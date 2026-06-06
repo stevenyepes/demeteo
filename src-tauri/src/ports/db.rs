@@ -1,0 +1,25 @@
+use crate::domain::models::{Machine, AgentProfile, ChatSession, ChatMessage, SessionHistory, ThreadSession};
+
+pub trait DatabasePort: Send + Sync {
+    fn get_machines(&self) -> Result<Vec<Machine>, String>;
+    fn add_machine(&self, machine: Machine) -> Result<(), String>;
+    fn delete_machine(&self, id: &str) -> Result<(), String>;
+    fn update_machine(&self, machine: Machine) -> Result<(), String>;
+    fn get_agent_profiles(&self, machine_id: &str) -> Result<Vec<AgentProfile>, String>;
+    fn add_agent_profile(&self, profile: AgentProfile) -> Result<(), String>;
+    fn delete_agent_profile(&self, id: &str) -> Result<(), String>;
+    
+    // Chat & History
+    fn create_chat_session(&self, id: &str, agent_id: &str, title: &str) -> Result<(), String>;
+    fn get_chat_sessions(&self, agent_id: &str) -> Result<Vec<ChatSession>, String>;
+    fn add_chat_message(&self, id: &str, session_id: &str, sender: &str, content: &str) -> Result<(), String>;
+    fn get_chat_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>, String>;
+    fn add_session_history(&self, id: &str, machine_id: &str, session_type: &str, title: &str, content: Option<&str>) -> Result<(), String>;
+    fn get_session_history(&self, machine_id: &str) -> Result<Vec<SessionHistory>, String>;
+
+    // Thread Sessions
+    fn get_thread_sessions(&self, machine_id: &str) -> Result<Vec<ThreadSession>, String>;
+    fn add_thread_session(&self, thread: ThreadSession) -> Result<(), String>;
+    fn update_thread_status(&self, id: &str, status: &str) -> Result<(), String>;
+    fn delete_thread_session(&self, id: &str) -> Result<(), String>;
+}
