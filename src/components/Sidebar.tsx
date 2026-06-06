@@ -30,6 +30,7 @@ interface SidebarProps {
   onThreadSelect: (id: string) => void;
   setWorkspaceMode: (mode: string) => void;
   onNewThreadClick: () => void;
+  onDeleteThread: (id: string) => void;
   workingMemory: FileReference[];
   inspectedFileName: string | undefined;
   onInspectFile: (path: string) => void;
@@ -50,6 +51,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onThreadSelect,
   setWorkspaceMode,
   onNewThreadClick,
+  onDeleteThread,
   workingMemory,
   inspectedFileName,
   onInspectFile,
@@ -167,18 +169,28 @@ const Sidebar: React.FC<SidebarProps> = ({
                   onThreadSelect(thread.id);
                   setWorkspaceMode("supervisor");
                 }}
-                className={`thread-card p-2.5 rounded-lg cursor-pointer transition-all border ${
+                className={`thread-card p-2.5 rounded-lg cursor-pointer transition-all border group ${
                   activeThreadId === thread.id
                     ? "bg-cyan-500/10 border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.1)]"
                     : "bg-white/5 border-white/5 hover:bg-white/10"
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-medium ${activeThreadId === thread.id ? "text-cyan-400" : "text-slate-300"}`}>
+                  <span className={`text-xs font-medium truncate flex-1 mr-1 ${activeThreadId === thread.id ? "text-cyan-400" : "text-slate-300"}`}>
                     {thread.title}
                   </span>
-                  {thread.status === "pending_approval" && <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>}
-                  {thread.status === "running" && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {thread.status === "pending_approval" && <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>}
+                    {thread.status === "running" && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onDeleteThread(thread.id); }}
+                      className="p-0.5 rounded text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover:opacity-100"
+                      title="Remove thread"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center text-[10px] text-slate-500 font-mono">
                   {thread.mode === "worktree" ? (

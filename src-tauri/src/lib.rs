@@ -82,106 +82,86 @@ fn add_thread_session(
     Ok(())
 }
 
-/// Persists a thread session in the database only (skips the remote worktree
-/// provisioning step). Used by the frontend to seed demo data that mirrors
-/// the design mockup without requiring a live SSH target.
+/// Tests SSH connectivity using parameters passed directly from the UI form.
+/// This avoids stale-state bugs where the DB has outdated auth settings that the
+/// user has already changed in the form but not yet saved.
 #[tauri::command]
-fn seed_thread_session(state: tauri::State<'_, DatabaseState>, thread: ThreadSession) -> Result<(), String> {
-    state.db.add_thread_session(thread)
+fn test_ssh_connection(
+    host: String,
+    port: i32,
+    username: String,
+    auth_type: String,
+    key_path: Option<String>,
+    secret: Option<String>,
+) -> Result<(), String> {
+    use ssh2::Session;
+    use std::net::TcpStream;
+
+    if auth_type == "local" {
+        return Ok(());
+    }
+
+    // Reject public key files early with a clear message
+    if let Some(ref kp) = key_path {
+        if kp.trim_end().ends_with(".pub") {
+            return Err(
+                "Key path points to a public key (.pub). Provide the private key instead (e.g. ~/.ssh/id_ed25519)."
+                    .to_string(),
+            );
+        }
+    }
+
+    let tcp = TcpStream::connect(format!("{}:{}", host, port))
+        .map_err(|e| format!("Cannot reach {}:{} — {}", host, port, e))?;
+
+    let mut sess = Session::new()
+        .map_err(|e| format!("Failed to create SSH session: {}", e))?;
+    sess.set_tcp_stream(tcp);
+    sess.handshake()
+        .map_err(|e| format!("SSH handshake failed: {}", e))?;
+
+    match auth_type.as_str() {
+        "password" => {
+            let password = secret.ok_or_else(|| "SSH password is required".to_string())?;
+            sess.userauth_password(&username, &password)
+                .map_err(|e| format!("Password authentication failed: {}", e))?;
+        }
+        "key" => {
+            let key_path_str = key_path
+                .as_deref()
+                .ok_or_else(|| "Private key path is required".to_string())?;
+            let resolved = if key_path_str.starts_with('~') {
+                let home = std::env::var("HOME")
+                    .map_err(|_| "HOME environment variable not set".to_string())?;
+                key_path_str.replacen('~', &home, 1)
+            } else {
+                key_path_str.to_string()
+            };
+            let key_file = std::path::Path::new(&resolved);
+            if !key_file.exists() {
+                return Err(format!("Private key file not found: {}", resolved));
+            }
+            sess.userauth_pubkey_file(&username, None, key_file, secret.as_deref())
+                .map_err(|e| format!("Key authentication failed: {}", e))?;
+        }
+        "agent" => {
+            sess.userauth_agent(&username)
+                .map_err(|e| format!("SSH agent authentication failed: {}", e))?;
+        }
+        other => return Err(format!("Unknown auth type: {}", other)),
+    }
+
+    let _ = sess.disconnect(None, "test complete", None);
+    Ok(())
 }
 
-/// One-shot seeding command for the mockup demo state. Idempotent: returns
-/// `false` if the demo machine is already present, `true` if data was just
-/// inserted.
 #[tauri::command]
-fn seed_demo_data(state: tauri::State<'_, DatabaseState>) -> Result<bool, String> {
-    let existing = state.db.get_machines().map_err(|e| e.to_string())?;
-    if existing.iter().any(|m| m.id == "prod-db-cluster") {
-        return Ok(false);
-    }
-
-    let demo_machines = vec![
-        Machine {
-            id: "prod-db-cluster".to_string(),
-            name: "prod-db-cluster".to_string(),
-            host: "10.0.5.12".to_string(),
-            port: 22,
-            username: "root".to_string(),
-            auth_type: "key".to_string(),
-            key_path: Some("~/.ssh/id_rsa".to_string()),
-            agents: Some(r#"["OpenCode","Claude Code"]"#.to_string()),
-            auto_approved_rules: Some(r#"["^git status$","^cat .*"]"#.to_string()),
-        },
-        Machine {
-            id: "staging-api".to_string(),
-            name: "staging-api".to_string(),
-            host: "192.168.1.5".to_string(),
-            port: 22,
-            username: "admin".to_string(),
-            auth_type: "key".to_string(),
-            key_path: Some("~/.ssh/id_rsa".to_string()),
-            agents: Some(r#"["Hermes"]"#.to_string()),
-            auto_approved_rules: Some(r#"["^git status$","^cat .*"]"#.to_string()),
-        },
-        Machine {
-            id: "local-macbook".to_string(),
-            name: "local-macbook".to_string(),
-            host: "localhost".to_string(),
-            port: 22,
-            username: "dev".to_string(),
-            auth_type: "local".to_string(),
-            key_path: None,
-            agents: Some(r#"["Claude Code","Hermes"]"#.to_string()),
-            auto_approved_rules: Some(r#"["^git status$","^cat .*"]"#.to_string()),
-        },
-    ];
-
-    for m in demo_machines {
-        state.db.add_machine(m).map_err(|e| e.to_string())?;
-    }
-
-    let threads = vec![
-        ThreadSession {
-            id: "t1_prod-db-cluster".to_string(),
-            machine_id: "prod-db-cluster".to_string(),
-            title: "Implement OAuth2".to_string(),
-            mode: "worktree".to_string(),
-            branch: Some("feature/agent-oauth".to_string()),
-            repo_path: Some("/home/ubuntu/project".to_string()),
-            sandbox_path: Some(
-                "/home/ubuntu/project/.demeteo/worktrees/feature-agent-oauth".to_string(),
-            ),
-            status: "pending_approval".to_string(),
-        },
-        ThreadSession {
-            id: "t2_prod-db-cluster".to_string(),
-            machine_id: "prod-db-cluster".to_string(),
-            title: "Analyze syslog memory leak".to_string(),
-            mode: "adhoc".to_string(),
-            branch: None,
-            repo_path: None,
-            sandbox_path: None,
-            status: "idle".to_string(),
-        },
-        ThreadSession {
-            id: "t3_prod-db-cluster".to_string(),
-            machine_id: "prod-db-cluster".to_string(),
-            title: "Update Dockerfile".to_string(),
-            mode: "worktree".to_string(),
-            branch: Some("feature/docker-fix".to_string()),
-            repo_path: Some("/home/ubuntu/project".to_string()),
-            sandbox_path: Some(
-                "/home/ubuntu/project/.demeteo/worktrees/feature-docker-fix".to_string(),
-            ),
-            status: "running".to_string(),
-        },
-    ];
-
-    for thread in threads {
-        state.db.add_thread_session(thread).map_err(|e| e.to_string())?;
-    }
-
-    Ok(true)
+fn update_thread_status(
+    state: tauri::State<'_, DatabaseState>,
+    id: String,
+    status: String,
+) -> Result<(), String> {
+    state.db.update_thread_status(&id, &status)
 }
 
 #[tauri::command]
@@ -243,9 +223,9 @@ pub fn run() {
             delete_agent_profile,
             get_thread_sessions,
             add_thread_session,
-            seed_thread_session,
-            seed_demo_data,
+            update_thread_status,
             delete_thread_session,
+            test_ssh_connection,
             terminal::set_machine_secret,
             terminal::delete_machine_secret,
             terminal::start_terminal_session,

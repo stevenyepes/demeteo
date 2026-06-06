@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Server, X, Key, AlertCircle, Cpu } from "lucide-react";
+import { Server, X, Key, AlertCircle, Cpu, Wifi, WifiOff, Loader } from "lucide-react";
 
 
 interface EnvFormState {
@@ -20,6 +20,7 @@ interface EnvModalProps {
   onSave: (data: EnvFormState) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onBrowseKey: () => Promise<string | null>;
+  onTestConnection: (form: EnvFormState) => Promise<string>;
 }
 
 const EnvModal: React.FC<EnvModalProps> = ({
@@ -29,11 +30,16 @@ const EnvModal: React.FC<EnvModalProps> = ({
   onSave,
   onDelete,
   onBrowseKey,
+  onTestConnection,
 }) => {
   const [form, setForm] = useState<EnvFormState>(initialData);
+  const [connStatus, setConnStatus] = useState<"idle" | "testing" | "ok" | "err">("idle");
+  const [connError, setConnError] = useState("");
 
   useEffect(() => {
     setForm(initialData);
+    setConnStatus("idle");
+    setConnError("");
   }, [initialData]);
 
   if (!isOpen) return null;
@@ -51,6 +57,18 @@ const EnvModal: React.FC<EnvModalProps> = ({
     const selected = await onBrowseKey();
     if (selected) {
       setForm((prev) => ({ ...prev, keyPath: selected }));
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setConnStatus("testing");
+    setConnError("");
+    const result = await onTestConnection(form as any);
+    if (result === "ok") {
+      setConnStatus("ok");
+    } else {
+      setConnStatus("err");
+      setConnError(result);
     }
   };
 
@@ -129,15 +147,29 @@ const EnvModal: React.FC<EnvModalProps> = ({
                   <Key size={10} className="mr-1" /> Auth Method
                 </label>
                 {form.authType !== "local" ? (
-                  <select
-                    className="bg-[#050508] border border-white/10 rounded-lg py-1.5 px-2 text-xs text-slate-200 focus:outline-none w-full"
-                    value={form.authType}
-                    onChange={(e) => setForm({ ...form, authType: e.target.value })}
-                  >
-                    <option value="key">Private SSH Key</option>
-                    <option value="password">Password</option>
-                    <option value="agent">SSH Agent</option>
-                  </select>
+                  <div className="flex flex-col gap-1">
+                    {(["key", "password", "agent"] as const).map((method) => {
+                      const labels: Record<string, string> = {
+                        key: "Private Key",
+                        password: "Password",
+                        agent: "SSH Agent",
+                      };
+                      return (
+                        <button
+                          key={method}
+                          type="button"
+                          onClick={() => setForm({ ...form, authType: method })}
+                          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all border ${
+                            form.authType === method
+                              ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400 font-medium"
+                              : "bg-[#050508] border-white/5 text-slate-400 hover:border-white/15 hover:text-slate-300"
+                          }`}
+                        >
+                          {labels[method]}
+                        </button>
+                      );
+                    })}
+                  </div>
                 ) : (
                   <div className="text-[11px] text-slate-400 bg-[#050508] border border-white/5 rounded-lg p-2 font-mono">
                     Native API (Local)
@@ -155,8 +187,10 @@ const EnvModal: React.FC<EnvModalProps> = ({
                       type="text"
                       value={form.keyPath}
                       onChange={(e) => setForm({ ...form, keyPath: e.target.value })}
-                      placeholder="~/.ssh/id_rsa"
-                      className="flex-1 bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                      placeholder="~/.ssh/id_ed25519"
+                      className={`flex-1 bg-[#050508] border rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 ${
+                        form.keyPath.endsWith(".pub") ? "border-amber-500/60" : "border-white/10"
+                      }`}
                     />
                     <button
                       type="button"
@@ -167,6 +201,11 @@ const EnvModal: React.FC<EnvModalProps> = ({
                       Browse
                     </button>
                   </div>
+                  {form.keyPath.endsWith(".pub") && (
+                    <p className="mt-1.5 text-[11px] text-amber-400 flex items-center gap-1">
+                      ⚠ This looks like a public key. Use the private key file (without .pub).
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Key Passphrase / Password (Optional)</label>
@@ -235,33 +274,64 @@ const EnvModal: React.FC<EnvModalProps> = ({
             </div>
           </div>
 
-          <div className="px-6 py-4 border-t border-white/5 bg-[#050508] flex justify-between gap-3">
-            {form.id && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(form.id);
-                }}
-                className="px-4 py-2 rounded-lg text-xs font-medium text-red-400 border border-red-500/20 hover:bg-red-500/10 transition-colors"
-              >
-                Delete Node
-              </button>
+          <div className="px-6 py-4 border-t border-white/5 bg-[#050508] flex flex-col gap-3">
+            {/* Connection test result */}
+            {connStatus === "ok" && (
+              <div className="flex items-center text-emerald-400 text-xs bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
+                <Wifi size={13} className="mr-2 flex-shrink-0" />
+                SSH connection successful.
+              </div>
             )}
-            <div className="flex gap-2 ml-auto">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 rounded-lg text-xs font-bold bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all"
-              >
-                Save Environment
-              </button>
+            {connStatus === "err" && (
+              <div className="flex items-start text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                <WifiOff size={13} className="mr-2 flex-shrink-0 mt-0.5" />
+                <span className="break-all">{connError}</span>
+              </div>
+            )}
+
+            <div className="flex justify-between gap-3">
+              {form.id && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(form.id);
+                  }}
+                  className="px-4 py-2 rounded-lg text-xs font-medium text-red-400 border border-red-500/20 hover:bg-red-500/10 transition-colors"
+                >
+                  Delete Node
+                </button>
+              )}
+              <div className="flex gap-2 ml-auto">
+                {form.authType !== "local" && (
+                  <button
+                    type="button"
+                    onClick={handleTestConnection}
+                    disabled={connStatus === "testing"}
+                    className="px-4 py-2 rounded-lg text-xs font-medium border border-white/10 text-slate-300 hover:border-cyan-500/40 hover:text-cyan-400 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {connStatus === "testing" ? (
+                      <Loader size={12} className="animate-spin" />
+                    ) : (
+                      <Wifi size={12} />
+                    )}
+                    Test Connection
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-lg text-xs font-bold bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all"
+                >
+                  Save Environment
+                </button>
+              </div>
             </div>
           </div>
         </form>

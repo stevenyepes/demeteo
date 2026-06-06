@@ -217,7 +217,18 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
           </button>
         </div>
         <div className="text-center mt-2 text-[10px] text-slate-600 font-mono">
-          Demeteo PDP Active • OpenCode Container Running
+          {activeThreadId
+            ? (() => {
+                const t = threads.find(t => t.id === activeThreadId);
+                if (!t) return "No active thread";
+                const statusMap: Record<string, string> = {
+                  idle: "Thread Idle • Awaiting Directive",
+                  running: "Agent Running • Supervisor Active",
+                  pending_approval: "Pending Supervisor Approval"
+                };
+                return statusMap[t.status] ?? `Status: ${t.status}`;
+              })()
+            : "Select a thread to begin"}
         </div>
       </div>
     </>

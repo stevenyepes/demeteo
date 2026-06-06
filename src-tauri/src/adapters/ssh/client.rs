@@ -108,6 +108,76 @@ impl SshClientAdapter {
 }
 
 impl ExecutionPort for SshClientAdapter {
+    fn test_connection(&self, machine_id: &str) -> Result<(), String> {
+        let machines = self.db.get_machines()?;
+        let machine = machines
+            .into_iter()
+            .find(|m| m.id == machine_id)
+            .ok_or_else(|| "Machine not found".to_string())?;
+
+        // Local machines don't use SSH – trivially valid
+        if machine.auth_type == "local" {
+            return Ok(());
+        }
+
+        let secret = match machine.auth_type.as_str() {
+            "password" | "key" => {
+                let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id)).ok();
+                entry.and_then(|e| e.get_password().ok())
+            }
+            _ => None,
+        };
+
+        let tcp = TcpStream::connect(format!("{}:{}", machine.host, machine.port))
+            .map_err(|e| format!("Cannot reach host: {}", e))?;
+
+        let mut sess =
+            Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
+        sess.set_tcp_stream(tcp);
+        sess.handshake()
+            .map_err(|e| format!("SSH handshake failed: {}", e))?;
+
+        match machine.auth_type.as_str() {
+            "password" => {
+                let password =
+                    secret.ok_or_else(|| "Password not found in keyring".to_string())?;
+                sess.userauth_password(&machine.username, &password)
+                    .map_err(|e| format!("Authentication failed: {}", e))?;
+            }
+            "key" => {
+                let key_path_str = machine
+                    .key_path
+                    .as_deref()
+                    .ok_or_else(|| "Key path not provided".to_string())?;
+                let resolved_path = if key_path_str.starts_with('~') {
+                    let home = std::env::var("HOME")
+                        .map_err(|_| "Could not find HOME environment variable".to_string())?;
+                    key_path_str.replacen('~', &home, 1)
+                } else {
+                    key_path_str.to_string()
+                };
+                let key_path = std::path::Path::new(&resolved_path);
+                if !key_path.exists() {
+                    return Err(format!(
+                        "Private key file does not exist: {}",
+                        resolved_path
+                    ));
+                }
+                sess.userauth_pubkey_file(&machine.username, None, key_path, secret.as_deref())
+                    .map_err(|e| format!("Key authentication failed: {}", e))?;
+            }
+            "agent" => {
+                sess.userauth_agent(&machine.username)
+                    .map_err(|e| format!("Agent authentication failed: {}", e))?;
+            }
+            _ => return Err(format!("Unknown auth type: {}", machine.auth_type)),
+        }
+
+        // Connection is valid – disconnect cleanly
+        let _ = sess.disconnect(None, "test complete", None);
+        Ok(())
+    }
+
     fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String> {
         let sftp_sess = self.get_sftp(machine_id)?;
         let mut channel = sftp_sess.session.channel_session()

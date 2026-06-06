@@ -16,7 +16,7 @@ const mapMachineToFrontend = (m: Machine): FrontendMachine => {
   return {
     ...m,
     type: m.auth_type === "local" ? "local" : "server",
-    status: m.id === "staging-api" ? "offline" : "connected",
+    status: "connected",
     user: `${m.username}@${m.host}`
   };
 };
@@ -61,17 +61,11 @@ function App() {
 
   const loadMachines = async () => {
     try {
-      // Idempotent: only seeds on the first run when the demo machine is missing
-      await invoke("seed_demo_data").catch((err) =>
-        console.warn("Demo seed (safe to ignore):", err)
-      );
-
       const list: Machine[] = await invoke("get_machines");
       const mapped = list.map(mapMachineToFrontend);
       setMachinesList(mapped);
       if (mapped.length > 0 && !activeMachine) {
-        const demo = mapped.find((m) => m.id === "prod-db-cluster");
-        handleMachineSelect(demo || mapped[0]);
+        handleMachineSelect(mapped[0]);
       }
     } catch (err) {
       console.error("Failed to load nodes:", err);
@@ -83,201 +77,25 @@ function App() {
     setShowMachineSelector(false);
 
     try {
-      // Fetch thread sessions for the selected node
       const threadList: ThreadSession[] = await invoke("get_thread_sessions", { machineId: m.id });
       setThreads(threadList);
-
-      // Seed default threads and telemetry stream if none exist
-      if (threadList.length === 0) {
-        const mockT1: ThreadSession = {
-          id: "t1_" + m.id,
-          machine_id: m.id,
-          title: "Implement OAuth2",
-          mode: "worktree",
-          branch: "feature/agent-oauth",
-          repo_path: "/home/ubuntu/project",
-          sandbox_path: `/home/ubuntu/project/.demeteo/worktrees/feature-agent-oauth`,
-          status: "pending_approval"
-        };
-        const mockT2: ThreadSession = {
-          id: "t2_" + m.id,
-          machine_id: m.id,
-          title: "Analyze syslog memory leak",
-          mode: "adhoc",
-          status: "idle"
-        };
-
-        await invoke("add_thread_session", { thread: mockT1 });
-        await invoke("add_thread_session", { thread: mockT2 });
-
-        const freshThreads: ThreadSession[] = await invoke("get_thread_sessions", { machineId: m.id });
-        setThreads(freshThreads);
-        setActiveThreadId(mockT1.id);
-
-        // Seed events
-        setStreams(prev => ({
-          ...prev,
-          [mockT1.id]: [
-            {
-              id: "e1",
-              type: "directive",
-              message: "Set up the initial OAuth2 routes using Actix-web in src/oauth.rs and update Cargo.toml",
-              timestamp: new Date(Date.now() - 3600000).toLocaleTimeString()
-            },
-            {
-              id: "e2",
-              type: "auto_approve",
-              message: "Agent executed git status",
-              timestamp: new Date(Date.now() - 3500000).toLocaleTimeString()
-            },
-            {
-              id: "e3",
-              type: "auto_approve",
-              message: "Agent executed cat Cargo.toml",
-              timestamp: new Date(Date.now() - 3400000).toLocaleTimeString()
-            },
-            {
-              id: "e4",
-              type: "intercept",
-              message: "Intercepted Action: File Write",
-              timestamp: new Date(Date.now() - 3300000).toLocaleTimeString(),
-              payload: {
-                path: "src/oauth.rs",
-                additions: 42,
-                code: `// Actix-web OAuth2 login controller\nuse actix_web::{get, web, HttpResponse, Responder};\nuse reqwest::Client;\n\n#[get("/login")]\npub async fn login() -> impl Responder {\n    HttpResponse::Ok().body("OAuth implementation pending")\n}`
-              }
-            }
-          ],
-          [mockT2.id]: [
-            {
-              id: "e5",
-              type: "directive",
-              message: "Find memory leaks inside syslog files",
-              timestamp: new Date().toLocaleTimeString()
-            },
-            {
-              id: "e6",
-              type: "info",
-              message: "Syslog diagnostic listener bound directly to remote kernel socket.",
-              timestamp: new Date().toLocaleTimeString()
-            }
-          ]
-        }));
-      } else {
+      if (threadList.length > 0) {
         setActiveThreadId(threadList[0].id);
-      }
-
-      if (m.id === "prod-db-cluster") {
-        seedDemoStreams(threadList);
+      } else {
+        setActiveThreadId(null);
       }
     } catch (err) {
       console.error(err);
     }
   };
 
-  const seedDemoStreams = (threadList: ThreadSession[]) => {
-    const t1 = threadList.find((t) => t.id === "t1_prod-db-cluster");
-    const t2 = threadList.find((t) => t.id === "t2_prod-db-cluster");
-    const t3 = threadList.find((t) => t.id === "t3_prod-db-cluster");
 
-    setStreams((prev) => {
-      const next = { ...prev };
-      if (t1 && !next[t1.id]) {
-        next[t1.id] = [
-          {
-            id: "e1",
-            type: "directive",
-            message:
-              "Set up the initial OAuth2 routes using Actix-web in src/oauth.rs and update Cargo.toml",
-            timestamp: new Date(Date.now() - 3600000).toLocaleTimeString(),
-          },
-          {
-            id: "e2",
-            type: "auto_approve",
-            message: "Agent executed git status",
-            timestamp: new Date(Date.now() - 3500000).toLocaleTimeString(),
-          },
-          {
-            id: "e3",
-            type: "auto_approve",
-            message: "Agent executed cat Cargo.toml",
-            timestamp: new Date(Date.now() - 3400000).toLocaleTimeString(),
-          },
-          {
-            id: "e4",
-            type: "intercept",
-            message: "Intercepted Action: File Write",
-            timestamp: new Date(Date.now() - 3300000).toLocaleTimeString(),
-            payload: {
-              path: "src/oauth.rs",
-              additions: 42,
-              code: `// Actix-web OAuth2 login controller\nuse actix_web::{get, web, HttpResponse, Responder};\nuse reqwest::Client;\n\n#[get("/login")]\npub async fn login() -> impl Responder {\n    HttpResponse::Ok().body("OAuth implementation pending")\n}`,
-            },
-          },
-        ];
-      }
-      if (t2 && !next[t2.id]) {
-        next[t2.id] = [
-          {
-            id: "e5",
-            type: "directive",
-            message: "Find memory leaks inside syslog files",
-            timestamp: new Date().toLocaleTimeString(),
-          },
-          {
-            id: "e6",
-            type: "info",
-            message: "Syslog diagnostic listener bound directly to remote kernel socket.",
-            timestamp: new Date().toLocaleTimeString(),
-          },
-        ];
-      }
-      if (t3 && !next[t3.id]) {
-        next[t3.id] = [
-          {
-            id: "e7",
-            type: "directive",
-            message: "Bump the rustc base image to slim-bookworm and prune apt caches",
-            timestamp: new Date(Date.now() - 7200000).toLocaleTimeString(),
-          },
-          {
-            id: "e8",
-            type: "info",
-            message: "Build pipeline linked to feature/docker-fix worktree.",
-            timestamp: new Date(Date.now() - 7100000).toLocaleTimeString(),
-          },
-        ];
-      }
-      return next;
-    });
-  };
-
-  // Seed / update working memory files list based on active thread
+  // Working memory is populated by real agent events; start empty
   useEffect(() => {
-    if (!activeThreadId) {
-      setWorkingMemory([]);
-      return;
-    }
-    if (activeThreadId.startsWith("t1")) {
-      setWorkingMemory([
-        { name: "src/main.rs", lines: 142, type: "rust" },
-        { name: "Cargo.toml", lines: 34, type: "toml" },
-        { name: "src/oauth.rs", lines: 89, type: "rust", isNew: true }
-      ]);
-    } else if (activeThreadId.startsWith("t3")) {
-      setWorkingMemory([
-        { name: "Dockerfile", lines: 48, type: "dockerfile" },
-        { name: ".dockerignore", lines: 21, type: "text" },
-        { name: "docker-compose.yml", lines: 76, type: "yaml", isNew: true }
-      ]);
-    } else {
-      setWorkingMemory([
-        { name: "var/log/syslog", lines: 4500, type: "text" },
-        { name: "src/main.rs", lines: 142, type: "rust" }
-      ]);
-    }
+    setWorkingMemory([]);
     setInspectedFile(null);
   }, [activeThreadId]);
+
 
   const openAddEnv = () => {
     setEnvForm({
@@ -436,23 +254,61 @@ function App() {
     }
   };
 
+  const deleteThread = async (threadId: string) => {
+    if (!confirm("Remove this thread session?")) return;
+    try {
+      await invoke("delete_thread_session", { id: threadId });
+      setStreams(prev => { const next = { ...prev }; delete next[threadId]; return next; });
+      if (activeMachine) {
+        const list: ThreadSession[] = await invoke("get_thread_sessions", { machineId: activeMachine.id });
+        setThreads(list);
+        setActiveThreadId(list.length > 0 ? list[0].id : null);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const testSshConnection = async (form: any): Promise<string> => {
+    try {
+      // Parse host/port/username from the connection string (same logic as saveEnv)
+      let username = "ubuntu";
+      let host = "localhost";
+      let port = 22;
+      const parts = form.connection.split("@");
+      if (parts.length > 1) {
+        username = parts[0];
+        const hostParts = parts[1].split(":");
+        host = hostParts[0];
+        if (hostParts[1]) port = Number(hostParts[1]);
+      } else {
+        const hostParts = parts[0].split(":");
+        host = hostParts[0];
+        if (hostParts[1]) port = Number(hostParts[1]);
+      }
+
+      await invoke("test_ssh_connection", {
+        host,
+        port,
+        username,
+        authType: form.authType,
+        keyPath: form.authType === "key" ? (form.keyPath || null) : null,
+        secret: form.secret || null,
+      });
+      return "ok";
+    } catch (err) {
+      return String(err);
+    }
+  };
+
   const handleInspectContext = async (path: string) => {
     if (!activeMachine) return;
     try {
       const content = await invoke<string>("sftp_read_file", { machineId: activeMachine.id, path });
       setInspectedFile({ name: path, content });
     } catch (e) {
-      if (path.endsWith("oauth.rs")) {
-        setInspectedFile({
-          name: path,
-          content: `// OAuth Implementation Proposal\nuse actix_web::{get, web, HttpResponse, Responder};\nuse reqwest::Client;\n\n#[get("/login")]\npub async fn login() -> impl Responder {\n    HttpResponse::Ok().body("OAuth implementation pending")\n}`
-        });
-      } else {
-        setInspectedFile({
-          name: path,
-          content: `// Local file context for ${path} not loaded.`
-        });
-      }
+      console.warn("Could not read remote file:", path, e);
+      setInspectedFile(null);
     }
   };
 
@@ -552,6 +408,7 @@ function App() {
         onThreadSelect={setActiveThreadId}
         setWorkspaceMode={setWorkspaceMode}
         onNewThreadClick={() => setIsNewThreadModalOpen(true)}
+        onDeleteThread={deleteThread}
         workingMemory={workingMemory}
         inspectedFileName={inspectedFile?.name}
         onInspectFile={handleInspectContext}
@@ -672,6 +529,7 @@ function App() {
           return deleteEnv(id, dummyEvent);
         }}
         onBrowseKey={handleBrowseKey}
+        onTestConnection={testSshConnection}
       />
     </div>
   );
