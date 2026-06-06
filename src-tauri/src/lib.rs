@@ -192,14 +192,13 @@ fn delete_thread_session(state: tauri::State<'_, DatabaseState>, id: String) -> 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK on Wayland frequently dispatches a Gdk protocol error
-    // (Error 71) on the host process, which in turn causes Vite's esbuild
-    // service to be torn down mid-request ("The service was stopped").
-    // Forcing the GDK backend to X11 makes the webview route through the
-    // stable XWayland shim and avoids the error entirely.
+    // (Error 71) on the host process. Disabling the DMA-BUF renderer
+    // and accelerated compositing avoids the crash while allowing the
+    // app to run natively under Wayland with correct UI scaling.
     #[cfg(target_os = "linux")]
     {
         if std::env::var("GDK_BACKEND").is_err() {
-            std::env::set_var("GDK_BACKEND", "x11");
+            std::env::set_var("GDK_BACKEND", "wayland,x11");
         }
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
@@ -223,6 +222,15 @@ pub fn run() {
             app.manage(ExecutionState { exec: exec_adapter });
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
+
+            // Set 1.25x zoom on Linux to offset the container 1x scaling fallback
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(webview) = app.get_webview_window("main") {
+                    let _ = webview.set_zoom(1.25);
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

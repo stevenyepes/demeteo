@@ -12,11 +12,13 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "demeteo",
         "width": 1440,
         "height": 960,
         "minWidth": 1024,
-        "minHeight": 700
+        "minHeight": 700,
+        "zoomHotkeysEnabled": true
       }
     ],
     "security": {

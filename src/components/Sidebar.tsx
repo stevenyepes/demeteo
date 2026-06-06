@@ -55,7 +55,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onInspectFile,
 }) => {
   return (
-    <div className={`flex-shrink-0 bg-[#0a0a0e] border-r border-white/5 flex flex-col z-30 shadow-xl h-full select-none transition-all duration-300 ${isCollapsed ? 'w-0 overflow-hidden border-r-0' : 'w-64'}`}>
+    <div className={`flex-shrink-0 bg-[#0a0a0e] border-r border-white/5 flex flex-col z-30 shadow-xl h-full select-none transition-all duration-300 ${isCollapsed ? 'w-0 overflow-hidden border-r-0' : 'w-80'}`}>
       
       {/* Environment Selector Dropdown */}
       <div className="p-4 border-b border-white/5 relative">
@@ -142,7 +142,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Scrollable Context Areas */}
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-8">
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-10">
         
         {/* Active Threads Block */}
         <section>
@@ -159,7 +159,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               <Plus size={14} />
             </button>
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-3">
             {threads.map((thread) => (
               <div
                 key={thread.id}
@@ -167,7 +167,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                   onThreadSelect(thread.id);
                   setWorkspaceMode("supervisor");
                 }}
-                className={`p-2.5 rounded-lg cursor-pointer transition-all border ${
+                className={`thread-card p-2.5 rounded-lg cursor-pointer transition-all border ${
                   activeThreadId === thread.id
                     ? "bg-cyan-500/10 border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.1)]"
                     : "bg-white/5 border-white/5 hover:bg-white/10"
@@ -209,7 +209,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-cyan-500 font-mono">4.2k tkns</span>
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-3">
             {workingMemory.map((file, idx) => (
               <div
                 key={idx}
@@ -217,7 +217,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                   setWorkspaceMode("supervisor");
                   onInspectFile(file.name);
                 }}
-                className={`flex items-center justify-between p-2 rounded-md border cursor-pointer transition-all ${
+                className={`memory-card flex items-center justify-between p-2 rounded-md border cursor-pointer transition-all ${
                   inspectedFileName === file.name
                     ? "bg-white/10 border-white/20"
                     : "bg-white/5 border-white/5 hover:border-white/10"

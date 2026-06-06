@@ -17,7 +17,7 @@ const CodeInspector: React.FC<CodeInspectorProps> = ({
   const codeLines = fileContent.split("\n");
 
   return (
-    <div className="w-full h-1/2 md:w-1/2 md:h-full flex flex-col bg-[#0a0a0e] border-t md:border-t-0 md:border-l border-white/5 z-10 animate-in slide-in-from-right-8 duration-300 shadow-2xl">
+    <div className="w-full h-1/2 md:w-[45%] md:h-full flex flex-col bg-[#0a0a0e] border-t md:border-t-0 md:border-l border-white/5 z-10 animate-in slide-in-from-right-8 duration-300 shadow-2xl">
       <div className="h-12 px-4 bg-[#050508] border-b border-white/5 flex items-center justify-between select-none">
         <div className="flex items-center gap-3">
           <FileCode2 size={14} className="text-cyan-500" />

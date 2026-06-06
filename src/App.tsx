@@ -571,12 +571,12 @@ function App() {
             >
               <Menu size={18} />
             </button>
-            <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-white/5">
+            <div className="flex items-center gap-1.5 bg-slate-900/80 p-1 rounded-lg border border-white/5 shadow-inner">
               <button 
                 type="button"
                 onClick={() => { setWorkspaceMode('supervisor'); }}
-                className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all flex items-center ${
-                  workspaceMode === 'supervisor' ? 'bg-cyan-500/20 text-cyan-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all duration-200 flex items-center hover:scale-[1.03] active:scale-[0.97] cursor-pointer ${
+                  workspaceMode === 'supervisor' ? 'bg-cyan-500/20 text-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.15)] border border-cyan-500/25' : 'text-slate-400 hover:text-slate-200 border border-transparent'
                 }`}
               >
                 <Activity size={14} className="mr-2" /> Supervisor Plane
@@ -584,8 +584,8 @@ function App() {
               <button 
                 type="button"
                 onClick={() => { setWorkspaceMode('terminal'); setInspectedFile(null); }}
-                className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all flex items-center ${
-                  workspaceMode === 'terminal' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all duration-200 flex items-center hover:scale-[1.03] active:scale-[0.97] cursor-pointer ${
+                  workspaceMode === 'terminal' ? 'bg-slate-800 text-white shadow-[0_0_12px_rgba(255,255,255,0.05)] border border-white/10' : 'text-slate-400 hover:text-slate-200 border border-transparent'
                 }`}
               >
                 <Terminal size={14} className="mr-2" /> Terminal
@@ -613,7 +613,7 @@ function App() {
         <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden w-full">
           
           {/* Main Stream (Shrinks if Inspector is open) */}
-          <div className={`flex flex-col min-w-0 transition-all duration-300 h-full ${inspectedFile && workspaceMode === 'supervisor' ? 'w-full h-1/2 md:w-1/2 md:h-full border-b md:border-b-0 md:border-r border-white/5' : 'w-full'}`}>
+          <div className={`flex flex-col min-w-0 transition-all duration-300 h-full ${inspectedFile && workspaceMode === 'supervisor' ? 'w-full h-1/2 md:w-[55%] md:h-full border-b md:border-b-0 md:border-r border-white/5' : 'w-full'}`}>
             
             {workspaceMode === 'supervisor' ? (
               <SupervisorPlane

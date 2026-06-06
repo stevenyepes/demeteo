@@ -39,7 +39,7 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
       currentGroup = [];
 
       renderedElements.push(
-        <div key={key} className="pl-6 border-l-2 border-slate-800 flex flex-col gap-3 py-2">
+        <div key={key} className="pl-6 border-l-2 border-slate-800 flex flex-col gap-3 py-2 animate-slide-in">
           {groupItems.map((ev) => {
             if (ev.type === "auto_approve") {
               const cmd = ev.message.replace("Agent executed ", "");
@@ -67,9 +67,9 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
       if (ev.type === "directive") {
         flushGroup(`group_before_dir_${idx}`);
         renderedElements.push(
-          <div key={ev.id} className="flex items-start text-slate-300 gap-3">
-            <span className="text-cyan-500 mt-0.5 font-bold font-mono mr-1">&gt;</span>
-            <div className="leading-relaxed">{ev.message}</div>
+          <div key={ev.id} className="flex items-start text-slate-300 gap-4 animate-slide-in bg-[#12161e]/75 p-4 rounded-xl border border-white/5 shadow-md">
+            <span className="text-cyan-400 mt-0.5 font-bold font-mono text-base">&gt;</span>
+            <div className="leading-relaxed text-sm">{ev.message}</div>
           </div>
         );
       } else if (ev.type === "intercept") {
@@ -80,21 +80,21 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
         const codeLines = rawCode.replace(/\n$/, "").split("\n");
 
         renderedElements.push(
-          <div key={ev.id} className="mt-6 bg-[#0a0a0e] border border-amber-500/30 rounded-xl overflow-hidden shadow-lg shadow-amber-500/5">
-            <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between">
+          <div key={ev.id} className="bg-[#0a0a0e]/95 border border-amber-500/30 rounded-xl overflow-hidden shadow-xl shadow-amber-500/5 hover:border-amber-500/50 transition-all duration-300 animate-slide-in">
+            <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between">
               <div className="flex items-center text-xs font-semibold text-amber-500 tracking-wide uppercase gap-2">
                 <ShieldAlert size={14} className="mr-1" />
                 <span>Intercepted Action: File Write</span>
               </div>
               <div className="text-[10px] text-slate-500">Agent: OpenCode</div>
             </div>
-            <div className="p-4">
+            <div className="p-5">
               <div className="text-xs text-slate-400 mb-3 flex items-center">
                 <ChevronRight size={14} className="text-slate-600 mr-1" />
                 <span>Target:</span>
                 <span className="font-mono text-cyan-400 ml-1.5">{ev.payload?.path}</span>
               </div>
-              <div className="bg-[#050508] border border-white/5 rounded-lg p-4 font-mono text-[13px] leading-relaxed relative max-h-60 overflow-y-auto whitespace-pre overflow-x-auto">
+              <div className="bg-[#050508] border border-white/5 rounded-lg p-5 font-mono text-[13px] leading-relaxed relative max-h-60 overflow-y-auto whitespace-pre overflow-x-auto shadow-inner">
                 <div className="absolute top-2 right-2 text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 rounded">+ {ev.payload?.additions} lines</div>
                 {codeLines.map((line, lIdx) => {
                   const hasPlus = line.startsWith("+");
@@ -146,7 +146,7 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
     if (currentGroup.length > 0 || isRunning) {
       const groupItems = [...currentGroup];
       renderedElements.push(
-        <div key="final_group" className="pl-6 border-l-2 border-slate-800 flex flex-col gap-3 py-2">
+        <div key="final_group" className="pl-6 border-l-2 border-slate-800 flex flex-col gap-3 py-2 animate-slide-in">
           {groupItems.map((ev) => {
             if (ev.type === "auto_approve") {
               const cmd = ev.message.replace("Agent executed ", "");
@@ -182,25 +182,27 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
   return (
     <>
       {/* Event Stream */}
-      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6 scroll-smooth font-mono text-sm h-full">
-        {renderStream()}
+      <div className="supervisor-stream-container flex-1">
+        <div className="supervisor-stream-content">
+          {renderStream()}
 
-        {(!activeThreadId || (streams[activeThreadId] || []).length === 0) && (
-          <div className="flex flex-col justify-center items-center h-full text-slate-500 select-none">
-            <CheckCircle2 size={32} className="mb-2 text-slate-600" />
-            <div>Select or launch a thread to inspect logs.</div>
-          </div>
-        )}
+          {(!activeThreadId || (streams[activeThreadId] || []).length === 0) && (
+            <div className="flex flex-col justify-center items-center py-20 text-slate-500 select-none">
+              <CheckCircle2 size={32} className="mb-2 text-slate-600" />
+              <div>Select or launch a thread to inspect logs.</div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Supervisor Input Box */}
       <div className="p-4 bg-slate-950/80 border-t border-white/5 select-none">
-        <div className="max-w-4xl mx-auto relative flex items-center">
-          <span className="absolute left-4 text-cyan-500 font-bold">{">"}</span>
+        <div className="supervisor-input-wrapper">
+          <span className="absolute left-4 text-cyan-500 font-bold z-10">{">"}</span>
           <input
             type="text"
             placeholder="Enter directive or feedback for the agent..."
-            className="w-full bg-[#0a0a0e] border border-white/10 rounded-xl py-3 pl-12 pr-12 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 focus:shadow-[0_0_15px_rgba(6,182,212,0.15)] transition-all font-mono placeholder-slate-600"
+            className="supervisor-input-field bg-[#0a0a0e] border border-white/10 rounded-xl py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 focus:shadow-[0_0_15px_rgba(6,182,212,0.15)] transition-all font-mono placeholder-slate-600"
             value={supervisorInput}
             onChange={(e) => setSupervisorInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && activeThreadId && onSendDirective(activeThreadId)}
@@ -209,7 +211,7 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
           <button
             type="button"
             onClick={() => activeThreadId && onSendDirective(activeThreadId)}
-            className="absolute right-2 p-2 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 transition-all flex items-center justify-center"
+            className="absolute right-2 p-2 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 transition-all flex items-center justify-center z-10"
           >
             <Send size={16} />
           </button>
