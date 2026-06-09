@@ -57,55 +57,7 @@ pub fn delete_machine_secret(machine_id: String) -> Result<(), String> {
 }
 
 pub fn connect_ssh(machine: &Machine, secret: Option<String>) -> Result<(Session, TcpStream), String> {
-    use std::net::ToSocketAddrs;
-
-    // Connect TCP with a 5s timeout so a black-holed host doesn't hang the whole command
-    let addr = format!("{}:{}", machine.host, machine.port)
-        .to_socket_addrs()
-        .map_err(|e| format!("Failed to resolve host: {}", e))?
-        .next()
-        .ok_or_else(|| format!("No addresses for host: {}", machine.host))?;
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
-        .map_err(|e| format!("Failed to connect to host (timeout after 5s): {}", e))?;
-    let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
-    let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
-
-    // SSH Handshake
-    let mut sess = Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
-    sess.set_tcp_stream(tcp.try_clone().map_err(|e| e.to_string())?);
-    sess.set_timeout(10_000);
-    sess.handshake().map_err(|e| format!("SSH Handshake failed: {}", e))?;
-
-    // Authenticate
-    match machine.auth_type.as_str() {
-        "password" => {
-            let password = secret.ok_or_else(|| "Password not found in keyring".to_string())?;
-            sess.userauth_password(&machine.username, &password)
-                .map_err(|e| format!("Authentication failed: {}", e))?;
-        }
-        "key" => {
-            let key_path_str = machine.key_path.as_deref().ok_or_else(|| "Key path not provided".to_string())?;
-            // Expand tilde (~) in key path if any
-            let resolved_path = if key_path_str.starts_with('~') {
-                let home = std::env::var("HOME").map_err(|_| "Could not find HOME environment variable".to_string())?;
-                key_path_str.replacen('~', &home, 1)
-            } else {
-                key_path_str.to_string()
-            };
-            let key_path = std::path::Path::new(&resolved_path);
-            if !key_path.exists() {
-                return Err(format!("Private key file does not exist: {}", resolved_path));
-            }
-            sess.userauth_pubkey_file(&machine.username, None, key_path, secret.as_deref())
-                .map_err(|e| format!("Key authentication failed: {}", e))?;
-        }
-        "agent" => {
-            sess.userauth_agent(&machine.username)
-                .map_err(|e| format!("Agent authentication failed: {}", e))?;
-        }
-        _ => return Err(format!("Unknown auth type: {}", machine.auth_type)),
-    }
-    Ok((sess, tcp))
+    crate::ssh_util::connect(machine, secret)
 }
 
 #[tauri::command]
