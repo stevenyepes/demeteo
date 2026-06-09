@@ -7,10 +7,10 @@ pub struct Machine {
     pub host: String,
     pub port: i32,
     pub username: String,
-    pub auth_type: String, // 'key', 'password', 'agent'
+    pub auth_type: String, // 'key', 'password', 'agent', 'local'
     pub key_path: Option<String>,
-    pub agents: Option<String>,               // JSON-encoded array of enabled agents
-    pub auto_approved_rules: Option<String>,   // JSON-encoded array of auto-approved commands (regexes)
+    pub agents: Option<String>,               // JSON-encoded array of {kind, enabled} records
+    pub auto_approved_rules: Option<String>,   // JSON-encoded array of auto-approved commands (regexes, legacy)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -61,5 +61,22 @@ pub struct ThreadSession {
     pub branch: Option<String>,
     pub repo_path: Option<String>,
     pub sandbox_path: Option<String>,
-    pub status: String, // 'idle', 'running', 'pending_approval'
+    pub status: String, // 'idle' | 'running' | 'pending_approval' | 'spawning' | 'installing' | 'error'
+    pub agent_kind: Option<String>, // NEW: "opencode" | "hermes" | None
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AgentConfig {
+    pub kind: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorkingMemoryEntry {
+    pub file_path: String,
+    pub line_count: Option<u32>,
+    pub size_bytes: Option<u64>,
+    pub modified_at: Option<i64>,
+    pub first_read_at: i64,
+    pub last_read_at: i64,
 }

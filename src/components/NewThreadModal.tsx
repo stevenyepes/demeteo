@@ -1,27 +1,65 @@
-import React, { useState } from "react";
-import { Bot, X, GitBranch, Terminal, ChevronRight } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Bot, X, GitBranch, Terminal, ChevronRight, Cpu } from "lucide-react";
+import type { AgentConfigView } from "../agentSessionRegistry";
+import { loadAgentConfigs } from "../agentSessionRegistry";
 
 interface NewThreadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLaunch: (title: string, mode: string, branch: string, repoPath: string) => Promise<void>;
+  onLaunch: (
+    title: string,
+    mode: string,
+    branch: string,
+    repoPath: string,
+    agentKind: string | null,
+  ) => Promise<void>;
+  machineId: string | null;
 }
 
 const NewThreadModal: React.FC<NewThreadModalProps> = ({
   isOpen,
   onClose,
   onLaunch,
+  machineId,
 }) => {
   const [title, setTitle] = useState("");
-  const [mode, setMode] = useState("worktree"); // worktree | adhoc
+  const [mode, setMode] = useState("worktree");
   const [branch, setBranch] = useState("feature/agent-oauth");
   const [repoPath, setRepoPath] = useState("/home/ubuntu/project");
+  const [agents, setAgents] = useState<AgentConfigView[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [loadingAgents, setLoadingAgents] = useState(false);
+
+  // Reset the agent card when the modal re-opens. We re-fetch the
+  // configured list from the backend (the user may have toggled
+  // something in EnvModal between launches) and auto-select the first
+  // enabled agent. If none are enabled, the launch button is disabled
+  // with a tooltip pointing the user to EnvModal.
+  useEffect(() => {
+    if (!isOpen) return;
+    setLoadingAgents(true);
+    loadAgentConfigs(machineId ?? "")
+      .then((list) => {
+        setAgents(list);
+        const firstEnabled = list.find((a) => a.enabled);
+        setSelectedAgent(firstEnabled?.kind ?? null);
+      })
+      .catch((e) => {
+        console.error("Failed to load agent configs:", e);
+        setAgents([]);
+        setSelectedAgent(null);
+      })
+      .finally(() => setLoadingAgents(false));
+  }, [isOpen, machineId]);
 
   if (!isOpen) return null;
 
+  const enabledAgents = agents.filter((a) => a.enabled);
+  const hasEnabledAgent = enabledAgents.length > 0;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onLaunch(title, mode, branch, repoPath);
+    onLaunch(title, mode, branch, repoPath, selectedAgent);
   };
 
   return (
@@ -111,6 +149,45 @@ const NewThreadModal: React.FC<NewThreadModalProps> = ({
             </>
           )}
 
+          {/* Stacked agent selection card (AGENT_INTEGRATION §8.1). */}
+          <div>
+            <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2 font-semibold flex items-center">
+              <Cpu size={10} className="mr-1" /> Agent Runtime
+            </label>
+            {loadingAgents ? (
+              <div className="text-[11px] text-slate-500 font-mono px-2 py-1.5">Loading agents…</div>
+            ) : enabledAgents.length === 0 ? (
+              <div className="text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 font-mono">
+                No agents enabled. Open <span className="font-semibold">Configure Node</span> to enable one.
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {enabledAgents.map((a) => (
+                  <button
+                    key={a.kind}
+                    type="button"
+                    onClick={() => setSelectedAgent(a.kind)}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition-all ${
+                      selectedAgent === a.kind
+                        ? "bg-cyan-500/10 border-cyan-500/50 text-cyan-400"
+                        : "bg-[#050508] border-white/5 text-slate-300 hover:border-white/10"
+                    }`}
+                    title={
+                      a.available
+                        ? `Available: ${a.kind}`
+                        : `Not installed on host. Install command will be requested.`
+                    }
+                  >
+                    {a.kind}
+                    {!a.available && (
+                      <span className="ml-1.5 text-[9px] text-amber-400">(not installed)</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="px-6 py-4 -mx-6 -mb-6 border-t border-white/5 bg-[#050508] flex justify-end gap-3 mt-4">
             <button
               type="button"
@@ -121,7 +198,9 @@ const NewThreadModal: React.FC<NewThreadModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-lg text-xs font-bold bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all flex items-center"
+              disabled={!hasEnabledAgent}
+              title={!hasEnabledAgent ? "Enable an agent in Configure Node first" : undefined}
+              className="px-5 py-2 rounded-lg text-xs font-bold bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all flex items-center disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Launch Thread <ChevronRight size={14} className="ml-1" />
             </button>

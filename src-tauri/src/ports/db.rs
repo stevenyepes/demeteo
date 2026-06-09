@@ -1,4 +1,7 @@
-use crate::domain::models::{Machine, AgentProfile, ChatSession, ChatMessage, SessionHistory, ThreadSession};
+use crate::domain::models::{
+    AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, SessionHistory, ThreadSession,
+    WorkingMemoryEntry,
+};
 
 pub trait DatabasePort: Send + Sync {
     fn get_machines(&self) -> Result<Vec<Machine>, String>;
@@ -8,7 +11,7 @@ pub trait DatabasePort: Send + Sync {
     fn get_agent_profiles(&self, machine_id: &str) -> Result<Vec<AgentProfile>, String>;
     fn add_agent_profile(&self, profile: AgentProfile) -> Result<(), String>;
     fn delete_agent_profile(&self, id: &str) -> Result<(), String>;
-    
+
     // Chat & History
     fn create_chat_session(&self, id: &str, agent_id: &str, title: &str) -> Result<(), String>;
     fn get_chat_sessions(&self, agent_id: &str) -> Result<Vec<ChatSession>, String>;
@@ -19,7 +22,22 @@ pub trait DatabasePort: Send + Sync {
 
     // Thread Sessions
     fn get_thread_sessions(&self, machine_id: &str) -> Result<Vec<ThreadSession>, String>;
+    fn get_thread_sessions_for_thread(&self, thread_id: &str) -> Result<Vec<ThreadSession>, String>;
     fn add_thread_session(&self, thread: ThreadSession) -> Result<(), String>;
     fn update_thread_status(&self, id: &str, status: &str) -> Result<(), String>;
     fn delete_thread_session(&self, id: &str) -> Result<(), String>;
+
+    // Agent configs (per machine, structured). Reads return the migrated,
+    // typed records; writes accept a JSON-encoded string for forward-compat.
+    fn get_agent_configs(&self, machine_id: &str) -> Result<Vec<AgentConfig>, String>;
+    fn set_agent_configs(&self, machine_id: &str, agents_json: &str) -> Result<(), String>;
+
+    // Working memory (per thread)
+    fn upsert_working_memory_entry(
+        &self,
+        thread_id: &str,
+        entry: WorkingMemoryEntry,
+    ) -> Result<(), String>;
+    fn get_working_memory(&self, thread_id: &str) -> Result<Vec<WorkingMemoryEntry>, String>;
+    fn clear_working_memory(&self, thread_id: &str) -> Result<(), String>;
 }

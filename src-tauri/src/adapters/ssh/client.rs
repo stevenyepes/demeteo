@@ -4,8 +4,9 @@ use crate::sftp::SftpEntry;
 use ssh2::{Session, Sftp};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub struct SftpSession {
     pub sftp: Mutex<Sftp>,
@@ -55,13 +56,21 @@ impl SshClientAdapter {
             _ => None,
         };
 
-        // Connect TCP
-        let tcp = TcpStream::connect(format!("{}:{}", machine.host, machine.port))
-            .map_err(|e| format!("Failed to connect to host: {}", e))?;
+        // Connect TCP with a 5s timeout so a black-holed host doesn't hang the whole command
+        let addr = format!("{}:{}", machine.host, machine.port)
+            .to_socket_addrs()
+            .map_err(|e| format!("Failed to resolve host: {}", e))?
+            .next()
+            .ok_or_else(|| format!("No addresses for host: {}", machine.host))?;
+        let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+            .map_err(|e| format!("Failed to connect to host (timeout after 5s): {}", e))?;
+        let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
+        let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
 
         // SSH Handshake
         let mut sess = Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
         sess.set_tcp_stream(tcp.try_clone().map_err(|e| e.to_string())?);
+        sess.set_timeout(10_000);
         sess.handshake().map_err(|e| format!("SSH Handshake failed: {}", e))?;
 
         // Authenticate
@@ -128,8 +137,15 @@ impl ExecutionPort for SshClientAdapter {
             _ => None,
         };
 
-        let tcp = TcpStream::connect(format!("{}:{}", machine.host, machine.port))
-            .map_err(|e| format!("Cannot reach host: {}", e))?;
+        let addr = format!("{}:{}", machine.host, machine.port)
+            .to_socket_addrs()
+            .map_err(|e| format!("Failed to resolve host: {}", e))?
+            .next()
+            .ok_or_else(|| format!("No addresses for host: {}", machine.host))?;
+        let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+            .map_err(|e| format!("Cannot reach host (timeout after 5s): {}", e))?;
+        let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
+        let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
 
         let mut sess =
             Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
@@ -307,7 +323,7 @@ impl ExecutionPort for SshClientAdapter {
     fn setup_worktree(&self, machine_id: &str, repo_path: &str, branch: &str, sandbox_path: &str) -> Result<(), String> {
         // Step 1: Ensure directory setup
         self.run_command(machine_id, &format!("mkdir -p {}/.demeteo/worktrees", repo_path))?;
-        
+
         // Step 2: Configure git info exclude
         let git_exclude_cmd = format!(
             "if [ -d \"{0}/.git\" ]; then mkdir -p \"{0}/.git/info\"; if ! grep -q \".demeteo/\" \"{0}/.git/info/exclude\" 2>/dev/null; then echo \".demeteo/\" >> \"{0}/.git/info/exclude\"; fi; fi",
@@ -325,4 +341,81 @@ impl ExecutionPort for SshClientAdapter {
 
         Ok(())
     }
+
+    fn spawn_interactive(
+        &self,
+        machine_id: &str,
+        binary: &str,
+        args: &[String],
+        cwd: &str,
+        env: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+        use crate::adapters::agent::acp::transport_ssh::RemoteSshTransport;
+
+        let machines = self.db.get_machines()?;
+        let machine = machines.into_iter().find(|m| m.id == machine_id)
+            .ok_or_else(|| "Machine not found".to_string())?;
+
+        let secret = match machine.auth_type.as_str() {
+            "password" | "key" => {
+                let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id))
+                    .ok();
+                entry.and_then(|e| e.get_password().ok())
+            }
+            _ => None,
+        };
+
+        let (sess, tcp) = crate::terminal::connect_ssh(&machine, secret)?;
+        let _ = sess.set_keepalive(true, 30);
+
+        let mut channel = sess
+            .channel_session()
+            .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+
+        // Build the remote command. We `cd` to the worktree first so the
+        // agent's `cwd` matches what the user picked, then exec the
+        // binary. Env vars are exported one per line.
+        let mut env_str = String::new();
+        for (k, v) in env {
+            // Quote each value with single quotes; escape any embedded
+            // single quotes by closing/reopening the quoted segment.
+            let escaped = v.replace('\'', "'\\''");
+            env_str.push_str(&format!("export {}='{}'; ", k, escaped));
+        }
+        let args_str = args
+            .iter()
+            .map(|a| shell_escape(a))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cmd = format!(
+            "cd {} && {} {} {}",
+            shell_escape(cwd),
+            env_str,
+            shell_escape(binary),
+            args_str
+        );
+        channel
+            .exec(&cmd)
+            .map_err(|e| format!("Failed to exec agent over SSH: {}", e))?;
+
+        sess.set_blocking(false);
+
+        Ok(Box::new(RemoteSshTransport::new(channel, sess, tcp, cmd)))
+    }
+}
+
+/// Single-quote-escape a string for use in a POSIX shell command. We don't
+/// shell-escape the whole assembled command because the caller composes
+/// segments and we only need to defend against the binary path / args.
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".into();
+    }
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@'))
+    {
+        return s.to_string();
+    }
+    let escaped = s.replace('\'', "'\\''");
+    format!("'{}'", escaped)
 }

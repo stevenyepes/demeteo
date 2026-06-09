@@ -26,5 +26,7 @@ ssh2 = "0.9"
 rusqlite = { version = "0.31", features = ["bundled"] }
 keyring = "3"
 tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+thiserror = "1"
 tauri-plugin-dialog = "2.7.1"
 

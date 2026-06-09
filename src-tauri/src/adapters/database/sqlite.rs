@@ -1,5 +1,8 @@
+use crate::domain::models::{
+    AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, SessionHistory, ThreadSession,
+    WorkingMemoryEntry,
+};
 use crate::ports::db::DatabasePort;
-use crate::domain::models::{Machine, AgentProfile, ChatSession, ChatMessage, SessionHistory, ThreadSession};
 use rusqlite::{params, Connection};
 use std::sync::Mutex;
 
@@ -9,25 +12,136 @@ pub struct SqliteAdapter {
 
 impl SqliteAdapter {
     pub fn new(conn: Connection) -> Self {
-        // Run migration checks on initialization
         let _ = conn.execute("ALTER TABLE machines ADD COLUMN agents TEXT;", []);
         let _ = conn.execute("ALTER TABLE machines ADD COLUMN auto_approved_rules TEXT;", []);
-        
-        let _ = conn.execute("CREATE TABLE IF NOT EXISTS thread_sessions (
-            id TEXT PRIMARY KEY,
-            machine_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            mode TEXT NOT NULL,
-            branch TEXT,
-            repo_path TEXT,
-            sandbox_path TEXT,
-            status TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(machine_id) REFERENCES machines(id) ON DELETE CASCADE
-        );", []);
-        
-        Self {
-            conn: Mutex::new(conn),
+        let _ = conn.execute("ALTER TABLE thread_sessions ADD COLUMN agent_kind TEXT;", []);
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS thread_sessions (
+                id TEXT PRIMARY KEY,
+                machine_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                branch TEXT,
+                repo_path TEXT,
+                sandbox_path TEXT,
+                status TEXT NOT NULL,
+                agent_kind TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(machine_id) REFERENCES machines(id) ON DELETE CASCADE
+            );",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS thread_working_memory (
+                thread_id      TEXT NOT NULL,
+                file_path      TEXT NOT NULL,
+                line_count     INTEGER,
+                size_bytes     INTEGER,
+                modified_at    INTEGER,
+                first_read_at  INTEGER NOT NULL,
+                last_read_at   INTEGER NOT NULL,
+                PRIMARY KEY (thread_id, file_path),
+                FOREIGN KEY (thread_id) REFERENCES thread_sessions(id) ON DELETE CASCADE
+            );",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_twm_thread_last_read
+             ON thread_working_memory(thread_id, last_read_at DESC);",
+            [],
+        );
+
+        let adapter = Self { conn: Mutex::new(conn) };
+        adapter.migrate_machine_agents();
+        adapter
+    }
+
+    /// Migrate legacy `Machine.agents` JSON. Pre-v1 stored a bare string
+    /// array (e.g. `["OpenCode", "Claude Code"]`); v1 wants structured
+    /// `{kind, enabled}` records. Bare strings for known agent kinds
+    /// (`opencode`, `hermes`) become `enabled: true`; everything else becomes
+    /// `enabled: false` so the UI hides them but the user can re-enable once
+    /// a real adapter exists.
+    fn migrate_machine_agents(&self) {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let machines: Vec<(String, Option<String>)> = match conn
+            .prepare("SELECT id, agents FROM machines")
+            .and_then(|mut s| {
+                s.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)))
+                    .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            }) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+
+        for (machine_id, raw) in machines {
+            let parsed: Vec<serde_json::Value> = match raw.as_deref() {
+                Some(s) if !s.trim().is_empty() => match serde_json::from_str(s) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                },
+                _ => continue,
+            };
+
+            let migrated: Vec<AgentConfig> = parsed
+                .into_iter()
+                .filter_map(|v| {
+                    if let Some(s) = v.as_str() {
+                        let kind = s.to_lowercase();
+                        if matches!(kind.as_str(), "opencode" | "hermes") {
+                            Some(AgentConfig { kind, enabled: true })
+                        } else {
+                            None
+                        }
+                    } else if let Some(obj) = v.as_object() {
+                        let raw_kind = obj
+                            .get("kind")
+                            .and_then(|k| k.as_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if !matches!(raw_kind.as_str(), "opencode" | "hermes") {
+                            // Bogus kind (e.g. the string "[object object]" left
+                            // behind by an earlier round-trip of an object
+                            // through a code path that Stringified it). Drop it.
+                            return None;
+                        }
+                        Some(AgentConfig {
+                            kind: raw_kind,
+                            enabled: obj
+                                .get("enabled")
+                                .and_then(|e| e.as_bool())
+                                .unwrap_or(false),
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Dedupe by kind (keep the first occurrence). Repeats from past
+            // double-writes (e.g. the user re-saved the same form twice in
+            // quick succession) should collapse to a single record.
+            let mut seen_kinds: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let migrated: Vec<AgentConfig> = migrated
+                .into_iter()
+                .filter(|c| seen_kinds.insert(c.kind.clone()))
+                .collect();
+
+            let serialized = match serde_json::to_string(&migrated) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let _ = conn.execute(
+                "UPDATE machines SET agents = ?2 WHERE id = ?1",
+                params![machine_id, serialized],
+            );
         }
     }
 }
@@ -217,7 +331,7 @@ impl DatabasePort for SqliteAdapter {
 
     fn get_thread_sessions(&self, machine_id: &str) -> Result<Vec<ThreadSession>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
-        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status FROM thread_sessions WHERE machine_id = ?1 ORDER BY created_at DESC")
+        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind FROM thread_sessions WHERE machine_id = ?1 ORDER BY created_at DESC")
             .map_err(|e| e.to_string())?;
         let thread_iter = stmt.query_map(params![machine_id], |row| {
             Ok(ThreadSession {
@@ -229,6 +343,32 @@ impl DatabasePort for SqliteAdapter {
                 repo_path: row.get(5)?,
                 sandbox_path: row.get(6)?,
                 status: row.get(7)?,
+                agent_kind: row.get(8)?,
+            })
+        }).map_err(|e| e.to_string())?;
+
+        let mut list = Vec::new();
+        for t in thread_iter {
+            list.push(t.map_err(|e| e.to_string())?);
+        }
+        Ok(list)
+    }
+
+    fn get_thread_sessions_for_thread(&self, thread_id: &str) -> Result<Vec<ThreadSession>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind FROM thread_sessions WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        let thread_iter = stmt.query_map(params![thread_id], |row| {
+            Ok(ThreadSession {
+                id: row.get(0)?,
+                machine_id: row.get(1)?,
+                title: row.get(2)?,
+                mode: row.get(3)?,
+                branch: row.get(4)?,
+                repo_path: row.get(5)?,
+                sandbox_path: row.get(6)?,
+                status: row.get(7)?,
+                agent_kind: row.get(8)?,
             })
         }).map_err(|e| e.to_string())?;
 
@@ -242,9 +382,9 @@ impl DatabasePort for SqliteAdapter {
     fn add_thread_session(&self, t: ThreadSession) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
         conn.execute(
-            "INSERT INTO thread_sessions (id, machine_id, title, mode, branch, repo_path, sandbox_path, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![t.id, t.machine_id, t.title, t.mode, t.branch, t.repo_path, t.sandbox_path, t.status],
+            "INSERT INTO thread_sessions (id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![t.id, t.machine_id, t.title, t.mode, t.branch, t.repo_path, t.sandbox_path, t.status, t.agent_kind],
         ).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -261,6 +401,105 @@ impl DatabasePort for SqliteAdapter {
     fn delete_thread_session(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
         conn.execute("DELETE FROM thread_sessions WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+
+    fn get_agent_configs(&self, machine_id: &str) -> Result<Vec<AgentConfig>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT agents FROM machines WHERE id = ?1",
+                params![machine_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let parsed: Vec<AgentConfig> = raw
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        Ok(parsed)
+    }
+
+    fn set_agent_configs(&self, machine_id: &str, agents_json: &str) -> Result<(), String> {
+        // Validate it's a parseable array before writing.
+        let _: Vec<AgentConfig> = serde_json::from_str(agents_json)
+            .map_err(|e| format!("Invalid agents JSON: {}", e))?;
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "UPDATE machines SET agents = ?2 WHERE id = ?1",
+            params![machine_id, agents_json],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn upsert_working_memory_entry(
+        &self,
+        thread_id: &str,
+        entry: WorkingMemoryEntry,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        // UPSERT: if a row exists, preserve the original first_read_at and
+        // refresh last_read_at + metadata. If not, insert.
+        conn.execute(
+            "INSERT INTO thread_working_memory
+                (thread_id, file_path, line_count, size_bytes, modified_at, first_read_at, last_read_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(thread_id, file_path) DO UPDATE SET
+                line_count  = excluded.line_count,
+                size_bytes  = excluded.size_bytes,
+                modified_at = excluded.modified_at,
+                last_read_at = excluded.last_read_at",
+            params![
+                thread_id,
+                entry.file_path,
+                entry.line_count.map(|n| n as i64),
+                entry.size_bytes.map(|n| n as i64),
+                entry.modified_at,
+                entry.first_read_at,
+                entry.last_read_at,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_working_memory(&self, thread_id: &str) -> Result<Vec<WorkingMemoryEntry>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT file_path, line_count, size_bytes, modified_at, first_read_at, last_read_at
+                 FROM thread_working_memory WHERE thread_id = ?1
+                 ORDER BY last_read_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(params![thread_id], |row| {
+                Ok(WorkingMemoryEntry {
+                    file_path: row.get(0)?,
+                    line_count: row.get::<_, Option<i64>>(1)?.map(|n| n as u32),
+                    size_bytes: row.get::<_, Option<i64>>(2)?.map(|n| n as u64),
+                    modified_at: row.get(3)?,
+                    first_read_at: row.get(4)?,
+                    last_read_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter {
+            list.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(list)
+    }
+
+    fn clear_working_memory(&self, thread_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "DELETE FROM thread_working_memory WHERE thread_id = ?1",
+            params![thread_id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 }

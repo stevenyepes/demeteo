@@ -219,7 +219,12 @@ const Sidebar: React.FC<SidebarProps> = ({
             <div className="flex items-center">
               <MemoryStick size={14} className="mr-2 text-slate-500" /> Working Memory
             </div>
-            <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-cyan-500 font-mono">4.2k tkns</span>
+            {/* Per AGENT_INTEGRATION §10.5: token/cost indicator is a
+                stub in v1 (Usage event is wired into the protocol
+                stack but the UI indicator stays a placeholder). */}
+            <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-500 font-mono">
+              idle
+            </span>
           </div>
           <div className="flex flex-col gap-3">
             {workingMemory.map((file, idx) => (

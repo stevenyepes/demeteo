@@ -133,9 +133,25 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<Connection> {
             repo_path TEXT,
             sandbox_path TEXT,
             status TEXT NOT NULL,
+            agent_kind TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(machine_id) REFERENCES machines(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS thread_working_memory (
+            thread_id      TEXT NOT NULL,
+            file_path      TEXT NOT NULL,
+            line_count     INTEGER,
+            size_bytes     INTEGER,
+            modified_at    INTEGER,
+            first_read_at  INTEGER NOT NULL,
+            last_read_at   INTEGER NOT NULL,
+            PRIMARY KEY (thread_id, file_path),
+            FOREIGN KEY (thread_id) REFERENCES thread_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_twm_thread_last_read
+            ON thread_working_memory(thread_id, last_read_at DESC);
 
         COMMIT;"
     )?;

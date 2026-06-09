@@ -10,7 +10,6 @@ interface EnvFormState {
   keyPath: string;
   secret: string;
   agents: string[];
-  autoApprovedRules: string;
 }
 
 interface EnvModalProps {
@@ -262,16 +261,6 @@ const EnvModal: React.FC<EnvModalProps> = ({
               </div>
             </div>
 
-            <div>
-              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Auto-Approved Command Regex List</label>
-              <input
-                type="text"
-                value={form.autoApprovedRules}
-                onChange={(e) => setForm({ ...form, autoApprovedRules: e.target.value })}
-                placeholder='["^git status$", "^cat .*"]'
-                className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
-              />
-            </div>
           </div>
 
           <div className="px-6 py-4 border-t border-white/5 bg-[#050508] flex flex-col gap-3">
