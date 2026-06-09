@@ -104,6 +104,53 @@ function App() {
   const [streams, setStreams] = useState<Record<string, StreamEvent[]>>({});
   const [supervisorInput, setSupervisorInput] = useState("");
 
+  // Per-thread sequence counter for ordering persisted events.
+  // seqRef tracks the highest seq seen (from DB or in-flight) so that
+  // new events get seqRef + 1 and sort correctly after restored history.
+  const seqRef = useRef<Record<string, number>>({});
+
+  // Tracks the next seq to assign. Updated whenever seqRef is updated.
+  const maxSeqRef = useRef<Record<string, number>>({});
+
+  // Persistable event types. `text` deltas are included because they
+  // are the agent's actual responses — there is no other way to recover
+  // them after a restart. `tool_call_update` is excluded as it is
+  // transient UI feedback that has no lasting value.
+  const PERSISTABLE_TYPES = new Set(["info", "directive", "agent_error", "intercept", "tool_call", "plan", "turn_complete", "text"]);
+
+  const setActiveThreadIdAndPersist = (id: string | null) => {
+    setActiveThreadId(id);
+    if (id) {
+      invoke("set_app_session", { key: "active_thread_id", value: id }).catch(() => {});
+    }
+  };
+
+  // Wraps setStreams: fires setStreams as normal, then asynchronously
+  // persists any new non-text events to the backend.
+  const setStreamsAndPersist = (
+    updater: React.SetStateAction<Record<string, StreamEvent[]>>,
+  ) => {
+    setStreams((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      for (const [threadId, nextEvents] of Object.entries(next)) {
+        const prevEvents = prev[threadId] || [];
+        if (nextEvents.length > prevEvents.length) {
+          const newEvents = nextEvents.slice(prevEvents.length);
+          for (const ev of newEvents) {
+            if (!PERSISTABLE_TYPES.has(ev.type)) continue;
+            const newSeq = (maxSeqRef.current[threadId] ?? 0) + 1;
+            maxSeqRef.current[threadId] = newSeq;
+            seqRef.current[threadId] = newSeq;
+            const json = JSON.stringify(ev);
+            invoke("append_thread_event", { id: ev.id, threadId, eventJson: json, seq: newSeq })
+              .catch(() => {});
+          }
+        }
+      }
+      return next;
+    });
+  };
+
   // Per-thread bookkeeping for the auto-inspector rule (§8.6):
   // - `inspectedFile` is already in state; we treat a non-null
   //   inspectedFile as "open" and a null as "dismissed".
@@ -127,6 +174,27 @@ function App() {
       .catch(console.error);
   }, []);
 
+  // Persist active_machine_id and active_thread_id on visibility change or before unload.
+  useEffect(() => {
+    const persist = () => {
+      if (activeMachine) {
+        invoke("set_app_session", { key: "active_machine_id", value: activeMachine.id }).catch(() => {});
+      }
+      if (activeThreadId) {
+        invoke("set_app_session", { key: "active_thread_id", value: activeThreadId }).catch(() => {});
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") persist();
+    };
+    window.addEventListener("beforeunload", persist);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("beforeunload", persist);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [activeMachine, activeThreadId]);
+
   useEffect(() => {
     const unlistens: Array<Promise<() => void>> = [];
 
@@ -134,7 +202,7 @@ function App() {
       listen<InterceptPayload>("permission_requested", (e) => {
         const p = e.payload;
         if (!p?.intercept_id) return;
-        setStreams((prev) => {
+        setStreamsAndPersist((prev) => {
           const list = prev[p.thread_id] || [];
           if (list.some((ev) => ev.payload?.intercept_id === p.intercept_id)) return prev;
           const message =
@@ -176,7 +244,7 @@ function App() {
         (e) => {
           const { thread_id, result, intercept_id } = e.payload;
           if (!thread_id || !result) return;
-          setStreams((prev) => {
+          setStreamsAndPersist((prev) => {
             // Remove the matching intercept card (if any). This covers both
             // the auto-approve path (intercept_id is null) and the escalated
             // path where the user approved/rejected — the card becomes stale
@@ -279,25 +347,71 @@ function App() {
       const list: Machine[] = await invoke("get_machines");
       const mapped = list.map(mapMachineToFrontend);
       setMachinesList(mapped);
-      if (mapped.length > 0 && !activeMachine) {
-        handleMachineSelect(mapped[0]);
+
+      const savedMachineId: string | null = await invoke<string | null>("get_app_session", { key: "active_machine_id" })
+        .catch(() => null);
+      const machineToSelect = savedMachineId
+        ? mapped.find((m) => m.id === savedMachineId) ?? mapped[0]
+        : mapped[0];
+      if (machineToSelect) {
+        handleMachineSelect(machineToSelect, false);
       }
     } catch (err) {
       console.error("Failed to load nodes:", err);
     }
   };
 
-  const handleMachineSelect = async (m: FrontendMachine) => {
+  const handleMachineSelect = async (m: FrontendMachine, shouldPersist = true) => {
     setActiveMachine(m);
     setShowMachineSelector(false);
+
+    if (shouldPersist) {
+      invoke("set_app_session", { key: "active_machine_id", value: m.id }).catch(() => {});
+    }
 
     try {
       const threadList: ThreadSession[] = await invoke("get_thread_sessions", { machineId: m.id });
       setThreads(threadList);
-      if (threadList.length > 0) {
-        setActiveThreadId(threadList[0].id);
-      } else {
-        setActiveThreadId(null);
+
+      const savedThreadId: string | null = shouldPersist
+        ? await invoke<string | null>("get_app_session", { key: "active_thread_id" }).catch(() => null)
+        : null;
+      const threadToSelect = savedThreadId && threadList.some((t) => t.id === savedThreadId)
+        ? savedThreadId
+        : threadList.length > 0
+          ? threadList[0].id
+          : null;
+      setActiveThreadId(threadToSelect);
+      if (shouldPersist && threadToSelect) {
+        invoke("set_app_session", { key: "active_thread_id", value: threadToSelect }).catch(() => {});
+      }
+
+      const events: Record<string, StreamEvent[]> = {};
+      const loadedSeqs: Record<string, number> = { ...seqRef.current };
+      const loadedMaxSeqs: Record<string, number> = { ...maxSeqRef.current };
+      await Promise.all(
+        threadList.map(async (t) => {
+          try {
+            const raw: [StreamEvent, number][] = await invoke("get_thread_events", { threadId: t.id });
+            if (raw.length > 0) {
+              const [eventList, maxSeq] = raw.reduce(
+                ([evts, max], [evt, seq]) => {
+                  evts.push(evt);
+                  return [evts, Math.max(max, seq)];
+                },
+                [[] as StreamEvent[], 0] as [StreamEvent[], number],
+              );
+              events[t.id] = eventList;
+              loadedSeqs[t.id] = maxSeq;
+              loadedMaxSeqs[t.id] = maxSeq;
+            }
+          } catch {}
+        }),
+      );
+      if (Object.keys(events).length > 0) {
+        seqRef.current = { ...seqRef.current, ...loadedSeqs };
+        maxSeqRef.current = { ...maxSeqRef.current, ...loadedMaxSeqs };
+        setStreams((prev) => ({ ...prev, ...events }));
       }
     } catch (err) {
       console.error(err);
@@ -501,7 +615,7 @@ function App() {
       await invoke("add_thread_session", { thread: threadData });
       setIsNewThreadModalOpen(false);
 
-      setStreams((prev) => ({
+      setStreamsAndPersist((prev) => ({
         ...prev,
         [id]: [
           {
@@ -550,7 +664,7 @@ function App() {
           setThreads((prev) =>
             prev.map((t) => (t.id === id ? { ...t, status: "error" } : t)),
           );
-          setStreams((prev) => ({
+          setStreamsAndPersist((prev) => ({
             ...prev,
             [id]: [
               ...(prev[id] || []),
@@ -582,7 +696,7 @@ function App() {
     if (!ok) return;
     try {
       await invoke("delete_thread_session", { id: threadId });
-      setStreams((prev) => {
+      setStreamsAndPersist((prev) => {
         const next = { ...prev };
         delete next[threadId];
         return next;
@@ -655,7 +769,7 @@ function App() {
     }
     try {
       await invoke("approve_intercept", { interceptId });
-      setStreams((prev) => {
+      setStreamsAndPersist((prev) => {
         const list = prev[threadId] || [];
         return {
           ...prev,
@@ -688,7 +802,7 @@ function App() {
         });
         setThreads(list);
       }
-      setStreams((prev) => {
+      setStreamsAndPersist((prev) => {
         const list = prev[threadId] || [];
         return {
           ...prev,
@@ -727,7 +841,7 @@ function App() {
 
     // Optimistic: append the directive to the visible stream so the
     // user sees what they sent.
-    setStreams((prev) => ({
+    setStreamsAndPersist((prev) => ({
       ...prev,
       [threadId]: [
         ...(prev[threadId] || []),
@@ -767,7 +881,7 @@ function App() {
       await agentPrompt(threadId, thread.agent_kind, text);
     } catch (e) {
       const msg = String(e);
-      setStreams((prev) => ({
+      setStreamsAndPersist((prev) => ({
         ...prev,
         [threadId]: [
           ...(prev[threadId] || []),
@@ -806,7 +920,7 @@ function App() {
   ) => {
     const now = Date.now();
     lastStreamEventAt.current[threadId] = now;
-    setStreams((prev) => {
+    setStreamsAndPersist((prev) => {
       const list = prev[threadId] || [];
       let next: StreamEvent[] = list;
       switch (event.kind) {
@@ -867,12 +981,15 @@ function App() {
           break;
         }
         case "plan": {
+          const planMsg = `Plan: ${event.entries.map((e) => `${e.step} (${e.status})`).join(" → ")}`;
+          const lastInfo = list.filter((e) => e.type === "info").pop();
+          if (lastInfo?.message === planMsg) break;
           next = [
             ...list,
             {
               id: crypto.randomUUID(),
               type: "info",
-              message: `Plan: ${event.entries.map((e) => `${e.step} (${e.status})`).join(" → ")}`,
+              message: planMsg,
               timestamp: new Date().toLocaleTimeString(),
             },
           ];
@@ -884,37 +1001,38 @@ function App() {
           break;
         }
         case "error": {
+          const errKey = `${event.code}:${event.message}`;
+          const lastErr = list.filter((e) => e.type === "agent_error").pop();
+          if (lastErr?.message === errKey) break;
           next = [
             ...list,
             {
               id: crypto.randomUUID(),
               type: "agent_error",
-              message: `${event.code}: ${event.message}`,
+              message: errKey,
               timestamp: new Date().toLocaleTimeString(),
             },
           ];
-          // Don't flip status here — the backend emits
-          // thread_status_changed with `error` separately.
           break;
         }
         case "turn_complete": {
-          // Per spec §8.5: append an info event with the turn
-          // summary, then the backend will fire
-          // thread_status_changed to flip us to `idle`.
           const reason = event.stop_reason;
+          const msg =
+            reason === "cancelled"
+              ? "[cancelled by user]"
+              : reason === "max_tokens"
+              ? "Turn complete: max tokens reached."
+              : reason === "error"
+              ? "Turn complete: error."
+              : "Turn complete.";
+          const lastInfo = list.filter((e) => e.type === "info").pop();
+          if (lastInfo?.message === msg) break;
           next = [
             ...list,
             {
               id: crypto.randomUUID(),
               type: "info",
-              message:
-                reason === "cancelled"
-                  ? "[cancelled by user]"
-                  : reason === "max_tokens"
-                  ? "Turn complete: max tokens reached."
-                  : reason === "error"
-                  ? "Turn complete: error."
-                  : "Turn complete.",
+              message: msg,
               timestamp: new Date().toLocaleTimeString(),
             },
           ];
@@ -934,7 +1052,7 @@ function App() {
     setThreads((prev) =>
       prev.map((t) => (t.id === threadId ? { ...t, status: "installing" } : t)),
     );
-    setStreams((prev) => ({
+    setStreamsAndPersist((prev) => ({
       ...prev,
       [threadId]: [
         ...(prev[threadId] || []),
@@ -957,7 +1075,7 @@ function App() {
       setThreads((prev) =>
         prev.map((t) => (t.id === threadId ? { ...t, status: "error" } : t)),
       );
-      setStreams((prev) => ({
+      setStreamsAndPersist((prev) => ({
         ...prev,
         [threadId]: [
           ...(prev[threadId] || []),
@@ -982,7 +1100,7 @@ function App() {
         t.id === threadId ? { ...t, status: "error", agent_kind: null } : t,
       ),
     );
-    setStreams((prev) => ({
+    setStreamsAndPersist((prev) => ({
       ...prev,
       [threadId]: [
         ...(prev[threadId] || []),
@@ -1010,7 +1128,7 @@ function App() {
         onDeleteEnv={deleteEnv}
         threads={threads}
         activeThreadId={activeThreadId}
-        onThreadSelect={setActiveThreadId}
+        onThreadSelect={setActiveThreadIdAndPersist}
         setWorkspaceMode={setWorkspaceMode}
         onNewThreadClick={() => setIsNewThreadModalOpen(true)}
         onDeleteThread={deleteThread}

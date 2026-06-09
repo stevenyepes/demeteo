@@ -89,6 +89,19 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.try_state::<terminal::SessionState>() {
+                    if let Ok(sessions) = state.sessions.lock() {
+                        for (_, active) in sessions.iter() {
+                            if let Ok(mut chan) = active.channel.lock() {
+                                let _ = chan.close();
+                            }
+                        }
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::machine::get_machines,
             commands::machine::add_machine,
@@ -114,6 +127,11 @@ pub fn run() {
             commands::agent_lifecycle::agent_prompt,
             commands::agent_lifecycle::agent_cancel,
             commands::agent_lifecycle::agent_restart,
+            commands::app_session::get_app_session,
+            commands::app_session::set_app_session,
+            commands::app_session::delete_app_session,
+            commands::thread_events::get_thread_events,
+            commands::thread_events::append_thread_event,
             terminal::set_machine_secret,
             terminal::delete_machine_secret,
             terminal::start_terminal_session,

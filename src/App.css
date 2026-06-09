@@ -796,10 +796,20 @@ body {
 .supervisor-stream-container {
   padding: 32px !important;
   overflow-y: auto !important;
-  scroll-behavior: smooth !important;
+  overflow-anchor: auto !important;
   height: 100% !important;
   display: flex !important;
   flex-direction: column !important;
+  will-change: scroll-position;
+}
+
+.supervisor-stream-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.stream-event {
+  content-visibility: auto;
+  contain-intrinsic-size: 80px 180px;
 }
 
 .supervisor-stream-content {

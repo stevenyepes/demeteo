@@ -5,3 +5,5 @@ pub mod ssh;
 pub mod agent_exec;
 pub mod agent_config;
 pub mod agent_lifecycle;
+pub mod app_session;
+pub mod thread_events;

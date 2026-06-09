@@ -54,6 +54,31 @@ impl SqliteAdapter {
             [],
         );
 
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_session (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS thread_events (
+                id         TEXT PRIMARY KEY,
+                thread_id  TEXT NOT NULL,
+                event_json TEXT NOT NULL,
+                seq        INTEGER NOT NULL,
+                FOREIGN KEY (thread_id) REFERENCES thread_sessions(id) ON DELETE CASCADE
+            );",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_thread_events_thread_seq
+             ON thread_events(thread_id, seq);",
+            [],
+        );
+
         let adapter = Self { conn: Mutex::new(conn) };
         adapter.migrate_machine_agents();
         adapter
@@ -498,6 +523,72 @@ impl DatabasePort for SqliteAdapter {
         conn.execute(
             "DELETE FROM thread_working_memory WHERE thread_id = ?1",
             params![thread_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_app_session(&self, key: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let result: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_session WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .ok();
+        Ok(result)
+    }
+
+    fn set_app_session(&self, key: &str, value: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "INSERT INTO app_session (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn delete_app_session(&self, key: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute("DELETE FROM app_session WHERE key = ?1", params![key])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_thread_events(&self, thread_id: &str) -> Result<Vec<(serde_json::Value, i64)>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT event_json, seq FROM thread_events WHERE thread_id = ?1 ORDER BY seq ASC")
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(params![thread_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut events = Vec::new();
+        for row in iter {
+            let (json_str, seq) = row.map_err(|e| e.to_string())?;
+            let parsed: serde_json::Value =
+                serde_json::from_str(&json_str).map_err(|e| e.to_string())?;
+            events.push((parsed, seq));
+        }
+        Ok(events)
+    }
+
+    fn append_thread_event(
+        &self,
+        id: &str,
+        thread_id: &str,
+        event_json: &str,
+        seq: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "INSERT INTO thread_events (id, thread_id, event_json, seq) VALUES (?1, ?2, ?3, ?4)",
+            params![id, thread_id, event_json, seq],
         )
         .map_err(|e| e.to_string())?;
         Ok(())

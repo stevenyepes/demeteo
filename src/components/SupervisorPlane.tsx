@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ShieldAlert, ChevronRight, Eye, Check, Send, CircleDashed, FlaskConical, Square } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
@@ -66,6 +66,24 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectEventId, setRejectEventId] = useState<string | null>(null);
   const events = activeThreadId ? streams[activeThreadId] || [] : [];
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const userScrolledUp = useRef(false);
+
+  // Auto-scroll to latest event when new events arrive, unless the user
+  // has manually scrolled up to read history.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || userScrolledUp.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [events.length]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    userScrolledUp.current = !atBottom;
+  };
   const activeThread = activeThreadId ? threads.find((t) => t.id === activeThreadId) : null;
   const status = activeThread?.status ?? "idle";
   const isRunning = status === "running";
@@ -82,8 +100,8 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
       currentGroup = [];
 
       renderedElements.push(
-        <div key={key} className="pl-6 border-l-2 border-slate-800 flex flex-col gap-3 py-2 animate-slide-in">
-          {groupItems.map((ev) => {
+          <div key={key} className="stream-event pl-6 border-l-2 border-slate-800 flex flex-col gap-3 py-2 animate-slide-in">
+            {groupItems.map((ev) => {
             if (ev.type === "auto_approve") {
               const cmd = ev.message.replace("Agent executed ", "");
               return (
@@ -110,7 +128,7 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
       if (ev.type === "directive") {
         flushGroup(`group_before_dir_${idx}`);
         renderedElements.push(
-          <div key={ev.id} className="flex items-start text-slate-300 gap-4 animate-slide-in bg-[#12161e]/75 p-4 rounded-xl border border-white/5 shadow-md">
+          <div key={ev.id} className="stream-event flex items-start text-slate-300 gap-4 animate-slide-in bg-[#12161e]/75 p-4 rounded-xl border border-white/5 shadow-md">
             <span className="text-cyan-400 mt-0.5 font-bold font-mono text-base">&gt;</span>
             <div className="leading-relaxed text-sm">{ev.message}</div>
           </div>
@@ -127,7 +145,7 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
         const isAgentOriginated = !!ev.payload?.tool_call_id;
 
         renderedElements.push(
-          <div key={ev.id} className="bg-[#0a0a0e]/95 border border-amber-500/30 rounded-xl overflow-hidden shadow-xl shadow-amber-500/5 hover:border-amber-500/50 transition-all duration-300 animate-slide-in">
+          <div key={ev.id} className="stream-event bg-[#0a0a0e]/95 border border-amber-500/30 rounded-xl overflow-hidden shadow-xl shadow-amber-500/5 hover:border-amber-500/50 transition-all duration-300 animate-slide-in">
             <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between">
               <div className="flex items-center text-xs font-semibold text-amber-500 tracking-wide uppercase gap-2">
                 <ShieldAlert size={14} className="mr-1" />
@@ -194,7 +212,7 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
       } else if (ev.type === "text") {
         flushGroup(`group_before_text_${idx}`);
         renderedElements.push(
-          <div key={ev.id} className="flex flex-col text-slate-300 gap-2.5 animate-slide-in bg-[#12161e]/45 p-4 rounded-xl border border-cyan-500/10 backdrop-blur-[12px] shadow-[0_4px_20px_rgba(0,0,0,0.2)]">
+          <div key={ev.id} className="stream-event flex flex-col text-slate-300 gap-2.5 animate-slide-in bg-[#12161e]/45 p-4 rounded-xl border border-cyan-500/10 backdrop-blur-[12px] shadow-[0_4px_20px_rgba(0,0,0,0.2)]">
             <div className="flex items-center gap-2 text-[10px] text-slate-400 font-semibold tracking-wider uppercase select-none">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse"></span>
               <span>Agent</span>
@@ -213,7 +231,7 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
     if (currentGroup.length > 0 || isRunning) {
       const groupItems = [...currentGroup];
       renderedElements.push(
-        <div key="final_group" className="pl-6 border-l-2 border-slate-800 flex flex-col gap-3 py-2 animate-slide-in">
+        <div key="final_group" className="stream-event pl-6 border-l-2 border-slate-800 flex flex-col gap-3 py-2 animate-slide-in">
           {groupItems.map((ev) => {
             if (ev.type === "auto_approve") {
               const cmd = ev.message.replace("Agent executed ", "");
@@ -264,7 +282,7 @@ const SupervisorPlane: React.FC<SupervisorPlaneProps> = ({
   return (
     <>
       {/* Event Stream */}
-      <div className="supervisor-stream-container flex-1">
+      <div className="supervisor-stream-container flex-1" ref={scrollRef} onScroll={handleScroll}>
         <div className="supervisor-stream-content">
           {renderStream()}
 

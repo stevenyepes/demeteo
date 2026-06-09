@@ -40,4 +40,13 @@ pub trait DatabasePort: Send + Sync {
     ) -> Result<(), String>;
     fn get_working_memory(&self, thread_id: &str) -> Result<Vec<WorkingMemoryEntry>, String>;
     fn clear_working_memory(&self, thread_id: &str) -> Result<(), String>;
+
+    // App session (key-value store for UI state)
+    fn get_app_session(&self, key: &str) -> Result<Option<String>, String>;
+    fn set_app_session(&self, key: &str, value: &str) -> Result<(), String>;
+    fn delete_app_session(&self, key: &str) -> Result<(), String>;
+
+    // Thread event history — returns (parsed_event, seq) ordered by seq ASC
+    fn get_thread_events(&self, thread_id: &str) -> Result<Vec<(serde_json::Value, i64)>, String>;
+    fn append_thread_event(&self, id: &str, thread_id: &str, event_json: &str, seq: i64) -> Result<(), String>;
 }

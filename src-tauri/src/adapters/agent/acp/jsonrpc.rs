@@ -260,8 +260,9 @@ fn call_blocking(
     // Read loop: pull messages until our `id` arrives or the transport
     // dies. Notifications get pushed to the mpsc; only the response
     // with the matching `id` resolves the oneshot.
+    let mut read_buf = Vec::new();
     loop {
-        let msg = read_one_message_blocking(transport)?;
+        let msg = read_one_message_blocking(transport, &mut read_buf)?;
         match msg {
             Message::Response {
                 id: Some(Value::Number(n)),
@@ -304,36 +305,65 @@ fn call_blocking(
     }
 }
 
+/// Streaming JSON-RPC reader that handles concatenated JSON objects
+/// (no newline delimiter required between frames). Uses
+/// `serde_json::StreamDeserializer` to extract complete messages from
+/// an accumulating byte buffer.
 fn read_one_message_blocking(
     transport: &Arc<Mutex<Box<dyn InteractiveHandle>>>,
+    buf: &mut Vec<u8>,
 ) -> Result<Message, RpcError> {
-    let mut line = String::new();
     loop {
-        let read_result = {
+        // Try to extract a complete JSON-RPC message from accumulated bytes.
+        if !buf.is_empty() {
+            let (msg, consumed) = {
+                let deser = serde_json::Deserializer::from_slice(buf);
+                let mut stream = deser.into_iter::<Message>();
+                match stream.next() {
+                    Some(Ok(msg)) => (Some(msg), stream.byte_offset()),
+                    Some(Err(ref e)) if e.is_eof() => (None, 0),
+                    Some(Err(e)) => {
+                        let raw = String::from_utf8_lossy(buf);
+                        return Err(RpcError {
+                            code: -32700,
+                            message: format!("parse: {} (data: {})", e, raw),
+                            data: None,
+                        });
+                    }
+                    None => (None, 0),
+                }
+            };
+
+            if let Some(msg) = msg {
+                buf.drain(..consumed);
+                return Ok(msg);
+            }
+        }
+
+        // Not enough data — read a chunk from the transport.
+        let mut chunk = [0u8; 8192];
+        let n = {
             let mut t = transport.lock().map_err(|_| RpcError {
                 code: -32000,
                 message: "transport lock poisoned".into(),
                 data: None,
             })?;
-            t.read_byte()
+            t.read(&mut chunk)
         };
-        match read_result {
-            Ok(b) => {
-                if b == b'\n' {
-                    break;
-                }
-                line.push(b as char);
-            }
-            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                continue;
-            }
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+        match n {
+            Ok(0) => {
                 return Err(RpcError {
                     code: -32001,
                     message: "agent closed stdout".into(),
                     data: None,
                 });
+            }
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
             }
             Err(e) => {
                 return Err(RpcError {
@@ -344,15 +374,6 @@ fn read_one_message_blocking(
             }
         }
     }
-
-    eprintln!("[agent jsonrpc] {}", line);
-
-    let msg: Message = serde_json::from_str(&line).map_err(|e| RpcError {
-        code: -32700,
-        message: format!("parse: {} (line: {})", e, line),
-        data: None,
-    })?;
-    Ok(msg)
 }
 
 #[cfg(test)]

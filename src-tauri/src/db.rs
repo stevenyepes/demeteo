@@ -97,6 +97,22 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_twm_thread_last_read
             ON thread_working_memory(thread_id, last_read_at DESC);
 
+        CREATE TABLE IF NOT EXISTS app_session (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS thread_events (
+            id         TEXT PRIMARY KEY,
+            thread_id  TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            seq        INTEGER NOT NULL,
+            FOREIGN KEY (thread_id) REFERENCES thread_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_thread_events_thread_seq
+            ON thread_events(thread_id, seq);
+
         COMMIT;"
     )?;
 
