@@ -8,6 +8,7 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
+use crate::domain::models::SessionInfo;
 use crate::ports::agent_execution::AgentExecutionPort;
 
 #[derive(Clone)]
@@ -80,6 +81,20 @@ pub trait AgentSession: Send + Sync {
 
     /// Cancel the in-flight turn. Idempotent: no-op if turn is already done.
     fn cancel(&self) -> Result<(), String>;
+
+    /// Switch the agent's operating mode (e.g. "plan", "build", "ask", "code").
+    /// Sends a `session/set_mode` ACP call. Returns an error if the agent
+    /// does not support the requested mode.
+    fn set_mode(&self, mode_id: &str) -> Result<(), String>;
+
+    /// Change a session configuration option (e.g. model, reasoning level).
+    /// Sends a `session/set_config_option` ACP call with the given config id
+    /// and value. The agent must have advertised the option during setup.
+    fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), String>;
+
+    /// Return the session info captured at startup (modes, config options, etc.)
+    /// so the frontend can display available choices to the user.
+    fn session_info(&self) -> SessionInfo;
 }
 
 /// Stub for SerializedAgentConfig — this is here for future use by the

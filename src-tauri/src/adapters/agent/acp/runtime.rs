@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use crate::adapters::agent::acp::jsonrpc::{JsonRpcClient, Message, RpcError};
 use crate::adapters::agent::acp::tool_bridge::{DispatchResult, ToolBridge};
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::intercept::ExecutionResult;
+use crate::domain::models::{ConfigOption, SessionInfo, SessionModeState};
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 /// Concrete runtime for agents speaking [ACP](https://agentclientprotocol.com/).
@@ -121,6 +123,24 @@ impl AgentRuntime for AcpRuntime {
                 })?
                 .to_string();
 
+            // Capture session info (modes, config options, etc.) from
+            // the session/new response so the frontend can display
+            // available modes/models for interactive selection.
+            let session_info = SessionInfo {
+                modes: session_result
+                    .get("modes")
+                    .map(|v| serde_json::from_value(v.clone()).ok())
+                    .flatten(),
+                config_options: session_result
+                    .get("configOptions")
+                    .map(|v| serde_json::from_value(v.clone()).ok())
+                    .flatten(),
+                raw: Some(
+                    serde_json::from_value(session_result.clone())
+                        .unwrap_or_default(),
+                ),
+            };
+
             // Tool bridge: we build it here so `prompt` can dispatch
             // agent-originated file/terminal requests through the
             // existing policy + scope-fence machinery.
@@ -134,6 +154,7 @@ impl AgentRuntime for AcpRuntime {
                 ctx,
                 cancelled: AtomicBool::new(false),
                 bridge,
+                session_info: StdMutex::new(session_info),
             }) as Arc<dyn AgentSession>)
         })
     }
@@ -183,6 +204,7 @@ struct AcpSession {
     ctx: AgentContext,
     cancelled: AtomicBool,
     bridge: Arc<ToolBridge>,
+    session_info: StdMutex<SessionInfo>,
 }
 
 impl AcpSession {
@@ -488,6 +510,45 @@ impl AgentSession for AcpSession {
                 .await;
         });
         Ok(())
+    }
+
+    fn set_mode(&self, mode_id: &str) -> Result<(), String> {
+        let rpc = self.rpc.clone();
+        let session_id = self.session_id.clone();
+        let mode = mode_id.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tokio::spawn(async move {
+            let result = rpc
+                .call("session/set_mode", json!({ "sessionId": session_id, "modeId": mode }), |_| {})
+                .await;
+            let _ = tx.send(result);
+        });
+        match rx.recv().map_err(|e| format!("set_mode channel closed: {}", e))? {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("set_mode failed: {} ({})", e.message, e.code)),
+        }
+    }
+
+    fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), String> {
+        let rpc = self.rpc.clone();
+        let session_id = self.session_id.clone();
+        let cid = config_id.to_string();
+        let val = value.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tokio::spawn(async move {
+            let result = rpc
+                .call("session/set_config_option", json!({ "sessionId": session_id, "configId": cid, "value": val }), |_| {})
+                .await;
+            let _ = tx.send(result);
+        });
+        match rx.recv().map_err(|e| format!("set_config_option channel closed: {}", e))? {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("set_config_option failed: {} ({})", e.message, e.code)),
+        }
+    }
+
+    fn session_info(&self) -> SessionInfo {
+        self.session_info.lock().unwrap().clone()
     }
 }
 

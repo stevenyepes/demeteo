@@ -46,8 +46,17 @@ pub fn run() {
             let conn = db::init_db(app_data_dir).expect("Failed to initialize database");
 
             let db_adapter = Arc::new(adapters::database::sqlite::SqliteAdapter::new(conn));
-            let exec_inner: Arc<dyn ExecutionPort> =
+            let ssh_adapter: Arc<dyn ExecutionPort> =
                 Arc::new(adapters::ssh::client::SshClientAdapter::new(db_adapter.clone()));
+            let local_adapter: Arc<dyn ExecutionPort> =
+                Arc::new(adapters::local::execution::LocalSubprocessAdapter::new());
+            let exec_inner: Arc<dyn ExecutionPort> = Arc::new(
+                adapters::router::RouterExecutionPort::new(
+                    db_adapter.clone(),
+                    ssh_adapter,
+                    local_adapter,
+                ),
+            );
             let notif_adapter: Arc<dyn NotificationPort> = Arc::new(
                 adapters::tauri_ui::notification::TauriNotificationAdapter::new(app.handle().clone()),
             );
@@ -94,8 +103,13 @@ pub fn run() {
                 if let Some(state) = window.try_state::<terminal::SessionState>() {
                     if let Ok(sessions) = state.sessions.lock() {
                         for (_, active) in sessions.iter() {
-                            if let Ok(mut chan) = active.channel.lock() {
-                                let _ = chan.close();
+                            match &active.write_sink {
+                                terminal::WriteSink::Ssh(ch) => {
+                                    if let Ok(mut chan) = ch.lock() {
+                                        let _ = chan.close();
+                                    }
+                                }
+                                terminal::WriteSink::Local(_) => {}
                             }
                         }
                     }
@@ -127,11 +141,14 @@ pub fn run() {
             commands::agent_lifecycle::agent_prompt,
             commands::agent_lifecycle::agent_cancel,
             commands::agent_lifecycle::agent_restart,
+            commands::agent_lifecycle::agent_get_session_info,
+            commands::agent_lifecycle::agent_set_mode,
+            commands::agent_lifecycle::agent_set_config_option,
             commands::app_session::get_app_session,
             commands::app_session::set_app_session,
             commands::app_session::delete_app_session,
-            commands::thread_events::get_thread_events,
-            commands::thread_events::append_thread_event,
+            commands::messages::get_messages,
+            commands::messages::append_message,
             terminal::set_machine_secret,
             terminal::delete_machine_secret,
             terminal::start_terminal_session,

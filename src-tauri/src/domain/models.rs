@@ -1,4 +1,58 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Captured session info from the ACP `session/new` response.
+/// Used by the frontend to display available modes, models, etc.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SessionInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modes: Option<SessionModeState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_options: Option<Vec<ConfigOption>>,
+    /// Raw JSON of the full session/new result so the frontend
+    /// can access any future fields the agent sends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionModeState {
+    #[serde(rename = "currentModeId")]
+    pub current_mode_id: String,
+    #[serde(rename = "availableModes")]
+    pub available_modes: Vec<SessionModeInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionModeInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(rename = "type", default)]
+    pub option_type: String,
+    #[serde(rename = "currentValue")]
+    pub current_value: String,
+    pub options: Vec<ConfigOptionValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigOptionValue {
+    pub value: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Machine {
@@ -62,7 +116,8 @@ pub struct ThreadSession {
     pub repo_path: Option<String>,
     pub sandbox_path: Option<String>,
     pub status: String, // 'idle' | 'running' | 'pending_approval' | 'spawning' | 'installing' | 'error'
-    pub agent_kind: Option<String>, // NEW: "opencode" | "hermes" | None
+    pub agent_kind: Option<String>, // "opencode" | "hermes" | None
+    pub updated_at: Option<i64>, // unix ms timestamp for sidebar ordering
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,4 +134,14 @@ pub struct WorkingMemoryEntry {
     pub modified_at: Option<i64>,
     pub first_read_at: i64,
     pub last_read_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Message {
+    pub id: String,
+    pub thread_id: String,
+    pub role: String, // "user" | "assistant" | "system"
+    pub content: String,
+    pub metadata: Option<String>, // JSON
+    pub created_at: i64,
 }

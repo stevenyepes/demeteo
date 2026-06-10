@@ -102,16 +102,18 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<Connection> {
             value TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS thread_events (
+        CREATE TABLE IF NOT EXISTS messages (
             id         TEXT PRIMARY KEY,
             thread_id  TEXT NOT NULL,
-            event_json TEXT NOT NULL,
-            seq        INTEGER NOT NULL,
+            role       TEXT NOT NULL,
+            content    TEXT NOT NULL DEFAULT '',
+            metadata   TEXT,
+            created_at INTEGER NOT NULL,
             FOREIGN KEY (thread_id) REFERENCES thread_sessions(id) ON DELETE CASCADE
         );
 
-        CREATE INDEX IF NOT EXISTS idx_thread_events_thread_seq
-            ON thread_events(thread_id, seq);
+        CREATE INDEX IF NOT EXISTS idx_messages_thread
+            ON messages(thread_id, created_at ASC);
 
         COMMIT;"
     )?;

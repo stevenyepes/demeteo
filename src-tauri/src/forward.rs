@@ -41,6 +41,10 @@ pub fn start_port_forward(
     let machine = machines.into_iter().find(|m| m.id == machine_id)
         .ok_or_else(|| "Machine not found".to_string())?;
 
+    // Local machines don't need port forwarding
+    if machine.auth_type == "local" {
+        return Err("Port forwarding is not available for local machines".to_string());
+    }
 
     // 3. Resolve keyring credentials
     let secret = match machine.auth_type.as_str() {

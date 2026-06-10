@@ -48,6 +48,7 @@ export interface ThreadSession {
   sandbox_path?: string;
   status: ThreadStatus | string; // backend enforces; UI accepts the union plus legacy strings
   agent_kind?: AgentKind | string | null;
+  updated_at?: number | null;
 }
 
 export interface WorkingMemoryEntry {
@@ -139,6 +140,15 @@ export type AgentEvent =
   | {
       kind: "turn_complete";
       stop_reason: "end_of_turn" | "cancelled" | "max_tokens" | "error";
+    }
+  | {
+      kind: "mode_changed";
+      mode_id: string;
+    }
+  | {
+      kind: "config_changed";
+      config_id: string;
+      value: string;
     };
 
 export interface ThreadStatusChangedEvent {
@@ -147,19 +157,62 @@ export interface ThreadStatusChangedEvent {
   reason?: string;
 }
 
-export interface StreamEvent {
+// ==== Session info (modes, config options from ACP setup) ====
+
+export interface SessionModeInfo {
   id: string;
-  type: "directive" | "info" | "auto_approve" | "intercept" | "agent_error" | "text";
-  message: string;
-  timestamp: string;
-  payload?: {
-    intercept_id?: string;
-    action?: ActionKind;
-    path?: string;
-    additions?: number;
-    code?: string;
-    created_at?: string;
-    tool_call_id?: string | null;
-    feedback?: string;
-  };
+  name: string;
+  description?: string;
+}
+
+export interface SessionModeState {
+  currentModeId: string;
+  availableModes: SessionModeInfo[];
+}
+
+export interface ConfigOptionValue {
+  value: string;
+  name: string;
+  description?: string;
+}
+
+export interface ConfigOption {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  type: string;
+  currentValue: string;
+  options: ConfigOptionValue[];
+}
+
+export interface SessionInfo {
+  modes?: SessionModeState;
+  config_options?: ConfigOption[];
+}
+
+/** A single message in a thread conversation.
+ *  Only 'user' and 'assistant' roles are persisted.
+ *  'system' messages (info, error) are shown but not saved. */
+export interface Message {
+  id: string;
+  thread_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  metadata: Record<string, unknown> | null;
+  created_at: number;
+}
+
+/** Transient UI state for intercept cards — not persisted. */
+export interface InterceptCard {
+  id: string;
+  thread_id: string;
+  intercept_id: string;
+  action: ActionKind;
+  target: string;
+  code: string;
+  created_at: string;
+  tool_call_id?: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  feedback?: string;
 }

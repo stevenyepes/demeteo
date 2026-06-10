@@ -1,6 +1,6 @@
 use crate::domain::models::{
-    AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, SessionHistory, ThreadSession,
-    WorkingMemoryEntry,
+    AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, Message, SessionHistory,
+    ThreadSession, WorkingMemoryEntry,
 };
 
 pub trait DatabasePort: Send + Sync {
@@ -46,7 +46,11 @@ pub trait DatabasePort: Send + Sync {
     fn set_app_session(&self, key: &str, value: &str) -> Result<(), String>;
     fn delete_app_session(&self, key: &str) -> Result<(), String>;
 
-    // Thread event history — returns (parsed_event, seq) ordered by seq ASC
-    fn get_thread_events(&self, thread_id: &str) -> Result<Vec<(serde_json::Value, i64)>, String>;
-    fn append_thread_event(&self, id: &str, thread_id: &str, event_json: &str, seq: i64) -> Result<(), String>;
+    // Messages — the canonical conversation history
+    fn get_messages(&self, thread_id: &str) -> Result<Vec<Message>, String>;
+    fn append_message(&self, msg: &Message) -> Result<(), String>;
+    fn delete_messages(&self, thread_id: &str) -> Result<(), String>;
+
+    // Thread timestamp tracking for sidebar ordering
+    fn update_thread_timestamp(&self, id: &str) -> Result<(), String>;
 }

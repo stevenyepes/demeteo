@@ -1,6 +1,6 @@
 use crate::domain::models::{
-    AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, SessionHistory, ThreadSession,
-    WorkingMemoryEntry,
+    AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, Message, SessionHistory,
+    ThreadSession, WorkingMemoryEntry,
 };
 use crate::ports::db::DatabasePort;
 use rusqlite::{params, Connection};
@@ -63,21 +63,31 @@ impl SqliteAdapter {
         );
 
         let _ = conn.execute(
-            "CREATE TABLE IF NOT EXISTS thread_events (
+            "ALTER TABLE thread_sessions ADD COLUMN updated_at INTEGER;",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS messages (
                 id         TEXT PRIMARY KEY,
                 thread_id  TEXT NOT NULL,
-                event_json TEXT NOT NULL,
-                seq        INTEGER NOT NULL,
+                role       TEXT NOT NULL,
+                content    TEXT NOT NULL DEFAULT '',
+                metadata   TEXT,
+                created_at INTEGER NOT NULL,
                 FOREIGN KEY (thread_id) REFERENCES thread_sessions(id) ON DELETE CASCADE
             );",
             [],
         );
 
         let _ = conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_thread_events_thread_seq
-             ON thread_events(thread_id, seq);",
+            "CREATE INDEX IF NOT EXISTS idx_messages_thread
+             ON messages(thread_id, created_at ASC);",
             [],
         );
+
+        // Drop the old thread_events table — we no longer use it.
+        let _ = conn.execute("DROP TABLE IF EXISTS thread_events;", []);
 
         let adapter = Self { conn: Mutex::new(conn) };
         adapter.migrate_machine_agents();
@@ -356,7 +366,7 @@ impl DatabasePort for SqliteAdapter {
 
     fn get_thread_sessions(&self, machine_id: &str) -> Result<Vec<ThreadSession>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
-        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind FROM thread_sessions WHERE machine_id = ?1 ORDER BY created_at DESC")
+        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, updated_at FROM thread_sessions WHERE machine_id = ?1 ORDER BY COALESCE(updated_at, CAST(strftime('%s', created_at) AS INTEGER) * 1000) DESC")
             .map_err(|e| e.to_string())?;
         let thread_iter = stmt.query_map(params![machine_id], |row| {
             Ok(ThreadSession {
@@ -369,6 +379,7 @@ impl DatabasePort for SqliteAdapter {
                 sandbox_path: row.get(6)?,
                 status: row.get(7)?,
                 agent_kind: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         }).map_err(|e| e.to_string())?;
 
@@ -381,7 +392,7 @@ impl DatabasePort for SqliteAdapter {
 
     fn get_thread_sessions_for_thread(&self, thread_id: &str) -> Result<Vec<ThreadSession>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
-        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind FROM thread_sessions WHERE id = ?1")
+        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, updated_at FROM thread_sessions WHERE id = ?1")
             .map_err(|e| e.to_string())?;
         let thread_iter = stmt.query_map(params![thread_id], |row| {
             Ok(ThreadSession {
@@ -394,6 +405,7 @@ impl DatabasePort for SqliteAdapter {
                 sandbox_path: row.get(6)?,
                 status: row.get(7)?,
                 agent_kind: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         }).map_err(|e| e.to_string())?;
 
@@ -406,10 +418,14 @@ impl DatabasePort for SqliteAdapter {
 
     fn add_thread_session(&self, t: ThreadSession) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
         conn.execute(
-            "INSERT INTO thread_sessions (id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![t.id, t.machine_id, t.title, t.mode, t.branch, t.repo_path, t.sandbox_path, t.status, t.agent_kind],
+            "INSERT INTO thread_sessions (id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![t.id, t.machine_id, t.title, t.mode, t.branch, t.repo_path, t.sandbox_path, t.status, t.agent_kind, now],
         ).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -558,37 +574,56 @@ impl DatabasePort for SqliteAdapter {
         Ok(())
     }
 
-    fn get_thread_events(&self, thread_id: &str) -> Result<Vec<(serde_json::Value, i64)>, String> {
+    fn get_messages(&self, thread_id: &str) -> Result<Vec<Message>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
         let mut stmt = conn
-            .prepare("SELECT event_json, seq FROM thread_events WHERE thread_id = ?1 ORDER BY seq ASC")
+            .prepare("SELECT id, thread_id, role, content, metadata, created_at FROM messages WHERE thread_id = ?1 ORDER BY created_at ASC")
             .map_err(|e| e.to_string())?;
         let iter = stmt
             .query_map(params![thread_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok(Message {
+                    id: row.get(0)?,
+                    thread_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    metadata: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
             })
             .map_err(|e| e.to_string())?;
-        let mut events = Vec::new();
-        for row in iter {
-            let (json_str, seq) = row.map_err(|e| e.to_string())?;
-            let parsed: serde_json::Value =
-                serde_json::from_str(&json_str).map_err(|e| e.to_string())?;
-            events.push((parsed, seq));
+        let mut list = Vec::new();
+        for r in iter {
+            list.push(r.map_err(|e| e.to_string())?);
         }
-        Ok(events)
+        Ok(list)
     }
 
-    fn append_thread_event(
-        &self,
-        id: &str,
-        thread_id: &str,
-        event_json: &str,
-        seq: i64,
-    ) -> Result<(), String> {
+    fn append_message(&self, msg: &Message) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
         conn.execute(
-            "INSERT INTO thread_events (id, thread_id, event_json, seq) VALUES (?1, ?2, ?3, ?4)",
-            params![id, thread_id, event_json, seq],
+            "INSERT INTO messages (id, thread_id, role, content, metadata, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![msg.id, msg.thread_id, msg.role, msg.content, msg.metadata, msg.created_at],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn delete_messages(&self, thread_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute("DELETE FROM messages WHERE thread_id = ?1", params![thread_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn update_thread_timestamp(&self, id: &str) -> Result<(), String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "UPDATE thread_sessions SET updated_at = ?2 WHERE id = ?1",
+            params![id, now],
         )
         .map_err(|e| e.to_string())?;
         Ok(())

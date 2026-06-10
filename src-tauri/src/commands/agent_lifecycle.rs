@@ -30,7 +30,7 @@ pub(crate) fn build_agent_context(
         .ok_or_else(|| format!("Machine not found: {}", thread.machine_id))?;
 
     let cwd = thread.sandbox_path.clone().unwrap_or_else(|| {
-        if thread.machine_id == "local" || thread.machine_id.is_empty() {
+        if machine.auth_type == "local" || thread.machine_id.is_empty() {
             std::env::var("HOME").unwrap_or_else(|_| ".".into())
         } else {
             ".".into()
@@ -284,5 +284,83 @@ pub async fn agent_restart(
     let tid = thread_id.clone();
     registry.kill(&tid).await;
     let _ = db.clear_working_memory(&tid);
+    Ok(())
+}
+
+/// Resolve a session handle for a thread, auto-spawning if needed.
+/// This mirrors the pattern used by `agent_prompt` so that
+/// `agent_get_session_info` / `agent_set_mode` / `agent_set_config_option`
+/// work even after the session has been cleaned up between turns.
+async fn resolve_session(
+    registry_state: &State<'_, AgentRegistryState>,
+    db_state: &State<'_, DatabaseState>,
+    exec_state: &State<'_, ExecutionState>,
+    thread_id: &str,
+) -> Result<Arc<dyn crate::ports::agent_runtime::AgentSession>, String> {
+    // Fast path: session already alive
+    if let Some(session) = registry_state.registry.session_handle_any(thread_id).await {
+        return Ok(session);
+    }
+
+    // Slow path: look up thread, get agent_kind, build context, spawn
+    let thread = db_state
+        .db
+        .get_thread_sessions_for_thread(thread_id)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("Thread not found: {}", thread_id))?;
+    let agent_kind = thread
+        .agent_kind
+        .as_deref()
+        .ok_or_else(|| format!("Thread {} has no agent configured", thread_id))?;
+    let ctx = build_agent_context(
+        db_state.db.as_ref(),
+        exec_state.exec.clone(),
+        thread_id,
+        agent_kind,
+        registry_state.agent_exec.clone(),
+    )?;
+    registry_state
+        .registry
+        .get_or_spawn(thread_id, agent_kind, ctx)
+        .await
+        .map_err(|e| format!("Failed to start agent session: {}", e))
+}
+
+#[tauri::command]
+pub async fn agent_get_session_info(
+    registry_state: State<'_, AgentRegistryState>,
+    db_state: State<'_, DatabaseState>,
+    exec_state: State<'_, ExecutionState>,
+    thread_id: String,
+) -> Result<crate::domain::models::SessionInfo, String> {
+    let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
+    Ok(session.session_info())
+}
+
+#[tauri::command]
+pub async fn agent_set_mode(
+    registry_state: State<'_, AgentRegistryState>,
+    db_state: State<'_, DatabaseState>,
+    exec_state: State<'_, ExecutionState>,
+    thread_id: String,
+    mode_id: String,
+) -> Result<(), String> {
+    let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
+    session.set_mode(&mode_id)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn agent_set_config_option(
+    registry_state: State<'_, AgentRegistryState>,
+    db_state: State<'_, DatabaseState>,
+    exec_state: State<'_, ExecutionState>,
+    thread_id: String,
+    config_id: String,
+    value: String,
+) -> Result<(), String> {
+    let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
+    session.set_config_option(&config_id, &value)?;
     Ok(())
 }

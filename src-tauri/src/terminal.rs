@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use std::thread;
 use std::time::Duration;
@@ -12,16 +13,40 @@ use crate::domain::models::Machine;
 
 static SESSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
+/// Wraps either an SSH channel or a local subprocess stdout for reading.
+pub enum ReadSource {
+    Ssh(Arc<Mutex<ssh2::Channel>>),
+    Local(Arc<Mutex<ChildStdout>>),
+}
+
+/// Wraps either an SSH channel or a local subprocess stdin for writing.
+pub enum WriteSink {
+    Ssh(Arc<Mutex<ssh2::Channel>>),
+    Local(Arc<Mutex<ChildStdin>>),
+}
+
 pub struct ActiveSession {
-    pub channel: Arc<Mutex<ssh2::Channel>>,
-    pub session: Session,
-    pub _tcp: TcpStream,
+    pub read_source: ReadSource,
+    pub write_sink: WriteSink,
+    /// Kept alive for the lifetime of the session (SSH or local process).
+    pub _keepalive: Arc<Mutex<SessionKeepalive>>,
     pub machine_id: String,
     pub created_at: u64,
-    /// The data channel bound to the currently attached frontend. The read
-    /// thread sends to whichever channel is installed here, so the frontend
-    /// can rebind on remount without dropping the SSH connection.
     pub frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>>,
+}
+
+/// SSH sessions need both the Session and TcpStream kept alive.
+/// Local processes need the Child kept alive.
+pub enum SessionKeepalive {
+    Ssh {
+        #[allow(dead_code)]
+        session: Session,
+        #[allow(dead_code)]
+        tcp: TcpStream,
+    },
+    Local {
+        child: Arc<Mutex<Child>>,
+    },
 }
 
 #[derive(Default)]
@@ -36,7 +61,6 @@ pub struct SessionInfo {
     pub created_at: u64,
 }
 
-/// 10 minutes — sessions idle longer than this on the SSH layer are reaped
 const IDLE_TIMEOUT_SECS: u64 = 600;
 
 #[tauri::command]
@@ -60,6 +84,18 @@ pub fn connect_ssh(machine: &Machine, secret: Option<String>) -> Result<(Session
     crate::ssh_util::connect(machine, secret)
 }
 
+fn spawn_local_shell() -> Result<(Child, ChildStdin, ChildStdout), String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+    let mut cmd = Command::new(&shell);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn local shell ({}): {}", shell, e))?;
+    let stdin = child.stdin.take().ok_or_else(|| "Failed to capture shell stdin".to_string())?;
+    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture shell stdout".to_string())?;
+    Ok((child, stdin, stdout))
+}
+
 #[tauri::command]
 pub fn start_terminal_session(
     app: AppHandle,
@@ -68,58 +104,73 @@ pub fn start_terminal_session(
     machine_id: String,
     tauri_channel: Channel<Vec<u8>>,
 ) -> Result<String, String> {
-    // 1. Get machine connection details from DB
     let machines = state.db.get_machines()?;
     let machine = machines.into_iter().find(|m| m.id == machine_id)
         .ok_or_else(|| "Machine not found".to_string())?;
 
-
-    // 2. Resolve credentials from keyring if password/key passphrase is required
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
             let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id))
                 .map_err(|e| format!("Keyring error: {}", e))?;
-            entry.get_password().ok() // None if it does not exist or empty
+            entry.get_password().ok()
         }
         _ => None,
     };
-
-    // 3. Connect and authenticate SSH
-    let (sess, tcp) = connect_ssh(&machine, secret)?;
-
-    // Enable SSH-level keepalive so NAT / firewall idle drops don't kill the session
-    let _ = sess.set_keepalive(true, 30);
-
-    // 6. Open channel, request PTY and spawn shell
-    let mut ssh_chan = sess.channel_session().map_err(|e| format!("Failed to open SSH channel: {}", e))?;
-    ssh_chan.request_pty("xterm-256color", None, None).map_err(|e| format!("Failed to request PTY: {}", e))?;
-    ssh_chan.shell().map_err(|e| format!("Failed to start shell: {}", e))?;
-
-    // 7. Configure non-blocking for streaming loop
-    sess.set_blocking(false);
 
     let session_id = format!("sess_{}", SESSION_COUNTER.fetch_add(1, Ordering::SeqCst));
     let created_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let arc_chan = Arc::new(Mutex::new(ssh_chan));
     let frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>> = Arc::new(Mutex::new(Some(tauri_channel)));
 
-    // Spawn read thread
-    let read_chan = arc_chan.clone();
-    let read_session_id = session_id.clone();
+    let (read_source, write_sink, keepalive) = if machine.auth_type == "local" {
+        let (child, stdin, stdout) = spawn_local_shell()?;
+        let child = Arc::new(Mutex::new(child));
+        let stdin = Arc::new(Mutex::new(stdin));
+        let stdout = Arc::new(Mutex::new(stdout));
+        (
+            ReadSource::Local(stdout),
+            WriteSink::Local(stdin),
+            SessionKeepalive::Local { child },
+        )
+    } else {
+        let (sess, tcp) = connect_ssh(&machine, secret)?;
+        let _ = sess.set_keepalive(true, 30);
+        let mut ssh_chan = sess.channel_session().map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+        ssh_chan.request_pty("xterm-256color", None, None).map_err(|e| format!("Failed to request PTY: {}", e))?;
+        ssh_chan.shell().map_err(|e| format!("Failed to start shell: {}", e))?;
+        sess.set_blocking(false);
+        let arc_chan = Arc::new(Mutex::new(ssh_chan));
+        (
+            ReadSource::Ssh(arc_chan.clone()),
+            WriteSink::Ssh(arc_chan),
+            SessionKeepalive::Ssh { session: sess, tcp },
+        )
+    };
+
+    let keepalive = Arc::new(Mutex::new(keepalive));
+
     let read_app = app.clone();
+    let read_session_id = session_id.clone();
     let read_machine_id = machine_id.clone();
     let read_frontend_channel = frontend_channel.clone();
+    let read_source_for_thread = match &read_source {
+        ReadSource::Ssh(ch) => ReadSource::Ssh(ch.clone()),
+        ReadSource::Local(out) => ReadSource::Local(out.clone()),
+    };
+
     thread::spawn(move || {
         let mut buffer = [0u8; 8192];
         let mut last_activity = std::time::Instant::now();
         loop {
-            let mut chan = read_chan.lock().unwrap();
-            match chan.read(&mut buffer) {
+            let result = match &read_source_for_thread {
+                ReadSource::Ssh(ch) => ch.lock().unwrap().read(&mut buffer),
+                ReadSource::Local(out) => out.lock().unwrap().read(&mut buffer),
+            };
+
+            match result {
                 Ok(0) => {
-                    // EOF - remote closed the channel (user ran `exit`, server reboot, etc.)
                     let _ = read_app.emit(
                         "terminal-session-ended",
                         SessionInfo {
@@ -136,25 +187,18 @@ pub fn start_terminal_session(
                     let chan_opt = read_frontend_channel.lock().unwrap();
                     if let Some(frontend) = chan_opt.as_ref() {
                         if frontend.send(chunk).is_err() {
-                            // Frontend channel is dead; keep the SSH session alive
-                            // and wait — the frontend will rebind on remount.
                             drop(chan_opt);
-                            drop(chan);
                             thread::sleep(Duration::from_millis(50));
                             continue;
                         }
                     } else {
-                        // No frontend attached — keep the session warm in the background.
                         drop(chan_opt);
-                        drop(chan);
                         thread::sleep(Duration::from_millis(50));
                         continue;
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    drop(chan);
                     if last_activity.elapsed().as_secs() > IDLE_TIMEOUT_SECS {
-                        // Idle too long: tell the frontend and bail
                         let _ = read_app.emit(
                             "terminal-session-ended",
                             SessionInfo {
@@ -182,14 +226,13 @@ pub fn start_terminal_session(
         }
     });
 
-    // 8. Save active session
     let mut sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
     sessions.insert(
         session_id.clone(),
         ActiveSession {
-            channel: arc_chan,
-            session: sess,
-            _tcp: tcp,
+            read_source,
+            write_sink,
+            _keepalive: keepalive,
             machine_id: machine_id.clone(),
             created_at,
             frontend_channel,
@@ -216,9 +259,18 @@ pub fn write_terminal_session(
 ) -> Result<(), String> {
     let sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.get(&session_id) {
-        let mut chan = active.channel.lock().map_err(|_| "Failed to lock channel".to_string())?;
-        chan.write_all(data.as_bytes()).map_err(|e| format!("Failed to write to terminal: {}", e))?;
-        chan.flush().map_err(|e| format!("Failed to flush terminal: {}", e))?;
+        match &active.write_sink {
+            WriteSink::Ssh(ch) => {
+                let mut chan = ch.lock().map_err(|_| "Failed to lock channel".to_string())?;
+                chan.write_all(data.as_bytes()).map_err(|e| format!("Failed to write to terminal: {}", e))?;
+                chan.flush().map_err(|e| format!("Failed to flush terminal: {}", e))?;
+            }
+            WriteSink::Local(stdin) => {
+                let mut stdin = stdin.lock().map_err(|_| "Failed to lock stdin".to_string())?;
+                stdin.write_all(data.as_bytes()).map_err(|e| format!("Failed to write to terminal: {}", e))?;
+                stdin.flush().map_err(|e| format!("Failed to flush terminal: {}", e))?;
+            }
+        }
         Ok(())
     } else {
         Err("Session not found".to_string())
@@ -234,9 +286,16 @@ pub fn resize_terminal_session(
 ) -> Result<(), String> {
     let sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.get(&session_id) {
-        let mut chan = active.channel.lock().map_err(|_| "Failed to lock channel".to_string())?;
-        chan.request_pty_size(cols, rows, None, None)
-            .map_err(|e| format!("Failed to resize terminal: {}", e))?;
+        match &active.write_sink {
+            WriteSink::Ssh(ch) => {
+                let mut chan = ch.lock().map_err(|_| "Failed to lock channel".to_string())?;
+                chan.request_pty_size(cols, rows, None, None)
+                    .map_err(|e| format!("Failed to resize terminal: {}", e))?;
+            }
+            WriteSink::Local(_) => {
+                // Local subprocess terminals don't support PTY resize
+            }
+        }
         Ok(())
     } else {
         Err("Session not found".to_string())
@@ -250,8 +309,22 @@ pub fn close_terminal_session(
 ) -> Result<(), String> {
     let mut sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.remove(&session_id) {
-        let mut chan = active.channel.lock().map_err(|_| "Failed to lock channel".to_string())?;
-        let _ = chan.close();
+        match &active.write_sink {
+            WriteSink::Ssh(ch) => {
+                let mut chan = ch.lock().map_err(|_| "Failed to lock channel".to_string())?;
+                let _ = chan.close();
+            }
+            WriteSink::Local(_) => {
+                if let Ok(keepalive) = active._keepalive.lock() {
+                    if let SessionKeepalive::Local { ref child } = *keepalive {
+                        if let Ok(mut child) = child.lock() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     } else {
         Err("Session not found".to_string())
@@ -286,19 +359,11 @@ pub fn close_machine_sessions(
         .collect();
     let count = to_close.len();
     for id in to_close {
-        if let Some(active) = sessions.remove(&id) {
-            if let Ok(mut chan) = active.channel.lock() {
-                let _ = chan.close();
-            }
-        }
+        sessions.remove(&id);
     }
     Ok(count)
 }
 
-/// Re-bind a new frontend data channel to an existing SSH session.
-/// Used when the frontend remounts (e.g. user switched to supervisor view
-/// and back) so the SSH connection survives but live output is re-routed
-/// to the new xterm instance.
 #[tauri::command]
 pub fn attach_terminal_session(
     session_state: State<'_, SessionState>,
@@ -317,9 +382,6 @@ pub fn attach_terminal_session(
     Ok(())
 }
 
-/// Detach the frontend channel from a session. The SSH session keeps running
-/// (with the read thread buffering skips for unattached periods), and a later
-/// attach_terminal_session call will rebind it.
 #[tauri::command]
 pub fn detach_terminal_session(
     session_state: State<'_, SessionState>,

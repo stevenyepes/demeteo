@@ -33,7 +33,8 @@ use serde_json::Value;
 ///    - `tool_call_update`            → `AgentEvent::ToolCallUpdate`
 ///    - `plan`                        → `AgentEvent::Plan`
 ///    - `available_commands_update`   → silently dropped
-///    - `current_mode_update`         → silently dropped
+///    - `current_mode_update`         → `AgentEvent::ModeChanged`
+///    - `config_option_update`        → `AgentEvent::ConfigChanged` (one per option)
 ///    - `session_info_update`         → silently dropped
 ///    - `usage_update`                → `AgentEvent::Usage`
 pub fn map_session_update(params: &Value) -> Vec<AgentEvent> {
@@ -141,9 +142,32 @@ pub fn map_session_update(params: &Value) -> Vec<AgentEvent> {
                 cost_usd: cost,
             }]
         }
-        // Benign no-op notifications: command list refresh, mode change,
-        // session info. We don't surface these to the user.
-        "available_commands_update" | "current_mode_update" | "session_info_update" => vec![],
+        "current_mode_update" => {
+            let mode_id = update
+                .get("modeId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            vec![AgentEvent::ModeChanged { mode_id }]
+        }
+        "config_option_update" => {
+            let configs = update
+                .get("configOptions")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|c| {
+                            let config_id = c.get("id").and_then(|v| v.as_str())?.to_string();
+                            let value = c.get("currentValue").and_then(|v| v.as_str())?.to_string();
+                            Some(AgentEvent::ConfigChanged { config_id, value })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            configs
+        }
+        // Benign no-op notifications: command list refresh, session info.
+        "available_commands_update" | "session_info_update" => vec![],
         _ => vec![],
     }
 }

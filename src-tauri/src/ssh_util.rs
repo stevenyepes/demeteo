@@ -12,6 +12,15 @@ use std::time::Duration;
 /// Demeteo. Callers are responsible for setting blocking mode,
 /// keepalive, SFTP init, or disconnect on top of this.
 pub fn connect(machine: &Machine, secret: Option<String>) -> Result<(Session, TcpStream), String> {
+    // Local machines don't use SSH — this function should not be called
+    // for local auth_type. Callers should check auth_type first.
+    if machine.auth_type == "local" {
+        return Err(format!(
+            "Machine '{}' uses auth_type=local; SSH connection is not applicable",
+            machine.id
+        ));
+    }
+
     let addr = format!("{}:{}", machine.host, machine.port)
         .to_socket_addrs()
         .map_err(|e| format!("Failed to resolve host: {}", e))?

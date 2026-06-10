@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio_stream::{empty, Stream};
 
 use crate::domain::agent_event::AgentEvent;
+use crate::domain::models::SessionInfo;
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 /// Default runtime used during Phase 7a so the wiring compiles and
@@ -51,5 +52,17 @@ impl AgentSession for NoopSession {
 
     fn cancel(&self) -> Result<(), String> {
         Ok(())
+    }
+
+    fn set_mode(&self, _mode_id: &str) -> Result<(), String> {
+        Err("noop session does not support set_mode".into())
+    }
+
+    fn set_config_option(&self, _config_id: &str, _value: &str) -> Result<(), String> {
+        Err("noop session does not support set_config_option".into())
+    }
+
+    fn session_info(&self) -> SessionInfo {
+        SessionInfo::default()
     }
 }

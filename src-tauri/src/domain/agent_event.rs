@@ -44,6 +44,12 @@ pub enum AgentEvent {
 
     /// Agent finished the turn. The channel closes after this.
     TurnComplete { stop_reason: StopReason },
+
+    /// Agent switched modes (e.g., plan -> build). Carries the new mode id.
+    ModeChanged { mode_id: String },
+
+    /// Agent updated a config option (model, mode, reasoning level, etc.)
+    ConfigChanged { config_id: String, value: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,5 +100,22 @@ mod tests {
         let s = serde_json::to_string(&e).unwrap();
         assert!(s.contains("\"status\":\"failed\""));
         assert!(s.contains("\"reason\":\"no\""));
+    }
+
+    #[test]
+    fn mode_changed_serializes_with_snake_case_kind() {
+        let e = AgentEvent::ModeChanged { mode_id: "code".into() };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains("\"kind\":\"mode_changed\""));
+        assert!(s.contains("\"mode_id\":\"code\""));
+    }
+
+    #[test]
+    fn config_changed_serializes_correctly() {
+        let e = AgentEvent::ConfigChanged { config_id: "model".into(), value: "claude-4".into() };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains("\"kind\":\"config_changed\""));
+        assert!(s.contains("\"config_id\":\"model\""));
+        assert!(s.contains("\"value\":\"claude-4\""));
     }
 }
