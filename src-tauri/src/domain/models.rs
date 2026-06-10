@@ -117,6 +117,8 @@ pub struct ThreadSession {
     pub sandbox_path: Option<String>,
     pub status: String, // 'idle' | 'running' | 'pending_approval' | 'spawning' | 'installing' | 'error'
     pub agent_kind: Option<String>, // "opencode" | "hermes" | None
+    #[serde(default)]
+    pub model: Option<String>, // selected LLM model, persisted across session restarts
     pub updated_at: Option<i64>, // unix ms timestamp for sidebar ordering
 }
 

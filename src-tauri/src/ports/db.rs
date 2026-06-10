@@ -53,4 +53,7 @@ pub trait DatabasePort: Send + Sync {
 
     // Thread timestamp tracking for sidebar ordering
     fn update_thread_timestamp(&self, id: &str) -> Result<(), String>;
+
+    // Persist the selected model for a thread session
+    fn update_thread_model(&self, id: &str, model: &str) -> Result<(), String>;
 }

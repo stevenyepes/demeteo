@@ -78,6 +78,7 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<Connection> {
             sandbox_path TEXT,
             status TEXT NOT NULL,
             agent_kind TEXT,
+            model TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(machine_id) REFERENCES machines(id) ON DELETE CASCADE
         );

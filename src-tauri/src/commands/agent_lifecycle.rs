@@ -11,6 +11,23 @@ use crate::ports::agent_execution::AgentExecutionPort;
 /// Build the `AgentContext` for a (thread, agent_kind) pair. Looks up
 /// the machine's auth type (to pick local vs SSH transport) and the
 /// thread's sandbox (to use as cwd). The `AcpRuntime` uses both.
+/// Apply the persisted model (if any) to a session after a fresh spawn.
+/// Silently ignores errors — the session may already have the correct model,
+/// or the agent may not support runtime model switching.
+async fn apply_thread_model(
+    db: &dyn DatabasePort,
+    session: &Arc<dyn crate::ports::agent_runtime::AgentSession>,
+    thread_id: &str,
+) {
+    if let Ok(threads) = db.get_thread_sessions_for_thread(thread_id) {
+        if let Some(thread) = threads.into_iter().next() {
+            if let Some(ref model) = thread.model {
+                let _ = session.set_config_option("model", model);
+            }
+        }
+    }
+}
+
 pub(crate) fn build_agent_context(
     db: &dyn DatabasePort,
     exec: Arc<dyn ExecutionPort>,
@@ -154,6 +171,9 @@ pub async fn agent_prompt(
         .get_or_spawn(&thread_id, &agent_kind, ctx)
         .await
         .map_err(|e| format!("agent_prompt: {}", e))?;
+
+    // Re-apply persisted model selection on fresh sessions
+    apply_thread_model(db_state.db.as_ref(), &session, &thread_id).await;
 
     let mut stream = session.prompt(&text);
     let tid = thread_id.clone();
@@ -320,11 +340,18 @@ async fn resolve_session(
         agent_kind,
         registry_state.agent_exec.clone(),
     )?;
-    registry_state
+    let session = registry_state
         .registry
         .get_or_spawn(thread_id, agent_kind, ctx)
         .await
-        .map_err(|e| format!("Failed to start agent session: {}", e))
+        .map_err(|e| format!("Failed to start agent session: {}", e))?;
+
+    // Re-apply persisted model on fresh spawns
+    if let Some(ref model) = thread.model {
+        let _ = session.set_config_option("model", model);
+    }
+
+    Ok(session)
 }
 
 #[tauri::command]
@@ -362,5 +389,11 @@ pub async fn agent_set_config_option(
 ) -> Result<(), String> {
     let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
     session.set_config_option(&config_id, &value)?;
+
+    // Persist model selection to DB so it survives session restarts
+    if config_id == "model" {
+        let _ = db_state.db.update_thread_model(&thread_id, &value);
+    }
+
     Ok(())
 }

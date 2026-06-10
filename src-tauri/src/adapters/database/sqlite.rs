@@ -27,6 +27,7 @@ impl SqliteAdapter {
                 sandbox_path TEXT,
                 status TEXT NOT NULL,
                 agent_kind TEXT,
+                model TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(machine_id) REFERENCES machines(id) ON DELETE CASCADE
             );",
@@ -64,6 +65,11 @@ impl SqliteAdapter {
 
         let _ = conn.execute(
             "ALTER TABLE thread_sessions ADD COLUMN updated_at INTEGER;",
+            [],
+        );
+
+        let _ = conn.execute(
+            "ALTER TABLE thread_sessions ADD COLUMN model TEXT;",
             [],
         );
 
@@ -366,7 +372,7 @@ impl DatabasePort for SqliteAdapter {
 
     fn get_thread_sessions(&self, machine_id: &str) -> Result<Vec<ThreadSession>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
-        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, updated_at FROM thread_sessions WHERE machine_id = ?1 ORDER BY COALESCE(updated_at, CAST(strftime('%s', created_at) AS INTEGER) * 1000) DESC")
+        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, model, updated_at FROM thread_sessions WHERE machine_id = ?1 ORDER BY COALESCE(updated_at, CAST(strftime('%s', created_at) AS INTEGER) * 1000) DESC")
             .map_err(|e| e.to_string())?;
         let thread_iter = stmt.query_map(params![machine_id], |row| {
             Ok(ThreadSession {
@@ -379,7 +385,8 @@ impl DatabasePort for SqliteAdapter {
                 sandbox_path: row.get(6)?,
                 status: row.get(7)?,
                 agent_kind: row.get(8)?,
-                updated_at: row.get(9)?,
+                model: row.get(9)?,
+                updated_at: row.get(10)?,
             })
         }).map_err(|e| e.to_string())?;
 
@@ -392,7 +399,7 @@ impl DatabasePort for SqliteAdapter {
 
     fn get_thread_sessions_for_thread(&self, thread_id: &str) -> Result<Vec<ThreadSession>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
-        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, updated_at FROM thread_sessions WHERE id = ?1")
+        let mut stmt = conn.prepare("SELECT id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, model, updated_at FROM thread_sessions WHERE id = ?1")
             .map_err(|e| e.to_string())?;
         let thread_iter = stmt.query_map(params![thread_id], |row| {
             Ok(ThreadSession {
@@ -405,7 +412,8 @@ impl DatabasePort for SqliteAdapter {
                 sandbox_path: row.get(6)?,
                 status: row.get(7)?,
                 agent_kind: row.get(8)?,
-                updated_at: row.get(9)?,
+                model: row.get(9)?,
+                updated_at: row.get(10)?,
             })
         }).map_err(|e| e.to_string())?;
 
@@ -423,9 +431,9 @@ impl DatabasePort for SqliteAdapter {
             .unwrap_or_default()
             .as_millis() as i64;
         conn.execute(
-            "INSERT INTO thread_sessions (id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![t.id, t.machine_id, t.title, t.mode, t.branch, t.repo_path, t.sandbox_path, t.status, t.agent_kind, now],
+            "INSERT INTO thread_sessions (id, machine_id, title, mode, branch, repo_path, sandbox_path, status, agent_kind, model, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![t.id, t.machine_id, t.title, t.mode, t.branch, t.repo_path, t.sandbox_path, t.status, t.agent_kind, t.model, now],
         ).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -435,6 +443,15 @@ impl DatabasePort for SqliteAdapter {
         conn.execute(
             "UPDATE thread_sessions SET status = ?2 WHERE id = ?1",
             params![id, status],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn update_thread_model(&self, id: &str, model: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "UPDATE thread_sessions SET model = ?2 WHERE id = ?1",
+            params![id, model],
         ).map_err(|e| e.to_string())?;
         Ok(())
     }

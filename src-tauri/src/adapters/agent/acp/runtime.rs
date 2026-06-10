@@ -18,7 +18,7 @@ use crate::adapters::agent::acp::jsonrpc::{JsonRpcClient, Message, RpcError};
 use crate::adapters::agent::acp::tool_bridge::{DispatchResult, ToolBridge};
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::intercept::ExecutionResult;
-use crate::domain::models::{ConfigOption, SessionInfo, SessionModeState};
+use crate::domain::models::SessionInfo;
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 /// Concrete runtime for agents speaking [ACP](https://agentclientprotocol.com/).
@@ -542,7 +542,17 @@ impl AgentSession for AcpSession {
             let _ = tx.send(result);
         });
         match rx.recv().map_err(|e| format!("set_config_option channel closed: {}", e))? {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Update local cache so session_info() reflects the change immediately.
+                if let Ok(mut info) = self.session_info.lock() {
+                    if let Some(ref mut opts) = info.config_options {
+                        if let Some(opt) = opts.iter_mut().find(|o| o.id == config_id) {
+                            opt.current_value = value.to_string();
+                        }
+                    }
+                }
+                Ok(())
+            }
             Err(e) => Err(format!("set_config_option failed: {} ({})", e.message, e.code)),
         }
     }
