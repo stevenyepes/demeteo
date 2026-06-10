@@ -1,4 +1,13 @@
-# Demeteo: Execution & Verification Plan
+# Demeteo: Execution & Verification Plan  *(LEGACY — superseded)*
+
+> **This document is legacy.** It describes the v1 single-agent phase
+> plan (Phase 0–5: Foundation, Database, SSH, Port Forwarding, SFTP,
+> UX Polish). The active plan is the multi-agent orchestrator; see
+> [`docs/REDESIGN_EXECUTION_PLAN.md`](REDESIGN_EXECUTION_PLAN.md) and
+> [`REDESIGN_PLAN.md`](../REDESIGN_PLAN.md). This file is preserved for
+> historical context.
+
+---
 
 This document defines the step-by-step roadmap for executing and verifying the implementation tasks detailed in [prd_task_breakdown.md](file:///home/jsteven/.gemini/antigravity-cli/brain/48a0e814-f589-4e35-b927-858d5d662c95/prd_task_breakdown.md). It outlines verification checklists, testing commands, and success criteria for each development phase.
 

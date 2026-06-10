@@ -1,4 +1,14 @@
-# Architectural Blueprint: Hexagonal (Ports & Adapters) Structure
+# Architectural Blueprint: Hexagonal (Ports & Adapters) Structure  *(LEGACY — superseded)*
+
+> **This document is legacy.** It describes the v1 single-agent chat-style
+> supervisor. The active plan is the multi-agent orchestrator; see
+> [`docs/REDESIGN_ARCHITECTURE.md`](REDESIGN_ARCHITECTURE.md) and
+> [`REDESIGN_PLAN.md`](../REDESIGN_PLAN.md). This file is preserved for
+> historical context. The `AcpRuntime` spec that lived here is the only
+> portion that survived the pivot; it has moved to
+> [`AGENT_INTEGRATION.md`](../AGENT_INTEGRATION.md).
+
+---
 
 This document details the software architecture of **Demeteo** using the **Hexagonal Architecture (Ports & Adapters)** pattern. This design guarantees loose coupling, high testability, and a clear path for future plugin extensibility.
 

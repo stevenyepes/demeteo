@@ -1,4 +1,13 @@
-# Domain-Driven Design (DDD) & Ubiquitous Language
+# Domain-Driven Design (DDD) & Ubiquitous Language  *(LEGACY — superseded)*
+
+> **This document is legacy.** It describes the bounded contexts for the
+> v1 single-agent chat-style supervisor (Thread, Machine, AgentProfile,
+> etc.). The active plan is the multi-agent orchestrator; see
+> [`docs/REDESIGN_DDD_MODEL.md`](REDESIGN_DDD_MODEL.md) and
+> [`REDESIGN_PLAN.md`](../REDESIGN_PLAN.md). This file is preserved for
+> historical context.
+
+---
 
 This document establishes the **Ubiquitous Language**, **Bounded Contexts**, and **Domain Model** for Demeteo. It acts as the single source of truth for architectural terminology, ensuring alignment between product definitions, frontend UI states, and backend Rust structs.
 
