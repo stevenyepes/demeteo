@@ -1,11 +1,11 @@
 # Graph Report - demeteo  (2026-06-10)
 
 ## Corpus Check
-- 132 files · ~112,220 words
+- 128 files · ~108,665 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2078 nodes · 3221 edges · 211 communities (179 shown, 32 thin omitted)
+- 2023 nodes · 3095 edges · 204 communities (174 shown, 30 thin omitted)
 - Extraction: 98% EXTRACTED · 2% INFERRED · 0% AMBIGUOUS · INFERRED: 51 edges (avg confidence: 0.86)
 - Token cost: 0 input · 0 output
 
@@ -195,10 +195,7 @@
 - [[_COMMUNITY_Community 191|Community 191]]
 - [[_COMMUNITY_Community 192|Community 192]]
 - [[_COMMUNITY_Community 194|Community 194]]
-- [[_COMMUNITY_Community 195|Community 195]]
-- [[_COMMUNITY_Community 196|Community 196]]
 - [[_COMMUNITY_Community 198|Community 198]]
-- [[_COMMUNITY_Community 199|Community 199]]
 - [[_COMMUNITY_Community 200|Community 200]]
 - [[_COMMUNITY_Community 201|Community 201]]
 - [[_COMMUNITY_Community 202|Community 202]]
@@ -206,18 +203,14 @@
 - [[_COMMUNITY_Community 204|Community 204]]
 - [[_COMMUNITY_Community 205|Community 205]]
 - [[_COMMUNITY_Community 206|Community 206]]
-- [[_COMMUNITY_Community 207|Community 207]]
-- [[_COMMUNITY_Community 208|Community 208]]
-- [[_COMMUNITY_Community 209|Community 209]]
-- [[_COMMUNITY_Community 210|Community 210]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `allow` - 76 edges
 2. `deny` - 76 edges
-3. `SqliteAdapter` - 45 edges
-4. `Result` - 39 edges
-5. `String` - 39 edges
-6. `permissions` - 31 edges
+3. `SqliteAdapter` - 37 edges
+4. `permissions` - 31 edges
+5. `Result` - 31 edges
+6. `String` - 31 edges
 7. `permissions` - 30 edges
 8. `Demeteo Redesign: Open & Deferred Questions` - 20 edges
 9. `Demeteo (Control Plane / PDP)` - 20 edges
@@ -273,7 +266,7 @@
 - **index.html mounts React app and loads fonts** — index_html_index_html, index_html_root_div, index_html_main_tsx_entry, public_vite_svg, index_html_fira_code_font, index_html_inter_font, index_html_outfit_font [EXTRACTED 1.00]
 - **Tauri app icon set** — src_tauri_icons_square_30_logo, src_tauri_icons_square_44_logo, src_tauri_icons_square_71_logo, src_tauri_icons_square_310_logo, prd_tauri_v2 [INFERRED 0.85]
 
-## Communities (211 total, 32 thin omitted)
+## Communities (204 total, 30 thin omitted)
 
 ### Community 0 - "Policy Engine & Decorator"
 Cohesion: 0.21
@@ -284,12 +277,12 @@ Cohesion: 0.07
 Nodes (41): Architecture Map (Frontend/IPC/Backend/Remotes), Agent Chat Interface (Frontend), Monaco Code Editor (Frontend), Workspace Splits (Frontend), xterm.js Terminals (Frontend), Implementation Phases 1-6 (All Completed), Remote VM/Host (Shell, Ollama/Hermes API, SFTP), Tauri v2 IPC (Async Channels + Commands) (+33 more)
 
 ### Community 2 - "SQLite Adapter & Policy Persistence"
-Cohesion: 0.09
-Nodes (22): ChatMessage, ChatSession, SqliteAdapter, Repository, SessionHistory, AgentConfig, AgentProfile, Connection (+14 more)
+Cohesion: 0.11
+Nodes (18): ChatMessage, ChatSession, SqliteAdapter, SessionHistory, AgentConfig, AgentProfile, Connection, DatabasePort (+10 more)
 
 ### Community 3 - "React Frontend Components"
-Cohesion: 0.13
-Nodes (16): SupervisorPlaneProps, ActionKind, AgentAction, AgentConfig, AgentConfigView, AgentKind, CommandOutcome, ConfigOption (+8 more)
+Cohesion: 0.17
+Nodes (10): ActionKind, AgentConfig, AgentConfigView, AgentKind, ConfigOption, ConfigOptionValue, ExecutionResult, SessionModeInfo (+2 more)
 
 ### Community 4 - "Tauri Capability Manifests"
 Cohesion: 0.05
@@ -304,12 +297,12 @@ Cohesion: 0.50
 Nodes (4): init_db(), Connection, PathBuf, Result
 
 ### Community 9 - "Tauri Schema ACLs"
-Cohesion: 0.06
-Nodes (36): commands, description, identifier, commands, description, identifier, commands, description (+28 more)
+Cohesion: 0.04
+Nodes (45): commands, description, identifier, commands, description, identifier, commands, description (+37 more)
 
 ### Community 10 - "Tauri Schema Capabilities"
-Cohesion: 0.50
-Nodes (4): commands, description, identifier, deny-identifier
+Cohesion: 0.21
+Nodes (8): commands, description, identifier, commands, description, identifier, allow-remove-at, deny-identifier
 
 ### Community 11 - "Core SSH/SFTP Adapter"
 Cohesion: 0.18
@@ -329,7 +322,7 @@ Nodes (17): app, security, windows, build, beforeBuildCommand, beforeDevCommand,
 
 ### Community 15 - "Machine Connection Modal"
 Cohesion: 0.13
-Nodes (17): Demeteo Execution & Verification Plan, Fira Code Font, Demeteo Root HTML, Inter Font, main.tsx Entry Script, Outfit Font, #root DOM Mount Point, Active Threads (Agent Workspaces) (+9 more)
+Nodes (16): Demeteo Execution & Verification Plan, Monaco Code Inspector, Phase 4: Contextual Split-Pane & Workspace Toggles, Tabs Workspace Toggle, Active Threads (Agent Workspaces), Contextual Split-Pane (Code Inspector), Demeteo (Control Plane / PDP), Environment Manager (+8 more)
 
 ### Community 16 - "Asset Bundling"
 Cohesion: 0.10
@@ -348,8 +341,8 @@ Cohesion: 0.23
 Nodes (13): bash_target_is_full_command(), current_iso8601(), ExecutionResult, from_agent_tool_call_records_tool_call_id(), InterceptPayload, preview_content(), preview_truncates_long_content(), Resolution (+5 more)
 
 ### Community 20 - "Database Schema Init"
-Cohesion: 0.19
-Nodes (16): core, default_permission, default_permission, default_permission, global_scope_schema, core:image, default_permission, global_scope_schema (+8 more)
+Cohesion: 0.13
+Nodes (22): core, core:app, default_permission, global_scope_schema, permission_sets, default_permission, core:event, default_permission (+14 more)
 
 ### Community 21 - "Supervisor Plane UI"
 Cohesion: 0.50
@@ -392,8 +385,8 @@ Cohesion: 0.20
 Nodes (10): type, webviews, windows, items, description, items, type, description (+2 more)
 
 ### Community 31 - "Default Policy Template"
-Cohesion: 0.15
-Nodes (27): ConfigOption, ConfigOptionValue, AgentConfig, AgentProfile, ChatMessage, ChatSession, ConfigOption, ConfigOptionValue (+19 more)
+Cohesion: 0.17
+Nodes (23): ConfigOption, ConfigOptionValue, AgentConfig, AgentProfile, ChatMessage, ChatSession, ConfigOption, ConfigOptionValue (+15 more)
 
 ### Community 32 - "Small Tight Clusters"
 Cohesion: 0.15
@@ -485,7 +478,7 @@ Nodes (12): RouterExecutionPort, Arc, Box, DatabasePort, ExecutionPort, HashMap,
 
 ### Community 54 - "Cluster 54"
 Cohesion: 0.06
-Nodes (36): commands, description, identifier, commands, description, identifier, commands, description (+28 more)
+Nodes (38): commands, description, identifier, commands, description, identifier, commands, description (+30 more)
 
 ### Community 55 - "Cluster 55"
 Cohesion: 0.09
@@ -520,8 +513,8 @@ Cohesion: 0.13
 Nodes (14): 1. Actor & User Interface Terms, 1. Machine Aggregate, 1. Target Control Context, 2. Agent Adapter Context, 2. Environment & Execution Terms, 2. Thread Session Aggregate, 3. Action Intercept Aggregate, 3. Policy Decision Context (Permission Proxy) (+6 more)
 
 ### Community 63 - "Cluster 63"
-Cohesion: 0.36
-Nodes (12): create_project(), get_projects(), ProjectConfig, ProjectCreateResponse, seed_sample_project(), DatabaseState, Option, Project (+4 more)
+Cohesion: 0.50
+Nodes (4): commands, description, identifier, allow-create-default
 
 ### Community 64 - "Cluster 64"
 Cohesion: 0.13
@@ -623,6 +616,10 @@ Nodes (4): ActionKind, AgentAction, Option, Self
 Cohesion: 0.50
 Nodes (4): commands, description, identifier, deny-name
 
+### Community 90 - "Cluster 90"
+Cohesion: 0.20
+Nodes (6): PromptDialogProps, SupervisorPlaneProps, AgentAction, CommandOutcome, InterceptCard, Message
+
 ### Community 91 - "Cluster 91"
 Cohesion: 0.25
 Nodes (7): graphify reference: extra exports and benchmark, Step 6b - Wiki (only if --wiki flag), Step 7 - Neo4j export (only if --neo4j or --neo4j-push flag), Step 7b - SVG export (only if --svg flag), Step 7c - GraphML export (only if --graphml flag), Step 7d - MCP server (only if --mcp flag), Step 8 - Token reduction benchmark (only if total_words > 5000)
@@ -641,7 +638,7 @@ Nodes (6): mock_agent_drives_state_machine(), mock_agent_script_is_executable(),
 
 ### Community 96 - "Cluster 96"
 Cohesion: 0.12
-Nodes (7): CodeInspectorProps, EmptyStateCardProps, ProviderSettingsProps, Project, Provider, ExecutionResult, InterceptPayload
+Nodes (7): EmptyStateCardProps, ProviderSettingsProps, TopBarProps, Project, Provider, InterceptPayload, SessionInfo
 
 ### Community 97 - "Cluster 97"
 Cohesion: 0.25
@@ -748,8 +745,8 @@ Cohesion: 0.50
 Nodes (4): 1. Scope and Non-Goals (post-pivot), v1 explicitly does NOT include, v1 ships, Why "ACP only" is the right bet for v1
 
 ### Community 149 - "Community 149"
-Cohesion: 0.32
-Nodes (13): connect_provider_instance(), fetch_provider_repos(), list_provider_instances(), ProviderValidationResult, sanitize_host(), validate_provider_pat(), DatabaseState, Option (+5 more)
+Cohesion: 0.39
+Nodes (6): ProviderValidationResult, sanitize_host(), validate_provider_pat(), Option, Result, String
 
 ### Community 150 - "Community 150"
 Cohesion: 0.50
@@ -784,20 +781,20 @@ Cohesion: 0.40
 Nodes (4): test_ssh_connection(), Option, Result, String
 
 ### Community 158 - "Community 158"
-Cohesion: 0.44
-Nodes (8): fetch_active_features(), start_feature(), DatabaseState, Feature, Result, State, String, Vec
+Cohesion: 0.50
+Nodes (4): commands, description, identifier, allow-is-checked
 
 ### Community 159 - "Community 159"
-Cohesion: 0.12
-Nodes (17): commands, description, identifier, commands, description, identifier, commands, description (+9 more)
+Cohesion: 0.50
+Nodes (4): commands, description, identifier, allow-set-text
 
 ### Community 160 - "Community 160"
 Cohesion: 0.44
 Nodes (8): append_message(), get_messages(), DatabaseState, Message, Result, State, String, Vec
 
 ### Community 162 - "Community 162"
-Cohesion: 0.38
-Nodes (5): Project, SidebarProps, FileReference, FrontendMachine, Machine
+Cohesion: 0.36
+Nodes (6): Project, SidebarProps, FileReference, FrontendMachine, Machine, ThreadSession
 
 ### Community 163 - "Community 163"
 Cohesion: 0.50
@@ -809,11 +806,11 @@ Nodes (4): commands, description, identifier, allow-supports-multiple-windows
 
 ### Community 166 - "Community 166"
 Cohesion: 0.33
-Nodes (4): Feature, MOCK_FEATURES, Project, ProjectHomeProps
+Nodes (6): Fira Code Font, Demeteo Root HTML, Inter Font, main.tsx Entry Script, Outfit Font, #root DOM Mount Point
 
 ### Community 167 - "Community 167"
-Cohesion: 0.40
-Nodes (5): Monaco Code Inspector, Phase 4: Contextual Split-Pane & Workspace Toggles, Tabs Workspace Toggle, Contextual Split-Pane (Code Inspector), Workspace Toggle (Supervisor vs Terminal)
+Cohesion: 0.50
+Nodes (4): commands, description, identifier, allow-popup
 
 ### Community 168 - "Community 168"
 Cohesion: 0.50
@@ -837,11 +834,15 @@ Nodes (4): commands, description, identifier, deny-version
 
 ### Community 181 - "Community 181"
 Cohesion: 0.05
-Nodes (37): commands, description, identifier, commands, description, identifier, commands, description (+29 more)
+Nodes (41): commands, description, identifier, commands, description, identifier, commands, description (+33 more)
 
 ### Community 182 - "Community 182"
 Cohesion: 0.50
 Nodes (4): commands, description, identifier, deny-supports-multiple-windows
+
+### Community 186 - "Community 186"
+Cohesion: 0.50
+Nodes (4): commands, description, identifier, allow-prepend
 
 ### Community 187 - "Community 187"
 Cohesion: 0.50
@@ -853,39 +854,27 @@ Nodes (4): commands, description, identifier, allow-set-as-app-menu
 
 ### Community 189 - "Community 189"
 Cohesion: 0.50
-Nodes (4): commands, description, identifier, allow-append
+Nodes (4): commands, description, identifier, allow-remove-listener
 
 ### Community 190 - "Community 190"
 Cohesion: 0.50
-Nodes (4): commands, description, identifier, allow-fetch-data-store-identifiers
+Nodes (4): commands, description, identifier, allow-set-as-window-menu
 
 ### Community 191 - "Community 191"
 Cohesion: 0.50
-Nodes (4): commands, description, identifier, allow-insert
+Nodes (4): commands, description, identifier, allow-tauri-version
 
 ### Community 192 - "Community 192"
 Cohesion: 0.50
-Nodes (4): commands, description, identifier, allow-register-listener
+Nodes (4): commands, description, identifier, deny-fetch-data-store-identifiers
 
 ### Community 194 - "Community 194"
 Cohesion: 0.50
-Nodes (4): commands, description, identifier, allow-remove-data-store
-
-### Community 195 - "Community 195"
-Cohesion: 0.50
-Nodes (4): commands, description, identifier, allow-set-as-help-menu-for-nsapp
-
-### Community 196 - "Community 196"
-Cohesion: 0.50
-Nodes (4): commands, description, identifier, allow-set-checked
+Nodes (4): commands, description, identifier, deny-is-checked
 
 ### Community 198 - "Community 198"
 Cohesion: 0.50
 Nodes (4): commands, description, identifier, deny-create-default
-
-### Community 199 - "Community 199"
-Cohesion: 0.50
-Nodes (4): commands, description, identifier, allow-set-enabled
 
 ### Community 200 - "Community 200"
 Cohesion: 0.50
@@ -911,41 +900,25 @@ Nodes (4): commands, description, identifier, deny-set-dock-visibility
 Cohesion: 0.50
 Nodes (4): commands, description, identifier, deny-tauri-version
 
-### Community 206 - "Community 206"
-Cohesion: 0.50
-Nodes (4): commands, description, identifier, deny-app-hide
-
-### Community 207 - "Community 207"
-Cohesion: 0.50
-Nodes (4): commands, description, identifier, deny-app-show
-
-### Community 208 - "Community 208"
-Cohesion: 0.50
-Nodes (4): commands, description, identifier, deny-insert
-
-### Community 209 - "Community 209"
-Cohesion: 0.50
-Nodes (4): commands, description, identifier, deny-items
-
 ## Knowledge Gaps
-- **838 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `recommendations`, `MOCK_PROJECTS` (+833 more)
+- **831 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `recommendations`, `MOCK_PROJECTS` (+826 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **32 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **30 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `allow` connect `Community 159` to `Tauri Capability Manifests`, `Tauri Schema ACLs`, `Tauri Schema Capabilities`, `Community 163`, `Community 164`, `Community 168`, `Community 169`, `Community 178`, `Community 179`, `Community 180`, `Community 181`, `Cluster 54`, `Community 182`, `Cluster 56`, `Community 187`, `Community 188`, `Cluster 61`, `Community 189`, `Community 190`, `Community 192`, `Community 191`, `Community 194`, `Community 195`, `Community 196`, `Community 198`, `Community 199`, `Community 200`, `Community 201`, `Community 202`, `Community 203`, `Community 204`, `Community 205`, `Cluster 78`, `Community 206`, `Community 207`, `Cluster 79`, `Community 208`, `Community 209`, `Community 87`, `Cluster 89`?**
-  _High betweenness centrality (0.010) - this node is a cross-community bridge._
-- **Why does `deny` connect `Tauri Capability Manifests` to `Tauri Schema ACLs`, `Tauri Schema Capabilities`, `Community 159`, `Community 163`, `Community 164`, `Community 168`, `Community 169`, `Community 178`, `Community 179`, `Community 180`, `Community 181`, `Cluster 54`, `Community 182`, `Cluster 56`, `Community 187`, `Community 188`, `Cluster 61`, `Community 189`, `Community 191`, `Community 192`, `Community 190`, `Community 194`, `Community 195`, `Community 196`, `Community 198`, `Community 199`, `Community 200`, `Community 201`, `Community 202`, `Community 203`, `Community 204`, `Community 205`, `Cluster 78`, `Community 206`, `Community 207`, `Cluster 79`, `Community 208`, `Community 209`, `Community 87`, `Cluster 89`?**
-  _High betweenness centrality (0.010) - this node is a cross-community bridge._
-- **Why does `permissions` connect `Community 181` to `Tauri Capability Manifests`, `Database Schema Init`, `Community 159`, `Community 168`, `Community 169`, `Community 179`, `Community 187`, `Community 188`, `Community 189`, `Cluster 61`, `Community 191`, `Community 195`, `Community 196`, `Community 198`, `Community 199`, `Community 201`, `Cluster 78`, `Community 208`, `Community 209`, `Community 87`?**
-  _High betweenness centrality (0.006) - this node is a cross-community bridge._
+- **Why does `allow` connect `Cluster 54` to `Tauri Capability Manifests`, `Tauri Schema ACLs`, `Tauri Schema Capabilities`, `Community 158`, `Community 159`, `Community 163`, `Community 164`, `Community 167`, `Community 168`, `Community 169`, `Community 178`, `Community 179`, `Community 180`, `Community 181`, `Community 182`, `Cluster 56`, `Community 186`, `Community 187`, `Community 188`, `Community 189`, `Community 190`, `Cluster 61`, `Cluster 63`, `Community 191`, `Community 192`, `Community 194`, `Community 198`, `Community 200`, `Community 201`, `Community 202`, `Community 203`, `Community 204`, `Community 205`, `Cluster 78`, `Cluster 79`, `Community 87`, `Cluster 89`?**
+  _High betweenness centrality (0.011) - this node is a cross-community bridge._
+- **Why does `deny` connect `Tauri Capability Manifests` to `Tauri Schema ACLs`, `Tauri Schema Capabilities`, `Community 158`, `Community 159`, `Community 163`, `Community 164`, `Community 167`, `Community 168`, `Community 169`, `Community 178`, `Community 179`, `Community 180`, `Community 181`, `Cluster 54`, `Community 182`, `Cluster 56`, `Community 186`, `Community 187`, `Community 188`, `Community 189`, `Community 190`, `Cluster 61`, `Cluster 63`, `Community 191`, `Community 192`, `Community 194`, `Community 198`, `Community 200`, `Community 201`, `Community 202`, `Community 203`, `Community 204`, `Community 205`, `Cluster 78`, `Cluster 79`, `Community 87`, `Cluster 89`?**
+  _High betweenness centrality (0.011) - this node is a cross-community bridge._
+- **Why does `permissions` connect `Tauri Schema ACLs` to `Tauri Capability Manifests`, `Tauri Schema Capabilities`, `Database Schema Init`, `Community 163`, `Community 164`, `Community 178`, `Community 180`, `Cluster 54`, `Community 182`, `Cluster 56`, `Community 189`, `Community 191`, `Community 192`, `Community 200`, `Community 202`, `Community 203`, `Community 204`, `Community 205`, `Cluster 79`, `Cluster 89`?**
+  _High betweenness centrality (0.005) - this node is a cross-community bridge._
 - **What connects `$schema`, `plugin`, `@opencode-ai/plugin` to the rest of the system?**
-  _843 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _836 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Project Docs & Domain Model` be split into smaller, more focused modules?**
   _Cohesion score 0.07195121951219512 - nodes in this community are weakly interconnected._
 - **Should `SQLite Adapter & Policy Persistence` be split into smaller, more focused modules?**
-  _Cohesion score 0.08978174603174603 - nodes in this community are weakly interconnected._
-- **Should `React Frontend Components` be split into smaller, more focused modules?**
-  _Cohesion score 0.12554112554112554 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.10633484162895927 - nodes in this community are weakly interconnected._
+- **Should `Tauri Capability Manifests` be split into smaller, more focused modules?**
+  _Cohesion score 0.05217391304347826 - nodes in this community are weakly interconnected._
