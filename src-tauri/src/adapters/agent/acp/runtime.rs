@@ -153,6 +153,7 @@ impl AgentRuntime for AcpRuntime {
                 kind: self.kind.to_string(),
                 ctx,
                 cancelled: AtomicBool::new(false),
+                prompting: Arc::new(AtomicBool::new(false)),
                 bridge,
                 session_info: StdMutex::new(session_info),
             }) as Arc<dyn AgentSession>)
@@ -203,6 +204,11 @@ struct AcpSession {
     kind: String,
     ctx: AgentContext,
     cancelled: AtomicBool,
+    /// True while `run_prompt_inner` has an in-flight `session/prompt`
+    /// RPC. Prevents `set_config_option` from opening a second
+    /// `call_blocking` reader on the same transport (which would
+    /// corrupt both message streams).
+    prompting: Arc<AtomicBool>,
     bridge: Arc<ToolBridge>,
     session_info: StdMutex<SessionInfo>,
 }
@@ -215,6 +221,8 @@ impl AcpSession {
         let bridge = self.bridge.clone();
         let machine_id = self.ctx.machine_id.clone();
         let thread_id = self.ctx.thread_id.clone();
+        let prompting = self.prompting.clone();
+        prompting.store(true, Ordering::SeqCst);
         tokio::spawn(async move {
             // `session/prompt` is a long-running call: the agent streams
             // notifications until it sends a response. Our JSON-RPC
@@ -291,6 +299,7 @@ impl AcpSession {
                         .await;
                 }
             }
+            prompting.store(false, Ordering::SeqCst);
         });
         rx
     }
@@ -513,6 +522,9 @@ impl AgentSession for AcpSession {
     }
 
     fn set_mode(&self, mode_id: &str) -> Result<(), String> {
+        if self.prompting.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let rpc = self.rpc.clone();
         let session_id = self.session_id.clone();
         let mode = mode_id.to_string();
@@ -523,13 +535,37 @@ impl AgentSession for AcpSession {
                 .await;
             let _ = tx.send(result);
         });
-        match rx.recv().map_err(|e| format!("set_mode channel closed: {}", e))? {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("set_mode failed: {} ({})", e.message, e.code)),
+        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(format!("set_mode failed: {} ({})", e.message, e.code)),
+            Err(_) => Ok(()),
         }
     }
 
     fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), String> {
+        // Update local cache immediately so session_info() reflects the
+        // change right away (the selector UI reads from this).
+        if let Ok(mut info) = self.session_info.lock() {
+            if let Some(ref mut opts) = info.config_options {
+                if let Some(opt) = opts.iter_mut().find(|o| o.id == config_id) {
+                    opt.current_value = value.to_string();
+                }
+            }
+        }
+
+        // If a prompt is in-flight, skip the RPC call entirely.
+        // Two concurrent call_blocking readers on the same JSON-RPC
+        // transport corrupt each other's message buffers. The DB is
+        // already persisted by the caller, and apply_thread_model
+        // will re-apply the model from DB on the next prompt.
+        if self.prompting.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        // No prompt in-flight — safe to do a blocking RPC call.
+        // Use a timeout so we don't block forever if the agent is
+        // unresponsive (e.g. crashed, as indicated by
+        // NeedDebuggerBreak traps).
         let rpc = self.rpc.clone();
         let session_id = self.session_id.clone();
         let cid = config_id.to_string();
@@ -541,19 +577,15 @@ impl AgentSession for AcpSession {
                 .await;
             let _ = tx.send(result);
         });
-        match rx.recv().map_err(|e| format!("set_config_option channel closed: {}", e))? {
-            Ok(_) => {
-                // Update local cache so session_info() reflects the change immediately.
-                if let Ok(mut info) = self.session_info.lock() {
-                    if let Some(ref mut opts) = info.config_options {
-                        if let Some(opt) = opts.iter_mut().find(|o| o.id == config_id) {
-                            opt.current_value = value.to_string();
-                        }
-                    }
-                }
+        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(format!("set_config_option failed: {} ({})", e.message, e.code)),
+            Err(_) => {
+                // Timeout — treat as success since DB is already
+                // persisted and apply_thread_model will retry on
+                // the next prompt.
                 Ok(())
             }
-            Err(e) => Err(format!("set_config_option failed: {} ({})", e.message, e.code)),
         }
     }
 

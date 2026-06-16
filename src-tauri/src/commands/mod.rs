@@ -7,3 +7,8 @@ pub mod agent_config;
 pub mod agent_lifecycle;
 pub mod app_session;
 pub mod messages;
+pub mod providers;
+pub mod project;
+pub mod features;
+pub mod bootstrap;
+

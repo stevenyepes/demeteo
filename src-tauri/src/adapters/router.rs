@@ -21,10 +21,18 @@ impl RouterExecutionPort {
     }
 
     fn resolve(&self, machine_id: &str) -> Result<Arc<dyn ExecutionPort>, String> {
+        if machine_id.is_empty() || machine_id == "local" {
+            return Ok(self.local.clone());
+        }
         let machines = self.db.get_machines()?;
         let machine = machines
             .into_iter()
-            .find(|m| m.id == machine_id)
+            .find(|m| {
+                m.id == machine_id
+                    || format!("{}@{}", m.username, m.host) == machine_id
+                    || m.host == machine_id
+                    || m.name == machine_id
+            })
             .ok_or_else(|| format!("Machine not found: {}", machine_id))?;
         match machine.auth_type.as_str() {
             "local" => Ok(self.local.clone()),

@@ -20,7 +20,7 @@
     "semantic_hash": "a4038619f5414c01f04abbbdd4730820"
   },
   "package.json": {
-    "mtime": 1780979502.570334,
+    "mtime": 1781620737.0897913,
     "ast_hash": "7b2207fe6a9aff680a8c4f315f62761d",
     "semantic_hash": ""
   },
@@ -65,18 +65,18 @@
     "semantic_hash": "fb493fad3718be79c7c840c32905b3d7"
   },
   "src-tauri/src/adapters/database/sqlite.rs": {
-    "mtime": 1781127473.6392066,
-    "ast_hash": "f0669ef6883a42f29b5592dd667eb9b2",
+    "mtime": 1781628376.685892,
+    "ast_hash": "dca0bb047b0dd485ebd2bbbf52cb3b90",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/mod.rs": {
-    "mtime": 1781095372.8915637,
-    "ast_hash": "22fe38ad7675e7d229a9cf11117bcb48",
+    "mtime": 1781627166.2467086,
+    "ast_hash": "cd1d6534f36eb11384df2fce0c2e0c73",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/ssh/client.rs": {
-    "mtime": 1781028996.497498,
-    "ast_hash": "003b8ade2dc20a005449ffc33de9b44f",
+    "mtime": 1781629890.9177666,
+    "ast_hash": "b3369619ab501732e93079e1de14de77",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/ssh/mod.rs": {
@@ -110,8 +110,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/domain/models.rs": {
-    "mtime": 1781127289.1477,
-    "ast_hash": "8e67cd43ac9e73febb83737a05a94fa6",
+    "mtime": 1781627118.5653586,
+    "ast_hash": "46e6b869c5b2a432f71bff9088848f13",
     "semantic_hash": ""
   },
   "src-tauri/src/forward.rs": {
@@ -120,8 +120,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/lib.rs": {
-    "mtime": 1781127506.731656,
-    "ast_hash": "0b3cf5fde935f324c83b9b23817b3060",
+    "mtime": 1781629204.2129567,
+    "ast_hash": "54dfefbf60ed27b3a56d93d13d2209e0",
     "semantic_hash": ""
   },
   "src-tauri/src/main.rs": {
@@ -135,8 +135,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/ports/db.rs": {
-    "mtime": 1781127318.5551,
-    "ast_hash": "7481069a080381b5f398ab2e7789a7bd",
+    "mtime": 1781628257.5119758,
+    "ast_hash": "40763a165708b11f55ccf94160922a1f",
     "semantic_hash": ""
   },
   "src-tauri/src/ports/execution.rs": {
@@ -170,8 +170,8 @@
     "semantic_hash": "c8cf2c10398056ba0ed8a17e344d7ffb"
   },
   "src/App.tsx": {
-    "mtime": 1781127966.3408892,
-    "ast_hash": "9b8b7334016d63a472e85e5d25466edc",
+    "mtime": 1781629392.8795922,
+    "ast_hash": "e1c41498592eb6f4c26ea15388618177",
     "semantic_hash": ""
   },
   "src/components/CodeInspector.tsx": {
@@ -200,7 +200,7 @@
     "semantic_hash": ""
   },
   "src/components/SupervisorPlane.tsx": {
-    "mtime": 1781095372.8915637,
+    "mtime": 1781620624.6597545,
     "ast_hash": "c0c01cdb3a74e13aec3da2b07b7939b0",
     "semantic_hash": ""
   },
@@ -585,13 +585,13 @@
     "semantic_hash": ""
   },
   "src-tauri/src/commands/machine.rs": {
-    "mtime": 1781037945.0375037,
-    "ast_hash": "3b184583eea93b654ca879e41cccb174",
+    "mtime": 1781629422.1658425,
+    "ast_hash": "d7502d6e2d0d37fef4b2de243b788735",
     "semantic_hash": ""
   },
   "src-tauri/src/commands/mod.rs": {
-    "mtime": 1781127444.4888108,
-    "ast_hash": "9f3874cfd96ac36c67845a95b7565ccb",
+    "mtime": 1781627210.481035,
+    "ast_hash": "380fa1d6e347e0d7a60c1ed49cc10c04",
     "semantic_hash": ""
   },
   "src-tauri/src/commands/ssh.rs": {
@@ -635,8 +635,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/router.rs": {
-    "mtime": 1781095372.8915637,
-    "ast_hash": "5b3ae9f253fe2e96c7a1503a2434e8bd",
+    "mtime": 1781629830.5002675,
+    "ast_hash": "98be7e6054aa9e6c30950183c58e9bb4",
     "semantic_hash": ""
   },
   "src-tauri/src/commands/messages.rs": {
@@ -705,8 +705,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/commands/providers.rs": {
-    "mtime": 1781127382.5489695,
-    "ast_hash": "02185d8d71ef108716933a96aa968ab3",
+    "mtime": 1781624776.9167576,
+    "ast_hash": "91e159035a6532758bd3737c66ba50e0",
     "semantic_hash": ""
   },
   "src/components/EmptyStateCard.tsx": {
@@ -715,8 +715,8 @@
     "semantic_hash": ""
   },
   "src/components/ProviderSettings.tsx": {
-    "mtime": 1781127528.7909555,
-    "ast_hash": "e239751d34e218e08b9e434bb5de4c76",
+    "mtime": 1781623636.2938027,
+    "ast_hash": "81d7b086e468fbe6f1b9040f82e336c2",
     "semantic_hash": ""
   },
   "src/components/TopBar.tsx": {
@@ -735,18 +735,43 @@
     "semantic_hash": ""
   },
   "src-tauri/src/commands/project.rs": {
-    "mtime": 1781127496.6985197,
-    "ast_hash": "dc63e32faa46c4380a41651f1d7f7303",
+    "mtime": 1781628312.9504018,
+    "ast_hash": "4c2a25d5b876034c22ecdd9c90f80e57",
     "semantic_hash": ""
   },
   "src/components/NewProjectView.tsx": {
-    "mtime": 1781126708.8367805,
-    "ast_hash": "07728fe2175cfc09bf0ffa03041aeaf4",
+    "mtime": 1781629327.7680326,
+    "ast_hash": "affad6236bded9f6fc7544688de15dc8",
     "semantic_hash": ""
   },
   "src/components/ProjectHome.tsx": {
-    "mtime": 1781127960.8788152,
-    "ast_hash": "ce96e5c0a44d18d9cd786a757bb2adca",
+    "mtime": 1781629466.2162178,
+    "ast_hash": "e9f5f24520f88133380ef24aa68a142a",
+    "semantic_hash": ""
+  },
+  "src-tauri/src/domain/policy_engine.rs": {
+    "mtime": 1781620263.4573467,
+    "ast_hash": "043f23ffcdfe3edec8e374ca59a328a8",
+    "semantic_hash": ""
+  },
+  "src-tauri/src/adapters/worktree/git_ops.rs": {
+    "mtime": 1781628271.6930847,
+    "ast_hash": "4f80da6f062bf103ec1abf4be05387c7",
+    "semantic_hash": ""
+  },
+  "src-tauri/src/adapters/worktree/mod.rs": {
+    "mtime": 1781627162.33568,
+    "ast_hash": "b1aa628b69e725e4d596b207b5624f3b",
+    "semantic_hash": ""
+  },
+  "src-tauri/src/commands/bootstrap.rs": {
+    "mtime": 1781629217.2720714,
+    "ast_hash": "dd7282976193e7b44649465eb4e0f787",
+    "semantic_hash": ""
+  },
+  "src/components/ProjectSettings.tsx": {
+    "mtime": 1781629448.9920714,
+    "ast_hash": "171b2e86e1d49f8f20729d0fa86da501",
     "semantic_hash": ""
   }
 }

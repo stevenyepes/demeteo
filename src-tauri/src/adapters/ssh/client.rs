@@ -44,8 +44,13 @@ impl SshClientAdapter {
 
         // Connect new session
         let machines = self.db.get_machines()?;
-        let machine = machines.into_iter().find(|m| m.id == machine_id)
-            .ok_or_else(|| "Machine not found".to_string())?;
+        let machine = machines.into_iter().find(|m| {
+            m.id == machine_id
+                || format!("{}@{}", m.username, m.host) == machine_id
+                || m.host == machine_id
+                || m.name == machine_id
+        })
+        .ok_or_else(|| "Machine not found".to_string())?;
 
         let secret = match machine.auth_type.as_str() {
             "password" | "key" => {
@@ -121,7 +126,12 @@ impl ExecutionPort for SshClientAdapter {
         let machines = self.db.get_machines()?;
         let machine = machines
             .into_iter()
-            .find(|m| m.id == machine_id)
+            .find(|m| {
+                m.id == machine_id
+                    || format!("{}@{}", m.username, m.host) == machine_id
+                    || m.host == machine_id
+                    || m.name == machine_id
+            })
             .ok_or_else(|| "Machine not found".to_string())?;
 
         // Local machines don't use SSH – trivially valid
@@ -353,8 +363,13 @@ impl ExecutionPort for SshClientAdapter {
         use crate::adapters::agent::acp::transport_ssh::RemoteSshTransport;
 
         let machines = self.db.get_machines()?;
-        let machine = machines.into_iter().find(|m| m.id == machine_id)
-            .ok_or_else(|| "Machine not found".to_string())?;
+        let machine = machines.into_iter().find(|m| {
+            m.id == machine_id
+                || format!("{}@{}", m.username, m.host) == machine_id
+                || m.host == machine_id
+                || m.name == machine_id
+        })
+        .ok_or_else(|| "Machine not found".to_string())?;
 
         let secret = match machine.auth_type.as_str() {
             "password" | "key" => {

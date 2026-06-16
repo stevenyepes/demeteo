@@ -387,13 +387,15 @@ pub async fn agent_set_config_option(
     config_id: String,
     value: String,
 ) -> Result<(), String> {
-    let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
-    session.set_config_option(&config_id, &value)?;
-
-    // Persist model selection to DB so it survives session restarts
+    // Persist to DB FIRST — even if the RPC call below blocks or fails
+    // (e.g. a prompt is in-flight on the same transport), the model is
+    // saved and will be re-applied on the next prompt via apply_thread_model.
     if config_id == "model" {
         let _ = db_state.db.update_thread_model(&thread_id, &value);
     }
+
+    let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
+    session.set_config_option(&config_id, &value)?;
 
     Ok(())
 }

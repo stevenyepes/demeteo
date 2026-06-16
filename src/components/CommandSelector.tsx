@@ -30,15 +30,63 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
   onClose,
 }) => {
   const [customValue, setCustomValue] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       setCustomValue("");
-      // Focus input on open
+      setSelectedIndex(-1);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [isOpen]);
+
+  const showList = options.length > 0;
+  const filteredOptions = freeform && customValue.trim()
+    ? options.filter(o =>
+        o.label.toLowerCase().includes(customValue.toLowerCase()) ||
+        o.value.toLowerCase().includes(customValue.toLowerCase())
+      )
+    : options;
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (filteredOptions.length > 0) {
+        setSelectedIndex(prev => {
+          if (prev < 0) return 0;
+          return prev < filteredOptions.length - 1 ? prev + 1 : 0;
+        });
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (filteredOptions.length > 0) {
+        setSelectedIndex(prev => {
+          if (prev < 0) return filteredOptions.length - 1;
+          return prev > 0 ? prev - 1 : filteredOptions.length - 1;
+        });
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (selectedIndex >= 0 && selectedIndex < filteredOptions.length) {
+        onSelect(filteredOptions[selectedIndex].value);
+      } else if (customValue.trim()) {
+        onSelect(customValue.trim());
+      } else if (filteredOptions.length > 0) {
+        onSelect(filteredOptions[0].value);
+      }
+    } else if (e.key === "Escape") {
+      onClose();
+    }
+  };
+
+  useEffect(() => {
+    if (selectedIndex >= 0 && listRef.current) {
+      const buttons = listRef.current.querySelectorAll("button");
+      buttons[selectedIndex]?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedIndex]);
 
   if (!isOpen) return null;
 
@@ -46,10 +94,10 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
     const v = customValue.trim();
     if (v) {
       onSelect(v);
+    } else if (filteredOptions.length > 0) {
+      onSelect(filteredOptions[0].value);
     }
   };
-
-  const showList = options.length > 0;
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 select-none">
@@ -80,15 +128,15 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
                   ref={inputRef}
                   type="text"
                   value={customValue}
-                  onChange={(e) => setCustomValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleCustomSubmit();
-                    if (e.key === "Escape") onClose();
+                  onChange={(e) => {
+                    setCustomValue(e.target.value);
+                    setSelectedIndex(-1);
                   }}
+                  onKeyDown={handleInputKeyDown}
                   placeholder={placeholder}
                   className="w-full bg-[#050508] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 focus:shadow-[0_0_15px_rgba(6,182,212,0.15)] transition-all placeholder-slate-600"
                 />
-                {customValue.trim() && (
+                {customValue.trim() ? (
                   <button
                     type="button"
                     onClick={handleCustomSubmit}
@@ -96,53 +144,75 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
                   >
                     <Send size={14} />
                   </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleCustomSubmit}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 transition-all"
+                    title="Select first option"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
                 )}
               </div>
             </div>
           )}
 
           {showList ? (
-            <div className="flex flex-col gap-1">
-              {freeform && options.length > 0 && (
+            <div className="flex flex-col gap-1" ref={listRef}>
+              {freeform && filteredOptions.length > 0 && (
                 <div className="px-3 py-2 text-[10px] text-slate-600 font-mono uppercase tracking-wider">
-                  Available choices
+                  {customValue.trim() ? `Results for "${customValue}"` : 'Available choices'}
                 </div>
               )}
-              {options.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => onSelect(opt.value)}
-                  className={`flex items-center gap-3 w-full text-left px-4 py-3 rounded-xl transition-all duration-150 group cursor-pointer ${
-                    opt.current
-                      ? "bg-cyan-500/10 border border-cyan-500/25"
-                      : "bg-transparent border border-transparent hover:bg-white/5 hover:border-white/10"
-                  }`}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-slate-200 group-hover:text-white transition-colors">
-                        {opt.label}
-                      </span>
-                      {opt.current && (
-                        <span className="text-[10px] font-mono text-cyan-400 flex items-center gap-0.5">
-                          <Check size={10} />
-                          active
-                        </span>
-                      )}
-                    </div>
-                    {opt.description && (
-                      <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">
-                        {opt.description}
+              {filteredOptions.length === 0 && freeform ? (
+                <div className="flex flex-col items-center py-6 text-slate-500">
+                  <p className="text-xs">No matching options</p>
+                </div>
+              ) : (
+                filteredOptions.map((opt, idx) => {
+                  const isSelected = idx === selectedIndex;
+                  const isCurrent = opt.current;
+                  let bgClass = "bg-transparent border border-transparent hover:bg-white/5 hover:border-white/10";
+                  if (isSelected) {
+                    bgClass = "bg-cyan-500/20 border border-cyan-500/40";
+                  } else if (isCurrent) {
+                    bgClass = "bg-cyan-500/10 border border-cyan-500/25";
+                  }
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => onSelect(opt.value)}
+                      onMouseEnter={() => setSelectedIndex(idx)}
+                      className={"flex items-center gap-3 w-full text-left px-4 py-3 rounded-xl transition-all duration-150 group cursor-pointer " + bgClass}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-slate-200 group-hover:text-white transition-colors">
+                            {opt.label}
+                          </span>
+                          {isCurrent && (
+                            <span className="text-[10px] font-mono text-cyan-400 flex items-center gap-0.5">
+                              <Check size={10} />
+                              active
+                            </span>
+                          )}
+                        </div>
+                        {opt.description && (
+                          <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">
+                            {opt.description}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                  <ChevronRight
-                    size={14}
-                    className="text-slate-600 group-hover:text-slate-400 transition-colors flex-shrink-0"
-                  />
-                </button>
-              ))}
+                      <ChevronRight
+                        size={14}
+                        className="text-slate-600 group-hover:text-slate-400 transition-colors flex-shrink-0"
+                      />
+                    </button>
+                  );
+                })
+              )}
             </div>
           ) : !freeform ? (
             <div className="flex flex-col items-center py-10 text-slate-500">

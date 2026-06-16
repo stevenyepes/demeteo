@@ -1,5 +1,5 @@
 use tauri::State;
-use crate::state::DatabaseState;
+use crate::state::{DatabaseState, ExecutionState};
 use crate::domain::models::Machine;
 
 #[tauri::command]
@@ -20,4 +20,12 @@ pub fn delete_machine(state: State<'_, DatabaseState>, id: String) -> Result<(),
 #[tauri::command]
 pub fn update_machine(state: State<'_, DatabaseState>, machine: Machine) -> Result<(), String> {
     state.db.update_machine(machine)
+}
+
+#[tauri::command]
+pub fn test_machine_connection(
+    state: State<'_, ExecutionState>,
+    machine_id: String,
+) -> Result<(), String> {
+    state.exec.test_connection(&machine_id)
 }

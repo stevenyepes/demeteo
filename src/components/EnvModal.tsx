@@ -274,7 +274,14 @@ const EnvModal: React.FC<EnvModalProps> = ({
             {connStatus === "err" && (
               <div className="flex items-start text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
                 <WifiOff size={13} className="mr-2 flex-shrink-0 mt-0.5" />
-                <span className="break-all">{connError}</span>
+                <div className="flex-1 break-all">{connError}</div>
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  className="ml-2 px-2 py-1 rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors text-[10px]"
+                >
+                  Retry
+                </button>
               </div>
             )}
 

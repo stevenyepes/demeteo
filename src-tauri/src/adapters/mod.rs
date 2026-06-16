@@ -4,3 +4,5 @@ pub mod local;
 pub mod router;
 pub mod ssh;
 pub mod tauri_ui;
+pub mod worktree;
+

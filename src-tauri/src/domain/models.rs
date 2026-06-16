@@ -147,3 +147,77 @@ pub struct Message {
     pub metadata: Option<String>, // JSON
     pub created_at: i64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProviderInstance {
+    pub id: String,
+    pub kind: String, // 'github' | 'gitlab'
+    pub host: String,
+    pub username: String,
+    pub avatar_url: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub compute_type: String, // 'local' | 'remote'
+    pub remote_host: Option<String>,
+    pub status: String,
+    pub nodes: i32,
+    pub spend: f64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Repository {
+    pub id: String,
+    pub project_id: String,
+    pub provider_id: String,
+    pub repo_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Feature {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+    pub status: String,
+    pub total_cost: f64,
+    pub duration: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorktreeStrategy {
+    pub default_branch: String,
+    pub branch_prefix: String,
+    pub test_command: Option<String>,
+    pub pr_template: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProjectSettings {
+    pub project_id: String,
+    pub worktree_strategy: WorktreeStrategy,
+    pub conflict_policy: String,
+    pub feature_lifecycle: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub branch: Option<String>,
+    pub is_locked: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RepoHealthStatus {
+    pub repo_path: String,     // logical path e.g. "org/repo"
+    pub is_cloned: bool,
+    pub head_branch: Option<String>,
+    pub worktrees: Vec<WorktreeInfo>,
+    pub has_uncommitted: bool,
+    pub has_unpushed: bool,
+}

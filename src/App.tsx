@@ -4,8 +4,9 @@ import Sidebar from "./components/Sidebar";
 import EmptyStateCard from "./components/EmptyStateCard";
 import ProviderSettings from "./components/ProviderSettings";
 import NewProjectView from "./components/NewProjectView";
-import { Plus, Trash2, Globe } from "lucide-react";
+import { Plus, Trash2, Globe, Edit2 } from "lucide-react";
 import ProjectHome from "./components/ProjectHome";
+import ProjectSettings from "./components/ProjectSettings";
 import "./App.css";
 
 interface Project {
@@ -15,6 +16,8 @@ interface Project {
   repos: number;
   nodes: number;
   spend: number;
+  compute_type?: string;
+  remote_host?: string | null;
 }
 
 interface Provider {
@@ -33,6 +36,7 @@ function App() {
   const [currentProject, setCurrentProject] = useState<string | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [activeFeatureId, setActiveFeatureId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,13 +58,23 @@ function App() {
         setProviders(mappedProviders);
 
         const backendProjects: any[] = await invoke('get_projects');
-        const mappedProjects: Project[] = backendProjects.map(p => ({
-          id: p.id,
-          name: p.name,
-          status: p.status,
-          repos: 1, // Scaffolded
-          nodes: p.nodes,
-          spend: p.spend
+        const mappedProjects: Project[] = await Promise.all(backendProjects.map(async p => {
+          let reposList: any[] = [];
+          try {
+            reposList = await invoke<any[]>('get_repositories_for_project', { projectId: p.id });
+          } catch (e) {
+            console.error(e);
+          }
+          return {
+            id: p.id,
+            name: p.name,
+            status: p.status,
+            repos: reposList.length,
+            nodes: p.nodes,
+            spend: p.spend,
+            compute_type: p.compute_type,
+            remote_host: p.remote_host
+          };
         }));
         setProjects(mappedProjects);
         if (mappedProjects.length > 0) {
@@ -68,7 +82,33 @@ function App() {
           setView('home');
         }
       } catch (err) {
-        console.error("Failed to fetch initial data", err);
+        console.error("Failed to fetch initial data, loading browser mocks:", err);
+        setProviders([
+          {
+            id: "prov_mock_1",
+            type: "github",
+            name: "github",
+            host: "github.com",
+            pat: "hidden",
+            username: "mockuser",
+            avatarUrl: ""
+          }
+        ]);
+        const mockProjects = [
+          {
+            id: "p_mock_1",
+            name: "Mock Project (Local)",
+            status: "idle",
+            repos: 1,
+            nodes: 4,
+            spend: 0.00,
+            compute_type: "local",
+            remote_host: null
+          }
+        ];
+        setProjects(mockProjects);
+        setCurrentProject(mockProjects[0].id);
+        setView('home');
       }
     };
     fetchInitialData();
@@ -94,6 +134,8 @@ function App() {
         repos: 2,
         nodes: sample.nodes,
         spend: sample.spend,
+        compute_type: sample.compute_type,
+        remote_host: sample.remote_host
       };
       setProjects([...projects, sampleProject]);
       setCurrentProject(sampleProject.id);
@@ -104,8 +146,15 @@ function App() {
   };
 
   const handleProviderConnected = (newProv: Provider) => {
-    setProviders([...providers, newProv]);
+    setProviders(prev => {
+      const exists = prev.find(p => p.id === newProv.id);
+      if (exists) {
+        return prev.map(p => p.id === newProv.id ? newProv : p);
+      }
+      return [...prev, newProv];
+    });
     setIsConnectModalOpen(false);
+    setEditingProvider(null);
   };
 
   return (
@@ -139,6 +188,7 @@ function App() {
               setView={setView}
               activeProject={activeProjectObj}
               setActiveFeatureId={setActiveFeatureId}
+              setProjects={setProjects}
             />
           )}
           {view === 'detail' && (
@@ -154,6 +204,15 @@ function App() {
               setView={setView}
               setProjects={setProjects}
               setCurrentProjectId={setCurrentProject}
+              providers={providers}
+            />
+          )}
+          {view === 'project-settings' && activeProjectObj && (
+            <ProjectSettings
+              setView={setView}
+              activeProject={activeProjectObj}
+              setProjects={setProjects}
+              setCurrentProject={setCurrentProject}
               providers={providers}
             />
           )}
@@ -221,13 +280,33 @@ function App() {
                           </div>
                         </div>
 
-                        <button
-                          onClick={() => setProviders(providers.filter((p) => p.id !== prov.id))}
-                          className="text-slate-500 hover:text-ruby-400 p-2 rounded-lg hover:bg-white/5 transition-all"
-                          title="Disconnect Provider"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setEditingProvider(prov);
+                              setIsConnectModalOpen(true);
+                            }}
+                            className="text-slate-500 hover:text-cyan-400 p-2 rounded-lg hover:bg-white/5 transition-all"
+                            title="Edit Provider"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={async () => {
+                              try {
+                                const { invoke } = await import('@tauri-apps/api/core');
+                                await invoke('delete_provider_instance', { providerId: prov.id });
+                                setProviders(providers.filter((p) => p.id !== prov.id));
+                              } catch (err) {
+                                console.error("Failed to delete provider", err);
+                              }
+                            }}
+                            className="text-slate-500 hover:text-ruby-400 p-2 rounded-lg hover:bg-white/5 transition-all"
+                            title="Disconnect Provider"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -236,8 +315,12 @@ function App() {
 
               {isConnectModalOpen && (
                 <ProviderSettings
+                  initialProvider={editingProvider || undefined}
                   onConnected={handleProviderConnected}
-                  onClose={() => setIsConnectModalOpen(false)}
+                  onClose={() => {
+                    setIsConnectModalOpen(false);
+                    setEditingProvider(null);
+                  }}
                 />
               )}
             </div>

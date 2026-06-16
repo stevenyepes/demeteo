@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Zap, Cpu, Play, Clock, DollarSign, ChevronRight } from 'lucide-react';
+import { Zap, Cpu, Play, Clock, DollarSign, ChevronRight, Settings, AlertTriangle, RotateCw, Check } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 export const MOCK_FEATURES = [
@@ -58,13 +58,72 @@ interface ProjectHomeProps {
   setView: (view: string) => void;
   activeProject: Project;
   setActiveFeatureId: (id: string) => void;
+  setProjects?: React.Dispatch<React.SetStateAction<Project[]>>;
 }
 
-const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setActiveFeatureId }) => {
+const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setActiveFeatureId, setProjects }) => {
     const [featureInput, setFeatureInput] = useState('');
     const [isExpanded, setIsExpanded] = useState(false);
     const [targetRepo, setTargetRepo] = useState('All Connected');
     const [features, setFeatures] = useState<any[]>(MOCK_FEATURES); // Fallback to mock for UI rendering where properties are missing
+
+    // Retry and recovery states
+    const [localBootstrapStep, setLocalBootstrapStep] = useState<'idle' | 'bootstrapping' | 'strategy_proposal' | 'error'>('idle');
+    const [bootstrapError, setBootstrapError] = useState('');
+
+    // Strategy Form States
+    const [defaultBranch, setDefaultBranch] = useState('main');
+    const [branchPrefix, setBranchPrefix] = useState('demeteo/features/');
+    const [testCommand, setTestCommand] = useState('');
+    const [prTemplate, setPrTemplate] = useState('');
+    const [conflictPolicy, setConflictPolicy] = useState('always_gate');
+    const [featureLifecycle, setFeatureLifecycle] = useState('archive');
+
+    const handleRetryBootstrap = async () => {
+        setLocalBootstrapStep('bootstrapping');
+        setBootstrapError('');
+        try {
+            const strategy = await invoke<any>('bootstrap_project', {
+                projectId: activeProject.id
+            });
+            setDefaultBranch(strategy.default_branch);
+            setBranchPrefix(strategy.branch_prefix);
+            setTestCommand(strategy.test_command || '');
+            setPrTemplate(strategy.pr_template || '');
+            setLocalBootstrapStep('strategy_proposal');
+        } catch (err: any) {
+            setLocalBootstrapStep('error');
+            setBootstrapError(String(err));
+        }
+    };
+
+    const handleApproveStrategy = async () => {
+        try {
+            await invoke('save_project_settings', {
+                projectId: activeProject.id,
+                settings: {
+                    project_id: activeProject.id,
+                    worktree_strategy: {
+                        default_branch: defaultBranch,
+                        branch_prefix: branchPrefix,
+                        test_command: testCommand || null,
+                        pr_template: prTemplate || null
+                    },
+                    conflict_policy: conflictPolicy,
+                    feature_lifecycle: featureLifecycle
+                }
+            });
+
+            // Update parent projects status to 'idle'
+            if (setProjects) {
+                setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, status: 'idle' } : p));
+            }
+            setLocalBootstrapStep('idle');
+        } catch (err: any) {
+            setLocalBootstrapStep('error');
+            setBootstrapError(String(err));
+        }
+    };
 
     useEffect(() => {
         const fetchFeatures = async () => {
@@ -110,6 +169,158 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
         }
     };
 
+    const isCurrentlyFailed = activeProject.status === 'error';
+    const isCurrentlyBootstrapping = activeProject.status === 'bootstrapping';
+
+    const currentStep = localBootstrapStep !== 'idle' ? localBootstrapStep : 
+                        isCurrentlyFailed ? 'error' : 
+                        isCurrentlyBootstrapping ? 'bootstrapping' : 'idle';
+
+    if (currentStep === 'bootstrapping') {
+        return (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
+                <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
+                <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-white/10 shadow-2xl">
+                    <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
+                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
+                    <p className="text-sm text-slate-400 mb-6 leading-relaxed">
+                        Demeteo is securely checking out your repositories and running structural analysis.
+                    </p>
+                    <div className="w-full bg-black/40 border border-white/5 rounded-lg p-4 font-mono text-left text-xs space-y-2.5 text-slate-300">
+                        <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                            <span>Resolving Provider Credentials...</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                            <span>Cloning Git Repositories...</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-slate-600"></span>
+                            <span className="text-slate-500">Detecting project workflow patterns...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (currentStep === 'error') {
+        return (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
+                <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-ruby-500/20 shadow-2xl">
+                    <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4 animate-pulse" />
+                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">Workspace Bootstrap Failed</h2>
+                    <p className="text-sm text-slate-400 mb-6 leading-relaxed">
+                        Demeteo could not clone configured repositories or analyze workspace structures. Verify target compute availability, credentials, and mapped repository paths.
+                    </p>
+                    {bootstrapError && (
+                        <div className="w-full bg-black/40 border border-ruby-500/10 rounded-lg p-4 font-mono text-left text-xs text-ruby-300 overflow-x-auto mb-6 max-h-[150px]">
+                            {bootstrapError}
+                        </div>
+                    )}
+                    <div className="flex gap-3">
+                        <button onClick={() => setView('project-settings')} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all flex items-center gap-1.5 font-medium">
+                            <Settings className="w-4 h-4" /> Configure Workspace
+                        </button>
+                        <button onClick={handleRetryBootstrap} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] flex items-center gap-1.5">
+                            <RotateCw className="w-4 h-4 animate-pulse" /> Retry Bootstrap
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (currentStep === 'strategy_proposal') {
+        return (
+            <div className="flex-1 overflow-y-auto p-8 relative flex items-center justify-center bg-[#08090c]">
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
+                <div className="glass-panel max-w-xl w-full p-6 rounded-xl flex flex-col border-white/10 shadow-2xl text-left">
+                    <div className="mb-6 border-b border-white/5 pb-4">
+                        <h3 className="font-outfit font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
+                        <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
+                    </div>
+
+                    <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
+                        <div>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Branch</label>
+                            <input 
+                                type="text" 
+                                value={defaultBranch} 
+                                onChange={e => setDefaultBranch(e.target.value)}
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Branch Prefix</label>
+                            <input 
+                                type="text" 
+                                value={branchPrefix} 
+                                onChange={e => setBranchPrefix(e.target.value)}
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Test Command</label>
+                            <input 
+                                type="text" 
+                                value={testCommand} 
+                                onChange={e => setTestCommand(e.target.value)}
+                                placeholder="e.g. npm test or cargo test"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Conflict Resolution Policy</label>
+                            <select 
+                                value={conflictPolicy} 
+                                onChange={e => setConflictPolicy(e.target.value)}
+                                className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                            >
+                                <option value="always_gate">Always Gate (Requires approval)</option>
+                                <option value="auto_agent">Auto Agent First (Cascade to manual)</option>
+                                <option value="auto_human">Immediate Manual Merge</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
+                            <select 
+                                value={featureLifecycle} 
+                                onChange={e => setFeatureLifecycle(e.target.value)}
+                                className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                            >
+                                <option value="archive">Archive by default</option>
+                                <option value="keep">Keep active</option>
+                                <option value="auto_delete">Auto delete branch after MR merge</option>
+                            </select>
+                        </div>
+
+                        {prTemplate && (
+                            <div>
+                                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Detected PR Template</label>
+                                <div className="w-full bg-black/40 border border-white/5 rounded-lg p-3 font-mono text-[10px] text-slate-400 max-h-[100px] overflow-y-auto leading-relaxed">
+                                    {prTemplate}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-4">
+                        <button onClick={() => setLocalBootstrapStep('idle')} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
+                        <button onClick={handleApproveStrategy} className="px-6 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all flex items-center gap-2">
+                            <Check className="w-4 h-4" /> Approve & Build Workspace
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="flex-1 overflow-y-auto p-8 relative">
             <div className="max-w-4xl mx-auto space-y-8">
@@ -117,7 +328,16 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                 {/* Header Block with Telemetry */}
                 <div className="flex justify-between items-end">
                     <div>
-                        <h1 className="text-3xl font-outfit font-bold text-white mb-2 tracking-tight">{activeProject.name}</h1>
+                        <div className="flex items-center gap-2 mb-2">
+                            <h1 className="text-3xl font-outfit font-bold text-white tracking-tight">{activeProject.name}</h1>
+                            <button
+                                onClick={() => setView('project-settings')}
+                                className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 transition-all"
+                                title="Workspace Settings"
+                            >
+                                <Settings className="w-5 h-5" />
+                            </button>
+                        </div>
                         <p className="text-sm text-slate-400">Connected via GitHub Enterprise &bull; Default Workflow: Standard Feature Pipeline</p>
                     </div>
                     <div className="glass-panel px-4 py-2 rounded-lg flex gap-4 text-xs font-mono">

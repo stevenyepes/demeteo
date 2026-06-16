@@ -1,6 +1,7 @@
 use crate::domain::models::{
     AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, Message, SessionHistory,
-    ThreadSession, WorkingMemoryEntry,
+    ThreadSession, WorkingMemoryEntry, ProviderInstance, Project, Repository, Feature,
+    ProjectSettings,
 };
 
 pub trait DatabasePort: Send + Sync {
@@ -56,4 +57,26 @@ pub trait DatabasePort: Send + Sync {
 
     // Persist the selected model for a thread session
     fn update_thread_model(&self, id: &str, model: &str) -> Result<(), String>;
+
+    // Redesign Phase R1 Additions
+    fn add_provider_instance(&self, provider: ProviderInstance) -> Result<(), String>;
+    fn get_provider_instances(&self) -> Result<Vec<ProviderInstance>, String>;
+    fn delete_provider_instance(&self, id: &str) -> Result<(), String>;
+
+    fn add_project(&self, project: Project) -> Result<(), String>;
+    fn get_projects(&self) -> Result<Vec<Project>, String>;
+    fn update_project_status(&self, id: &str, status: &str) -> Result<(), String>;
+
+    fn add_repository(&self, repo: Repository) -> Result<(), String>;
+    fn get_repositories_for_project(&self, project_id: &str) -> Result<Vec<Repository>, String>;
+
+    fn add_feature(&self, feature: Feature) -> Result<(), String>;
+    fn get_active_features(&self, project_id: &str) -> Result<Vec<Feature>, String>;
+
+    fn get_project_settings(&self, project_id: &str) -> Result<Option<ProjectSettings>, String>;
+    fn save_project_settings(&self, settings: ProjectSettings) -> Result<(), String>;
+
+    fn update_project(&self, project: Project) -> Result<(), String>;
+    fn delete_project(&self, id: &str) -> Result<(), String>;
+    fn delete_repositories_for_project(&self, project_id: &str) -> Result<(), String>;
 }

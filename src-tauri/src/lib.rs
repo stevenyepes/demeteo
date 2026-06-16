@@ -121,6 +121,7 @@ pub fn run() {
             commands::machine::add_machine,
             commands::machine::delete_machine,
             commands::machine::update_machine,
+            commands::machine::test_machine_connection,
             commands::agent_profile::get_agent_profiles,
             commands::agent_profile::add_agent_profile,
             commands::agent_profile::delete_agent_profile,
@@ -164,7 +165,25 @@ pub fn run() {
             sftp::sftp_list_dir,
             sftp::sftp_read_file,
             sftp::sftp_write_file,
-            sftp::sftp_get_metadata
+            sftp::sftp_get_metadata,
+            commands::providers::validate_provider_pat,
+            commands::providers::fetch_provider_repos,
+            commands::providers::connect_provider_instance,
+            commands::providers::list_provider_instances,
+            commands::providers::delete_provider_instance,
+            commands::project::create_project,
+            commands::project::get_projects,
+            commands::project::seed_sample_project,
+            commands::project::update_project,
+            commands::project::delete_project,
+            commands::project::check_repos_dirty,
+            commands::project::get_repositories_for_project,
+            commands::project::get_workspace_health,
+            commands::features::fetch_active_features,
+            commands::features::start_feature,
+            commands::bootstrap::bootstrap_project,
+            commands::bootstrap::get_proposed_strategy,
+            commands::bootstrap::save_project_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

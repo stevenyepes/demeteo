@@ -52,10 +52,10 @@
 - **UI Mocks:** [mock.tsx](file:///home/jsteven/Projects/demeteo/docs/mock.tsx) (ProjectHome, Feature input block)
 
 **Tasks:**
-- [ ] Implement `ProjectHome` layout including header block with telemetry (spend/nodes).
-- [ ] Build the "Start Feature Expanded Card" text area with auto-inference visual simulation.
-- [ ] Add the "Active Running Pipelines" list rendering active features with status/cost indicators.
-- [ ] Hook up "Delegate Workspace" button to launch the workflow.
+- [x] Implement `ProjectHome` layout including header block with telemetry (spend/nodes).
+- [x] Build the "Start Feature Expanded Card" text area with auto-inference visual simulation.
+- [x] Add the "Active Running Pipelines" list rendering active features with status/cost indicators.
+- [x] Hook up "Delegate Workspace" button to launch the workflow.
 
 ## Story 5: Orchestration Monitoring (Feature Detail)
 **Description:** As a user, I want to see the execution DAG of a feature to monitor agent progress, subtask fan-outs, and per-step telemetry.

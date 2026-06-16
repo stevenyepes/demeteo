@@ -1,6 +1,7 @@
 use crate::domain::models::{
     AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, Message, SessionHistory,
-    ThreadSession, WorkingMemoryEntry,
+    ThreadSession, WorkingMemoryEntry, ProviderInstance, Project, Repository, Feature,
+    ProjectSettings, WorktreeStrategy,
 };
 use crate::ports::db::DatabasePort;
 use rusqlite::{params, Connection};
@@ -94,6 +95,71 @@ impl SqliteAdapter {
 
         // Drop the old thread_events table — we no longer use it.
         let _ = conn.execute("DROP TABLE IF EXISTS thread_events;", []);
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS provider_instances (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                host TEXT NOT NULL,
+                username TEXT NOT NULL,
+                avatar_url TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                compute_type TEXT NOT NULL,
+                remote_host TEXT,
+                status TEXT NOT NULL,
+                nodes INTEGER NOT NULL,
+                spend REAL NOT NULL,
+                created_at INTEGER NOT NULL
+            );",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS repositories (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                repo_path TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS features (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                total_cost REAL NOT NULL,
+                duration TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS project_settings (
+                project_id TEXT PRIMARY KEY,
+                default_branch TEXT NOT NULL,
+                branch_prefix TEXT NOT NULL,
+                test_command TEXT,
+                pr_template TEXT,
+                conflict_policy TEXT NOT NULL,
+                feature_lifecycle TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );",
+            [],
+        );
 
         let adapter = Self { conn: Mutex::new(conn) };
         adapter.migrate_machine_agents();
@@ -644,5 +710,289 @@ impl DatabasePort for SqliteAdapter {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn add_provider_instance(&self, provider: ProviderInstance) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO provider_instances (id, kind, host, username, avatar_url, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![provider.id, provider.kind, provider.host, provider.username, provider.avatar_url, provider.created_at],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_provider_instances(&self) -> Result<Vec<ProviderInstance>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn.prepare("SELECT id, kind, host, username, avatar_url, created_at FROM provider_instances ORDER BY created_at DESC").map_err(|e| e.to_string())?;
+        let iter = stmt.query_map([], |row| {
+            Ok(ProviderInstance {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                host: row.get(2)?,
+                username: row.get(3)?,
+                avatar_url: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter { list.push(r.map_err(|e| e.to_string())?); }
+        Ok(list)
+    }
+
+    fn delete_provider_instance(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute("DELETE FROM provider_instances WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn add_project(&self, project: Project) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "INSERT INTO projects (id, name, compute_type, remote_host, status, nodes, spend, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![project.id, project.name, project.compute_type, project.remote_host, project.status, project.nodes, project.spend, project.created_at],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_projects(&self) -> Result<Vec<Project>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn.prepare("SELECT id, name, compute_type, remote_host, status, nodes, spend, created_at FROM projects ORDER BY created_at DESC").map_err(|e| e.to_string())?;
+        let iter = stmt.query_map([], |row| {
+            Ok(Project {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                compute_type: row.get(2)?,
+                remote_host: row.get(3)?,
+                status: row.get(4)?,
+                nodes: row.get(5)?,
+                spend: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter { list.push(r.map_err(|e| e.to_string())?); }
+        Ok(list)
+    }
+
+    fn update_project_status(&self, id: &str, status: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "UPDATE projects SET status = ?2 WHERE id = ?1",
+            params![id, status],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn add_repository(&self, repo: Repository) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "INSERT INTO repositories (id, project_id, provider_id, repo_path) VALUES (?1, ?2, ?3, ?4)",
+            params![repo.id, repo.project_id, repo.provider_id, repo.repo_path],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_repositories_for_project(&self, project_id: &str) -> Result<Vec<Repository>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn.prepare("SELECT id, project_id, provider_id, repo_path FROM repositories WHERE project_id = ?1").map_err(|e| e.to_string())?;
+        let iter = stmt.query_map(params![project_id], |row| {
+            Ok(Repository {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                provider_id: row.get(2)?,
+                repo_path: row.get(3)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter { list.push(r.map_err(|e| e.to_string())?); }
+        Ok(list)
+    }
+
+    fn add_feature(&self, feature: Feature) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "INSERT INTO features (id, project_id, title, status, total_cost, duration, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![feature.id, feature.project_id, feature.title, feature.status, feature.total_cost, feature.duration, feature.created_at],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_active_features(&self, project_id: &str) -> Result<Vec<Feature>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn.prepare("SELECT id, project_id, title, status, total_cost, duration, created_at FROM features WHERE project_id = ?1 ORDER BY created_at DESC").map_err(|e| e.to_string())?;
+        let iter = stmt.query_map(params![project_id], |row| {
+            Ok(Feature {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                title: row.get(2)?,
+                status: row.get(3)?,
+                total_cost: row.get(4)?,
+                duration: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter { list.push(r.map_err(|e| e.to_string())?); }
+        Ok(list)
+    }
+
+    fn get_project_settings(&self, project_id: &str) -> Result<Option<ProjectSettings>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT project_id, default_branch, branch_prefix, test_command, pr_template, conflict_policy, feature_lifecycle
+             FROM project_settings WHERE project_id = ?1"
+        ).map_err(|e| e.to_string())?;
+
+        let mut iter = stmt.query_map(params![project_id], |row| {
+            Ok(ProjectSettings {
+                project_id: row.get(0)?,
+                worktree_strategy: WorktreeStrategy {
+                    default_branch: row.get(1)?,
+                    branch_prefix: row.get(2)?,
+                    test_command: row.get(3)?,
+                    pr_template: row.get(4)?,
+                },
+                conflict_policy: row.get(5)?,
+                feature_lifecycle: row.get(6)?,
+            })
+        }).map_err(|e| e.to_string())?;
+
+        if let Some(res) = iter.next() {
+            Ok(Some(res.map_err(|e| e.to_string())?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn save_project_settings(&self, s: ProjectSettings) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO project_settings
+             (project_id, default_branch, branch_prefix, test_command, pr_template, conflict_policy, feature_lifecycle)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                s.project_id,
+                s.worktree_strategy.default_branch,
+                s.worktree_strategy.branch_prefix,
+                s.worktree_strategy.test_command,
+                s.worktree_strategy.pr_template,
+                s.conflict_policy,
+                s.feature_lifecycle
+            ],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn update_project(&self, project: Project) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "UPDATE projects SET name = ?2, compute_type = ?3, remote_host = ?4, status = ?5, nodes = ?6 WHERE id = ?1",
+            params![
+                project.id,
+                project.name,
+                project.compute_type,
+                project.remote_host,
+                project.status,
+                project.nodes
+            ],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn delete_project(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute("DELETE FROM projects WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn delete_repositories_for_project(&self, project_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute("DELETE FROM repositories WHERE project_id = ?1", params![project_id]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn test_update_and_delete_project() {
+        let conn = Connection::open_in_memory().unwrap();
+        let adapter = SqliteAdapter::new(conn);
+
+        // 1. Insert a test project
+        let project = Project {
+            id: "test_p1".to_string(),
+            name: "Test Project".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 4,
+            spend: 0.0,
+            created_at: 123456,
+        };
+        adapter.add_project(project.clone()).unwrap();
+
+        // Check it was inserted
+        let projects = adapter.get_projects().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "Test Project");
+
+        // 2. Add repository
+        let repo = Repository {
+            id: "test_r1".to_string(),
+            project_id: "test_p1".to_string(),
+            provider_id: "github".to_string(),
+            repo_path: "org/repo".to_string(),
+        };
+        adapter.add_repository(repo).unwrap();
+
+        let repos = adapter.get_repositories_for_project("test_p1").unwrap();
+        assert_eq!(repos.len(), 1);
+
+        // 3. Update project details
+        let updated = Project {
+            id: "test_p1".to_string(),
+            name: "Updated Project".to_string(),
+            compute_type: "remote".to_string(),
+            remote_host: Some("machine_1".to_string()),
+            status: "bootstrapping".to_string(),
+            nodes: 8,
+            spend: 10.5,
+            created_at: 123456,
+        };
+        adapter.update_project(updated).unwrap();
+
+        let projects = adapter.get_projects().unwrap();
+        assert_eq!(projects[0].name, "Updated Project");
+        assert_eq!(projects[0].compute_type, "remote");
+        assert_eq!(projects[0].remote_host, Some("machine_1".to_string()));
+        assert_eq!(projects[0].status, "bootstrapping");
+        assert_eq!(projects[0].nodes, 8);
+
+        // 4. Delete repositories for project
+        adapter.delete_repositories_for_project("test_p1").unwrap();
+        let repos = adapter.get_repositories_for_project("test_p1").unwrap();
+        assert!(repos.is_empty());
+
+        // Re-insert repository for delete cascade check
+        let repo = Repository {
+            id: "test_r1_cascade".to_string(),
+            project_id: "test_p1".to_string(),
+            provider_id: "github".to_string(),
+            repo_path: "org/repo-cascade".to_string(),
+        };
+        adapter.add_repository(repo).unwrap();
+
+        // 5. Delete project (should cascade delete repos)
+        adapter.delete_project("test_p1").unwrap();
+        let projects = adapter.get_projects().unwrap();
+        assert!(projects.is_empty());
+
+        // Check if repositories cascade deleted
+        let repos = adapter.get_repositories_for_project("test_p1").unwrap();
+        assert!(repos.is_empty());
     }
 }
