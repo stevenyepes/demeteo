@@ -112,6 +112,21 @@ impl AgentRuntime for AcpRuntime {
                 })
                 .unwrap_or((false, "tool_call/update".to_string()));
 
+            // Detect whether the agent supports `session/cancel`. v1 opencode
+            // (and several other ACP servers) don't implement it; sending it
+            // yields a noisy `-32601 Method not found` on the agent's
+            // stderr. When unsupported we fall back to a hard cancel
+            // (closing the transport) in `AcpSession::cancel`.
+            let supports_session_cancel = init_result
+                .get("capabilities")
+                .and_then(|c| c.get("sessionCancel").and_then(|v| v.as_bool()))
+                .or_else(|| {
+                    init_result
+                        .get("capabilities")
+                        .and_then(|c| c.get("session_cancel").and_then(|v| v.as_bool()))
+                })
+                .unwrap_or(false);
+
             // If the agent advertises authMethods, call authenticate. v1
             // doesn't surface agent API keys (see spec §1) so we just pass
             // through with a no-op; the agent is pre-configured on the host.
@@ -182,6 +197,7 @@ impl AgentRuntime for AcpRuntime {
                 session_info: StdMutex::new(session_info),
                 supports_tool_call_update,
                 tool_call_update_method,
+                supports_session_cancel,
             }) as Arc<dyn AgentSession>)
         })
     }
@@ -243,6 +259,12 @@ struct AcpSession {
     supports_tool_call_update: bool,
     /// The resolved method name for tool call updates (e.g. `toolCall/update` or `tool_call/update`).
     tool_call_update_method: String,
+    /// Whether the agent declared `capabilities.sessionCancel` in its
+    /// `initialize` response. When false, `cancel()` falls back to
+    /// closing the transport (hard cancel) instead of sending a
+    /// `session/cancel` notification, which would otherwise produce a
+    /// `-32601 Method not found` on the agent's stderr.
+    supports_session_cancel: bool,
 }
 
 impl AcpSession {
@@ -577,18 +599,32 @@ impl AgentSession for AcpSession {
 
     fn cancel(&self) -> Result<(), String> {
         self.cancelled.store(true, Ordering::SeqCst);
-        // Best-effort: send a `session/cancel` notification. The agent
-        // will stop the in-flight turn; we'll get a TurnComplete with
-        // stop_reason=cancelled in the next prompt. The cancel is
-        // fire-and-forget: we spawn it and return immediately so the
-        // sync trait method doesn't have to block on async I/O.
-        let rpc = self.rpc.clone();
-        let session_id = self.session_id.clone();
-        tokio::spawn(async move {
-            let _ = rpc
-                .call("session/cancel", json!({ "sessionId": session_id }), |_| {})
-                .await;
-        });
+
+        if self.supports_session_cancel {
+            // Cooperative cancel. `session/cancel` is a one-way
+            // JSON-RPC *notification* per ACP spec §5.2 — no `id`, no
+            // response expected. The previous implementation used
+            // `rpc.call` (request/response), which made the agent
+            // return `-32601 Method not found` even when the method
+            // was actually supported but the agent ignored unknown
+            // methods-with-ids. Using `notify` avoids that and the
+            // caller can fire-and-forget without blocking.
+            let rpc = self.rpc.clone();
+            let session_id = self.session_id.clone();
+            tokio::spawn(async move {
+                let _ = rpc.notify("session/cancel", json!({ "sessionId": session_id })).await;
+            });
+        } else {
+            // Hard cancel. v1 opencode (and several other ACP servers)
+            // don't implement `session/cancel` and don't advertise it
+            // in `initialize.capabilities`. Sending the notification
+            // anyway produces a noisy `-32601 Method not found` on
+            // the agent's stderr. Instead, close the transport — the
+            // remote `opencode acp` receives SIGHUP, the turn dies,
+            // and the registry replaces this session on the next
+            // `get_or_spawn`.
+            let _ = self.rpc.kill();
+        }
         Ok(())
     }
 
