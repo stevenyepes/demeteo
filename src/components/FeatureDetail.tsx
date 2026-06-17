@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import { StepExecution } from '../types';
 import { ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
@@ -159,24 +160,36 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   };
 
   const handleCancelFeature = async () => {
-    if (!confirm('Are you sure you want to cancel the execution of this feature?')) return;
+    const ok = await confirmDialog('Are you sure you want to cancel the execution of this feature?', {
+      title: 'Cancel Feature',
+      kind: 'warning',
+      okLabel: 'Cancel Feature',
+      cancelLabel: 'Keep Running',
+    });
+    if (!ok) return;
     try {
       await invoke('feature_cancel', { featureId });
       setStatus('cancelled');
       loadFeatureData();
     } catch (err: any) {
-      alert(err.toString());
+      await messageDialog(err.toString(), { title: 'Cancel Failed', kind: 'error' });
     }
   };
 
   const handleStopStep = async () => {
-    if (!confirm('Are you sure you want to stop the execution of this step?')) return;
+    const ok = await confirmDialog('Are you sure you want to stop the execution of this step?', {
+      title: 'Stop Step',
+      kind: 'warning',
+      okLabel: 'Stop Step',
+      cancelLabel: 'Keep Running',
+    });
+    if (!ok) return;
     try {
       await invoke('feature_cancel', { featureId });
       setStatus('cancelled');
       loadFeatureData();
     } catch (err: any) {
-      alert(err.toString());
+      await messageDialog(err.toString(), { title: 'Stop Failed', kind: 'error' });
     }
   };
 
@@ -185,7 +198,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       await invoke('step_retry', { stepExecutionId });
       loadFeatureData();
     } catch (err: any) {
-      alert(err.toString());
+      await messageDialog(err.toString(), { title: 'Retry Failed', kind: 'error' });
     }
   };
 

@@ -17,8 +17,10 @@ pub async fn start_feature(
     project_id: String,
     workflow_id: String,
     title: String,
+    agent_kind: Option<String>,
+    model: Option<String>,
 ) -> Result<Feature, String> {
-    ctx.executor.feature_start(&project_id, &workflow_id, &title)
+    ctx.executor.feature_start(&project_id, &workflow_id, &title, agent_kind.as_deref(), model.as_deref())
 }
 
 #[tauri::command]

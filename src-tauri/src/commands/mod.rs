@@ -12,4 +12,5 @@ pub mod project;
 pub mod features;
 pub mod bootstrap;
 pub mod workflows;
+pub mod agent_config_probe;
 

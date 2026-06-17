@@ -5,6 +5,7 @@ import {
     Activity, RefreshCw, ChevronDown, ChevronUp, Zap, CircleAlert
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { ConfigOptionValue } from '../types';
 
 interface Project {
     id: string;
@@ -52,6 +53,8 @@ interface ProjectSettings {
     worktree_strategy: WorktreeStrategy;
     conflict_policy: string;
     feature_lifecycle: string;
+    default_agent_kind?: string | null;
+    default_model?: string | null;
 }
 
 interface RepoDirtyStatus {
@@ -137,6 +140,36 @@ export default function ProjectSettingsView({
     // Coding Agent configs
     const [agentConfigs, setAgentConfigs] = useState<AgentConfigView[]>([]);
 
+    // Default AI Executor States
+    const [defaultAgentKind, setDefaultAgentKind] = useState<string>('');
+    const [defaultModel, setDefaultModel] = useState<string>('');
+    const [availableModelsForDefault, setAvailableModelsForDefault] = useState<ConfigOptionValue[]>([]);
+    const [isLoadingModelsForDefault, setIsLoadingModelsForDefault] = useState(false);
+
+    useEffect(() => {
+        const fetchModels = async () => {
+            if (!defaultAgentKind) {
+                setAvailableModelsForDefault([]);
+                return;
+            }
+            setIsLoadingModelsForDefault(true);
+            try {
+                const machineId = computeType === 'remote' ? remoteHost : 'local';
+                const models = await invoke<ConfigOptionValue[]>('get_agent_models', {
+                    machineId,
+                    agentKind: defaultAgentKind
+                });
+                setAvailableModelsForDefault(models);
+            } catch (err) {
+                console.warn("Failed to fetch models for agent:", defaultAgentKind, err);
+                setAvailableModelsForDefault([]);
+            } finally {
+                setIsLoadingModelsForDefault(false);
+            }
+        };
+        fetchModels();
+    }, [defaultAgentKind, computeType, remoteHost]);
+
     useEffect(() => {
         setConnectionStatus('idle');
     }, [remoteHost]);
@@ -209,6 +242,8 @@ export default function ProjectSettingsView({
                     setPrTemplate(res.worktree_strategy.pr_template || '');
                     setConflictPolicy(res.conflict_policy);
                     setFeatureLifecycle(res.feature_lifecycle);
+                    setDefaultAgentKind(res.default_agent_kind || '');
+                    setDefaultModel(res.default_model || '');
                 }
 
                 // Fetch configured repos
@@ -392,7 +427,9 @@ export default function ProjectSettingsView({
                             pr_template: prTemplate || null
                         },
                         conflict_policy: conflictPolicy,
-                        feature_lifecycle: featureLifecycle
+                        feature_lifecycle: featureLifecycle,
+                        default_agent_kind: defaultAgentKind || null,
+                        default_model: defaultModel || null
                     }
                 });
 
@@ -465,7 +502,9 @@ export default function ProjectSettingsView({
                         pr_template: prTemplate || null
                     },
                     conflict_policy: conflictPolicy,
-                    feature_lifecycle: featureLifecycle
+                    feature_lifecycle: featureLifecycle,
+                    default_agent_kind: defaultAgentKind || null,
+                    default_model: defaultModel || null
                 }
             });
 
@@ -1277,6 +1316,69 @@ export default function ProjectSettingsView({
                                     <option value="keep">Keep active</option>
                                     <option value="auto_delete">Auto delete branch after MR merge</option>
                                 </select>
+                            </div>
+                        </div>
+
+                        {/* Default AI Executor Settings */}
+                        <div className="glass-panel p-6 rounded-xl space-y-4">
+                            <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                <Zap className="w-4 h-4 text-violet-400" /> Default AI Executor Settings
+                            </h3>
+
+                            <div>
+                                <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Coding Agent</label>
+                                <select 
+                                    value={defaultAgentKind} 
+                                    onChange={e => {
+                                        setDefaultAgentKind(e.target.value);
+                                        setDefaultModel('');
+                                    }}
+                                    className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 capitalize"
+                                >
+                                    <option value="">No default (Prompt on feature creation)</option>
+                                    {agentConfigs.filter(a => a.enabled).map(a => (
+                                        <option key={a.kind} value={a.kind}>
+                                            {a.kind.replace(/-/g, ' ')}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Model</label>
+                                <div>
+                                    {isLoadingModelsForDefault ? (
+                                        <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-slate-400 flex items-center gap-2">
+                                            <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                                            <span>Probing available models...</span>
+                                        </div>
+                                    ) : (
+                                        <div className="flex gap-2">
+                                            <select
+                                                value={defaultModel}
+                                                onChange={e => setDefaultModel(e.target.value)}
+                                                className="flex-1 min-w-0 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50"
+                                                disabled={!defaultAgentKind}
+                                            >
+                                                <option value="">No default model</option>
+                                                {availableModelsForDefault.map(m => (
+                                                    <option key={m.value} value={m.value}>{m.name}</option>
+                                                ))}
+                                                {defaultModel && !availableModelsForDefault.some(m => m.value === defaultModel) && (
+                                                    <option value={defaultModel}>{defaultModel} (custom)</option>
+                                                )}
+                                            </select>
+                                            <input
+                                                type="text"
+                                                value={defaultModel}
+                                                onChange={e => setDefaultModel(e.target.value)}
+                                                placeholder="Custom override"
+                                                className="w-1/3 shrink-0 min-w-[140px] bg-black/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600"
+                                                disabled={!defaultAgentKind}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
 

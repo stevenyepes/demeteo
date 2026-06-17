@@ -149,5 +149,7 @@ pub(crate) fn fetch_default_settings() -> ProjectSettings {
         },
         conflict_policy: "always_gate".to_string(),
         feature_lifecycle: "archive".to_string(),
+        default_agent_kind: None,
+        default_model: None,
     }
 }

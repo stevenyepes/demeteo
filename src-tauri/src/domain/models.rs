@@ -193,6 +193,10 @@ pub struct Feature {
     pub total_cost: f64,
     pub duration: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub agent_kind: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -225,6 +229,10 @@ pub struct ProjectSettings {
     pub worktree_strategy: WorktreeStrategy,
     pub conflict_policy: String,
     pub feature_lifecycle: String,
+    #[serde(default)]
+    pub default_agent_kind: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

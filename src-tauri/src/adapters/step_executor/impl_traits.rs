@@ -200,6 +200,8 @@ impl StepExecutor for DagStepExecutor {
         project_id: &str,
         workflow_id: &str,
         description: &str,
+        agent_kind: Option<&str>,
+        model: Option<&str>,
     ) -> Result<Feature, String> {
         let now = paths::now_ms();
         let feature_id = FeatureId::from(format!("f-{}", now));
@@ -273,6 +275,8 @@ impl StepExecutor for DagStepExecutor {
             total_cost: 0.0,
             duration: "0s".to_string(),
             created_at: now,
+            agent_kind: agent_kind.map(|s| s.to_string()),
+            model: model.map(|s| s.to_string()),
         };
         self.features.add(feature.clone())?;
 
@@ -294,12 +298,35 @@ impl StepExecutor for DagStepExecutor {
             self.features.step_create(step_exec)?;
         }
 
-        self.start_execution_loop(
+        if let Err(e) = self.start_execution_loop(
             feature_id.as_str(),
             project_id,
             workflow_id,
             description,
-        )?;
+        ) {
+            let _ = self.features.update(
+                &feature_id,
+                &FeaturePatch {
+                    status: Some("failed".to_string()),
+                    total_cost: None,
+                    duration: None,
+                },
+            );
+            let all_steps = self.features.steps_for_feature(&feature_id).unwrap_or_default();
+            for s in all_steps {
+                let _ = self.features.step_update(
+                    &s.id,
+                    &StepExecutionPatch {
+                        status: Some("failed".to_string()),
+                        cost_usd: None,
+                        wall_clock_secs: None,
+                        artifact_path: None,
+                        error_message: Some(Some(e.clone())),
+                    },
+                );
+            }
+            return Err(e);
+        }
 
         Ok(feature)
     }
@@ -332,7 +359,7 @@ impl StepExecutor for DagStepExecutor {
             .step_get(&se_id)?
             .ok_or_else(|| format!("Step execution not found: {}", execution_id))?;
 
-        if step_exec.status != "failed" && step_exec.status != "interrupted" {
+        if step_exec.status != "failed" && step_exec.status != "interrupted" && step_exec.status != "pending" {
             return Err(format!(
                 "Cannot retry a step in '{}' status. Only failed or interrupted steps can be retried.",
                 step_exec.status
@@ -375,8 +402,10 @@ impl StepExecutor for DagStepExecutor {
         })?;
 
         let all_steps = self.features.steps_for_feature(feature_id)?;
+        let mut patch_list: Vec<(StepExecutionId, String)> = Vec::new();
         for s in &all_steps {
             if s.step_index >= step_exec.step_index {
+                patch_list.push((s.id.clone(), s.status.clone()));
                 self.features.step_update(
                     &s.id,
                     &StepExecutionPatch {
@@ -390,6 +419,7 @@ impl StepExecutor for DagStepExecutor {
             }
         }
 
+        let prev_feature_status = feature.status.clone();
         self.features.update(
             feature_id,
             &FeaturePatch {
@@ -403,12 +433,34 @@ impl StepExecutor for DagStepExecutor {
             status: "running".into(),
         });
 
-        self.start_execution_loop(
+        if let Err(e) = self.start_execution_loop(
             feature_id.as_str(),
             &feature.project_id.0,
             workflow_id.as_str(),
             &feature.title,
-        )?;
+        ) {
+            for (sid, original_status) in &patch_list {
+                let _ = self.features.step_update(
+                    sid,
+                    &StepExecutionPatch {
+                        status: Some(original_status.clone()),
+                        cost_usd: None,
+                        wall_clock_secs: None,
+                        artifact_path: None,
+                        error_message: None,
+                    },
+                );
+            }
+            let _ = self.features.update(
+                feature_id,
+                &FeaturePatch {
+                    status: Some(prev_feature_status.clone()),
+                    total_cost: None,
+                    duration: None,
+                },
+            );
+            return Err(e);
+        }
 
         Ok(())
     }

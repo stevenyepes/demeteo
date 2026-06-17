@@ -9,7 +9,30 @@ pub fn get_agent_configs(
     machine_id: String,
 ) -> Result<Vec<AgentConfigView>, String> {
     let machine_id_typed = MachineId::from(machine_id.clone());
-    let configured = ctx.threads.get_agent_configs(&machine_id_typed)?;
+    // Resolve machine first using the same logic as RouterExecutionPort
+    let resolved_id = match ctx.machines.get_machines() {
+        Ok(machines) => {
+            machines.into_iter().find(|m| {
+                m.id == machine_id_typed
+                    || format!("{}@{}", m.username, m.host) == machine_id
+                    || m.host == machine_id
+                    || m.name == machine_id
+            })
+            .map(|m| m.id)
+            .unwrap_or(machine_id_typed)
+        }
+        Err(_) => machine_id_typed,
+    };
+
+    let configured = ctx.threads.get_agent_configs(&resolved_id).unwrap_or_else(|_| {
+        vec![
+            AgentConfig { kind: "opencode".to_string(), enabled: true },
+            AgentConfig { kind: "hermes".to_string(), enabled: true },
+            AgentConfig { kind: "claude-code".to_string(), enabled: true },
+            AgentConfig { kind: "antigravity".to_string(), enabled: true },
+        ]
+    });
+
     let runtime_kinds: Vec<&'static str> = ctx
         .registry
         .runtimes()
@@ -50,7 +73,22 @@ pub fn set_agent_configs(
     agents: Vec<AgentConfig>,
 ) -> Result<(), String> {
     let json = serde_json::to_string(&agents).map_err(|e| e.to_string())?;
-    ctx.threads.set_agent_configs(&MachineId::from(machine_id), &json)
+    let machine_id_typed = MachineId::from(machine_id.clone());
+    // Resolve machine first using the same logic as RouterExecutionPort
+    let resolved_id = match ctx.machines.get_machines() {
+        Ok(machines) => {
+            machines.into_iter().find(|m| {
+                m.id == machine_id_typed
+                    || format!("{}@{}", m.username, m.host) == machine_id
+                    || m.host == machine_id
+                    || m.name == machine_id
+            })
+            .map(|m| m.id)
+            .unwrap_or(machine_id_typed)
+        }
+        Err(_) => machine_id_typed,
+    };
+    ctx.threads.set_agent_configs(&resolved_id, &json)
 }
 
 #[tauri::command]

@@ -21,6 +21,10 @@ impl ExecutionDriver {
         step_index: usize,
         step_execs: &[StepExecution],
     ) -> StepOutcome {
+        let feature = self.features.get(&self.f_id).ok().flatten();
+        let override_agent = feature.as_ref().and_then(|f| f.agent_kind.clone());
+        let override_model = feature.as_ref().and_then(|f| f.model.clone());
+
         let subtasks = vec![
             ("sub-1", "Implement core logic"),
             ("sub-2", "Write unit tests"),
@@ -53,8 +57,10 @@ impl ExecutionDriver {
                 }
             };
 
-            let agent_kind =
-                step_conf.agent_kind.clone().unwrap_or_else(|| "opencode".to_string());
+            let agent_kind = override_agent
+                .clone()
+                .or_else(|| step_conf.agent_kind.clone())
+                .unwrap_or_else(|| "opencode".to_string());
 
             let subtask_files_str =
                 "All relevant files for this subtask (feel free to create or edit files as needed to implement the logic)"
@@ -111,6 +117,9 @@ impl ExecutionDriver {
 
             match spawn_res {
                 Some(Ok(session)) => {
+                    if let Some(ref model) = override_model {
+                        let _ = session.set_config_option("model", model);
+                    }
                     let mut stream = session.prompt(&sub_prompt);
                     let mut sub_content = String::new();
                     while let Some(event) = stream.next().await {

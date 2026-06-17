@@ -1,16 +1,16 @@
 # Graph Report - demeteo  (2026-06-17)
 
 ## Corpus Check
-- 156 files · ~151,472 words
+- 179 files · ~151,632 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2094 nodes · 3746 edges · 171 communities (143 shown, 28 thin omitted)
-- Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS · INFERRED: 16 edges (avg confidence: 0.81)
+- 2225 nodes · 3658 edges · 188 communities (159 shown, 29 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 21 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `9459faa5`
+- Built from commit: `9fd1c2dd`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -139,6 +139,10 @@
 - [[_COMMUNITY_Schemas & Acl & Manifests|Schemas & Acl & Manifests]]
 - [[_COMMUNITY_Schemas & Acl & Manifests|Schemas & Acl & Manifests]]
 - [[_COMMUNITY_Community 125|Community 125]]
+- [[_COMMUNITY_Community 126|Community 126]]
+- [[_COMMUNITY_Community 127|Community 127]]
+- [[_COMMUNITY_Community 128|Community 128]]
+- [[_COMMUNITY_Community 129|Community 129]]
 - [[_COMMUNITY_Schemas & Desktop & Schema|Schemas & Desktop & Schema]]
 - [[_COMMUNITY_Description & Schemas & Desktop|Description & Schemas & Desktop]]
 - [[_COMMUNITY_Schemas & Desktop & Schema|Schemas & Desktop & Schema]]
@@ -156,9 +160,11 @@
 - [[_COMMUNITY_Schemas & Linux & Schema|Schemas & Linux & Schema]]
 - [[_COMMUNITY_Agents & Graphify & Rules|Agents & Graphify & Rules]]
 - [[_COMMUNITY_Cf & Terminal & Streaming|Cf & Terminal & Streaming]]
+- [[_COMMUNITY_Community 150|Community 150]]
 - [[_COMMUNITY_32X32|32X32]]
 - [[_COMMUNITY_Cf & SFTP & Explorer|Cf & SFTP & Explorer]]
 - [[_COMMUNITY_Connection & Flows|Connection & Flows]]
+- [[_COMMUNITY_Database|Database]]
 - [[_COMMUNITY_Database & Schema|Database & Schema]]
 - [[_COMMUNITY_Icon|Icon]]
 - [[_COMMUNITY_Icons & Appiconset|Icons & Appiconset]]
@@ -168,18 +174,26 @@
 - [[_COMMUNITY_Square284X284Logo|Square284X284Logo]]
 - [[_COMMUNITY_Square89X89Logo|Square89X89Logo]]
 - [[_COMMUNITY_Storelogo|Storelogo]]
+- [[_COMMUNITY_Community 176|Community 176]]
+- [[_COMMUNITY_Community 177|Community 177]]
+- [[_COMMUNITY_Community 178|Community 178]]
+- [[_COMMUNITY_Community 179|Community 179]]
+- [[_COMMUNITY_Community 180|Community 180]]
+- [[_COMMUNITY_Community 181|Community 181]]
+- [[_COMMUNITY_Community 182|Community 182]]
+- [[_COMMUNITY_Community 184|Community 184]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `SqliteAdapter` - 108 edges
-2. `Result` - 96 edges
-3. `String` - 96 edges
-4. `DagStepExecutor` - 32 edges
-5. `String` - 28 edges
-6. `String` - 27 edges
-7. `Result` - 26 edges
-8. `Vec` - 22 edges
-9. `Option` - 22 edges
-10. `SshClientAdapter` - 20 edges
+1. `String` - 27 edges
+2. `ExecutionDriver` - 25 edges
+3. `SshClientAdapter` - 20 edges
+4. `Option` - 20 edges
+5. `Demeteo Redesign: Open & Deferred Questions` - 20 edges
+6. `Demeteo (Control Plane / PDP)` - 20 edges
+7. `DagStepExecutor` - 19 edges
+8. `RemoteSshTransport` - 18 edges
+9. `AcpSession` - 17 edges
+10. `LocalSubprocessTransport` - 17 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Tauri v2` --conceptually_related_to--> `Tauri Logo SVG`  [INFERRED]
@@ -210,10 +224,10 @@
 - 1-file cycle: `src-tauri/src/adapters/agent/noop.rs -> src-tauri/src/adapters/agent/noop.rs`
 - 1-file cycle: `src-tauri/src/adapters/agent/opencode/mod.rs -> src-tauri/src/adapters/agent/opencode/mod.rs`
 - 1-file cycle: `src-tauri/src/adapters/agent/registry.rs -> src-tauri/src/adapters/agent/registry.rs`
-- 1-file cycle: `src-tauri/src/adapters/database/sqlite.rs -> src-tauri/src/adapters/database/sqlite.rs`
-- 1-file cycle: `src-tauri/src/commands/agent_lifecycle.rs -> src-tauri/src/commands/agent_lifecycle.rs`
-- 1-file cycle: `src-tauri/src/commands/messages.rs -> src-tauri/src/commands/messages.rs`
-- 1-file cycle: `src-tauri/src/commands/thread.rs -> src-tauri/src/commands/thread.rs`
+- 1-file cycle: `src-tauri/src/adapters/database/connection.rs -> src-tauri/src/adapters/database/connection.rs`
+- 1-file cycle: `src-tauri/src/adapters/database/migration.rs -> src-tauri/src/adapters/database/migration.rs`
+- 1-file cycle: `src-tauri/src/adapters/database/mod.rs -> src-tauri/src/adapters/database/mod.rs`
+- 1-file cycle: `src-tauri/src/adapters/database/repos/app_settings.rs -> src-tauri/src/adapters/database/repos/app_settings.rs`
 
 ## Hyperedges (group relationships)
 - **Graphify Skill Artifacts** — agents_rules_graphify, agents_workflows_graphify [EXTRACTED 1.00]
@@ -222,19 +236,19 @@
 - **Agent adapters normalize into DemeteoEvent** — prd_agent_adapters, prd_claude_code, prd_openhands_opencode, prd_hermes, prd_mcp, prd_demeteo_event [EXTRACTED 1.00]
 - **index.html mounts React app and loads fonts** — index_html_index_html, index_html_root_div, index_html_main_tsx_entry, public_vite_svg, index_html_fira_code_font, index_html_inter_font, index_html_outfit_font [EXTRACTED 1.00]
 
-## Communities (171 total, 28 thin omitted)
+## Communities (188 total, 29 thin omitted)
 
 ### Community 0 - "Database & Sqlite & Sqliteadapter"
-Cohesion: 0.05
-Nodes (44): ChatMessage, ChatSession, SqliteAdapter, test_update_and_delete_project(), FeaturePatch, SessionHistory, AgentConfig, AgentProfile (+36 more)
+Cohesion: 0.07
+Nodes (36): FeaturePatch, GateDecisionId, SqliteAdapter, Feature, FeatureId, FeatureRepository, Option, ProjectId (+28 more)
 
 ### Community 1 - "ACP & Runtime & Agent"
 Cohesion: 0.05
 Nodes (64): action_kind_from_str(), map_session_update(), map_session_update_kind(), map_tool_call_update(), map_usage_notification(), opencode_available_commands_is_silently_dropped(), opencode_message_chunk_yields_text_event(), opencode_thought_chunk_is_silently_dropped() (+56 more)
 
 ### Community 2 - "Step & Executor & Dagstepexecutor"
-Cohesion: 0.07
-Nodes (42): ActionError, AgentAction, AgentExecutionPort, AgentRegistry, AppSettingsRepository, Arc, Box, CommandOutcome (+34 more)
+Cohesion: 0.19
+Nodes (19): AgentExecutionPort, AgentRegistry, AppSettingsRepository, Arc, ExecutionPort, FeatureRepository, GateDecision, GateRepository (+11 more)
 
 ### Community 3 - "Policy & Engine & SSH"
 Cohesion: 0.32
@@ -253,16 +267,16 @@ Cohesion: 0.05
 Nodes (44): Fira Code Font, Demeteo Root HTML, Inter Font, main.tsx Entry Script, Outfit Font, #root DOM Mount Point, Active Threads (Agent Workspaces), Ad-Hoc Mode (Raw Session) (+36 more)
 
 ### Community 7 - "Jsonrpc & ACP & Agent"
-Cohesion: 0.08
-Nodes (43): call_blocking(), JsonRpcClient, Message, Pending, read_one_message_blocking(), Request, request_serializes_with_jsonrpc_envelope(), RpcError (+35 more)
+Cohesion: 0.06
+Nodes (45): JsonRpcClient, Message, Pending, Request, request_serializes_with_jsonrpc_envelope(), RpcError, TransportAsRead, AtomicU64 (+37 more)
 
 ### Community 8 - "Tool & Bridge & ACP"
 Cohesion: 0.14
 Nodes (23): ApprovePort, bridge_with(), DispatchResult, read_text_file_happy_path_returns_content(), RejectPort, terminal_create_happy_path_returns_output(), terminal_create_reject_returns_tool_failure(), ToolBridge (+15 more)
 
 ### Community 9 - "Models & Sessionmodestate & Configoption"
-Cohesion: 0.09
-Nodes (49): ConfigOption, ConfigOptionValue, AgentConfig, AgentProfile, ChatMessage, ChatSession, ConfigOption, ConfigOptionValue (+41 more)
+Cohesion: 0.10
+Nodes (48): ConfigOption, AgentConfig, AgentProfile, ChatMessage, ChatSession, ConfigOption, ConfigOptionValue, Feature (+40 more)
 
 ### Community 10 - "Schemas & Acl & Manifests"
 Cohesion: 0.08
@@ -322,7 +336,7 @@ Nodes (25): check_repos_dirty(), create_project(), delete_project(), get_project
 
 ### Community 24 - "Workfloweditor & Components & Workfloweditorprops"
 Cohesion: 0.09
-Nodes (23): AGENT_KINDS, WorkflowEditor(), WorkflowEditorProps, ActionKind, AgentConfig, AgentConfigView, AgentKind, ConfigOption (+15 more)
+Nodes (22): AGENT_KINDS, WorkflowEditor(), WorkflowEditorProps, ActionKind, AgentConfig, AgentConfigView, AgentKind, ConfigOption (+14 more)
 
 ### Community 25 - "Router & Routerexecutionport & Resolve"
 Cohesion: 0.22
@@ -349,7 +363,7 @@ Cohesion: 0.11
 Nodes (11): EmptyStateCard(), EmptyStateCardProps, ProviderSettingsProps, Project, Sidebar(), SidebarProps, TopBarProps, WorkflowList() (+3 more)
 
 ### Community 31 - "Features & Feature & Step"
-Cohesion: 0.32
+Cohesion: 0.33
 Nodes (19): feature_cancel(), feature_pause(), feature_resume(), fetch_active_features(), gate_decide(), gate_pending_for_run(), start_feature(), step_get() (+11 more)
 
 ### Community 32 - "Agentsessionregistry & Newthreadmodal & Components"
@@ -369,8 +383,8 @@ Cohesion: 0.11
 Nodes (17): app, security, windows, build, beforeBuildCommand, beforeDevCommand, devUrl, frontendDist (+9 more)
 
 ### Community 36 - "Bootstrap & Project & Get"
-Cohesion: 0.32
-Nodes (14): bootstrap_project(), do_bootstrap_inner(), get_proposed_strategy(), get_repo_name(), save_project_settings(), AppContext, AppHandle, Option (+6 more)
+Cohesion: 0.08
+Nodes (37): bootstrap_project(), do_bootstrap_inner(), get_proposed_strategy(), get_repo_name(), save_project_settings(), GitOpsHelper, AgentExecutionPort, AgentRegistry (+29 more)
 
 ### Community 37 - "Schemas & Acl & Manifests"
 Cohesion: 0.12
@@ -533,8 +547,8 @@ Cohesion: 0.33
 Nodes (4): AvailableRepo, NewProjectViewProps, Provider, WorktreeStrategy
 
 ### Community 80 - "Projecthome & Components & Features"
-Cohesion: 0.33
-Nodes (4): Feature, MOCK_FEATURES, Project, ProjectHomeProps
+Cohesion: 0.29
+Nodes (5): Feature, MOCK_FEATURES, Project, ProjectHomeProps, ConfigOptionValue
 
 ### Community 81 - "Workflows & Bugfix & Pipeline"
 Cohesion: 0.13
@@ -561,7 +575,7 @@ Cohesion: 0.40
 Nodes (4): test_ssh_connection(), Option, Result, String
 
 ### Community 87 - "Execution & Interactivehandle & Send"
-Cohesion: 0.50
+Cohesion: 0.60
 Nodes (4): ExecutionPort, InteractiveHandle, Send, Sync
 
 ### Community 88 - "Step & Executor & Stepexecutor"
@@ -676,6 +690,22 @@ Nodes (3): For --cluster-only, For --update (incremental re-extraction), graphif
 Cohesion: 0.23
 Nodes (14): Clone, clone_allows_per_step_extension(), collapse_unknown_placeholders(), collapses_unknown_variables_to_empty(), handles_empty_value(), handles_no_placeholders(), last_set_wins_for_duplicate_keys(), PromptContext (+6 more)
 
+### Community 126 - "Community 126"
+Cohesion: 0.11
+Nodes (27): Feature, GateDecision, GatePresenter, Option, Result, StepExecution, StepExecutor, String (+19 more)
+
+### Community 127 - "Community 127"
+Cohesion: 0.10
+Nodes (20): ActionError, AgentAction, AgentExecutionPort, Box, CommandOutcome, DomainEvent, ExecutionPort, ExecutionResult (+12 more)
+
+### Community 128 - "Community 128"
+Cohesion: 0.23
+Nodes (11): SqliteAdapter, AgentConfig, MachineId, Message, Result, String, ThreadId, ThreadRepository (+3 more)
+
+### Community 129 - "Community 129"
+Cohesion: 0.23
+Nodes (10): SqliteAdapter, Option, Project, ProjectId, ProjectRepository, ProjectSettings, Repository, Result (+2 more)
+
 ### Community 130 - "Schemas & Desktop & Schema"
 Cohesion: 0.50
 Nodes (4): description, required, type, Capability
@@ -716,33 +746,69 @@ Nodes (3): Number, anyOf, description
 Cohesion: 0.67
 Nodes (3): PermissionEntry, anyOf, description
 
+### Community 150 - "Community 150"
+Cohesion: 0.23
+Nodes (10): SqliteAdapter, AgentProfile, AgentProfileId, Machine, MachineId, MachineRepository, Option, Result (+2 more)
+
 ### Community 157 - "Connection & Flows"
 Cohesion: 0.33
 Nodes (5): 🔒 1. Keyring Integration & Credentials Security, 📺 2. Bi-directional Terminal Streaming (Tauri Channels), 🔌 3. SSH Port Forwarding & Agent APIs, 📁 4. SFTP File Explorer & Editing, SSH & Connection Flow Protocols
+
+### Community 158 - "Database"
+Cohesion: 0.31
+Nodes (6): SqliteAdapter, SqliteConnection, Connection, Result, Self, String
 
 ### Community 159 - "Database & Schema"
 Cohesion: 0.25
 Nodes (7): 1. `machines`, 2. `agent_profiles`, 3. `chat_sessions`, 4. `chat_messages`, 5. `session_history`, Database Schema Spec: demeteo.db, 🗄️ Tables Configuration
 
+### Community 176 - "Community 176"
+Cohesion: 0.29
+Nodes (9): SqliteAdapter, Option, Result, String, Vec, WorkflowId, WorkflowRepository, WorkflowVersion (+1 more)
+
+### Community 177 - "Community 177"
+Cohesion: 0.25
+Nodes (8): SqliteAdapter, AppSettingsRepository, Option, ProviderId, ProviderInstance, Result, String, Vec
+
+### Community 178 - "Community 178"
+Cohesion: 0.31
+Nodes (8): SqliteAdapter, FeatureId, GateDecision, GateRepository, Option, Result, StepExecutionId, String
+
+### Community 179 - "Community 179"
+Cohesion: 0.27
+Nodes (7): SqliteConnection, MutexGuard, Connection, Mutex, Result, Self, String
+
+### Community 180 - "Community 180"
+Cohesion: 0.33
+Nodes (9): FeatureId, FeatureRepository, Instant, NotificationPort, Option, StepExecution, String, finish_feature() (+1 more)
+
+### Community 181 - "Community 181"
+Cohesion: 0.36
+Nodes (7): get_agent_models(), AppContext, ConfigOptionValue, Result, State, String, Vec
+
+### Community 182 - "Community 182"
+Cohesion: 0.73
+Nodes (5): add_column_if_missing(), run(), DbError, Connection, Result
+
 ## Knowledge Gaps
-- **748 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+743 more)
+- **792 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+787 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **28 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **29 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `ThreadPatch` connect `Thread & Session & Get` to `Database & Sqlite & Sqliteadapter`, `Agent & Lifecycle & Start`?**
+- **Why does `GateDecision` connect `Models & Sessionmodestate & Configoption` to `Database & Sqlite & Sqliteadapter`?**
   _High betweenness centrality (0.002) - this node is a cross-community bridge._
-- **Why does `StepId` connect `Models & Sessionmodestate & Configoption` to `Step & Executor & Dagstepexecutor`?**
+- **Why does `GateDecisionId` connect `Database & Sqlite & Sqliteadapter` to `Models & Sessionmodestate & Configoption`?**
   _High betweenness centrality (0.002) - this node is a cross-community bridge._
 - **What connects `$schema`, `plugin`, `@opencode-ai/plugin` to the rest of the system?**
-  _754 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _798 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Database & Sqlite & Sqliteadapter` be split into smaller, more focused modules?**
-  _Cohesion score 0.0535802225943071 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06636500754147813 - nodes in this community are weakly interconnected._
 - **Should `ACP & Runtime & Agent` be split into smaller, more focused modules?**
   _Cohesion score 0.05401234567901234 - nodes in this community are weakly interconnected._
-- **Should `Step & Executor & Dagstepexecutor` be split into smaller, more focused modules?**
-  _Cohesion score 0.07370600414078675 - nodes in this community are weakly interconnected._
 - **Should `Agent & Registry & Agentregistry` be split into smaller, more focused modules?**
   _Cohesion score 0.0841813135985199 - nodes in this community are weakly interconnected._
+- **Should `Schemas & Acl & Manifests` be split into smaller, more focused modules?**
+  _Cohesion score 0.08333333333333333 - nodes in this community are weakly interconnected._

@@ -55,7 +55,7 @@ pub fn run() {
             let app_data_dir = app.path().app_local_data_dir().expect("Failed to get local data dir");
             let conn = db::init_db(app_data_dir.clone()).expect("Failed to initialize database");
 
-            let db_adapter = Arc::new(adapters::database::sqlite::SqliteAdapter::new(conn));
+            let db_adapter = Arc::new(adapters::database::SqliteAdapter::new(conn).expect("Failed to initialize database adapter"));
             let machines_repo: Arc<dyn crate::ports::db::MachineRepository> = db_adapter.clone();
             let projects_repo: Arc<dyn crate::ports::db::ProjectRepository> = db_adapter.clone();
             let features_repo: Arc<dyn crate::ports::db::FeatureRepository> = db_adapter.clone();
@@ -251,7 +251,8 @@ pub fn run() {
             commands::workflows::workflow_revert_to_default,
             commands::bootstrap::bootstrap_project,
             commands::bootstrap::get_proposed_strategy,
-            commands::bootstrap::save_project_settings
+            commands::bootstrap::save_project_settings,
+            commands::agent_config_probe::get_agent_models
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

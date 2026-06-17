@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -104,6 +103,18 @@ struct Pending {
     tx: oneshot::Sender<Result<Value, RpcError>>,
 }
 
+/// Thin adapter that exposes our blocking `InteractiveHandle` as a
+/// `std::io::Read`. The background reader hands this to serde_json's
+/// `StreamDeserializer`, which transparently handles concatenated
+/// messages, inter-value whitespace, and partial reads.
+struct TransportAsRead(Arc<dyn InteractiveHandle>);
+
+impl std::io::Read for TransportAsRead {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
 /// Synchronous JSON-RPC 2.0 line client. Reads newline-delimited JSON
 /// messages from the agent's stdout and routes responses to the matching
 /// pending request; notifications get pushed to a single sink. The
@@ -142,15 +153,37 @@ impl JsonRpcClient {
         let n_clone = notifs.clone();
 
         std::thread::spawn(move || {
+            let reader = TransportAsRead(t_clone);
+            let mut stream =
+                serde_json::Deserializer::from_reader(std::io::BufReader::new(reader))
+                    .into_iter::<Message>();
             loop {
-                let msg = match read_one_message_blocking(&*t_clone) {
-                    Ok(m) => m,
-                    Err(e) => {
+                let msg = match stream.next() {
+                    Some(Ok(m)) => m,
+                    Some(Err(e)) => {
                         eprintln!("[JsonRpcClient] background read error: {}", e);
-                        // Notify all pending requests that the transport died
+                        let rpc_err = RpcError {
+                            code: -32700,
+                            message: format!("parse: {}", e),
+                            data: None,
+                        };
                         if let Ok(mut p) = p_clone.lock() {
                             for (_id, pending) in p.drain() {
-                                let _ = pending.tx.send(Err(e.clone()));
+                                let _ = pending.tx.send(Err(rpc_err.clone()));
+                            }
+                        }
+                        break;
+                    }
+                    None => {
+                        // EOF — agent closed stdout cleanly.
+                        let rpc_err = RpcError {
+                            code: -32001,
+                            message: "agent closed stdout".into(),
+                            data: None,
+                        };
+                        if let Ok(mut p) = p_clone.lock() {
+                            for (_id, pending) in p.drain() {
+                                let _ = pending.tx.send(Err(rpc_err.clone()));
                             }
                         }
                         break;
@@ -401,60 +434,6 @@ impl JsonRpcClient {
             }),
         }
     }
-}
-
-/// Read exactly one newline-delimited JSON-RPC message from the transport.
-///
-/// Wire format: one JSON object per line, with a trailing `\n` delimiter
-/// (matches opencode's ACP output). Reading byte-by-byte until `\n` gives
-/// us a complete, unsplit message regardless of payload size — no chunk
-/// size limits, no buffer accumulation heuristics.
-fn read_one_message_blocking(
-    transport: &dyn InteractiveHandle,
-) -> Result<Message, RpcError> {
-    let mut line = Vec::new();
-    loop {
-        let byte = transport.read_byte();
-        match byte {
-            Ok(b'\n') => {
-                break;
-            }
-            Ok(b) => line.push(b),
-            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                continue;
-            }
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof || e.raw_os_error() == Some(0) => {
-                return Err(RpcError {
-                    code: -32001,
-                    message: "agent closed stdout".into(),
-                    data: None,
-                });
-            }
-            Err(e) => {
-                return Err(RpcError {
-                    code: -32603,
-                    message: format!("read: {}", e),
-                    data: None,
-                });
-            }
-        }
-    }
-
-    if line.is_empty() {
-        // Blank line — skip and read the next one.
-        return read_one_message_blocking(transport);
-    }
-
-    let raw = String::from_utf8_lossy(&line);
-
-    serde_json::from_slice::<Message>(&line).map_err(|e| {
-        RpcError {
-            code: -32700,
-            message: format!("parse: {} (data: {})", e, raw),
-            data: None,
-        }
-    })
 }
 
 #[cfg(test)]

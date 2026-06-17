@@ -117,7 +117,35 @@ impl ExecutionDriver {
                 }
                 StepOutcome::Failed(msg) => {
                     let is_cancelled = *self.cancel_watch.borrow();
-                    if !is_cancelled {
+                    if is_cancelled {
+                        // The step was failing (e.g. the agent process
+                        // crashed mid-turn) when the user cancelled.
+                        // Honour the cancellation: mark the step
+                        // `interrupted` with the failure context, then
+                        // cancel the feature. Without this branch the
+                        // driver would exit silently and the UI would
+                        // stay stuck on "running" because no event is
+                        // emitted and the DB is never updated.
+                        let wall = step_start.elapsed().as_secs();
+                        let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
+                            status: Some("interrupted".to_string()),
+                            cost_usd: Some(accumulated_cost).map(|v| Some(v)),
+                            wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                            artifact_path: None,
+                            error_message: Some(Some(format!(
+                                "Cancelled while step was failing: {}",
+                                msg
+                            ))),
+                        });
+                        let _ = self.notif.emit(&DomainEvent::StepProgress {
+                            feature_id: self.f_id.clone(),
+                            step_id: step_exec.step_id.0.clone(),
+                            status: "interrupted".into(),
+                            cost_usd: Some(accumulated_cost),
+                            wall_clock_secs: Some(wall),
+                        });
+                        self.cancel_feature().await;
+                    } else {
                         self.fail_step_and_feature(step_exec, &msg, accumulated_cost, step_start).await;
                     }
                     return;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Zap, Cpu, Play, Clock, DollarSign, ChevronRight, Settings, AlertTriangle, RotateCw, Check } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { ConfigOptionValue } from '../types';
 
 export const MOCK_FEATURES = [
     {
@@ -42,6 +43,8 @@ interface Project {
   repos: number;
   nodes: number;
   spend: number;
+  compute_type?: string;
+  remote_host?: string | null;
 }
 
 interface Feature {
@@ -52,6 +55,8 @@ interface Feature {
   total_cost: number;
   duration: string;
   created_at: number;
+  agent_kind?: string | null;
+  model?: string | null;
 }
 
 interface ProjectHomeProps {
@@ -75,6 +80,42 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
     const [selectedWorkflow, setSelectedWorkflow] = useState<any | null>(null);
     const [userOverriddenWorkflow, setUserOverriddenWorkflow] = useState(false);
     const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
+
+    // Coding Agent & Model Selector States
+    const [agentConfigs, setAgentConfigs] = useState<any[]>([]);
+    const [selectedAgentKind, setSelectedAgentKind] = useState<string>('');
+    const [selectedModel, setSelectedModel] = useState<string>('');
+    const [availableModels, setAvailableModels] = useState<ConfigOptionValue[]>([]);
+    const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+    // Defaults from settings
+    const [defaultAgentKind, setDefaultAgentKind] = useState<string>('');
+    const [defaultModel, setDefaultModel] = useState<string>('');
+
+    // Fetch models on selected agent change
+    useEffect(() => {
+        const fetchModels = async () => {
+            if (!selectedAgentKind) {
+                setAvailableModels([]);
+                return;
+            }
+            setIsLoadingModels(true);
+            try {
+                const machineId = activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local';
+                const models = await invoke<ConfigOptionValue[]>('get_agent_models', {
+                    machineId,
+                    agentKind: selectedAgentKind
+                });
+                setAvailableModels(models || []);
+            } catch (err) {
+                console.warn("Failed to fetch models for agent:", selectedAgentKind, err);
+                setAvailableModels([]);
+            } finally {
+                setIsLoadingModels(false);
+            }
+        };
+        fetchModels();
+    }, [selectedAgentKind, activeProject.compute_type, activeProject.remote_host]);
 
     // Retry and recovery states
     const [localBootstrapStep, setLocalBootstrapStep] = useState<'idle' | 'bootstrapping' | 'strategy_proposal' | 'error'>('idle');
@@ -182,6 +223,33 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
             } catch (err) {
                 console.error("Failed to fetch workflows:", err);
             }
+
+            try {
+                // Fetch settings to get default agent and model
+                const settings = await invoke<any>('get_proposed_strategy', {
+                    projectId: activeProject.id
+                });
+                if (settings) {
+                    const defAgent = settings.default_agent_kind || '';
+                    const defModel = settings.default_model || '';
+                    setDefaultAgentKind(defAgent);
+                    setDefaultModel(defModel);
+                    setSelectedAgentKind(defAgent);
+                    setSelectedModel(defModel);
+                }
+            } catch (err) {
+                console.error("Failed to fetch project settings:", err);
+            }
+
+            try {
+                // Fetch available agents for the project's machine
+                const machineId = activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local';
+                const configs = await invoke<any[]>('get_agent_configs', { machineId });
+                setAgentConfigs(configs || []);
+            } catch (err) {
+                console.error("Failed to fetch agent configs:", err);
+                setAgentConfigs([]);
+            }
         };
         fetchWorkspaceData();
     }, [activeProject.id]);
@@ -217,7 +285,9 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
             const res = await invoke<Feature>('start_feature', { 
                 projectId: activeProject.id, 
                 workflowId: selectedWorkflow.id,
-                title: featureInput 
+                title: featureInput,
+                agentKind: selectedAgentKind || null,
+                model: selectedModel || null
             });
             const newFeature = {
                 id: res.id,
@@ -436,6 +506,22 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                             placeholder="Describe the feature or bug you want the agent fleet to build... (e.g., 'Configure OAuth2 with Google authentication')"
                                             className="w-full block bg-black/20 border border-white/5 rounded-lg p-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 min-h-[120px] transition-colors duration-200 resize-none"
                                         />
+                                        
+                                        {/* Active Executor Configuration Summary (Micro-telemetry) */}
+                                        {featureInput.length > 0 && (
+                                            <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-400 font-mono pl-1">
+                                                <Zap className="w-3.5 h-3.5 text-violet-400" />
+                                                <span>Pipeline Agent:</span>
+                                                <span className="text-white font-semibold">
+                                                    {selectedAgentKind ? selectedAgentKind.replace(/-/g, ' ') : (defaultAgentKind ? `${defaultAgentKind.replace(/-/g, ' ')} (default)` : 'Auto (Workflow)')}
+                                                </span>
+                                                <span className="text-slate-600">•</span>
+                                                <span>Model:</span>
+                                                <span className="text-cyan-400 font-semibold">
+                                                    {selectedModel ? selectedModel : (defaultModel ? `${defaultModel} (default)` : 'Default')}
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
 
 
@@ -555,6 +641,84 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                                             })
                                                         )}
                                                     </div>
+                                                </div>
+
+                                                {/* AI Agent Override */}
+                                                <div>
+                                                    <label className="block text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">
+                                                        AI Agent Override {defaultAgentKind && `(Default: ${defaultAgentKind})`}
+                                                    </label>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setSelectedAgentKind('');
+                                                                setSelectedModel('');
+                                                            }}
+                                                            className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                                                                !selectedAgentKind
+                                                                    ? 'bg-violet-500/10 border-violet-500/50 text-violet-300'
+                                                                    : 'bg-black/40 border-white/5 text-slate-400 hover:border-white/10'
+                                                            }`}
+                                                        >
+                                                            Use Default
+                                                        </button>
+                                                        {agentConfigs.filter(a => a.enabled).map(agent => (
+                                                            <button
+                                                                key={agent.kind}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSelectedAgentKind(agent.kind);
+                                                                    setSelectedModel('');
+                                                                }}
+                                                                className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all capitalize ${
+                                                                    selectedAgentKind === agent.kind
+                                                                        ? 'bg-violet-500/10 border-violet-500/50 text-violet-300'
+                                                                        : 'bg-black/40 border-white/5 text-slate-400 hover:border-white/10'
+                                                                }`}
+                                                            >
+                                                                {agent.kind.replace(/-/g, ' ')}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Model Selection Override */}
+                                                <div>
+                                                    <label className="block text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">
+                                                        LLM Model Override {defaultModel && `(Default: ${defaultModel})`}
+                                                    </label>
+                                                    {isLoadingModels ? (
+                                                        <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg p-2 text-xs text-slate-400 flex items-center gap-2">
+                                                            <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                                                            <span>Probing models...</span>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="flex gap-2">
+                                                            <select
+                                                                value={selectedModel}
+                                                                onChange={e => setSelectedModel(e.target.value)}
+                                                                className="flex-1 min-w-0 bg-[#08090c] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                                                disabled={!selectedAgentKind}
+                                                            >
+                                                                <option value="">Use Default Model</option>
+                                                                {availableModels.map(m => (
+                                                                    <option key={m.value} value={m.value}>{m.name}</option>
+                                                                ))}
+                                                                {selectedModel && !availableModels.some(m => m.value === selectedModel) && (
+                                                                    <option value={selectedModel}>{selectedModel} (custom)</option>
+                                                                )}
+                                                            </select>
+                                                            <input
+                                                                type="text"
+                                                                value={selectedModel}
+                                                                onChange={e => setSelectedModel(e.target.value)}
+                                                                placeholder="Custom override"
+                                                                className="w-1/3 shrink-0 min-w-[120px] bg-black/40 border border-white/10 rounded-lg p-1.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600"
+                                                                disabled={!selectedAgentKind}
+                                                            />
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
 

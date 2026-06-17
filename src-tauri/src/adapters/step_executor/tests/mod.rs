@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::adapters::agent::registry::AgentRegistry;
-use crate::adapters::database::sqlite::SqliteAdapter;
+use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::DagStepExecutor;
 use crate::domain::action::AgentAction;
 use crate::domain::ids::{FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId};
@@ -110,8 +110,8 @@ async fn test_executor_instantiation_and_cancel() {
             .as_millis()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
-    let conn = crate::db::init_db(temp_dir.clone()).unwrap();
-    let db = Arc::new(SqliteAdapter::new(conn));
+    let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
+    let db = Arc::new(SqliteAdapter::new(conn).unwrap());
     let registry = Arc::new(AgentRegistry::new(vec![]));
     let notif = Arc::new(FakeNotif);
     let agent_exec = Arc::new(FakeAgentExec);
@@ -147,8 +147,8 @@ async fn test_executor_gate_decide() {
             .as_millis()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
-    let conn = crate::db::init_db(temp_dir.clone()).unwrap();
-    let db = Arc::new(SqliteAdapter::new(conn));
+    let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
+    let db = Arc::new(SqliteAdapter::new(conn).unwrap());
     let registry = Arc::new(AgentRegistry::new(vec![]));
     let notif = Arc::new(FakeNotif);
     let agent_exec = Arc::new(FakeAgentExec);
@@ -202,6 +202,8 @@ async fn test_executor_gate_decide() {
             status: "running".to_string(),
             total_cost: 0.0,
             duration: "0s".to_string(),
+            agent_kind: None,
+            model: None,
             created_at: now,
         })
         .unwrap();

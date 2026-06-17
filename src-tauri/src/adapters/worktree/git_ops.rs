@@ -362,7 +362,7 @@ impl GitOpsHelper {
 mod tests {
     use super::*;
     use crate::adapters::local::execution::LocalSubprocessAdapter;
-    use crate::adapters::database::sqlite::SqliteAdapter;
+    use crate::adapters::database::SqliteAdapter;
     use rusqlite::Connection;
 
     #[test]
@@ -384,7 +384,7 @@ mod tests {
 
         // Initialize helper
         let conn = Connection::open_in_memory().unwrap();
-        let db_adapter = Arc::new(SqliteAdapter::new(conn)) as Arc<dyn AppSettingsRepository>;
+        let db_adapter = Arc::new(SqliteAdapter::new(conn).unwrap()) as Arc<dyn AppSettingsRepository>;
         let git_ops = GitOpsHelper::new(db_adapter, Arc::new(local_exec));
 
         let strategy = git_ops.detect_worktree_strategy(None, &temp_dir.to_string_lossy()).unwrap();
@@ -418,7 +418,7 @@ mod tests {
         let _ = exec.run_command("local", &format!("git -C \"{repo}\" commit -m \"init\""));
 
         let conn = Connection::open_in_memory().unwrap();
-        let db = Arc::new(SqliteAdapter::new(conn)) as Arc<dyn AppSettingsRepository>;
+        let db = Arc::new(SqliteAdapter::new(conn).unwrap()) as Arc<dyn AppSettingsRepository>;
         let helper = GitOpsHelper::new(db, Arc::new(exec));
         (temp_dir, helper)
     }
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn test_get_head_branch_missing_dir_returns_none() {
         let conn = Connection::open_in_memory().unwrap();
-        let db = Arc::new(SqliteAdapter::new(conn)) as Arc<dyn AppSettingsRepository>;
+        let db = Arc::new(SqliteAdapter::new(conn).unwrap()) as Arc<dyn AppSettingsRepository>;
         let helper = GitOpsHelper::new(db, Arc::new(LocalSubprocessAdapter::new()));
         let result = helper.get_head_branch(None, "/tmp/demeteo_nonexistent_repo_xyz");
         assert!(result.is_none(),

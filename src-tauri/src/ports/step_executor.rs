@@ -6,6 +6,8 @@ pub trait StepExecutor: Send + Sync {
         project_id: &str,
         workflow_id: &str,
         description: &str,
+        agent_kind: Option<&str>,
+        model: Option<&str>,
     ) -> Result<Feature, String>;
 
     fn feature_pause(&self, feature_id: &str) -> Result<(), String>;
