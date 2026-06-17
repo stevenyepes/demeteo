@@ -1,0 +1,349 @@
+import React, { useState, useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { StepExecution } from '../types';
+import { ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X } from 'lucide-react';
+import { ArtifactViewer } from './ArtifactViewer';
+
+interface FeatureDetailProps {
+  featureId: string;
+  projectId?: string;
+  title: string;
+  onDecideGate: (stepExecId: string) => void;
+  onBack: () => void;
+}
+
+const humanizeStepId = (id: string) => {
+  return id
+    .replace(/^s-/, '')
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+export const FeatureDetail: React.FC<FeatureDetailProps> = ({
+  featureId,
+  title,
+  onDecideGate,
+  onBack,
+}) => {
+  const [steps, setSteps] = useState<StepExecution[]>([]);
+  const [status, setStatus] = useState('running');
+  const [cost, setCost] = useState(0.0);
+  const [duration, setDuration] = useState('0s');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(null);
+  const [selectedStepTitle, setSelectedStepTitle] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadFeatureData();
+
+    // Subscribe to Tauri events
+    let unlistenStatus: () => void = () => {};
+    let unlistenProgress: () => void = () => {};
+    let unlistenGate: () => void = () => {};
+
+    const setupListeners = async () => {
+      unlistenStatus = await listen<{ feature_id: string; status: string }>(
+        'feature_status_changed',
+        (event) => {
+          if (event.payload.feature_id === featureId) {
+            setStatus(event.payload.status);
+            loadFeatureData();
+          }
+        }
+      );
+
+      unlistenProgress = await listen<{
+        feature_id: string;
+        step_id: string;
+        status: string;
+        cost_usd: number | null;
+        wall_clock_secs: number | null;
+      }>('step_progress', (event) => {
+        if (event.payload.feature_id === featureId) {
+          loadFeatureData();
+        }
+      });
+
+      unlistenGate = await listen<{ feature_id: string; step_execution_id: string }>(
+        'gate_required',
+        (event) => {
+          if (event.payload.feature_id === featureId) {
+            onDecideGate(event.payload.step_execution_id);
+          }
+        }
+      );
+    };
+
+    setupListeners();
+
+    return () => {
+      unlistenStatus();
+      unlistenProgress();
+      unlistenGate();
+    };
+  }, [featureId]);
+
+  const loadFeatureData = async () => {
+    try {
+      const list = await invoke<StepExecution[]>('step_list_for_run', { featureId });
+      setSteps(list);
+      
+      // Compute telemetry
+      let totalCost = 0.0;
+      let totalSecs = 0;
+      let isGated = false;
+      let hasFailed = false;
+      let isRunning = false;
+
+      for (const s of list) {
+        totalCost += s.cost_usd || 0.0;
+        totalSecs += s.wall_clock_secs || 0;
+        if (s.status === 'awaiting_gate') isGated = true;
+        if (s.status === 'failed') hasFailed = true;
+        if (s.status === 'running') isRunning = true;
+      }
+
+      setCost(totalCost);
+      setDuration(`${totalSecs}s`);
+
+      if (isGated) setStatus('gated');
+      else if (hasFailed) setStatus('failed');
+      else if (isRunning) setStatus('running');
+      else if (list.every(s => s.status === 'completed')) setStatus('completed');
+
+      setError(null);
+    } catch (err: any) {
+      setError(err.toString());
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!confirm('Are you sure you want to cancel the execution of this feature?')) return;
+    try {
+      await invoke('feature_cancel', { featureId });
+      setStatus('cancelled');
+      loadFeatureData();
+    } catch (err: any) {
+      alert(err.toString());
+    }
+  };
+
+  const handleRetryStep = async (stepExecutionId: string) => {
+    try {
+      await invoke('step_retry', { stepExecutionId });
+      loadFeatureData();
+    } catch (err: any) {
+      alert(err.toString());
+    }
+  };
+
+  return (
+    <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
+      {/* Header telemetry panel */}
+      <div className="p-6 border-b border-white/5 bg-[#0d0f14]/80 flex items-center justify-between backdrop-blur-md">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="text-xs px-2.5 py-1 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition uppercase font-bold"
+            >
+              Back
+            </button>
+            <h1 className="text-xl font-bold font-display text-white tracking-wide">{title}</h1>
+            <span
+              className={`text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
+                status === 'running'
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 animate-pulse'
+                  : status === 'gated'
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                  : status === 'completed'
+                  ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                  : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+              }`}
+            >
+              {status}
+            </span>
+          </div>
+          <p className="text-xs text-slate-400">ID: {featureId}</p>
+        </div>
+
+        <div className="flex items-center gap-6">
+          <div className="text-right">
+            <div className="text-[10px] text-slate-500 uppercase font-bold">Elapsed Duration</div>
+            <div className="text-lg font-bold font-mono text-white">{duration}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Cost</div>
+            <div className="text-lg font-bold font-mono text-cyan-400">${cost.toFixed(3)}</div>
+          </div>
+          {status === 'running' && (
+            <button
+              onClick={handleCancel}
+              className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300"
+            >
+              Cancel Feature
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center">
+          <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="flex-1 p-8 text-rose-400 flex items-center gap-2">
+          <ShieldAlert className="w-5 h-5" />
+          <span>Error loading details: {error}</span>
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-row overflow-hidden w-full h-full">
+          {/* Left Column: Timeline */}
+          <div className={`overflow-y-auto p-8 transition-all duration-500 ${
+            selectedArtifactPath ? 'w-[40%] border-r border-white/5 bg-[#08090c]/40' : 'w-full max-w-3xl mx-auto'
+          }`}>
+            <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
+              {steps.map((step, idx) => {
+                let icon = <Hourglass className="w-4 h-4 text-slate-500 animate-pulse" />;
+                let statusBg = 'border-white/5 bg-white/[0.01]';
+
+                if (step.status === 'completed') {
+                  icon = <CheckCircle className="w-4 h-4 text-emerald-400" />;
+                  statusBg = 'border-emerald-500/20 bg-emerald-950/5';
+                } else if (step.status === 'failed') {
+                  icon = <XCircle className="w-4 h-4 text-rose-400" />;
+                  statusBg = 'border-rose-500/20 bg-rose-950/5';
+                } else if (step.status === 'running') {
+                  icon = <Cpu className="w-4 h-4 text-cyan-400 animate-spin" />;
+                  statusBg = 'border-cyan-500/30 bg-cyan-950/10 shadow-[0_0_15px_rgba(6,182,212,0.05)]';
+                } else if (step.status === 'awaiting_gate') {
+                  icon = <ShieldAlert className="w-4 h-4 text-amber-400 animate-bounce" />;
+                  statusBg = 'border-amber-500/40 bg-amber-950/10 shadow-[0_0_15px_rgba(245,158,11,0.08)]';
+                }
+
+                return (
+                  <div key={step.id} className="relative group">
+                    {/* Connector node circle */}
+                    <span className="absolute -left-[41px] top-1.5 flex items-center justify-center w-6 h-6 rounded-full bg-[#08090c] border border-white/10">
+                      <span className="text-[10px] text-slate-400 font-bold">{idx + 1}</span>
+                    </span>
+
+                    <div className={`p-5 rounded-xl border transition-all duration-300 ${statusBg}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          {icon}
+                          <span className="font-semibold text-white tracking-wide text-sm">{humanizeStepId(step.step_id)}</span>
+                          <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono">
+                            {step.step_kind}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-4 text-xs font-mono">
+                          {typeof step.cost_usd === 'number' && <span className="text-cyan-400">${step.cost_usd.toFixed(3)}</span>}
+                          {step.wall_clock_secs !== null && <span className="text-slate-400">{step.wall_clock_secs}s</span>}
+                        </div>
+                      </div>
+
+                      {step.status === 'awaiting_gate' && (
+                        <div className="mt-4 p-4 rounded bg-amber-500/5 border border-amber-500/20 flex justify-between items-center animate-pulse">
+                          <div className="text-xs text-amber-400 font-semibold uppercase tracking-wide">
+                            Pipeline paused. Awaiting manual review.
+                          </div>
+                          <button
+                            onClick={() => onDecideGate(step.id)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 rounded text-xs font-bold text-black transition shadow-[0_0_10px_rgba(245,158,11,0.4)]"
+                          >
+                            Decide Gate <ArrowRight className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+
+                      {step.error_message && (
+                        <div className="mt-3 p-3 rounded bg-rose-500/5 border border-rose-500/20 text-xs text-rose-400 font-mono">
+                          {step.error_message}
+                        </div>
+                      )}
+
+                      {(step.status === 'failed' || step.status === 'interrupted') && (
+                        <div className="mt-4 p-4 rounded bg-rose-500/5 border border-rose-500/20 flex justify-between items-center">
+                          <div className="text-xs text-rose-400 font-semibold uppercase tracking-wide">
+                            Step failed. You can retry from here.
+                          </div>
+                          <button
+                            onClick={() => handleRetryStep(step.id)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-xs font-bold transition shadow-[0_0_10px_rgba(239,68,68,0.4)]"
+                          >
+                            <RefreshCw className="w-3 h-3 animate-pulse" /> Retry Step
+                          </button>
+                        </div>
+                      )}
+
+                      {step.artifact_path && (
+                        <button
+                          onClick={() => {
+                            setSelectedArtifactPath(step.artifact_path || null);
+                            setSelectedStepTitle(step.step_id);
+                          }}
+                          className={`mt-3 w-full text-left text-xs font-mono p-3 rounded border flex items-center justify-between transition duration-300 ${
+                            selectedArtifactPath === step.artifact_path
+                              ? 'bg-violet-950/20 border-violet-500/30 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
+                              : 'bg-[#050608] border-white/[0.02] text-slate-400 hover:border-white/10 hover:bg-white/[0.02] hover:text-white cursor-pointer'
+                          }`}
+                        >
+                          <span className="truncate">Artifact: {step.artifact_path.split('/').pop()}</span>
+                          <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">View Output</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Right Column: Artifact Viewer panel */}
+          <div 
+            className={`h-full overflow-hidden border-l border-white/5 bg-[#0d0f14]/60 backdrop-blur-xl flex flex-col transition-all duration-500 ${
+              selectedArtifactPath ? 'w-[60%] opacity-100 translate-x-0' : 'w-0 opacity-0 translate-x-[50px] pointer-events-none'
+            }`}
+          >
+            {selectedArtifactPath && (
+              <div className="flex-1 flex flex-col p-6 overflow-hidden h-full">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 shrink-0">
+                  <div>
+                    <h3 className="text-sm font-bold text-white font-display uppercase tracking-wider">
+                      Artifact Preview
+                    </h3>
+                    <p className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
+                      {selectedStepTitle ? humanizeStepId(selectedStepTitle) : ''}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSelectedArtifactPath(null);
+                      setSelectedStepTitle(null);
+                    }}
+                    className="p-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition duration-150"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <ArtifactViewer artifactPath={selectedArtifactPath} />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

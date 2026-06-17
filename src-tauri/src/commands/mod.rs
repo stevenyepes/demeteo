@@ -11,4 +11,5 @@ pub mod providers;
 pub mod project;
 pub mod features;
 pub mod bootstrap;
+pub mod workflows;
 

@@ -27,6 +27,11 @@ pub struct AgentRegistryState {
     pub agent_exec: Arc<dyn AgentExecutionPort>,
 }
 
+pub struct StepExecutorState {
+    pub executor: Arc<dyn crate::ports::step_executor::StepExecutor>,
+    pub presenter: Arc<dyn crate::ports::step_executor::GatePresenter>,
+}
+
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";
 pub const EVENT_AGENT_EVENT: &str = "agent_event";
 

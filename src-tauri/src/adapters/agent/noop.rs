@@ -20,7 +20,7 @@ impl AgentRuntime for NoopRuntime {
         "noop"
     }
 
-    fn is_available(&self, _machine_id: &str) -> bool {
+    fn is_available(&self, _exec: &dyn crate::ports::execution::ExecutionPort, _machine_id: &str) -> bool {
         false
     }
 

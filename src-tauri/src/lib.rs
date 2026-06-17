@@ -8,6 +8,7 @@ pub mod adapters;
 pub mod state;
 pub mod ssh_util;
 pub mod commands;
+pub mod paths;
 
 use state::{DatabaseState, ExecutionState, AgentExecutionState, NotificationState, AgentRegistryState};
 use terminal::SessionState;
@@ -21,6 +22,15 @@ use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Startup banner so a stale binary is obvious in the Tauri dev
+    // console. Bump the suffix whenever the bootstrap/step-executor
+    // path resolution changes.
+    eprintln!(
+        "[demeteo] startup v{} ({}) — paths/agent-target-dir fix active",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_NAME"),
+    );
+
     // WebKitGTK on Wayland frequently dispatches a Gdk protocol error
     // (Error 71) on the host process. Disabling the DMA-BUF renderer
     // and accelerated compositing avoids the crash while allowing the
@@ -43,18 +53,20 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_local_data_dir().expect("Failed to get local data dir");
-            let conn = db::init_db(app_data_dir).expect("Failed to initialize database");
+            let conn = db::init_db(app_data_dir.clone()).expect("Failed to initialize database");
 
             let db_adapter = Arc::new(adapters::database::sqlite::SqliteAdapter::new(conn));
+            let db_port: Arc<dyn ports::db::DatabasePort> = db_adapter.clone();
+            commands::workflows::seed_starter_workflows(&db_port);
             let ssh_adapter: Arc<dyn ExecutionPort> =
                 Arc::new(adapters::ssh::client::SshClientAdapter::new(db_adapter.clone()));
             let local_adapter: Arc<dyn ExecutionPort> =
                 Arc::new(adapters::local::execution::LocalSubprocessAdapter::new());
             let exec_inner: Arc<dyn ExecutionPort> = Arc::new(
                 adapters::router::RouterExecutionPort::new(
-                    db_adapter.clone(),
-                    ssh_adapter,
-                    local_adapter,
+                     db_adapter.clone(),
+                     ssh_adapter,
+                     local_adapter,
                 ),
             );
             let notif_adapter: Arc<dyn NotificationPort> = Arc::new(
@@ -72,10 +84,24 @@ pub fn run() {
                         as Arc<dyn AgentRuntime>,
                     Arc::new(adapters::agent::hermes::runtime())
                         as Arc<dyn AgentRuntime>,
+                    Arc::new(adapters::agent::claude_code::runtime())
+                        as Arc<dyn AgentRuntime>,
+                    Arc::new(adapters::agent::antigravity::runtime())
+                        as Arc<dyn AgentRuntime>,
                     Arc::new(adapters::agent::noop::NoopRuntime)
                         as Arc<dyn AgentRuntime>,
                 ]),
             );
+
+            let step_executor_adapter = Arc::new(adapters::step_executor::DagStepExecutor::new(
+                db_adapter.clone(),
+                agent_registry.clone(),
+                notif_adapter.clone(),
+                agent_exec.clone(),
+                exec_inner.clone(),
+                app_data_dir.clone(),
+            ));
+            step_executor_adapter.startup_watchdog();
 
             app.manage(DatabaseState { db: db_adapter });
             app.manage(ExecutionState { exec: exec_inner });
@@ -84,6 +110,10 @@ pub fn run() {
             app.manage(AgentRegistryState {
                 registry: agent_registry,
                 agent_exec,
+            });
+            app.manage(state::StepExecutorState {
+                executor: step_executor_adapter.clone(),
+                presenter: step_executor_adapter,
             });
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
@@ -181,6 +211,22 @@ pub fn run() {
             commands::project::get_workspace_health,
             commands::features::fetch_active_features,
             commands::features::start_feature,
+            commands::features::feature_pause,
+            commands::features::feature_resume,
+            commands::features::feature_cancel,
+            commands::features::step_list_for_run,
+            commands::features::gate_pending_for_run,
+            commands::features::gate_decide,
+            commands::features::step_retry,
+            commands::workflows::workflow_list,
+            commands::workflows::workflow_get,
+            commands::workflows::workflow_create,
+            commands::workflows::workflow_update,
+            commands::workflows::workflow_delete,
+            commands::workflows::workflow_versions,
+            commands::workflows::workflow_export,
+            commands::workflows::workflow_import,
+            commands::workflows::workflow_revert_to_default,
             commands::bootstrap::bootstrap_project,
             commands::bootstrap::get_proposed_strategy,
             commands::bootstrap::save_project_settings

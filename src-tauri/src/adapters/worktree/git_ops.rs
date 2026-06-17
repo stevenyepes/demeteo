@@ -4,6 +4,25 @@ use crate::ports::db::DatabasePort;
 use crate::ports::execution::ExecutionPort;
 use crate::domain::models::{WorktreeStrategy, WorktreeInfo};
 
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".into();
+    }
+    if s == "~" {
+        return "~".into();
+    }
+    if s.starts_with("~/") {
+        return format!("~/{}", shell_escape(&s[2..]));
+    }
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@'))
+    {
+        return s.to_string();
+    }
+    let escaped = s.replace('\'', "'\\''");
+    format!("'{}'", escaped)
+}
+
 pub struct GitOpsHelper {
     db: Arc<dyn DatabasePort>,
     exec: Arc<dyn ExecutionPort>,
@@ -49,11 +68,11 @@ impl GitOpsHelper {
         let path = std::path::Path::new(target_dir);
         if let Some(parent) = path.parent() {
             let parent_str = parent.to_str().unwrap_or("");
-            self.exec.run_command(machine_str, &format!("mkdir -p {}", parent_str))?;
+            self.exec.run_command(machine_str, &format!("mkdir -p {}", shell_escape(parent_str)))?;
         }
 
         // Run clone
-        let clone_cmd = format!("git clone \"{}\" \"{}\"", clone_url, target_dir);
+        let clone_cmd = format!("git clone \"{}\" {}", clone_url, shell_escape(target_dir));
         let output = self.exec.run_command(machine_str, &clone_cmd)?;
         println!("[GitOps] Clone output: {}", output);
 
@@ -70,7 +89,7 @@ impl GitOpsHelper {
 
         // 1. Detect Default Branch name
         // Immediately after cloning, checking HEAD is the most reliable way to get the default branch
-        let default_branch = match self.exec.run_command(machine_str, &format!("git -C \"{}\" rev-parse --abbrev-ref HEAD", repo_dir)) {
+        let default_branch = match self.exec.run_command(machine_str, &format!("git -C {} rev-parse --abbrev-ref HEAD", shell_escape(repo_dir))) {
             Ok(out) => out.trim().to_string(),
             Err(_) => "main".to_string(), // Fallback
         };
@@ -104,10 +123,40 @@ impl GitOpsHelper {
             test_command = Some("pytest".to_string());
         }
 
+        // 4. Auto-detect project conventions file (for {{project_conventions}} injection).
+        // Priority order: AGENTS.md, CLAUDE.md, .cursor/rules/rules.md
+        let conventions_candidates = [
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".cursor/rules/rules.md",
+        ];
+        let mut conventions_file = None;
+        for candidate in &conventions_candidates {
+            let full_path = format!("{}/{}", repo_dir, candidate);
+            if self.exec.get_metadata(machine_str, &full_path).is_ok() {
+                conventions_file = Some(full_path);
+                break;
+            }
+        }
+
+        // 5. Infer build command
+        let build_command = if self.exec.get_metadata(machine_str, &format!("{}/package.json", repo_dir)).is_ok() {
+            Some("npm run build".to_string())
+        } else if self.exec.get_metadata(machine_str, &format!("{}/Cargo.toml", repo_dir)).is_ok() {
+            Some("cargo build".to_string())
+        } else if self.exec.get_metadata(machine_str, &format!("{}/go.mod", repo_dir)).is_ok() {
+            Some("go build ./...".to_string())
+        } else {
+            None
+        };
+
         Ok(WorktreeStrategy {
             default_branch,
             branch_prefix: "demeteo/features/".to_string(),
             test_command,
+            build_command,
+            coverage_command: None,
+            conventions_file,
             pr_template,
         })
     }
@@ -123,7 +172,7 @@ impl GitOpsHelper {
         // Check if directory exists
         let exists = self.exec.run_command(
             machine_str,
-            &format!("git -C \"{}\" rev-parse --is-inside-work-tree", repo_dir)
+            &format!("git -C {} rev-parse --is-inside-work-tree", shell_escape(repo_dir))
         ).is_ok();
         
         if !exists {
@@ -133,7 +182,7 @@ impl GitOpsHelper {
         // 1. Check for uncommitted changes
         let status_output = match self.exec.run_command(
             machine_str,
-            &format!("git -C \"{}\" status --porcelain", repo_dir)
+            &format!("git -C {} status --porcelain", shell_escape(repo_dir))
         ) {
             Ok(out) => out.trim().to_string(),
             Err(e) => return Err(format!("Failed to run git status: {}", e)),
@@ -143,7 +192,7 @@ impl GitOpsHelper {
         // 2. Check for unpushed commits
         let unpushed_output = match self.exec.run_command(
             machine_str,
-            &format!("git -C \"{}\" log --branches --not --remotes --oneline", repo_dir)
+            &format!("git -C {} log --branches --not --remotes --oneline", shell_escape(repo_dir))
         ) {
             Ok(out) => out.trim().to_string(),
             Err(_) => String::new(),
@@ -161,7 +210,7 @@ impl GitOpsHelper {
     ) -> Option<String> {
         let machine_str = machine_id.unwrap_or("local");
         self.exec
-            .run_command(machine_str, &format!("git -C \"{}\" rev-parse --abbrev-ref HEAD", repo_dir))
+            .run_command(machine_str, &format!("git -C {} rev-parse --abbrev-ref HEAD", shell_escape(repo_dir)))
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -177,7 +226,7 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or("local");
         let output = self.exec.run_command(
             machine_str,
-            &format!("git -C \"{}\" worktree list --porcelain", repo_dir),
+            &format!("git -C {} worktree list --porcelain", shell_escape(repo_dir)),
         )?;
 
         let mut worktrees = Vec::new();
@@ -228,6 +277,91 @@ impl GitOpsHelper {
 
         Ok(worktrees)
     }
+
+    /// Create a feature branch off the default branch in the main repo.
+    pub fn create_feature_branch(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        default_branch: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or("local");
+        // Ensure default branch is checked out
+        let _ = self.exec.run_command(machine_str, &format!("git -C {} checkout {}", shell_escape(repo_dir), shell_escape(default_branch)));
+
+        // Try creating and checking out the branch. If it exists, checkout.
+        let cmd = format!("git -C {} checkout -b {}", shell_escape(repo_dir), shell_escape(branch_name));
+        match self.exec.run_command(machine_str, &cmd) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                let cmd_exists = format!("git -C {} checkout {}", shell_escape(repo_dir), shell_escape(branch_name));
+                self.exec.run_command(machine_str, &cmd_exists).map(|_| ())
+            }
+        }
+    }
+
+    /// Provision a linked worktree for a subtask branched off the main feature branch.
+    /// Returns the absolute path to the provisioned worktree.
+    pub fn provision_subtask_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+        subtask_id: &str,
+    ) -> Result<String, String> {
+        let machine_str = machine_id.unwrap_or("local");
+        let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
+        let subtask_branch = format!("{}_subtask_{}", feature_branch, subtask_id);
+
+        let _ = self.exec.run_command(machine_str, &format!("rm -rf {}", shell_escape(&wt_dir)));
+        let _ = self.exec.run_command(machine_str, &format!("git -C {} worktree prune", shell_escape(repo_dir)));
+
+        let cmd = format!(
+            "git -C {} worktree add {} -b {} {}",
+            shell_escape(repo_dir),
+            shell_escape(&wt_dir),
+            shell_escape(&subtask_branch),
+            shell_escape(feature_branch)
+        );
+        self.exec.run_command(machine_str, &cmd)?;
+        Ok(wt_dir)
+    }
+
+    /// Clean up a linked worktree for a subtask.
+    pub fn cleanup_subtask_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        subtask_id: &str,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or("local");
+        let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
+
+        let cmd = format!("git -C {} worktree remove --force {}", shell_escape(repo_dir), shell_escape(&wt_dir));
+        let _ = self.exec.run_command(machine_str, &cmd);
+        let _ = self.exec.run_command(machine_str, &format!("git -C {} worktree prune", shell_escape(repo_dir)));
+        let _ = self.exec.run_command(machine_str, &format!("rm -rf {}", shell_escape(&wt_dir)));
+        Ok(())
+    }
+
+    /// Merge a subtask branch back into the parent feature branch.
+    pub fn merge_subtask(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+        subtask_id: &str,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or("local");
+        let subtask_branch = format!("{}_subtask_{}", feature_branch, subtask_id);
+
+        self.exec.run_command(machine_str, &format!("git -C {} checkout {}", shell_escape(repo_dir), shell_escape(feature_branch)))?;
+
+        let cmd = format!("git -C {} merge {} -m \"Merge subtask {}\"", shell_escape(repo_dir), shell_escape(&subtask_branch), shell_escape(subtask_id));
+        self.exec.run_command(machine_str, &cmd)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -239,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_detect_worktree_strategy_local() {
-        let temp_dir = std::env::temp_dir().join(format!("demeteo_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let temp_dir = std::env::temp_dir().join(format!("demeteo_test_gitops_detect_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         // Run git init and config

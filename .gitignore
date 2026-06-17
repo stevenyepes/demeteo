@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Graphify temporary files and local cache
+graphify-out/.*
+graphify-out/cache/
+graphify-out/run_semantic.py

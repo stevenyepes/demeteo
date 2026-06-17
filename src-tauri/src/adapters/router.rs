@@ -70,6 +70,10 @@ impl ExecutionPort for RouterExecutionPort {
         self.resolve(machine_id)?.setup_worktree(machine_id, repo_path, branch, sandbox_path)
     }
 
+    fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
+        self.resolve(machine_id)?.resolve_home(machine_id)
+    }
+
     fn spawn_interactive(
         &self,
         machine_id: &str,

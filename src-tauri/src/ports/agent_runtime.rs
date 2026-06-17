@@ -52,7 +52,7 @@ pub trait AgentRuntime: Send + Sync {
     /// Check if the binary is reachable on the target host (which / command
     /// -v). The result is cached per `(machine_id, kind)` by the registry for
     /// the duration of the app session.
-    fn is_available(&self, machine_id: &str) -> bool;
+    fn is_available(&self, exec: &dyn crate::ports::execution::ExecutionPort, machine_id: &str) -> bool;
 
     /// The official install command, shown verbatim in the consent prompt.
     fn install_command(&self) -> &'static str;

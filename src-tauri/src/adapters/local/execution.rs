@@ -143,6 +143,28 @@ impl ExecutionPort for LocalSubprocessAdapter {
         Ok(())
     }
 
+    fn resolve_home(&self, _machine_id: &str) -> Result<String, String> {
+        let raw = std::env::var("HOME")
+            .map_err(|_| "HOME environment variable is not set on the local process".to_string())?;
+        let expanded = if raw == "~" || raw.starts_with("~/") {
+            // HOME is the literal "~" or starts with it — bash would still
+            // expand this, but a plain env::var on a degenerate system
+            // might return a non-absolute value. Resolve via the shell so
+            // we get a real path.
+            local_run_command("printf %s \"$HOME\"")?
+        } else {
+            raw
+        };
+        let trimmed = expanded.trim().to_string();
+        if trimmed.is_empty() {
+            return Err("Resolved local HOME is empty".to_string());
+        }
+        if !trimmed.starts_with('/') {
+            return Err(format!("Resolved local HOME is not absolute: '{}'", trimmed));
+        }
+        Ok(trimmed)
+    }
+
     fn spawn_interactive(
         &self,
         _machine_id: &str,

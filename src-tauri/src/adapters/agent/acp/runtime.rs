@@ -44,8 +44,14 @@ impl AgentRuntime for AcpRuntime {
         self.kind
     }
 
-    fn is_available(&self, machine_id: &str) -> bool {
-        is_binary_on_path(self.kind, machine_id)
+    fn is_available(&self, exec: &dyn crate::ports::execution::ExecutionPort, machine_id: &str) -> bool {
+        if machine_id == "local" || machine_id.is_empty() {
+            is_binary_on_path(self.kind, machine_id)
+        } else {
+            exec.run_command(machine_id, &format!("command -v {} >/dev/null 2>&1 && echo ok", self.kind))
+                .map(|out| out.trim() == "ok")
+                .unwrap_or(false)
+        }
     }
 
     fn install_command(&self) -> &'static str {
@@ -87,6 +93,20 @@ impl AgentRuntime for AcpRuntime {
             // Notifications from `initialize` aren't currently used;
             // the agent's init response carries the capability surface.
             drop(notif_collector);
+
+            // Detect whether the agent supports receiving `tool_call/update`
+            // notifications from us. Opencode (and other ACP v1 agents) may
+            // not implement that inbound method; sending it causes a noisy
+            // -32601 on the agent's stderr. We check two naming conventions
+            // (camelCase and snake_case) to be forward-compatible.
+            let supports_tool_call_update = init_result
+                .get("capabilities")
+                .and_then(|c| {
+                    c.get("toolCallUpdate")
+                        .or_else(|| c.get("tool_call_update"))
+                })
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             // If the agent advertises authMethods, call authenticate. v1
             // doesn't surface agent API keys (see spec §1) so we just pass
@@ -156,6 +176,7 @@ impl AgentRuntime for AcpRuntime {
                 prompting: Arc::new(AtomicBool::new(false)),
                 bridge,
                 session_info: StdMutex::new(session_info),
+                supports_tool_call_update,
             }) as Arc<dyn AgentSession>)
         })
     }
@@ -211,6 +232,10 @@ struct AcpSession {
     prompting: Arc<AtomicBool>,
     bridge: Arc<ToolBridge>,
     session_info: StdMutex<SessionInfo>,
+    /// Whether the agent declared `capabilities.toolCallUpdate` in its
+    /// `initialize` response. When false, we skip sending `tool_call/update`
+    /// notifications to avoid -32601 errors on the agent's stderr.
+    supports_tool_call_update: bool,
 }
 
 impl AcpSession {
@@ -222,6 +247,7 @@ impl AcpSession {
         let machine_id = self.ctx.machine_id.clone();
         let thread_id = self.ctx.thread_id.clone();
         let prompting = self.prompting.clone();
+        let supports_tool_call_update = self.supports_tool_call_update;
         prompting.store(true, Ordering::SeqCst);
         tokio::spawn(async move {
             // `session/prompt` is a long-running call: the agent streams
@@ -257,7 +283,7 @@ impl AcpSession {
                         let machine_id = machine_id_clone.clone();
                         let thread_id = thread_id_clone.clone();
                         let handle = tokio::spawn(async move {
-                            handle_message(&tx, &rpc, &bridge, &machine_id, &thread_id, msg).await;
+                            handle_message(&tx, &rpc, &bridge, &machine_id, &thread_id, supports_tool_call_update, msg).await;
                         });
                         pending_tasks_clone.lock().unwrap().push(handle);
                     },
@@ -320,6 +346,7 @@ async fn handle_message(
     bridge: &Arc<ToolBridge>,
     machine_id: &str,
     thread_id: &str,
+    supports_tool_call_update: bool,
     msg: Message,
 ) {
     if let Message::Notification { method, params } = &msg {
@@ -363,7 +390,7 @@ async fn handle_message(
                 }
             }
 
-            if is_tool_call {
+            if is_tool_call && supports_tool_call_update {
                 if let Some(dispatch) = build_tool_call_response(bridge, machine_id, thread_id, &tool_call_params) {
                     if let Some(payload) = dispatch.immediate {
                         let _ = rpc.notify("tool_call/update", payload).await;

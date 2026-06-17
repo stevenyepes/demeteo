@@ -67,22 +67,34 @@ body {
 
 /* Custom Scrollbar Styles */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-cyan-glow);
+  background: var(--accent-cyan);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent-purple);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
 
 /* ----------------------------------------------------
    GLASSMORPHISM & CORE PANEL UI UTILITIES

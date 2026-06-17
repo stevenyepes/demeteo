@@ -130,7 +130,7 @@ pub async fn agent_install_and_start(
     )
     .map_err(|e| format!("install failed: {}", e))?;
 
-    if !runtime.is_available(&thread.machine_id) {
+    if !runtime.is_available(exec_state.exec.as_ref(), &thread.machine_id) {
         return Err(format!("INSTALL_BUT_STILL_MISSING:{}", runtime.kind()));
     }
 

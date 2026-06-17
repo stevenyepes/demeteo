@@ -1,7 +1,7 @@
 use crate::domain::models::{
     AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, Message, SessionHistory,
     ThreadSession, WorkingMemoryEntry, ProviderInstance, Project, Repository, Feature,
-    ProjectSettings,
+    ProjectSettings, Workflow, WorkflowVersion, StepExecution, GateDecision,
 };
 
 pub trait DatabasePort: Send + Sync {
@@ -72,6 +72,8 @@ pub trait DatabasePort: Send + Sync {
 
     fn add_feature(&self, feature: Feature) -> Result<(), String>;
     fn get_active_features(&self, project_id: &str) -> Result<Vec<Feature>, String>;
+    fn get_feature(&self, id: &str) -> Result<Option<Feature>, String>;
+    fn feature_update_workflow_id(&self, id: &str, workflow_id: &str) -> Result<(), String>;
 
     fn get_project_settings(&self, project_id: &str) -> Result<Option<ProjectSettings>, String>;
     fn save_project_settings(&self, settings: ProjectSettings) -> Result<(), String>;
@@ -79,4 +81,47 @@ pub trait DatabasePort: Send + Sync {
     fn update_project(&self, project: Project) -> Result<(), String>;
     fn delete_project(&self, id: &str) -> Result<(), String>;
     fn delete_repositories_for_project(&self, project_id: &str) -> Result<(), String>;
+
+    // ── Phase R3: Workflow catalog ─────────────────────────────────────────────
+    fn workflow_create(&self, workflow: Workflow) -> Result<(), String>;
+    fn workflow_update_meta(&self, id: &str, name: &str, description: &str) -> Result<(), String>;
+    fn workflow_delete(&self, id: &str) -> Result<(), String>;
+    fn workflow_get(&self, id: &str) -> Result<Option<Workflow>, String>;
+    fn workflow_list(&self) -> Result<Vec<Workflow>, String>;
+
+    fn workflow_save_version(&self, version: WorkflowVersion) -> Result<(), String>;
+    fn workflow_latest_version(&self, workflow_id: &str) -> Result<Option<WorkflowVersion>, String>;
+    fn workflow_versions(&self, workflow_id: &str) -> Result<Vec<WorkflowVersion>, String>;
+
+    /// Check whether any workflow rows exist (used for first-launch seeding).
+    fn workflow_count(&self) -> Result<u32, String>;
+
+    // ── Phase R4: Step execution + gate ───────────────────────────────────────
+    fn step_execution_create(&self, step: StepExecution) -> Result<(), String>;
+    fn step_execution_get(&self, id: &str) -> Result<Option<StepExecution>, String>;
+    fn step_execution_update_status(
+        &self,
+        id: &str,
+        status: &str,
+        cost_usd: Option<f64>,
+        wall_clock_secs: Option<u64>,
+        artifact_path: Option<&str>,
+        error_message: Option<&str>,
+    ) -> Result<(), String>;
+    fn step_executions_for_feature(&self, feature_id: &str) -> Result<Vec<StepExecution>, String>;
+    fn update_feature_status(&self, id: &str, status: &str, total_cost: Option<f64>, duration: Option<&str>) -> Result<(), String>;
+
+    fn gate_create(&self, gate: GateDecision) -> Result<(), String>;
+    fn gate_decide(
+        &self,
+        step_execution_id: &str,
+        decision: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), String>;
+    fn gate_pending_for_feature(&self, feature_id: &str) -> Result<Option<GateDecision>, String>;
+
+    // ── App settings (first-launch detection, etc.) ───────────────────────────
+    fn app_setting_get(&self, key: &str) -> Result<Option<String>, String>;
+    fn app_setting_set(&self, key: &str, value: &str) -> Result<(), String>;
 }
+

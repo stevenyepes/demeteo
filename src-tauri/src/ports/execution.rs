@@ -49,6 +49,16 @@ pub trait ExecutionPort: Send + Sync {
     fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String>;
     fn setup_worktree(&self, machine_id: &str, repo_path: &str, branch: &str, sandbox_path: &str) -> Result<(), String>;
 
+    /// Resolve the absolute home directory on the target host.
+    ///
+    /// Implementations MUST return an absolute path (no `~`) and SHOULD
+    /// cache the result per `machine_id` because the value is stable for
+    /// the lifetime of the SSH connection. The local adapter returns the
+    /// process `HOME`; the SSH adapter runs `echo $HOME` over a channel
+    /// so the value matches the remote user's actual home regardless of
+    /// how the demeteo process was launched.
+    fn resolve_home(&self, machine_id: &str) -> Result<String, String>;
+
     /// Spawn a long-lived interactive process on the target host and
     /// return an owned handle to its stdio. The local case uses
     /// `tokio::process::Child`; the SSH case uses a long-lived

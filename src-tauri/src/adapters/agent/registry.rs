@@ -110,7 +110,7 @@ mod tests {
     struct NoopRuntime;
     impl AgentRuntime for NoopRuntime {
         fn kind(&self) -> &'static str { "noop" }
-        fn is_available(&self, _machine_id: &str) -> bool { false }
+        fn is_available(&self, _exec: &dyn crate::ports::execution::ExecutionPort, _machine_id: &str) -> bool { false }
         fn install_command(&self) -> &'static str { "echo noop" }
         fn start(
             &self,
@@ -170,6 +170,7 @@ mod tests {
             }
             fn list_dir(&self, _: &str, _: &str) -> Result<Vec<crate::sftp::SftpEntry>, String> { Ok(vec![]) }
             fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
+            fn resolve_home(&self, _: &str) -> Result<String, String> { Ok("/tmp".to_string()) }
             fn spawn_interactive(
                 &self,
                 _: &str,

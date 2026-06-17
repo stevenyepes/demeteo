@@ -14,7 +14,7 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<Connection> {
     conn.execute("PRAGMA foreign_keys = ON;", [])?;
 
     conn.execute_batch(
-        "BEGIN;
+        r#"BEGIN;
         
         CREATE TABLE IF NOT EXISTS machines (
             id TEXT PRIMARY KEY,
@@ -116,7 +116,121 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_messages_thread
             ON messages(thread_id, created_at ASC);
 
-        COMMIT;"
+        -- ── New multi-agent orchestrator tables (Phase R3/R4) ─────────────────
+
+        CREATE TABLE IF NOT EXISTS provider_instances (
+            id          TEXT PRIMARY KEY,
+            kind        TEXT NOT NULL,
+            host        TEXT NOT NULL,
+            username    TEXT NOT NULL,
+            avatar_url  TEXT NOT NULL DEFAULT '',
+            created_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS projects (
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            compute_type TEXT NOT NULL DEFAULT 'local',
+            remote_host  TEXT,
+            status       TEXT NOT NULL DEFAULT 'idle',
+            nodes        INTEGER NOT NULL DEFAULT 0,
+            spend        REAL NOT NULL DEFAULT 0.0,
+            created_at   INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS repositories (
+            id          TEXT PRIMARY KEY,
+            project_id  TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            repo_path   TEXT NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS project_settings (
+            project_id        TEXT PRIMARY KEY,
+            default_branch    TEXT NOT NULL DEFAULT 'main',
+            branch_prefix     TEXT NOT NULL DEFAULT 'demeteo/features/',
+            test_command      TEXT,
+            pr_template       TEXT,
+            conflict_policy   TEXT NOT NULL DEFAULT 'always_gate',
+            feature_lifecycle TEXT NOT NULL DEFAULT 'archive',
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS workflows (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            is_starter  INTEGER NOT NULL DEFAULT 0,
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_versions (
+            id          TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL,
+            version     INTEGER NOT NULL,
+            steps_json  TEXT NOT NULL,
+            note        TEXT,
+            created_at  INTEGER NOT NULL,
+            FOREIGN KEY(workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_version
+            ON workflow_versions(workflow_id, version);
+
+        CREATE TABLE IF NOT EXISTS features (
+            id          TEXT PRIMARY KEY,
+            project_id  TEXT NOT NULL,
+            workflow_id TEXT,
+            title       TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'running',
+            total_cost  REAL NOT NULL DEFAULT 0.0,
+            duration    TEXT NOT NULL DEFAULT '0s',
+            created_at  INTEGER NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_features_project
+            ON features(project_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS step_executions (
+            id              TEXT PRIMARY KEY,
+            feature_id      TEXT NOT NULL,
+            step_id         TEXT NOT NULL,
+            step_index      INTEGER NOT NULL,
+            step_kind       TEXT NOT NULL,
+            status          TEXT NOT NULL DEFAULT 'pending',
+            cost_usd        REAL,
+            wall_clock_secs INTEGER,
+            artifact_path   TEXT,
+            error_message   TEXT,
+            created_at      INTEGER NOT NULL,
+            updated_at      INTEGER NOT NULL,
+            FOREIGN KEY(feature_id) REFERENCES features(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_step_exec_feature
+            ON step_executions(feature_id, step_index ASC);
+
+        CREATE TABLE IF NOT EXISTS gate_decisions (
+            id                  TEXT PRIMARY KEY,
+            step_execution_id   TEXT NOT NULL UNIQUE,
+            decision            TEXT,
+            feedback            TEXT,
+            created_at          INTEGER NOT NULL,
+            FOREIGN KEY(step_execution_id) REFERENCES step_executions(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        INSERT OR IGNORE INTO machines (id, name, host, port, username, auth_type, agents)
+        VALUES ('local', 'Local Machine', 'localhost', 0, '', 'local', '[{"kind":"opencode","enabled":true},{"kind":"hermes","enabled":true},{"kind":"claude-code","enabled":true},{"kind":"antigravity","enabled":true}]');
+
+        COMMIT;"#
     )?;
 
     Ok(conn)

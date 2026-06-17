@@ -260,9 +260,8 @@ fn call_blocking(
     // Read loop: pull messages until our `id` arrives or the transport
     // dies. Notifications get pushed to the mpsc; only the response
     // with the matching `id` resolves the oneshot.
-    let mut read_buf = Vec::new();
     loop {
-        let msg = read_one_message_blocking(transport, &mut read_buf)?;
+        let msg = read_one_message_blocking(transport)?;
         match msg {
             Message::Response {
                 id: Some(Value::Number(n)),
@@ -305,65 +304,38 @@ fn call_blocking(
     }
 }
 
-/// Streaming JSON-RPC reader that handles concatenated JSON objects
-/// (no newline delimiter required between frames). Uses
-/// `serde_json::StreamDeserializer` to extract complete messages from
-/// an accumulating byte buffer.
+/// Read exactly one newline-delimited JSON-RPC message from the transport.
+///
+/// Wire format: one JSON object per line, with a trailing `\n` delimiter
+/// (matches opencode's ACP output). Reading byte-by-byte until `\n` gives
+/// us a complete, unsplit message regardless of payload size — no chunk
+/// size limits, no buffer accumulation heuristics.
 fn read_one_message_blocking(
     transport: &Arc<Mutex<Box<dyn InteractiveHandle>>>,
-    buf: &mut Vec<u8>,
 ) -> Result<Message, RpcError> {
+    let mut line = Vec::new();
     loop {
-        // Try to extract a complete JSON-RPC message from accumulated bytes.
-        if !buf.is_empty() {
-            let (msg, consumed) = {
-                let deser = serde_json::Deserializer::from_slice(buf);
-                let mut stream = deser.into_iter::<Message>();
-                match stream.next() {
-                    Some(Ok(msg)) => (Some(msg), stream.byte_offset()),
-                    Some(Err(ref e)) if e.is_eof() => (None, 0),
-                    Some(Err(e)) => {
-                        let raw = String::from_utf8_lossy(buf);
-                        return Err(RpcError {
-                            code: -32700,
-                            message: format!("parse: {} (data: {})", e, raw),
-                            data: None,
-                        });
-                    }
-                    None => (None, 0),
-                }
-            };
-
-            if let Some(msg) = msg {
-                buf.drain(..consumed);
-                return Ok(msg);
-            }
-        }
-
-        // Not enough data — read a chunk from the transport.
-        let mut chunk = [0u8; 8192];
-        let n = {
+        let byte = {
             let mut t = transport.lock().map_err(|_| RpcError {
                 code: -32000,
                 message: "transport lock poisoned".into(),
                 data: None,
             })?;
-            t.read(&mut chunk)
+            t.read_byte()
         };
-        match n {
-            Ok(0) => {
+        match byte {
+            Ok(b'\n') => break,
+            Ok(b) => line.push(b),
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof || e.raw_os_error() == Some(0) => {
                 return Err(RpcError {
                     code: -32001,
                     message: "agent closed stdout".into(),
                     data: None,
                 });
-            }
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-            }
-            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                continue;
             }
             Err(e) => {
                 return Err(RpcError {
@@ -374,6 +346,20 @@ fn read_one_message_blocking(
             }
         }
     }
+
+    if line.is_empty() {
+        // Blank line — skip and read the next one.
+        return read_one_message_blocking(transport);
+    }
+
+    serde_json::from_slice::<Message>(&line).map_err(|e| {
+        let raw = String::from_utf8_lossy(&line);
+        RpcError {
+            code: -32700,
+            message: format!("parse: {} (data: {})", e, raw),
+            data: None,
+        }
+    })
 }
 
 #[cfg(test)]

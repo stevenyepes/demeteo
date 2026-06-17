@@ -17,6 +17,13 @@ pub struct SftpSession {
 pub struct SshClientAdapter {
     pub db: Arc<dyn DatabasePort>,
     pub sessions: Mutex<HashMap<String, Arc<SftpSession>>>,
+    /// Resolved remote HOME per machine_id. The remote HOME is stable
+    /// for the lifetime of the user's account, so we cache it after the
+    /// first successful resolve to avoid an extra `echo $HOME` round-trip
+    /// on every path computation. Cleared on `disconnect_all` (which
+    /// isn't called today, but the cache is keyed by `machine_id` so
+    /// reconnects naturally pick up the cached value).
+    home_cache: Mutex<HashMap<String, String>>,
 }
 
 impl SshClientAdapter {
@@ -24,6 +31,7 @@ impl SshClientAdapter {
         Self {
             db,
             sessions: Mutex::new(HashMap::new()),
+            home_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -119,6 +127,70 @@ impl SshClientAdapter {
         sessions.insert(machine_id.to_string(), sftp_session.clone());
         Ok(sftp_session)
     }
+
+    /// Resolve the remote user's HOME directory by running `echo $HOME`
+    /// over the SSH channel. Cached per `machine_id` so we only pay the
+    /// round-trip once per session.
+    fn resolve_remote_home(&self, machine_id: &str) -> Result<String, String> {
+        if let Ok(cache) = self.home_cache.lock() {
+            if let Some(home) = cache.get(machine_id) {
+                eprintln!(
+                    "[SshClientAdapter] resolve_remote_home({}) = {} (cache hit)",
+                    machine_id, home
+                );
+                return Ok(home.clone());
+            }
+        }
+
+        let sftp_sess = self.get_sftp(machine_id)?;
+        let sess = sftp_sess.session.clone();
+        let mut channel = sess
+            .channel_session()
+            .map_err(|e| format!("Failed to open SSH channel for HOME probe: {}", e))?;
+        // `printf %s` avoids trailing newlines and respects quoting.
+        channel
+            .exec("printf %s \"$HOME\"")
+            .map_err(|e| format!("Failed to exec HOME probe over SSH: {}", e))?;
+        let mut raw = String::new();
+        channel
+            .read_to_string(&mut raw)
+            .map_err(|e| format!("Failed to read HOME probe output: {}", e))?;
+        let wait_result = channel.wait_close()
+            .map_err(|e| format!("Failed to wait for HOME probe channel: {}", e))?;
+        // ssh2's `wait_close` returns `Result<(), Error>`; the exit
+        // status is on a separate method that returns `Result<i32, Error>`
+        // (0 on success, non-zero on remote failure). Drain it so a
+        // broken shell session doesn't get cached as a valid HOME.
+        let _ = wait_result;
+        let exit_code = channel.exit_status()
+            .map_err(|e| format!("Failed to read HOME probe exit status: {}", e))?;
+        if exit_code != 0 {
+            return Err(format!(
+                "Remote HOME probe exited with status {}; the SSH session may be denying shell access",
+                exit_code
+            ));
+        }
+
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() {
+            return Err("Remote HOME is empty (HOME is not set on the SSH session)".to_string());
+        }
+        if !trimmed.starts_with('/') {
+            return Err(format!(
+                "Remote HOME is not an absolute path (got '{}')",
+                trimmed
+            ));
+        }
+
+        eprintln!(
+            "[SshClientAdapter] resolve_remote_home({}) = {} (fresh probe; cached)",
+            machine_id, trimmed
+        );
+        if let Ok(mut cache) = self.home_cache.lock() {
+            cache.insert(machine_id.to_string(), trimmed.clone());
+        }
+        Ok(trimmed)
+    }
 }
 
 impl ExecutionPort for SshClientAdapter {
@@ -209,14 +281,59 @@ impl ExecutionPort for SshClientAdapter {
         let mut channel = sftp_sess.session.channel_session()
             .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
         channel.exec(cmd).map_err(|e| format!("Failed to execute command: {}", e))?;
-        
-        let mut output = String::new();
-        channel.read_to_string(&mut output).map_err(|e| format!("Failed to read command output: {}", e))?;
-        let _ = channel.wait_close();
-        
-        Ok(output)
+
+        // Drain both stdout AND stderr. The previous implementation only
+        // read stdout and ignored the channel's exit status, which meant
+        // a command that failed (e.g. `cd /nonexistent`) returned
+        // `Ok("")` and every caller — the workspace-health check in
+        // particular — concluded the operation succeeded. That is the
+        // root cause of "UI says CLONED + HEALTHY but the agent can't
+        // find the dir": the health probe was returning Ok on a path
+        // that didn't exist.
+        let mut stdout = String::new();
+        channel.read_to_string(&mut stdout)
+            .map_err(|e| format!("Failed to read command stdout: {}", e))?;
+
+        // ssh2 keeps stderr on a separate stream. Drain it so the
+        // remote shell's error message is included in the Err variant
+        // (otherwise the user sees a useless "exit code: 1" with no
+        // context, which is what the original bash `cd: ...: No such
+        // file or directory` message was hiding behind).
+        let mut stderr = String::new();
+        let mut err_stream = channel.stderr();
+        let _ = err_stream.read_to_string(&mut stderr);
+
+        let wait_result = channel.wait_close()
+            .map_err(|e| format!("Failed to wait for channel close: {}", e))?;
+        let _ = wait_result;
+        // `Channel::exit_status` returns the remote process's exit
+        // code as `Result<i32, Error>` (0 on success, non-zero on
+        // failure). We must check this — see the comment on
+        // `run_command` above.
+        let exit_code = channel.exit_status()
+            .map_err(|e| format!("Failed to read command exit status: {}", e))?;
+
+        if exit_code != 0 {
+            // Preserve any captured stderr; fall back to a generic
+            // message if the remote shell didn't write anything.
+            let detail = if stderr.trim().is_empty() {
+                format!("exit code: {}", exit_code)
+            } else {
+                stderr.trim().to_string()
+            };
+            return Err(format!(
+                "Command failed ({}): {}",
+                detail,
+                cmd
+            ));
+        }
+
+        Ok(stdout)
     }
 
+    /// Resolve the remote user's HOME directory by running `echo $HOME`
+    /// over the SSH channel. Cached per `machine_id` so we only pay the
+    /// round-trip once per session.
     fn read_file(&self, machine_id: &str, path: &str) -> Result<String, String> {
         let sftp_sess = self.get_sftp(machine_id)?;
         let sftp = sftp_sess.sftp.lock().map_err(|_| "Failed to lock SFTP".to_string())?;
@@ -352,6 +469,13 @@ impl ExecutionPort for SshClientAdapter {
         Ok(())
     }
 
+    fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
+        if machine_id.is_empty() || machine_id == "local" {
+            return Err("Cannot resolve remote HOME for local machine_id".to_string());
+        }
+        self.resolve_remote_home(machine_id)
+    }
+
     fn spawn_interactive(
         &self,
         machine_id: &str,
@@ -409,6 +533,12 @@ impl ExecutionPort for SshClientAdapter {
             shell_escape(binary),
             args_str
         );
+        // Log the exact command we're about to exec so failures in the
+        // field can be diagnosed by reading the Tauri stderr log. The
+        // command is also the only place the pre-launch `test -d` path
+        // and the agent's `cd` path can drift apart, so logging it is
+        // cheap insurance.
+        eprintln!("[SshClientAdapter] spawn_interactive cmd: {}", cmd);
         channel
             .exec(&cmd)
             .map_err(|e| format!("Failed to exec agent over SSH: {}", e))?;
@@ -425,6 +555,12 @@ impl ExecutionPort for SshClientAdapter {
 fn shell_escape(s: &str) -> String {
     if s.is_empty() {
         return "''".into();
+    }
+    if s == "~" {
+        return "~".into();
+    }
+    if s.starts_with("~/") {
+        return format!("~/{}", shell_escape(&s[2..]));
     }
     if s.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@'))

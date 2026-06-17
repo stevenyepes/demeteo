@@ -1,0 +1,58 @@
+{
+  "id": "wf-starter-ci-fix",
+  "name": "CI Fix Pipeline",
+  "description": "Diagnose a failing CI pipeline from its log, apply a targeted fix, verify locally, then ship. Best for red CI caused by test failures, lint errors, or build regressions.",
+  "is_starter": true,
+  "steps": [
+    {
+      "id": "s-diagnose",
+      "kind": "agent",
+      "title": "Diagnose CI Failure",
+      "agent_kind": null,
+      "prompt_template": "You are a senior engineer diagnosing a failing CI pipeline.\n\nCI failure description: {{feature_description}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\n\n## Your task\n1. Read the CI log provided (or fetch it from the most recent failed pipeline if accessible).\n2. Identify the exact step that failed (build, lint, test, security scan, etc.).\n3. Identify the root cause: which file(s), which line(s), which error.\n4. Classify the failure type:\n   - `FLAKY_TEST` — test is non-deterministic; fix the test.\n   - `REGRESSION` — a recent commit broke a previously-passing check; fix the code or the test.\n   - `MISSING_DEPENDENCY` — a package or tool is missing in the CI environment.\n   - `CONFIG_ERROR` — the CI config itself is wrong.\n   - `COMPILATION_ERROR` — the code does not compile.\n5. State the fix boundary: which file(s) need to change, and which must not be touched.\n\n## Output artifact (required sections)\n- `## Failing Step` — CI step name + error message verbatim\n- `## Root Cause` — precise, one-paragraph diagnosis\n- `## Failure Type` — one of the five types above\n- `## Fix Boundary` — files in scope | files that must not change\n- `## Proposed Fix` — a concrete description of the change needed (not yet implemented)\n\n## Stop condition\nYou are done when all 5 sections are present and Failure Type is one of the five valid values.",
+      "artifact_mode": "full",
+      "on_failure": null,
+      "max_iterations": 2
+    },
+    {
+      "id": "s-gate-confirm",
+      "kind": "gate",
+      "title": "Confirm Diagnosis Before Fix",
+      "agent_kind": null,
+      "prompt_template": "Review the Diagnosis artifact from 's-diagnose'. Approve if the root cause and proposed fix are correct. Redirect if the diagnosis is wrong or the fix scope is too wide. Cancel to abort.",
+      "artifact_mode": "none",
+      "on_failure": null,
+      "max_iterations": null
+    },
+    {
+      "id": "s-fix",
+      "kind": "agent",
+      "title": "Apply CI Fix",
+      "agent_kind": null,
+      "prompt_template": "You are a senior engineer applying a targeted fix to make CI green.\n\nDiagnosis artifact: [attached — from s-diagnose]\n\n## Rules (non-negotiable)\n1. Touch ONLY the files in the Fix Boundary from the diagnosis artifact.\n2. Do NOT fix unrelated issues — one CI failure, one fix.\n3. If the failure type is FLAKY_TEST: make the test deterministic, do not disable it.\n4. If the failure type is REGRESSION: fix the root cause in the source code, not just the test.\n\n## After applying the fix\nRun the specific failing check locally: {{test_command}}\nReport the result.\n\n## Output artifact\n- Files changed (list)\n- Specific lines modified (diff summary)\n- Local check result: PASS / FAIL\n- Confidence: HIGH / MEDIUM / LOW (with reason)\n\n## Stop condition\nYou are done when the local check passes and the output artifact is written.",
+      "artifact_mode": "full",
+      "on_failure": "s-diagnose",
+      "max_iterations": 3
+    },
+    {
+      "id": "s-verify",
+      "kind": "agent",
+      "title": "Verify Locally",
+      "agent_kind": null,
+      "prompt_template": "You are a QA engineer verifying that the CI fix does not introduce regressions.\n\nFix artifact: [attached — from s-fix]\n\n## Verification sequence\n1. **Build** — `{{build_command}}`. If it fails, report and stop.\n2. **Full test suite** — `{{test_command}}`. Report pass/fail counts.\n3. **Lint** — run the project linter. Report any new warnings introduced by the fix.\n\nFor any test failure:\n1. Classify: REGRESSION (caused by this fix) or PRE-EXISTING.\n2. For REGRESSION: apply a minimal fix. Do not change unrelated code.\n3. For PRE-EXISTING: document but do not fix.\n\n## Output artifact\n- Build: PASS / FAIL\n- Test suite: X passed, Y failed, Z skipped\n- New regressions introduced: list (should be empty)\n- Lint warnings introduced: list (should be empty)\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when all three checks have run and an Overall verdict is written.",
+      "artifact_mode": "summary_only",
+      "on_failure": null,
+      "max_iterations": 2
+    },
+    {
+      "id": "s-gate-ship",
+      "kind": "gate",
+      "title": "Review Fix Before Merging",
+      "agent_kind": null,
+      "prompt_template": "Review the Fix artifact (s-fix) and the Verification result (s-verify). Approve to merge the fix and optionally open an MR. Redirect to re-run a prior step with specific feedback. Cancel to abort.",
+      "artifact_mode": "none",
+      "on_failure": null,
+      "max_iterations": null
+    }
+  ]
+}

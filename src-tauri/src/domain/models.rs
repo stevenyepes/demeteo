@@ -182,6 +182,7 @@ pub struct Repository {
 pub struct Feature {
     pub id: String,
     pub project_id: String,
+    pub workflow_id: Option<String>,
     pub title: String,
     pub status: String,
     pub total_cost: f64,
@@ -193,7 +194,23 @@ pub struct Feature {
 pub struct WorktreeStrategy {
     pub default_branch: String,
     pub branch_prefix: String,
+    /// Shell command to run the project's test suite (e.g. `cargo test`).
+    #[serde(default)]
     pub test_command: Option<String>,
+    /// Shell command to build the project (e.g. `cargo build --release`).
+    /// Injected as `{{build_command}}` in prompt templates.
+    #[serde(default)]
+    pub build_command: Option<String>,
+    /// Shell command to measure test coverage (e.g. `cargo tarpaulin`).
+    /// Injected as `{{coverage_command}}` in prompt templates.
+    #[serde(default)]
+    pub coverage_command: Option<String>,
+    /// Path to the project conventions file on the project host
+    /// (e.g. `AGENTS.md`, `.cursor/rules/rules.md`, `CLAUDE.md`).
+    /// Its content is injected as `{{project_conventions}}` in prompt templates.
+    /// Auto-detected at bootstrap; user-editable in Project Settings.
+    #[serde(default)]
+    pub conventions_file: Option<String>,
     pub pr_template: Option<String>,
 }
 
@@ -220,4 +237,91 @@ pub struct RepoHealthStatus {
     pub worktrees: Vec<WorktreeInfo>,
     pub has_uncommitted: bool,
     pub has_unpushed: bool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workflow catalog domain models (Phase R3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A versioned, reusable template that defines the steps to build a feature.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Workflow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Starter-pack workflows shipped in the binary; cannot be deleted by the user.
+    pub is_starter: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// A single immutable snapshot of a workflow's step list.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorkflowVersion {
+    pub id: String,
+    pub workflow_id: String,
+    pub version: u32,
+    /// JSON-serialised `Vec<StepConfig>`.
+    pub steps_json: String,
+    pub note: Option<String>,
+    pub created_at: i64,
+}
+
+/// Configuration for one step in a workflow.
+/// Stored as JSON inside `WorkflowVersion.steps_json`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct StepConfig {
+    /// Stable UUID — preserved across version bumps.
+    pub id: String,
+    /// "agent" | "parallel" | "gate"
+    pub kind: String,
+    pub title: String,
+    /// Which agent to use. None = inherit from project's planner setting.
+    /// One of: "opencode" | "hermes" | "claude-code" | "antigravity"
+    pub agent_kind: Option<String>,
+    /// Prompt template sent to the agent. May reference {{feature_description}}.
+    pub prompt_template: Option<String>,
+    /// "full" | "summary_only" | "none"
+    pub artifact_mode: String,
+    /// Step id to jump to on failure (loopback). None = abort feature.
+    pub on_failure: Option<String>,
+    /// Maximum loop iterations before the executor surfaces a gate instead.
+    pub max_iterations: Option<u32>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step execution domain models (Phase R4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Runtime execution record for one step within a feature run.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StepExecution {
+    pub id: String,
+    pub feature_id: String,
+    /// The stable step id from `StepConfig`.
+    pub step_id: String,
+    pub step_index: u32,
+    /// "agent" | "parallel" | "gate"
+    pub step_kind: String,
+    /// pending | running | awaiting_gate | completed | failed | skipped | interrupted
+    pub status: String,
+    pub cost_usd: Option<f64>,
+    pub wall_clock_secs: Option<u64>,
+    /// Filesystem path of the artifact produced by this step.
+    pub artifact_path: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// A gate decision record — one row per gate step execution.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GateDecision {
+    pub id: String,
+    pub step_execution_id: String,
+    /// None = pending. "approve" | "redirect" | "cancel"
+    pub decision: Option<String>,
+    /// Feedback / redirect instructions provided by the user.
+    pub feedback: Option<String>,
+    pub created_at: i64,
 }

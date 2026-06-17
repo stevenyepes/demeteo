@@ -73,6 +73,7 @@ fn build_ctx(binary: &str) -> AgentContext {
         }
         fn list_dir(&self, _: &str, _: &str) -> Result<Vec<crate::sftp::SftpEntry>, String> { Ok(vec![]) }
         fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
+        fn resolve_home(&self, _: &str) -> Result<String, String> { Ok("/tmp".to_string()) }
         fn spawn_interactive(
             &self,
             _: &str,

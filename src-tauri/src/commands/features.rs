@@ -1,6 +1,6 @@
 use tauri::State;
-use crate::state::DatabaseState;
-use crate::domain::models::Feature;
+use crate::state::{DatabaseState, StepExecutorState};
+use crate::domain::models::{Feature, StepExecution, GateDecision};
 
 #[tauri::command]
 pub fn fetch_active_features(
@@ -11,26 +11,69 @@ pub fn fetch_active_features(
 }
 
 #[tauri::command]
-pub fn start_feature(
-    state: State<'_, DatabaseState>,
+pub async fn start_feature(
+    state: State<'_, StepExecutorState>,
     project_id: String,
+    workflow_id: String,
     title: String,
 ) -> Result<Feature, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
-    let id = format!("f{}", now);
+    state.executor.feature_start(&project_id, &workflow_id, &title)
+}
 
-    let feature = Feature {
-        id: id.clone(),
-        project_id,
-        title,
-        status: "running".to_string(),
-        total_cost: 0.0,
-        duration: "0s".to_string(),
-        created_at: now,
-    };
+#[tauri::command]
+pub fn feature_pause(
+    state: State<'_, StepExecutorState>,
+    feature_id: String,
+) -> Result<(), String> {
+    state.executor.feature_pause(&feature_id)
+}
 
-    state.db.add_feature(feature.clone())?;
+#[tauri::command]
+pub fn feature_resume(
+    state: State<'_, StepExecutorState>,
+    feature_id: String,
+) -> Result<(), String> {
+    state.executor.feature_resume(&feature_id)
+}
 
-    Ok(feature)
+#[tauri::command]
+pub fn feature_cancel(
+    state: State<'_, StepExecutorState>,
+    feature_id: String,
+) -> Result<(), String> {
+    state.executor.feature_cancel(&feature_id)
+}
+
+#[tauri::command]
+pub fn step_list_for_run(
+    state: State<'_, StepExecutorState>,
+    feature_id: String,
+) -> Result<Vec<StepExecution>, String> {
+    state.executor.step_list_for_run(&feature_id)
+}
+
+#[tauri::command]
+pub fn gate_pending_for_run(
+    state: State<'_, StepExecutorState>,
+    feature_id: String,
+) -> Result<Option<GateDecision>, String> {
+    state.presenter.gate_pending_for_run(&feature_id)
+}
+
+#[tauri::command]
+pub async fn gate_decide(
+    state: State<'_, StepExecutorState>,
+    step_execution_id: String,
+    decision: String,
+    feedback: Option<String>,
+) -> Result<(), String> {
+    state.presenter.gate_decide(&step_execution_id, &decision, feedback.as_deref())
+}
+
+#[tauri::command]
+pub async fn step_retry(
+    state: State<'_, StepExecutorState>,
+    step_execution_id: String,
+) -> Result<(), String> {
+    state.executor.step_retry(&step_execution_id)
 }

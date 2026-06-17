@@ -1,0 +1,78 @@
+{
+  "id": "wf-starter-refactor",
+  "name": "Refactor Pipeline",
+  "description": "Analyse and plan the refactor, get user approval, execute in parallel, check test coverage, critic-review for behaviour drift, run the full test suite, then gate before merging. Best for structural improvements that must not change observable behaviour.",
+  "is_starter": true,
+  "steps": [
+    {
+      "id": "s-analyse",
+      "kind": "agent",
+      "title": "Analyse & Plan Refactor",
+      "agent_kind": null,
+      "prompt_template": "You are a senior software architect planning a structural refactor.\n\nRefactor target: {{feature_description}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\n\n## Your task\nProduce a refactor plan that preserves ALL observable behaviour.\n\n## Required sections\n1. **Code Smell Inventory** — table: file | smell type | description | severity (H/M/L)\n2. **Refactor Strategy** — for each smell: which technique to apply (rename / extract / move / inline / simplify / delete dead code).\n3. **Execution Order** — ordered list of changes; changes that would break compilation mid-refactor must be grouped into atomic commits.\n4. **Behaviour Invariants** — explicit list of public contracts that must be identical before and after (function signatures, event schemas, IPC commands, serialized types).\n5. **Test Coverage Baseline** — identify the tests that cover each refactored module; these must all pass before and after.\n6. **Parallel Partition** — how to split the work across 2–4 independent workers with zero file overlap. Each partition: partition ID, files owned, dependencies on other partitions.\n7. **Risk Assessment** — flag any refactor touching public APIs or serialization formats as HIGH risk.\n\n## Stop condition\nYou are done when all 7 sections are written and the Parallel Partition has zero file overlap between partitions.",
+      "artifact_mode": "full",
+      "on_failure": null,
+      "max_iterations": 1
+    },
+    {
+      "id": "s-gate-plan",
+      "kind": "gate",
+      "title": "Approve Refactor Plan Before Execution",
+      "agent_kind": null,
+      "prompt_template": "Review the Refactor Plan from 's-analyse'. Check: (1) Behaviour Invariants — are all public contracts listed? (2) Parallel Partition — is there truly zero file overlap? (3) Risk Assessment — are HIGH risk items acceptable? Approve to begin parallel execution. Redirect with specific objections. Cancel to abort.",
+      "artifact_mode": "none",
+      "on_failure": null,
+      "max_iterations": null
+    },
+    {
+      "id": "s-refactor",
+      "kind": "parallel",
+      "title": "Execute Refactor Subtasks",
+      "agent_kind": null,
+      "prompt_template": "You are a refactor worker. You have been assigned a partition from the refactor plan.\n\nRefactor plan artifact: [attached — from s-analyse]\nYour partition ID: {{partition_id}}\nFiles you own: {{subtask_files}}\nFiles you must NOT touch: {{other_subtask_files}}\n\n## Rules (non-negotiable)\n1. Do NOT change observable behaviour — only structure.\n2. For every file you touch: verify the Behaviour Invariants in the plan still hold.\n3. Run the tests for your partition after each atomic commit: {{test_command}}\n4. Commit format: `refactor({{partition_id}}): <what changed>`.\n\n## Output artifact\n- Files changed (list)\n- Invariants verified (checklist)\n- Partition test result: PASS / FAIL\n- Commit SHA(s)\n\n## Stop condition\nYou are done when all your files are refactored, invariants are verified, and partition tests pass.",
+      "artifact_mode": "summary_only",
+      "on_failure": "s-gate-plan",
+      "max_iterations": 2
+    },
+    {
+      "id": "s-coverage",
+      "kind": "agent",
+      "title": "Coverage Baseline Check",
+      "agent_kind": null,
+      "prompt_template": "You are a QA engineer verifying that the refactor has not reduced test coverage.\n\nRefactor plan (coverage baseline section): [attached — from s-analyse]\nParallel execution artifacts: [attached — from s-refactor]\n\n## Your task\n1. Run the coverage tool: {{coverage_command}}\n2. Compare output against the 'Test Coverage Baseline' section of the refactor plan.\n3. If any test that was previously covering a refactored module is now missing or failing: flag it as a COVERAGE REGRESSION.\n4. Do NOT apply any fixes — report only.\n\n## Output artifact\n- Coverage summary: overall % (measured)\n- Baseline tests still present and passing: list\n- Coverage regressions: list (should be empty)\n- Tests removed or skipped: list\n- **Verdict: COVERAGE OK / COVERAGE REGRESSION**\n\n## Stop condition\nYou are done when the coverage report is generated and a verdict is stated.",
+      "artifact_mode": "summary_only",
+      "on_failure": null,
+      "max_iterations": 1
+    },
+    {
+      "id": "s-critic",
+      "kind": "agent",
+      "title": "Behaviour Drift Review",
+      "agent_kind": null,
+      "prompt_template": "You are a senior engineer performing an adversarial review to detect behaviour drift in a refactor.\n\nRefactor plan (invariants section): [attached — from s-analyse]\nParallel execution artifacts: [attached — from s-refactor]\nCoverage report: [attached — from s-coverage]\n\n## Your task (analysis only — do not write code)\nFor each Behaviour Invariant in the refactor plan:\n1. Inspect the diff for the relevant files.\n2. Verify the invariant still holds exactly.\n3. If the invariant is violated: mark it BROKEN and describe how.\n\nAlso check:\n- Are there any renamed public functions or types not listed as intentional in the plan?\n- Are there any serialized data format changes (JSON keys, database columns, IPC command names)?\n- Are there new panics or unreachable branches?\n\n## Output artifact\n- Invariant check table: invariant | status (HOLDS / BROKEN) | evidence\n- Unplanned public API changes: list\n- Serialization changes: list\n- **Verdict: CLEAN / DRIFT DETECTED**\n\n## Stop condition\nYou are done when all invariants are checked and a Verdict is written.",
+      "artifact_mode": "full",
+      "on_failure": null,
+      "max_iterations": 1
+    },
+    {
+      "id": "s-test",
+      "kind": "agent",
+      "title": "Full Test Suite",
+      "agent_kind": null,
+      "prompt_template": "You are a QA engineer running the full test suite after a structural refactor.\n\nCoverage report: [attached — from s-coverage]\nBehaviour drift review: [attached — from s-critic]\n\n## Pre-condition\nIf the coverage report shows COVERAGE REGRESSION or the drift review shows DRIFT DETECTED, output a BLOCKED status and stop — do not run the full suite.\n\n## Task (if pre-conditions pass)\nRun the full test suite: {{test_command}}\n\nFor any failure:\n1. Classify: REGRESSION (caused by refactor) or PRE-EXISTING.\n2. For REGRESSION: apply a minimal fix — the refactor must be behaviour-preserving.\n3. For PRE-EXISTING: document but do not fix.\n\n## Output artifact\n- Full suite: X passed, Y failed, Z skipped\n- Regressions: list (must be empty for PASS)\n- Pre-existing failures: list\n- Fixes applied: list\n- **Overall: PASS / BLOCKED**\n\n## Stop condition\nYou are done when the suite has run and all sections are written.",
+      "artifact_mode": "summary_only",
+      "on_failure": null,
+      "max_iterations": 2
+    },
+    {
+      "id": "s-gate-diff",
+      "kind": "gate",
+      "title": "Review Diff Before Merging",
+      "agent_kind": null,
+      "prompt_template": "Review the Behaviour Drift Review (s-critic) and the Full Test Suite result (s-test). If Drift Review is CLEAN and Full Suite is PASS: approve to merge. If DRIFT DETECTED or any regressions remain: redirect to re-run the specific subtask. Cancel to abort.",
+      "artifact_mode": "none",
+      "on_failure": null,
+      "max_iterations": null
+    }
+  ]
+}

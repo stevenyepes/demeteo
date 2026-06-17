@@ -75,6 +75,14 @@ interface RepoHealthStatus {
     has_unpushed: boolean;
 }
 
+interface AgentConfigView {
+    kind: string;
+    enabled: boolean;
+    available: boolean;
+    install_command: string;
+}
+
+
 export default function ProjectSettingsView({ 
     setView, 
     activeProject, 
@@ -111,6 +119,7 @@ export default function ProjectSettingsView({
     const [isLoadingHealth, setIsLoadingHealth] = useState(false);
     const [healthExpanded, setHealthExpanded] = useState(true);
     const [showHealthPanel, setShowHealthPanel] = useState(false);
+    const [healthError, setHealthError] = useState('');
 
     // Strategy Form States
     const [defaultBranch, setDefaultBranch] = useState('main');
@@ -125,12 +134,43 @@ export default function ProjectSettingsView({
     const [pendingActionAfterConfirm, setPendingActionAfterConfirm] = useState<'save' | 'delete' | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+    // Coding Agent configs
+    const [agentConfigs, setAgentConfigs] = useState<AgentConfigView[]>([]);
+
     useEffect(() => {
         setConnectionStatus('idle');
     }, [remoteHost]);
 
+    const fetchAgentConfigs = async () => {
+        const machineId = computeType === 'remote' ? remoteHost : 'local';
+        if (computeType === 'remote' && !remoteHost) {
+            setAgentConfigs([]);
+            return;
+        }
+        try {
+            const configs = await invoke<AgentConfigView[]>('get_agent_configs', { machineId });
+            setAgentConfigs(configs);
+        } catch (err) {
+            // The backend has no rows for this machine — that's a
+            // legitimate state, not an error. Show an empty list and
+            // let the user save new configs. Previously this catch
+            // block silently replaced the error with mock data that
+            // hardcoded `available: true`, which let the user start a
+            // feature against an agent that was never installed.
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn("No agent configs found for machine:", machineId, "—", message);
+            setAgentConfigs([]);
+        }
+    };
+
+    useEffect(() => {
+        fetchAgentConfigs();
+    }, [computeType, remoteHost]);
+
+
     const fetchWorkspaceHealth = async () => {
         setIsLoadingHealth(true);
+        setHealthError('');
         try {
             const data = await invoke<RepoHealthStatus[]>('get_workspace_health', {
                 projectId: activeProject.id
@@ -139,19 +179,16 @@ export default function ProjectSettingsView({
             setShowHealthPanel(true);
             setHealthExpanded(true);
         } catch (err) {
+            // DO NOT paper over backend errors with fake "is_cloned: true"
+            // data — that's how the user ends up with a panel that says
+            // HEALTHY while the remote has no .demeteo directory at all.
+            // Surface the error, leave the panel closed, and let the
+            // user re-trigger the bootstrap from the settings screen.
+            const message = err instanceof Error ? err.message : String(err);
             console.error('Failed to fetch workspace health:', err);
-            // Show mock data in dev/browser context
-            setHealthData([
-                {
-                    repo_path: selectedRepos[0]?.path ?? 'org/repo',
-                    is_cloned: true,
-                    head_branch: 'main',
-                    worktrees: [],
-                    has_uncommitted: false,
-                    has_unpushed: false,
-                }
-            ]);
-            setShowHealthPanel(true);
+            setHealthError(message);
+            setHealthData([]);
+            setShowHealthPanel(false);
         } finally {
             setIsLoadingHealth(false);
         }
@@ -185,20 +222,18 @@ export default function ProjectSettingsView({
                 setSelectedRepos(mappedRepos);
                 setOriginalRepos(mappedRepos);
             } catch (err) {
-                console.error("Failed to load project configuration details, loading browser mocks:", err);
-                setDefaultBranch('main');
-                setBranchPrefix('demeteo/features/');
-                setTestCommand('npm test');
-                setPrTemplate('## Proposed Changes\n- JWT integration\n- Verification');
-                setConflictPolicy('always_gate');
-                setFeatureLifecycle('archive');
-                
-                const mockRepos = [
-                    { path: "acme-corp/auth-service", providerId: "prov_mock_1" },
-                    { path: "acme-corp/api-gateway", providerId: "prov_mock_1" }
-                ];
-                setSelectedRepos(mockRepos);
-                setOriginalRepos(mockRepos);
+                // Surface the error to the user instead of silently
+                // filling the form with fake defaults — that's how
+                // the workspace-health panel ended up claiming a
+                // non-existent clone was healthy. The user can see
+                // the red status badge at the top of the settings
+                // and re-trigger the bootstrap.
+                const message = err instanceof Error ? err.message : String(err);
+                console.error("Failed to load project configuration details:", err);
+                setErrorMsg(message);
+                setStatus('error');
+                setSelectedRepos([]);
+                setOriginalRepos([]);
             } finally {
                 setIsLoading(false);
             }
@@ -239,13 +274,15 @@ export default function ProjectSettingsView({
             }
             setAvailableRepos(uniqueRepos);
         } catch (err) {
-            console.error("Error fetching repositories, loading browser mocks:", err);
-            setAvailableRepos([
-                { path: "acme-corp/auth-service", providerId: "prov_mock_1" },
-                { path: "acme-corp/api-gateway", providerId: "prov_mock_1" },
-                { path: "acme-corp/payment-service", providerId: "prov_mock_1" },
-                { path: "acme-corp/notification-service", providerId: "prov_mock_1" }
-            ]);
+            // Don't fill the repo picker with fake "acme-corp/*"
+            // mock entries — that lets the user select repos that
+            // don't exist on any provider and silently breaks the
+            // bootstrap. Show an empty list and let the user retry.
+            const message = err instanceof Error ? err.message : String(err);
+            console.error("Failed to fetch repositories from providers:", err);
+            setErrorMsg(message);
+            setStatus('error');
+            setAvailableRepos([]);
         } finally {
             setIsLoadingRepos(false);
         }
@@ -299,6 +336,18 @@ export default function ProjectSettingsView({
             selectedRepos.some(r => !originalRepos.some(o => o.path === r.path));
         const computeChanged = computeType !== activeProject.compute_type || remoteHost !== activeProject.remote_host;
         const isCurrentlyFailedOrBootstrapping = activeProject.status === 'error' || activeProject.status === 'bootstrapping';
+
+        try {
+            const machineId = computeType === 'remote' ? remoteHost : 'local';
+            if (machineId) {
+                await invoke('set_agent_configs', {
+                    machineId,
+                    agents: agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled }))
+                });
+            }
+        } catch (err) {
+            console.error("Failed to save agent configs:", err);
+        }
 
         if (reposChanged || computeChanged || isCurrentlyFailedOrBootstrapping) {
             // Check if any repositories are being removed
@@ -973,6 +1022,32 @@ export default function ProjectSettingsView({
 
                         {/* Workspace Health Panel */}
                         <div className="md:col-span-2">
+                            {healthError && (
+                                <div className="rounded-xl border border-ruby-500/30 bg-ruby-500/5 p-4 mb-3">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <AlertTriangle className="w-4 h-4 text-ruby-400" />
+                                        <span className="font-outfit text-sm font-semibold text-ruby-300 uppercase tracking-wider">Workspace Health Check Failed</span>
+                                    </div>
+                                    <pre className="font-mono text-xs text-ruby-200/80 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+{healthError}
+                                    </pre>
+                                    <div className="mt-3 flex gap-2">
+                                        <button
+                                            onClick={fetchWorkspaceHealth}
+                                            disabled={isLoadingHealth}
+                                            className="px-3 py-1.5 text-xs rounded-md border border-ruby-500/30 text-ruby-200 hover:bg-ruby-500/10 transition-all flex items-center gap-1.5"
+                                        >
+                                            <RefreshCw className={`w-3 h-3 ${isLoadingHealth ? 'animate-spin' : ''}`} /> Retry
+                                        </button>
+                                        <button
+                                            onClick={proceedWithReBootstrap}
+                                            className="px-3 py-1.5 text-xs rounded-md bg-cyan-600 hover:bg-cyan-500 text-white transition-all font-medium"
+                                        >
+                                            Re-run Bootstrap
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                             {!showHealthPanel ? (
                                 <button
                                     onClick={fetchWorkspaceHealth}
@@ -984,15 +1059,28 @@ export default function ProjectSettingsView({
                                 </button>
                             ) : (
                                 <div className="glass-panel rounded-xl border border-white/5 overflow-hidden">
-                                    {/* Health panel header */}
-                                    <button
+                                    {/* Health panel header — note: cannot be a
+                                        <button> because we nest a refresh
+                                        <button> inside it. Use a div with
+                                        role=button + tabIndex + onKeyDown so
+                                        the row stays clickable for the
+                                        expand/collapse toggle. */}
+                                    <div
+                                        role="button"
+                                        tabIndex={0}
                                         onClick={() => setHealthExpanded(prev => !prev)}
-                                        className="w-full flex items-center justify-between px-5 py-3.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                setHealthExpanded(prev => !prev);
+                                            }
+                                        }}
+                                        className="w-full flex items-center justify-between px-5 py-3.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors cursor-pointer"
                                     >
                                         <div className="flex items-center gap-2.5">
                                             <Activity className="w-4 h-4 text-cyan-400" />
                                             <span className="font-outfit text-sm font-semibold text-slate-200 uppercase tracking-wider">Workspace Health</span>
-                                            {healthData && (() => {
+                                            {healthData && healthData.length > 0 && (() => {
                                                 const hasError = healthData.some(r => !r.is_cloned);
                                                 const hasDirty = healthData.some(r => r.has_uncommitted || r.has_unpushed);
                                                 if (hasError) return <span className="px-2 py-0.5 text-[10px] rounded-full bg-ruby-500/15 border border-ruby-500/25 text-ruby-400 font-mono">DEGRADED</span>;
@@ -1011,7 +1099,7 @@ export default function ProjectSettingsView({
                                             </button>
                                             {healthExpanded ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
                                         </div>
-                                    </button>
+                                    </div>
 
                                     {healthExpanded && (
                                         <div className="p-4 space-y-3">
@@ -1200,6 +1288,94 @@ export default function ProjectSettingsView({
                                 </div>
                             </div>
                         )}
+
+                        {/* Coding Agent Configurations */}
+                        <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
+                            <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                                <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                                    <Activity className="w-4 h-4 text-cyan-400 animate-pulse" /> Coding Agent Configuration
+                                </h3>
+                                <button
+                                    type="button"
+                                    onClick={fetchAgentConfigs}
+                                    className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-white/5 transition-all"
+                                    title="Re-check agent availability"
+                                >
+                                    <RotateCw className="w-3.5 h-3.5" />
+                                </button>
+                            </div>
+                            <p className="text-xs text-slate-400">
+                                Enable or disable specific AI coding agents for this workspace. Demeteo validates if these agents' CLI binaries are available on the selected compute server.
+                            </p>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                {agentConfigs.length === 0 ? (
+                                    <div className="md:col-span-2 text-xs text-slate-500 italic p-2">No agents found on target machine.</div>
+                                ) : agentConfigs.map((agent) => (
+                                    <div 
+                                        key={agent.kind}
+                                        className={`flex items-start justify-between p-4 rounded-lg border transition-all ${
+                                            agent.enabled 
+                                                ? 'bg-violet-500/5 border-violet-500/25 shadow-[0_0_15px_rgba(139,92,246,0.05)]' 
+                                                : 'bg-black/20 border-white/5 opacity-60'
+                                        }`}
+                                    >
+                                        <div className="flex gap-3 w-full">
+                                            {/* Checkbox */}
+                                            <div className="pt-0.5">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setAgentConfigs(prev => prev.map(a => 
+                                                            a.kind === agent.kind ? { ...a, enabled: !a.enabled } : a
+                                                        ));
+                                                    }}
+                                                    className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
+                                                        agent.enabled 
+                                                            ? 'bg-violet-500 border-violet-500 text-white' 
+                                                            : 'border-slate-600 hover:border-slate-500'
+                                                    }`}
+                                                >
+                                                    {agent.enabled && <Check className="w-3 h-3 stroke-[3]" />}
+                                                </button>
+                                            </div>
+
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <span className="text-sm font-semibold text-white font-outfit capitalize">
+                                                        {agent.kind.replace(/-/g, ' ')}
+                                                    </span>
+                                                    {/* Status badge */}
+                                                    {agent.available ? (
+                                                        <span className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-mono">
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                                                            Available
+                                                        </span>
+                                                    ) : (
+                                                        <span className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] rounded bg-ruby-500/10 border border-ruby-500/20 text-ruby-400 font-mono">
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-ruby-400"></span>
+                                                            Missing
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                                                    {agent.kind === 'opencode' && 'Local open-source developer agent.'}
+                                                    {agent.kind === 'hermes' && 'Autonomic codebase planner and execution agent.'}
+                                                    {agent.kind === 'claude-code' && 'Claude Code agent for complex tasks.'}
+                                                    {agent.kind === 'antigravity' && 'Antigravity coding assistant.'}
+                                                    {!['opencode', 'hermes', 'claude-code', 'antigravity'].includes(agent.kind) && 'Additional configured coding agent.'}
+                                                </p>
+                                                {!agent.available && agent.install_command && (
+                                                    <div className="mt-2.5 p-2 bg-black/40 border border-white/5 rounded font-mono text-[9px] text-slate-300 flex items-center justify-between gap-2 select-all overflow-x-auto">
+                                                        <span>{agent.install_command}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                     </div>
                 )}
 

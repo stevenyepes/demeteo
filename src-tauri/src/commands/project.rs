@@ -1,7 +1,63 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Manager, State};
 use crate::state::{DatabaseState, ExecutionState};
 use crate::domain::models::{Project, Repository, RepoHealthStatus};
+use crate::paths;
+
+/// Compute the absolute target dir for a (project, repo) pair.
+///
+/// Local projects live under Tauri's `app_local_data_dir()`; remote
+/// projects live under the remote user's HOME (resolved via
+/// `ExecutionPort::resolve_home`). This wrapper exists so the
+/// `is_local` check lives in one place — every command that needs a
+/// path must funnel through here, otherwise the bootstrap, health
+/// check, and step executor can drift apart and the agent will end up
+/// `cd`-ing into a directory the health check never probed.
+fn resolve_target_dir(
+    app: &tauri::AppHandle,
+    exec_state: &State<'_, ExecutionState>,
+    project: &Project,
+    project_id: &str,
+    repo_path: &str,
+) -> Result<String, String> {
+    if project.compute_type.to_lowercase() == "local" {
+        let local_data = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|e| format!("Failed to get local data dir: {}", e))?;
+        let p = local_data
+            .join("projects")
+            .join(project_id)
+            .join("repos")
+            .join(paths::repo_name_from_path(repo_path));
+        Ok(p.to_string_lossy().to_string())
+    } else {
+        paths::repo_target_dir_str(
+            &exec_state.exec,
+            &project.compute_type,
+            project.remote_host.as_deref(),
+            project_id,
+            repo_path,
+        )
+    }
+}
+
+/// Single-quote-escape a path for use in a POSIX shell command. Paths
+/// coming out of [`resolve_target_dir`] are absolute and contain no
+/// shell metacharacters for our supported inputs, so the fast path
+/// returns them verbatim; the quoted fallback is defensive.
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".into();
+    }
+    if s.chars().all(|c| c.is_ascii_alphanumeric()
+        || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@' | '~'))
+    {
+        return s.to_string();
+    }
+    let escaped = s.replace('\'', "'\\''");
+    format!("'{}'", escaped)
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RepositoryConfig {
@@ -159,8 +215,28 @@ pub async fn delete_project(
             }
         }
     } else if let Some(machine_id) = &project.remote_host {
-        let remote_dir = format!("~/.demeteo/projects/{}", id);
-        let _ = exec_state.exec.run_command(machine_id, &format!("rm -rf \"{}\"", remote_dir));
+        // Use the shared helper so we delete exactly the directory the
+        // bootstrap created — never a `~`-expanded guess.
+        match paths::project_root(
+            &exec_state.exec,
+            &project.compute_type,
+            Some(machine_id),
+            &id,
+        ) {
+            Ok(remote_dir) => {
+                let remote_dir_str = remote_dir.to_string_lossy().to_string();
+                let _ = exec_state.exec.run_command(
+                    machine_id,
+                    &format!("rm -rf {}", shell_escape(&remote_dir_str)),
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "[delete_project] could not resolve remote project root for {}: {}",
+                    id, e
+                );
+            }
+        }
     }
 
     Ok(())
@@ -181,7 +257,6 @@ pub async fn check_repos_dirty(
     project_id: String,
     repo_paths: Vec<String>,
 ) -> Result<Vec<RepoDirtyStatus>, String> {
-    use tauri::Manager;
     use crate::adapters::worktree::git_ops::GitOpsHelper;
 
     let projects = db_state.db.get_projects()?;
@@ -198,20 +273,13 @@ pub async fn check_repos_dirty(
     let mut results = Vec::new();
 
     for repo_path in repo_paths {
-        let repo_name = repo_path.split('/').last().unwrap_or(&repo_path).to_string();
-        let target_dir = if project.compute_type.to_lowercase() == "local" {
-            let local_data = app.path().app_local_data_dir()
-                .map_err(|e| format!("Failed to get local data dir: {}", e))?;
-            local_data
-                .join("projects")
-                .join(&project_id)
-                .join("repos")
-                .join(&repo_name)
-                .to_string_lossy()
-                .to_string()
-        } else {
-            format!("~/.demeteo/projects/{}/repos/{}", project_id, repo_name)
-        };
+        let target_dir = resolve_target_dir(
+            &app,
+            &exec_state,
+            &project,
+            &project_id,
+            &repo_path,
+        )?;
 
         let (has_uncommitted, has_unpushed) = git_ops.check_repo_dirty(machine_id, &target_dir).unwrap_or((false, false));
         results.push(RepoDirtyStatus {
@@ -239,7 +307,6 @@ pub async fn get_workspace_health(
     exec_state: State<'_, ExecutionState>,
     project_id: String,
 ) -> Result<Vec<RepoHealthStatus>, String> {
-    use tauri::Manager;
     use crate::adapters::worktree::git_ops::GitOpsHelper;
 
     let projects = db_state.db.get_projects()?;
@@ -259,31 +326,32 @@ pub async fn get_workspace_health(
     let mut results = Vec::new();
 
     for repo in repos {
-        let repo_name = repo.repo_path.split('/').last().unwrap_or(&repo.repo_path).to_string();
-        let target_dir = if project.compute_type.to_lowercase() == "local" {
-            let local_data = app
-                .path()
-                .app_local_data_dir()
-                .map_err(|e| format!("Failed to get local data dir: {}", e))?;
-            local_data
-                .join("projects")
-                .join(&project_id)
-                .join("repos")
-                .join(&repo_name)
-                .to_string_lossy()
-                .to_string()
-        } else {
-            format!("~/.demeteo/projects/{}/repos/{}", project_id, repo_name)
-        };
+        let target_dir = resolve_target_dir(
+            &app,
+            &exec_state,
+            &project,
+            &project_id,
+            &repo.repo_path,
+        )?;
 
-        // Determine if the repo is actually cloned by checking for a git repo
-        let is_cloned = exec_state
-            .exec
-            .run_command(
-                machine_id.unwrap_or("local"),
-                &format!("git -C \"{}\" rev-parse --is-inside-work-tree", target_dir),
-            )
-            .is_ok();
+        // Determine if the repo is actually cloned by checking for a git repo.
+        // We log the exact path and the raw command output so a field
+        // diagnosis can compare the path the backend *thinks* it is
+        // probing against the path the user sees in their terminal.
+        let machine_str = machine_id.unwrap_or("local");
+        let probe_cmd = format!("git -C {} rev-parse --is-inside-work-tree", shell_escape(&target_dir));
+        let probe_result = exec_state.exec.run_command(machine_str, &probe_cmd);
+        let is_cloned = probe_result.is_ok();
+        eprintln!(
+            "[get_workspace_health v2] project={} repo={} target_dir={} machine={} cmd={} ok={} stdout_or_err={:?}",
+            project_id,
+            repo.repo_path,
+            target_dir,
+            machine_str,
+            probe_cmd,
+            is_cloned,
+            probe_result.as_ref().map(|s| s.as_str()).unwrap_or("<none>")
+        );
 
         let head_branch = if is_cloned {
             git_ops.get_head_branch(machine_id, &target_dir)

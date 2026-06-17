@@ -7,6 +7,10 @@ import NewProjectView from "./components/NewProjectView";
 import { Plus, Trash2, Globe, Edit2 } from "lucide-react";
 import ProjectHome from "./components/ProjectHome";
 import ProjectSettings from "./components/ProjectSettings";
+import { WorkflowList } from "./components/WorkflowList";
+import { WorkflowEditor } from "./components/WorkflowEditor";
+import { FeatureDetail } from "./components/FeatureDetail";
+import { GateView } from "./components/GateView";
 import "./App.css";
 
 interface Project {
@@ -38,6 +42,33 @@ function App() {
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [activeFeatureId, setActiveFeatureId] = useState<string | null>(null);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [gateStepExecutionId, setGateStepExecutionId] = useState<string | null>(null);
+  const [activeFeatureTitle, setActiveFeatureTitle] = useState<string>('Feature Pipeline');
+  const [initialLoadError, setInitialLoadError] = useState<string>('');
+
+  useEffect(() => {
+    let unlistenGateGlobal: () => void = () => {};
+    const setupGateListener = async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlistenGateGlobal = await listen<{ feature_id: string; step_execution_id: string }>(
+          'gate_required',
+          (event) => {
+            setGateStepExecutionId(event.payload.step_execution_id);
+            setActiveFeatureId(event.payload.feature_id);
+            setView('detail');
+          }
+        );
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    setupGateListener();
+    return () => {
+      if (unlistenGateGlobal) unlistenGateGlobal();
+    };
+  }, []);
 
   useEffect(() => {
     // Fetch initial data
@@ -82,33 +113,16 @@ function App() {
           setView('home');
         }
       } catch (err) {
-        console.error("Failed to fetch initial data, loading browser mocks:", err);
-        setProviders([
-          {
-            id: "prov_mock_1",
-            type: "github",
-            name: "github",
-            host: "github.com",
-            pat: "hidden",
-            username: "mockuser",
-            avatarUrl: ""
-          }
-        ]);
-        const mockProjects = [
-          {
-            id: "p_mock_1",
-            name: "Mock Project (Local)",
-            status: "idle",
-            repos: 1,
-            nodes: 4,
-            spend: 0.00,
-            compute_type: "local",
-            remote_host: null
-          }
-        ];
-        setProjects(mockProjects);
-        setCurrentProject(mockProjects[0].id);
-        setView('home');
+        // Don't fabricate a "Mock Project (Local)" with a fake
+        // github provider — that's how the user ends up trying to
+        // bootstrap a workspace that points at github.com with a
+        // bogus PAT. Empty state is honest: the user sees the
+        // empty-state view and can re-add their real provider.
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("Failed to fetch initial data:", err);
+        setProviders([]);
+        setProjects([]);
+        setInitialLoadError(message);
       }
     };
     fetchInitialData();
@@ -169,19 +183,31 @@ function App() {
         />
         <main className="flex-1 flex flex-col relative overflow-hidden bg-[#0a0c10] z-0">
           {projects.length === 0 && view === 'empty-state' && (
-            <EmptyStateCard 
-              onSeedSample={handleSeedSample}
-              onConnectProviders={() => {
-                setView('providers');
-                setIsConnectModalOpen(true);
-              }}
-              onSyncWorktrees={() => {
-                setView('new-project');
-              }}
-              onDeployAgents={() => {
-                setView('workflows');
-              }}
-            />
+            <>
+              {initialLoadError && (
+                <div className="mx-8 mt-6 rounded-xl border border-ruby-500/30 bg-ruby-500/5 p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="font-outfit text-sm font-semibold text-ruby-300 uppercase tracking-wider">Failed to load workspace</span>
+                  </div>
+                  <pre className="font-mono text-xs text-ruby-200/80 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+{initialLoadError}
+                  </pre>
+                </div>
+              )}
+              <EmptyStateCard
+                onSeedSample={handleSeedSample}
+                onConnectProviders={() => {
+                  setView('providers');
+                  setIsConnectModalOpen(true);
+                }}
+                onSyncWorktrees={() => {
+                  setView('new-project');
+                }}
+                onDeployAgents={() => {
+                  setView('workflows');
+                }}
+              />
+            </>
           )}
           {projects.length > 0 && view === 'home' && activeProjectObj && (
             <ProjectHome
@@ -191,13 +217,14 @@ function App() {
               setProjects={setProjects}
             />
           )}
-          {view === 'detail' && (
-            <div className="p-8 flex items-center justify-center h-full">
-               <div className="text-center">
-                 <h1 className="text-2xl text-slate-300 font-outfit mb-2">Feature Detail</h1>
-                 <p className="text-slate-500 font-mono text-sm">Feature detail monitoring coming in Story 5 (ID: {activeFeatureId})</p>
-               </div>
-            </div>
+          {view === 'detail' && activeFeatureId && currentProject && (
+            <FeatureDetail
+              featureId={activeFeatureId}
+              projectId={currentProject}
+              title={activeFeatureTitle}
+              onDecideGate={(stepExecId) => setGateStepExecutionId(stepExecId)}
+              onBack={() => setView('home')}
+            />
           )}
           {view === 'new-project' && (
             <NewProjectView
@@ -217,12 +244,40 @@ function App() {
             />
           )}
           {view === 'workflows' && (
-            <div className="p-8 flex items-center justify-center h-full">
-               <div className="text-center">
-                 <h1 className="text-2xl text-slate-300 font-outfit mb-2">Workflows Catalog</h1>
-                 <p className="text-slate-500 font-mono text-sm">Workflow authoring coming in Story 8</p>
-               </div>
-            </div>
+            <WorkflowList
+              onEdit={(id) => {
+                setSelectedWorkflowId(id);
+                setView('workflow-editor');
+              }}
+              onNew={() => {
+                setSelectedWorkflowId(null);
+                setView('workflow-editor');
+              }}
+              onStartFeature={async (wfId) => {
+                const desc = prompt('Enter a description/title for the new feature:');
+                if (!desc) return;
+                try {
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  const feature: any = await invoke('start_feature', {
+                    projectId: currentProject || '',
+                    workflowId: wfId,
+                    title: desc,
+                  });
+                  setActiveFeatureId(feature.id);
+                  setActiveFeatureTitle(feature.title);
+                  setView('detail');
+                } catch (err: any) {
+                  alert(err.toString());
+                }
+              }}
+            />
+          )}
+          {view === 'workflow-editor' && (
+            <WorkflowEditor
+              workflowId={selectedWorkflowId}
+              onBack={() => setView('workflows')}
+              onSaved={() => setView('workflows')}
+            />
           )}
           {view === 'providers' && (
             <div className="flex-1 overflow-y-auto p-8 relative flex flex-col justify-start max-w-4xl mx-auto w-full">
@@ -332,6 +387,16 @@ function App() {
                  <p className="text-slate-500 font-mono text-sm">Settings coming in Story 9</p>
                </div>
             </div>
+          )}
+          {gateStepExecutionId && (
+            <GateView
+              stepExecutionId={gateStepExecutionId}
+              onDecisionSubmitted={() => {
+                setGateStepExecutionId(null);
+                setView('detail');
+              }}
+              onClose={() => setGateStepExecutionId(null)}
+            />
           )}
         </main>
       </div>

@@ -6,6 +6,7 @@ use crate::domain::models::{AgentConfig, WorkingMemoryEntry};
 pub fn get_agent_configs(
     state: State<'_, DatabaseState>,
     registry_state: State<'_, AgentRegistryState>,
+    exec_state: State<'_, crate::state::ExecutionState>,
     machine_id: String,
 ) -> Result<Vec<AgentConfigView>, String> {
     let configured = state.db.get_agent_configs(&machine_id)?;
@@ -24,7 +25,7 @@ pub fn get_agent_configs(
                 registry_state
                     .registry
                     .runtime_for(k)
-                    .map(|r| r.is_available(&machine_id))
+                    .map(|r| r.is_available(&*exec_state.exec, &machine_id))
                     .unwrap_or(false)
             })
             .unwrap_or(false);

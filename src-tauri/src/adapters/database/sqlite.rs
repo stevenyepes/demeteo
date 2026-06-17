@@ -1,7 +1,7 @@
 use crate::domain::models::{
     AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, Message, SessionHistory,
     ThreadSession, WorkingMemoryEntry, ProviderInstance, Project, Repository, Feature,
-    ProjectSettings, WorktreeStrategy,
+    ProjectSettings, WorktreeStrategy, Workflow, WorkflowVersion, StepExecution, GateDecision,
 };
 use crate::ports::db::DatabasePort;
 use rusqlite::{params, Connection};
@@ -137,6 +137,7 @@ impl SqliteAdapter {
             "CREATE TABLE IF NOT EXISTS features (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
+                workflow_id TEXT,
                 title TEXT NOT NULL,
                 status TEXT NOT NULL,
                 total_cost REAL NOT NULL,
@@ -148,11 +149,23 @@ impl SqliteAdapter {
         );
 
         let _ = conn.execute(
+            "ALTER TABLE features ADD COLUMN workflow_id TEXT;",
+            [],
+        );
+
+        let _ = conn.execute("ALTER TABLE project_settings ADD COLUMN build_command TEXT;", []);
+        let _ = conn.execute("ALTER TABLE project_settings ADD COLUMN coverage_command TEXT;", []);
+        let _ = conn.execute("ALTER TABLE project_settings ADD COLUMN conventions_file TEXT;", []);
+
+        let _ = conn.execute(
             "CREATE TABLE IF NOT EXISTS project_settings (
                 project_id TEXT PRIMARY KEY,
                 default_branch TEXT NOT NULL,
                 branch_prefix TEXT NOT NULL,
                 test_command TEXT,
+                build_command TEXT,
+                coverage_command TEXT,
+                conventions_file TEXT,
                 pr_template TEXT,
                 conflict_policy TEXT NOT NULL,
                 feature_lifecycle TEXT NOT NULL,
@@ -811,24 +824,25 @@ impl DatabasePort for SqliteAdapter {
     fn add_feature(&self, feature: Feature) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
         conn.execute(
-            "INSERT INTO features (id, project_id, title, status, total_cost, duration, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![feature.id, feature.project_id, feature.title, feature.status, feature.total_cost, feature.duration, feature.created_at],
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![feature.id, feature.project_id, feature.workflow_id, feature.title, feature.status, feature.total_cost, feature.duration, feature.created_at],
         ).map_err(|e| e.to_string())?;
         Ok(())
     }
 
     fn get_active_features(&self, project_id: &str) -> Result<Vec<Feature>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
-        let mut stmt = conn.prepare("SELECT id, project_id, title, status, total_cost, duration, created_at FROM features WHERE project_id = ?1 ORDER BY created_at DESC").map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare("SELECT id, project_id, workflow_id, title, status, total_cost, duration, created_at FROM features WHERE project_id = ?1 ORDER BY created_at DESC").map_err(|e| e.to_string())?;
         let iter = stmt.query_map(params![project_id], |row| {
             Ok(Feature {
                 id: row.get(0)?,
                 project_id: row.get(1)?,
-                title: row.get(2)?,
-                status: row.get(3)?,
-                total_cost: row.get(4)?,
-                duration: row.get(5)?,
-                created_at: row.get(6)?,
+                workflow_id: row.get(2)?,
+                title: row.get(3)?,
+                status: row.get(4)?,
+                total_cost: row.get(5)?,
+                duration: row.get(6)?,
+                created_at: row.get(7)?,
             })
         }).map_err(|e| e.to_string())?;
         let mut list = Vec::new();
@@ -836,10 +850,37 @@ impl DatabasePort for SqliteAdapter {
         Ok(list)
     }
 
+    fn get_feature(&self, id: &str) -> Result<Option<Feature>, String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        let mut stmt = conn.prepare("SELECT id, project_id, workflow_id, title, status, total_cost, duration, created_at FROM features WHERE id = ?1").map_err(|e| e.to_string())?;
+        let mut iter = stmt.query_map(params![id], |row| {
+            Ok(Feature {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                workflow_id: row.get(2)?,
+                title: row.get(3)?,
+                status: row.get(4)?,
+                total_cost: row.get(5)?,
+                duration: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        if let Some(r) = iter.next() { Ok(Some(r.map_err(|e| e.to_string())?)) } else { Ok(None) }
+    }
+
+    fn feature_update_workflow_id(&self, id: &str, workflow_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
+        conn.execute(
+            "UPDATE features SET workflow_id = ?2 WHERE id = ?1",
+            params![id, workflow_id],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn get_project_settings(&self, project_id: &str) -> Result<Option<ProjectSettings>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
         let mut stmt = conn.prepare(
-            "SELECT project_id, default_branch, branch_prefix, test_command, pr_template, conflict_policy, feature_lifecycle
+            "SELECT project_id, default_branch, branch_prefix, test_command, pr_template, conflict_policy, feature_lifecycle, build_command, coverage_command, conventions_file
              FROM project_settings WHERE project_id = ?1"
         ).map_err(|e| e.to_string())?;
 
@@ -850,6 +891,9 @@ impl DatabasePort for SqliteAdapter {
                     default_branch: row.get(1)?,
                     branch_prefix: row.get(2)?,
                     test_command: row.get(3)?,
+                    build_command: row.get(7)?,
+                    coverage_command: row.get(8)?,
+                    conventions_file: row.get(9)?,
                     pr_template: row.get(4)?,
                 },
                 conflict_policy: row.get(5)?,
@@ -868,13 +912,16 @@ impl DatabasePort for SqliteAdapter {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
         conn.execute(
             "INSERT OR REPLACE INTO project_settings
-             (project_id, default_branch, branch_prefix, test_command, pr_template, conflict_policy, feature_lifecycle)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (project_id, default_branch, branch_prefix, test_command, build_command, coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
                 s.worktree_strategy.branch_prefix,
                 s.worktree_strategy.test_command,
+                s.worktree_strategy.build_command,
+                s.worktree_strategy.coverage_command,
+                s.worktree_strategy.conventions_file,
                 s.worktree_strategy.pr_template,
                 s.conflict_policy,
                 s.feature_lifecycle
@@ -910,7 +957,284 @@ impl DatabasePort for SqliteAdapter {
         conn.execute("DELETE FROM repositories WHERE project_id = ?1", params![project_id]).map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    // ── Phase R3: Workflow catalog ─────────────────────────────────────────────
+
+    fn workflow_create(&self, w: Workflow) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        conn.execute(
+            "INSERT INTO workflows (id, name, description, is_starter, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![w.id, w.name, w.description, w.is_starter as i32, w.created_at, w.updated_at],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn workflow_update_meta(&self, id: &str, name: &str, description: &str) -> Result<(), String> {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        conn.execute(
+            "UPDATE workflows SET name=?2, description=?3, updated_at=?4 WHERE id=?1",
+            params![id, name, description, now],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn workflow_delete(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        // Refuse to delete starter pack workflows
+        let is_starter: i32 = conn.query_row(
+            "SELECT is_starter FROM workflows WHERE id=?1", params![id], |r| r.get(0)
+        ).map_err(|_| "Workflow not found".to_string())?;
+        if is_starter == 1 {
+            return Err("Cannot delete a starter pack workflow. Use 'Revert to Default' instead.".to_string());
+        }
+        conn.execute("DELETE FROM workflows WHERE id=?1", params![id]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn workflow_get(&self, id: &str) -> Result<Option<Workflow>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT id,name,description,is_starter,created_at,updated_at FROM workflows WHERE id=?1"
+        ).map_err(|e| e.to_string())?;
+        let mut iter = stmt.query_map(params![id], |row| {
+            Ok(Workflow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                is_starter: row.get::<_, i32>(3)? != 0,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        if let Some(r) = iter.next() { Ok(Some(r.map_err(|e| e.to_string())?)) } else { Ok(None) }
+    }
+
+    fn workflow_list(&self) -> Result<Vec<Workflow>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT id,name,description,is_starter,created_at,updated_at FROM workflows ORDER BY is_starter DESC, created_at ASC"
+        ).map_err(|e| e.to_string())?;
+        let iter = stmt.query_map([], |row| {
+            Ok(Workflow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                is_starter: row.get::<_, i32>(3)? != 0,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter { list.push(r.map_err(|e| e.to_string())?); }
+        Ok(list)
+    }
+
+    fn workflow_save_version(&self, v: WorkflowVersion) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        conn.execute(
+            "INSERT INTO workflow_versions (id,workflow_id,version,steps_json,note,created_at) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![v.id, v.workflow_id, v.version, v.steps_json, v.note, v.created_at],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn workflow_latest_version(&self, workflow_id: &str) -> Result<Option<WorkflowVersion>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT id,workflow_id,version,steps_json,note,created_at FROM workflow_versions WHERE workflow_id=?1 ORDER BY version DESC LIMIT 1"
+        ).map_err(|e| e.to_string())?;
+        let mut iter = stmt.query_map(params![workflow_id], |row| {
+            Ok(WorkflowVersion {
+                id: row.get(0)?,
+                workflow_id: row.get(1)?,
+                version: row.get::<_, u32>(2)?,
+                steps_json: row.get(3)?,
+                note: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        if let Some(r) = iter.next() { Ok(Some(r.map_err(|e| e.to_string())?)) } else { Ok(None) }
+    }
+
+    fn workflow_versions(&self, workflow_id: &str) -> Result<Vec<WorkflowVersion>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT id,workflow_id,version,steps_json,note,created_at FROM workflow_versions WHERE workflow_id=?1 ORDER BY version ASC"
+        ).map_err(|e| e.to_string())?;
+        let iter = stmt.query_map(params![workflow_id], |row| {
+            Ok(WorkflowVersion {
+                id: row.get(0)?,
+                workflow_id: row.get(1)?,
+                version: row.get::<_, u32>(2)?,
+                steps_json: row.get(3)?,
+                note: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter { list.push(r.map_err(|e| e.to_string())?); }
+        Ok(list)
+    }
+
+    fn workflow_count(&self) -> Result<u32, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM workflows", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        Ok(count as u32)
+    }
+
+    // ── Phase R4: Step execution + gate ───────────────────────────────────────
+
+    fn step_execution_create(&self, s: StepExecution) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        conn.execute(
+            "INSERT INTO step_executions (id,feature_id,step_id,step_index,step_kind,status,cost_usd,wall_clock_secs,artifact_path,error_message,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![s.id,s.feature_id,s.step_id,s.step_index,s.step_kind,s.status,s.cost_usd,s.wall_clock_secs.map(|v| v as i64),s.artifact_path,s.error_message,s.created_at,s.updated_at],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn step_execution_get(&self, id: &str) -> Result<Option<StepExecution>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,wall_clock_secs,artifact_path,error_message,created_at,updated_at FROM step_executions WHERE id=?1"
+        ).map_err(|e| e.to_string())?;
+        let mut iter = stmt.query_map(params![id], |row| {
+            Ok(StepExecution {
+                id: row.get(0)?,
+                feature_id: row.get(1)?,
+                step_id: row.get(2)?,
+                step_index: row.get::<_, u32>(3)?,
+                step_kind: row.get(4)?,
+                status: row.get(5)?,
+                cost_usd: row.get(6)?,
+                wall_clock_secs: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+                artifact_path: row.get(8)?,
+                error_message: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        if let Some(r) = iter.next() { Ok(Some(r.map_err(|e| e.to_string())?)) } else { Ok(None) }
+    }
+
+    fn step_execution_update_status(
+        &self,
+        id: &str,
+        status: &str,
+        cost_usd: Option<f64>,
+        wall_clock_secs: Option<u64>,
+        artifact_path: Option<&str>,
+        error_message: Option<&str>,
+    ) -> Result<(), String> {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        conn.execute(
+            "UPDATE step_executions SET status=?2,cost_usd=?3,wall_clock_secs=?4,artifact_path=?5,error_message=?6,updated_at=?7 WHERE id=?1",
+            params![id, status, cost_usd, wall_clock_secs.map(|v| v as i64), artifact_path, error_message, now],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn step_executions_for_feature(&self, feature_id: &str) -> Result<Vec<StepExecution>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,wall_clock_secs,artifact_path,error_message,created_at,updated_at FROM step_executions WHERE feature_id=?1 ORDER BY step_index ASC"
+        ).map_err(|e| e.to_string())?;
+        let iter = stmt.query_map(params![feature_id], |row| {
+            Ok(StepExecution {
+                id: row.get(0)?,
+                feature_id: row.get(1)?,
+                step_id: row.get(2)?,
+                step_index: row.get::<_, u32>(3)?,
+                step_kind: row.get(4)?,
+                status: row.get(5)?,
+                cost_usd: row.get(6)?,
+                wall_clock_secs: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+                artifact_path: row.get(8)?,
+                error_message: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter { list.push(r.map_err(|e| e.to_string())?); }
+        Ok(list)
+    }
+
+    fn update_feature_status(&self, id: &str, status: &str, total_cost: Option<f64>, duration: Option<&str>) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        if let (Some(cost), Some(dur)) = (total_cost, duration) {
+            conn.execute(
+                "UPDATE features SET status=?2, total_cost=?3, duration=?4 WHERE id=?1",
+                params![id, status, cost, dur],
+            ).map_err(|e| e.to_string())?;
+        } else {
+            conn.execute(
+                "UPDATE features SET status=?2 WHERE id=?1",
+                params![id, status],
+            ).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn gate_create(&self, g: GateDecision) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        conn.execute(
+            "INSERT INTO gate_decisions (id,step_execution_id,decision,feedback,created_at) VALUES (?1,?2,?3,?4,?5)",
+            params![g.id, g.step_execution_id, g.decision, g.feedback, g.created_at],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn gate_decide(&self, step_execution_id: &str, decision: &str, feedback: Option<&str>) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        conn.execute(
+            "UPDATE gate_decisions SET decision=?2, feedback=?3 WHERE step_execution_id=?1",
+            params![step_execution_id, decision, feedback],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn gate_pending_for_feature(&self, feature_id: &str) -> Result<Option<GateDecision>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at
+             FROM gate_decisions gd
+             JOIN step_executions se ON se.id = gd.step_execution_id
+             WHERE se.feature_id=?1 AND gd.decision IS NULL
+             ORDER BY gd.created_at DESC LIMIT 1"
+        ).map_err(|e| e.to_string())?;
+        let mut iter = stmt.query_map(params![feature_id], |row| {
+            Ok(GateDecision {
+                id: row.get(0)?,
+                step_execution_id: row.get(1)?,
+                decision: row.get(2)?,
+                feedback: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        if let Some(r) = iter.next() { Ok(Some(r.map_err(|e| e.to_string())?)) } else { Ok(None) }
+    }
+
+    // ── App settings ─────────────────────────────────────────────────────────
+
+    fn app_setting_get(&self, key: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        Ok(conn.query_row("SELECT value FROM app_settings WHERE key=?1", params![key], |r| r.get(0)).ok())
+    }
+
+    fn app_setting_set(&self, key: &str, value: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        conn.execute(
+            "INSERT INTO app_settings (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
