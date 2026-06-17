@@ -56,6 +56,7 @@ pub(crate) fn finish_feature(
             status: Some(status.to_string()),
             total_cost: Some(Some(total_cost)),
             duration: Some(Some(total_dur)),
+            ..Default::default()
         },
     );
     let _ = notif.emit(&DomainEvent::FeatureStatusChanged {

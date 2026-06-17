@@ -599,17 +599,24 @@ impl AgentSession for AcpSession {
         let rpc = self.rpc.clone();
         let session_id = self.session_id.clone();
         let mode = mode_id.to_string();
-        let (tx, rx) = std::sync::mpsc::channel();
-        tokio::spawn(async move {
-            let result = rpc
-                .call("session/set_mode", json!({ "sessionId": session_id, "modeId": mode }), |_| {})
-                .await;
-            let _ = tx.send(result);
+
+        let result = tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    rpc.call("session/set_mode", json!({ "sessionId": session_id, "modeId": mode }), |_| {})
+                ).await
+            })
         });
-        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+
+        match result {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => Err(format!("set_mode failed: {} ({})", e.message, e.code)),
-            Err(_) => Ok(()),
+            Err(_) => {
+                eprintln!("[acp/runtime] set_mode timed out after 10s!");
+                Ok(())
+            }
         }
     }
 
@@ -641,20 +648,25 @@ impl AgentSession for AcpSession {
         let session_id = self.session_id.clone();
         let cid = config_id.to_string();
         let val = value.to_string();
-        let (tx, rx) = std::sync::mpsc::channel();
-        tokio::spawn(async move {
-            let result = rpc
-                .call("session/set_config_option", json!({ "sessionId": session_id, "configId": cid, "value": val }), |_| {})
-                .await;
-            let _ = tx.send(result);
+
+        let result = tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    rpc.call("session/set_config_option", json!({ "sessionId": session_id, "configId": cid, "value": val }), |_| {})
+                ).await
+            })
         });
-        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+
+        match result {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => Err(format!("set_config_option failed: {} ({})", e.message, e.code)),
             Err(_) => {
                 // Timeout — treat as success since DB is already
                 // persisted and apply_thread_model will retry on
                 // the next prompt.
+                eprintln!("[acp/runtime] set_config_option timed out after 10s!");
                 Ok(())
             }
         }

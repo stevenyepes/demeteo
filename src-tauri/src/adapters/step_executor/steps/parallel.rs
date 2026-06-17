@@ -94,7 +94,7 @@ impl ExecutionDriver {
                 .unwrap_or_else(|| "local".to_string());
             let ctx = AgentContext {
                 thread_id: format!("{}-{}", self.f_id_str, sub_id),
-                machine_id: machine_str,
+                machine_id: machine_str.clone(),
                 binary: agent_kind.clone(),
                 args: vec!["acp".to_string()],
                 env: std::collections::HashMap::new(),
@@ -118,39 +118,69 @@ impl ExecutionDriver {
             match spawn_res {
                 Some(Ok(session)) => {
                     if let Some(ref model) = override_model {
-                        let _ = session.set_config_option("model", model);
+                        match session.set_config_option("model", model) {
+                            Ok(_) => println!("[parallel step] set_config_option model to '{}' succeeded", model),
+                            Err(e) => eprintln!("[parallel step] set_config_option model to '{}' failed: {}", model, e),
+                        }
                     }
                     let mut stream = session.prompt(&sub_prompt);
                     let mut sub_content = String::new();
-                    while let Some(event) = stream.next().await {
-                        if *self.cancel_watch.borrow() {
-                            let _ = session.cancel();
-                            step_failed = true;
-                            step_err_msg = "Execution cancelled by user".to_string();
-                            break;
-                        }
-                        match event {
-                            AgentEvent::Text { delta } => {
-                                sub_content.push_str(&delta);
-                                let _ = self.notif.emit(&DomainEvent::AgentStream {
-                                    feature_id: self.f_id.clone(),
-                                    step_execution_id: step_exec.id.clone(),
-                                    content: delta.clone(),
-                                });
-                            }
-                            AgentEvent::Usage { cost_usd, .. } => {
-                                if let Some(c) = cost_usd {
-                                    *accumulated_cost += c;
+                    let mut cancel_watch = self.cancel_watch.clone();
+                    let timeout_dur = std::time::Duration::from_secs(180);
+                    let sleep_fut = tokio::time::sleep(timeout_dur);
+                    tokio::pin!(sleep_fut);
+
+                    loop {
+                        tokio::select! {
+                            event_opt = stream.next() => {
+                                let event = match event_opt {
+                                    Some(ev) => ev,
+                                    None => break,
+                                };
+
+                                // Reset the timeout timer whenever we receive ANY event from the agent
+                                sleep_fut.as_mut().reset(tokio::time::Instant::now() + timeout_dur);
+
+                                match event {
+                                    AgentEvent::Text { delta } => {
+                                        sub_content.push_str(&delta);
+                                        let _ = self.notif.emit(&DomainEvent::AgentStream {
+                                            feature_id: self.f_id.clone(),
+                                            step_execution_id: step_exec.id.clone(),
+                                            content: delta.clone(),
+                                        });
+                                    }
+                                    AgentEvent::Usage { cost_usd, .. } => {
+                                        if let Some(c) = cost_usd {
+                                            *accumulated_cost += c;
+                                        }
+                                    }
+                                    AgentEvent::Error { message, .. } => {
+                                        step_failed = true;
+                                        let descriptive = super::agent::format_agent_error_message(&message, &machine_str, &*self.exec);
+                                        step_err_msg =
+                                            format!("parallel subtask agent error ({}): {}", sub_id, descriptive);
+                                        break;
+                                    }
+                                    AgentEvent::TurnComplete { .. } => break,
+                                    _ => {}
                                 }
                             }
-                            AgentEvent::Error { message, .. } => {
+                            _ = &mut sleep_fut => {
+                                eprintln!("[parallel step] Subtask {} agent silent timeout of 180s reached.", sub_id);
                                 step_failed = true;
-                                step_err_msg =
-                                    format!("parallel subtask agent error ({}): {}", sub_id, message);
+                                let descriptive = super::agent::format_agent_error_message("agent response timed out (no output for 180s)", &machine_str, &*self.exec);
+                                step_err_msg = format!("parallel subtask agent response timed out ({}) - details: {}", sub_id, descriptive);
                                 break;
                             }
-                            AgentEvent::TurnComplete { .. } => break,
-                            _ => {}
+                            _ = cancel_watch.changed() => {
+                                if *cancel_watch.borrow() {
+                                    let _ = session.cancel();
+                                    step_failed = true;
+                                    step_err_msg = "Execution cancelled by user".to_string();
+                                    break;
+                                }
+                            }
                         }
                     }
 

@@ -24,6 +24,7 @@ const humanizeStepId = (id: string) => {
 
 export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   featureId,
+  projectId,
   title,
   onDecideGate,
   onBack,
@@ -38,6 +39,10 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   const [selectedStepTitle, setSelectedStepTitle] = useState<string | null>(null);
   const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
   const [streamContent, setStreamContent] = useState<Record<string, string>>({});
+  const [feature, setFeature] = useState<any>(null);
+  const [availableModels, setAvailableModels] = useState<Array<{ value: string; name: string }>>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
 
   useEffect(() => {
     loadFeatureData();
@@ -127,6 +132,36 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     try {
       const list = await invoke<StepExecution[]>('step_list_for_run', { featureId });
       setSteps(list);
+
+      let f: any = null;
+      try {
+        f = await invoke('feature_get', { featureId });
+        setFeature(f);
+        if (f && selectedModel === '') {
+          setSelectedModel(f.model || '');
+        }
+      } catch (err) {
+        console.error('Failed to fetch feature detail:', err);
+      }
+
+      const targetProjectId = projectId || f?.project_id;
+      if (f && targetProjectId && availableModels.length === 0 && !isLoadingModels) {
+        setIsLoadingModels(true);
+        try {
+          const project = await invoke<any>('get_project_by_id', { projectId: targetProjectId });
+          const machineId = project?.remote_host || 'local';
+          const agentKind = f.agent_kind || 'opencode';
+          const models = await invoke<Array<{ value: string; name: string }>>('get_agent_models', {
+            machineId,
+            agentKind
+          });
+          setAvailableModels(models || []);
+        } catch (err) {
+          console.warn('Failed to fetch available models:', err);
+        } finally {
+          setIsLoadingModels(false);
+        }
+      }
       
       // Compute telemetry
       let totalCost = 0.0;
@@ -195,7 +230,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
 
   const handleRetryStep = async (stepExecutionId: string) => {
     try {
-      await invoke('step_retry', { stepExecutionId });
+      const modelParam = selectedModel || null;
+      await invoke('step_retry', { stepExecutionId, newModel: modelParam });
       loadFeatureData();
     } catch (err: any) {
       await messageDialog(err.toString(), { title: 'Retry Failed', kind: 'error' });
@@ -342,16 +378,40 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                       )}
 
                       {(step.status === 'failed' || step.status === 'interrupted') && (
-                        <div className="mt-4 p-4 rounded bg-rose-500/5 border border-rose-500/20 flex justify-between items-center">
-                          <div className="text-xs text-rose-400 font-semibold uppercase tracking-wide">
-                            Step failed. You can retry from here.
+                        <div className="mt-4 p-4 rounded bg-rose-500/5 border border-rose-500/20 flex flex-col gap-3">
+                          <div className="flex justify-between items-center">
+                            <div className="text-xs text-rose-400 font-semibold uppercase tracking-wide">
+                              Step failed. You can change model and retry.
+                            </div>
+                            <button
+                              onClick={() => handleRetryStep(step.id)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-xs font-bold transition shadow-[0_0_10px_rgba(239,68,68,0.4)]"
+                            >
+                              <RefreshCw className="w-3 h-3 animate-pulse" /> Retry Step
+                            </button>
                           </div>
-                          <button
-                            onClick={() => handleRetryStep(step.id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-xs font-bold transition shadow-[0_0_10px_rgba(239,68,68,0.4)]"
-                          >
-                            <RefreshCw className="w-3 h-3 animate-pulse" /> Retry Step
-                          </button>
+
+                          {isLoadingModels ? (
+                            <div className="text-[10px] text-slate-500 font-mono animate-pulse">
+                              Probing available models...
+                            </div>
+                          ) : availableModels.length > 0 ? (
+                            <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
+                              <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Model:</label>
+                              <select
+                                value={selectedModel}
+                                onChange={(e) => setSelectedModel(e.target.value)}
+                                className="flex-1 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
+                              >
+                                <option value="">Default (From Workflow)</option>
+                                {availableModels.map((m) => (
+                                  <option key={m.value} value={m.value}>
+                                    {m.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : null}
                         </div>
                       )}
 

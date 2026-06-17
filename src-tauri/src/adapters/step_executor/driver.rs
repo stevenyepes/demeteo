@@ -171,6 +171,7 @@ impl ExecutionDriver {
             status: Some("completed".to_string()),
             total_cost: Some(total_cost).map(|v| Some(v)),
             duration: Some(&total_dur).map(|v| Some(v.to_string())),
+            ..Default::default()
         });
         let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
             feature_id: self.f_id.clone(),
@@ -211,6 +212,7 @@ impl ExecutionDriver {
             status: Some("failed".to_string()),
             total_cost: Some(total_cost).map(|v| Some(v)),
             duration: Some(&total_dur).map(|v| Some(v.to_string())),
+            ..Default::default()
         });
         let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
             feature_id: self.f_id.clone(),
@@ -230,6 +232,7 @@ impl ExecutionDriver {
             status: Some("cancelled".to_string()),
             total_cost: Some(total_cost).map(|v| Some(v)),
             duration: Some(&total_dur).map(|v| Some(v.to_string())),
+            ..Default::default()
         });
         let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
             feature_id: self.f_id.clone(),

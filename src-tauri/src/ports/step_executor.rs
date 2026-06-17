@@ -15,7 +15,7 @@ pub trait StepExecutor: Send + Sync {
     fn feature_cancel(&self, feature_id: &str) -> Result<(), String>;
 
     fn step_get(&self, execution_id: &str) -> Result<StepExecution, String>;
-    fn step_retry(&self, execution_id: &str) -> Result<(), String>;
+    fn step_retry(&self, execution_id: &str, new_model: Option<&str>) -> Result<(), String>;
     fn step_list_for_run(&self, feature_id: &str) -> Result<Vec<StepExecution>, String>;
 }
 

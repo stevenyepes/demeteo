@@ -87,6 +87,8 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let cost: Option<f64> = patch.total_cost.flatten();
         let dur: Option<String> = patch.duration.clone().flatten();
+        let agent_kind: Option<Option<String>> = patch.agent_kind.clone();
+        let model: Option<Option<String>> = patch.model.clone();
 
         // Build the SET clause dynamically so a `None` field on the patch
         // actually means "leave the column alone". The previous code
@@ -108,6 +110,14 @@ impl FeatureRepository for SqliteAdapter {
         if let Some(d) = &dur {
             sets.push("duration=?");
             binds.push(Box::new(d.clone()));
+        }
+        if let Some(ak) = agent_kind {
+            sets.push("agent_kind=?");
+            binds.push(Box::new(ak));
+        }
+        if let Some(m) = model {
+            sets.push("model=?");
+            binds.push(Box::new(m));
         }
         if sets.is_empty() {
             return Ok(());

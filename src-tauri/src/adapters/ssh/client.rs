@@ -530,13 +530,14 @@ impl ExecutionPort for SshClientAdapter {
             .map(|a| paths::shell_escape_posix(a))
             .collect::<Vec<_>>()
             .join(" ");
-        let cmd = format!(
-            "cd {} && {} {} {}",
+        let inner_cmd = format!(
+            "cd {} && {} exec {} {}",
             paths::shell_escape_posix(cwd),
             env_str,
             paths::shell_escape_posix(binary),
             args_str
         );
+        let cmd = format!("bash -l -c {}", paths::shell_escape_posix(&inner_cmd));
         // Log the exact command we're about to exec so failures in the
         // field can be diagnosed by reading the Tauri stderr log. The
         // command is also the only place the pre-launch `test -d` path

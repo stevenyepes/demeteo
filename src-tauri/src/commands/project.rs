@@ -367,3 +367,11 @@ pub async fn get_workspace_health(
 
     Ok(results)
 }
+
+#[tauri::command]
+pub fn get_project_by_id(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+) -> Result<Option<Project>, String> {
+    ctx.projects.get_project(&ProjectId::from(project_id))
+}

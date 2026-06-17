@@ -1,16 +1,16 @@
 # Graph Report - demeteo  (2026-06-17)
 
 ## Corpus Check
-- 179 files · ~151,482 words
+- 179 files · ~151,733 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2225 nodes · 3654 edges · 188 communities (159 shown, 29 thin omitted)
+- 2225 nodes · 3658 edges · 188 communities (159 shown, 29 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 21 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `9fd1c2dd`
+- Built from commit: `345c0793`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -336,7 +336,7 @@ Nodes (25): check_repos_dirty(), create_project(), delete_project(), get_project
 
 ### Community 24 - "Workfloweditor & Components & Workfloweditorprops"
 Cohesion: 0.09
-Nodes (23): AGENT_KINDS, WorkflowEditor(), WorkflowEditorProps, ActionKind, AgentConfig, AgentConfigView, AgentKind, ConfigOption (+15 more)
+Nodes (22): AGENT_KINDS, WorkflowEditor(), WorkflowEditorProps, ActionKind, AgentConfig, AgentConfigView, AgentKind, ConfigOption (+14 more)
 
 ### Community 25 - "Router & Routerexecutionport & Resolve"
 Cohesion: 0.22
@@ -547,8 +547,8 @@ Cohesion: 0.33
 Nodes (4): AvailableRepo, NewProjectViewProps, Provider, WorktreeStrategy
 
 ### Community 80 - "Projecthome & Components & Features"
-Cohesion: 0.33
-Nodes (4): Feature, MOCK_FEATURES, Project, ProjectHomeProps
+Cohesion: 0.29
+Nodes (5): Feature, MOCK_FEATURES, Project, ProjectHomeProps, ConfigOptionValue
 
 ### Community 81 - "Workflows & Bugfix & Pipeline"
 Cohesion: 0.13
@@ -791,7 +791,7 @@ Cohesion: 0.73
 Nodes (5): add_column_if_missing(), run(), DbError, Connection, Result
 
 ## Knowledge Gaps
-- **793 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+788 more)
+- **792 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+787 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **29 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -803,7 +803,7 @@ _Questions this graph is uniquely positioned to answer:_
 - **Why does `GateDecisionId` connect `Database & Sqlite & Sqliteadapter` to `Models & Sessionmodestate & Configoption`?**
   _High betweenness centrality (0.002) - this node is a cross-community bridge._
 - **What connects `$schema`, `plugin`, `@opencode-ai/plugin` to the rest of the system?**
-  _799 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _798 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Database & Sqlite & Sqliteadapter` be split into smaller, more focused modules?**
   _Cohesion score 0.06636500754147813 - nodes in this community are weakly interconnected._
 - **Should `ACP & Runtime & Agent` be split into smaller, more focused modules?**

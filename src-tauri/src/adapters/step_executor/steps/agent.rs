@@ -43,7 +43,7 @@ impl ExecutionDriver {
         let machine_str = self.machine_id_opt.clone().unwrap_or_else(|| "local".to_string());
         let ctx = AgentContext {
             thread_id: self.f_id_str.clone(),
-            machine_id: machine_str,
+            machine_id: machine_str.clone(),
             binary: agent_kind.clone(),
             args: vec!["acp".to_string()],
             env: std::collections::HashMap::new(),
@@ -68,42 +68,71 @@ impl ExecutionDriver {
         match spawn_res {
             Some(Ok(session)) => {
                 if let Some(ref model) = override_model {
-                    let _ = session.set_config_option("model", model);
+                    match session.set_config_option("model", model) {
+                        Ok(_) => println!("[agent step] set_config_option model to '{}' succeeded", model),
+                        Err(e) => eprintln!("[agent step] set_config_option model to '{}' failed: {}", model, e),
+                    }
                 }
                 let mut artifact_content = String::new();
                 let mut stream = session.prompt(&prompt);
-                while let Some(event) = stream.next().await {
-                    if *self.cancel_watch.borrow() {
-                        let _ = session.cancel();
-                        break;
-                    }
-                    match event {
-                        AgentEvent::Text { delta } => {
-                            artifact_content.push_str(&delta);
-                            let _ = self.notif.emit(&DomainEvent::AgentStream {
-                                feature_id: self.f_id.clone(),
-                                step_execution_id: step_exec.id.clone(),
-                                content: delta.clone(),
-                            });
-                            let _ = self.notif.emit(&DomainEvent::StepProgress {
-                                feature_id: self.f_id.clone(),
-                                step_id: step_exec.step_id.0.clone(),
-                                status: "running".into(),
-                                cost_usd: Some(*accumulated_cost),
-                                wall_clock_secs: Some(step_start.elapsed().as_secs()),
-                            });
-                        }
-                        AgentEvent::Usage { cost_usd, .. } => {
-                            if let Some(c) = cost_usd {
-                                *accumulated_cost += c;
+                let mut cancel_watch = self.cancel_watch.clone();
+                let timeout_dur = std::time::Duration::from_secs(180);
+                let sleep_fut = tokio::time::sleep(timeout_dur);
+                tokio::pin!(sleep_fut);
+
+                loop {
+                    tokio::select! {
+                        event_opt = stream.next() => {
+                            let event = match event_opt {
+                                Some(ev) => ev,
+                                None => break,
+                            };
+
+                            // Reset the timeout timer whenever we receive ANY event from the agent
+                            sleep_fut.as_mut().reset(tokio::time::Instant::now() + timeout_dur);
+
+                            match event {
+                                AgentEvent::Text { delta } => {
+                                    artifact_content.push_str(&delta);
+                                    let _ = self.notif.emit(&DomainEvent::AgentStream {
+                                        feature_id: self.f_id.clone(),
+                                        step_execution_id: step_exec.id.clone(),
+                                        content: delta.clone(),
+                                    });
+                                    let _ = self.notif.emit(&DomainEvent::StepProgress {
+                                        feature_id: self.f_id.clone(),
+                                        step_id: step_exec.step_id.0.clone(),
+                                        status: "running".into(),
+                                        cost_usd: Some(*accumulated_cost),
+                                        wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                                    });
+                                }
+                                AgentEvent::Usage { cost_usd, .. } => {
+                                    if let Some(c) = cost_usd {
+                                        *accumulated_cost += c;
+                                    }
+                                }
+                                AgentEvent::TurnComplete { .. } => break,
+                                AgentEvent::Error { message, .. } => {
+                                    let _ = self.registry.kill(self.f_id.as_str()).await;
+                                    let descriptive = format_agent_error_message(&message, &machine_str, &*self.exec);
+                                    return StepOutcome::Failed(descriptive);
+                                }
+                                _ => {}
                             }
                         }
-                        AgentEvent::TurnComplete { .. } => break,
-                        AgentEvent::Error { message, .. } => {
+                        _ = &mut sleep_fut => {
+                            eprintln!("[agent step] Agent silent timeout of 180s reached.");
                             let _ = self.registry.kill(self.f_id.as_str()).await;
-                            return StepOutcome::Failed(message.to_string());
+                            let descriptive = format_agent_error_message("Agent response timed out (no output for 180s)", &machine_str, &*self.exec);
+                            return StepOutcome::Failed(descriptive);
                         }
-                        _ => {}
+                        _ = cancel_watch.changed() => {
+                            if *cancel_watch.borrow() {
+                                let _ = session.cancel();
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -153,8 +182,47 @@ impl ExecutionDriver {
                 let _ = self.registry.kill(self.f_id.as_str()).await;
                 StepOutcome::Completed
             }
-            Some(Err(e)) => StepOutcome::Failed(e.to_string()),
+            Some(Err(e)) => {
+                let descriptive = format_agent_error_message(&e.to_string(), &machine_str, &*self.exec);
+                StepOutcome::Failed(descriptive)
+            }
             None => StepOutcome::Cancelled,
         }
     }
+}
+
+pub(crate) fn format_agent_error_message(
+    message: &str,
+    machine_id: &str,
+    exec: &dyn crate::ports::execution::ExecutionPort,
+) -> String {
+    if message.contains("OpenCode service failure")
+        || message.contains("timed out")
+        || message.contains("no output")
+        || message.is_empty()
+    {
+        // Fetch last 100 lines of remote log
+        if let Ok(logs) = exec.run_command(machine_id, "tail -n 100 /tmp/opencode_run.log") {
+            if logs.contains("FreeUsageLimitError") || logs.contains("Rate limit exceeded") {
+                return "OpenCode Rate Limit Exceeded: The free model rate limit was reached. Please try changing the model to a different model (e.g. 'opencode/big-pickle') or try again later.".to_string();
+            }
+            if logs.contains("CreditLimitError")
+                || logs.contains("Insufficient funds")
+                || logs.contains("credits limit")
+                || logs.contains("insufficient balance")
+            {
+                return "OpenCode Credit Limit Exceeded: You have run out of credits or reached your usage quota. Please verify your billing/credits on OpenCode or switch to a free model.".to_string();
+            }
+            // Fallback search through last lines
+            for line in logs.lines().rev() {
+                if line.contains("FreeUsageLimitError") || line.contains("Rate limit exceeded") {
+                    return "OpenCode Rate Limit Exceeded: The free model rate limit was reached. Please try changing the model to a different model (e.g. 'opencode/big-pickle') or try again later.".to_string();
+                }
+                if line.contains("CreditLimitError") || line.contains("credits limit") {
+                    return "OpenCode Credit Limit Exceeded: You have run out of credits or reached your usage quota. Please verify your billing/credits on OpenCode or switch to a free model.".to_string();
+                }
+            }
+        }
+    }
+    message.to_string()
 }

@@ -310,6 +310,7 @@ impl StepExecutor for DagStepExecutor {
                     status: Some("failed".to_string()),
                     total_cost: None,
                     duration: None,
+                    ..Default::default()
                 },
             );
             let all_steps = self.features.steps_for_feature(&feature_id).unwrap_or_default();
@@ -352,7 +353,7 @@ impl StepExecutor for DagStepExecutor {
             .ok_or_else(|| "Step execution not found".to_string())
     }
 
-    fn step_retry(&self, execution_id: &str) -> Result<(), String> {
+    fn step_retry(&self, execution_id: &str, new_model: Option<&str>) -> Result<(), String> {
         let se_id = StepExecutionId::from(execution_id.to_string());
         let step_exec = self
             .features
@@ -371,6 +372,16 @@ impl StepExecutor for DagStepExecutor {
             .features
             .get(feature_id)?
             .ok_or_else(|| format!("Feature not found: {}", feature_id))?;
+
+        if let Some(model) = new_model {
+            self.features.update(
+                feature_id,
+                &FeaturePatch {
+                    model: Some(Some(model.to_string())),
+                    ..Default::default()
+                },
+            )?;
+        }
 
         let mut workflow_id = feature.workflow_id.clone();
 
@@ -426,6 +437,7 @@ impl StepExecutor for DagStepExecutor {
                 status: Some("running".to_string()),
                 total_cost: None,
                 duration: None,
+                ..Default::default()
             },
         )?;
         let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
@@ -457,6 +469,7 @@ impl StepExecutor for DagStepExecutor {
                     status: Some(prev_feature_status.clone()),
                     total_cost: None,
                     duration: None,
+                    ..Default::default()
                 },
             );
             return Err(e);

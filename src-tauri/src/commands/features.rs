@@ -85,6 +85,15 @@ pub async fn gate_decide(
 pub async fn step_retry(
     ctx: State<'_, AppContext>,
     step_execution_id: String,
+    new_model: Option<String>,
 ) -> Result<(), String> {
-    ctx.executor.step_retry(&step_execution_id)
+    ctx.executor.step_retry(&step_execution_id, new_model.as_deref())
+}
+
+#[tauri::command]
+pub fn feature_get(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<Feature>, String> {
+    ctx.features.get(&FeatureId::from(feature_id))
 }

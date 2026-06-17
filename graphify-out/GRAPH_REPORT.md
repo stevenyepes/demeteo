@@ -1,16 +1,16 @@
 # Graph Report - demeteo  (2026-06-17)
 
 ## Corpus Check
-- 179 files · ~151,632 words
+- 179 files · ~152,467 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2225 nodes · 3658 edges · 188 communities (159 shown, 29 thin omitted)
+- 2230 nodes · 3678 edges · 188 communities (159 shown, 29 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 21 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `9fd1c2dd`
+- Built from commit: `345c0793`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -239,8 +239,8 @@
 ## Communities (188 total, 29 thin omitted)
 
 ### Community 0 - "Database & Sqlite & Sqliteadapter"
-Cohesion: 0.07
-Nodes (36): FeaturePatch, GateDecisionId, SqliteAdapter, Feature, FeatureId, FeatureRepository, Option, ProjectId (+28 more)
+Cohesion: 0.06
+Nodes (39): FeaturePatch, GateDecisionId, SqliteAdapter, Feature, FeatureId, FeatureRepository, Option, ProjectId (+31 more)
 
 ### Community 1 - "ACP & Runtime & Agent"
 Cohesion: 0.05
@@ -332,7 +332,7 @@ Nodes (21): agent_cancel(), agent_get_session_info(), agent_install_and_start(),
 
 ### Community 23 - "Project & Get & Resolve"
 Cohesion: 0.26
-Nodes (25): check_repos_dirty(), create_project(), delete_project(), get_projects(), get_repositories_for_project(), get_workspace_health(), ProjectConfig, ProjectCreateResponse (+17 more)
+Nodes (26): check_repos_dirty(), create_project(), delete_project(), get_project_by_id(), get_projects(), get_repositories_for_project(), get_workspace_health(), ProjectConfig (+18 more)
 
 ### Community 24 - "Workfloweditor & Components & Workfloweditorprops"
 Cohesion: 0.09
@@ -364,7 +364,7 @@ Nodes (11): EmptyStateCard(), EmptyStateCardProps, ProviderSettingsProps, Projec
 
 ### Community 31 - "Features & Feature & Step"
 Cohesion: 0.33
-Nodes (19): feature_cancel(), feature_pause(), feature_resume(), fetch_active_features(), gate_decide(), gate_pending_for_run(), start_feature(), step_get() (+11 more)
+Nodes (20): feature_cancel(), feature_get(), feature_pause(), feature_resume(), fetch_active_features(), gate_decide(), gate_pending_for_run(), start_feature() (+12 more)
 
 ### Community 32 - "Agentsessionregistry & Newthreadmodal & Components"
 Cohesion: 0.12
@@ -791,7 +791,7 @@ Cohesion: 0.73
 Nodes (5): add_column_if_missing(), run(), DbError, Connection, Result
 
 ## Knowledge Gaps
-- **792 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+787 more)
+- **793 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+788 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **29 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -803,9 +803,9 @@ _Questions this graph is uniquely positioned to answer:_
 - **Why does `GateDecisionId` connect `Database & Sqlite & Sqliteadapter` to `Models & Sessionmodestate & Configoption`?**
   _High betweenness centrality (0.002) - this node is a cross-community bridge._
 - **What connects `$schema`, `plugin`, `@opencode-ai/plugin` to the rest of the system?**
-  _798 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _799 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Database & Sqlite & Sqliteadapter` be split into smaller, more focused modules?**
-  _Cohesion score 0.06636500754147813 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.061952861952861954 - nodes in this community are weakly interconnected._
 - **Should `ACP & Runtime & Agent` be split into smaller, more focused modules?**
   _Cohesion score 0.05401234567901234 - nodes in this community are weakly interconnected._
 - **Should `Agent & Registry & Agentregistry` be split into smaller, more focused modules?**

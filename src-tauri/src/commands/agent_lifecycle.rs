@@ -58,7 +58,10 @@ async fn apply_thread_model(
     if let Ok(threads) = threads_repo.get_thread_sessions_for_thread(&ThreadId::from(thread_id.to_string())) {
         if let Some(thread) = threads.into_iter().next() {
             if let Some(ref model) = thread.model {
-                let _ = session.set_config_option("model", model);
+                match session.set_config_option("model", model) {
+                    Ok(_) => println!("[apply_thread_model] set_config_option model to '{}' succeeded", model),
+                    Err(e) => eprintln!("[apply_thread_model] set_config_option model to '{}' failed: {}", model, e),
+                }
             }
         }
     }
@@ -309,9 +312,11 @@ async fn resolve_session(
         .await
         .map_err(|e| format!("Failed to start agent session: {}", e))?;
 
-    // Re-apply persisted model on fresh spawns
     if let Some(ref model) = thread.model {
-        let _ = session.set_config_option("model", model);
+        match session.set_config_option("model", model) {
+            Ok(_) => println!("[resolve_session] set_config_option model to '{}' succeeded", model),
+            Err(e) => eprintln!("[resolve_session] set_config_option model to '{}' failed: {}", model, e),
+        }
     }
 
     Ok(session)

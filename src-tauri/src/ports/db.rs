@@ -67,6 +67,8 @@ pub struct FeaturePatch {
     pub status: Option<String>,
     pub total_cost: Option<Option<f64>>,
     pub duration: Option<Option<String>>,
+    pub agent_kind: Option<Option<String>>,
+    pub model: Option<Option<String>>,
 }
 
 /// Patch for [`FeatureRepository::step_update`].
