@@ -10,31 +10,31 @@ use std::io;
 /// Implementations are responsible for honoring `kill` (close pipes,
 /// send SIGTERM/EOF) and for surfacing EOF to the reader via a
 /// short-read (0 bytes) on stdout.
-pub trait InteractiveHandle: Send {
+pub trait InteractiveHandle: Send + Sync {
     /// Write a single line (the caller is responsible for including the
     /// trailing newline if the protocol expects it). Returns the number
     /// of bytes written.
-    fn write_line(&mut self, line: &str) -> io::Result<usize>;
+    fn write_line(&self, line: &str) -> io::Result<usize>;
 
     /// Read bytes from stdout. Returns Ok(0) on EOF; Ok(n) with n>0 on
     /// a partial read. The JSON-RPC layer reads byte-by-byte until
     /// newline, so partial reads are fine.
-    fn read_byte(&mut self) -> io::Result<u8>;
+    fn read_byte(&self) -> io::Result<u8>;
 
     /// Read available bytes into `buf` without blocking. Returns Ok(0)
     /// on EOF and Ok(n) on partial read.
-    fn try_read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
 
     /// Block until at least one byte is available or EOF is hit.
     /// Returns Ok(0) on EOF, Ok(n) on read.
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+    fn read(&self, buf: &mut [u8]) -> io::Result<usize>;
 
     /// Send EOF / SIGTERM to the agent and close pipes. Idempotent.
-    fn kill(&mut self) -> Result<(), String>;
+    fn kill(&self) -> Result<(), String>;
 
     /// If the agent has exited, return its exit code; else return None.
     /// The watchdog polls this between read timeouts to detect death.
-    fn try_wait(&mut self) -> Result<Option<i32>, String>;
+    fn try_wait(&self) -> Result<Option<i32>, String>;
 }
 
 pub trait ExecutionPort: Send + Sync {
@@ -47,7 +47,13 @@ pub trait ExecutionPort: Send + Sync {
     fn write_file(&self, machine_id: &str, path: &str, content: &str) -> Result<(), String>;
     fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String>;
     fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String>;
-    fn setup_worktree(&self, machine_id: &str, repo_path: &str, branch: &str, sandbox_path: &str) -> Result<(), String>;
+    fn setup_worktree(
+        &self,
+        machine_id: &str,
+        repo_path: &str,
+        branch: &str,
+        sandbox_path: &str,
+    ) -> Result<(), String>;
 
     /// Resolve the absolute home directory on the target host.
     ///

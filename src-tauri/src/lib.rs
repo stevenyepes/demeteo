@@ -10,7 +10,7 @@ pub mod ssh_util;
 pub mod commands;
 pub mod paths;
 
-use state::{DatabaseState, ExecutionState, AgentExecutionState, NotificationState, AgentRegistryState};
+use state::AppContext;
 use terminal::SessionState;
 use forward::ForwardState;
 use ports::agent_execution::AgentExecutionPort;
@@ -56,15 +56,22 @@ pub fn run() {
             let conn = db::init_db(app_data_dir.clone()).expect("Failed to initialize database");
 
             let db_adapter = Arc::new(adapters::database::sqlite::SqliteAdapter::new(conn));
-            let db_port: Arc<dyn ports::db::DatabasePort> = db_adapter.clone();
-            commands::workflows::seed_starter_workflows(&db_port);
+            let machines_repo: Arc<dyn crate::ports::db::MachineRepository> = db_adapter.clone();
+            let projects_repo: Arc<dyn crate::ports::db::ProjectRepository> = db_adapter.clone();
+            let features_repo: Arc<dyn crate::ports::db::FeatureRepository> = db_adapter.clone();
+            let workflows_repo: Arc<dyn crate::ports::db::WorkflowRepository> = db_adapter.clone();
+            let gates_repo: Arc<dyn crate::ports::db::GateRepository> = db_adapter.clone();
+            let app_settings_repo: Arc<dyn crate::ports::db::AppSettingsRepository> = db_adapter.clone();
+            let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter;
+
+            commands::workflows::seed_starter_workflows(&workflows_repo);
             let ssh_adapter: Arc<dyn ExecutionPort> =
-                Arc::new(adapters::ssh::client::SshClientAdapter::new(db_adapter.clone()));
+                Arc::new(adapters::ssh::client::SshClientAdapter::new(machines_repo.clone()));
             let local_adapter: Arc<dyn ExecutionPort> =
                 Arc::new(adapters::local::execution::LocalSubprocessAdapter::new());
             let exec_inner: Arc<dyn ExecutionPort> = Arc::new(
                 adapters::router::RouterExecutionPort::new(
-                     db_adapter.clone(),
+                     machines_repo.clone(),
                      ssh_adapter,
                      local_adapter,
                 ),
@@ -93,25 +100,39 @@ pub fn run() {
                 ]),
             );
 
-            let step_executor_adapter = Arc::new(adapters::step_executor::DagStepExecutor::new(
-                db_adapter.clone(),
-                agent_registry.clone(),
-                notif_adapter.clone(),
-                agent_exec.clone(),
-                exec_inner.clone(),
-                app_data_dir.clone(),
-            ));
-            step_executor_adapter.startup_watchdog();
+            // Build the DagStepExecutor before AppContext to avoid a
+            // circular dependency (the executor contains sub-port Arcs;
+            // AppContext contains the executor's Arc).
+            let step_executor_adapter = {
+                let exec = Arc::new(adapters::step_executor::DagStepExecutor::new(
+                    machines_repo.clone(),
+                    projects_repo.clone(),
+                    features_repo.clone(),
+                    workflows_repo.clone(),
+                    gates_repo.clone(),
+                    app_settings_repo.clone(),
+                    agent_registry.clone(),
+                    notif_adapter.clone(),
+                    agent_exec.clone(),
+                    exec_inner.clone(),
+                    app_data_dir.clone(),
+                ));
+                exec.startup_watchdog();
+                exec
+            };
 
-            app.manage(DatabaseState { db: db_adapter });
-            app.manage(ExecutionState { exec: exec_inner });
-            app.manage(AgentExecutionState { agent_exec: agent_exec.clone() });
-            app.manage(NotificationState { notif: notif_adapter });
-            app.manage(AgentRegistryState {
+            app.manage(AppContext {
+                machines: machines_repo.clone(),
+                threads: threads_repo.clone(),
+                projects: projects_repo.clone(),
+                features: features_repo.clone(),
+                workflows: workflows_repo.clone(),
+                gates: gates_repo.clone(),
+                app_settings: app_settings_repo.clone(),
+                exec: exec_inner,
+                agent_exec: agent_exec,
+                notif: notif_adapter,
                 registry: agent_registry,
-                agent_exec,
-            });
-            app.manage(state::StepExecutorState {
                 executor: step_executor_adapter.clone(),
                 presenter: step_executor_adapter,
             });
@@ -214,6 +235,7 @@ pub fn run() {
             commands::features::feature_pause,
             commands::features::feature_resume,
             commands::features::feature_cancel,
+            commands::features::step_get,
             commands::features::step_list_for_run,
             commands::features::gate_pending_for_run,
             commands::features::gate_decide,

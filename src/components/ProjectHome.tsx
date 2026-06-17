@@ -58,10 +58,11 @@ interface ProjectHomeProps {
   setView: (view: string) => void;
   activeProject: Project;
   setActiveFeatureId: (id: string) => void;
+  setActiveFeatureTitle?: (title: string) => void;
   setProjects?: React.Dispatch<React.SetStateAction<Project[]>>;
 }
 
-const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setActiveFeatureId, setProjects }) => {
+const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setActiveFeatureId, setActiveFeatureTitle, setProjects }) => {
     const [featureInput, setFeatureInput] = useState('');
     const [isExpanded, setIsExpanded] = useState(false);
     const [features, setFeatures] = useState<any[]>([]);
@@ -656,6 +657,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                     key={feature.id}
                                     onClick={() => {
                                         setActiveFeatureId(feature.id);
+                                        if (setActiveFeatureTitle) setActiveFeatureTitle(feature.title);
                                         setView('detail');
                                     }}
                                     className="glass-panel glass-panel-hover rounded-xl p-5 cursor-pointer relative overflow-hidden group"

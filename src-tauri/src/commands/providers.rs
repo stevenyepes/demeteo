@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use crate::state::DatabaseState;
+use crate::state::AppContext;
+use crate::domain::ids::ProviderId;
 use crate::domain::models::ProviderInstance;
+use crate::paths;
 use keyring::Entry;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -80,14 +82,15 @@ pub async fn validate_provider_pat(
 
 #[tauri::command]
 pub async fn fetch_provider_repos(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     provider_id: String,
 ) -> Result<Vec<String>, String> {
-    let providers = state.db.get_provider_instances()?;
-    let provider = providers.into_iter().find(|p| p.id == provider_id)
+    let providers = ctx.app_settings.get_provider_instances()?;
+    let provider_id_typed = ProviderId::from(provider_id.clone());
+    let provider = providers.into_iter().find(|p| p.id == provider_id_typed)
         .ok_or_else(|| "Provider not found".to_string())?;
 
-    let entry = Entry::new("demeteo", &provider.id).map_err(|e| e.to_string())?;
+    let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
     let pat = match entry.get_password() {
         Ok(p) => p,
         Err(e) => {
@@ -164,7 +167,7 @@ pub async fn fetch_provider_repos(
 
 #[tauri::command]
 pub async fn connect_provider_instance(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     provider_type: String,
     host: String,
     pat: String,
@@ -183,16 +186,16 @@ pub async fn connect_provider_instance(
         sanitized_host
     };
 
-    let id = format!("{}_{}", kind, h.replace('.', "_"));
-    
+    let id = ProviderId::from(format!("{}_{}", kind, h.replace('.', "_")));
+
     // Store PAT in keyring
-    let entry = Entry::new("demeteo", &id).map_err(|e| e.to_string())?;
+    let entry = Entry::new("demeteo", id.as_str()).map_err(|e| e.to_string())?;
     entry.set_password(&pat).map_err(|e| e.to_string())?;
 
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let now = paths::now_ms();
 
     let instance = ProviderInstance {
-        id,
+        id: id.clone(),
         kind,
         host: h,
         username: validation.username.unwrap_or_default(),
@@ -200,27 +203,28 @@ pub async fn connect_provider_instance(
         created_at: now,
     };
 
-    state.db.add_provider_instance(instance.clone())?;
+    ctx.app_settings.add_provider_instance(instance.clone())?;
 
     Ok(instance)
 }
 
 #[tauri::command]
 pub fn list_provider_instances(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<Vec<ProviderInstance>, String> {
-    state.db.get_provider_instances()
+    ctx.app_settings.get_provider_instances()
 }
 
 #[tauri::command]
 pub async fn delete_provider_instance(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     provider_id: String,
 ) -> Result<(), String> {
+    let provider_id_typed = ProviderId::from(provider_id.clone());
     if let Ok(entry) = Entry::new("demeteo", &provider_id) {
         let _ = entry.delete_credential();
     }
-    state.db.delete_provider_instance(&provider_id)?;
+    ctx.app_settings.delete_provider_instance(&provider_id_typed)?;
     Ok(())
 }
 

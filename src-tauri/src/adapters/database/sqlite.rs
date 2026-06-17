@@ -1,9 +1,17 @@
+use crate::domain::ids::{
+    AgentProfileId, FeatureId, MachineId, ProjectId, ProviderId,
+    StepExecutionId, ThreadId, WorkflowId,
+};
 use crate::domain::models::{
     AgentConfig, AgentProfile, ChatMessage, ChatSession, Machine, Message, SessionHistory,
     ThreadSession, WorkingMemoryEntry, ProviderInstance, Project, Repository, Feature,
     ProjectSettings, WorktreeStrategy, Workflow, WorkflowVersion, StepExecution, GateDecision,
 };
-use crate::ports::db::DatabasePort;
+use crate::ports::db::{
+    AppSettingsRepository, FeatureRepository, FeaturePatch, GateRepository,
+    MachineRepository, ProjectRepository, StepExecutionPatch, ThreadPatch,
+    ThreadRepository, WorkflowRepository,
+};
 use rusqlite::{params, Connection};
 use std::sync::Mutex;
 
@@ -266,7 +274,7 @@ impl SqliteAdapter {
     }
 }
 
-impl DatabasePort for SqliteAdapter {
+impl SqliteAdapter {
     fn get_machines(&self) -> Result<Vec<Machine>, String> {
         let conn = self.conn.lock().map_err(|_| "Failed to lock database".to_string())?;
         let mut stmt = conn.prepare("SELECT id, name, host, port, username, auth_type, key_path, agents, auto_approved_rules FROM machines ORDER BY created_at DESC")
@@ -1122,7 +1130,7 @@ impl DatabasePort for SqliteAdapter {
     fn step_execution_update_status(
         &self,
         id: &str,
-        status: &str,
+        status: Option<&str>,
         cost_usd: Option<f64>,
         wall_clock_secs: Option<u64>,
         artifact_path: Option<&str>,
@@ -1130,10 +1138,17 @@ impl DatabasePort for SqliteAdapter {
     ) -> Result<(), String> {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
         let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
-        conn.execute(
-            "UPDATE step_executions SET status=?2,cost_usd=?3,wall_clock_secs=?4,artifact_path=?5,error_message=?6,updated_at=?7 WHERE id=?1",
-            params![id, status, cost_usd, wall_clock_secs.map(|v| v as i64), artifact_path, error_message, now],
-        ).map_err(|e| e.to_string())?;
+        if let Some(s) = status {
+            conn.execute(
+                "UPDATE step_executions SET status=?2,cost_usd=?3,wall_clock_secs=?4,artifact_path=?5,error_message=?6,updated_at=?7 WHERE id=?1",
+                params![id, s, cost_usd, wall_clock_secs.map(|v| v as i64), artifact_path, error_message, now],
+            ).map_err(|e| e.to_string())?;
+        } else {
+            conn.execute(
+                "UPDATE step_executions SET cost_usd=?2,wall_clock_secs=?3,artifact_path=?4,error_message=?5,updated_at=?6 WHERE id=?1",
+                params![id, cost_usd, wall_clock_secs.map(|v| v as i64), artifact_path, error_message, now],
+            ).map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -1163,17 +1178,24 @@ impl DatabasePort for SqliteAdapter {
         Ok(list)
     }
 
-    fn update_feature_status(&self, id: &str, status: &str, total_cost: Option<f64>, duration: Option<&str>) -> Result<(), String> {
+    fn update_feature_status(&self, id: &str, status: Option<&str>, total_cost: Option<f64>, duration: Option<&str>) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
         if let (Some(cost), Some(dur)) = (total_cost, duration) {
-            conn.execute(
-                "UPDATE features SET status=?2, total_cost=?3, duration=?4 WHERE id=?1",
-                params![id, status, cost, dur],
-            ).map_err(|e| e.to_string())?;
-        } else {
+            if let Some(s) = status {
+                conn.execute(
+                    "UPDATE features SET status=?2, total_cost=?3, duration=?4 WHERE id=?1",
+                    params![id, s, cost, dur],
+                ).map_err(|e| e.to_string())?;
+            } else {
+                conn.execute(
+                    "UPDATE features SET total_cost=?2, duration=?3 WHERE id=?1",
+                    params![id, cost, dur],
+                ).map_err(|e| e.to_string())?;
+            }
+        } else if let Some(s) = status {
             conn.execute(
                 "UPDATE features SET status=?2 WHERE id=?1",
-                params![id, status],
+                params![id, s],
             ).map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -1218,6 +1240,27 @@ impl DatabasePort for SqliteAdapter {
         if let Some(r) = iter.next() { Ok(Some(r.map_err(|e| e.to_string())?)) } else { Ok(None) }
     }
 
+    fn gate_latest_decided_for_feature(&self, feature_id: &str) -> Result<Option<GateDecision>, String> {
+        let conn = self.conn.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at
+             FROM gate_decisions gd
+             JOIN step_executions se ON se.id = gd.step_execution_id
+             WHERE se.feature_id=?1 AND gd.decision IS NOT NULL
+             ORDER BY gd.created_at DESC LIMIT 1"
+        ).map_err(|e| e.to_string())?;
+        let mut iter = stmt.query_map(params![feature_id], |row| {
+            Ok(GateDecision {
+                id: row.get(0)?,
+                step_execution_id: row.get(1)?,
+                decision: row.get(2)?,
+                feedback: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        if let Some(r) = iter.next() { Ok(Some(r.map_err(|e| e.to_string())?)) } else { Ok(None) }
+    }
+
     // ── App settings ─────────────────────────────────────────────────────────
 
     fn app_setting_get(&self, key: &str) -> Result<Option<String>, String> {
@@ -1239,6 +1282,7 @@ impl DatabasePort for SqliteAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
     use rusqlite::Connection;
 
     #[test]
@@ -1248,7 +1292,7 @@ mod tests {
 
         // 1. Insert a test project
         let project = Project {
-            id: "test_p1".to_string(),
+            id: ProjectId::from("test_p1".to_string()),
             name: "Test Project".to_string(),
             compute_type: "local".to_string(),
             remote_host: None,
@@ -1266,22 +1310,22 @@ mod tests {
 
         // 2. Add repository
         let repo = Repository {
-            id: "test_r1".to_string(),
-            project_id: "test_p1".to_string(),
-            provider_id: "github".to_string(),
+            id: RepositoryId::from("test_r1".to_string()),
+            project_id: ProjectId::from("test_p1".to_string()),
+            provider_id: ProviderId::from("github".to_string()),
             repo_path: "org/repo".to_string(),
         };
         adapter.add_repository(repo).unwrap();
 
-        let repos = adapter.get_repositories_for_project("test_p1").unwrap();
+        let repos = adapter.get_repositories_for_project(&ProjectId::from("test_p1".to_string())).unwrap();
         assert_eq!(repos.len(), 1);
 
         // 3. Update project details
         let updated = Project {
-            id: "test_p1".to_string(),
+            id: ProjectId::from("test_p1".to_string()),
             name: "Updated Project".to_string(),
             compute_type: "remote".to_string(),
-            remote_host: Some("machine_1".to_string()),
+            remote_host: Some(MachineId::from("machine_1".to_string())),
             status: "bootstrapping".to_string(),
             nodes: 8,
             spend: 10.5,
@@ -1292,31 +1336,284 @@ mod tests {
         let projects = adapter.get_projects().unwrap();
         assert_eq!(projects[0].name, "Updated Project");
         assert_eq!(projects[0].compute_type, "remote");
-        assert_eq!(projects[0].remote_host, Some("machine_1".to_string()));
+        assert_eq!(projects[0].remote_host, Some(MachineId::from("machine_1".to_string())));
         assert_eq!(projects[0].status, "bootstrapping");
         assert_eq!(projects[0].nodes, 8);
 
         // 4. Delete repositories for project
-        adapter.delete_repositories_for_project("test_p1").unwrap();
-        let repos = adapter.get_repositories_for_project("test_p1").unwrap();
+        adapter.delete_repositories_for_project(&ProjectId::from("test_p1".to_string())).unwrap();
+        let repos = adapter.get_repositories_for_project(&ProjectId::from("test_p1".to_string())).unwrap();
         assert!(repos.is_empty());
 
         // Re-insert repository for delete cascade check
         let repo = Repository {
-            id: "test_r1_cascade".to_string(),
-            project_id: "test_p1".to_string(),
-            provider_id: "github".to_string(),
+            id: RepositoryId::from("test_r1_cascade".to_string()),
+            project_id: ProjectId::from("test_p1".to_string()),
+            provider_id: ProviderId::from("github".to_string()),
             repo_path: "org/repo-cascade".to_string(),
         };
         adapter.add_repository(repo).unwrap();
 
         // 5. Delete project (should cascade delete repos)
-        adapter.delete_project("test_p1").unwrap();
+        adapter.delete_project(&ProjectId::from("test_p1".to_string())).unwrap();
         let projects = adapter.get_projects().unwrap();
         assert!(projects.is_empty());
 
         // Check if repositories cascade deleted
-        let repos = adapter.get_repositories_for_project("test_p1").unwrap();
+        let repos = adapter.get_repositories_for_project(&ProjectId::from("test_p1".to_string())).unwrap();
         assert!(repos.is_empty());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-port impls
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl MachineRepository for SqliteAdapter {
+    fn get_machines(&self) -> Result<Vec<Machine>, String> {
+        self.get_machines()
+    }
+    fn get_machine(&self, id: &MachineId) -> Result<Option<Machine>, String> {
+        Ok(self.get_machines()?
+            .into_iter()
+            .find(|m| m.id.0 == id.0))
+    }
+    fn add(&self, m: Machine) -> Result<(), String> {
+        self.add_machine(m)
+    }
+    fn update(&self, m: Machine) -> Result<(), String> {
+        self.update_machine(m)
+    }
+    fn delete(&self, id: &MachineId) -> Result<(), String> {
+        self.delete_machine(&id.0)
+    }
+    fn get_agent_profiles(&self, machine_id: &MachineId) -> Result<Vec<AgentProfile>, String> {
+        self.get_agent_profiles(&machine_id.0)
+    }
+    fn add_agent_profile(&self, profile: AgentProfile) -> Result<(), String> {
+        self.add_agent_profile(profile)
+    }
+    fn delete_agent_profile(&self, id: &AgentProfileId) -> Result<(), String> {
+        self.delete_agent_profile(&id.0)
+    }
+}
+
+impl ThreadRepository for SqliteAdapter {
+    fn get_thread_sessions(&self, machine_id: &MachineId) -> Result<Vec<ThreadSession>, String> {
+        self.get_thread_sessions(&machine_id.0)
+    }
+    fn get_thread_sessions_for_thread(&self, thread_id: &ThreadId) -> Result<Vec<ThreadSession>, String> {
+        self.get_thread_sessions_for_thread(&thread_id.0)
+    }
+    fn add_thread_session(&self, thread: ThreadSession) -> Result<(), String> {
+        self.add_thread_session(thread)
+    }
+    fn delete_thread_session(&self, id: &ThreadId) -> Result<(), String> {
+        self.delete_thread_session(&id.0)
+    }
+    fn update_thread(&self, id: &ThreadId, patch: &ThreadPatch) -> Result<(), String> {
+        if let Some(status) = &patch.status {
+            self.update_thread_status(&id.0, status)?;
+        }
+        if let Some(model) = &patch.model {
+            // Some(Some(v)) = set, Some(None) = clear, None = skip
+            match model {
+                Some(m) => self.update_thread_model(&id.0, m)?,
+                None => self.update_thread_model(&id.0, "")?,
+            }
+        }
+        if patch.touch_timestamp {
+            self.update_thread_timestamp(&id.0)?;
+        }
+        Ok(())
+    }
+    fn get_messages(&self, thread_id: &ThreadId) -> Result<Vec<Message>, String> {
+        self.get_messages(&thread_id.0)
+    }
+    fn append_message(&self, msg: &Message) -> Result<(), String> {
+        self.append_message(msg)?;
+        // Bump the thread's `updated_at` so the sidebar reorders.
+        self.update_thread_timestamp(&msg.thread_id.0)
+    }
+    fn delete_messages(&self, thread_id: &ThreadId) -> Result<(), String> {
+        self.delete_messages(&thread_id.0)
+    }
+    fn get_agent_configs(&self, machine_id: &MachineId) -> Result<Vec<AgentConfig>, String> {
+        self.get_agent_configs(&machine_id.0)
+    }
+    fn set_agent_configs(&self, machine_id: &MachineId, agents_json: &str) -> Result<(), String> {
+        self.set_agent_configs(&machine_id.0, agents_json)
+    }
+    fn upsert_working_memory_entry(
+        &self,
+        thread_id: &ThreadId,
+        entry: WorkingMemoryEntry,
+    ) -> Result<(), String> {
+        self.upsert_working_memory_entry(&thread_id.0, entry)
+    }
+    fn get_working_memory(&self, thread_id: &ThreadId) -> Result<Vec<WorkingMemoryEntry>, String> {
+        self.get_working_memory(&thread_id.0)
+    }
+    fn clear_working_memory(&self, thread_id: &ThreadId) -> Result<(), String> {
+        self.clear_working_memory(&thread_id.0)
+    }
+}
+
+impl ProjectRepository for SqliteAdapter {
+    fn get_projects(&self) -> Result<Vec<Project>, String> {
+        self.get_projects()
+    }
+    fn get_project(&self, id: &ProjectId) -> Result<Option<Project>, String> {
+        Ok(self.get_projects()?
+            .into_iter()
+            .find(|p| p.id.0 == id.0))
+    }
+    fn add(&self, p: Project) -> Result<(), String> {
+        self.add_project(p)
+    }
+    fn update(&self, p: Project) -> Result<(), String> {
+        self.update_project(p)
+    }
+    fn update_status(&self, id: &ProjectId, status: &str) -> Result<(), String> {
+        self.update_project_status(id, status)
+    }
+    fn delete(&self, id: &ProjectId) -> Result<(), String> {
+        self.delete_project(&id.0)
+    }
+    fn delete_repositories_for(&self, project_id: &ProjectId) -> Result<(), String> {
+        self.delete_repositories_for_project(&project_id.0)
+    }
+    fn add_repository(&self, repo: Repository) -> Result<(), String> {
+        self.add_repository(repo)
+    }
+    fn get_repositories_for(&self, project_id: &ProjectId) -> Result<Vec<Repository>, String> {
+        self.get_repositories_for_project(&project_id.0)
+    }
+    fn get_settings(&self, project_id: &ProjectId) -> Result<Option<ProjectSettings>, String> {
+        self.get_project_settings(&project_id.0)
+    }
+    fn save_settings(&self, settings: ProjectSettings) -> Result<(), String> {
+        self.save_project_settings(settings)
+    }
+}
+
+impl FeatureRepository for SqliteAdapter {
+    fn get_active(&self, project_id: &ProjectId) -> Result<Vec<Feature>, String> {
+        self.get_active_features(&project_id.0)
+    }
+    fn get(&self, id: &FeatureId) -> Result<Option<Feature>, String> {
+        self.get_feature(&id.0)
+    }
+    fn add(&self, f: Feature) -> Result<(), String> {
+        self.add_feature(f)
+    }
+    fn update(&self, id: &FeatureId, patch: &FeaturePatch) -> Result<(), String> {
+        let status = patch.status.as_deref();
+        let total_cost = patch.total_cost.as_ref().map(|inner| inner.unwrap_or(0.0));
+        let duration = patch.duration.as_ref().map(|inner| inner.as_deref().unwrap_or(""));
+        self.update_feature_status(&id.0, status, total_cost, duration)
+    }
+    fn update_workflow_id(&self, id: &FeatureId, workflow_id: &WorkflowId) -> Result<(), String> {
+        self.feature_update_workflow_id(&id.0, &workflow_id.0)
+    }
+    fn step_create(&self, step: StepExecution) -> Result<(), String> {
+        self.step_execution_create(step)
+    }
+    fn step_get(&self, id: &StepExecutionId) -> Result<Option<StepExecution>, String> {
+        self.step_execution_get(&id.0)
+    }
+    fn step_update(
+        &self,
+        id: &StepExecutionId,
+        patch: &StepExecutionPatch,
+    ) -> Result<(), String> {
+        self.step_execution_update_status(
+            &id.0,
+            patch.status.as_deref(),
+            patch.cost_usd.as_ref().map(|inner| inner.unwrap_or(0.0)),
+            patch.wall_clock_secs.as_ref().map(|inner| inner.unwrap_or(0)),
+            patch.artifact_path.as_ref().and_then(|inner| inner.as_deref()),
+            patch.error_message.as_ref().and_then(|inner| inner.as_deref()),
+        )
+    }
+    fn steps_for_feature(&self, feature_id: &FeatureId) -> Result<Vec<StepExecution>, String> {
+        self.step_executions_for_feature(&feature_id.0)
+    }
+}
+
+impl WorkflowRepository for SqliteAdapter {
+    fn get(&self, id: &WorkflowId) -> Result<Option<Workflow>, String> {
+        self.workflow_get(id)
+    }
+    fn list(&self) -> Result<Vec<Workflow>, String> {
+        self.workflow_list()
+    }
+    fn create(&self, w: Workflow) -> Result<(), String> {
+        self.workflow_create(w)
+    }
+    fn update_meta(&self, id: &WorkflowId, name: &str, description: &str) -> Result<(), String> {
+        self.workflow_update_meta(id, name, description)
+    }
+    fn delete(&self, id: &WorkflowId) -> Result<(), String> {
+        self.workflow_delete(id)
+    }
+    fn save_version(&self, v: WorkflowVersion) -> Result<(), String> {
+        self.workflow_save_version(v)
+    }
+    fn latest_version(&self, workflow_id: &WorkflowId) -> Result<Option<WorkflowVersion>, String> {
+        self.workflow_latest_version(workflow_id)
+    }
+    fn versions(&self, workflow_id: &WorkflowId) -> Result<Vec<WorkflowVersion>, String> {
+        self.workflow_versions(workflow_id)
+    }
+    fn count(&self) -> Result<u32, String> {
+        self.workflow_count()
+    }
+}
+
+impl GateRepository for SqliteAdapter {
+    fn create(&self, g: GateDecision) -> Result<(), String> {
+        self.gate_create(g)
+    }
+    fn decide(
+        &self,
+        step_execution_id: &StepExecutionId,
+        decision: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), String> {
+        self.gate_decide(&step_execution_id.0, decision, feedback)
+    }
+    fn pending_for_feature(&self, feature_id: &FeatureId) -> Result<Option<GateDecision>, String> {
+        self.gate_pending_for_feature(&feature_id.0)
+    }
+    fn latest_decided_for_feature(&self, feature_id: &FeatureId) -> Result<Option<GateDecision>, String> {
+        self.gate_latest_decided_for_feature(&feature_id.0)
+    }
+}
+
+impl AppSettingsRepository for SqliteAdapter {
+    fn add_provider_instance(&self, provider: ProviderInstance) -> Result<(), String> {
+        self.add_provider_instance(provider)
+    }
+    fn get_provider_instances(&self) -> Result<Vec<ProviderInstance>, String> {
+        self.get_provider_instances()
+    }
+    fn delete_provider_instance(&self, id: &ProviderId) -> Result<(), String> {
+        self.delete_provider_instance(&id.0)
+    }
+    fn get_app_session(&self, key: &str) -> Result<Option<String>, String> {
+        self.get_app_session(key)
+    }
+    fn set_app_session(&self, key: &str, value: &str) -> Result<(), String> {
+        self.set_app_session(key, value)
+    }
+    fn delete_app_session(&self, key: &str) -> Result<(), String> {
+        self.delete_app_session(key)
+    }
+    fn app_setting_get(&self, key: &str) -> Result<Option<String>, String> {
+        self.app_setting_get(key)
+    }
+    fn app_setting_set(&self, key: &str, value: &str) -> Result<(), String> {
+        self.app_setting_set(key, value)
     }
 }

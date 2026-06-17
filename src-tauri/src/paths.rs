@@ -18,11 +18,22 @@
 //!    now resolve HOME once via [`ExecutionPort::resolve_home`] and use
 //!    the absolute path everywhere.
 //!
-//! All public functions in this module take an [`ExecutionPort`] (so the
-//! remote HOME can be resolved) and return absolute paths.
+//! This module is also the single source of truth for small primitives
+//! shared by many callers:
+//!
+//! * [`shell_escape_posix`] — single-quote-escape a string for safe
+//!   inclusion in a POSIX shell command. Was duplicated in 5 files.
+//! * [`now_ms`] / [`now_secs`] — monotonic timestamp helpers used by
+//!   the database adapters, intercept payload, and command handlers.
+//! * [`new_id`] — short hex ID built from the wall clock and the
+//!   current thread id. Collision-resistant enough for in-app IDs.
+//!
+//! All public path functions take an [`ExecutionPort`] (so the remote
+//! HOME can be resolved) and return absolute paths.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ports::execution::ExecutionPort;
 
@@ -143,5 +154,134 @@ mod tests {
         assert_eq!(repo_name_from_path("spectacular"), "spectacular");
         assert_eq!(repo_name_from_path("a/b/c/d"), "d");
         assert_eq!(repo_name_from_path("a/b/"), "b");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared primitives (shell escaping, time, IDs)
+//
+// These were previously duplicated across `commands/project.rs`,
+// `commands/bootstrap.rs`, `commands/workflows.rs`, `commands/providers.rs`,
+// `adapters/ssh/client.rs`, `adapters/step_executor/mod.rs`,
+// `adapters/worktree/git_ops.rs`, and `domain/intercept.rs`. Each duplicate
+// was a near-copy of the same algorithm; a single change to the escape
+// strategy (e.g. switch to `printf %q`) used to require touching 5 files.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Single-quote-escape `s` for safe inclusion in a POSIX shell command.
+///
+/// * `~` and `~/...` pass through unchanged so the remote shell expands them.
+/// * Strings made entirely of "safe" characters (alnum + `_-. /=:,@`) are
+///   returned verbatim (the fast path; matches the previous local behaviour).
+/// * Everything else is wrapped in single quotes with internal `'` escaped
+///   via the standard `'\''` trick.
+///
+/// This is the only POSIX shell escaper in the codebase. If you find
+/// yourself reaching for `format!("... {}", something)` to build a shell
+/// command, route the `something` through this function.
+pub fn shell_escape_posix(s: &str) -> String {
+    if s.is_empty() {
+        return "''".into();
+    }
+    if s == "~" {
+        return "~".into();
+    }
+    if let Some(rest) = s.strip_prefix("~/") {
+        return format!("~/{}", shell_escape_posix(rest));
+    }
+    if s.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@')
+    }) {
+        return s.to_string();
+    }
+    let escaped = s.replace('\'', "'\\''");
+    format!("'{}'", escaped)
+}
+
+/// Current wall-clock time in milliseconds since the UNIX epoch.
+///
+/// Used for `created_at` / `updated_at` columns, sidebar ordering, and
+/// ad-hoc timing in workflow command handlers. The single source of truth
+/// (was duplicated in 4 files).
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// Current wall-clock time in seconds since the UNIX epoch. Used by
+/// `domain/intercept.rs` to build the `created_at` field on the
+/// `permission_requested` payload.
+pub fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Generate a short, unique-enough identifier for in-app entities
+/// (workflow rows, step configurations, intercepted commands).
+///
+/// Not cryptographically random — it's a `DefaultHasher` of the wall
+/// clock and the current thread id, formatted as 16 hex digits. Good
+/// enough for the "no two rows in the same table share an id" property
+/// inside one process; **not** suitable for security tokens.
+pub fn new_id() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .hash(&mut h);
+    std::thread::current().id().hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+#[cfg(test)]
+mod primitive_tests {
+    use super::*;
+
+    #[test]
+    fn shell_escape_fast_path() {
+        assert_eq!(shell_escape_posix("/home/u/proj"), "/home/u/proj");
+        assert_eq!(shell_escape_posix("a-b_c.d"), "a-b_c.d");
+        assert_eq!(shell_escape_posix(""), "''");
+    }
+
+    #[test]
+    fn shell_escape_quotes_unsafe_chars() {
+        assert_eq!(shell_escape_posix("a b"), "'a b'");
+        assert_eq!(shell_escape_posix("a;b"), "'a;b'");
+        assert_eq!(shell_escape_posix("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_escape_preserves_tilde() {
+        assert_eq!(shell_escape_posix("~"), "~");
+        assert_eq!(shell_escape_posix("~/projects/x"), "~/projects/x");
+        // Tilde is preserved as the leading segment, but the suffix is
+        // recursively escaped — a space in the path forces quoting.
+        assert_eq!(shell_escape_posix("~/a b"), "~/'a b'");
+    }
+
+    #[test]
+    fn now_ms_is_monotonic_and_positive() {
+        let a = now_ms();
+        let b = now_ms();
+        assert!(a > 0);
+        assert!(b >= a);
+    }
+
+    #[test]
+    fn new_id_is_16_hex_chars_and_unique_enough() {
+        let a = new_id();
+        let b = new_id();
+        assert_eq!(a.len(), 16);
+        assert_eq!(b.len(), 16);
+        assert_ne!(a, b);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

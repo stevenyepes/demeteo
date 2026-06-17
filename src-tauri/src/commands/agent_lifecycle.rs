@@ -1,46 +1,25 @@
 use std::sync::Arc;
 use tauri::{Emitter, State};
 use crate::state::{
-    DatabaseState, ExecutionState, AgentRegistryState,
-    ThreadStatusChanged, EVENT_THREAD_STATUS_CHANGED, EVENT_AGENT_EVENT,
+    AppContext, ThreadStatusChanged, EVENT_THREAD_STATUS_CHANGED, EVENT_AGENT_EVENT,
 };
-use crate::ports::db::DatabasePort;
-use crate::ports::execution::ExecutionPort;
-use crate::ports::agent_execution::AgentExecutionPort;
+use crate::domain::ids::ThreadId;
+use crate::ports::db::ThreadPatch;
 
 /// Build the `AgentContext` for a (thread, agent_kind) pair. Looks up
 /// the machine's auth type (to pick local vs SSH transport) and the
 /// thread's sandbox (to use as cwd). The `AcpRuntime` uses both.
-/// Apply the persisted model (if any) to a session after a fresh spawn.
-/// Silently ignores errors — the session may already have the correct model,
-/// or the agent may not support runtime model switching.
-async fn apply_thread_model(
-    db: &dyn DatabasePort,
-    session: &Arc<dyn crate::ports::agent_runtime::AgentSession>,
-    thread_id: &str,
-) {
-    if let Ok(threads) = db.get_thread_sessions_for_thread(thread_id) {
-        if let Some(thread) = threads.into_iter().next() {
-            if let Some(ref model) = thread.model {
-                let _ = session.set_config_option("model", model);
-            }
-        }
-    }
-}
-
-pub(crate) fn build_agent_context(
-    db: &dyn DatabasePort,
-    exec: Arc<dyn ExecutionPort>,
+fn build_agent_context(
+    ctx: &AppContext,
     thread_id: &str,
     agent_kind: &str,
-    agent_exec: Arc<dyn AgentExecutionPort>,
 ) -> Result<crate::ports::agent_runtime::AgentContext, String> {
-    let threads = db.get_thread_sessions_for_thread(thread_id)?;
+    let threads = ctx.threads.get_thread_sessions_for_thread(&ThreadId::from(thread_id.to_string()))?;
     let thread = threads
         .into_iter()
         .next()
         .ok_or_else(|| format!("Thread not found: {}", thread_id))?;
-    let machines = db.get_machines()?;
+    let machines = ctx.machines.get_machines()?;
     let machine = machines
         .into_iter()
         .find(|m| m.id == thread.machine_id)
@@ -58,42 +37,51 @@ pub(crate) fn build_agent_context(
 
     Ok(crate::ports::agent_runtime::AgentContext {
         thread_id: thread_id.to_string(),
-        machine_id: machine.id.clone(),
+        machine_id: machine.id.0.clone(),
         binary,
         args,
         env: Default::default(),
         cwd,
-        agent_exec,
-        exec,
+        agent_exec: ctx.agent_exec.clone(),
+        exec: ctx.exec.clone(),
     })
+}
+
+/// Re-apply the persisted model (if any) to a session after a fresh spawn.
+/// Silently ignores errors — the session may already have the correct model,
+/// or the agent may not support runtime model switching.
+async fn apply_thread_model(
+    threads_repo: &dyn crate::ports::db::ThreadRepository,
+    session: &Arc<dyn crate::ports::agent_runtime::AgentSession>,
+    thread_id: &str,
+) {
+    if let Ok(threads) = threads_repo.get_thread_sessions_for_thread(&ThreadId::from(thread_id.to_string())) {
+        if let Some(thread) = threads.into_iter().next() {
+            if let Some(ref model) = thread.model {
+                let _ = session.set_config_option("model", model);
+            }
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn agent_start(
-    registry_state: State<'_, AgentRegistryState>,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     thread_id: String,
     agent_kind: String,
 ) -> Result<String, String> {
-    let ctx = build_agent_context(
-        db_state.db.as_ref(),
-        exec_state.exec.clone(),
-        &thread_id,
-        &agent_kind,
-        registry_state.agent_exec.clone(),
-    )?;
-    let runtime = registry_state
+    let agent_ctx = build_agent_context(&ctx, &thread_id, &agent_kind)?;
+    let runtime = ctx
         .registry
         .runtime_for(&agent_kind)
         .ok_or_else(|| format!("No runtime registered for agent kind '{}'", agent_kind))?;
-    match runtime.start(ctx).await {
+    match runtime.start(agent_ctx).await {
         Ok(_session) => {
-            let _ = registry_state.registry.session_handle(&thread_id, &agent_kind).await;
+            let _ = ctx.registry.session_handle(&thread_id, &agent_kind).await;
             Ok("ok".into())
         }
         Err(crate::ports::agent_runtime::AgentStartError::NotFound(binary)) => {
-            let install = registry_state
+            let install = ctx
                 .registry
                 .runtime_for(&agent_kind)
                 .map(|r| r.install_command().to_string())
@@ -106,78 +94,62 @@ pub async fn agent_start(
 
 #[tauri::command]
 pub async fn agent_install_and_start(
-    registry_state: State<'_, AgentRegistryState>,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     thread_id: String,
     agent_kind: String,
 ) -> Result<String, String> {
-    let threads = db_state.db.get_thread_sessions_for_thread(&thread_id)?;
+    let threads = ctx.threads.get_thread_sessions_for_thread(&ThreadId::from(thread_id.clone()))?;
     let thread = threads
         .into_iter()
         .next()
         .ok_or_else(|| format!("Thread not found: {}", thread_id))?;
-    let runtime = registry_state
+    let runtime = ctx
         .registry
         .runtime_for(&agent_kind)
         .ok_or_else(|| format!("No runtime registered for agent kind '{}'", agent_kind))?;
     let install_cmd = runtime.install_command();
 
     crate::adapters::agent::acp::install::run_official_install(
-        exec_state.exec.as_ref(),
-        &thread.machine_id,
+        ctx.exec.as_ref(),
+        thread.machine_id.as_str(),
         install_cmd,
     )
     .map_err(|e| format!("install failed: {}", e))?;
 
-    if !runtime.is_available(exec_state.exec.as_ref(), &thread.machine_id) {
+    if !runtime.is_available(ctx.exec.as_ref(), thread.machine_id.as_str()) {
         return Err(format!("INSTALL_BUT_STILL_MISSING:{}", runtime.kind()));
     }
 
-    let ctx = build_agent_context(
-        db_state.db.as_ref(),
-        exec_state.exec.clone(),
-        &thread_id,
-        &agent_kind,
-        registry_state.agent_exec.clone(),
-    )?;
+    let agent_ctx = build_agent_context(&ctx, &thread_id, &agent_kind)?;
     runtime
-        .start(ctx)
+        .start(agent_ctx)
         .await
         .map_err(|e| format!("start after install: {}", e))?;
-    let _ = registry_state.registry.session_handle(&thread_id, &agent_kind).await;
+    let _ = ctx.registry.session_handle(&thread_id, &agent_kind).await;
     Ok("ok".into())
 }
 
 #[tauri::command]
 pub async fn agent_prompt(
-    registry_state: State<'_, AgentRegistryState>,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     app: tauri::AppHandle,
     thread_id: String,
     agent_kind: String,
     text: String,
 ) -> Result<(), String> {
-    let ctx = build_agent_context(
-        db_state.db.as_ref(),
-        exec_state.exec.clone(),
-        &thread_id,
-        &agent_kind,
-        registry_state.agent_exec.clone(),
-    )?;
-    let session = registry_state
+    let agent_ctx = build_agent_context(&ctx, &thread_id, &agent_kind)?;
+    let session = ctx
         .registry
-        .get_or_spawn(&thread_id, &agent_kind, ctx)
+        .get_or_spawn(&thread_id, &agent_kind, agent_ctx)
         .await
         .map_err(|e| format!("agent_prompt: {}", e))?;
 
     // Re-apply persisted model selection on fresh sessions
-    apply_thread_model(db_state.db.as_ref(), &session, &thread_id).await;
+    apply_thread_model(ctx.threads.as_ref(), &session, &thread_id).await;
 
     let mut stream = session.prompt(&text);
     let tid = thread_id.clone();
-    let db = db_state.db.clone();
+    let db = ctx.threads.clone();
     let app_clone = app.clone();
     tokio::spawn(async move {
         use tokio_stream::StreamExt;
@@ -266,7 +238,7 @@ pub async fn agent_prompt(
             }
         }
 
-        if let Err(e) = db.update_thread_status(&tid, &final_status) {
+        if let Err(e) = db.update_thread(&ThreadId::from(tid.clone()), &ThreadPatch { status: Some(final_status.clone()), ..Default::default() }) {
             eprintln!("[agent_prompt] failed to update thread status in DB: {}", e);
         }
 
@@ -284,10 +256,10 @@ pub async fn agent_prompt(
 
 #[tauri::command]
 pub async fn agent_cancel(
-    registry_state: State<'_, AgentRegistryState>,
+    ctx: State<'_, AppContext>,
     thread_id: String,
 ) -> Result<(), String> {
-    if let Some(session) = registry_state.registry.session_handle_any(&thread_id).await {
+    if let Some(session) = ctx.registry.session_handle_any(&thread_id).await {
         session.cancel().map_err(|e| format!("cancel: {}", e))?;
     }
     Ok(())
@@ -295,15 +267,14 @@ pub async fn agent_cancel(
 
 #[tauri::command]
 pub async fn agent_restart(
-    registry_state: State<'_, AgentRegistryState>,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     thread_id: String,
 ) -> Result<(), String> {
-    let registry = registry_state.registry.clone();
-    let db = db_state.db.clone();
+    let registry = ctx.registry.clone();
+    let db = ctx.threads.clone();
     let tid = thread_id.clone();
     registry.kill(&tid).await;
-    let _ = db.clear_working_memory(&tid);
+    let _ = db.clear_working_memory(&ThreadId::from(tid));
     Ok(())
 }
 
@@ -312,20 +283,18 @@ pub async fn agent_restart(
 /// `agent_get_session_info` / `agent_set_mode` / `agent_set_config_option`
 /// work even after the session has been cleaned up between turns.
 async fn resolve_session(
-    registry_state: &State<'_, AgentRegistryState>,
-    db_state: &State<'_, DatabaseState>,
-    exec_state: &State<'_, ExecutionState>,
+    ctx: &AppContext,
     thread_id: &str,
 ) -> Result<Arc<dyn crate::ports::agent_runtime::AgentSession>, String> {
     // Fast path: session already alive
-    if let Some(session) = registry_state.registry.session_handle_any(thread_id).await {
+    if let Some(session) = ctx.registry.session_handle_any(thread_id).await {
         return Ok(session);
     }
 
     // Slow path: look up thread, get agent_kind, build context, spawn
-    let thread = db_state
-        .db
-        .get_thread_sessions_for_thread(thread_id)?
+    let thread = ctx
+        .threads
+        .get_thread_sessions_for_thread(&ThreadId::from(thread_id.to_string()))?
         .into_iter()
         .next()
         .ok_or_else(|| format!("Thread not found: {}", thread_id))?;
@@ -333,16 +302,10 @@ async fn resolve_session(
         .agent_kind
         .as_deref()
         .ok_or_else(|| format!("Thread {} has no agent configured", thread_id))?;
-    let ctx = build_agent_context(
-        db_state.db.as_ref(),
-        exec_state.exec.clone(),
-        thread_id,
-        agent_kind,
-        registry_state.agent_exec.clone(),
-    )?;
-    let session = registry_state
+    let agent_ctx = build_agent_context(ctx, thread_id, agent_kind)?;
+    let session = ctx
         .registry
-        .get_or_spawn(thread_id, agent_kind, ctx)
+        .get_or_spawn(thread_id, agent_kind, agent_ctx)
         .await
         .map_err(|e| format!("Failed to start agent session: {}", e))?;
 
@@ -356,33 +319,27 @@ async fn resolve_session(
 
 #[tauri::command]
 pub async fn agent_get_session_info(
-    registry_state: State<'_, AgentRegistryState>,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     thread_id: String,
 ) -> Result<crate::domain::models::SessionInfo, String> {
-    let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
+    let session = resolve_session(&ctx, &thread_id).await?;
     Ok(session.session_info())
 }
 
 #[tauri::command]
 pub async fn agent_set_mode(
-    registry_state: State<'_, AgentRegistryState>,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     thread_id: String,
     mode_id: String,
 ) -> Result<(), String> {
-    let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
+    let session = resolve_session(&ctx, &thread_id).await?;
     session.set_mode(&mode_id)?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn agent_set_config_option(
-    registry_state: State<'_, AgentRegistryState>,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     thread_id: String,
     config_id: String,
     value: String,
@@ -391,10 +348,10 @@ pub async fn agent_set_config_option(
     // (e.g. a prompt is in-flight on the same transport), the model is
     // saved and will be re-applied on the next prompt via apply_thread_model.
     if config_id == "model" {
-        let _ = db_state.db.update_thread_model(&thread_id, &value);
+        let _ = ctx.threads.update_thread(&ThreadId::from(thread_id.clone()), &ThreadPatch { model: Some(Some(value.clone())), ..Default::default() });
     }
 
-    let session = resolve_session(&registry_state, &db_state, &exec_state, &thread_id).await?;
+    let session = resolve_session(&ctx, &thread_id).await?;
     session.set_config_option(&config_id, &value)?;
 
     Ok(())

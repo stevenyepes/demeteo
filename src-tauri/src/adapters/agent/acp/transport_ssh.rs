@@ -47,17 +47,38 @@ impl RemoteSshTransport {
 }
 
 impl InteractiveHandle for RemoteSshTransport {
-    fn write_line(&mut self, line: &str) -> io::Result<usize> {
+    fn write_line(&self, line: &str) -> io::Result<usize> {
         let mut ch = self
             .channel
             .lock()
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "SSH channel lock poisoned"))?;
-        let n = ch.write(line.as_bytes())?;
-        ch.flush()?;
-        Ok(n)
+        let bytes = line.as_bytes();
+        let mut written = 0;
+        while written < bytes.len() {
+            match ch.write(&bytes[written..]) {
+                Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "failed to write whole line to SSH")),
+                Ok(n) => {
+                    written += n;
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        loop {
+            match ch.flush() {
+                Ok(()) => break,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(written)
     }
 
-    fn read_byte(&mut self) -> io::Result<u8> {
+    fn read_byte(&self) -> io::Result<u8> {
         let mut buf = [0u8; 1];
         let mut ch = self
             .channel
@@ -94,7 +115,7 @@ impl InteractiveHandle for RemoteSshTransport {
         }
     }
 
-    fn try_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
         let mut ch = self
             .channel
             .lock()
@@ -109,7 +130,7 @@ impl InteractiveHandle for RemoteSshTransport {
         }
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let mut ch = self
                 .channel
@@ -131,7 +152,7 @@ impl InteractiveHandle for RemoteSshTransport {
         }
     }
 
-    fn kill(&mut self) -> Result<(), String> {
+    fn kill(&self) -> Result<(), String> {
         let mut ch = self
             .channel
             .lock()
@@ -142,7 +163,7 @@ impl InteractiveHandle for RemoteSshTransport {
         Ok(())
     }
 
-    fn try_wait(&mut self) -> Result<Option<i32>, String> {
+    fn try_wait(&self) -> Result<Option<i32>, String> {
         let ch = self
             .channel
             .lock()

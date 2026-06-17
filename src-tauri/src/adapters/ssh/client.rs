@@ -1,5 +1,6 @@
-use crate::ports::db::DatabasePort;
+use crate::ports::db::MachineRepository;
 use crate::ports::execution::ExecutionPort;
+use crate::paths;
 use crate::sftp::SftpEntry;
 use ssh2::{Session, Sftp};
 use std::collections::HashMap;
@@ -15,7 +16,7 @@ pub struct SftpSession {
 }
 
 pub struct SshClientAdapter {
-    pub db: Arc<dyn DatabasePort>,
+    pub machines: Arc<dyn MachineRepository>,
     pub sessions: Mutex<HashMap<String, Arc<SftpSession>>>,
     /// Resolved remote HOME per machine_id. The remote HOME is stable
     /// for the lifetime of the user's account, so we cache it after the
@@ -27,9 +28,9 @@ pub struct SshClientAdapter {
 }
 
 impl SshClientAdapter {
-    pub fn new(db: Arc<dyn DatabasePort>) -> Self {
+    pub fn new(machines: Arc<dyn MachineRepository>) -> Self {
         Self {
-            db,
+            machines,
             sessions: Mutex::new(HashMap::new()),
             home_cache: Mutex::new(HashMap::new()),
         }
@@ -51,9 +52,10 @@ impl SshClientAdapter {
         }
 
         // Connect new session
-        let machines = self.db.get_machines()?;
+        let machines = self.machines.get_machines()?;
+        let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.to_string());
         let machine = machines.into_iter().find(|m| {
-            m.id == machine_id
+            m.id == machine_id_typed
                 || format!("{}@{}", m.username, m.host) == machine_id
                 || m.host == machine_id
                 || m.name == machine_id
@@ -195,11 +197,12 @@ impl SshClientAdapter {
 
 impl ExecutionPort for SshClientAdapter {
     fn test_connection(&self, machine_id: &str) -> Result<(), String> {
-        let machines = self.db.get_machines()?;
+        let machines = self.machines.get_machines()?;
+        let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.to_string());
         let machine = machines
             .into_iter()
             .find(|m| {
-                m.id == machine_id
+                m.id == machine_id_typed
                     || format!("{}@{}", m.username, m.host) == machine_id
                     || m.host == machine_id
                     || m.name == machine_id
@@ -486,9 +489,10 @@ impl ExecutionPort for SshClientAdapter {
     ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
         use crate::adapters::agent::acp::transport_ssh::RemoteSshTransport;
 
-        let machines = self.db.get_machines()?;
+        let machines = self.machines.get_machines()?;
+        let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.to_string());
         let machine = machines.into_iter().find(|m| {
-            m.id == machine_id
+            m.id == machine_id_typed
                 || format!("{}@{}", m.username, m.host) == machine_id
                 || m.host == machine_id
                 || m.name == machine_id
@@ -523,14 +527,14 @@ impl ExecutionPort for SshClientAdapter {
         }
         let args_str = args
             .iter()
-            .map(|a| shell_escape(a))
+            .map(|a| paths::shell_escape_posix(a))
             .collect::<Vec<_>>()
             .join(" ");
         let cmd = format!(
             "cd {} && {} {} {}",
-            shell_escape(cwd),
+            paths::shell_escape_posix(cwd),
             env_str,
-            shell_escape(binary),
+            paths::shell_escape_posix(binary),
             args_str
         );
         // Log the exact command we're about to exec so failures in the
@@ -547,26 +551,4 @@ impl ExecutionPort for SshClientAdapter {
 
         Ok(Box::new(RemoteSshTransport::new(channel, sess, tcp, cmd)))
     }
-}
-
-/// Single-quote-escape a string for use in a POSIX shell command. We don't
-/// shell-escape the whole assembled command because the caller composes
-/// segments and we only need to defend against the binary path / args.
-fn shell_escape(s: &str) -> String {
-    if s.is_empty() {
-        return "''".into();
-    }
-    if s == "~" {
-        return "~".into();
-    }
-    if s.starts_with("~/") {
-        return format!("~/{}", shell_escape(&s[2..]));
-    }
-    if s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@'))
-    {
-        return s.to_string();
-    }
-    let escaped = s.replace('\'', "'\\''");
-    format!("'{}'", escaped)
 }

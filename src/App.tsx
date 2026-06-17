@@ -214,6 +214,7 @@ function App() {
               setView={setView}
               activeProject={activeProjectObj}
               setActiveFeatureId={setActiveFeatureId}
+              setActiveFeatureTitle={setActiveFeatureTitle}
               setProjects={setProjects}
             />
           )}

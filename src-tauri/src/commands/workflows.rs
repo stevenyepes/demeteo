@@ -1,31 +1,13 @@
+use crate::domain::ids::{WorkflowId, WorkflowVersionId};
 use crate::domain::models::{Workflow, WorkflowVersion, StepConfig};
-use crate::ports::db::DatabasePort;
-use crate::state::DatabaseState;
+use crate::ports::db::WorkflowRepository;
+use crate::state::AppContext;
+use crate::paths;
 use tauri::State;
 use std::sync::Arc;
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
-
-fn new_id() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-        .hash(&mut h);
-    std::thread::current().id().hash(&mut h);
-    format!("{:016x}", h.finish())
-}
-
 /// Seed starter-pack workflows on first launch if the `workflows` table is empty.
-pub fn seed_starter_workflows(db: &Arc<dyn DatabasePort>) {
+pub fn seed_starter_workflows(workflows: &Arc<dyn WorkflowRepository>) {
     let starters: &[(&str, &str)] = &[
         (
             include_str!("../../workflows/standard-feature-pipeline.json"),
@@ -55,36 +37,36 @@ pub fn seed_starter_workflows(db: &Arc<dyn DatabasePort>) {
 
     for (json, _slug) in starters {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
-            let id = v["id"].as_str().unwrap_or("").to_string();
+            let id = WorkflowId::from(v["id"].as_str().unwrap_or("").to_string());
             let name = v["name"].as_str().unwrap_or("").to_string();
             let description = v["description"].as_str().unwrap_or("").to_string();
             let is_starter = v["is_starter"].as_bool().unwrap_or(false);
             let steps: Vec<StepConfig> = serde_json::from_value(v["steps"].clone()).unwrap_or_default();
             let steps_json = serde_json::to_string(&steps).unwrap_or_default();
-            let now = now_ms();
+            let now = paths::now_ms();
 
-            match db.workflow_get(&id) {
+            match workflows.get(&id) {
                 Ok(Some(w)) => {
                     // Check if steps have changed compared to the latest DB version
-                    if let Ok(Some(latest_ver)) = db.workflow_latest_version(&id) {
+                    if let Ok(Some(latest_ver)) = workflows.latest_version(&id) {
                         let db_steps: Vec<StepConfig> = serde_json::from_str(&latest_ver.steps_json).unwrap_or_default();
                         if db_steps != steps {
-                            let all_versions = db.workflow_versions(&id).unwrap_or_default();
+                            let all_versions = workflows.versions(&id).unwrap_or_default();
                             let next_version = all_versions.iter().map(|ver| ver.version).max().unwrap_or(0) + 1;
 
                             if w.name != name || w.description != description {
-                                let _ = db.workflow_update_meta(&id, &name, &description);
+                                let _ = workflows.update_meta(&id, &name, &description);
                             }
 
                             let version = WorkflowVersion {
-                                id: format!("{}-v{}", id, next_version),
+                                id: WorkflowVersionId::from(format!("{}-v{}", id.as_str(), next_version)),
                                 workflow_id: id.clone(),
                                 version: next_version,
                                 steps_json,
                                 note: Some("System auto-update to latest starter template".to_string()),
                                 created_at: now,
                             };
-                            let _ = db.workflow_save_version(version);
+                            let _ = workflows.save_version(version);
                         }
                     }
                 }
@@ -97,16 +79,16 @@ pub fn seed_starter_workflows(db: &Arc<dyn DatabasePort>) {
                         created_at: now,
                         updated_at: now,
                     };
-                    let _ = db.workflow_create(workflow);
+                    let _ = workflows.create(workflow);
                     let version = WorkflowVersion {
-                        id: format!("{}-v1", id),
+                        id: WorkflowVersionId::from(format!("{}-v1", id.as_str())),
                         workflow_id: id,
                         version: 1,
                         steps_json,
                         note: Some("Initial version".to_string()),
                         created_at: now,
                     };
-                    let _ = db.workflow_save_version(version);
+                    let _ = workflows.save_version(version);
                 }
                 Err(_) => {}
             }
@@ -132,20 +114,20 @@ pub struct WorkflowWithSteps {
 }
 
 #[tauri::command]
-pub async fn workflow_list(db_state: State<'_, DatabaseState>) -> Result<Vec<WorkflowWithSteps>, String> {
-    let db = &db_state.db;
-    let workflows = db.workflow_list()?;
+pub async fn workflow_list(ctx: State<'_, AppContext>) -> Result<Vec<WorkflowWithSteps>, String> {
+    let workflows = &ctx.workflows;
+    let ws = workflows.list()?;
     let mut result = Vec::new();
-    for w in workflows {
-        let latest = db.workflow_latest_version(&w.id)?;
+    for w in ws {
+        let latest = workflows.latest_version(&w.id)?;
         let (steps, version, version_id) = if let Some(v) = latest {
             let steps = serde_json::from_str::<Vec<StepConfig>>(&v.steps_json).unwrap_or_default();
-            (steps, v.version, v.id)
+            (steps, v.version, v.id.0)
         } else {
             (vec![], 0, String::new())
         };
         result.push(WorkflowWithSteps {
-            id: w.id,
+            id: w.id.0,
             name: w.name,
             description: w.description,
             is_starter: w.is_starter,
@@ -162,19 +144,20 @@ pub async fn workflow_list(db_state: State<'_, DatabaseState>) -> Result<Vec<Wor
 #[tauri::command]
 pub async fn workflow_get(
     workflow_id: String,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<WorkflowWithSteps, String> {
-    let db = &db_state.db;
-    let w = db.workflow_get(&workflow_id)?.ok_or("Workflow not found")?;
-    let latest = db.workflow_latest_version(&workflow_id)?;
+    let workflows = &ctx.workflows;
+    let wf_id = WorkflowId::from(workflow_id.clone());
+    let w = workflows.get(&wf_id)?.ok_or("Workflow not found")?;
+    let latest = workflows.latest_version(&wf_id)?;
     let (steps, version, version_id) = if let Some(v) = latest {
         let steps = serde_json::from_str::<Vec<StepConfig>>(&v.steps_json).unwrap_or_default();
-        (steps, v.version, v.id)
+        (steps, v.version, v.id.0)
     } else {
         (vec![], 0, String::new())
     };
     Ok(WorkflowWithSteps {
-        id: w.id,
+        id: w.id.0,
         name: w.name,
         description: w.description,
         is_starter: w.is_starter,
@@ -191,11 +174,11 @@ pub async fn workflow_create(
     name: String,
     description: String,
     steps: Vec<StepConfig>,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<WorkflowWithSteps, String> {
-    let db = &db_state.db;
-    let now = now_ms();
-    let id = format!("wf-{}", new_id());
+    let workflows = &ctx.workflows;
+    let now = paths::now_ms();
+    let id = WorkflowId::from(format!("wf-{}", paths::new_id()));
     let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
 
     let workflow = Workflow {
@@ -206,9 +189,9 @@ pub async fn workflow_create(
         created_at: now,
         updated_at: now,
     };
-    db.workflow_create(workflow)?;
+    workflows.create(workflow)?;
 
-    let version_id = format!("{}-v1", id);
+    let version_id = WorkflowVersionId::from(format!("{}-v1", id.as_str()));
     let version = WorkflowVersion {
         id: version_id.clone(),
         workflow_id: id.clone(),
@@ -217,10 +200,10 @@ pub async fn workflow_create(
         note: Some("Initial version".to_string()),
         created_at: now,
     };
-    db.workflow_save_version(version)?;
+    workflows.save_version(version)?;
 
     Ok(WorkflowWithSteps {
-        id,
+        id: id.0,
         name,
         description,
         is_starter: false,
@@ -228,7 +211,7 @@ pub async fn workflow_create(
         updated_at: now,
         steps,
         version: 1,
-        version_id,
+        version_id: version_id.0,
     })
 }
 
@@ -239,26 +222,27 @@ pub async fn workflow_update(
     description: String,
     steps: Vec<StepConfig>,
     note: Option<String>,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<WorkflowWithSteps, String> {
-    let db = &db_state.db;
-    let now = now_ms();
-    db.workflow_update_meta(&workflow_id, &name, &description)?;
+    let workflows = &ctx.workflows;
+    let now = paths::now_ms();
+    let wf_id = WorkflowId::from(workflow_id.clone());
+    workflows.update_meta(&wf_id, &name, &description)?;
 
     // Calculate next version number
-    let existing_versions = db.workflow_versions(&workflow_id)?;
+    let existing_versions = workflows.versions(&wf_id)?;
     let next_version = existing_versions.iter().map(|v| v.version).max().unwrap_or(0) + 1;
     let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
-    let version_id = format!("{}-v{}", workflow_id, next_version);
+    let version_id = WorkflowVersionId::from(format!("{}-v{}", workflow_id, next_version));
     let version = WorkflowVersion {
         id: version_id.clone(),
-        workflow_id: workflow_id.clone(),
+        workflow_id: wf_id.clone(),
         version: next_version,
         steps_json,
         note,
         created_at: now,
     };
-    db.workflow_save_version(version)?;
+    workflows.save_version(version)?;
 
     Ok(WorkflowWithSteps {
         id: workflow_id,
@@ -269,34 +253,35 @@ pub async fn workflow_update(
         updated_at: now,
         steps,
         version: next_version,
-        version_id,
+        version_id: version_id.0,
     })
 }
 
 #[tauri::command]
 pub async fn workflow_delete(
     workflow_id: String,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<(), String> {
-    db_state.db.workflow_delete(&workflow_id)
+    ctx.workflows.delete(&WorkflowId::from(workflow_id))
 }
 
 #[tauri::command]
 pub async fn workflow_versions(
     workflow_id: String,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<Vec<WorkflowVersion>, String> {
-    db_state.db.workflow_versions(&workflow_id)
+    ctx.workflows.versions(&WorkflowId::from(workflow_id))
 }
 
 #[tauri::command]
 pub async fn workflow_export(
     workflow_id: String,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<String, String> {
-    let db = &db_state.db;
-    let w = db.workflow_get(&workflow_id)?.ok_or("Workflow not found")?;
-    let latest = db.workflow_latest_version(&workflow_id)?
+    let workflows = &ctx.workflows;
+    let wf_id = WorkflowId::from(workflow_id);
+    let w = workflows.get(&wf_id)?.ok_or("Workflow not found")?;
+    let latest = workflows.latest_version(&wf_id)?
         .ok_or("No versions found")?;
     let steps: Vec<StepConfig> = serde_json::from_str(&latest.steps_json)
         .map_err(|e| e.to_string())?;
@@ -314,7 +299,7 @@ pub async fn workflow_export(
 #[tauri::command]
 pub async fn workflow_import(
     json: String,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<WorkflowWithSteps, String> {
     let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     let name = v["name"].as_str().unwrap_or("Imported Workflow").to_string();
@@ -323,9 +308,9 @@ pub async fn workflow_import(
         .map_err(|e| format!("Invalid steps: {}", e))?;
 
     // Always create a new ID on import to avoid conflicts
-    let db = &db_state.db;
-    let now = now_ms();
-    let id = format!("wf-imported-{}", new_id());
+    let workflows = &ctx.workflows;
+    let now = paths::now_ms();
+    let id = WorkflowId::from(format!("wf-imported-{}", paths::new_id()));
     let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
 
     let workflow = Workflow {
@@ -336,8 +321,8 @@ pub async fn workflow_import(
         created_at: now,
         updated_at: now,
     };
-    db.workflow_create(workflow)?;
-    let version_id = format!("{}-v1", id);
+    workflows.create(workflow)?;
+    let version_id = WorkflowVersionId::from(format!("{}-v1", id.as_str()));
     let version = WorkflowVersion {
         id: version_id.clone(),
         workflow_id: id.clone(),
@@ -346,10 +331,12 @@ pub async fn workflow_import(
         note: Some("Imported".to_string()),
         created_at: now,
     };
-    db.workflow_save_version(version)?;
+    workflows.save_version(version)?;
+
+
 
     Ok(WorkflowWithSteps {
-        id,
+        id: id.0,
         name,
         description,
         is_starter: false,
@@ -357,7 +344,7 @@ pub async fn workflow_import(
         updated_at: now,
         steps,
         version: 1,
-        version_id,
+        version_id: version_id.0,
     })
 }
 
@@ -365,10 +352,11 @@ pub async fn workflow_import(
 #[tauri::command]
 pub async fn workflow_revert_to_default(
     workflow_id: String,
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<WorkflowWithSteps, String> {
-    let db = &db_state.db;
-    let w = db.workflow_get(&workflow_id)?.ok_or("Workflow not found")?;
+    let workflows = &ctx.workflows;
+    let wf_id = WorkflowId::from(workflow_id.clone());
+    let w = workflows.get(&wf_id)?.ok_or("Workflow not found")?;
     if !w.is_starter {
         return Err("Only starter pack workflows can be reverted to default.".to_string());
     }
@@ -387,15 +375,15 @@ pub async fn workflow_revert_to_default(
                 let name = v["name"].as_str().unwrap_or("").to_string();
                 let description = v["description"].as_str().unwrap_or("").to_string();
                 let steps: Vec<StepConfig> = serde_json::from_value(v["steps"].clone()).unwrap_or_default();
-                let existing_versions = db.workflow_versions(&workflow_id)?;
+                let existing_versions = workflows.versions(&wf_id)?;
                 let next_version = existing_versions.iter().map(|v| v.version).max().unwrap_or(0) + 1;
                 let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
-                let now = now_ms();
-                let version_id = format!("{}-v{}", workflow_id, next_version);
-                db.workflow_update_meta(&workflow_id, &name, &description)?;
-                db.workflow_save_version(WorkflowVersion {
+                let now = paths::now_ms();
+                let version_id = WorkflowVersionId::from(format!("{}-v{}", workflow_id, next_version));
+                workflows.update_meta(&wf_id, &name, &description)?;
+                workflows.save_version(WorkflowVersion {
                     id: version_id.clone(),
-                    workflow_id: workflow_id.clone(),
+                    workflow_id: wf_id.clone(),
                     version: next_version,
                     steps_json,
                     note: Some("Reverted to default".to_string()),
@@ -410,7 +398,7 @@ pub async fn workflow_revert_to_default(
                     updated_at: now,
                     steps,
                     version: next_version,
-                    version_id,
+                    version_id: version_id.0,
                 });
             }
         }

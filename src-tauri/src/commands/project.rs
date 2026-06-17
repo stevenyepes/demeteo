@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
-use crate::state::{DatabaseState, ExecutionState};
+use crate::state::AppContext;
+use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
 use crate::domain::models::{Project, Repository, RepoHealthStatus};
 use crate::paths;
 
@@ -15,7 +16,7 @@ use crate::paths;
 /// `cd`-ing into a directory the health check never probed.
 fn resolve_target_dir(
     app: &tauri::AppHandle,
-    exec_state: &State<'_, ExecutionState>,
+    exec: &std::sync::Arc<dyn crate::ports::execution::ExecutionPort>,
     project: &Project,
     project_id: &str,
     repo_path: &str,
@@ -33,30 +34,13 @@ fn resolve_target_dir(
         Ok(p.to_string_lossy().to_string())
     } else {
         paths::repo_target_dir_str(
-            &exec_state.exec,
+            exec,
             &project.compute_type,
             project.remote_host.as_deref(),
             project_id,
             repo_path,
         )
     }
-}
-
-/// Single-quote-escape a path for use in a POSIX shell command. Paths
-/// coming out of [`resolve_target_dir`] are absolute and contain no
-/// shell metacharacters for our supported inputs, so the fast path
-/// returns them verbatim; the quoted fallback is defensive.
-fn shell_escape(s: &str) -> String {
-    if s.is_empty() {
-        return "''".into();
-    }
-    if s.chars().all(|c| c.is_ascii_alphanumeric()
-        || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@' | '~'))
-    {
-        return s.to_string();
-    }
-    let escaped = s.replace('\'', "'\\''");
-    format!("'{}'", escaped)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -81,57 +65,56 @@ pub struct ProjectCreateResponse {
 
 #[tauri::command]
 pub async fn create_project(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     config: ProjectConfig,
 ) -> Result<ProjectCreateResponse, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
-    let id = format!("p{}", now);
+    let now = paths::now_ms();
+    let id_str = format!("p{}", now);
+    let id = ProjectId::from(id_str.clone());
 
     let project = Project {
         id: id.clone(),
         name: config.name.clone(),
         compute_type: config.compute_type.clone(),
-        remote_host: config.remote_host.clone(),
+        remote_host: config.remote_host.clone().map(MachineId::from),
         status: "bootstrapping".to_string(),
         nodes: if config.compute_type == "local" { 4 } else { 8 },
         spend: 0.0,
         created_at: now,
     };
 
-    state.db.add_project(project)?;
+    ctx.projects.add(project)?;
 
     for (i, repo_cfg) in config.repos.iter().enumerate() {
-        let repo_id = format!("{}_r{}", id, i);
+        let repo_id = RepositoryId::from(format!("{}_r{}", id_str, i));
         let repo = Repository {
             id: repo_id,
             project_id: id.clone(),
-            provider_id: repo_cfg.provider_id.clone(),
+            provider_id: ProviderId::from(repo_cfg.provider_id.clone()),
             repo_path: repo_cfg.repo_path.clone(),
         };
-        state.db.add_repository(repo)?;
+        ctx.projects.add_repository(repo)?;
     }
 
     Ok(ProjectCreateResponse {
-        id,
+        id: id_str,
         success: true,
     })
 }
 
 #[tauri::command]
 pub fn get_projects(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<Vec<Project>, String> {
-    state.db.get_projects()
+    ctx.projects.get_projects()
 }
 
 #[tauri::command]
 pub fn seed_sample_project(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
 ) -> Result<Project, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
-    let id = "p_sample_1".to_string();
+    let now = paths::now_ms();
+    let id = ProjectId::from("p_sample_1".to_string());
 
     let project = Project {
         id: id.clone(),
@@ -145,46 +128,47 @@ pub fn seed_sample_project(
     };
 
     // Ignore error if it already exists
-    let _ = state.db.add_project(project.clone());
+    let _ = ctx.projects.add(project.clone());
 
     Ok(project)
 }
 
 #[tauri::command]
 pub async fn update_project(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     id: String,
     config: ProjectConfig,
 ) -> Result<(), String> {
     // Fetch current project to preserve spend, created_at
-    let existing_projects = state.db.get_projects()?;
-    let existing = existing_projects.into_iter().find(|p| p.id == id)
+    let existing_projects = ctx.projects.get_projects()?;
+    let project_id = ProjectId::from(id.clone());
+    let existing = existing_projects.into_iter().find(|p| p.id == project_id)
         .ok_or_else(|| format!("Project {} not found", id))?;
 
     let updated_project = Project {
-        id: id.clone(),
+        id: project_id.clone(),
         name: config.name.clone(),
         compute_type: config.compute_type.clone(),
-        remote_host: config.remote_host.clone(),
+        remote_host: config.remote_host.clone().map(MachineId::from),
         status: "bootstrapping".to_string(),
         nodes: if config.compute_type == "local" { 4 } else { 8 },
         spend: existing.spend,
         created_at: existing.created_at,
     };
 
-    state.db.update_project(updated_project)?;
+    ctx.projects.update(updated_project)?;
 
     // Re-create repositories entries for this project
-    state.db.delete_repositories_for_project(&id)?;
+    ctx.projects.delete_repositories_for(&project_id)?;
     for (i, repo_cfg) in config.repos.iter().enumerate() {
-        let repo_id = format!("{}_r{}", id, i);
+        let repo_id = RepositoryId::from(format!("{}_r{}", id, i));
         let repo = Repository {
             id: repo_id,
-            project_id: id.clone(),
-            provider_id: repo_cfg.provider_id.clone(),
+            project_id: project_id.clone(),
+            provider_id: ProviderId::from(repo_cfg.provider_id.clone()),
             repo_path: repo_cfg.repo_path.clone(),
         };
-        state.db.add_repository(repo)?;
+        ctx.projects.add_repository(repo)?;
     }
 
     Ok(())
@@ -193,19 +177,19 @@ pub async fn update_project(
 #[tauri::command]
 pub async fn delete_project(
     app: tauri::AppHandle,
-    state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     id: String,
 ) -> Result<(), String> {
     use tauri::Manager;
-    
+
     // Fetch project
-    let projects = state.db.get_projects()?;
-    let project = projects.into_iter().find(|p| p.id == id)
+    let projects = ctx.projects.get_projects()?;
+    let project_id = ProjectId::from(id.clone());
+    let project = projects.into_iter().find(|p| p.id == project_id)
         .ok_or_else(|| format!("Project {} not found", id))?;
 
     // Delete project from database
-    state.db.delete_project(&id)?;
+    ctx.projects.delete(&project_id)?;
 
     if project.compute_type.to_lowercase() == "local" {
         if let Ok(local_data) = app.path().app_local_data_dir() {
@@ -218,16 +202,16 @@ pub async fn delete_project(
         // Use the shared helper so we delete exactly the directory the
         // bootstrap created — never a `~`-expanded guess.
         match paths::project_root(
-            &exec_state.exec,
+            &ctx.exec,
             &project.compute_type,
-            Some(machine_id),
+            Some(machine_id.as_str()),
             &id,
         ) {
             Ok(remote_dir) => {
                 let remote_dir_str = remote_dir.to_string_lossy().to_string();
-                let _ = exec_state.exec.run_command(
-                    machine_id,
-                    &format!("rm -rf {}", shell_escape(&remote_dir_str)),
+                let _ = ctx.exec.run_command(
+                    machine_id.as_str(),
+                    &format!("rm -rf {}", paths::shell_escape_posix(&remote_dir_str)),
                 );
             }
             Err(e) => {
@@ -252,30 +236,30 @@ pub struct RepoDirtyStatus {
 #[tauri::command]
 pub async fn check_repos_dirty(
     app: tauri::AppHandle,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     project_id: String,
     repo_paths: Vec<String>,
 ) -> Result<Vec<RepoDirtyStatus>, String> {
     use crate::adapters::worktree::git_ops::GitOpsHelper;
 
-    let projects = db_state.db.get_projects()?;
-    let project = projects.into_iter().find(|p| p.id == project_id)
+    let projects = ctx.projects.get_projects()?;
+    let project_id_typed = ProjectId::from(project_id.clone());
+    let project = projects.into_iter().find(|p| p.id == project_id_typed)
         .ok_or_else(|| format!("Project not found: {}", project_id))?;
 
     let machine_id = if project.compute_type.to_lowercase() == "local" {
         None
     } else {
-        project.remote_host.as_deref()
+        project.remote_host.as_ref().map(|m| m.as_str())
     };
 
-    let git_ops = GitOpsHelper::new(db_state.db.clone(), exec_state.exec.clone());
+    let git_ops = GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone());
     let mut results = Vec::new();
 
     for repo_path in repo_paths {
         let target_dir = resolve_target_dir(
             &app,
-            &exec_state,
+            &ctx.exec,
             &project,
             &project_id,
             &repo_path,
@@ -294,41 +278,41 @@ pub async fn check_repos_dirty(
 
 #[tauri::command]
 pub fn get_repositories_for_project(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     project_id: String,
 ) -> Result<Vec<Repository>, String> {
-    state.db.get_repositories_for_project(&project_id)
+    ctx.projects.get_repositories_for(&ProjectId::from(project_id))
 }
 
 #[tauri::command]
 pub async fn get_workspace_health(
     app: tauri::AppHandle,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     project_id: String,
 ) -> Result<Vec<RepoHealthStatus>, String> {
     use crate::adapters::worktree::git_ops::GitOpsHelper;
 
-    let projects = db_state.db.get_projects()?;
+    let projects = ctx.projects.get_projects()?;
+    let project_id_typed = ProjectId::from(project_id.clone());
     let project = projects
         .into_iter()
-        .find(|p| p.id == project_id)
+        .find(|p| p.id == project_id_typed)
         .ok_or_else(|| format!("Project not found: {}", project_id))?;
 
     let machine_id: Option<&str> = if project.compute_type.to_lowercase() == "local" {
         None
     } else {
-        project.remote_host.as_deref()
+        project.remote_host.as_ref().map(|m| m.as_str())
     };
 
-    let repos = db_state.db.get_repositories_for_project(&project_id)?;
-    let git_ops = GitOpsHelper::new(db_state.db.clone(), exec_state.exec.clone());
+    let repos = ctx.projects.get_repositories_for(&project_id_typed)?;
+    let git_ops = GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone());
     let mut results = Vec::new();
 
     for repo in repos {
         let target_dir = resolve_target_dir(
             &app,
-            &exec_state,
+            &ctx.exec,
             &project,
             &project_id,
             &repo.repo_path,
@@ -339,8 +323,8 @@ pub async fn get_workspace_health(
         // diagnosis can compare the path the backend *thinks* it is
         // probing against the path the user sees in their terminal.
         let machine_str = machine_id.unwrap_or("local");
-        let probe_cmd = format!("git -C {} rev-parse --is-inside-work-tree", shell_escape(&target_dir));
-        let probe_result = exec_state.exec.run_command(machine_str, &probe_cmd);
+        let probe_cmd = format!("git -C {} rev-parse --is-inside-work-tree", paths::shell_escape_posix(&target_dir));
+        let probe_result = ctx.exec.run_command(machine_str, &probe_cmd);
         let is_cloned = probe_result.is_ok();
         eprintln!(
             "[get_workspace_health v2] project={} repo={} target_dir={} machine={} cmd={} ok={} stdout_or_err={:?}",

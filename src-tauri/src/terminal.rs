@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde::Serialize;
 use ssh2::Session;
 use tauri::{AppHandle, Emitter, ipc::Channel, State};
-use crate::DatabaseState;
+use crate::state::AppContext;
 use crate::domain::models::Machine;
 
 static SESSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -99,13 +99,14 @@ fn spawn_local_shell() -> Result<(Child, ChildStdin, ChildStdout), String> {
 #[tauri::command]
 pub fn start_terminal_session(
     app: AppHandle,
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     session_state: State<'_, SessionState>,
     machine_id: String,
     tauri_channel: Channel<Vec<u8>>,
 ) -> Result<String, String> {
-    let machines = state.db.get_machines()?;
-    let machine = machines.into_iter().find(|m| m.id == machine_id)
+    let machines = ctx.machines.get_machines()?;
+    let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.clone());
+    let machine = machines.into_iter().find(|m| m.id == machine_id_typed)
         .ok_or_else(|| "Machine not found".to_string())?;
 
     let secret = match machine.auth_type.as_str() {

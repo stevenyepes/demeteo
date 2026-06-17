@@ -1,34 +1,35 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::ports::db::DatabasePort;
+use crate::ports::db::MachineRepository;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle};
 use crate::sftp::SftpEntry;
 
 pub struct RouterExecutionPort {
-    db: Arc<dyn DatabasePort>,
+    machines: Arc<dyn MachineRepository>,
     ssh: Arc<dyn ExecutionPort>,
     local: Arc<dyn ExecutionPort>,
 }
 
 impl RouterExecutionPort {
     pub fn new(
-        db: Arc<dyn DatabasePort>,
+        machines: Arc<dyn MachineRepository>,
         ssh: Arc<dyn ExecutionPort>,
         local: Arc<dyn ExecutionPort>,
     ) -> Self {
-        Self { db, ssh, local }
+        Self { machines, ssh, local }
     }
 
     fn resolve(&self, machine_id: &str) -> Result<Arc<dyn ExecutionPort>, String> {
         if machine_id.is_empty() || machine_id == "local" {
             return Ok(self.local.clone());
         }
-        let machines = self.db.get_machines()?;
+        let machines = self.machines.get_machines()?;
+        let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.to_string());
         let machine = machines
             .into_iter()
             .find(|m| {
-                m.id == machine_id
+                m.id == machine_id_typed
                     || format!("{}@{}", m.username, m.host) == machine_id
                     || m.host == machine_id
                     || m.name == machine_id

@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 use super::action::{ActionKind, AgentAction};
+use super::ids::{InterceptId, MachineId, ThreadId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterceptPayload {
-    pub intercept_id: String,
-    pub thread_id: String,
-    pub machine_id: String,
+    pub intercept_id: InterceptId,
+    pub thread_id: ThreadId,
+    pub machine_id: MachineId,
     pub action: ActionKind,
     pub target: String,
     pub preview: Option<String>,
@@ -16,9 +17,9 @@ pub struct InterceptPayload {
 
 impl InterceptPayload {
     pub fn from_action(
-        intercept_id: String,
-        thread_id: String,
-        machine_id: String,
+        intercept_id: InterceptId,
+        thread_id: ThreadId,
+        machine_id: MachineId,
         action: &AgentAction,
     ) -> Self {
         let (preview, target) = match action {
@@ -49,9 +50,9 @@ impl InterceptPayload {
     /// own id is preserved so the runtime can correlate a later resolution
     /// with the in-flight `tool_call/update` notification.
     pub fn from_agent_tool_call(
-        intercept_id: String,
-        thread_id: String,
-        machine_id: String,
+        intercept_id: InterceptId,
+        thread_id: ThreadId,
+        machine_id: MachineId,
         tool_call_id: String,
         action: &AgentAction,
     ) -> Self {

@@ -35,54 +35,90 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(null);
   const [selectedStepTitle, setSelectedStepTitle] = useState<string | null>(null);
+  const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
+  const [streamContent, setStreamContent] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadFeatureData();
 
     // Subscribe to Tauri events
-    let unlistenStatus: () => void = () => {};
-    let unlistenProgress: () => void = () => {};
-    let unlistenGate: () => void = () => {};
+    let active = true;
+    const cleanups: Array<() => void> = [];
 
     const setupListeners = async () => {
-      unlistenStatus = await listen<{ feature_id: string; status: string }>(
-        'feature_status_changed',
-        (event) => {
+      try {
+        const unlistenStatus = await listen<{ feature_id: string; status: string }>(
+          'feature_status_changed',
+          (event) => {
+            if (event.payload.feature_id === featureId) {
+              setStatus(event.payload.status);
+              loadFeatureData();
+            }
+          }
+        );
+        if (!active) {
+          unlistenStatus();
+        } else {
+          cleanups.push(unlistenStatus);
+        }
+
+        const unlistenProgress = await listen<{
+          feature_id: string;
+          step_id: string;
+          status: string;
+          cost_usd: number | null;
+          wall_clock_secs: number | null;
+        }>('step_progress', (event) => {
           if (event.payload.feature_id === featureId) {
-            setStatus(event.payload.status);
             loadFeatureData();
           }
+        });
+        if (!active) {
+          unlistenProgress();
+        } else {
+          cleanups.push(unlistenProgress);
         }
-      );
 
-      unlistenProgress = await listen<{
-        feature_id: string;
-        step_id: string;
-        status: string;
-        cost_usd: number | null;
-        wall_clock_secs: number | null;
-      }>('step_progress', (event) => {
-        if (event.payload.feature_id === featureId) {
-          loadFeatureData();
-        }
-      });
-
-      unlistenGate = await listen<{ feature_id: string; step_execution_id: string }>(
-        'gate_required',
-        (event) => {
-          if (event.payload.feature_id === featureId) {
-            onDecideGate(event.payload.step_execution_id);
+        const unlistenGate = await listen<{ feature_id: string; step_execution_id: string }>(
+          'gate_required',
+          (event) => {
+            if (event.payload.feature_id === featureId) {
+              onDecideGate(event.payload.step_execution_id);
+            }
           }
+        );
+        if (!active) {
+          unlistenGate();
+        } else {
+          cleanups.push(unlistenGate);
         }
-      );
+
+        const unlistenStream = await listen<{ feature_id: string; step_execution_id: string; content: string }>(
+          'agent_stream',
+          (event) => {
+            if (event.payload.feature_id === featureId) {
+              setStreamContent((prev) => ({
+                ...prev,
+                [event.payload.step_execution_id]: (prev[event.payload.step_execution_id] || '') + event.payload.content
+              }));
+            }
+          }
+        );
+        if (!active) {
+          unlistenStream();
+        } else {
+          cleanups.push(unlistenStream);
+        }
+      } catch (err) {
+        console.error('Failed to setup Tauri event listeners:', err);
+      }
     };
 
     setupListeners();
 
     return () => {
-      unlistenStatus();
-      unlistenProgress();
-      unlistenGate();
+      active = false;
+      cleanups.forEach((unlisten) => unlisten());
     };
   }, [featureId]);
 
@@ -122,8 +158,19 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     }
   };
 
-  const handleCancel = async () => {
+  const handleCancelFeature = async () => {
     if (!confirm('Are you sure you want to cancel the execution of this feature?')) return;
+    try {
+      await invoke('feature_cancel', { featureId });
+      setStatus('cancelled');
+      loadFeatureData();
+    } catch (err: any) {
+      alert(err.toString());
+    }
+  };
+
+  const handleStopStep = async () => {
+    if (!confirm('Are you sure you want to stop the execution of this step?')) return;
     try {
       await invoke('feature_cancel', { featureId });
       setStatus('cancelled');
@@ -154,7 +201,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
             >
               Back
             </button>
-            <h1 className="text-xl font-bold font-display text-white tracking-wide">{title}</h1>
+            <h1 className="text-xl font-bold font-display text-white tracking-wide">Feature Pipeline</h1>
             <span
               className={`text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
                 status === 'running'
@@ -183,12 +230,24 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           </div>
           {status === 'running' && (
             <button
-              onClick={handleCancel}
+              onClick={handleCancelFeature}
               className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300"
             >
               Cancel Feature
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Feature Objective panel */}
+      <div className="p-6 bg-[#08090c] border-b border-white/5">
+        <div className="max-w-4xl mx-auto flex flex-col gap-2">
+          <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
+            Initial Prompt
+          </div>
+          <div className="p-4 bg-white/[0.02] rounded-xl border border-white/5 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed shadow-inner">
+            {title}
+          </div>
         </div>
       </div>
 
@@ -298,6 +357,40 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                           <span className="truncate">Artifact: {step.artifact_path.split('/').pop()}</span>
                           <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">View Output</span>
                         </button>
+                      )}
+
+                      {step.status === 'running' && (
+                        <div className="mt-3 flex gap-2">
+                          <button
+                            onClick={() => setActiveStreamId(activeStreamId === step.id ? null : step.id)}
+                            className="flex-1 text-left text-xs font-mono p-3 rounded border flex items-center justify-between transition duration-300 bg-[#050608] border-white/[0.02] text-cyan-400 hover:border-cyan-500/30 hover:bg-cyan-950/20 cursor-pointer"
+                          >
+                            <span className="truncate flex items-center gap-2">
+                              <Cpu className="w-3 h-3 animate-spin" />
+                              View Agent Reasoning
+                            </span>
+                            <span className="text-[9px] uppercase font-bold text-cyan-500 shrink-0">
+                              {activeStreamId === step.id ? 'Hide Stream' : 'Live Stream'}
+                            </span>
+                          </button>
+
+                          <button
+                            onClick={handleStopStep}
+                            className="px-4 py-2.5 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5 shrink-0"
+                            title="Stop this step execution"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            Stop Step
+                          </button>
+                        </div>
+                      )}
+
+                      {activeStreamId === step.id && (
+                        <div className="mt-2 p-3 rounded-lg bg-[#020304] border border-cyan-500/20 max-h-64 overflow-y-auto font-mono text-[11px] shadow-inner flex flex-col-reverse">
+                          <pre className="text-cyan-300/80 whitespace-pre-wrap break-words">
+                            {streamContent[step.id] || 'Waiting for agent output...'}
+                          </pre>
+                        </div>
                       )}
                     </div>
                   </div>

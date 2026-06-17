@@ -99,14 +99,18 @@ impl AgentRuntime for AcpRuntime {
             // not implement that inbound method; sending it causes a noisy
             // -32601 on the agent's stderr. We check two naming conventions
             // (camelCase and snake_case) to be forward-compatible.
-            let supports_tool_call_update = init_result
+            let (supports_tool_call_update, tool_call_update_method) = init_result
                 .get("capabilities")
-                .and_then(|c| {
-                    c.get("toolCallUpdate")
-                        .or_else(|| c.get("tool_call_update"))
+                .map(|c| {
+                    if c.get("toolCallUpdate").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        (true, "toolCall/update".to_string())
+                    } else if c.get("tool_call_update").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        (true, "tool_call/update".to_string())
+                    } else {
+                        (false, "tool_call/update".to_string())
+                    }
                 })
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+                .unwrap_or((false, "tool_call/update".to_string()));
 
             // If the agent advertises authMethods, call authenticate. v1
             // doesn't surface agent API keys (see spec §1) so we just pass
@@ -177,6 +181,7 @@ impl AgentRuntime for AcpRuntime {
                 bridge,
                 session_info: StdMutex::new(session_info),
                 supports_tool_call_update,
+                tool_call_update_method,
             }) as Arc<dyn AgentSession>)
         })
     }
@@ -236,6 +241,8 @@ struct AcpSession {
     /// `initialize` response. When false, we skip sending `tool_call/update`
     /// notifications to avoid -32601 errors on the agent's stderr.
     supports_tool_call_update: bool,
+    /// The resolved method name for tool call updates (e.g. `toolCall/update` or `tool_call/update`).
+    tool_call_update_method: String,
 }
 
 impl AcpSession {
@@ -248,6 +255,7 @@ impl AcpSession {
         let thread_id = self.ctx.thread_id.clone();
         let prompting = self.prompting.clone();
         let supports_tool_call_update = self.supports_tool_call_update;
+        let tool_call_update_method = self.tool_call_update_method.clone();
         prompting.store(true, Ordering::SeqCst);
         tokio::spawn(async move {
             // `session/prompt` is a long-running call: the agent streams
@@ -262,6 +270,7 @@ impl AcpSession {
             let bridge_clone = bridge.clone();
             let machine_id_clone = machine_id.clone();
             let thread_id_clone = thread_id.clone();
+            let tool_call_update_method_clone = tool_call_update_method.clone();
 
             let pending_tasks = Arc::new(StdMutex::new(Vec::new()));
             let pending_tasks_clone = pending_tasks.clone();
@@ -282,8 +291,9 @@ impl AcpSession {
                         let bridge = bridge_clone.clone();
                         let machine_id = machine_id_clone.clone();
                         let thread_id = thread_id_clone.clone();
+                        let tc_method = tool_call_update_method_clone.clone();
                         let handle = tokio::spawn(async move {
-                            handle_message(&tx, &rpc, &bridge, &machine_id, &thread_id, supports_tool_call_update, msg).await;
+                            handle_message(&tx, &rpc, &bridge, &machine_id, &thread_id, supports_tool_call_update, &tc_method, msg).await;
                         });
                         pending_tasks_clone.lock().unwrap().push(handle);
                     },
@@ -347,8 +357,41 @@ async fn handle_message(
     machine_id: &str,
     thread_id: &str,
     supports_tool_call_update: bool,
+    tool_call_update_method: &str,
     msg: Message,
 ) {
+    if let Message::Request { id, method, params } = &msg {
+        if method == "session/request_permission" {
+            // Find the allow option or default to "once"
+            let option_id = params
+                .as_ref()
+                .and_then(|p| p.get("options"))
+                .and_then(|o| o.as_array())
+                .and_then(|arr| {
+                    // Try to find allow_once first (for stateless agent handling), then allow_always
+                    arr.iter()
+                        .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("allow_once"))
+                        .or_else(|| arr.iter().find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("allow_always")))
+                        .or_else(|| arr.first())
+                        .and_then(|opt| opt.get("optionId").cloned())
+                })
+                .unwrap_or(serde_json::json!("once"));
+
+            eprintln!("[AcpRuntime] handle_message: auto-approving request_permission with optionId={:?}", option_id);
+
+            let res = rpc.respond(id.clone(), serde_json::json!({
+                "outcome": {
+                    "outcome": "selected",
+                    "optionId": option_id
+                }
+            })).await;
+
+            if let Err(e) = res {
+                eprintln!("[AcpRuntime] handle_message: failed to send request_permission response: {}", e);
+            }
+        }
+    }
+
     if let Message::Notification { method, params } = &msg {
         if method == "session/update" {
             let p = params.clone().unwrap_or(json!({}));
@@ -393,30 +436,31 @@ async fn handle_message(
             if is_tool_call && supports_tool_call_update {
                 if let Some(dispatch) = build_tool_call_response(bridge, machine_id, thread_id, &tool_call_params) {
                     if let Some(payload) = dispatch.immediate {
-                        let _ = rpc.notify("tool_call/update", payload).await;
+                        let _ = rpc.notify(tool_call_update_method, payload).await;
                     }
                     if let Some(rx) = dispatch.intercept_rx {
                         let rpc = rpc.clone();
                         let tc_id = dispatch.tool_call_id;
+                        let tc_method = tool_call_update_method.to_string();
                         tokio::spawn(async move {
                             match rx.await {
                                 Ok(Ok(r)) => {
                                     let body = result_to_json(&r);
-                                    let _ = rpc.notify("tool_call/update", json!({
+                                    let _ = rpc.notify(&tc_method, json!({
                                         "toolCallId": tc_id,
                                         "status": "completed",
                                         "content": [{ "type": "text", "text": serde_json::to_string(&body).unwrap_or_default() }],
                                     })).await;
                                 }
                                 Ok(Err(e)) => {
-                                    let _ = rpc.notify("tool_call/update", json!({
+                                    let _ = rpc.notify(&tc_method, json!({
                                         "toolCallId": tc_id,
                                         "status": "failed",
                                         "content": [{ "type": "text", "text": e }],
                                     })).await;
                                 }
                                 Err(_) => {
-                                    let _ = rpc.notify("tool_call/update", json!({
+                                    let _ = rpc.notify(&tc_method, json!({
                                         "toolCallId": tc_id,
                                         "status": "failed",
                                         "content": [{ "type": "text", "text": "intercept channel closed" }],
@@ -634,7 +678,7 @@ fn emit_message(tx: &mpsc::Sender<AgentEvent>, msg: Message) {
                     // watchdog will surface a hang.
                     let _ = tx.try_send(ev);
                 }
-            } else if method == "tool_call/update" {
+            } else if method == "tool_call/update" || method == "toolCall/update" {
                 if let Some(ev) = map_tool_call_update(&params) {
                     let _ = tx.try_send(ev);
                 }
@@ -656,6 +700,10 @@ fn emit_message(tx: &mpsc::Sender<AgentEvent>, msg: Message) {
             // Successful response with no notification payload; we
             // already route the `result` to the oneshot in the
             // JSON-RPC client, so this arm is a no-op.
+        }
+        Message::Request { .. } => {
+            // Requests from the agent are handled directly in handle_message,
+            // so we do not emit any AgentEvents for them.
         }
     }
 }

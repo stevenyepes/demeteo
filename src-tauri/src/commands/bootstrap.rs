@@ -1,5 +1,6 @@
 use tauri::{State, Manager};
-use crate::state::{DatabaseState, ExecutionState};
+use crate::state::AppContext;
+use crate::domain::ids::ProjectId;
 use crate::domain::models::{ProjectSettings, WorktreeStrategy};
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::paths;
@@ -11,22 +12,22 @@ fn get_repo_name(repo_path: &str) -> String {
 #[tauri::command]
 pub async fn bootstrap_project(
     app: tauri::AppHandle,
-    db_state: State<'_, DatabaseState>,
-    exec_state: State<'_, ExecutionState>,
+    ctx: State<'_, AppContext>,
     project_id: String,
 ) -> Result<WorktreeStrategy, String> {
     // 1. Resolve project
-    let projects = db_state.db.get_projects()?;
-    let project = projects.into_iter().find(|p| p.id == project_id)
+    let projects = ctx.projects.get_projects()?;
+    let project_id_typed = ProjectId::from(project_id.clone());
+    let project = projects.into_iter().find(|p| p.id == project_id_typed)
         .ok_or_else(|| format!("Project not found: {}", project_id))?;
 
     // Update status to bootstrapping
-    db_state.db.update_project_status(&project_id, "bootstrapping")?;
+    ctx.projects.update_status(&project_id_typed, "bootstrapping")?;
 
-    match do_bootstrap_inner(&app, &db_state, &exec_state, &project_id, &project).await {
+    match do_bootstrap_inner(&app, &ctx, &project_id, &project).await {
         Ok(strategy) => Ok(strategy),
         Err(err) => {
-            let _ = db_state.db.update_project_status(&project_id, "error");
+            let _ = ctx.projects.update_status(&project_id_typed, "error");
             Err(err)
         }
     }
@@ -34,25 +35,25 @@ pub async fn bootstrap_project(
 
 async fn do_bootstrap_inner(
     app: &tauri::AppHandle,
-    db_state: &State<'_, DatabaseState>,
-    exec_state: &State<'_, ExecutionState>,
+    ctx: &AppContext,
     project_id: &str,
     project: &crate::domain::models::Project,
 ) -> Result<WorktreeStrategy, String> {
     // 2. Resolve repos
-    let repos = db_state.db.get_repositories_for_project(project_id)?;
+    let project_id_typed = ProjectId::from(project_id.to_string());
+    let repos = ctx.projects.get_repositories_for(&project_id_typed)?;
     if repos.is_empty() {
         return Err("No repositories configured for this project".to_string());
     }
 
-    let git_ops = GitOpsHelper::new(db_state.db.clone(), exec_state.exec.clone());
+    let git_ops = GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone());
     let mut main_repo_dir = String::new();
 
     // Determine machine_id (Some if remote, None if local)
     let machine_id = if project.compute_type.to_lowercase() == "local" {
         None
     } else {
-        project.remote_host.as_deref()
+        project.remote_host.as_ref().map(|m| m.as_str())
     };
 
     // Resolve the absolute repos parent dir *once* for this project. We
@@ -74,9 +75,9 @@ async fn do_bootstrap_inner(
         local_data.join("projects").join(project_id).join("repos")
     } else {
         paths::project_root(
-            &exec_state.exec,
+            &ctx.exec,
             &project.compute_type,
-            project.remote_host.as_deref(),
+            project.remote_host.as_ref().map(|m| m.as_str()),
             project_id,
         )?
         .join(paths::REPOS_SUBDIR)
@@ -108,7 +109,7 @@ async fn do_bootstrap_inner(
             repos_parent_str,
             allowed_names_str
         );
-        let _ = exec_state.exec.run_command(machine_str, &cleanup_cmd);
+        let _ = ctx.exec.run_command(machine_str, &cleanup_cmd);
     }
 
     // 3. Loop and clone each repository
@@ -127,9 +128,9 @@ async fn do_bootstrap_inner(
                 .to_string()
         } else {
             paths::repo_target_dir_str(
-                &exec_state.exec,
+                &ctx.exec,
                 &project.compute_type,
-                project.remote_host.as_deref(),
+                project.remote_host.as_ref().map(|m| m.as_str()),
                 project_id,
                 &repo.repo_path,
             )?
@@ -140,18 +141,18 @@ async fn do_bootstrap_inner(
         }
 
         // Check if the directory already exists. Run a git command to test if clone is needed.
-        let exists = exec_state
+        let exists = ctx
             .exec
             .run_command(
                 machine_str,
-                &format!("git -C {} rev-parse --is-inside-work-tree", shell_escape(&target_dir)),
+                &format!("git -C {} rev-parse --is-inside-work-tree", paths::shell_escape_posix(&target_dir)),
             )
             .is_ok();
 
         if !exists {
             git_ops.clone_repository(
                 machine_id,
-                &repo.provider_id,
+                repo.provider_id.as_str(),
                 &repo.repo_path,
                 &target_dir,
             )?;
@@ -161,11 +162,11 @@ async fn do_bootstrap_inner(
             // contains an unrelated repo), and we want to fail loudly
             // now rather than surface a confusing `agent closed stdout`
             // from the step executor ten seconds later.
-            let verified = exec_state
+            let verified = ctx
                 .exec
                 .run_command(
                     machine_str,
-                    &format!("git -C {} rev-parse --is-inside-work-tree", shell_escape(&target_dir)),
+                    &format!("git -C {} rev-parse --is-inside-work-tree", paths::shell_escape_posix(&target_dir)),
                 )
                 .is_ok();
             if !verified {
@@ -184,45 +185,26 @@ async fn do_bootstrap_inner(
     Ok(strategy)
 }
 
-/// Single-quote-escape a path for use in a POSIX shell command. We avoid
-/// double-quoting so `~` is not interpreted by the shell, and we use
-/// single-quote-escape so paths with spaces / quotes are handled
-/// safely. For our use case the path is always ASCII with only `~`,
-/// `.`, `/`, `_`, and alphanumerics, so the fast path returns it
-/// verbatim; the quoted fallback is defensive.
-fn shell_escape(s: &str) -> String {
-    if s.is_empty() {
-        return "''".into();
-    }
-    if s.chars().all(|c| c.is_ascii_alphanumeric()
-        || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@' | '~'))
-    {
-        return s.to_string();
-    }
-    let escaped = s.replace('\'', "'\\''");
-    format!("'{}'", escaped)
-}
-
-
 #[tauri::command]
 pub fn get_proposed_strategy(
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     project_id: String,
 ) -> Result<Option<ProjectSettings>, String> {
-    db_state.db.get_project_settings(&project_id)
+    ctx.projects.get_settings(&ProjectId::from(project_id))
 }
 
 #[tauri::command]
 pub fn save_project_settings(
-    db_state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     project_id: String,
     settings: ProjectSettings,
 ) -> Result<(), String> {
+    let project_id_typed = ProjectId::from(project_id);
     // Save to DB
-    db_state.db.save_project_settings(settings)?;
+    ctx.projects.save_settings(settings)?;
 
     // Set project status to idle (workspace build complete)
-    db_state.db.update_project_status(&project_id, "idle")?;
+    ctx.projects.update_status(&project_id_typed, "idle")?;
 
     Ok(())
 }

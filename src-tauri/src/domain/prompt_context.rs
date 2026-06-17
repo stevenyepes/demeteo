@@ -3,6 +3,7 @@
 /// # Usage
 ///
 /// ```rust
+/// # use demeteo_lib::domain::prompt_context::PromptContext;
 /// let prompt = PromptContext::new()
 ///     .set("feature_description", "Add dark mode toggle")
 ///     .set("test_command", "cargo test")

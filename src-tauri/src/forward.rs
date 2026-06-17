@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 use ssh2::Session;
 use tauri::State;
-use crate::DatabaseState;
+use crate::state::AppContext;
 use crate::terminal::connect_ssh;
 
 pub struct ActiveForward {
@@ -24,7 +24,7 @@ pub struct ForwardState {
 
 #[tauri::command]
 pub fn start_port_forward(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     forward_state: State<'_, ForwardState>,
     machine_id: String,
     remote_port: i32,
@@ -37,8 +37,9 @@ pub fn start_port_forward(
     }
 
     // 2. Fetch machine details
-    let machines = state.db.get_machines()?;
-    let machine = machines.into_iter().find(|m| m.id == machine_id)
+    let machines = ctx.machines.get_machines()?;
+    let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.clone());
+    let machine = machines.into_iter().find(|m| m.id == machine_id_typed)
         .ok_or_else(|| "Machine not found".to_string())?;
 
     // Local machines don't need port forwarding

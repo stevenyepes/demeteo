@@ -46,6 +46,11 @@ pub enum Message {
         method: String,
         params: Option<Value>,
     },
+    Request {
+        id: Value,
+        method: String,
+        params: Option<Value>,
+    },
 }
 
 impl<'de> Deserialize<'de> for Message {
@@ -62,7 +67,11 @@ impl<'de> Deserialize<'de> for Message {
                 .ok_or_else(|| D::Error::custom("notification missing method string"))?
                 .to_string();
             let params = v.get("params").cloned();
-            return Ok(Message::Notification { method, params });
+            if let Some(id) = v.get("id").cloned() {
+                return Ok(Message::Request { id, method, params });
+            } else {
+                return Ok(Message::Notification { method, params });
+            }
         }
         let id = v.get("id").cloned();
         let result = v.get("result").cloned();
@@ -104,25 +113,98 @@ struct Pending {
 /// Wire format: one JSON object per line, with a trailing `\n` delimiter.
 pub struct JsonRpcClient {
     /// The underlying agent process. The AcpRuntime serializes calls
-    /// (one in-flight at a time).
-    transport: Arc<Mutex<Box<dyn InteractiveHandle>>>,
+    /// (one in-flight at a time). All methods take `&self` (interior
+    /// mutability) so reads and writes don't share a single Mutex.
+    transport: Arc<dyn InteractiveHandle>,
     next_id: AtomicU64,
     /// In-flight requests keyed by id.
     pending: Arc<Mutex<HashMap<u64, Pending>>>,
+    /// Active notification / request sinks.
+    notifs: Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<Message>>>>,
+}
+
+impl Drop for JsonRpcClient {
+    fn drop(&mut self) {
+        // Kill the transport to unblock the background reader thread.
+        let _ = self.transport.kill();
+    }
 }
 
 impl JsonRpcClient {
     pub fn new(transport: Box<dyn InteractiveHandle>) -> Self {
-        Self {
-            transport: Arc::new(Mutex::new(transport)),
-            next_id: AtomicU64::new(1),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
+        let transport: Arc<dyn InteractiveHandle> = Arc::from(transport);
+        let next_id = AtomicU64::new(1);
+        let pending = Arc::new(Mutex::new(HashMap::<u64, Pending>::new()));
+        let notifs = Arc::new(Mutex::new(HashMap::<u64, mpsc::UnboundedSender<Message>>::new()));
 
-    /// Borrow the transport for the AcpRuntime's lifecycle (kill, etc).
-    pub fn transport(&self) -> Arc<Mutex<Box<dyn InteractiveHandle>>> {
-        self.transport.clone()
+        let t_clone = transport.clone();
+        let p_clone = pending.clone();
+        let n_clone = notifs.clone();
+
+        std::thread::spawn(move || {
+            loop {
+                let msg = match read_one_message_blocking(&*t_clone) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("[JsonRpcClient] background read error: {}", e);
+                        // Notify all pending requests that the transport died
+                        if let Ok(mut p) = p_clone.lock() {
+                            for (_id, pending) in p.drain() {
+                                let _ = pending.tx.send(Err(e.clone()));
+                            }
+                        }
+                        break;
+                    }
+                };
+
+                // Dispatch message
+                match msg {
+                    Message::Response { id, result, error } => {
+                        let mut resolved = false;
+                        if let Some(ref val) = id {
+                            if let Some(n_u64) = val.as_u64() {
+                                if let Ok(mut p) = p_clone.lock() {
+                                    if let Some(pending) = p.remove(&n_u64) {
+                                        let res = match error.clone() {
+                                            Some(err) => Err(err),
+                                            None => Ok(result.clone().unwrap_or(Value::Null)),
+                                        };
+                                        let _ = pending.tx.send(res);
+                                        resolved = true;
+                                    }
+                                }
+                            }
+                        }
+                        if !resolved {
+                            if let Ok(n) = n_clone.lock() {
+                                for tx in n.values() {
+                                    let _ = tx.send(Message::Response {
+                                        id: id.clone(),
+                                        result: result.clone(),
+                                        error: error.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    other => {
+                        if let Ok(n) = n_clone.lock() {
+                            for tx in n.values() {
+                                let _ = tx.send(other.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            eprintln!("[JsonRpcClient] background read thread stopped");
+        });
+
+        Self {
+            transport,
+            next_id,
+            pending,
+            notifs,
+        }
     }
 
     /// Send a notification (no `id`, no response expected). Used for
@@ -149,12 +231,7 @@ impl JsonRpcClient {
         framed.push('\n');
         let transport = self.transport.clone();
         tokio::task::spawn_blocking(move || -> Result<(), RpcError> {
-            let mut t = transport.lock().map_err(|_| RpcError {
-                code: -32000,
-                message: "transport lock poisoned".into(),
-                data: None,
-            })?;
-            t.write_line(&framed).map_err(|e| RpcError {
+            transport.write_line(&framed).map_err(|e| RpcError {
                 code: -32603,
                 message: format!("write: {}", e),
                 data: None,
@@ -165,6 +242,41 @@ impl JsonRpcClient {
         .map_err(|e| RpcError {
             code: -32000,
             message: format!("notify task: {}", e),
+            data: None,
+        })?
+    }
+
+    /// Send a response back to the agent (e.g. for session/request_permission).
+    pub async fn respond(
+        &self,
+        id: Value,
+        result: Value,
+    ) -> Result<(), RpcError> {
+        let line = serde_json::to_string(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }))
+        .map_err(|e| RpcError {
+            code: -32700,
+            message: format!("serialize: {}", e),
+            data: None,
+        })?;
+        let mut framed = line;
+        framed.push('\n');
+        let transport = self.transport.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), RpcError> {
+            transport.write_line(&framed).map_err(|e| RpcError {
+                code: -32603,
+                message: format!("write: {}", e),
+                data: None,
+            })?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| RpcError {
+            code: -32000,
+            message: format!("respond task: {}", e),
             data: None,
         })?
     }
@@ -183,12 +295,39 @@ impl JsonRpcClient {
         params: Value,
         notif_sink: impl FnMut(Message) + Send + 'static,
     ) -> Result<Value, RpcError> {
-        let transport = self.transport.clone();
-        let pending = self.pending.clone();
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let req = Request::new(id, method, params);
 
+        let line = serde_json::to_string(&req).map_err(|e| RpcError {
+            code: -32700,
+            message: format!("serialize: {}", e),
+            data: None,
+        })?;
+        let mut framed = line;
+        framed.push('\n');
+
+        let (tx, rx) = oneshot::channel::<Result<Value, RpcError>>();
+        
+        // Register pending oneshot
+        {
+            let mut p = self.pending.lock().map_err(|_| RpcError {
+                code: -32000,
+                message: "pending lock poisoned".into(),
+                data: None,
+            })?;
+            p.insert(id, Pending { tx });
+        }
+
+        // Register notification channel
         let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<Message>();
-        let (result_tx, result_rx) = oneshot::channel::<Result<Value, RpcError>>();
+        {
+            let mut n = self.notifs.lock().map_err(|_| RpcError {
+                code: -32000,
+                message: "notifs lock poisoned".into(),
+                data: None,
+            })?;
+            n.insert(id, notif_tx.clone());
+        }
 
         // Drain notifications on a separate task; the user-supplied
         // sink lives in the caller's task, so we forward via mpsc.
@@ -199,107 +338,67 @@ impl JsonRpcClient {
             }
         });
 
-        let req = Request::new(id, method, params);
-        let _ = tokio::task::spawn_blocking(move || {
-            let res = call_blocking(&transport, &pending, id, &req, notif_tx);
-            let _ = result_tx.send(res);
+        // Write the request to transport.
+        let transport = self.transport.clone();
+        let write_res = tokio::task::spawn_blocking(move || {
+            transport.write_line(&framed).map_err(|e| RpcError {
+                code: -32603,
+                message: format!("write: {}", e),
+                data: None,
+            })?;
+            Ok::<(), RpcError>(())
         })
         .await;
 
-        let _ = drain.await;
-        result_rx.await.map_err(|_| RpcError {
-            code: -32000,
-            message: "jsonrpc call task dropped".into(),
-            data: None,
-        })?
-    }
-}
-
-/// The blocking half of `JsonRpcClient::call`. Runs on a
-/// `spawn_blocking` worker so it doesn't pin a tokio reactor thread.
-fn call_blocking(
-    transport: &Arc<Mutex<Box<dyn InteractiveHandle>>>,
-    pending: &Arc<Mutex<HashMap<u64, Pending>>>,
-    id: u64,
-    req: &Request,
-    notif_tx: mpsc::UnboundedSender<Message>,
-) -> Result<Value, RpcError> {
-    let line = serde_json::to_string(req).map_err(|e| RpcError {
-        code: -32700,
-        message: format!("serialize: {}", e),
-        data: None,
-    })?;
-    let mut framed = line;
-    framed.push('\n');
-
-    // Register the pending response channel.
-    let (tx, rx) = oneshot::channel::<Result<Value, RpcError>>();
-    {
-        let mut p = pending.lock().map_err(|_| RpcError {
-            code: -32000,
-            message: "pending lock poisoned".into(),
-            data: None,
-        })?;
-        p.insert(id, Pending { tx });
-    }
-
-    // Send the request.
-    {
-        let mut transport = transport.lock().map_err(|_| RpcError {
-            code: -32000,
-            message: "transport lock poisoned".into(),
-            data: None,
-        })?;
-        transport.write_line(&framed).map_err(|e| RpcError {
-            code: -32603,
-            message: format!("write: {}", e),
-            data: None,
-        })?;
-    }
-
-    // Read loop: pull messages until our `id` arrives or the transport
-    // dies. Notifications get pushed to the mpsc; only the response
-    // with the matching `id` resolves the oneshot.
-    loop {
-        let msg = read_one_message_blocking(transport)?;
-        match msg {
-            Message::Response {
-                id: Some(Value::Number(n)),
-                result,
-                error,
-            } => {
-                let n = n.as_u64().unwrap_or(0);
-                if n == id {
-                    let mut p = pending.lock().map_err(|_| RpcError {
-                        code: -32000,
-                        message: "pending lock poisoned".into(),
-                        data: None,
-                    })?;
-                    if let Some(pending) = p.remove(&id) {
-                        let res = match error {
-                            Some(e) => Err(e),
-                            None => Ok(result.unwrap_or(Value::Null)),
-                        };
-                        let _ = pending.tx.send(res);
-                    }
-                    return match rx.blocking_recv() {
-                        Ok(Ok(v)) => Ok(v),
-                        Ok(Err(e)) => Err(e),
-                        Err(_) => Err(RpcError {
-                            code: -32000,
-                            message: "response oneshot dropped".into(),
-                            data: None,
-                        }),
-                    };
+        let _write_ok = match write_res {
+            Ok(Ok(())) => true,
+            Ok(Err(e)) => {
+                // Deregister
+                if let Ok(mut p) = self.pending.lock() {
+                    p.remove(&id);
                 }
-                // Stale id; drop on the floor.
+                if let Ok(mut n) = self.notifs.lock() {
+                    n.remove(&id);
+                }
+                return Err(e);
             }
-            Message::Response { id, result, error } => {
-                let _ = notif_tx.send(Message::Response { id, result, error });
+            Err(e) => {
+                if let Ok(mut p) = self.pending.lock() {
+                    p.remove(&id);
+                }
+                if let Ok(mut n) = self.notifs.lock() {
+                    n.remove(&id);
+                }
+                return Err(RpcError {
+                    code: -32000,
+                    message: format!("write task panicked: {}", e),
+                    data: None,
+                });
             }
-            Message::Notification { method, params } => {
-                let _ = notif_tx.send(Message::Notification { method, params });
+        };
+
+        // Await the response
+        let res = rx.await;
+
+        // Deregister notification channel
+        {
+            if let Ok(mut n) = self.notifs.lock() {
+                n.remove(&id);
             }
+        }
+
+        // Drop the mpsc sender to finish the drain loop
+        drop(notif_tx);
+        let _ = drain.await;
+
+        match res {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(RpcError {
+                code: -32000,
+                message: "response oneshot dropped".into(),
+                data: None,
+            }),
         }
     }
 }
@@ -311,20 +410,15 @@ fn call_blocking(
 /// us a complete, unsplit message regardless of payload size — no chunk
 /// size limits, no buffer accumulation heuristics.
 fn read_one_message_blocking(
-    transport: &Arc<Mutex<Box<dyn InteractiveHandle>>>,
+    transport: &dyn InteractiveHandle,
 ) -> Result<Message, RpcError> {
     let mut line = Vec::new();
     loop {
-        let byte = {
-            let mut t = transport.lock().map_err(|_| RpcError {
-                code: -32000,
-                message: "transport lock poisoned".into(),
-                data: None,
-            })?;
-            t.read_byte()
-        };
+        let byte = transport.read_byte();
         match byte {
-            Ok(b'\n') => break,
+            Ok(b'\n') => {
+                break;
+            }
             Ok(b) => line.push(b),
             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                 std::thread::sleep(std::time::Duration::from_millis(20));
@@ -352,8 +446,9 @@ fn read_one_message_blocking(
         return read_one_message_blocking(transport);
     }
 
+    let raw = String::from_utf8_lossy(&line);
+
     serde_json::from_slice::<Message>(&line).map_err(|e| {
-        let raw = String::from_utf8_lossy(&line);
         RpcError {
             code: -32700,
             message: format!("parse: {} (data: {})", e, raw),

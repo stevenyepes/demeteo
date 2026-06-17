@@ -67,7 +67,7 @@ state="init"
 while IFS= read -r line; do
   case "$state" in
     init)
-      echo '{"id":1,"result":{"protocolVersion":1}}'
+      echo '{"id":1,"result":{"protocolVersion":1,"capabilities":{"toolCallUpdate":true}}}'
       state="new"
       ;;
     new)

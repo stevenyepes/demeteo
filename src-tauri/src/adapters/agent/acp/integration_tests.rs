@@ -188,7 +188,7 @@ state="init"
 while IFS= read -r line; do
   case "$state" in
     init)
-      echo '{{"id":1,"result":{{"protocolVersion":1}}}}'
+      echo '{{"id":1,"result":{{"protocolVersion":1,"capabilities":{{"toolCallUpdate":true}}}}}}'
       state="new"
       ;;
     new)
@@ -247,8 +247,8 @@ done
     let record = std::fs::read_to_string(&record_path).unwrap_or_default();
     let _ = std::fs::remove_file(&record_path);
     assert!(
-        record.contains("tool_call/update"),
-        "expected tool_call/update in agent's record; got: {}",
+        record.contains("toolCall/update"),
+        "expected toolCall/update in agent's record; got: {}",
         record
     );
     assert!(
@@ -280,7 +280,7 @@ state="init"
 while IFS= read -r line; do
   case "$state" in
     init)
-      echo '{{"id":1,"result":{{"protocolVersion":1}}}}'
+      echo '{{"id":1,"result":{{"protocolVersion":1,"capabilities":{{"toolCallUpdate":true}}}}}}'
       state="new"
       ;;
     new)
@@ -338,8 +338,8 @@ done
     let record = std::fs::read_to_string(&record_path).unwrap_or_default();
     let _ = std::fs::remove_file(&record_path);
     assert!(
-        record.contains("tool_call/update"),
-        "expected tool_call/update in agent's record; got: {}",
+        record.contains("toolCall/update"),
+        "expected toolCall/update in agent's record; got: {}",
         record
     );
     assert!(

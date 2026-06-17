@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::ids::{
+    AgentProfileId, FeatureId, GateDecisionId, MachineId, MessageId, ProjectId, ProviderId,
+    RepositoryId, StepExecutionId, StepId, ThreadId, WorkflowId, WorkflowVersionId,
+};
+
 /// Captured session info from the ACP `session/new` response.
 /// Used by the frontend to display available modes, models, etc.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -56,7 +61,7 @@ pub struct ConfigOptionValue {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Machine {
-    pub id: String,
+    pub id: MachineId,
     pub name: String,
     pub host: String,
     pub port: i32,
@@ -69,8 +74,8 @@ pub struct Machine {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentProfile {
-    pub id: String,
-    pub machine_id: String,
+    pub id: AgentProfileId,
+    pub machine_id: MachineId,
     pub name: String,
     pub agent_type: String, // 'ollama', 'openai', 'cli', 'custom_http'
     pub command: Option<String>,
@@ -99,7 +104,7 @@ pub struct ChatMessage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SessionHistory {
     pub id: String,
-    pub machine_id: String,
+    pub machine_id: MachineId,
     pub session_type: String, // 'terminal', 'agent'
     pub title: String,
     pub content: Option<String>,
@@ -108,8 +113,8 @@ pub struct SessionHistory {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ThreadSession {
-    pub id: String,
-    pub machine_id: String,
+    pub id: ThreadId,
+    pub machine_id: MachineId,
     pub title: String,
     pub mode: String, // 'worktree', 'adhoc'
     pub branch: Option<String>,
@@ -140,8 +145,8 @@ pub struct WorkingMemoryEntry {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
-    pub id: String,
-    pub thread_id: String,
+    pub id: MessageId,
+    pub thread_id: ThreadId,
     pub role: String, // "user" | "assistant" | "system"
     pub content: String,
     pub metadata: Option<String>, // JSON
@@ -150,7 +155,7 @@ pub struct Message {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProviderInstance {
-    pub id: String,
+    pub id: ProviderId,
     pub kind: String, // 'github' | 'gitlab'
     pub host: String,
     pub username: String,
@@ -160,10 +165,10 @@ pub struct ProviderInstance {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Project {
-    pub id: String,
+    pub id: ProjectId,
     pub name: String,
     pub compute_type: String, // 'local' | 'remote'
-    pub remote_host: Option<String>,
+    pub remote_host: Option<MachineId>,
     pub status: String,
     pub nodes: i32,
     pub spend: f64,
@@ -172,17 +177,17 @@ pub struct Project {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Repository {
-    pub id: String,
-    pub project_id: String,
-    pub provider_id: String,
+    pub id: RepositoryId,
+    pub project_id: ProjectId,
+    pub provider_id: ProviderId,
     pub repo_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Feature {
-    pub id: String,
-    pub project_id: String,
-    pub workflow_id: Option<String>,
+    pub id: FeatureId,
+    pub project_id: ProjectId,
+    pub workflow_id: Option<WorkflowId>,
     pub title: String,
     pub status: String,
     pub total_cost: f64,
@@ -216,7 +221,7 @@ pub struct WorktreeStrategy {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProjectSettings {
-    pub project_id: String,
+    pub project_id: ProjectId,
     pub worktree_strategy: WorktreeStrategy,
     pub conflict_policy: String,
     pub feature_lifecycle: String,
@@ -246,7 +251,7 @@ pub struct RepoHealthStatus {
 /// A versioned, reusable template that defines the steps to build a feature.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Workflow {
-    pub id: String,
+    pub id: WorkflowId,
     pub name: String,
     pub description: String,
     /// Starter-pack workflows shipped in the binary; cannot be deleted by the user.
@@ -258,8 +263,8 @@ pub struct Workflow {
 /// A single immutable snapshot of a workflow's step list.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WorkflowVersion {
-    pub id: String,
-    pub workflow_id: String,
+    pub id: WorkflowVersionId,
+    pub workflow_id: WorkflowId,
     pub version: u32,
     /// JSON-serialised `Vec<StepConfig>`.
     pub steps_json: String,
@@ -272,7 +277,7 @@ pub struct WorkflowVersion {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct StepConfig {
     /// Stable UUID — preserved across version bumps.
-    pub id: String,
+    pub id: StepId,
     /// "agent" | "parallel" | "gate"
     pub kind: String,
     pub title: String,
@@ -284,7 +289,7 @@ pub struct StepConfig {
     /// "full" | "summary_only" | "none"
     pub artifact_mode: String,
     /// Step id to jump to on failure (loopback). None = abort feature.
-    pub on_failure: Option<String>,
+    pub on_failure: Option<StepId>,
     /// Maximum loop iterations before the executor surfaces a gate instead.
     pub max_iterations: Option<u32>,
 }
@@ -296,10 +301,10 @@ pub struct StepConfig {
 /// Runtime execution record for one step within a feature run.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StepExecution {
-    pub id: String,
-    pub feature_id: String,
+    pub id: StepExecutionId,
+    pub feature_id: FeatureId,
     /// The stable step id from `StepConfig`.
-    pub step_id: String,
+    pub step_id: StepId,
     pub step_index: u32,
     /// "agent" | "parallel" | "gate"
     pub step_kind: String,
@@ -317,8 +322,8 @@ pub struct StepExecution {
 /// A gate decision record — one row per gate step execution.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GateDecision {
-    pub id: String,
-    pub step_execution_id: String,
+    pub id: GateDecisionId,
+    pub step_execution_id: StepExecutionId,
     /// None = pending. "approve" | "redirect" | "cancel"
     pub decision: Option<String>,
     /// Feedback / redirect instructions provided by the user.

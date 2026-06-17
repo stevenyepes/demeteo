@@ -12,7 +12,7 @@ pub struct LocalSubprocessTransport {
     child: Mutex<Child>,
     stdin: Mutex<Option<ChildStdin>>,
     stdout: Mutex<Option<ChildStdout>>,
-    stderr_thread: Option<std::thread::JoinHandle<()>>,
+    stderr_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl LocalSubprocessTransport {
@@ -49,7 +49,7 @@ impl LocalSubprocessTransport {
             child: Mutex::new(child),
             stdin: Mutex::new(Some(stdin)),
             stdout: Mutex::new(Some(stdout)),
-            stderr_thread,
+            stderr_thread: Mutex::new(stderr_thread),
         })
     }
 }
@@ -69,7 +69,7 @@ fn spawn_stderr_drain(mut stderr: ChildStderr) -> std::thread::JoinHandle<()> {
 }
 
 impl InteractiveHandle for LocalSubprocessTransport {
-    fn write_line(&mut self, line: &str) -> io::Result<usize> {
+    fn write_line(&self, line: &str) -> io::Result<usize> {
         let mut guard = self
             .stdin
             .lock()
@@ -82,7 +82,7 @@ impl InteractiveHandle for LocalSubprocessTransport {
         Ok(line.len())
     }
 
-    fn read_byte(&mut self) -> io::Result<u8> {
+    fn read_byte(&self) -> io::Result<u8> {
         let mut buf = [0u8; 1];
         let mut guard = self
             .stdout
@@ -101,7 +101,7 @@ impl InteractiveHandle for LocalSubprocessTransport {
         }
     }
 
-    fn try_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
         let mut guard = self
             .stdout
             .lock()
@@ -118,7 +118,7 @@ impl InteractiveHandle for LocalSubprocessTransport {
         }
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         let mut guard = self
             .stdout
             .lock()
@@ -129,27 +129,23 @@ impl InteractiveHandle for LocalSubprocessTransport {
         stdout.read(buf)
     }
 
-    fn kill(&mut self) -> Result<(), String> {
-        if let Some(t) = self.stderr_thread.take() {
-            // Best-effort: a blocking stderr drain thread will exit when
-            // the pipe closes (which happens after kill).
-            drop(t);
+    fn kill(&self) -> Result<(), String> {
+        if let Ok(mut st) = self.stderr_thread.lock() {
+            if let Some(t) = st.take() {
+                // Best-effort: a blocking stderr drain thread will exit when
+                // the pipe closes (which happens after kill).
+                drop(t);
+            }
         }
-        let mut child = self
-            .child
-            .lock()
-            .map_err(|_| "child lock poisoned")?;
+        let mut child = self.child.lock().map_err(|_| "child lock poisoned")?;
         child
             .kill()
             .map_err(|e| format!("Failed to kill agent: {}", e))?;
         Ok(())
     }
 
-    fn try_wait(&mut self) -> Result<Option<i32>, String> {
-        let mut child = self
-            .child
-            .lock()
-            .map_err(|_| "child lock poisoned")?;
+    fn try_wait(&self) -> Result<Option<i32>, String> {
+        let mut child = self.child.lock().map_err(|_| "child lock poisoned")?;
         match child.try_wait() {
             Ok(Some(status)) => Ok(status.code()),
             Ok(None) => Ok(None),
@@ -177,7 +173,10 @@ mod tests {
     fn local_transport_spawns_and_round_trips() {
         let mut t = LocalSubprocessTransport::spawn(
             "sh",
-            &["-c".to_string(), "read line; echo \"got:$line\"".to_string()],
+            &[
+                "-c".to_string(),
+                "read line; echo \"got:$line\"".to_string(),
+            ],
             ".",
             &HashMap::new(),
         )
