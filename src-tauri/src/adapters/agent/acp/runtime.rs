@@ -675,6 +675,14 @@ impl AgentSession for AcpSession {
     fn session_info(&self) -> SessionInfo {
         self.session_info.lock().unwrap().clone()
     }
+
+    fn kill(&self) -> Result<(), String> {
+        // Close the underlying transport (SSH channel / local child)
+        // so the spawned agent process is actually reaped. The
+        // background JSON-RPC reader thread will see EOF on its next
+        // read and exit on its own.
+        self.rpc.kill()
+    }
 }
 
 fn emit_message(tx: &mpsc::Sender<AgentEvent>, msg: Message) {

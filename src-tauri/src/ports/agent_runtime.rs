@@ -95,6 +95,15 @@ pub trait AgentSession: Send + Sync {
     /// Return the session info captured at startup (modes, config options, etc.)
     /// so the frontend can display available choices to the user.
     fn session_info(&self) -> SessionInfo;
+
+    /// Forcibly tear down the session's transport. Used by one-shot
+    /// callers (e.g. the model probe in `get_agent_models`) that need
+    /// to abort the session without sending a cooperative
+    /// `session/cancel` first. Default is a no-op for sessions that
+    /// don't hold a transport handle (CLI agents, noop).
+    fn kill(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Stub for SerializedAgentConfig — this is here for future use by the

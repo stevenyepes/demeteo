@@ -142,6 +142,21 @@ impl Drop for JsonRpcClient {
 }
 
 impl JsonRpcClient {
+    /// Forcibly tear down the transport. Closes the underlying SSH
+    /// channel (which sends SIGHUP to the remote agent via the SSH
+    /// server, killing the spawned `opencode acp`) or kills the local
+    /// child. Idempotent and safe to call multiple times.
+    ///
+    /// Distinct from `Drop`: the background reader thread holds an
+    /// `Arc` clone of the transport, so the transport isn't actually
+    /// dropped (and thus `Drop::kill` doesn't run) until that thread
+    /// exits. Explicit callers like the model probe need a way to
+    /// close the channel now, not when the reader happens to notice
+    /// EOF.
+    pub fn kill(&self) -> Result<(), String> {
+        self.transport.kill()
+    }
+
     pub fn new(transport: Box<dyn InteractiveHandle>) -> Self {
         let transport: Arc<dyn InteractiveHandle> = Arc::from(transport);
         let next_id = AtomicU64::new(1);

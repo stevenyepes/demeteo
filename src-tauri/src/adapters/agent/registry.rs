@@ -129,6 +129,7 @@ mod tests {
         fn cancel(&self) -> Result<(), String> { Ok(()) }
         fn set_mode(&self, _mode_id: &str) -> Result<(), String> { Ok(()) }
         fn set_config_option(&self, _config_id: &str, _value: &str) -> Result<(), String> { Ok(()) }
+        fn kill(&self) -> Result<(), String> { Ok(()) }
         fn session_info(&self) -> crate::domain::models::SessionInfo {
             crate::domain::models::SessionInfo::default()
         }

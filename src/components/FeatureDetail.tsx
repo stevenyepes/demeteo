@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import { StepExecution } from '../types';
+import { getAgentModels } from '../lib/agentModels';
 import { ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
 
@@ -151,11 +152,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           const project = await invoke<any>('get_project_by_id', { projectId: targetProjectId });
           const machineId = project?.remote_host || 'local';
           const agentKind = f.agent_kind || 'opencode';
-          const models = await invoke<Array<{ value: string; name: string }>>('get_agent_models', {
-            machineId,
-            agentKind
-          });
-          setAvailableModels(models || []);
+          const models = await getAgentModels(machineId, agentKind);
+          setAvailableModels(models as Array<{ value: string; name: string }>);
         } catch (err) {
           console.warn('Failed to fetch available models:', err);
         } finally {

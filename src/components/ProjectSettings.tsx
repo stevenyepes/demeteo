@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue } from '../types';
+import { getAgentModels } from '../lib/agentModels';
 
 interface Project {
     id: string;
@@ -147,6 +148,7 @@ export default function ProjectSettingsView({
     const [isLoadingModelsForDefault, setIsLoadingModelsForDefault] = useState(false);
 
     useEffect(() => {
+        let cancelled = false;
         const fetchModels = async () => {
             if (!defaultAgentKind) {
                 setAvailableModelsForDefault([]);
@@ -155,19 +157,19 @@ export default function ProjectSettingsView({
             setIsLoadingModelsForDefault(true);
             try {
                 const machineId = computeType === 'remote' ? remoteHost : 'local';
-                const models = await invoke<ConfigOptionValue[]>('get_agent_models', {
-                    machineId,
-                    agentKind: defaultAgentKind
-                });
-                setAvailableModelsForDefault(models);
+                const models = await getAgentModels(machineId, defaultAgentKind);
+                if (!cancelled) setAvailableModelsForDefault(models);
             } catch (err) {
-                console.warn("Failed to fetch models for agent:", defaultAgentKind, err);
-                setAvailableModelsForDefault([]);
+                if (!cancelled) {
+                    console.warn("Failed to fetch models for agent:", defaultAgentKind, err);
+                    setAvailableModelsForDefault([]);
+                }
             } finally {
-                setIsLoadingModelsForDefault(false);
+                if (!cancelled) setIsLoadingModelsForDefault(false);
             }
         };
         fetchModels();
+        return () => { cancelled = true; };
     }, [defaultAgentKind, computeType, remoteHost]);
 
     useEffect(() => {

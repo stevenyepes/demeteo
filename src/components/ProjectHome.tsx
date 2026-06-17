@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Zap, Cpu, Play, Clock, DollarSign, ChevronRight, Settings, AlertTriangle, RotateCw, Check } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue } from '../types';
+import { getAgentModels } from '../lib/agentModels';
 
 export const MOCK_FEATURES = [
     {
@@ -94,6 +95,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
 
     // Fetch models on selected agent change
     useEffect(() => {
+        let cancelled = false;
         const fetchModels = async () => {
             if (!selectedAgentKind) {
                 setAvailableModels([]);
@@ -102,19 +104,19 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
             setIsLoadingModels(true);
             try {
                 const machineId = activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local';
-                const models = await invoke<ConfigOptionValue[]>('get_agent_models', {
-                    machineId,
-                    agentKind: selectedAgentKind
-                });
-                setAvailableModels(models || []);
+                const models = await getAgentModels(machineId, selectedAgentKind);
+                if (!cancelled) setAvailableModels(models);
             } catch (err) {
-                console.warn("Failed to fetch models for agent:", selectedAgentKind, err);
-                setAvailableModels([]);
+                if (!cancelled) {
+                    console.warn("Failed to fetch models for agent:", selectedAgentKind, err);
+                    setAvailableModels([]);
+                }
             } finally {
-                setIsLoadingModels(false);
+                if (!cancelled) setIsLoadingModels(false);
             }
         };
         fetchModels();
+        return () => { cancelled = true; };
     }, [selectedAgentKind, activeProject.compute_type, activeProject.remote_host]);
 
     // Retry and recovery states

@@ -43,9 +43,18 @@ pub async fn get_agent_models(
 
     // 4. Retrieve session config options
     let info = session.session_info();
-    
-    // 5. Clean up process immediately
+
+    // 5. Clean up the spawned agent process BEFORE the registry drops
+    // the session Arc. `registry.kill` only removes the map entry; the
+    // session's `JsonRpcClient` background reader thread keeps the
+    // transport Arc alive until the reader thread sees EOF. We must
+    // explicitly call `session.kill()` to close the SSH channel (which
+    // sends SIGHUP to the remote `opencode acp`) so the remote process
+    // is reaped and we don't leak agents on the server.
+    let _ = session.kill();
     ctx.registry.kill(&temp_thread_id).await;
+    // `session` Arc drops at end of function; JsonRpcClient Drop is now
+    // a no-op because we already closed the transport above.
 
     if let Some(opts) = info.config_options {
         if let Some(opt) = opts.into_iter().find(|o| o.id == "model") {
