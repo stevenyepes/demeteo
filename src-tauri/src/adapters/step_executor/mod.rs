@@ -5,14 +5,15 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{oneshot, watch};
 
 use crate::adapters::agent::registry::AgentRegistry;
+use crate::domain::models::GateDecision;
 use crate::ports::agent_execution::AgentExecutionPort;
+use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
     ProjectRepository, WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
 use crate::ports::notification::NotificationPort;
-use crate::domain::models::GateDecision;
 
 // ── Sub-modules (deep-module decomposition) ────────────────────────────────────
 
@@ -40,12 +41,18 @@ pub struct DagStepExecutor {
     notif: Arc<dyn NotificationPort>,
     agent_exec: Arc<dyn AgentExecutionPort>,
     exec: Arc<dyn ExecutionPort>,
+    /// Artifact persistence port. The step executor and the tool
+    /// bridge both route artifact I/O through this so a future S3
+    /// or SFTP-on-remote adapter can swap in without touching either
+    /// caller. See `REDESIGN_PLAN.md` §3 (locked port catalogue).
+    artifacts: Arc<dyn ArtifactStore>,
     app_local_data_dir: PathBuf,
     gate_senders: Arc<Mutex<HashMap<String, oneshot::Sender<GateDecision>>>>,
     cancel_senders: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
 }
 
 impl DagStepExecutor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         machines: Arc<dyn MachineRepository>,
         projects: Arc<dyn ProjectRepository>,
@@ -57,6 +64,7 @@ impl DagStepExecutor {
         notif: Arc<dyn NotificationPort>,
         agent_exec: Arc<dyn AgentExecutionPort>,
         exec: Arc<dyn ExecutionPort>,
+        artifacts: Arc<dyn ArtifactStore>,
         app_local_data_dir: PathBuf,
     ) -> Self {
         Self {
@@ -70,6 +78,7 @@ impl DagStepExecutor {
             notif,
             agent_exec,
             exec,
+            artifacts,
             app_local_data_dir,
             gate_senders: Arc::new(Mutex::new(HashMap::new())),
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),

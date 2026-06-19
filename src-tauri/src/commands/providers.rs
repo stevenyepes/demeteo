@@ -90,14 +90,13 @@ pub async fn fetch_provider_repos(
     let provider = providers.into_iter().find(|p| p.id == provider_id_typed)
         .ok_or_else(|| "Provider not found".to_string())?;
 
-    let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
-    let pat = match entry.get_password() {
-        Ok(p) => p,
-        Err(e) => {
+    let pat = crate::credential_cache::get_or_fetch(provider.id.as_str(), || {
+        let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
+        entry.get_password().map_err(|e| {
             let _ = std::fs::write("/tmp/demeteo_fetch.log", format!("Keyring error for id '{}': {}\n", provider.id, e));
-            return Err(e.to_string());
-        }
-    };
+            e.to_string()
+        })
+    })?;
 
     let provider_type = provider.kind;
     let host = provider.host;
@@ -191,6 +190,7 @@ pub async fn connect_provider_instance(
     // Store PAT in keyring
     let entry = Entry::new("demeteo", id.as_str()).map_err(|e| e.to_string())?;
     entry.set_password(&pat).map_err(|e| e.to_string())?;
+    crate::credential_cache::invalidate(id.as_str());
 
     let now = paths::now_ms();
 
@@ -224,6 +224,7 @@ pub async fn delete_provider_instance(
     if let Ok(entry) = Entry::new("demeteo", &provider_id) {
         let _ = entry.delete_credential();
     }
+    crate::credential_cache::invalidate(&provider_id);
     ctx.app_settings.delete_provider_instance(&provider_id_typed)?;
     Ok(())
 }

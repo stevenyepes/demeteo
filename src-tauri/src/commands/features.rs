@@ -17,10 +17,18 @@ pub async fn start_feature(
     project_id: String,
     workflow_id: String,
     title: String,
+    description: String,
     agent_kind: Option<String>,
     model: Option<String>,
 ) -> Result<Feature, String> {
-    ctx.executor.feature_start(&project_id, &workflow_id, &title, agent_kind.as_deref(), model.as_deref())
+    ctx.executor.feature_start(
+        &project_id,
+        &workflow_id,
+        &title,
+        &description,
+        agent_kind.as_deref(),
+        model.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -88,6 +96,15 @@ pub async fn step_retry(
     new_model: Option<String>,
 ) -> Result<(), String> {
     ctx.executor.step_retry(&step_execution_id, new_model.as_deref())
+}
+
+#[tauri::command]
+pub async fn replay_from_step(
+    ctx: State<'_, AppContext>,
+    step_execution_id: String,
+    new_model: Option<String>,
+) -> Result<(), String> {
+    ctx.executor.replay_from_step(&step_execution_id, new_model.as_deref())
 }
 
 #[tauri::command]

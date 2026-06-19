@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import { StepExecution } from '../types';
 import { getAgentModels } from '../lib/agentModels';
-import { ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X } from 'lucide-react';
+import { ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X, GitPullRequest, RotateCcw } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
 
 interface FeatureDetailProps {
@@ -40,10 +40,10 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   const [selectedStepTitle, setSelectedStepTitle] = useState<string | null>(null);
   const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
   const [streamContent, setStreamContent] = useState<Record<string, string>>({});
-  const [feature, setFeature] = useState<any>(null);
   const [availableModels, setAvailableModels] = useState<Array<{ value: string; name: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [replayTarget, setReplayTarget] = useState<{ id: string; name: string; downstreamCount: number } | null>(null);
 
   useEffect(() => {
     loadFeatureData();
@@ -128,7 +128,6 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       cleanups.forEach((unlisten) => unlisten());
     };
   }, [featureId]);
-
   const loadFeatureData = async () => {
     try {
       const list = await invoke<StepExecution[]>('step_list_for_run', { featureId });
@@ -137,7 +136,6 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       let f: any = null;
       try {
         f = await invoke('feature_get', { featureId });
-        setFeature(f);
         if (f && selectedModel === '') {
           setSelectedModel(f.model || '');
         }
@@ -145,28 +143,13 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         console.error('Failed to fetch feature detail:', err);
       }
 
-      const targetProjectId = projectId || f?.project_id;
-      if (f && targetProjectId && availableModels.length === 0 && !isLoadingModels) {
-        setIsLoadingModels(true);
-        try {
-          const project = await invoke<any>('get_project_by_id', { projectId: targetProjectId });
-          const machineId = project?.remote_host || 'local';
-          const agentKind = f.agent_kind || 'opencode';
-          const models = await getAgentModels(machineId, agentKind);
-          setAvailableModels(models as Array<{ value: string; name: string }>);
-        } catch (err) {
-          console.warn('Failed to fetch available models:', err);
-        } finally {
-          setIsLoadingModels(false);
-        }
-      }
-      
       // Compute telemetry
       let totalCost = 0.0;
       let totalSecs = 0;
       let isGated = false;
       let hasFailed = false;
       let isRunning = false;
+      let hasInterrupted = false;
 
       for (const s of list) {
         totalCost += s.cost_usd || 0.0;
@@ -174,20 +157,41 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         if (s.status === 'awaiting_gate') isGated = true;
         if (s.status === 'failed') hasFailed = true;
         if (s.status === 'running') isRunning = true;
+        if (s.status === 'interrupted') hasInterrupted = true;
       }
 
       setCost(totalCost);
       setDuration(`${totalSecs}s`);
 
-      if (isGated) setStatus('gated');
+      if (f?.status === 'cancelled') setStatus('cancelled');
+      else if (isGated) setStatus('gated');
       else if (hasFailed) setStatus('failed');
+      else if (hasInterrupted) setStatus('cancelled');
       else if (isRunning) setStatus('running');
       else if (list.every(s => s.status === 'completed')) setStatus('completed');
 
       setError(null);
+      setLoading(false);
+
+      const targetProjectId = projectId || f?.project_id;
+      if (f && targetProjectId && availableModels.length === 0 && !isLoadingModels) {
+        setIsLoadingModels(true);
+        (async () => {
+          try {
+            const project = await invoke<any>('get_project_by_id', { projectId: targetProjectId });
+            const machineId = project?.remote_host || 'local';
+            const agentKind = f.agent_kind || 'opencode';
+            const models = await getAgentModels(machineId, agentKind);
+            setAvailableModels(models as Array<{ value: string; name: string }>);
+          } catch (err) {
+            console.warn('Failed to fetch available models:', err);
+          } finally {
+            setIsLoadingModels(false);
+          }
+        })();
+      }
     } catch (err: any) {
       setError(err.toString());
-    } finally {
       setLoading(false);
     }
   };
@@ -203,7 +207,14 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     try {
       await invoke('feature_cancel', { featureId });
       setStatus('cancelled');
-      loadFeatureData();
+      // The backend processes cancellation asynchronously; poll until
+      // the feature status flips so the UI doesn't revert to "running".
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 200));
+        const f2: any = await invoke('feature_get', { featureId }).catch(() => null);
+        if (f2?.status === 'cancelled' || f2?.status === 'failed') break;
+        await loadFeatureData();
+      }
     } catch (err: any) {
       await messageDialog(err.toString(), { title: 'Cancel Failed', kind: 'error' });
     }
@@ -220,7 +231,12 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     try {
       await invoke('feature_cancel', { featureId });
       setStatus('cancelled');
-      loadFeatureData();
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 200));
+        const f2: any = await invoke('feature_get', { featureId }).catch(() => null);
+        if (f2?.status === 'cancelled' || f2?.status === 'failed') break;
+        await loadFeatureData();
+      }
     } catch (err: any) {
       await messageDialog(err.toString(), { title: 'Stop Failed', kind: 'error' });
     }
@@ -233,6 +249,68 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       loadFeatureData();
     } catch (err: any) {
       await messageDialog(err.toString(), { title: 'Retry Failed', kind: 'error' });
+    }
+  };
+
+  const handleReplayFromStep = async () => {
+    if (!replayTarget) return;
+    try {
+      const modelParam = selectedModel || null;
+      await invoke('replay_from_step', { stepExecutionId: replayTarget.id, newModel: modelParam });
+      setReplayTarget(null);
+      loadFeatureData();
+    } catch (err: any) {
+      await messageDialog(err.toString(), { title: 'Replay Failed', kind: 'error' });
+    }
+  };
+
+  /** Publish the feature branch as a PR/MR via the project's
+   *  connected provider (R6). The backend is idempotent: re-publish
+   *  on an already-published feature returns the existing URL
+   *  instead of creating a duplicate. */
+  const [publishing, setPublishing] = useState(false);
+  const handlePublish = async (draft: boolean) => {
+    if (!projectId) {
+      await messageDialog('No project is associated with this feature.', {
+        title: 'Cannot publish',
+        kind: 'error',
+      });
+      return;
+    }
+    setPublishing(true);
+    try {
+      const result: any = await invoke('publish_mr', {
+        projectId,
+        featureId,
+        draft,
+      });
+      const url = result?.url ?? '(unknown)';
+      const state = result?.state ?? 'open';
+      await messageDialog(
+        `MR/PR opened (state: ${state}).\n\n${url}`,
+        { title: 'Published', kind: 'info' },
+      );
+      loadFeatureData();
+    } catch (err: any) {
+      await messageDialog(err.toString(), { title: 'Publish failed', kind: 'error' });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  /** Apply the project's `feature_lifecycle` policy (R6 decision 26).
+   *  `archive` → soft-delete; `auto_delete` → git branch -D +
+   *  soft-delete; `keep` → no-op. */
+  const handleCleanup = async () => {
+    try {
+      const result: any = await invoke('feature_cleanup', { featureId });
+      await messageDialog(
+        `Cleanup (${result.policy}): ${result.action}`,
+        { title: 'Lifecycle applied', kind: 'info' },
+      );
+      loadFeatureData();
+    } catch (err: any) {
+      await messageDialog(err.toString(), { title: 'Cleanup failed', kind: 'error' });
     }
   };
 
@@ -282,6 +360,26 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
             >
               Cancel Feature
             </button>
+          )}
+          {(status === 'completed' || status === 'failed' || status === 'cancelled') && (
+            <>
+              <button
+                onClick={() => handlePublish(false)}
+                disabled={publishing}
+                className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
+                title="Open a PR/MR for review (R6)"
+              >
+                {publishing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitPullRequest className="w-3.5 h-3.5" />}
+                Publish MR
+              </button>
+              <button
+                onClick={handleCleanup}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-bold transition duration-300"
+                title="Apply the project's feature_lifecycle (archive / keep / auto_delete)"
+              >
+                Cleanup
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -347,6 +445,17 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                           <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono">
                             {step.step_kind}
                           </span>
+                          <button
+                            onClick={() => setReplayTarget({
+                              id: step.id,
+                              name: humanizeStepId(step.step_id),
+                              downstreamCount: steps.length - idx - 1,
+                            })}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1 px-2 py-1 rounded text-[10px] text-cyan-400/60 hover:text-cyan-300 hover:bg-cyan-500/10 font-bold uppercase tracking-wider"
+                            title="Replay from this step"
+                          >
+                            <RotateCcw className="w-3 h-3" /> Replay
+                          </button>
                         </div>
 
                         <div className="flex items-center gap-4 text-xs font-mono">
@@ -369,7 +478,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                         </div>
                       )}
 
-                      {step.error_message && (
+                      {(step.status === 'failed' || step.status === 'interrupted') && step.error_message && (
                         <div className="mt-3 p-3 rounded bg-rose-500/5 border border-rose-500/20 text-xs text-rose-400 font-mono">
                           {step.error_message}
                         </div>
@@ -413,22 +522,23 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                         </div>
                       )}
 
-                      {step.artifact_path && (
+                      {(step.artifact_paths?.length ? step.artifact_paths : step.artifact_path ? [step.artifact_path] : []).map((path) => (
                         <button
+                          key={path}
                           onClick={() => {
-                            setSelectedArtifactPath(step.artifact_path || null);
+                            setSelectedArtifactPath(path);
                             setSelectedStepTitle(step.step_id);
                           }}
                           className={`mt-3 w-full text-left text-xs font-mono p-3 rounded border flex items-center justify-between transition duration-300 ${
-                            selectedArtifactPath === step.artifact_path
+                            selectedArtifactPath === path
                               ? 'bg-violet-950/20 border-violet-500/30 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
                               : 'bg-[#050608] border-white/[0.02] text-slate-400 hover:border-white/10 hover:bg-white/[0.02] hover:text-white cursor-pointer'
                           }`}
                         >
-                          <span className="truncate">Artifact: {step.artifact_path.split('/').pop()}</span>
+                          <span className="truncate">Artifact: {path.split('/').pop()}</span>
                           <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">View Output</span>
                         </button>
-                      )}
+                      ))}
 
                       {step.status === 'running' && (
                         <div className="mt-3 flex gap-2">
@@ -505,6 +615,65 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Replay from step confirmation modal */}
+      {replayTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#0d0f14] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 shadow-[0_0_40px_rgba(0,0,0,0.5)]">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-8 h-8 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
+                <RotateCcw className="w-4 h-4 text-cyan-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white font-display tracking-wide">
+                  Replay from "{replayTarget.name}"
+                </h3>
+                <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                  {replayTarget.downstreamCount > 0
+                    ? `${replayTarget.downstreamCount} downstream step${replayTarget.downstreamCount > 1 ? 's' : ''} will be re-executed`
+                    : 'Only this step will be re-executed'}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-400 mb-5 leading-relaxed">
+              Current artifacts for the affected steps will be replaced.
+              {status === 'running' && ' The current execution will be cancelled.'}
+            </p>
+
+            {availableModels.length > 0 && (
+              <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5 mb-5">
+                <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Model:</label>
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="flex-1 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
+                >
+                  <option value="">Default (From Workflow)</option>
+                  {availableModels.map((m) => (
+                    <option key={m.value} value={m.value}>{m.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setReplayTarget(null)}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReplayFromStep}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] rounded-lg text-xs font-bold text-white transition duration-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+              >
+                <RotateCcw className="w-3 h-3" /> Replay
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -21,10 +21,12 @@ pub(crate) fn update_step_status(
     error_message: Option<String>,
 ) {
     let _ = features.step_update(&step_exec.id, &StepExecutionPatch {
+        iteration_count: None,
         status: Some(status.to_string()),
         cost_usd: Some(Some(cost_usd)),
         wall_clock_secs: Some(Some(wall_clock_secs)),
         artifact_path: artifact_path.map(|p| Some(p)),
+        artifact_paths: None,
         error_message: error_message.map(|msg| Some(msg)),
     });
     let _ = notif.emit(&DomainEvent::StepProgress {

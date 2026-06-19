@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Server, RotateCw, AlertTriangle } from 'lucide-react';
+import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Server, RotateCw, AlertTriangle, Key } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface Provider {
@@ -12,11 +12,28 @@ interface Provider {
     avatarUrl: string;
 }
 
+interface Machine {
+    id: string;
+    name: string;
+    host: string;
+    port: number;
+    username: string;
+    auth_type: string;
+    key_path?: string | null;
+    agents?: string | null;
+}
+
 interface NewProjectViewProps {
     setView: (view: string) => void;
     setProjects: (updater: (prev: any[]) => any[]) => void;
     setCurrentProjectId: (id: string) => void;
     providers: Provider[];
+    /**
+     * Optional callback to navigate to the Machines settings page.
+     * When omitted, the "Manage machines…" link is hidden — useful
+     * for tests and for surfaces that don't want to expose it.
+     */
+    onOpenMachinesSettings?: () => void;
 }
 
 interface AvailableRepo {
@@ -31,10 +48,12 @@ interface WorktreeStrategy {
     pr_template: string | null;
 }
 
-const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, setCurrentProjectId, providers }) => {
+const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, setCurrentProjectId, providers, onOpenMachinesSettings }) => {
     const [projectName, setProjectName] = useState('');
     const [computeType, setComputeType] = useState('local');
     const [remoteHost, setRemoteHost] = useState('');
+    const [machines, setMachines] = useState<Machine[]>([]);
+    const [keyPassphrase, setKeyPassphrase] = useState('');
     const [selectedRepos, setSelectedRepos] = useState<AvailableRepo[]>([]);
     const [isRepoModalOpen, setIsRepoModalOpen] = useState(false);
     const [repoSearch, setRepoSearch] = useState('');
@@ -91,12 +110,45 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
         fetchRepos();
     }, [providers]);
 
+    // Fetch the machine list so the Remote SSH row can show a dropdown
+    // and surface a passphrase field when the selected machine uses
+    // SSH-key auth (the most common case for "private key with a
+    // passphrase" the user mentioned).
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const list: Machine[] = await invoke('get_machines');
+                if (!cancelled) setMachines(list ?? []);
+            } catch (err) {
+                console.warn('Failed to fetch machines:', err);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    // The dropdown's selected machine is what the passphrase is for.
+    // Fall back to a manual id if the user typed something we don't
+    // recognise (e.g. they created the machine in a previous session).
+    const selectedMachine = machines.find((m) => m.id === remoteHost) ?? null;
+    const showPassphraseField =
+        computeType === 'remote' &&
+        selectedMachine !== null &&
+        selectedMachine.auth_type === 'key';
+
     const [isTestingConnection, setIsTestingConnection] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
     useEffect(() => {
         setConnectionStatus('idle');
     }, [remoteHost]);
+
+    // Clear the in-memory passphrase if the user picks a different
+    // machine (or switches back to local) — otherwise the next submit
+    // would write the old machine's passphrase to the new one.
+    useEffect(() => {
+        setKeyPassphrase('');
+    }, [remoteHost, computeType]);
 
     const toggleRepo = (repo: AvailableRepo) => {
         setSelectedRepos(prev =>
@@ -128,6 +180,21 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
         setBootstrapError('');
 
         try {
+            // 0. If the user provided a passphrase for a key-auth
+            //    machine, persist it to the keyring *before* the
+            //    bootstrap clone runs (the SSH layer reads the
+            //    secret during bootstrap).
+            if (computeType === 'remote' && keyPassphrase.trim().length > 0 && remoteHost) {
+                await invoke('set_machine_secret', {
+                    machineId: remoteHost,
+                    secret: keyPassphrase,
+                });
+                // Clear the in-memory passphrase; we don't want it
+                // lingering in component state once it's been written
+                // to the keyring.
+                setKeyPassphrase('');
+            }
+
             // 1. Create the project record
             const res = await invoke<{ id: string; success: boolean }>('create_project', {
                 config: {
@@ -355,30 +422,119 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
                                 </button>
                             </div>
                             {computeType === 'remote' && (
-                                <div className="mt-3 flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={remoteHost}
-                                        onChange={e => setRemoteHost(e.target.value)}
-                                        placeholder="e.g. machine_id (from Machines preferences)"
-                                        className="flex-1 bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white font-mono focus:outline-none focus:border-cyan-500/50"
-                                        disabled={bootstrapStep !== 'form'}
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={handleTestConnection}
-                                        disabled={!remoteHost || isTestingConnection || bootstrapStep !== 'form'}
-                                        className="px-4 py-2 text-xs font-semibold rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-white disabled:opacity-40 flex items-center gap-1.5 transition-all shrink-0"
-                                    >
-                                        {isTestingConnection ? (
-                                            <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-                                        ) : connectionStatus === 'success' ? (
-                                            <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                        ) : connectionStatus === 'error' ? (
-                                            <X className="w-3.5 h-3.5 text-ruby-400" />
-                                        ) : null}
-                                        {isTestingConnection ? 'Testing...' : connectionStatus === 'success' ? 'Connected' : connectionStatus === 'error' ? 'Failed' : 'Test Connection'}
-                                    </button>
+                                <div className="mt-3 space-y-2">
+                                    <div className="flex gap-2">
+                                        <select
+                                            value={remoteHost}
+                                            onChange={e => setRemoteHost(e.target.value)}
+                                            disabled={bootstrapStep !== 'form' || machines.length === 0}
+                                            className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white font-mono focus:outline-none focus:border-cyan-500/50 disabled:opacity-60"
+                                        >
+                                            <option value="">
+                                                {machines.length === 0 ? 'No machines configured — add one in Settings → Machines' : 'Select a machine…'}
+                                            </option>
+                                            {machines.map(m => (
+                                                <option key={m.id} value={m.id}>
+                                                    {m.name} ({m.username}@{m.host}:{m.port} — {m.auth_type})
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            type="button"
+                                            onClick={handleTestConnection}
+                                            disabled={!remoteHost || isTestingConnection || bootstrapStep !== 'form'}
+                                            title={
+                                                isTestingConnection
+                                                    ? 'Testing SSH connection…'
+                                                    : connectionStatus === 'success'
+                                                        ? 'SSH connection successful — click to re-test'
+                                                        : connectionStatus === 'error'
+                                                            ? 'SSH connection failed — click to retry'
+                                                            : 'Test SSH connection to the selected machine'
+                                            }
+                                            aria-label="Test SSH connection"
+                                            className="px-3 py-2 text-xs font-semibold rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-white disabled:opacity-40 flex items-center gap-1.5 transition-all shrink-0"
+                                        >
+                                            {isTestingConnection ? (
+                                                <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                                            ) : connectionStatus === 'success' ? (
+                                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                            ) : connectionStatus === 'error' ? (
+                                                <X className="w-3.5 h-3.5 text-ruby-400" />
+                                            ) : (
+                                                <Server className="w-3.5 h-3.5 text-cyan-400" />
+                                            )}
+                                            <span className="hidden sm:inline">Test</span>
+                                        </button>
+                                    </div>
+
+                                    {/* Connection status — small inline chip
+                                        below the row so the row itself stays
+                                        compact and never overlaps other UI. */}
+                                    {connectionStatus !== 'idle' && (
+                                        <div
+                                            className={`text-[11px] font-mono flex items-center gap-1.5 ${
+                                                connectionStatus === 'success'
+                                                    ? 'text-emerald-400'
+                                                    : 'text-ruby-400'
+                                            }`}
+                                        >
+                                            {connectionStatus === 'success' ? (
+                                                <>
+                                                    <Check className="w-3 h-3" />
+                                                    SSH connection verified
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <X className="w-3 h-3" />
+                                                    SSH connection failed — verify the machine's credentials in Settings
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {onOpenMachinesSettings && (
+                                        <button
+                                            type="button"
+                                            onClick={onOpenMachinesSettings}
+                                            className="text-[11px] text-cyan-400 hover:text-cyan-300 font-mono underline-offset-2 hover:underline"
+                                        >
+                                            Manage machines… (open Settings)
+                                        </button>
+                                    )}
+
+                                    {/* Passphrase for key-auth machines. Saved to the
+                                        keyring via `set_machine_secret` immediately
+                                        before the bootstrap clone runs. */}
+                                    {showPassphraseField && (
+                                        <div>
+                                            <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                                                <Key className="w-3 h-3" /> Private Key Passphrase
+                                            </label>
+                                            <input
+                                                type="password"
+                                                value={keyPassphrase}
+                                                onChange={e => setKeyPassphrase(e.target.value)}
+                                                placeholder="Leave blank if the key has no passphrase, or to keep the stored one"
+                                                autoComplete="off"
+                                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                                                disabled={bootstrapStep !== 'form'}
+                                            />
+                                            {selectedMachine?.key_path && (
+                                                <p className="mt-1 text-[10px] text-slate-500 font-mono truncate">
+                                                    Key: {selectedMachine.key_path}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* If the typed id is not a known machine,
+                                        surface a hint to the user. */}
+                                    {computeType === 'remote' && remoteHost && !selectedMachine && machines.length > 0 && (
+                                        <p className="text-[10px] text-amber-400 font-mono">
+                                            Unknown machine id. Configure it in Preferences → Machines before bootstrapping.
+                                        </p>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -418,8 +574,13 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
                     </div>
                 </div>
 
-                {/* Right Panel: Proposals & settings config */}
-                <div className="glass-panel p-6 rounded-xl flex flex-col h-fit sticky top-8 border-white/10 shadow-2xl">
+                {/* Right Panel: Proposals & settings config. NOT sticky —
+                    the left panel can grow tall (machine dropdown,
+                    passphrase field, Manage-machines link, repo list)
+                    and a sticky right panel would visually overlap
+                    the left-panel rows as the user scrolls, blocking
+                    access to the Save button. */}
+                <div className="glass-panel p-6 rounded-xl flex flex-col h-fit border-white/10 shadow-2xl">
                     {bootstrapStep === 'form' ? (
                         <>
                             <div className="mb-6">

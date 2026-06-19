@@ -69,6 +69,10 @@ pub struct FeaturePatch {
     pub duration: Option<Option<String>>,
     pub agent_kind: Option<Option<String>>,
     pub model: Option<Option<String>>,
+    /// Set/clear the MR/PR URL after [`MrPublisher::publish_mr`].
+    pub mr_url: Option<Option<String>>,
+    /// Set the MR/PR state on the feature (draft/open/merged/closed).
+    pub mr_state: Option<Option<String>>,
 }
 
 /// Patch for [`FeatureRepository::step_update`].
@@ -79,8 +83,21 @@ pub struct StepExecutionPatch {
     pub status: Option<String>,
     pub cost_usd: Option<Option<f64>>,
     pub wall_clock_secs: Option<Option<u64>>,
+    /// Legacy single-path field. The repo adapter also writes the first
+    /// entry of `artifact_paths` here when the latter is set, so older
+    /// readers (gate UI, startup watchdog) keep seeing a primary path.
+    /// New code should set `artifact_paths` and let the adapter keep
+    /// `artifact_path` in sync.
     pub artifact_path: Option<Option<String>>,
+    /// Replace the full artifact list. `None` → leave alone. `Some(vec)`
+    /// → set to that vec (may be empty to clear). There is no
+    /// `Some(None)`-means-NULL path: the column is NOT NULL DEFAULT '[]'
+    /// so an empty list is the "no artifacts" representation.
+    pub artifact_paths: Option<Vec<String>>,
     pub error_message: Option<Option<String>>,
+    /// Bump the per-step retry counter. The driver uses this when
+    /// following an `on_failure -> goto` edge. `None` = leave alone.
+    pub iteration_count: Option<u32>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,6 +234,9 @@ pub trait GateRepository: Send + Sync {
     ) -> Result<(), String>;
     fn pending_for_feature(&self, feature_id: &FeatureId) -> Result<Option<GateDecision>, String>;
     fn latest_decided_for_feature(&self, feature_id: &FeatureId) -> Result<Option<GateDecision>, String>;
+    /// Remove the gate decision row for a given step execution.
+    /// Used when replaying from a gate step to clear its pending/decided state.
+    fn reset_for_step_execution(&self, step_execution_id: &StepExecutionId) -> Result<(), String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

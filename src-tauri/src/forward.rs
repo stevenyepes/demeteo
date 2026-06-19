@@ -50,9 +50,12 @@ pub fn start_port_forward(
     // 3. Resolve keyring credentials
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
-            let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id))
-                .map_err(|e| format!("Keyring error: {}", e))?;
-            entry.get_password().ok()
+            let key = format!("machine_{}", machine.id);
+            crate::credential_cache::get_or_fetch(&key, || {
+                let entry = keyring::Entry::new("demeteo", &key)
+                    .map_err(|e| format!("Keyring error: {}", e))?;
+                entry.get_password().map_err(|e| format!("Keyring error: {}", e))
+            }).ok()
         }
         _ => None,
     };

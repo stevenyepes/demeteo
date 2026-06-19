@@ -118,6 +118,8 @@ pub(crate) fn build_base_ctx(
         .set("project_conventions", conventions_content)
 }
 
+const MAX_SLUG_LEN: usize = 50;
+
 /// Generate a URL-safe slug from a feature description string.
 pub(crate) fn slug_from_description(description: &str) -> String {
     let slug = description
@@ -129,10 +131,20 @@ pub(crate) fn slug_from_description(description: &str) -> String {
         .join("-")
         .to_lowercase();
     if slug.is_empty() {
-        "feature".to_string()
-    } else {
-        slug
+        return "feature".to_string();
     }
+    if slug.len() <= MAX_SLUG_LEN {
+        return slug;
+    }
+    // Truncate at a hyphen boundary to avoid cutting a word in half.
+    let truncated = &slug[..MAX_SLUG_LEN];
+    if let Some(last_hyphen) = truncated.rfind('-') {
+        // Only trim if we'd actually remove characters (keep at least some)
+        if last_hyphen > 1 {
+            return truncated[..last_hyphen].to_string();
+        }
+    }
+    truncated.to_string()
 }
 
 pub(crate) fn fetch_default_settings() -> ProjectSettings {

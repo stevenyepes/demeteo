@@ -19,12 +19,20 @@ pub struct AgentContext {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub cwd: String,
+    /// Optional model identifier to pass as initial configOption
+    /// in the `session/new` request (e.g. "deepseek", "gpt-4o").
+    pub model: Option<String>,
     /// The policy-enforced execution port. Used by the tool bridge
     /// inside the runtime to dispatch agent-originated file/terminal
     /// requests through the existing policy + scope-fence machinery.
     pub agent_exec: Arc<dyn AgentExecutionPort>,
     /// The execution port for spawning processes locally or remotely.
     pub exec: Arc<dyn crate::ports::execution::ExecutionPort>,
+}
+
+/// Standard environment variables injected into every agent process.
+pub fn agent_base_env() -> HashMap<String, String> {
+    HashMap::new()
 }
 
 #[derive(Debug, Error)]

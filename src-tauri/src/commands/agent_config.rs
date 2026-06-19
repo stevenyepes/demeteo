@@ -24,14 +24,15 @@ pub fn get_agent_configs(
         Err(_) => machine_id_typed,
     };
 
-    let configured = ctx.threads.get_agent_configs(&resolved_id).unwrap_or_else(|_| {
-        vec![
+    let mut configured = ctx.threads.get_agent_configs(&resolved_id).unwrap_or_else(|_| Vec::new());
+    if configured.is_empty() {
+        configured = vec![
             AgentConfig { kind: "opencode".to_string(), enabled: true },
             AgentConfig { kind: "hermes".to_string(), enabled: true },
             AgentConfig { kind: "claude-code".to_string(), enabled: true },
             AgentConfig { kind: "antigravity".to_string(), enabled: true },
-        ]
-    });
+        ];
+    }
 
     let runtime_kinds: Vec<&'static str> = ctx
         .registry
@@ -44,12 +45,7 @@ pub fn get_agent_configs(
         let available = runtime_kinds
             .iter()
             .find(|k| **k == cfg.kind)
-            .map(|k| {
-                ctx.registry
-                    .runtime_for(k)
-                    .map(|r| r.is_available(&*ctx.exec, &machine_id))
-                    .unwrap_or(false)
-            })
+            .map(|k| ctx.registry.is_available(k, &*ctx.exec, &machine_id))
             .unwrap_or(false);
         let install_command = runtime_kinds
             .iter()

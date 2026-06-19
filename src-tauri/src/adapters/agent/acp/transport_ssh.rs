@@ -144,7 +144,7 @@ impl InteractiveHandle for RemoteSshTransport {
                 Ok(n) => return Ok(n),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                     drop(ch);
-                    std::thread::yield_now();
+                    std::thread::sleep(std::time::Duration::from_millis(10));
                     continue;
                 }
                 Err(e) => return Err(e),

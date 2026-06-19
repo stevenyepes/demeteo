@@ -4,6 +4,7 @@ use crate::domain::ids::ProjectId;
 use crate::domain::models::{ProjectSettings, WorktreeStrategy};
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::paths;
+use crate::ports::db::MachineRepository;
 
 fn get_repo_name(repo_path: &str) -> String {
     paths::repo_name_from_path(repo_path)
@@ -177,6 +178,15 @@ async fn do_bootstrap_inner(
                 ));
             }
         }
+
+        // Run machine-level setup commands after clone (e.g. mise trust,
+        // npm install, or other per-repo initialization).  These are
+        // configured by the user in the machine settings UI.
+        if let Some(cmds_json) = lookup_machine_setup_commands(ctx, machine_str) {
+            for cmd in &cmds_json {
+                let _ = ctx.exec.run_command(machine_str, cmd);
+            }
+        }
     }
 
     // 4. Run Strategy Detector on the main repository
@@ -207,4 +217,19 @@ pub fn save_project_settings(
     ctx.projects.update_status(&project_id_typed, "idle")?;
 
     Ok(())
+}
+
+/// Look up a machine by its string identifier (id, name, host, or "local")
+/// and return its parsed `setup_commands` (JSON array of shell commands),
+/// or `None` if not configured / not found.
+fn lookup_machine_setup_commands(ctx: &AppContext, machine_str: &str) -> Option<Vec<String>> {
+    let machines = ctx.machines.get_machines().ok()?;
+    let machine = machines.into_iter().find(|m| {
+        m.id.as_ref() == machine_str
+            || format!("{}@{}", m.username, m.host) == machine_str
+            || m.host == machine_str
+            || m.name == machine_str
+    })?;
+    let json = machine.setup_commands.as_ref()?;
+    serde_json::from_str(json).ok()
 }

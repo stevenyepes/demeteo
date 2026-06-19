@@ -15,12 +15,14 @@ impl GitOpsHelper {
         Self { app_settings, exec }
     }
 
-    /// Retrieve the token for the given provider from Keyring
+    /// Retrieve the token for the given provider from Keyring (cached in-process).
     pub fn get_provider_pat(&self, provider_id: &str) -> Result<String, String> {
-        let entry = Entry::new("demeteo", provider_id)
-            .map_err(|e| format!("Failed to access keyring: {}", e))?;
-        entry.get_password()
-            .map_err(|e| format!("Token not found in keyring for provider '{}': {}", provider_id, e))
+        crate::credential_cache::get_or_fetch(provider_id, || {
+            let entry = Entry::new("demeteo", provider_id)
+                .map_err(|e| format!("Failed to access keyring: {}", e))?;
+            entry.get_password()
+                .map_err(|e| format!("Token not found in keyring for provider '{}': {}", provider_id, e))
+        })
     }
 
     /// Run clone operation. Clones to either local or remote path based on compute_type
@@ -322,20 +324,22 @@ impl GitOpsHelper {
         Ok(wt_dir)
     }
 
-    /// Clean up a linked worktree for a subtask.
+    /// Clean up a linked worktree for a subtask, including its branch.
     pub fn cleanup_subtask_worktree(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
+        feature_branch: &str,
         subtask_id: &str,
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or("local");
         let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
+        let subtask_branch = format!("{}_subtask_{}", feature_branch, subtask_id);
 
-        let cmd = format!("git -C {} worktree remove --force {}", paths::shell_escape_posix(repo_dir), paths::shell_escape_posix(&wt_dir));
-        let _ = self.exec.run_command(machine_str, &cmd);
+        let _ = self.exec.run_command(machine_str, &format!("git -C {} worktree remove --force {}", paths::shell_escape_posix(repo_dir), paths::shell_escape_posix(&wt_dir)));
         let _ = self.exec.run_command(machine_str, &format!("git -C {} worktree prune", paths::shell_escape_posix(repo_dir)));
         let _ = self.exec.run_command(machine_str, &format!("rm -rf {}", paths::shell_escape_posix(&wt_dir)));
+        let _ = self.exec.run_command(machine_str, &format!("git -C {} branch -D {}", paths::shell_escape_posix(repo_dir), paths::shell_escape_posix(&subtask_branch)));
         Ok(())
     }
 
@@ -455,7 +459,13 @@ mod tests {
     #[test]
     fn test_list_worktrees_with_one_extra_worktree() {
         let (dir, helper) = make_repo("wt_extra");
-        let repo = dir.to_string_lossy().to_string();
+        // Canonicalize to handle macOS /tmp → /private/tmp symlink.
+        // TempDir may return the symlink path while git worktree list
+        // returns the real path, causing an assertion mismatch.
+        let repo = std::fs::canonicalize(&dir)
+            .unwrap_or_else(|_| dir.as_os_str().to_os_string().into())
+            .to_string_lossy()
+            .to_string();
 
         // Add a linked worktree on a new branch
         let wt_dir = format!("{}-wt", repo);

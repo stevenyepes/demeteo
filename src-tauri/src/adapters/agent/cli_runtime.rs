@@ -36,14 +36,7 @@ impl AgentRuntime for CliAgentRuntime {
 
     fn is_available(&self, exec: &dyn crate::ports::execution::ExecutionPort, machine_id: &str) -> bool {
         if machine_id == "local" || machine_id.is_empty() {
-            // Quick which/command -v check on the local PATH.
-            Command::new("which")
-                .arg(self.binary)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
+            super::is_binary_on_local_path(self.binary)
         } else {
             exec.run_command(machine_id, &format!("command -v {} >/dev/null 2>&1 && echo ok", self.binary))
                 .map(|out| out.trim() == "ok")
@@ -66,21 +59,45 @@ impl AgentRuntime for CliAgentRuntime {
         let kind = self.kind_str;
 
         Box::pin(async move {
+            let resolved_binary = super::resolve_local_binary_path(binary)
+                .unwrap_or_else(|| binary.to_string());
             // Build the command. The full prompt is delivered via stdin after spawn.
-            let mut child = Command::new(binary)
-                .args(&extra_args)
+            let mut args: Vec<String> = extra_args.iter().map(|s| s.to_string()).collect();
+            if let Some(ref m) = ctx.model {
+                args.push("--model".to_string());
+                args.push(m.clone());
+            }
+
+            let mut child = Command::new(resolved_binary)
+                .args(&args)
                 .current_dir(&ctx.cwd)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|e| AgentStartError::SpawnFailed(format!("{}: {}", kind, e)))?;
 
             let stdin = child.stdin.take().expect("stdin was piped");
             let stdout = child.stdout.take().expect("stdout was piped");
+            let stderr = child.stderr.take();
+
+            if let Some(stderr) = stderr {
+                std::thread::spawn(move || {
+                    let reader = std::io::BufReader::new(stderr);
+                    for line in reader.lines() {
+                        if let Ok(l) = line {
+                            let trimmed = l.trim();
+                            if !trimmed.is_empty() {
+                                eprintln!("[agent stderr] {}", trimmed);
+                            }
+                        }
+                    }
+                });
+            }
 
             let session = CliAgentSession {
                 session_id: format!("{}-{}", kind, ctx.thread_id),
+                child: Mutex::new(Some(child)),
                 stdin: Mutex::new(Some(stdin)),
                 stdout: Mutex::new(Some(BufReader::new(stdout))),
                 parse_event,
@@ -93,6 +110,7 @@ impl AgentRuntime for CliAgentRuntime {
 
 pub struct CliAgentSession {
     session_id: String,
+    child: Mutex<Option<std::process::Child>>,
     stdin: Mutex<Option<std::process::ChildStdin>>,
     stdout: Mutex<Option<BufReader<std::process::ChildStdout>>>,
     parse_event: EventParser,
@@ -156,11 +174,11 @@ impl AgentSession for CliAgentSession {
     }
 
     fn cancel(&self) -> Result<(), String> {
-        // Drop stdin to signal EOF to the child process.
+        // Drop stdin to signal EOF to the child process, and also kill it
         if let Ok(mut guard) = self.stdin.lock() {
             *guard = None;
         }
-        Ok(())
+        self.kill()
     }
 
     fn set_mode(&self, _mode_id: &str) -> Result<(), String> {
@@ -174,5 +192,21 @@ impl AgentSession for CliAgentSession {
 
     fn session_info(&self) -> SessionInfo {
         SessionInfo::default()
+    }
+
+    fn kill(&self) -> Result<(), String> {
+        if let Ok(mut guard) = self.child.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for CliAgentSession {
+    fn drop(&mut self) {
+        let _ = self.kill();
     }
 }

@@ -181,8 +181,19 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
     useEffect(() => {
         const fetchWorkspaceData = async () => {
             setIsLoadingFeatures(true);
-            try {
-                const res = await invoke<Feature[]>('fetch_active_features', { projectId: activeProject.id });
+            const machineId = activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local';
+
+            const [featuresRes, reposRes, workflowsRes, settingsRes, configsRes] = await Promise.allSettled([
+                invoke<Feature[]>('fetch_active_features', { projectId: activeProject.id }),
+                invoke<any[]>('get_repositories_for_project', { projectId: activeProject.id }),
+                invoke<any[]>('workflow_list'),
+                invoke<any>('get_proposed_strategy', { projectId: activeProject.id }),
+                invoke<any[]>('get_agent_configs', { machineId })
+            ]);
+
+            // Handle active features
+            if (featuresRes.status === 'fulfilled' && featuresRes.value) {
+                const res = featuresRes.value;
                 if (res && res.length > 0) {
                     const mapped = res.map(f => ({
                         id: f.id,
@@ -196,41 +207,39 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                 } else {
                     setFeatures([]);
                 }
-            } catch (err) {
-                console.error("Failed to fetch active features:", err);
+            } else {
+                if (featuresRes.status === 'rejected') {
+                    console.error("Failed to fetch active features:", featuresRes.reason);
+                }
                 setFeatures([]);
-            } finally {
-                setIsLoadingFeatures(false);
             }
+            setIsLoadingFeatures(false);
 
-            try {
-                const reposRes = await invoke<any[]>('get_repositories_for_project', {
-                    projectId: activeProject.id
-                });
-                const mapped = reposRes.map(r => ({
+            // Handle repositories
+            if (reposRes.status === 'fulfilled' && reposRes.value) {
+                const mapped = reposRes.value.map(r => ({
                     path: r.repo_path,
                     name: r.repo_path.split('/').pop() || r.repo_path
                 }));
                 setRepositories(mapped);
-            } catch (err) {
-                console.error("Failed to fetch repositories:", err);
+            } else if (reposRes.status === 'rejected') {
+                console.error("Failed to fetch repositories:", reposRes.reason);
             }
 
-            try {
-                const list = await invoke<any[]>('workflow_list');
+            // Handle workflows
+            if (workflowsRes.status === 'fulfilled' && workflowsRes.value) {
+                const list = workflowsRes.value;
                 setWorkflows(list);
                 if (list.length > 0) {
                     setSelectedWorkflow(list[0]);
                 }
-            } catch (err) {
-                console.error("Failed to fetch workflows:", err);
+            } else if (workflowsRes.status === 'rejected') {
+                console.error("Failed to fetch workflows:", workflowsRes.reason);
             }
 
-            try {
-                // Fetch settings to get default agent and model
-                const settings = await invoke<any>('get_proposed_strategy', {
-                    projectId: activeProject.id
-                });
+            // Handle proposed strategy settings
+            if (settingsRes.status === 'fulfilled' && settingsRes.value) {
+                const settings = settingsRes.value;
                 if (settings) {
                     const defAgent = settings.default_agent_kind || '';
                     const defModel = settings.default_model || '';
@@ -239,17 +248,17 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                     setSelectedAgentKind(defAgent);
                     setSelectedModel(defModel);
                 }
-            } catch (err) {
-                console.error("Failed to fetch project settings:", err);
+            } else if (settingsRes.status === 'rejected') {
+                console.error("Failed to fetch project settings:", settingsRes.reason);
             }
 
-            try {
-                // Fetch available agents for the project's machine
-                const machineId = activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local';
-                const configs = await invoke<any[]>('get_agent_configs', { machineId });
-                setAgentConfigs(configs || []);
-            } catch (err) {
-                console.error("Failed to fetch agent configs:", err);
+            // Handle agent configs
+            if (configsRes.status === 'fulfilled' && configsRes.value) {
+                setAgentConfigs(configsRes.value || []);
+            } else {
+                if (configsRes.status === 'rejected') {
+                    console.error("Failed to fetch agent configs:", configsRes.reason);
+                }
                 setAgentConfigs([]);
             }
         };
@@ -288,6 +297,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                 projectId: activeProject.id, 
                 workflowId: selectedWorkflow.id,
                 title: featureInput,
+                description: featureInput,
                 agentKind: selectedAgentKind || null,
                 model: selectedModel || null
             });

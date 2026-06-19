@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::artifact::{ArtifactDecl, ArtifactMode};
 use super::ids::{
     AgentProfileId, FeatureId, GateDecisionId, MachineId, MessageId, ProjectId, ProviderId,
     RepositoryId, StepExecutionId, StepId, ThreadId, WorkflowId, WorkflowVersionId,
@@ -36,6 +37,20 @@ pub struct SessionModeInfo {
     pub description: Option<String>,
 }
 
+fn deserialize_lax_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let val = serde_json::Value::deserialize(deserializer)?;
+    match val {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        serde_json::Value::Bool(b) => Ok(b.to_string()),
+        serde_json::Value::Null => Ok(String::new()),
+        _ => Ok(val.to_string()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigOption {
     pub id: String,
@@ -46,13 +61,15 @@ pub struct ConfigOption {
     pub category: Option<String>,
     #[serde(rename = "type", default)]
     pub option_type: String,
-    #[serde(rename = "currentValue")]
+    #[serde(rename = "currentValue", deserialize_with = "deserialize_lax_string")]
     pub current_value: String,
+    #[serde(default)]
     pub options: Vec<ConfigOptionValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigOptionValue {
+    #[serde(deserialize_with = "deserialize_lax_string")]
     pub value: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,6 +87,10 @@ pub struct Machine {
     pub key_path: Option<String>,
     pub agents: Option<String>,               // JSON-encoded array of {kind, enabled} records
     pub auto_approved_rules: Option<String>,   // JSON-encoded array of auto-approved commands (regexes, legacy)
+    #[serde(default)]
+    pub use_login_shell: Option<bool>,         // null/false = no login shell; true = bash -l -c
+    #[serde(default)]
+    pub setup_commands: Option<String>,        // JSON array of shell commands run after clone
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -197,6 +218,12 @@ pub struct Feature {
     pub agent_kind: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// URL of the published PR/MR, if any. Set by the `MrPublisher`.
+    #[serde(default)]
+    pub mr_url: Option<String>,
+    /// State of the PR/MR on the provider: `none|draft|open|merged|closed`.
+    #[serde(default)]
+    pub mr_state: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -294,12 +321,31 @@ pub struct StepConfig {
     pub agent_kind: Option<String>,
     /// Prompt template sent to the agent. May reference {{feature_description}}.
     pub prompt_template: Option<String>,
-    /// "full" | "summary_only" | "none"
+    /// Default persistence mode for this step's artifacts. The per-artifact
+    /// `ArtifactDecl.mode` overrides this when set; this field is what the
+    /// workflow editor's dropdown binds to.
     pub artifact_mode: String,
     /// Step id to jump to on failure (loopback). None = abort feature.
     pub on_failure: Option<StepId>,
     /// Maximum loop iterations before the executor surfaces a gate instead.
     pub max_iterations: Option<u32>,
+    /// Per-step artifact contract. The executor resolves these at
+    /// `TurnComplete` against the events the agent emitted, computes
+    /// derived artifacts (diffs, worktree pointers), and writes the
+    /// resulting references to `step_execution.artifact_paths`.
+    ///
+    /// `None` (JSON `null`) or `Some([])` is the legacy backstop: the
+    /// executor falls back to the chat-stream-as-artifact path so old
+    /// workflows keep running during migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<Vec<ArtifactDecl>>,
+}
+
+impl StepConfig {
+    /// The effective per-step default mode as a typed enum.
+    pub fn artifact_mode_typed(&self) -> ArtifactMode {
+        ArtifactMode::from_str_loose(&self.artifact_mode)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,9 +366,26 @@ pub struct StepExecution {
     pub status: String,
     pub cost_usd: Option<f64>,
     pub wall_clock_secs: Option<u64>,
-    /// Filesystem path of the artifact produced by this step.
+    /// Legacy single-path field. Kept so existing readers (gate display,
+    /// pre-refactor tests, the startup watchdog) still see a sensible
+    /// primary path. New code should prefer [`Self::artifact_paths`].
+    /// Populated by the executor as the first entry of `artifact_paths`
+    /// when the latter is non-empty; cleared when the latter is empty.
+    #[serde(default)]
     pub artifact_path: Option<String>,
+    /// Ordered list of artifact references produced by this step.
+    /// Stored as a JSON-encoded TEXT column on `step_executions` (V5
+    /// migration). Each entry is an `ArtifactStore` reference
+    /// (filesystem path for the FS adapter) that the next step's
+    /// prompt renderer and the UI's `ArtifactViewer` can resolve.
+    #[serde(default)]
+    pub artifact_paths: Vec<String>,
     pub error_message: Option<String>,
+    /// How many times the executor has entered this step via a
+    /// `on_failure -> goto` edge. Persists across executor restarts so
+    /// the `max_iterations` budget can't be reset by relaunching.
+    #[serde(default)]
+    pub iteration_count: u32,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -337,4 +400,137 @@ pub struct GateDecision {
     /// Feedback / redirect instructions provided by the user.
     pub feedback: Option<String>,
     pub created_at: i64,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase R6 — merge / conflict / publish domain models
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One row per `parallel`-step subtask execution. Linked back to the
+/// `step_executions` row that spawned it.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubtaskRun {
+    pub id: String,
+    pub feature_id: FeatureId,
+    pub step_execution_id: StepExecutionId,
+    /// The planner-assigned subtask id ("sub-1", "sub-2", …).
+    pub subtask_id: String,
+    /// The agent session that ran the subtask, if any. Set after
+    /// the agent spawns; cleared on teardown so the audit trail
+    /// doesn't pin a stale handle.
+    pub agent_id: Option<String>,
+    pub worktree_path: String,
+    pub branch: String,
+    /// pending | running | completed | failed | skipped
+    pub status: String,
+    pub cost_usd: f64,
+    pub error_message: Option<String>,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+}
+
+/// One row per attempt to merge a `SubtaskRun` back into the feature
+/// branch. Conflict reports and resolution attempts are recorded
+/// here so the user can see what happened even after the driver
+/// moves on.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubtaskMerge {
+    pub id: String,
+    pub subtask_run_id: String,
+    pub feature_id: FeatureId,
+    pub source_branch: String,
+    pub target_branch: String,
+    /// pending | ok | conflict | skipped | aborted
+    pub status: String,
+    pub merge_commit_sha: Option<String>,
+    /// JSON-encoded [`ConflictReport`] when `status == "conflict"`.
+    pub conflict_report: Option<String>,
+    pub resolution_attempts: i32,
+    pub created_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+/// Result of a successful merge. `Ok` from [`MergeExecutor::merge_subtask_into_feature`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MergeOutcome {
+    pub merge_commit_sha: String,
+    pub target_branch: String,
+    pub source_branch: String,
+}
+
+/// One file in a conflict set. Path is repo-relative.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConflictFile {
+    pub path: String,
+    /// Short one-line summary ("both modified", "deleted by us",
+    /// "deleted by them", "added by both", …).
+    pub kind: String,
+}
+
+/// `git merge` / `git rebase` returned this — the merge executor
+/// surfaces it so the conflict resolver cascade has structured
+/// data to work with.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConflictReport {
+    pub source_branch: String,
+    pub target_branch: String,
+    pub files: Vec<ConflictFile>,
+    /// Raw stderr from the failing git invocation. Useful for the
+    /// manual-resolution UI ("look at the actual git error").
+    pub raw_error: String,
+    /// Detected at: ms-since-epoch. Helps the UI render "X minutes ago".
+    pub detected_at: i64,
+}
+
+/// Per-project setting that controls how a merge conflict is
+/// resolved. Mirrors the dropdown in `ProjectSettings`'s
+/// "Conflict Resolution Policy" field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictPolicy {
+    /// Always surface a gate; never auto-merge.
+    AlwaysGate,
+    /// Try the auto-agent first; cascade to manual on failure.
+    AutoAgent,
+    /// Skip the auto-agent; immediately open the manual UI.
+    AutoHuman,
+}
+
+impl ConflictPolicy {
+    pub fn from_db(s: &str) -> Self {
+        match s {
+            "auto_agent" => ConflictPolicy::AutoAgent,
+            "auto_human" => ConflictPolicy::AutoHuman,
+            _ => ConflictPolicy::AlwaysGate,
+        }
+    }
+}
+
+/// Options for [`MrPublisher::publish_mr`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishOptions {
+    /// True → open as draft. False → open as ready-for-review.
+    #[serde(default)]
+    pub draft: bool,
+    /// Optional PR/MR title override; defaults to the feature title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Optional body override; defaults to the rendered PR template.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// Optional base branch override; defaults to the project's
+    /// `default_branch` setting.
+    #[serde(default)]
+    pub target_branch: Option<String>,
+}
+
+/// Returned by [`MrPublisher::publish_mr`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MrInfo {
+    pub url: String,
+    /// Provider's state machine: "draft" | "open" | "merged" | "closed".
+    pub state: String,
+    pub number: u64,
+    pub provider_kind: String,
+    pub provider_host: String,
 }

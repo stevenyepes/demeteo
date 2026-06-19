@@ -16,7 +16,8 @@ use crate::adapters::agent::acp::event_mapper::{
 };
 use crate::adapters::agent::acp::jsonrpc::{JsonRpcClient, Message, RpcError};
 use crate::adapters::agent::acp::tool_bridge::{DispatchResult, ToolBridge};
-use crate::domain::agent_event::AgentEvent;
+use crate::domain::agent_event::{AgentEvent, ToolCallStatus};
+use crate::domain::artifact::Artifact;
 use crate::domain::intercept::ExecutionResult;
 use crate::domain::models::SessionInfo;
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
@@ -79,17 +80,20 @@ impl AgentRuntime for AcpRuntime {
                     "name": "demeteo",
                     "version": env!("CARGO_PKG_VERSION")
                 },
-                "capabilities": {
+                "clientCapabilities": {
                     "fs": { "readTextFile": true, "writeTextFile": true },
                     "terminal": true
                 }
             });
             let notif_collector: Arc<StdMutex<Vec<Message>>> = Arc::new(StdMutex::new(Vec::new()));
             let nc = notif_collector.clone();
-            let init_result = rpc
-                .call("initialize", init_params, move |m| nc.lock().unwrap().push(m))
-                .await
-                .map_err(|e| AgentStartError::SpawnFailed(format!("initialize: {}", e)))?;
+            let init_result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                rpc.call("initialize", init_params, move |m| nc.lock().unwrap().push(m)),
+            )
+            .await
+            .map_err(|_| AgentStartError::SpawnFailed("initialize timed out after 30s".into()))?
+            .map_err(|e| AgentStartError::SpawnFailed(format!("initialize: {}", e)))?;
             // Notifications from `initialize` aren't currently used;
             // the agent's init response carries the capability surface.
             drop(notif_collector);
@@ -146,14 +150,24 @@ impl AgentRuntime for AcpRuntime {
 
             // Create the per-turn session. The schema requires
             // `mcpServers` (an array, may be empty) alongside `cwd`.
-            let session_result = rpc
-                .call(
-                    "session/new",
-                    json!({ "cwd": ctx.cwd, "mcpServers": [] }),
-                    |_| {},
-                )
-                .await
-                .map_err(|e| AgentStartError::SpawnFailed(format!("session/new: {}", e)))?;
+            // If the caller specified a model, pass it as an initial
+            // configOption so the agent starts with it immediately.
+            let mut session_params = json!({ "cwd": ctx.cwd, "mcpServers": [] });
+            if let Some(ref model) = ctx.model {
+                if let Some(obj) = session_params.as_object_mut() {
+                    obj.insert(
+                        "configOptions".to_string(),
+                        json!([{"id": "model", "currentValue": model}]),
+                    );
+                }
+            }
+            let session_result = tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                rpc.call("session/new", session_params, |_| {}),
+            )
+            .await
+            .map_err(|_| AgentStartError::SpawnFailed("session/new timed out after 300s (model may be slow to load on this machine)".into()))?
+            .map_err(|e| AgentStartError::SpawnFailed(format!("session/new: {}", e)))?;
             let session_id = session_result
                 .get("sessionId")
                 .and_then(|v| v.as_str())
@@ -179,6 +193,26 @@ impl AgentRuntime for AcpRuntime {
                         .unwrap_or_default(),
                 ),
             };
+
+            // Verify the requested model was applied in the response.
+            if let Some(ref model) = ctx.model {
+                let applied = session_result
+                    .get("configOptions")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.iter().find(|o| o.get("id").and_then(|v| v.as_str()) == Some("model")))
+                    .and_then(|o| o.get("currentValue").and_then(|v| v.as_str()))
+                    .map(|v| v == model)
+                    .unwrap_or(false);
+                if !applied {
+                    eprintln!(
+                        "[acp/runtime] WARNING: model '{}' not reflected in session/new response configOptions. \
+                         Agent may ignore the initial config. Will try set_config_option as fallback.",
+                        model
+                    );
+                } else {
+                    println!("[acp/runtime] model '{}' confirmed in session/new response", model);
+                }
+            }
 
             // Tool bridge: we build it here so `prompt` can dispatch
             // agent-originated file/terminal requests through the
@@ -215,7 +249,9 @@ fn spawn_transport(ctx: &AgentContext) -> Result<Box<dyn crate::ports::execution
 
 fn spawn_local(ctx: &AgentContext) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
     use crate::adapters::agent::acp::transport_local::LocalSubprocessTransport;
-    let t = LocalSubprocessTransport::spawn(&ctx.binary, &ctx.args, &ctx.cwd, &ctx.env)?;
+    let resolved_binary = crate::adapters::agent::resolve_local_binary_path(&ctx.binary)
+        .unwrap_or_else(|| ctx.binary.clone());
+    let t = LocalSubprocessTransport::spawn(&resolved_binary, &ctx.args, &ctx.cwd, &ctx.env)?;
     Ok(Box::new(t))
 }
 
@@ -224,14 +260,7 @@ fn spawn_local(ctx: &AgentContext) -> Result<Box<dyn crate::ports::execution::In
 /// phase. The "machine_id == local" sentinel bypasses the check.
 fn is_binary_on_path(binary: &str, machine_id: &str) -> bool {
     if machine_id == "local" || machine_id.is_empty() {
-        // Use `command -v` via std::process to avoid adding a `which`
-        // dependency. Returns 0 if the binary is on PATH.
-        std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("command -v {} >/dev/null 2>&1", binary))
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        crate::adapters::agent::is_binary_on_local_path(binary)
     } else {
         // Remote check is the registry's job (via SSH `command -v`).
         // We return `true` optimistically here and let the spawn fail
@@ -411,6 +440,132 @@ async fn handle_message(
             if let Err(e) = res {
                 eprintln!("[AcpRuntime] handle_message: failed to send request_permission response: {}", e);
             }
+        } else {
+            // Check if it is a tool call request
+            let is_tool_call = match method.as_str() {
+                "read" | "read_text_file" | "fs/read_text_file" |
+                "write" | "write_text_file" | "fs/write_text_file" |
+                "edit" | "edit_text_file" | "fs/edit_text_file" |
+                "run_bash" | "bash" | "terminal/create" => true,
+                _ => false,
+            };
+
+            if is_tool_call {
+                let tool_call_id = id.as_str().map(|s| s.to_string())
+                    .or_else(|| id.as_u64().map(|n| n.to_string()))
+                    .or_else(|| id.as_i64().map(|n| n.to_string()))
+                    .unwrap_or_else(|| "req-id".to_string());
+                
+                let p = params.clone().unwrap_or(json!({}));
+                let target = p.get("path")
+                    .or_else(|| p.get("target"))
+                    .or_else(|| p.get("cmd"))
+                    .or_else(|| p.get("command"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                
+                let content = p.get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                
+                let tool_call_params = json!({
+                    "toolCallId": tool_call_id,
+                    "action": method,
+                    "target": target,
+                    "content": content
+                });
+
+                // 1. Emit AgentEvent::ToolCall so UI shows the tool call in progress
+                let action_kind = match method.as_str() {
+                    "read" | "read_text_file" | "fs/read_text_file" => crate::domain::action::ActionKind::Read,
+                    "write" | "write_text_file" | "fs/write_text_file" => crate::domain::action::ActionKind::Write,
+                    "edit" | "edit_text_file" | "fs/edit_text_file" => crate::domain::action::ActionKind::Edit,
+                    "run_bash" | "bash" | "terminal/create" => crate::domain::action::ActionKind::RunBash,
+                    _ => crate::domain::action::ActionKind::Read,
+                };
+                
+                let intercept_id = format!("int_pending:{}", tool_call_id);
+                let _ = tx.send(AgentEvent::ToolCall {
+                    tool_call_id: tool_call_id.clone(),
+                    intercept_id: intercept_id.clone(),
+                    action: action_kind,
+                    target: target.to_string(),
+                    preview: if content.is_empty() { None } else { Some(content.to_string()) },
+                }).await;
+
+                // 2. Build the tool call response
+                if let Some(dispatch) = build_tool_call_response(bridge, machine_id, thread_id, &tool_call_params) {
+                    let artifact_for_intercept = dispatch.produced_artifact.clone();
+                    if let Some(body) = dispatch.payload {
+                        let _ = rpc.respond(id.clone(), body).await;
+                        
+                        // Emit completed status to UI
+                        let _ = tx.send(AgentEvent::ToolCallUpdate {
+                            tool_call_id: tool_call_id.clone(),
+                            status: ToolCallStatus::Completed,
+                            preview: None,
+                        }).await;
+
+                        // Emit ArtifactProduced for Write/Edit
+                        if let Some(artifact) = dispatch.produced_artifact {
+                            let _ = tx.send(AgentEvent::ArtifactProduced { artifact }).await;
+                        }
+                    }
+                    if let Some(rx) = dispatch.intercept_rx {
+                        let rpc = rpc.clone();
+                        let tc_id = tool_call_id.clone();
+                        let req_id = id.clone();
+                        let artifact_opt = artifact_for_intercept;
+                        let tx_clone = tx.clone();
+                        tokio::spawn(async move {
+                            match rx.await {
+                                Ok(Ok(r)) => {
+                                    let body = result_to_json(&r);
+                                    let _ = rpc.respond(req_id, body).await;
+                                    
+                                    let _ = tx_clone.send(AgentEvent::ToolCallUpdate {
+                                        tool_call_id: tc_id,
+                                        status: ToolCallStatus::Completed,
+                                        preview: None,
+                                    }).await;
+
+                                    if let Some(artifact) = artifact_opt {
+                                        if matches!(r, ExecutionResult::FileChanged { .. }) {
+                                            let _ = tx_clone.send(AgentEvent::ArtifactProduced { artifact }).await;
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    let _ = rpc.respond(req_id, json!({
+                                        "status": "failed",
+                                        "content": [{ "type": "text", "text": e.clone() }],
+                                    })).await;
+                                    
+                                    let _ = tx_clone.send(AgentEvent::ToolCallUpdate {
+                                        tool_call_id: tc_id,
+                                        status: ToolCallStatus::Failed { reason: e },
+                                        preview: None,
+                                    }).await;
+                                }
+                                Err(_) => {
+                                    let _ = rpc.respond(req_id, json!({
+                                        "status": "failed",
+                                        "content": [{ "type": "text", "text": "intercept channel closed" }],
+                                    })).await;
+                                    
+                                    let _ = tx_clone.send(AgentEvent::ToolCallUpdate {
+                                        tool_call_id: tc_id,
+                                        status: ToolCallStatus::Failed { reason: "intercept channel closed".to_string() },
+                                        preview: None,
+                                    }).await;
+                                }
+                            }
+                        });
+                    }
+                } else {
+                    let _ = rpc.respond(id.clone(), json!({ "status": "failed", "content": [] })).await;
+                }
+            }
         }
     }
 
@@ -457,13 +612,20 @@ async fn handle_message(
 
             if is_tool_call && supports_tool_call_update {
                 if let Some(dispatch) = build_tool_call_response(bridge, machine_id, thread_id, &tool_call_params) {
+                    let artifact_for_intercept = dispatch.produced_artifact.clone();
                     if let Some(payload) = dispatch.immediate {
                         let _ = rpc.notify(tool_call_update_method, payload).await;
+                        // Emit ArtifactProduced for auto-approved Write/Edit
+                        if let Some(artifact) = dispatch.produced_artifact {
+                            let _ = tx.send(AgentEvent::ArtifactProduced { artifact });
+                        }
                     }
                     if let Some(rx) = dispatch.intercept_rx {
                         let rpc = rpc.clone();
                         let tc_id = dispatch.tool_call_id;
                         let tc_method = tool_call_update_method.to_string();
+                        let artifact_opt = artifact_for_intercept;
+                        let tx_clone = tx.clone();
                         tokio::spawn(async move {
                             match rx.await {
                                 Ok(Ok(r)) => {
@@ -473,6 +635,14 @@ async fn handle_message(
                                         "status": "completed",
                                         "content": [{ "type": "text", "text": serde_json::to_string(&body).unwrap_or_default() }],
                                     })).await;
+                                    // Emit ArtifactProduced when Write/Edit
+                                    // intercepted result is a FileChanged
+                                    // (i.e. the supervisor approved it).
+                                    if let Some(artifact) = artifact_opt {
+                                        if matches!(r, ExecutionResult::FileChanged { .. }) {
+                                            let _ = tx_clone.send(AgentEvent::ArtifactProduced { artifact });
+                                        }
+                                    }
                                 }
                                 Ok(Err(e)) => {
                                     let _ = rpc.notify(&tc_method, json!({
@@ -501,10 +671,16 @@ async fn handle_message(
 struct ToolCallDispatch {
     /// Payload to send as `tool_call/update` immediately (executed/rejected).
     immediate: Option<serde_json::Value>,
+    /// Raw un-enveloped payload outcome from the execution port.
+    payload: Option<serde_json::Value>,
     /// Intercept result receiver — present when action was intercepted.
     intercept_rx: Option<oneshot::Receiver<Result<ExecutionResult, String>>>,
     /// The tool_call_id from the agent, needed to correlate the response.
     tool_call_id: String,
+    /// Artifact produced by this tool call (Write/Edit only). The runtime
+    /// emits `AgentEvent::ArtifactProduced` when this is `Some` and
+    /// the tool call completed successfully.
+    produced_artifact: Option<Artifact>,
 }
 
 /// Build the response for a tool call by routing through the bridge.
@@ -520,6 +696,10 @@ fn build_tool_call_response(
     let tool_call_id = params.get("toolCallId").and_then(|v| v.as_str())?;
     let action_str = params.get("action").and_then(|v| v.as_str())?;
     let target = params.get("target").and_then(|v| v.as_str()).unwrap_or("");
+    let content = params
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let kind = match action_str {
         "read" | "read_text_file" | "fs/read_text_file" => ActionKind::Read,
         "write" | "write_text_file" | "fs/write_text_file" => ActionKind::Write,
@@ -528,22 +708,16 @@ fn build_tool_call_response(
         _ => return None,
     };
 
+    let is_write_or_edit = matches!(kind, ActionKind::Write | ActionKind::Edit);
+
     let dr: DispatchResult = match kind {
         ActionKind::Read => {
             bridge.handle_read_text_file(thread_id, machine_id, target, tool_call_id)
         }
         ActionKind::Write => {
-            let content = params
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
             bridge.handle_write_text_file(thread_id, machine_id, target, content, tool_call_id)
         }
         ActionKind::Edit => {
-            let content = params
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
             bridge.handle_edit_text_file(thread_id, machine_id, target, content, tool_call_id)
         }
         ActionKind::RunBash => {
@@ -551,7 +725,17 @@ fn build_tool_call_response(
         }
     };
 
-    let immediate = dr.payload.map(|body| {
+    // Build artifact for Write/Edit using the content from params. The
+    // artifact name uses the target path for later matching by the
+    // StepExecutor's `resolve_declared_artifacts` (which matches by
+    // `ArtifactSource::ToolWrite { path }`).
+    let produced_artifact: Option<Artifact> = if is_write_or_edit && !target.is_empty() {
+        Some(Artifact::tool_write(target, target, content))
+    } else {
+        None
+    };
+
+    let immediate = dr.payload.as_ref().map(|body| {
         serde_json::json!({
             "toolCallId": tool_call_id,
             "status": "completed",
@@ -561,8 +745,10 @@ fn build_tool_call_response(
 
     Some(ToolCallDispatch {
         immediate,
+        payload: dr.payload,
         intercept_rx: dr.intercept_rx,
         tool_call_id: tool_call_id.to_string(),
+        produced_artifact,
     })
 }
 
@@ -696,7 +882,19 @@ impl AgentSession for AcpSession {
         });
 
         match result {
-            Ok(Ok(_)) => Ok(()),
+            Ok(Ok(response)) => {
+                // The spec says the agent MUST respond with the full
+                // configOptions list.  Parse it and update our local
+                // cache so session_info() reflects the actual state.
+                if let Some(config_opts) = response.get("configOptions") {
+                    if let Ok(opts) = serde_json::from_value::<Vec<crate::domain::models::ConfigOption>>(config_opts.clone()) {
+                        if let Ok(mut info) = self.session_info.lock() {
+                            info.config_options = Some(opts);
+                        }
+                    }
+                }
+                Ok(())
+            }
             Ok(Err(e)) => Err(format!("set_config_option failed: {} ({})", e.message, e.code)),
             Err(_) => {
                 // Timeout — treat as success since DB is already

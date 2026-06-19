@@ -12,7 +12,7 @@ impl MachineRepository for SqliteAdapter {
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, host, port, username, auth_type, key_path,
-                        agents, auto_approved_rules
+                        agents, auto_approved_rules, use_login_shell, setup_commands
                  FROM machines ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -28,6 +28,8 @@ impl MachineRepository for SqliteAdapter {
                     key_path: row.get(6)?,
                     agents: row.get(7)?,
                     auto_approved_rules: row.get(8)?,
+                    use_login_shell: row.get(9)?,
+                    setup_commands: row.get(10)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -39,7 +41,7 @@ impl MachineRepository for SqliteAdapter {
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, host, port, username, auth_type, key_path,
-                        agents, auto_approved_rules
+                        agents, auto_approved_rules, use_login_shell, setup_commands
                  FROM machines WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -55,6 +57,8 @@ impl MachineRepository for SqliteAdapter {
                     key_path: row.get(6)?,
                     agents: row.get(7)?,
                     auto_approved_rules: row.get(8)?,
+                    use_login_shell: row.get(9)?,
+                    setup_commands: row.get(10)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -68,9 +72,9 @@ impl MachineRepository for SqliteAdapter {
     fn add(&self, m: Machine) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
-            "INSERT INTO machines (id, name, host, port, username, auth_type, key_path, agents, auto_approved_rules)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![m.id, m.name, m.host, m.port, m.username, m.auth_type, m.key_path, m.agents, m.auto_approved_rules],
+            "INSERT INTO machines (id, name, host, port, username, auth_type, key_path, agents, auto_approved_rules, use_login_shell, setup_commands)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![m.id, m.name, m.host, m.port, m.username, m.auth_type, m.key_path, m.agents, m.auto_approved_rules, m.use_login_shell, m.setup_commands],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -81,9 +85,10 @@ impl MachineRepository for SqliteAdapter {
         conn.execute(
             "UPDATE machines
              SET name = ?2, host = ?3, port = ?4, username = ?5,
-                 auth_type = ?6, key_path = ?7, agents = ?8, auto_approved_rules = ?9
+                 auth_type = ?6, key_path = ?7, agents = ?8, auto_approved_rules = ?9,
+                 use_login_shell = ?10, setup_commands = ?11
              WHERE id = ?1",
-            params![m.id, m.name, m.host, m.port, m.username, m.auth_type, m.key_path, m.agents, m.auto_approved_rules],
+            params![m.id, m.name, m.host, m.port, m.username, m.auth_type, m.key_path, m.agents, m.auto_approved_rules, m.use_login_shell, m.setup_commands],
         )
         .map_err(|e| e.to_string())?;
         Ok(())

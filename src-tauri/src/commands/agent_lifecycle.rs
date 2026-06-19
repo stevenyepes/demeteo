@@ -40,8 +40,9 @@ fn build_agent_context(
         machine_id: machine.id.0.clone(),
         binary,
         args,
-        env: Default::default(),
+        env: crate::ports::agent_runtime::agent_base_env(),
         cwd,
+        model: None,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
     })

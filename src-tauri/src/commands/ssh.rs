@@ -27,6 +27,8 @@ pub fn test_ssh_connection(
         key_path,
         agents: None,
         auto_approved_rules: None,
+        use_login_shell: None,
+        setup_commands: None,
     };
 
     let (sess, _tcp) = crate::ssh_util::connect(&machine, secret)?;

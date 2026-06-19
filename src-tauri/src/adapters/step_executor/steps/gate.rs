@@ -19,21 +19,38 @@ impl ExecutionDriver {
         step_execs: &[StepExecution],
     ) -> StepOutcome {
         // Use the passed-in step_execs to get the previous step's artifact
-        // (avoids an extra DB call — the caller already fetched the list).
-        let prev_artifact: Option<String> = if step_index > 0 {
+        // list (avoids an extra DB call — the caller already fetched the
+        // list). The gate inherits its predecessor's artifacts by default
+        // so the UI can keep showing them on the gate card; if the user
+        // redirects, the redirected step will re-derive the new lineage.
+        let prev_artifact_path: Option<String> = if step_index > 0 {
             step_execs.get(step_index - 1).and_then(|s| s.artifact_path.clone())
         } else {
             None
+        };
+        let prev_artifact_paths: Vec<String> = if step_index > 0 {
+            step_execs.get(step_index - 1).map(|s| s.artifact_paths.clone()).unwrap_or_default()
+        } else {
+            Vec::new()
         };
 
         // Mark gate awaiting decision
         let wall = step_start.elapsed().as_secs();
         let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
+        iteration_count: None,
             status: Some("awaiting_gate".to_string()),
             cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-            wall_clock_secs: Some(wall).map(|v| Some(v)),
-            artifact_path: prev_artifact.as_ref().map(|p| Some(p.clone())),
-            error_message: None,
+            wall_clock_secs: Some(wall).map(|v| Some(wall)),
+            artifact_path: prev_artifact_path.as_ref().map(|p| Some(p.clone())),
+            artifact_paths: Some(prev_artifact_paths.clone()),
+            error_message: Some(None),
+        });
+        let _ = self.notif.emit(&DomainEvent::StepProgress {
+            feature_id: self.f_id.clone(),
+            step_id: step_exec.step_id.0.clone(),
+            status: "awaiting_gate".into(),
+            cost_usd: Some(*accumulated_cost),
+            wall_clock_secs: Some(wall),
         });
         let _ = self.notif.emit(&DomainEvent::StepProgress {
             feature_id: self.f_id.clone(),
@@ -76,11 +93,13 @@ impl ExecutionDriver {
                     Some("approve") => {
                         let wall = step_start.elapsed().as_secs();
                         let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
+        iteration_count: None,
                             status: Some("completed".to_string()),
                             cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                            wall_clock_secs: Some(wall).map(|v| Some(v)),
-                            artifact_path: prev_artifact.as_ref().map(|p| Some(p.clone())),
-                            error_message: None,
+                            wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                            artifact_path: prev_artifact_path.as_ref().map(|p| Some(p.clone())),
+                            artifact_paths: Some(prev_artifact_paths.clone()),
+                            error_message: Some(None),
                         });
                         let _ = self.notif.emit(&DomainEvent::StepProgress {
                             feature_id: self.f_id.clone(),

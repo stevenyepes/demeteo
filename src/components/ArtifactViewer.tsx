@@ -3,38 +3,64 @@ import { invoke } from '@tauri-apps/api/core';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle, ExternalLink } from 'lucide-react';
 
 interface ArtifactViewerProps {
   artifactPath: string | null;
   maxHeight?: string;
+  /** Explicit mime type override. When set, the viewer dispatches on
+   *  mime rather than file extension (e.g. `application/x-demeteo-worktree-ref`
+   *  renders an "Open in editor" CTA instead of trying to display code). */
+  mime?: string;
 }
 
 export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
   artifactPath,
   maxHeight = '100%',
+  mime,
 }) => {
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [viewType, setViewType] = useState<'markdown' | 'diff' | 'code'>('code');
+  const [viewType, setViewType] = useState<'markdown' | 'diff' | 'code' | 'worktree-ref'>('code');
   const [language, setLanguage] = useState<string>('plaintext');
+  const [worktreeRef, setWorktreeRef] = useState<{ machine_id: string; branch: string; path: string } | null>(null);
 
   useEffect(() => {
     if (!artifactPath) {
       setContent('');
       setError(null);
+      setWorktreeRef(null);
       return;
     }
 
     const loadArtifact = async () => {
       setLoading(true);
       setError(null);
+      setWorktreeRef(null);
       try {
         const fileContent = await invoke<string>('sftp_read_file', {
           machineId: 'local',
           path: artifactPath,
         });
+
+        // Worktree-ref dispatch via explicit mime prop
+        if (mime === 'application/x-demeteo-worktree-ref') {
+          try {
+            const ref = JSON.parse(fileContent);
+            setWorktreeRef({
+              machine_id: ref.machine_id || 'local',
+              branch: ref.branch || '',
+              path: ref.path || '',
+            });
+            setViewType('worktree-ref');
+            setContent(fileContent);
+          } catch {
+            setError('Invalid worktree reference payload');
+          }
+          setLoading(false);
+          return;
+        }
 
         setContent(fileContent);
 
@@ -90,7 +116,7 @@ export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
     };
 
     loadArtifact();
-  }, [artifactPath]);
+  }, [artifactPath, mime]);
 
   // Loader state
   if (loading) {
@@ -116,10 +142,33 @@ export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
   }
 
   // Blank state
-  if (!content) {
+  if (!content && viewType !== 'worktree-ref') {
     return (
       <div className="flex-1 flex items-center justify-center p-12 text-slate-500 text-center text-xs uppercase font-bold tracking-wider">
         No output content generated for this step.
+      </div>
+    );
+  }
+
+  // Worktree-ref CTA — navigation pointer, not content
+  if (viewType === 'worktree-ref' && worktreeRef) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-12 text-center space-y-4">
+        <ExternalLink className="w-10 h-10 text-cyan-400" />
+        <div className="text-sm font-semibold text-slate-200">Worktree File Reference</div>
+        <div className="text-xs text-slate-400 font-mono bg-white/5 px-3 py-1.5 rounded-lg">
+          {worktreeRef.path}
+        </div>
+        <button
+          onClick={() => {
+            const url = `/editor?machine=${worktreeRef.machine_id}&branch=${worktreeRef.branch}&file=${worktreeRef.path}`;
+            // Navigate to the editor view using the app's router
+            window.location.hash = url;
+          }}
+          className="px-5 py-2 bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-cyan-600/30 transition duration-150"
+        >
+          Open in Editor
+        </button>
       </div>
     );
   }

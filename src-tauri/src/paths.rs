@@ -69,10 +69,40 @@ pub fn project_root(
     project_id: &str,
 ) -> Result<PathBuf, String> {
     let home = resolve_home(exec, compute_type, remote_host)?;
-    Ok(home
-        .join(DEMETEO_HOME_SUBDIR)
-        .join(PROJECTS_SUBDIR)
-        .join(project_id))
+    if compute_type.eq_ignore_ascii_case("local") {
+        #[cfg(target_os = "macos")]
+        {
+            Ok(home
+                .join("Library")
+                .join("Application Support")
+                .join("com.jsteven.demeteo")
+                .join("projects")
+                .join(project_id))
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Ok(home
+                .join("AppData")
+                .join("Local")
+                .join("com.jsteven.demeteo")
+                .join("projects")
+                .join(project_id))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Ok(home
+                .join(".local")
+                .join("share")
+                .join("com.jsteven.demeteo")
+                .join("projects")
+                .join(project_id))
+        }
+    } else {
+        Ok(home
+            .join(DEMETEO_HOME_SUBDIR)
+            .join(PROJECTS_SUBDIR)
+            .join(project_id))
+    }
 }
 
 /// Resolve the absolute path of a cloned repository's working tree.

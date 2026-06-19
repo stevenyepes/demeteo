@@ -69,6 +69,7 @@ pub fn set_machine_secret(machine_id: String, secret: String) -> Result<(), Stri
         .map_err(|e| format!("Keyring error: {}", e))?;
     entry.set_password(&secret)
         .map_err(|e| format!("Failed to store secret in keyring: {}", e))?;
+    crate::credential_cache::invalidate(&format!("machine_{}", machine_id));
     Ok(())
 }
 
@@ -77,6 +78,7 @@ pub fn delete_machine_secret(machine_id: String) -> Result<(), String> {
     let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine_id))
         .map_err(|e| format!("Keyring error: {}", e))?;
     let _ = entry.delete_credential();
+    crate::credential_cache::invalidate(&format!("machine_{}", machine_id));
     Ok(())
 }
 
@@ -111,9 +113,12 @@ pub fn start_terminal_session(
 
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
-            let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id))
-                .map_err(|e| format!("Keyring error: {}", e))?;
-            entry.get_password().ok()
+            let key = format!("machine_{}", machine.id);
+            crate::credential_cache::get_or_fetch(&key, || {
+                let entry = keyring::Entry::new("demeteo", &key)
+                    .map_err(|e| format!("Keyring error: {}", e))?;
+                entry.get_password().map_err(|e| format!("Keyring error: {}", e))
+            }).ok()
         }
         _ => None,
     };

@@ -22,6 +22,8 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         [],
     )?;
     add_column_if_missing(conn, "machines", "auto_approved_rules", "TEXT")?;
+    add_column_if_missing(conn, "machines", "use_login_shell", "INTEGER")?;
+    add_column_if_missing(conn, "machines", "setup_commands", "TEXT")?;
     add_column_if_missing(conn, "thread_sessions", "agent_kind", "TEXT")?;
     add_column_if_missing(conn, "thread_sessions", "updated_at", "INTEGER")?;
     add_column_if_missing(conn, "thread_sessions", "model", "TEXT")?;

@@ -19,6 +19,19 @@ interface Project {
     remote_host?: string | null;
 }
 
+interface Machine {
+    id: string;
+    name: string;
+    host: string;
+    port: number;
+    username: string;
+    auth_type: string;
+    key_path?: string | null;
+    agents?: string | null;
+    use_login_shell?: boolean | null;
+    setup_commands?: string | null;
+}
+
 interface Provider {
     id: string;
     type: string;
@@ -103,6 +116,7 @@ export default function ProjectSettingsView({
     const [projectName, setProjectName] = useState(activeProject.name);
     const [computeType, setComputeType] = useState(activeProject.compute_type || 'local');
     const [remoteHost, setRemoteHost] = useState(activeProject.remote_host || '');
+    const [machines, setMachines] = useState<Machine[]>([]);
     const [isTestingConnection, setIsTestingConnection] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
@@ -175,6 +189,19 @@ export default function ProjectSettingsView({
     useEffect(() => {
         setConnectionStatus('idle');
     }, [remoteHost]);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const list: Machine[] = await invoke('get_machines');
+                if (!cancelled) setMachines(list ?? []);
+            } catch (err) {
+                console.warn('Failed to fetch machines:', err);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
 
     const fetchAgentConfigs = async () => {
         const machineId = computeType === 'remote' ? remoteHost : 'local';
@@ -1000,13 +1027,20 @@ export default function ProjectSettingsView({
                                 </div>
                                 {computeType === 'remote' && (
                                     <div className="mt-3 flex gap-2">
-                                        <input 
-                                            type="text" 
-                                            value={remoteHost} 
+                                        <select
+                                            value={remoteHost}
                                             onChange={e => setRemoteHost(e.target.value)}
-                                            placeholder="e.g. machine_id"
                                             className="flex-1 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white font-mono focus:outline-none focus:border-cyan-500/50"
-                                        />
+                                        >
+                                            <option value="">
+                                                {machines.length === 0 ? 'No machines configured' : 'Select a machine…'}
+                                            </option>
+                                            {machines.map(m => (
+                                                <option key={m.id} value={m.id}>
+                                                    {m.name} ({m.username}@{m.host}:{m.port})
+                                                </option>
+                                            ))}
+                                        </select>
                                         <button
                                             type="button"
                                             onClick={handleTestConnection}
@@ -1020,7 +1054,15 @@ export default function ProjectSettingsView({
                                             ) : connectionStatus === 'error' ? (
                                                 <X className="w-3.5 h-3.5 text-ruby-400" />
                                             ) : null}
-                                            {isTestingConnection ? 'Testing...' : connectionStatus === 'success' ? 'Connected' : connectionStatus === 'error' ? 'Failed' : 'Test Connection'}
+                                            {isTestingConnection ? 'Testing...' : connectionStatus === 'success' ? 'Connected' : connectionStatus === 'error' ? 'Failed' : 'Test'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setView('settings')}
+                                            className="px-3 py-2 text-xs rounded-lg bg-violet-500/10 border border-violet-500/30 hover:bg-violet-500/20 text-violet-300 transition-all shrink-0"
+                                            title="Manage machines in Settings"
+                                        >
+                                            <Settings className="w-3.5 h-3.5" />
                                         </button>
                                     </div>
                                 )}

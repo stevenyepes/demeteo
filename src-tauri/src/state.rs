@@ -24,7 +24,9 @@ use crate::ports::db::{
     ProjectRepository, ThreadRepository, WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
+use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::NotificationPort;
+use crate::ports::pricing::PricingTable;
 use crate::ports::step_executor::{GatePresenter, StepExecutor};
 use serde::Serialize;
 use std::sync::Arc;
@@ -70,6 +72,15 @@ pub struct AppContext {
 
     /// Gate presenter (read-side of gate decisions).
     pub presenter: Arc<dyn GatePresenter>,
+
+    /// Model → USD pricing (used to backfill per-step `cost_usd` when the
+    /// agent's `Usage` event doesn't carry it).
+    pub pricing: Arc<dyn PricingTable>,
+
+    /// MR/PR publisher (GitHub + GitLab). Wired through `AppContext`
+    /// so the orchestrator can publish from any code path without
+    /// threading the port through every layer.
+    pub mr_publisher: Arc<dyn MrPublisher>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

@@ -58,6 +58,18 @@ impl PromptContext {
     pub fn extend(self, key: &str, value: impl Into<String>) -> Self {
         self.set(key, value)
     }
+
+    /// Look up a previously-set variable. Returns the empty string if
+    /// the key was never set — matches the "unknown token → empty"
+    /// behaviour of `render`. First-set-wins (same as `render`).
+    pub fn get(&self, key: &str) -> &str {
+        for (k, v) in &self.vars {
+            if k == key {
+                return v.as_str();
+            }
+        }
+        ""
+    }
 }
 
 impl Clone for PromptContext {

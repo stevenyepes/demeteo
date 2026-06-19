@@ -70,8 +70,8 @@
     "semantic_hash": "053e6a815b773555cd15a6367d58745f"
   },
   "src-tauri/src/adapters/ssh/client.rs": {
-    "mtime": 1781727827.1607473,
-    "ast_hash": "9fcd29464e6cc8cee279ff178acfb400",
+    "mtime": 1781730661.3015013,
+    "ast_hash": "a781a086030e085af0c2d1a4e0b95859",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/ssh/mod.rs": {
@@ -115,8 +115,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/lib.rs": {
-    "mtime": 1781725617.4381902,
-    "ast_hash": "2adf1119e158f4ca3d6d15dd6eb74f0b",
+    "mtime": 1781730750.54228,
+    "ast_hash": "fcc7dd062c89c230db9bebd49a381a82",
     "semantic_hash": ""
   },
   "src-tauri/src/main.rs": {
@@ -130,8 +130,8 @@
     "semantic_hash": "f4b59ed6472bc59d4d0770705f673f27"
   },
   "src-tauri/src/ports/db.rs": {
-    "mtime": 1781703379.2882495,
-    "ast_hash": "02c42770e2095f3c096fec441eb39842",
+    "mtime": 1781730670.6175828,
+    "ast_hash": "8a0f3097d7a8bf67087dc8b4af7bc822",
     "semantic_hash": ""
   },
   "src-tauri/src/ports/execution.rs": {
@@ -725,13 +725,13 @@
     "semantic_hash": "591bfd798ccdc14930773e6e001d8dae"
   },
   "src-tauri/src/commands/features.rs": {
-    "mtime": 1781725588.0809364,
-    "ast_hash": "976c232f56fe31ddeafc839aa45917d4",
+    "mtime": 1781730734.4021392,
+    "ast_hash": "a35b2c40e73261d8879df58b39d953a4",
     "semantic_hash": ""
   },
   "src-tauri/src/commands/project.rs": {
-    "mtime": 1781700482.7336862,
-    "ast_hash": "e3f5e76cec943ac2bc1bb5449f537ad9",
+    "mtime": 1781730740.5561929,
+    "ast_hash": "ebad11bdd6038baaf54d1a0f84295ff1",
     "semantic_hash": ""
   },
   "src/components/NewProjectView.tsx": {
@@ -790,8 +790,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/ports/step_executor.rs": {
-    "mtime": 1781725575.2358255,
-    "ast_hash": "03217906031a6f0850c04f61c4a9952d",
+    "mtime": 1781730715.694976,
+    "ast_hash": "7112a1a77b9b8957e56c5f1994458f2f",
     "semantic_hash": ""
   },
   "src-tauri/workflows/bugfix-pipeline.json": {
@@ -820,8 +820,8 @@
     "semantic_hash": ""
   },
   "src/components/FeatureDetail.tsx": {
-    "mtime": 1781720933.4521906,
-    "ast_hash": "81449616b80f88723e5697b16a3b9945",
+    "mtime": 1781731189.3250935,
+    "ast_hash": "eef50ca9d5aa370c00291c262af3cf46",
     "semantic_hash": ""
   },
   "src/components/GateView.tsx": {
@@ -890,8 +890,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/database/repos/feature.rs": {
-    "mtime": 1781725562.1667125,
-    "ast_hash": "81c3e542a5acbda83e06a2f912dbdc48",
+    "mtime": 1781730678.0026472,
+    "ast_hash": "3da5cadc12d7e2e962aeb30d70098de4",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/database/repos/gate.rs": {
@@ -935,13 +935,13 @@
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/step_executor/driver.rs": {
-    "mtime": 1781721402.3231833,
-    "ast_hash": "16b94b63099d713ff41bb84b37ca69e8",
+    "mtime": 1781730694.250789,
+    "ast_hash": "01d629a7d6e48ba34e47a8dedd74af2e",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/step_executor/impl_traits.rs": {
-    "mtime": 1781725582.1338851,
-    "ast_hash": "a8e46ba947c8df0c95eb72051abb27fe",
+    "mtime": 1781730723.5080442,
+    "ast_hash": "e5e4d4a79e3abb4b2ab318e86283e923",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/step_executor/setup.rs": {
@@ -950,8 +950,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/step_executor/steps/agent.rs": {
-    "mtime": 1781729943.731159,
-    "ast_hash": "95014df222ddc21347c8e0b505fbad41",
+    "mtime": 1781730837.9910417,
+    "ast_hash": "f5cd835ba2a47bee5540c29ba09ccceb",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/step_executor/steps/gate.rs": {
@@ -965,8 +965,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/step_executor/steps/parallel.rs": {
-    "mtime": 1781729952.2942362,
-    "ast_hash": "3b869fccf8c52347cc6a1ec195c9dab6",
+    "mtime": 1781730857.8902147,
+    "ast_hash": "f3802bf4d4574df52e20898563dfe55b",
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/step_executor/tests/mod.rs": {
@@ -975,8 +975,8 @@
     "semantic_hash": ""
   },
   "src-tauri/src/adapters/step_executor/updates.rs": {
-    "mtime": 1781715673.9047656,
-    "ast_hash": "6f2684acc6ee60d0242568249c24ca6d",
+    "mtime": 1781730688.066735,
+    "ast_hash": "06d5bbed8d487adc864ac1533b754ee5",
     "semantic_hash": ""
   },
   "src-tauri/src/commands/agent_config_probe.rs": {

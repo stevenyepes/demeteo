@@ -13,6 +13,7 @@ use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, Agen
 pub struct AgentRegistry {
     runtimes: Vec<Arc<dyn AgentRuntime>>,
     sessions: Mutex<HashMap<String, Arc<dyn AgentSession>>>,
+    availability_cache: std::sync::Mutex<HashMap<(String, String), bool>>,
 }
 
 impl AgentRegistry {
@@ -20,6 +21,35 @@ impl AgentRegistry {
         Self {
             runtimes,
             sessions: Mutex::new(HashMap::new()),
+            availability_cache: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Check if the agent kind is available on the given machine.
+    /// The result is cached per `(machine_id, kind)` for the duration of the app session.
+    pub fn is_available(
+        &self,
+        kind: &str,
+        exec: &dyn crate::ports::execution::ExecutionPort,
+        machine_id: &str,
+    ) -> bool {
+        let key = (machine_id.to_string(), kind.to_string());
+        {
+            if let Ok(cache) = self.availability_cache.lock() {
+                if let Some(&avail) = cache.get(&key) {
+                    return avail;
+                }
+            }
+        }
+
+        if let Some(runtime) = self.runtime_for(kind) {
+            let avail = runtime.is_available(exec, machine_id);
+            if let Ok(mut cache) = self.availability_cache.lock() {
+                cache.insert(key, avail);
+            }
+            avail
+        } else {
+            false
         }
     }
 
@@ -63,10 +93,12 @@ impl AgentRegistry {
 
     pub async fn kill(&self, thread_id: &str) {
         let mut sessions = self.sessions.lock().await;
-        if let Some(_s) = sessions.remove(thread_id) {
-            // The session's Drop impl (or the transport's kill) handles cleanup;
-            // the registry just forgets the handle so a future directive
-            // creates a fresh session.
+        if let Some(s) = sessions.remove(thread_id) {
+            // Force-kill the session's transport so the agent process
+            // is actually reaped even if other Arc references exist
+            // (e.g. the old driver loop). Removing from the map alone
+            // would leave the transport alive until all Arcs drop.
+            let _ = s.kill();
         }
     }
 
@@ -194,6 +226,7 @@ mod tests {
                 args: vec![],
                 env: Default::default(),
                 cwd: ".".into(),
+                model: None,
                 agent_exec: stub.clone(),
                 exec: stub,
             })
@@ -210,6 +243,7 @@ mod tests {
         let reg = AgentRegistry {
             runtimes: vec![],
             sessions: Mutex::new(sessions),
+            availability_cache: std::sync::Mutex::new(HashMap::new()),
         };
         reg.kill("t1").await;
         reg.kill("t1").await; // idempotent

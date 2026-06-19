@@ -170,7 +170,13 @@ Each phase is "Done means…". Sequential. Don't start the next until the curren
 - Migration log (`~/.local/share/demeteo/migrations.log`).
 - Done: the app can ship v1.1 with additive schema changes silently, and v2.0 with a clean wipe-and-reinit flow.
 
-Detailed file touch list and verification checkpoints per phase: [`docs/REDESIGN_EXECUTION_PLAN.md`](docs/REDESIGN_EXECUTION_PLAN.md).
+Detailed file touch list and verification checkpoints per phase:
+[`docs/REDESIGN_EXECUTION_PLAN.md`](docs/REDESIGN_EXECUTION_PLAN.md).
+
+Reliability hardening (cancel-vs-future, conditional edges,
+mid-step interrupt, SSH stale-session reconnect, etc.) is tracked in
+[`docs/REDESIGN_RELIABILITY_PLAN.md`](docs/REDESIGN_RELIABILITY_PLAN.md)
+and is worked in parallel with R4–R6.
 
 ## 5. Open / Deferred Questions
 

@@ -4,9 +4,10 @@ import { Activity, Search, Sliders, Globe, Settings } from 'lucide-react';
 interface TopBarProps {
   setView: (view: string) => void;
   connectedProvider: any | null;
+  onOpenCommandPalette?: () => void;
 }
 
-const TopBar: React.FC<TopBarProps> = ({ setView, connectedProvider }) => (
+const TopBar: React.FC<TopBarProps> = ({ setView, connectedProvider, onOpenCommandPalette }) => (
     <header className="h-14 border-b border-white/5 bg-[#0d0f14]/80 backdrop-blur-md flex items-center justify-between px-6 z-20 relative shrink-0">
         <div className="flex items-center gap-4">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center">
@@ -16,7 +17,10 @@ const TopBar: React.FC<TopBarProps> = ({ setView, connectedProvider }) => (
         </div>
 
         <div className="flex items-center gap-4">
-            <div className="flex items-center px-3 py-1.5 glass-panel rounded-md text-sm text-slate-400 w-64 group hover:border-white/20 transition-colors cursor-pointer">
+            <div
+              className="flex items-center px-3 py-1.5 glass-panel rounded-md text-sm text-slate-400 w-64 group hover:border-white/20 transition-colors cursor-pointer"
+              onClick={onOpenCommandPalette}
+            >
                 <Search className="w-4 h-4 mr-2 opacity-50" />
                 <span>Search workspace...</span>
                 <span className="ml-auto text-[10px] font-mono border border-white/10 px-1.5 py-0.5 rounded opacity-50">⌘K</span>

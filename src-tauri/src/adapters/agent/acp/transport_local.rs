@@ -54,12 +54,13 @@ impl LocalSubprocessTransport {
     }
 }
 
-fn spawn_stderr_drain(mut stderr: ChildStderr) -> std::thread::JoinHandle<()> {
+fn spawn_stderr_drain(stderr: ChildStderr) -> std::thread::JoinHandle<()> {
+    use std::io::BufRead;
     std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if io::copy(&mut stderr, &mut buf).is_ok() && !buf.is_empty() {
-            if let Ok(s) = std::str::from_utf8(&buf) {
-                let trimmed = s.trim_end();
+        let reader = io::BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let trimmed = l.trim();
                 if !trimmed.is_empty() {
                     eprintln!("[agent stderr] {}", trimmed);
                 }

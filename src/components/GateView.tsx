@@ -92,13 +92,18 @@ export const GateView: React.FC<GateViewProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-violet-400" /> Artifact Output
             </div>
             <div className="flex-1 flex flex-col p-4 rounded-lg border border-white/5 bg-[#050608] overflow-hidden min-h-[280px]">
-              {stepExec?.artifact_path ? (
-                <ArtifactViewer artifactPath={stepExec.artifact_path} maxHeight="280px" />
-              ) : (
-                <div className="text-slate-500 font-mono text-xs italic flex items-center justify-center h-full">
-                  No artifact outputs saved for this gate step.
-                </div>
-              )}
+              {(() => {
+                const gatePath = stepExec?.artifact_paths?.length
+                  ? stepExec.artifact_paths[0]
+                  : stepExec?.artifact_path;
+                return gatePath ? (
+                  <ArtifactViewer artifactPath={gatePath} maxHeight="280px" />
+                ) : (
+                  <div className="text-slate-500 font-mono text-xs italic flex items-center justify-center h-full">
+                    No artifact outputs saved for this gate step.
+                  </div>
+                );
+              })()}
             </div>
           </div>
 

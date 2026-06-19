@@ -13,4 +13,7 @@ pub mod features;
 pub mod bootstrap;
 pub mod workflows;
 pub mod agent_config_probe;
+pub mod pricing;
+pub mod mr_publisher;
+pub mod feature_lifecycle;
 

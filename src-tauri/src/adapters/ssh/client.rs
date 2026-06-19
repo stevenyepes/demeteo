@@ -64,9 +64,12 @@ impl SshClientAdapter {
 
         let secret = match machine.auth_type.as_str() {
             "password" | "key" => {
-                let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id))
-                    .ok();
-                entry.and_then(|e| e.get_password().ok())
+                let key = format!("machine_{}", machine.id);
+                crate::credential_cache::get_or_fetch(&key, || {
+                    let entry = keyring::Entry::new("demeteo", &key)
+                        .map_err(|e| format!("Keyring error: {}", e))?;
+                    entry.get_password().map_err(|e| format!("Keyring error: {}", e))
+                }).ok()
             }
             _ => None,
         };
@@ -216,8 +219,12 @@ impl ExecutionPort for SshClientAdapter {
 
         let secret = match machine.auth_type.as_str() {
             "password" | "key" => {
-                let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id)).ok();
-                entry.and_then(|e| e.get_password().ok())
+                let key = format!("machine_{}", machine.id);
+                crate::credential_cache::get_or_fetch(&key, || {
+                    let entry = keyring::Entry::new("demeteo", &key)
+                        .map_err(|e| format!("Keyring error: {}", e))?;
+                    entry.get_password().map_err(|e| format!("Keyring error: {}", e))
+                }).ok()
             }
             _ => None,
         };
@@ -501,9 +508,12 @@ impl ExecutionPort for SshClientAdapter {
 
         let secret = match machine.auth_type.as_str() {
             "password" | "key" => {
-                let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id))
-                    .ok();
-                entry.and_then(|e| e.get_password().ok())
+                let key = format!("machine_{}", machine.id);
+                crate::credential_cache::get_or_fetch(&key, || {
+                    let entry = keyring::Entry::new("demeteo", &key)
+                        .map_err(|e| format!("Keyring error: {}", e))?;
+                    entry.get_password().map_err(|e| format!("Keyring error: {}", e))
+                }).ok()
             }
             _ => None,
         };
@@ -515,9 +525,17 @@ impl ExecutionPort for SshClientAdapter {
             .channel_session()
             .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
 
-        // Build the remote command. We `cd` to the worktree first so the
-        // agent's `cwd` matches what the user picked, then exec the
-        // binary. Env vars are exported one per line.
+        // Request a PTY so the remote process's stdout uses line-buffered
+        // I/O instead of fully-buffered (pipe) mode. Without this, JSON-RPC
+        // responses from the agent pile up in the stdio buffer and never
+        // reach demeteo until the buffer fills or the process exits.
+        channel
+            .request_pty("xterm-256color", None, None)
+            .map_err(|e| format!("Failed to request PTY on SSH channel: {}", e))?;
+
+        let use_login_shell = machine.use_login_shell.unwrap_or(false);
+
+        // Build the remote command.
         let mut env_str = String::new();
         for (k, v) in env {
             // Quote each value with single quotes; escape any embedded
@@ -530,14 +548,41 @@ impl ExecutionPort for SshClientAdapter {
             .map(|a| paths::shell_escape_posix(a))
             .collect::<Vec<_>>()
             .join(" ");
-        let inner_cmd = format!(
-            "cd {} && {} exec {} {}",
-            paths::shell_escape_posix(cwd),
-            env_str,
-            paths::shell_escape_posix(binary),
-            args_str
-        );
-        let cmd = format!("bash -l -c {}", paths::shell_escape_posix(&inner_cmd));
+
+        let cmd = if use_login_shell {
+            // Wrap in bash -l -c to source .bashrc/.profile so user-
+            // configured env vars (API keys, PATH tweaks, etc.) are
+            // available to the agent.  Use `command cd` to bypass any
+            // shell-function overrides (e.g. `mise activate`'s `cd`
+            // hook) and `exec` to avoid an extra shell process.
+            //
+            // Before exec'ing the agent, auto-trust the CWD for common
+            // tool-version managers (mise, rtx) so their config files
+            // don't get rejected as untrusted.  This is a best-effort,
+            // silent operation — if the tool isn't installed, nothing
+            // happens, and the agent always starts regardless.
+            let inner = format!(
+                "{} command cd {} && {{ command -v mise >/dev/null 2>&1 && mise trust --yes . || :; }} 2>/dev/null && exec {} {}",
+                env_str,
+                paths::shell_escape_posix(cwd),
+                paths::shell_escape_posix(binary),
+                args_str
+            );
+            format!("bash -l -c {}", paths::shell_escape_posix(&inner))
+        } else {
+            // Non-login shell — SSH channel.exec runs the string
+            // through the user's default shell as a non-interactive,
+            // non-login child.  .bashrc is never sourced, so mise
+            // and other activation hooks stay out of the way.
+            format!(
+                "cd {} && {} {} {}",
+                paths::shell_escape_posix(cwd),
+                env_str,
+                paths::shell_escape_posix(binary),
+                args_str
+            )
+        };
+
         // Log the exact command we're about to exec so failures in the
         // field can be diagnosed by reading the Tauri stderr log. The
         // command is also the only place the pre-launch `test -d` path

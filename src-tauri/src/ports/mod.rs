@@ -1,6 +1,11 @@
 pub mod agent_execution;
 pub mod agent_runtime;
+pub mod artifact_store;
+pub mod conflict;
 pub mod db;
 pub mod execution;
+pub mod merge;
+pub mod mr_publisher;
 pub mod notification;
+pub mod pricing;
 pub mod step_executor;

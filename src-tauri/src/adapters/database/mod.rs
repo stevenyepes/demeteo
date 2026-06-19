@@ -6,7 +6,11 @@ pub mod repos;
 #[cfg(test)]
 pub mod tests;
 
-use connection::SqliteConnection;
+// Re-export the most-used DB primitives so callers don't have to
+// chase a path through `connection::`. Mirrors what the legacy
+// `DatabaseAdapter` did.
+pub use connection::SqliteConnection;
+pub use migration::run as run_migrations;
 
 use rusqlite::Connection;
 
@@ -61,7 +65,7 @@ impl SqliteAdapter {
                 .filter_map(|v| {
                     if let Some(s) = v.as_str() {
                         let kind = s.to_lowercase();
-                        if matches!(kind.as_str(), "opencode" | "hermes") {
+                        if matches!(kind.as_str(), "opencode" | "hermes" | "claude-code" | "antigravity") {
                             Some(AgentConfig { kind, enabled: true })
                         } else {
                             None
@@ -72,7 +76,7 @@ impl SqliteAdapter {
                             .and_then(|k| k.as_str())
                             .unwrap_or("")
                             .to_lowercase();
-                        if !matches!(raw_kind.as_str(), "opencode" | "hermes") {
+                        if !matches!(raw_kind.as_str(), "opencode" | "hermes" | "claude-code" | "antigravity") {
                             return None;
                         }
                         Some(AgentConfig {
@@ -89,10 +93,21 @@ impl SqliteAdapter {
                 .collect();
 
             let mut seen_kinds = std::collections::HashSet::new();
-            let migrated: Vec<AgentConfig> = migrated
+            let mut migrated: Vec<AgentConfig> = migrated
                 .into_iter()
                 .filter(|c| seen_kinds.insert(c.kind.clone()))
                 .collect();
+
+            // Self-healing: ensure all 4 default agents are present in the configuration list.
+            for default_kind in &["opencode", "hermes", "claude-code", "antigravity"] {
+                if !seen_kinds.contains(*default_kind) {
+                    migrated.push(AgentConfig {
+                        kind: default_kind.to_string(),
+                        enabled: true,
+                    });
+                    seen_kinds.insert(default_kind.to_string());
+                }
+            }
 
             let serialized = match serde_json::to_string(&migrated) {
                 Ok(s) => s,

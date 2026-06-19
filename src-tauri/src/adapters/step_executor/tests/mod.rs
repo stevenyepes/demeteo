@@ -116,6 +116,8 @@ async fn test_executor_instantiation_and_cancel() {
     let notif = Arc::new(FakeNotif);
     let agent_exec = Arc::new(FakeAgentExec);
     let exec = Arc::new(FakeExec);
+    let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> =
+        Arc::new(crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()));
 
     let executor = DagStepExecutor::new(
         db.clone(),
@@ -128,6 +130,7 @@ async fn test_executor_instantiation_and_cancel() {
         notif,
         agent_exec,
         exec,
+        artifacts,
         temp_dir.clone(),
     );
 
@@ -153,6 +156,8 @@ async fn test_executor_gate_decide() {
     let notif = Arc::new(FakeNotif);
     let agent_exec = Arc::new(FakeAgentExec);
     let exec = Arc::new(FakeExec);
+    let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> =
+        Arc::new(crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()));
 
     let executor = DagStepExecutor::new(
         db.clone(),
@@ -165,6 +170,7 @@ async fn test_executor_gate_decide() {
         notif,
         agent_exec,
         exec,
+        artifacts,
         temp_dir.clone(),
     );
 
@@ -204,6 +210,8 @@ async fn test_executor_gate_decide() {
             duration: "0s".to_string(),
             agent_kind: None,
             model: None,
+            mr_url: None,
+            mr_state: Some("none".to_string()),
             created_at: now,
         })
         .unwrap();
@@ -219,7 +227,9 @@ async fn test_executor_gate_decide() {
             cost_usd: Some(0.0),
             wall_clock_secs: Some(0),
             artifact_path: None,
+            artifact_paths: Vec::new(),
             error_message: None,
+            iteration_count: 0,
             created_at: now,
             updated_at: now,
         })

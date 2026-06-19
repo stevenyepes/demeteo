@@ -62,6 +62,19 @@ impl GateRepository for SqliteAdapter {
         }
     }
 
+    fn reset_for_step_execution(
+        &self,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        conn.execute(
+            "DELETE FROM gate_decisions WHERE step_execution_id=?1",
+            params![step_execution_id.0],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn latest_decided_for_feature(
         &self,
         feature_id: &FeatureId,

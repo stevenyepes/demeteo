@@ -1,3 +1,4 @@
+pub mod credential_cache;
 pub mod db;
 pub mod terminal;
 pub mod forward;
@@ -20,8 +21,54 @@ use ports::notification::NotificationPort;
 use tauri::Manager;
 use std::sync::Arc;
 
+fn enrich_env_path() {
+    // Enrich local PATH so coding agents installed in homebrew, cargo, npm-global, etc.
+    // are discoverable by Tauri GUI process on macOS/Linux.
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(current_path) = std::env::var("PATH") {
+            let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(&current_path).collect();
+            let home = std::env::var("HOME").unwrap_or_default();
+            
+            let mut additional_paths = vec![
+                std::path::PathBuf::from("/opt/homebrew/bin"),
+                std::path::PathBuf::from("/usr/local/bin"),
+                std::path::PathBuf::from("/usr/bin"),
+                std::path::PathBuf::from("/bin"),
+                std::path::PathBuf::from("/usr/sbin"),
+                std::path::PathBuf::from("/sbin"),
+            ];
+            
+            if !home.is_empty() {
+                additional_paths.push(std::path::PathBuf::from(format!("{}/.cargo/bin", home)));
+                additional_paths.push(std::path::PathBuf::from(format!("{}/.local/bin", home)));
+                additional_paths.push(std::path::PathBuf::from(format!("{}/.npm-global/bin", home)));
+                additional_paths.push(std::path::PathBuf::from(format!("{}/.opencode/bin", home)));
+                // Also common nvm node versions paths
+                additional_paths.push(std::path::PathBuf::from(format!("{}/.nvm/versions/node", home)));
+            }
+            
+            let mut changed = false;
+            for p in additional_paths {
+                if p.exists() && !paths.contains(&p) {
+                    paths.push(p);
+                    changed = true;
+                }
+            }
+            
+            if changed {
+                if let Ok(new_path) = std::env::join_paths(paths) {
+                    std::env::set_var("PATH", new_path);
+                }
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    enrich_env_path();
+
     // Startup banner so a stale binary is obvious in the Tauri dev
     // console. Bump the suffix whenever the bootstrap/step-executor
     // path resolution changes.
@@ -99,11 +146,23 @@ pub fn run() {
                         as Arc<dyn AgentRuntime>,
                 ]),
             );
+            let pricing: Arc<dyn ports::pricing::PricingTable> =
+                Arc::new(adapters::pricing::HardcodedPricingTable::new());
+            let mr_publisher: Arc<dyn ports::mr_publisher::MrPublisher> =
+                Arc::new(adapters::mr_publisher::HttpMrPublisher::new(
+                    app_settings_repo.clone(),
+                    projects_repo.clone(),
+                    features_repo.clone(),
+                ));
 
             // Build the DagStepExecutor before AppContext to avoid a
             // circular dependency (the executor contains sub-port Arcs;
             // AppContext contains the executor's Arc).
             let step_executor_adapter = {
+                let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> =
+                    Arc::new(adapters::artifact_store::fs::FsArtifactStore::new(
+                        app_data_dir.clone(),
+                    ));
                 let exec = Arc::new(adapters::step_executor::DagStepExecutor::new(
                     machines_repo.clone(),
                     projects_repo.clone(),
@@ -115,6 +174,7 @@ pub fn run() {
                     notif_adapter.clone(),
                     agent_exec.clone(),
                     exec_inner.clone(),
+                    artifact_store,
                     app_data_dir.clone(),
                 ));
                 exec.startup_watchdog();
@@ -135,6 +195,8 @@ pub fn run() {
                 registry: agent_registry,
                 executor: step_executor_adapter.clone(),
                 presenter: step_executor_adapter,
+                pricing,
+                mr_publisher,
             });
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
@@ -242,6 +304,7 @@ pub fn run() {
             commands::features::gate_pending_for_run,
             commands::features::gate_decide,
             commands::features::step_retry,
+            commands::features::replay_from_step,
             commands::workflows::workflow_list,
             commands::workflows::workflow_get,
             commands::workflows::workflow_create,
@@ -254,7 +317,12 @@ pub fn run() {
             commands::bootstrap::bootstrap_project,
             commands::bootstrap::get_proposed_strategy,
             commands::bootstrap::save_project_settings,
-            commands::agent_config_probe::get_agent_models
+            commands::agent_config_probe::get_agent_models,
+            commands::pricing::pricing_list,
+            commands::pricing::pricing_for,
+            commands::mr_publisher::publish_mr,
+            commands::mr_publisher::fetch_mr_state,
+            commands::feature_lifecycle::feature_cleanup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

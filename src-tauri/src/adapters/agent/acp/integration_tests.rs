@@ -94,6 +94,7 @@ fn build_ctx(binary: &str) -> AgentContext {
         args: vec![],
         env: HashMap::new(),
         cwd: ".".into(),
+        model: None,
         agent_exec: stub.clone(),
         exec: stub,
     }

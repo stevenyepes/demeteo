@@ -1,0 +1,11 @@
+-- Phase R4 closure of the artifact refactor.
+--
+-- `step_executions.artifact_path TEXT` conflated the agent's chat
+-- stream with the actual produced artifact and couldn't represent
+-- multi-artifact steps (e.g. a parallel implement step with N file
+-- artifacts + a diff + a summary). Replace it with a JSON-encoded
+-- list of references. Old rows get an empty list on migration; the
+-- legacy single-path column is left in place for the few places that
+-- still want a "primary" path (it'll be NULL going forward — the
+-- Application code chooses how to derive a primary from the list).
+ALTER TABLE step_executions ADD COLUMN artifact_paths TEXT NOT NULL DEFAULT '[]';
