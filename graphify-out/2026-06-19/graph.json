@@ -2790,7 +2790,7 @@
       "source_location": "L55",
       "_origin": "ast",
       "id": "deserialize",
-      "community": 7,
+      "community": 32,
       "norm_label": "deserialize"
     },
     {
@@ -22037,7 +22037,7 @@
       "label": "\ud83d\uddc2\ufe0f 4. Documentation & Schema Index",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L108",
+      "source_location": "L110",
       "_origin": "ast",
       "id": "agents_4_documentation_schema_index",
       "community": 74,
@@ -22047,7 +22047,7 @@
       "label": "Active plan (multi-agent orchestrator)",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L112",
+      "source_location": "L114",
       "_origin": "ast",
       "id": "agents_active_plan_multi_agent_orchestrator",
       "community": 74,
@@ -22057,7 +22057,7 @@
       "label": "Carried-forward references",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L122",
+      "source_location": "L124",
       "_origin": "ast",
       "id": "agents_carried_forward_references",
       "community": 74,
@@ -22067,7 +22067,7 @@
       "label": "Legacy single-agent work (preserved for historical context)",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L127",
+      "source_location": "L129",
       "_origin": "ast",
       "id": "agents_legacy_single_agent_work_preserved_for_historical_context",
       "community": 74,
@@ -22077,7 +22077,7 @@
       "label": "\ud83c\udfaf 5. Implementation Phases",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L137",
+      "source_location": "L139",
       "_origin": "ast",
       "id": "agents_5_implementation_phases",
       "community": 74,
@@ -22087,7 +22087,7 @@
       "label": "Active plan: R0\u2013R8 (multi-agent orchestrator)",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L139",
+      "source_location": "L141",
       "_origin": "ast",
       "id": "agents_active_plan_r0_r8_multi_agent_orchestrator",
       "community": 74,
@@ -22097,7 +22097,7 @@
       "label": "Legacy single-agent work (Phases 1\u20136, completed before the pivot)",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L163",
+      "source_location": "L165",
       "_origin": "ast",
       "id": "agents_legacy_single_agent_work_phases_1_6_completed_before_the_pivot",
       "community": 74,
@@ -22107,7 +22107,7 @@
       "label": "graphify",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L183",
+      "source_location": "L185",
       "_origin": "ast",
       "id": "agents_graphify",
       "community": 74,
@@ -22124,20 +22124,20 @@
       "norm_label": "agent_integration.md"
     },
     {
-      "label": "Agent Integration Spec (v1, post-pivot)",
+      "label": "Agent Integration Spec (v1, post-pivot, CLI)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "agent_integration_agent_integration_spec_v1_post_pivot",
+      "id": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
       "community": 105,
-      "norm_label": "agent integration spec (v1, post-pivot)"
+      "norm_label": "agent integration spec (v1, post-pivot, cli)"
     },
     {
       "label": "1. Scope and Non-Goals (post-pivot)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L18",
+      "source_location": "L19",
       "_origin": "ast",
       "id": "agent_integration_1_scope_and_non_goals_post_pivot",
       "community": 107,
@@ -22147,7 +22147,7 @@
       "label": "v1 ships",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L20",
+      "source_location": "L21",
       "_origin": "ast",
       "id": "agent_integration_v1_ships",
       "community": 107,
@@ -22157,27 +22157,27 @@
       "label": "v1 explicitly does NOT include",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L31",
+      "source_location": "L33",
       "_origin": "ast",
       "id": "agent_integration_v1_explicitly_does_not_include",
       "community": 107,
       "norm_label": "v1 explicitly does not include"
     },
     {
-      "label": "Why \"ACP only\" is the right bet for v1",
+      "label": "Why CLI is the right bet for v1",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L44",
+      "source_location": "L46",
       "_origin": "ast",
-      "id": "agent_integration_why_acp_only_is_the_right_bet_for_v1",
+      "id": "agent_integration_why_cli_is_the_right_bet_for_v1",
       "community": 107,
-      "norm_label": "why \"acp only\" is the right bet for v1"
+      "norm_label": "why cli is the right bet for v1"
     },
     {
       "label": "2. Locked Decisions (the runtime-relevant ones)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L52",
+      "source_location": "L54",
       "_origin": "ast",
       "id": "agent_integration_2_locked_decisions_the_runtime_relevant_ones",
       "community": 105,
@@ -22187,7 +22187,7 @@
       "label": "3. Domain Model (post-pivot)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L73",
+      "source_location": "L78",
       "_origin": "ast",
       "id": "agent_integration_3_domain_model_post_pivot",
       "community": 99,
@@ -22197,7 +22197,7 @@
       "label": "3.1 The agent session is scoped to a step execution",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L75",
+      "source_location": "L80",
       "_origin": "ast",
       "id": "agent_integration_3_1_the_agent_session_is_scoped_to_a_step_execution",
       "community": 99,
@@ -22207,7 +22207,7 @@
       "label": "3.2 The planner is just an agent session",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L101",
+      "source_location": "L108",
       "_origin": "ast",
       "id": "agent_integration_3_2_the_planner_is_just_an_agent_session",
       "community": 99,
@@ -22217,7 +22217,7 @@
       "label": "3.3 Project host + provider instance",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L107",
+      "source_location": "L114",
       "_origin": "ast",
       "id": "agent_integration_3_3_project_host_provider_instance",
       "community": 99,
@@ -22227,7 +22227,7 @@
       "label": "3.4 The `AgentEvent` vocabulary is internal",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L117",
+      "source_location": "L124",
       "_origin": "ast",
       "id": "agent_integration_3_4_the_agentevent_vocabulary_is_internal",
       "community": 99,
@@ -22237,7 +22237,7 @@
       "label": "3.5 Step status state machine",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L190",
+      "source_location": "L197",
       "_origin": "ast",
       "id": "agent_integration_3_5_step_status_state_machine",
       "community": 99,
@@ -22247,7 +22247,7 @@
       "label": "3.6 The worktree-of-record is `feature/<slug>`",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L206",
+      "source_location": "L213",
       "_origin": "ast",
       "id": "agent_integration_3_6_the_worktree_of_record_is_feature_slug",
       "community": 99,
@@ -22257,7 +22257,7 @@
       "label": "4. Runtime Trait and Lifecycle",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L214",
+      "source_location": "L221",
       "_origin": "ast",
       "id": "agent_integration_4_runtime_trait_and_lifecycle",
       "community": 101,
@@ -22267,127 +22267,137 @@
       "label": "4.1 The trait",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L216",
+      "source_location": "L223",
       "_origin": "ast",
       "id": "agent_integration_4_1_the_trait",
       "community": 101,
       "norm_label": "4.1 the trait"
     },
     {
-      "label": "4.2 Lifecycle: lazy on first prompt, scoped to step execution",
+      "label": "4.2 Lifecycle: one-shot per prompt call, scoped to step execution",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L276",
+      "source_location": "L283",
       "_origin": "ast",
-      "id": "agent_integration_4_2_lifecycle_lazy_on_first_prompt_scoped_to_step_execution",
+      "id": "agent_integration_4_2_lifecycle_one_shot_per_prompt_call_scoped_to_step_execution",
       "community": 101,
-      "norm_label": "4.2 lifecycle: lazy on first prompt, scoped to step execution"
+      "norm_label": "4.2 lifecycle: one-shot per prompt call, scoped to step execution"
     },
     {
       "label": "4.3 Where the process lives",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L288",
+      "source_location": "L295",
       "_origin": "ast",
       "id": "agent_integration_4_3_where_the_process_lives",
       "community": 101,
       "norm_label": "4.3 where the process lives"
     },
     {
-      "label": "4.4 The transport layer",
+      "label": "4.4 The CLI event stream",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L297",
+      "source_location": "L304",
       "_origin": "ast",
-      "id": "agent_integration_4_4_the_transport_layer",
+      "id": "agent_integration_4_4_the_cli_event_stream",
       "community": 101,
-      "norm_label": "4.4 the transport layer"
+      "norm_label": "4.4 the cli event stream"
     },
     {
       "label": "4.5 Conflict resolution cascade (decision 20)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L316",
+      "source_location": "L324",
       "_origin": "ast",
       "id": "agent_integration_4_5_conflict_resolution_cascade_decision_20",
       "community": 101,
       "norm_label": "4.5 conflict resolution cascade (decision 20)"
     },
     {
-      "label": "5. The AcpRuntime",
+      "label": "5. The CliRuntime",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L328",
+      "source_location": "L336",
       "_origin": "ast",
-      "id": "agent_integration_5_the_acpruntime",
+      "id": "agent_integration_5_the_cliruntime",
       "community": 100,
-      "norm_label": "5. the acpruntime"
+      "norm_label": "5. the cliruntime"
     },
     {
-      "label": "5.1 Why ACP",
-      "file_type": "document",
-      "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L330",
-      "_origin": "ast",
-      "id": "agent_integration_5_1_why_acp",
-      "community": 100,
-      "norm_label": "5.1 why acp"
-    },
-    {
-      "label": "5.2 Method surface (v1 subset)",
+      "label": "5.1 Why CLI",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
       "source_location": "L338",
       "_origin": "ast",
-      "id": "agent_integration_5_2_method_surface_v1_subset",
+      "id": "agent_integration_5_1_why_cli",
       "community": 100,
-      "norm_label": "5.2 method surface (v1 subset)"
+      "norm_label": "5.1 why cli"
     },
     {
-      "label": "5.3 Install flow",
+      "label": "5.2 The wire format",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L367",
+      "source_location": "L344",
       "_origin": "ast",
-      "id": "agent_integration_5_3_install_flow",
+      "id": "agent_integration_5_2_the_wire_format",
       "community": 100,
-      "norm_label": "5.3 install flow"
+      "norm_label": "5.2 the wire format"
     },
     {
-      "label": "5.4 The tool bridge",
+      "label": "5.3 Cross-step session continuity",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L398",
+      "source_location": "L355",
       "_origin": "ast",
-      "id": "agent_integration_5_4_the_tool_bridge",
+      "id": "agent_integration_5_3_cross_step_session_continuity",
       "community": 100,
-      "norm_label": "5.4 the tool bridge"
+      "norm_label": "5.3 cross-step session continuity"
     },
     {
-      "label": "5.5 Adapters (v1)",
+      "label": "5.4 Install flow",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L410",
+      "source_location": "L372",
       "_origin": "ast",
-      "id": "agent_integration_5_5_adapters_v1",
+      "id": "agent_integration_5_4_install_flow",
       "community": 100,
-      "norm_label": "5.5 adapters (v1)"
+      "norm_label": "5.4 install flow"
     },
     {
-      "label": "5.6 Disclaimer",
+      "label": "5.5 Permission policy per spawn",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L419",
+      "source_location": "L402",
       "_origin": "ast",
-      "id": "agent_integration_5_6_disclaimer",
+      "id": "agent_integration_5_5_permission_policy_per_spawn",
       "community": 100,
-      "norm_label": "5.6 disclaimer"
+      "norm_label": "5.5 permission policy per spawn"
+    },
+    {
+      "label": "5.6 Adapters",
+      "file_type": "document",
+      "source_file": "AGENT_INTEGRATION.md",
+      "source_location": "L416",
+      "_origin": "ast",
+      "id": "agent_integration_5_6_adapters",
+      "community": 100,
+      "norm_label": "5.6 adapters"
+    },
+    {
+      "label": "5.7 Disclaimer",
+      "file_type": "document",
+      "source_file": "AGENT_INTEGRATION.md",
+      "source_location": "L427",
+      "_origin": "ast",
+      "id": "agent_integration_5_7_disclaimer",
+      "community": 100,
+      "norm_label": "5.7 disclaimer"
     },
     {
       "label": "6. The Scope Fence",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L425",
+      "source_location": "L433",
       "_origin": "ast",
       "id": "agent_integration_6_the_scope_fence",
       "community": 102,
@@ -22397,7 +22407,7 @@
       "label": "6.1 The problem",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L427",
+      "source_location": "L435",
       "_origin": "ast",
       "id": "agent_integration_6_1_the_problem",
       "community": 102,
@@ -22407,47 +22417,27 @@
       "label": "6.2 The implementation",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L433",
+      "source_location": "L439",
       "_origin": "ast",
       "id": "agent_integration_6_2_the_implementation",
       "community": 102,
       "norm_label": "6.2 the implementation"
     },
     {
-      "label": "6.3 Path resolution",
+      "label": "6.3 What this does NOT solve",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L471",
+      "source_location": "L445",
       "_origin": "ast",
-      "id": "agent_integration_6_3_path_resolution",
+      "id": "agent_integration_6_3_what_this_does_not_solve",
       "community": 102,
-      "norm_label": "6.3 path resolution"
-    },
-    {
-      "label": "6.4 Overriding the fence",
-      "file_type": "document",
-      "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L480",
-      "_origin": "ast",
-      "id": "agent_integration_6_4_overriding_the_fence",
-      "community": 102,
-      "norm_label": "6.4 overriding the fence"
-    },
-    {
-      "label": "6.5 What this does NOT solve",
-      "file_type": "document",
-      "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L486",
-      "_origin": "ast",
-      "id": "agent_integration_6_5_what_this_does_not_solve",
-      "community": 102,
-      "norm_label": "6.5 what this does not solve"
+      "norm_label": "6.3 what this does not solve"
     },
     {
       "label": "7. Error Model",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L494",
+      "source_location": "L453",
       "_origin": "ast",
       "id": "agent_integration_7_error_model",
       "community": 108,
@@ -22457,7 +22447,7 @@
       "label": "7.1 Per-action errors (typed)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L496",
+      "source_location": "L455",
       "_origin": "ast",
       "id": "agent_integration_7_1_per_action_errors_typed",
       "community": 108,
@@ -22467,7 +22457,7 @@
       "label": "7.2 Per-step errors (`AgentEvent::Error`)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L514",
+      "source_location": "L473",
       "_origin": "ast",
       "id": "agent_integration_7_2_per_step_errors_agentevent_error",
       "community": 108,
@@ -22477,7 +22467,7 @@
       "label": "7.3 Per-feature errors (watchdog)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L518",
+      "source_location": "L477",
       "_origin": "ast",
       "id": "agent_integration_7_3_per_feature_errors_watchdog",
       "community": 108,
@@ -22487,7 +22477,7 @@
       "label": "8. Tauri Command Surface (post-pivot)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L529",
+      "source_location": "L488",
       "_origin": "ast",
       "id": "agent_integration_8_tauri_command_surface_post_pivot",
       "community": 105,
@@ -22497,7 +22487,7 @@
       "label": "9. File Layout (post-pivot)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L567",
+      "source_location": "L526",
       "_origin": "ast",
       "id": "agent_integration_9_file_layout_post_pivot",
       "community": 103,
@@ -22507,27 +22497,27 @@
       "label": "Phase R1 \u2014 Port + domain skeleton",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L571",
+      "source_location": "L530",
       "_origin": "ast",
       "id": "agent_integration_phase_r1_port_domain_skeleton",
       "community": 103,
       "norm_label": "phase r1 \u2014 port + domain skeleton"
     },
     {
-      "label": "Phase R4 \u2014 Step executor + AcpRuntime",
+      "label": "Phase R4 \u2014 Step executor + CliRuntime",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L586",
+      "source_location": "L545",
       "_origin": "ast",
-      "id": "agent_integration_phase_r4_step_executor_acpruntime",
+      "id": "agent_integration_phase_r4_step_executor_cliruntime",
       "community": 103,
-      "norm_label": "phase r4 \u2014 step executor + acpruntime"
+      "norm_label": "phase r4 \u2014 step executor + cliruntime"
     },
     {
       "label": "Phase R5 \u2014 Feature orchestrator",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L604",
+      "source_location": "L563",
       "_origin": "ast",
       "id": "agent_integration_phase_r5_feature_orchestrator",
       "community": 103,
@@ -22537,7 +22527,7 @@
       "label": "Phase R6 \u2014 Worktree & merge",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L616",
+      "source_location": "L575",
       "_origin": "ast",
       "id": "agent_integration_phase_r6_worktree_merge",
       "community": 103,
@@ -22547,7 +22537,7 @@
       "label": "Phase R7 \u2014 UI",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L631",
+      "source_location": "L590",
       "_origin": "ast",
       "id": "agent_integration_phase_r7_ui",
       "community": 103,
@@ -22557,7 +22547,7 @@
       "label": "10. Phase Plan (R0\u2013R8)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L664",
+      "source_location": "L623",
       "_origin": "ast",
       "id": "agent_integration_10_phase_plan_r0_r8",
       "community": 98,
@@ -22567,29 +22557,29 @@
       "label": "Phase R1 \u2014 Greenfield schema & ports",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L668",
+      "source_location": "L627",
       "_origin": "ast",
       "id": "agent_integration_phase_r1_greenfield_schema_ports",
       "community": 98,
       "norm_label": "phase r1 \u2014 greenfield schema & ports"
     },
     {
-      "label": "Phase R4 \u2014 Step executor + AcpRuntime",
+      "label": "Phase R4 \u2014 Step executor + CliRuntime",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L677",
+      "source_location": "L636",
       "_origin": "ast",
-      "id": "agent_integration_phase_r4_step_executor_acpruntime_677",
+      "id": "agent_integration_phase_r4_step_executor_cliruntime_636",
       "community": 98,
-      "norm_label": "phase r4 \u2014 step executor + acpruntime"
+      "norm_label": "phase r4 \u2014 step executor + cliruntime"
     },
     {
       "label": "Phase R5 \u2014 Feature orchestrator",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L687",
+      "source_location": "L647",
       "_origin": "ast",
-      "id": "agent_integration_phase_r5_feature_orchestrator_687",
+      "id": "agent_integration_phase_r5_feature_orchestrator_647",
       "community": 98,
       "norm_label": "phase r5 \u2014 feature orchestrator"
     },
@@ -22597,9 +22587,9 @@
       "label": "Phase R6 \u2014 Worktree & merge",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L695",
+      "source_location": "L655",
       "_origin": "ast",
-      "id": "agent_integration_phase_r6_worktree_merge_695",
+      "id": "agent_integration_phase_r6_worktree_merge_655",
       "community": 98,
       "norm_label": "phase r6 \u2014 worktree & merge"
     },
@@ -22607,7 +22597,7 @@
       "label": "Phase R7 \u2014 UX polish & docs",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L704",
+      "source_location": "L664",
       "_origin": "ast",
       "id": "agent_integration_phase_r7_ux_polish_docs",
       "community": 98,
@@ -22617,7 +22607,7 @@
       "label": "Phase R8 \u2014 Hardening & migration",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L715",
+      "source_location": "L675",
       "_origin": "ast",
       "id": "agent_integration_phase_r8_hardening_migration",
       "community": 98,
@@ -22627,7 +22617,7 @@
       "label": "11. Open Questions (the runtime-relevant subset)",
       "file_type": "document",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L727",
+      "source_location": "L687",
       "_origin": "ast",
       "id": "agent_integration_11_open_questions_the_runtime_relevant_subset",
       "community": 105,
@@ -23617,7 +23607,7 @@
       "label": "4. Tauri Command Surface",
       "file_type": "document",
       "source_file": "docs/REDESIGN_ARCHITECTURE.md",
-      "source_location": "L233",
+      "source_location": "L231",
       "_origin": "ast",
       "id": "docs_redesign_architecture_4_tauri_command_surface",
       "community": 82,
@@ -23627,7 +23617,7 @@
       "label": "New commands (one per port method the UI calls)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_ARCHITECTURE.md",
-      "source_location": "L235",
+      "source_location": "L233",
       "_origin": "ast",
       "id": "docs_redesign_architecture_new_commands_one_per_port_method_the_ui_calls",
       "community": 82,
@@ -23637,7 +23627,7 @@
       "label": "Modified commands (carried with reduced payload)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_ARCHITECTURE.md",
-      "source_location": "L255",
+      "source_location": "L253",
       "_origin": "ast",
       "id": "docs_redesign_architecture_modified_commands_carried_with_reduced_payload",
       "community": 82,
@@ -23647,7 +23637,7 @@
       "label": "Removed events",
       "file_type": "document",
       "source_file": "docs/REDESIGN_ARCHITECTURE.md",
-      "source_location": "L261",
+      "source_location": "L259",
       "_origin": "ast",
       "id": "docs_redesign_architecture_removed_events",
       "community": 82,
@@ -23657,7 +23647,7 @@
       "label": "New events",
       "file_type": "document",
       "source_file": "docs/REDESIGN_ARCHITECTURE.md",
-      "source_location": "L266",
+      "source_location": "L264",
       "_origin": "ast",
       "id": "docs_redesign_architecture_new_events",
       "community": 82,
@@ -23667,7 +23657,7 @@
       "label": "5. Frontend State Model (React, simplified)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_ARCHITECTURE.md",
-      "source_location": "L274",
+      "source_location": "L272",
       "_origin": "ast",
       "id": "docs_redesign_architecture_5_frontend_state_model_react_simplified",
       "community": 82,
@@ -23677,7 +23667,7 @@
       "label": "Top-level navigation (one shell)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_ARCHITECTURE.md",
-      "source_location": "L286",
+      "source_location": "L284",
       "_origin": "ast",
       "id": "docs_redesign_architecture_top_level_navigation_one_shell",
       "community": 82,
@@ -23687,7 +23677,7 @@
       "label": "6. Migration Strategy (Q30)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_ARCHITECTURE.md",
-      "source_location": "L308",
+      "source_location": "L306",
       "_origin": "ast",
       "id": "docs_redesign_architecture_6_migration_strategy_q30",
       "community": 82,
@@ -23797,7 +23787,7 @@
       "label": "7. UI & Telemetry (Supporting Subdomain)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_DDD_MODEL.md",
-      "source_location": "L119",
+      "source_location": "L120",
       "_origin": "ast",
       "id": "docs_redesign_ddd_model_7_ui_telemetry_supporting_subdomain",
       "community": 85,
@@ -23837,7 +23827,7 @@
       "label": "2. Cross-References",
       "file_type": "document",
       "source_file": "docs/REDESIGN_DECISIONS.md",
-      "source_location": "L48",
+      "source_location": "L51",
       "_origin": "ast",
       "id": "docs_redesign_decisions_2_cross_references",
       "community": 112,
@@ -23917,7 +23907,7 @@
       "label": "Phase R5 \u2014 Feature orchestrator (Rust + UI)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_EXECUTION_PLAN.md",
-      "source_location": "L171",
+      "source_location": "L172",
       "_origin": "ast",
       "id": "docs_redesign_execution_plan_phase_r5_feature_orchestrator_rust_ui",
       "community": 83,
@@ -23927,7 +23917,7 @@
       "label": "Phase R6 \u2014 Worktree & merge (Rust)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_EXECUTION_PLAN.md",
-      "source_location": "L203",
+      "source_location": "L204",
       "_origin": "ast",
       "id": "docs_redesign_execution_plan_phase_r6_worktree_merge_rust",
       "community": 83,
@@ -23937,7 +23927,7 @@
       "label": "Phase R7 \u2014 UX polish & docs (UI + content)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_EXECUTION_PLAN.md",
-      "source_location": "L237",
+      "source_location": "L238",
       "_origin": "ast",
       "id": "docs_redesign_execution_plan_phase_r7_ux_polish_docs_ui_content",
       "community": 83,
@@ -23947,7 +23937,7 @@
       "label": "Phase R8 \u2014 Hardening & migration (v1.0 \u2192 v1.x)",
       "file_type": "document",
       "source_file": "docs/REDESIGN_EXECUTION_PLAN.md",
-      "source_location": "L271",
+      "source_location": "L272",
       "_origin": "ast",
       "id": "docs_redesign_execution_plan_phase_r8_hardening_migration_v1_0_v1_x",
       "community": 83,
@@ -23957,7 +23947,7 @@
       "label": "Combined Timeline",
       "file_type": "document",
       "source_file": "docs/REDESIGN_EXECUTION_PLAN.md",
-      "source_location": "L302",
+      "source_location": "L303",
       "_origin": "ast",
       "id": "docs_redesign_execution_plan_combined_timeline",
       "community": 83,
@@ -27425,9 +27415,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L5",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema",
-      "target": "schemas_linux_schema_anyof",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_anyof"
     },
     {
       "relation": "contains",
@@ -27435,9 +27425,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L38",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema",
-      "target": "schemas_linux_schema_definitions",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions"
     },
     {
       "relation": "contains",
@@ -27445,9 +27435,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L4",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema",
-      "target": "schemas_linux_schema_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_description"
     },
     {
       "relation": "contains",
@@ -27455,9 +27445,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema",
-      "target": "schemas_linux_schema_schema",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_schema"
     },
     {
       "relation": "contains",
@@ -27465,9 +27455,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L3",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema",
-      "target": "schemas_linux_schema_title",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_title"
     },
     {
       "relation": "contains",
@@ -27475,9 +27465,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2573",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions",
-      "target": "schemas_linux_schema_definitions_application",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions_application"
     },
     {
       "relation": "contains",
@@ -27485,9 +27475,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L39",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions",
-      "target": "schemas_linux_schema_definitions_capability",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions_capability"
     },
     {
       "relation": "contains",
@@ -27495,9 +27485,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L106",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions",
-      "target": "schemas_linux_schema_definitions_capabilityremote",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions_capabilityremote"
     },
     {
       "relation": "contains",
@@ -27505,9 +27495,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L344",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions",
-      "target": "schemas_linux_schema_definitions_identifier",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions_identifier"
     },
     {
       "relation": "contains",
@@ -27515,9 +27505,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2518",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions",
-      "target": "schemas_linux_schema_definitions_number",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions_number"
     },
     {
       "relation": "contains",
@@ -27525,9 +27515,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L122",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions",
-      "target": "schemas_linux_schema_definitions_permissionentry",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions_permissionentry"
     },
     {
       "relation": "contains",
@@ -27535,9 +27525,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2533",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions",
-      "target": "schemas_linux_schema_definitions_target",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions_target"
     },
     {
       "relation": "contains",
@@ -27545,9 +27535,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2479",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions",
-      "target": "schemas_linux_schema_definitions_value",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_definitions_value"
     },
     {
       "relation": "contains",
@@ -27555,9 +27545,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L40",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_capability",
-      "target": "schemas_linux_schema_capability_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_capability_description"
     },
     {
       "relation": "contains",
@@ -27565,9 +27555,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L46",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_capability",
-      "target": "schemas_linux_schema_capability_properties",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_capability_properties"
     },
     {
       "relation": "contains",
@@ -27575,9 +27565,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L42",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_capability",
-      "target": "schemas_linux_schema_capability_required",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_capability_required"
     },
     {
       "relation": "contains",
@@ -27585,9 +27575,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L41",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_capability",
-      "target": "schemas_linux_schema_capability_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_capability_type"
     },
     {
       "relation": "contains",
@@ -27595,9 +27585,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L51",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capability_properties",
-      "target": "schemas_linux_schema_properties_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_description"
     },
     {
       "relation": "contains",
@@ -27605,9 +27595,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L47",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capability_properties",
-      "target": "schemas_linux_schema_properties_identifier",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_identifier"
     },
     {
       "relation": "contains",
@@ -27615,9 +27605,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L67",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capability_properties",
-      "target": "schemas_linux_schema_properties_local",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_local"
     },
     {
       "relation": "contains",
@@ -27625,9 +27615,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L86",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capability_properties",
-      "target": "schemas_linux_schema_properties_permissions",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_permissions"
     },
     {
       "relation": "contains",
@@ -27635,9 +27625,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L94",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capability_properties",
-      "target": "schemas_linux_schema_properties_platforms",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_platforms"
     },
     {
       "relation": "contains",
@@ -27645,9 +27635,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L56",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capability_properties",
-      "target": "schemas_linux_schema_properties_remote",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_remote"
     },
     {
       "relation": "contains",
@@ -27655,9 +27645,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L79",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capability_properties",
-      "target": "schemas_linux_schema_properties_webviews",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_webviews"
     },
     {
       "relation": "contains",
@@ -27665,9 +27655,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L72",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capability_properties",
-      "target": "schemas_linux_schema_properties_windows",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_windows"
     },
     {
       "relation": "contains",
@@ -27675,9 +27665,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L48",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_identifier",
-      "target": "schemas_linux_schema_identifier_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_identifier_description"
     },
     {
       "relation": "contains",
@@ -27685,9 +27675,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L49",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_identifier",
-      "target": "schemas_linux_schema_identifier_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_identifier_type"
     },
     {
       "relation": "contains",
@@ -27695,9 +27685,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L345",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_identifier",
-      "target": "schemas_linux_schema_identifier_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_identifier_description"
     },
     {
       "relation": "contains",
@@ -27705,9 +27695,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L53",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_description",
-      "target": "schemas_linux_schema_description_default",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_description_default"
     },
     {
       "relation": "contains",
@@ -27715,9 +27705,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L52",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_description",
-      "target": "schemas_linux_schema_description_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_description_description"
     },
     {
       "relation": "contains",
@@ -27725,9 +27715,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L54",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_description",
-      "target": "schemas_linux_schema_description_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_description_type"
     },
     {
       "relation": "contains",
@@ -27735,9 +27725,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L58",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_remote",
-      "target": "schemas_linux_schema_remote_anyof",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_remote_anyof"
     },
     {
       "relation": "contains",
@@ -27745,9 +27735,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L57",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_remote",
-      "target": "schemas_linux_schema_remote_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_remote_description"
     },
     {
       "relation": "contains",
@@ -27755,9 +27745,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L69",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_local",
-      "target": "schemas_linux_schema_local_default",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_local_default"
     },
     {
       "relation": "contains",
@@ -27765,9 +27755,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L68",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_local",
-      "target": "schemas_linux_schema_local_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_local_description"
     },
     {
       "relation": "contains",
@@ -27775,9 +27765,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L70",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_local",
-      "target": "schemas_linux_schema_local_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_local_type"
     },
     {
       "relation": "contains",
@@ -27785,9 +27775,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L73",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_windows",
-      "target": "schemas_linux_schema_windows_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_windows_description"
     },
     {
       "relation": "contains",
@@ -27795,9 +27785,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L75",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_windows",
-      "target": "schemas_linux_schema_windows_items",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_windows_items"
     },
     {
       "relation": "contains",
@@ -27805,9 +27795,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L74",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_windows",
-      "target": "schemas_linux_schema_windows_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_windows_type"
     },
     {
       "relation": "contains",
@@ -27815,9 +27805,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L76",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_windows_items",
-      "target": "schemas_linux_schema_items_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_items_type"
     },
     {
       "relation": "contains",
@@ -27825,9 +27815,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L117",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_urls_items",
-      "target": "schemas_linux_schema_items_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_items_type"
     },
     {
       "relation": "contains",
@@ -27835,9 +27825,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L83",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_webviews_items",
-      "target": "schemas_linux_schema_items_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_items_type"
     },
     {
       "relation": "contains",
@@ -27845,9 +27835,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L80",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_webviews",
-      "target": "schemas_linux_schema_webviews_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_webviews_description"
     },
     {
       "relation": "contains",
@@ -27855,9 +27845,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L82",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_webviews",
-      "target": "schemas_linux_schema_webviews_items",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_webviews_items"
     },
     {
       "relation": "contains",
@@ -27865,9 +27855,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L81",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_webviews",
-      "target": "schemas_linux_schema_webviews_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_webviews_type"
     },
     {
       "relation": "contains",
@@ -27875,9 +27865,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L87",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_permissions",
-      "target": "schemas_linux_schema_permissions_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_permissions_description"
     },
     {
       "relation": "contains",
@@ -27885,9 +27875,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L89",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_permissions",
-      "target": "schemas_linux_schema_permissions_items",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_permissions_items"
     },
     {
       "relation": "contains",
@@ -27895,9 +27885,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L88",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_permissions",
-      "target": "schemas_linux_schema_permissions_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_permissions_type"
     },
     {
       "relation": "contains",
@@ -27905,9 +27895,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L92",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_permissions",
-      "target": "schemas_linux_schema_permissions_uniqueitems",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_permissions_uniqueitems"
     },
     {
       "relation": "contains",
@@ -27915,9 +27905,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L90",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_permissions_items",
-      "target": "schemas_linux_schema_items_ref",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_items_ref"
     },
     {
       "relation": "contains",
@@ -27925,9 +27915,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L101",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_platforms_items",
-      "target": "schemas_linux_schema_items_ref",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_items_ref"
     },
     {
       "relation": "contains",
@@ -27935,9 +27925,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L95",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_platforms",
-      "target": "schemas_linux_schema_platforms_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_platforms_description"
     },
     {
       "relation": "contains",
@@ -27945,9 +27935,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L100",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_platforms",
-      "target": "schemas_linux_schema_platforms_items",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_platforms_items"
     },
     {
       "relation": "contains",
@@ -27955,9 +27945,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L96",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_platforms",
-      "target": "schemas_linux_schema_platforms_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_platforms_type"
     },
     {
       "relation": "contains",
@@ -27965,9 +27955,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L107",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_capabilityremote",
-      "target": "schemas_linux_schema_capabilityremote_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_capabilityremote_description"
     },
     {
       "relation": "contains",
@@ -27975,9 +27965,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L112",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_capabilityremote",
-      "target": "schemas_linux_schema_capabilityremote_properties",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_capabilityremote_properties"
     },
     {
       "relation": "contains",
@@ -27985,9 +27975,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L109",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_capabilityremote",
-      "target": "schemas_linux_schema_capabilityremote_required",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_capabilityremote_required"
     },
     {
       "relation": "contains",
@@ -27995,9 +27985,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L108",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_capabilityremote",
-      "target": "schemas_linux_schema_capabilityremote_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_capabilityremote_type"
     },
     {
       "relation": "contains",
@@ -28005,9 +27995,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L113",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_capabilityremote_properties",
-      "target": "schemas_linux_schema_properties_urls",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_properties_urls"
     },
     {
       "relation": "contains",
@@ -28015,9 +28005,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L114",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_urls",
-      "target": "schemas_linux_schema_urls_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_urls_description"
     },
     {
       "relation": "contains",
@@ -28025,9 +28015,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L116",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_urls",
-      "target": "schemas_linux_schema_urls_items",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_urls_items"
     },
     {
       "relation": "contains",
@@ -28035,9 +28025,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L115",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_properties_urls",
-      "target": "schemas_linux_schema_urls_type",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_urls_type"
     },
     {
       "relation": "contains",
@@ -28045,9 +28035,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L124",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_permissionentry",
-      "target": "schemas_linux_schema_permissionentry_anyof",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_permissionentry_anyof"
     },
     {
       "relation": "contains",
@@ -28055,9 +28045,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L123",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_permissionentry",
-      "target": "schemas_linux_schema_permissionentry_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_permissionentry_description"
     },
     {
       "relation": "contains",
@@ -28065,9 +28055,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L346",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_identifier",
-      "target": "schemas_linux_schema_identifier_oneof",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_identifier_oneof"
     },
     {
       "relation": "contains",
@@ -28075,9 +28065,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2481",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_value",
-      "target": "schemas_linux_schema_value_anyof",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_value_anyof"
     },
     {
       "relation": "contains",
@@ -28085,9 +28075,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2480",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_value",
-      "target": "schemas_linux_schema_value_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_value_description"
     },
     {
       "relation": "contains",
@@ -28095,9 +28085,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2520",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_number",
-      "target": "schemas_linux_schema_number_anyof",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_number_anyof"
     },
     {
       "relation": "contains",
@@ -28105,9 +28095,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2519",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_number",
-      "target": "schemas_linux_schema_number_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_number_description"
     },
     {
       "relation": "contains",
@@ -28115,9 +28105,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2534",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_target",
-      "target": "schemas_linux_schema_target_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_target_description"
     },
     {
       "relation": "contains",
@@ -28125,9 +28115,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2535",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_target",
-      "target": "schemas_linux_schema_target_oneof",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_target_oneof"
     },
     {
       "relation": "contains",
@@ -28135,9 +28125,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2575",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_application",
-      "target": "schemas_linux_schema_application_anyof",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_application_anyof"
     },
     {
       "relation": "contains",
@@ -28145,9 +28135,9 @@
       "source_file": "src-tauri/gen/schemas/linux-schema.json",
       "source_location": "L2574",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "schemas_linux_schema_definitions_application",
-      "target": "schemas_linux_schema_application_description",
-      "confidence_score": 1.0
+      "target": "schemas_linux_schema_application_description"
     },
     {
       "relation": "contains",
@@ -69228,119 +69218,119 @@
       "source_file": "AGENT_INTEGRATION.md",
       "source_location": "L1",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration",
-      "target": "agent_integration_agent_integration_spec_v1_post_pivot"
+      "target": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L664",
+      "source_location": "L623",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_10_phase_plan_r0_r8"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_10_phase_plan_r0_r8",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L727",
+      "source_location": "L687",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_11_open_questions_the_runtime_relevant_subset"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_11_open_questions_the_runtime_relevant_subset",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L18",
+      "source_location": "L19",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_1_scope_and_non_goals_post_pivot"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_1_scope_and_non_goals_post_pivot",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L52",
+      "source_location": "L54",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_2_locked_decisions_the_runtime_relevant_ones"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_2_locked_decisions_the_runtime_relevant_ones",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L73",
+      "source_location": "L78",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_3_domain_model_post_pivot"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_3_domain_model_post_pivot",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L214",
+      "source_location": "L221",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_4_runtime_trait_and_lifecycle"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_4_runtime_trait_and_lifecycle",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L328",
+      "source_location": "L336",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_5_the_acpruntime"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_5_the_cliruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L425",
+      "source_location": "L433",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_6_the_scope_fence"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_6_the_scope_fence",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L494",
+      "source_location": "L453",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_7_error_model"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_7_error_model",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L529",
+      "source_location": "L488",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_8_tauri_command_surface_post_pivot"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_8_tauri_command_surface_post_pivot",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L567",
+      "source_location": "L526",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_agent_integration_spec_v1_post_pivot",
-      "target": "agent_integration_9_file_layout_post_pivot"
+      "source": "agent_integration_agent_integration_spec_v1_post_pivot_cli",
+      "target": "agent_integration_9_file_layout_post_pivot",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -69366,11 +69356,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L44",
+      "source_location": "L46",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration_1_scope_and_non_goals_post_pivot",
-      "target": "agent_integration_why_acp_only_is_the_right_bet_for_v1"
+      "target": "agent_integration_why_cli_is_the_right_bet_for_v1",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -69446,11 +69436,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L276",
+      "source_location": "L283",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration_4_runtime_trait_and_lifecycle",
-      "target": "agent_integration_4_2_lifecycle_lazy_on_first_prompt_scoped_to_step_execution"
+      "target": "agent_integration_4_2_lifecycle_one_shot_per_prompt_call_scoped_to_step_execution",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -69466,11 +69456,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L297",
+      "source_location": "L304",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration_4_runtime_trait_and_lifecycle",
-      "target": "agent_integration_4_4_the_transport_layer"
+      "target": "agent_integration_4_4_the_cli_event_stream",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -69486,61 +69476,71 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L330",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_5_the_acpruntime",
-      "target": "agent_integration_5_1_why_acp"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "AGENT_INTEGRATION.md",
       "source_location": "L338",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_5_the_acpruntime",
-      "target": "agent_integration_5_2_method_surface_v1_subset"
+      "source": "agent_integration_5_the_cliruntime",
+      "target": "agent_integration_5_1_why_cli",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L367",
+      "source_location": "L344",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_5_the_acpruntime",
-      "target": "agent_integration_5_3_install_flow"
+      "source": "agent_integration_5_the_cliruntime",
+      "target": "agent_integration_5_2_the_wire_format",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L398",
+      "source_location": "L355",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_5_the_acpruntime",
-      "target": "agent_integration_5_4_the_tool_bridge"
+      "source": "agent_integration_5_the_cliruntime",
+      "target": "agent_integration_5_3_cross_step_session_continuity",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L410",
+      "source_location": "L372",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_5_the_acpruntime",
-      "target": "agent_integration_5_5_adapters_v1"
+      "source": "agent_integration_5_the_cliruntime",
+      "target": "agent_integration_5_4_install_flow",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L419",
+      "source_location": "L402",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_5_the_acpruntime",
-      "target": "agent_integration_5_6_disclaimer"
+      "source": "agent_integration_5_the_cliruntime",
+      "target": "agent_integration_5_5_permission_policy_per_spawn",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "AGENT_INTEGRATION.md",
+      "source_location": "L416",
+      "weight": 1.0,
+      "source": "agent_integration_5_the_cliruntime",
+      "target": "agent_integration_5_6_adapters",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "AGENT_INTEGRATION.md",
+      "source_location": "L427",
+      "weight": 1.0,
+      "source": "agent_integration_5_the_cliruntime",
+      "target": "agent_integration_5_7_disclaimer",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -69566,31 +69566,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L471",
+      "source_location": "L445",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration_6_the_scope_fence",
-      "target": "agent_integration_6_3_path_resolution"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L480",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_6_the_scope_fence",
-      "target": "agent_integration_6_4_overriding_the_fence"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L486",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "agent_integration_6_the_scope_fence",
-      "target": "agent_integration_6_5_what_this_does_not_solve"
+      "target": "agent_integration_6_3_what_this_does_not_solve",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -69636,11 +69616,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L586",
+      "source_location": "L545",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration_9_file_layout_post_pivot",
-      "target": "agent_integration_phase_r4_step_executor_acpruntime"
+      "target": "agent_integration_phase_r4_step_executor_cliruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -69686,31 +69666,31 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L677",
+      "source_location": "L636",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration_10_phase_plan_r0_r8",
-      "target": "agent_integration_phase_r4_step_executor_acpruntime_677"
+      "target": "agent_integration_phase_r4_step_executor_cliruntime_636",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L687",
+      "source_location": "L647",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration_10_phase_plan_r0_r8",
-      "target": "agent_integration_phase_r5_feature_orchestrator_687"
+      "target": "agent_integration_phase_r5_feature_orchestrator_647",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENT_INTEGRATION.md",
-      "source_location": "L695",
+      "source_location": "L655",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agent_integration_10_phase_plan_r0_r8",
-      "target": "agent_integration_phase_r6_worktree_merge_695"
+      "target": "agent_integration_phase_r6_worktree_merge_655",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",

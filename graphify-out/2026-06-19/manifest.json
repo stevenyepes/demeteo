@@ -305,9 +305,9 @@
     "semantic_hash": "0dad167a95bdb389f02fecffb60b1bc8"
   },
   "AGENTS.md": {
-    "mtime": 1781115991.2560453,
-    "ast_hash": "2f286ebb1deaf205cadbb39b4499f9f5",
-    "semantic_hash": "2f286ebb1deaf205cadbb39b4499f9f5"
+    "mtime": 1781879813.0368273,
+    "ast_hash": "37e15ab3702734b00c5d99a3fe2c5328",
+    "semantic_hash": ""
   },
   "CONNECTION_FLOWS.md": {
     "mtime": 1780716149.0832484,
@@ -430,9 +430,9 @@
     "semantic_hash": "fc4aba64b6aa32b255fefac5840479f1"
   },
   "AGENT_INTEGRATION.md": {
-    "mtime": 1781116144.843522,
-    "ast_hash": "e913c8aaeb67bfb6de2d4d1052a70efa",
-    "semantic_hash": "e913c8aaeb67bfb6de2d4d1052a70efa"
+    "mtime": 1781880363.586754,
+    "ast_hash": "d2ac3da43623d14b59c66217c81ec0f4",
+    "semantic_hash": ""
   },
   "src-tauri/src/adapters/agent/acp/event_mapper.rs": {
     "mtime": 1781095372.8893762,
@@ -605,8 +605,8 @@
     "semantic_hash": "2c05c30ac007ed3afa6e147f52b3f97d"
   },
   "REDESIGN_PLAN.md": {
-    "mtime": 1781875755.5459182,
-    "ast_hash": "7f3ac72d108d98192f65b7ef031f4361",
+    "mtime": 1781879910.2804844,
+    "ast_hash": "f60baa17e44eb311862d201fddd57b84",
     "semantic_hash": ""
   },
   "docs/LEGACY_ARCHITECTURE.md": {
@@ -625,24 +625,24 @@
     "semantic_hash": "3d5078d759b9f395a0d5ca5f9a312439"
   },
   "docs/REDESIGN_ARCHITECTURE.md": {
-    "mtime": 1781115765.8206317,
-    "ast_hash": "ed745b40fde1db912edc34e0d74c6ef7",
-    "semantic_hash": "ed745b40fde1db912edc34e0d74c6ef7"
+    "mtime": 1781880404.6051116,
+    "ast_hash": "18ebed29a63700e11641beb34cb09514",
+    "semantic_hash": ""
   },
   "docs/REDESIGN_DDD_MODEL.md": {
-    "mtime": 1781115698.235836,
-    "ast_hash": "e1ee39b529e55cf4e755915b02d04388",
-    "semantic_hash": "e1ee39b529e55cf4e755915b02d04388"
+    "mtime": 1781880417.9592268,
+    "ast_hash": "124646b05ca1cef7cb2649cb30106f63",
+    "semantic_hash": ""
   },
   "docs/REDESIGN_DECISIONS.md": {
-    "mtime": 1781115860.1876848,
-    "ast_hash": "41bcb8f832b60622da0739b41c366609",
-    "semantic_hash": "41bcb8f832b60622da0739b41c366609"
+    "mtime": 1781879829.3209376,
+    "ast_hash": "9ebe48494da43366c1a97201ea9b3d40",
+    "semantic_hash": ""
   },
   "docs/REDESIGN_EXECUTION_PLAN.md": {
-    "mtime": 1781115841.729484,
-    "ast_hash": "d6d0e9daeee67dba1aa308a7ede39459",
-    "semantic_hash": "d6d0e9daeee67dba1aa308a7ede39459"
+    "mtime": 1781879920.7245548,
+    "ast_hash": "c52411a82f40e53a1167035c0d83d894",
+    "semantic_hash": ""
   },
   "docs/REDESIGN_OPEN_QUESTIONS.md": {
     "mtime": 1781115920.004319,
@@ -950,8 +950,8 @@
     "semantic_hash": ""
   },
   "docs/REDESIGN_RELIABILITY_PLAN.md": {
-    "mtime": 1781875755.5459182,
-    "ast_hash": "a1e958859a6bab6df0de076a0f0c8689",
+    "mtime": 1781880427.508309,
+    "ast_hash": "4103f2593bc158c439b820bc6d808e73",
     "semantic_hash": ""
   },
   "src-tauri/migrations/V2__schema_version.sql": {
