@@ -163,7 +163,7 @@ impl ExecutionDriver {
                 let mut cancel_watch = self.cancel_watch.clone();
                 let mut first_event_seen = false;
 
-                const FAST_TIMEOUT_S: u64 = 60;
+                const FAST_TIMEOUT_S: u64 = 180;
                 const NORMAL_TIMEOUT_S: u64 = 180;
                 const WALL_CAP_S: u64 = 600;
 

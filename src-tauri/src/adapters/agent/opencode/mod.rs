@@ -154,23 +154,45 @@ fn parse_part_shape(kind: &str, v: &serde_json::Value) -> Option<AgentEvent> {
                 .and_then(|t| t.as_str())
                 .unwrap_or("");
 
-            if status == "completed" {
-                let mut line = format!(
-                    "[tool {tool} id={call_id}]"
-                );
-                if !output.is_empty() {
-                    line.push_str(&format!("\n{output}"));
+            // Emit Text events for ALL tool_use outcomes so the
+                // step-executor timeout is reset on every JSON line.
+                // Non-completed tools (error/running) get a "[tool
+                // name (status) id=xxx]" line whose "[tool " prefix
+                // causes the artifact accumulator to skip it (same
+                // logic as completed tools above).
+                let line = if status == "completed" {
+                    let mut line = format!("[tool {tool} id={call_id}]");
+                    if !output.is_empty() {
+                        line.push_str(&format!("\n{output}"));
+                    } else {
+                        let input_str = serde_json::to_string(&input).unwrap_or_default();
+                        line.push_str(&format!("\ninput: {input_str}"));
+                    }
+                    line
                 } else {
-                    let input_str = serde_json::to_string(&input).unwrap_or_default();
-                    line.push_str(&format!("\ninput: {input_str}"));
-                }
+                    let err_output = state
+                        .and_then(|s| s.get("output"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    let detail = if !err_output.is_empty() {
+                        format!(": {err_output}")
+                    } else if let (Some(input_val), _) = (input.as_object(), status) {
+                        // Show truncated input so operator can see which
+                        // file/path was attempted.
+                        let input_str = serde_json::to_string(input_val).unwrap_or_default();
+                        let max = 120;
+                        if input_str.len() > max {
+                            format!(" — input={}…", &input_str[..max])
+                        } else {
+                            format!(" — input={input_str}")
+                        }
+                    } else {
+                        String::new()
+                    };
+                    eprintln!("[opencode tool] {tool} ({status}) id={call_id}{detail}");
+                    format!("[tool {tool} ({status}) id={call_id}]{detail}")
+                };
                 Some(AgentEvent::Text { delta: line })
-            } else {
-                eprintln!(
-                    "[opencode tool] {tool} ({status}) id={call_id}"
-                );
-                None
-            }
         }
         "step_start" | "snapshot" | "patch" => None,
         _ => None,
@@ -1100,17 +1122,28 @@ mod tests {
 
     #[test]
     fn parse_event_tool_use_error_is_dropped() {
-        // Tool calls with status != "completed" must not produce Text
-        // events — they'd pollute the artifact with noise that confuses
-        // downstream steps.
-        let line = r#"{"type":"tool_use","part":{"tool":"read","callID":"call_err","state":{"status":"error","input":{"filePath":"/nonexistent"},"output":"no such file","title":"Read"}}}}"#;
-        assert!(parse_opencode_event(line).is_none());
+        // Tool calls with status != "completed" now produce Text events
+        // with a "[tool name (status) id=xxx]" breadcrumb so the
+        // step-executor timeout is reset on every JSON line. The "[tool "
+        // prefix causes the artifact accumulator to skip the line.
+        let line = r#"{"type":"tool_use","part":{"tool":"read","callID":"call_err","state":{"status":"error","input":{"filePath":"/nonexistent"},"output":"no such file","title":"Read"}}}"#;
+        match parse_opencode_event(line).expect("error tool should produce Text event") {
+            AgentEvent::Text { delta } => {
+                assert!(delta.starts_with("[tool read (error)"), "unexpected delta: {delta}");
+            }
+            e => panic!("expected Text, got {:?}", e),
+        }
     }
 
     #[test]
     fn parse_event_tool_use_running_is_dropped() {
         let line = r#"{"type":"tool_use","part":{"tool":"bash","callID":"call_r","state":{"status":"running","input":{"command":"ls"}}}}"#;
-        assert!(parse_opencode_event(line).is_none());
+        match parse_opencode_event(line).expect("running tool should produce Text event") {
+            AgentEvent::Text { delta } => {
+                assert!(delta.starts_with("[tool bash (running)"), "unexpected delta: {delta}");
+            }
+            e => panic!("expected Text, got {:?}", e),
+        }
     }
 
     #[test]
