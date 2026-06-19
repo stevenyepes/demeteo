@@ -1,16 +1,16 @@
 # Graph Report - demeteo  (2026-06-19)
 
 ## Corpus Check
-- 207 files · ~178,144 words
+- 207 files · ~178,213 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2576 nodes · 4381 edges · 214 communities (183 shown, 31 thin omitted)
+- 2575 nodes · 4380 edges · 214 communities (183 shown, 31 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 25 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `9ad14d27`
+- Built from commit: `a83067a9`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -296,8 +296,8 @@ Cohesion: 0.05
 Nodes (44): Fira Code Font, Demeteo Root HTML, Inter Font, main.tsx Entry Script, Outfit Font, #root DOM Mount Point, Active Threads (Agent Workspaces), Ad-Hoc Mode (Raw Session) (+36 more)
 
 ### Community 7 - "Jsonrpc & ACP & Agent"
-Cohesion: 0.08
-Nodes (30): JsonRpcClient, Message, Pending, Request, request_serializes_with_jsonrpc_envelope(), RpcError, TransportAsRead, AtomicU64 (+22 more)
+Cohesion: 0.09
+Nodes (29): JsonRpcClient, Message, Pending, Request, request_serializes_with_jsonrpc_envelope(), RpcError, TransportAsRead, AtomicU64 (+21 more)
 
 ### Community 8 - "Tool & Bridge & ACP"
 Cohesion: 0.14
@@ -397,7 +397,7 @@ Nodes (21): feature_cancel(), feature_get(), feature_pause(), feature_resume(), 
 
 ### Community 32 - "Agentsessionregistry & Newthreadmodal & Components"
 Cohesion: 0.11
-Nodes (31): dyn HttpClient, extract_number_from_url(), feature_id_to_branch(), feature_id_to_branch_returns_feature_id(), GithubPull, GitlabMr, HttpClient, HttpMrPublisher (+23 more)
+Nodes (32): dyn HttpClient, extract_number_from_url(), feature_id_to_branch(), feature_id_to_branch_returns_feature_id(), GithubPull, GitlabMr, HttpClient, HttpMrPublisher (+24 more)
 
 ### Community 33 - "State & Databasestate & Databaseport"
 Cohesion: 0.13
@@ -645,27 +645,27 @@ Nodes (7): graphify reference: extra exports and benchmark, Step 6b - Wiki (only
 
 ### Community 98 - "Schemas & Acl & Manifests"
 Cohesion: 0.29
-Nodes (7): 10. Phase Plan (R0–R8), Phase R1 — Greenfield schema & ports, Phase R4 — Step executor + AcpRuntime, Phase R5 — Feature orchestrator, Phase R6 — Worktree & merge, Phase R7 — UX polish & docs, Phase R8 — Hardening & migration
+Nodes (7): 10. Phase Plan (R0–R8), Phase R1 — Greenfield schema & ports, Phase R4 — Step executor + CliRuntime, Phase R5 — Feature orchestrator, Phase R6 — Worktree & merge, Phase R7 — UX polish & docs, Phase R8 — Hardening & migration
 
 ### Community 99 - "Schemas & Acl & Manifests"
 Cohesion: 0.29
 Nodes (7): 3.1 The agent session is scoped to a step execution, 3.2 The planner is just an agent session, 3.3 Project host + provider instance, 3.4 The `AgentEvent` vocabulary is internal, 3.5 Step status state machine, 3.6 The worktree-of-record is `feature/<slug>`, 3. Domain Model (post-pivot)
 
 ### Community 100 - "Schemas & Acl & Manifests"
-Cohesion: 0.29
-Nodes (7): 5.1 Why ACP, 5.2 Method surface (v1 subset), 5.3 Install flow, 5.4 The tool bridge, 5.5 Adapters (v1), 5.6 Disclaimer, 5. The AcpRuntime
+Cohesion: 0.25
+Nodes (8): 5.1 Why CLI, 5.2 The wire format, 5.3 Cross-step session continuity, 5.4 Install flow, 5.5 Permission policy per spawn, 5.6 Adapters, 5.7 Disclaimer, 5. The CliRuntime
 
 ### Community 101 - "Schemas & Acl & Manifests"
 Cohesion: 0.33
-Nodes (6): 4.1 The trait, 4.2 Lifecycle: lazy on first prompt, scoped to step execution, 4.3 Where the process lives, 4.4 The transport layer, 4.5 Conflict resolution cascade (decision 20), 4. Runtime Trait and Lifecycle
+Nodes (6): 4.1 The trait, 4.2 Lifecycle: one-shot per prompt call, scoped to step execution, 4.3 Where the process lives, 4.4 The CLI event stream, 4.5 Conflict resolution cascade (decision 20), 4. Runtime Trait and Lifecycle
 
 ### Community 102 - "Schemas & Acl & Manifests"
-Cohesion: 0.33
-Nodes (6): 6.1 The problem, 6.2 The implementation, 6.3 Path resolution, 6.4 Overriding the fence, 6.5 What this does NOT solve, 6. The Scope Fence
+Cohesion: 0.50
+Nodes (4): 6.1 The problem, 6.2 The implementation, 6.3 What this does NOT solve, 6. The Scope Fence
 
 ### Community 103 - "Schemas & Acl & Manifests"
 Cohesion: 0.33
-Nodes (6): 9. File Layout (post-pivot), Phase R1 — Port + domain skeleton, Phase R4 — Step executor + AcpRuntime, Phase R5 — Feature orchestrator, Phase R6 — Worktree & merge, Phase R7 — UI
+Nodes (6): 9. File Layout (post-pivot), Phase R1 — Port + domain skeleton, Phase R4 — Step executor + CliRuntime, Phase R5 — Feature orchestrator, Phase R6 — Worktree & merge, Phase R7 — UI
 
 ### Community 104 - "Schemas & Acl & Manifests"
 Cohesion: 0.33
@@ -673,7 +673,7 @@ Nodes (5): For /graphify explain, For /graphify path, graphify reference: query,
 
 ### Community 105 - "Schemas & Acl & Manifests"
 Cohesion: 0.40
-Nodes (4): 11. Open Questions (the runtime-relevant subset), 2. Locked Decisions (the runtime-relevant ones), 8. Tauri Command Surface (post-pivot), Agent Integration Spec (v1, post-pivot)
+Nodes (4): 11. Open Questions (the runtime-relevant subset), 2. Locked Decisions (the runtime-relevant ones), 8. Tauri Command Surface (post-pivot), Agent Integration Spec (v1, post-pivot, CLI)
 
 ### Community 106 - "Schemas & Acl & Manifests"
 Cohesion: 0.40
@@ -681,7 +681,7 @@ Nodes (4): Demeteo, Development setup, Recommended IDE Setup, Third-party projec
 
 ### Community 107 - "Schemas & Acl & Manifests"
 Cohesion: 0.50
-Nodes (4): 1. Scope and Non-Goals (post-pivot), v1 explicitly does NOT include, v1 ships, Why "ACP only" is the right bet for v1
+Nodes (4): 1. Scope and Non-Goals (post-pivot), v1 explicitly does NOT include, v1 ships, Why CLI is the right bet for v1
 
 ### Community 108 - "Schemas & Acl & Manifests"
 Cohesion: 0.50
@@ -928,7 +928,7 @@ Cohesion: 0.30
 Nodes (21): agent_cancel(), agent_get_session_info(), agent_install_and_start(), agent_prompt(), agent_restart(), agent_set_config_option(), agent_set_mode(), agent_start() (+13 more)
 
 ## Knowledge Gaps
-- **885 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+880 more)
+- **884 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+879 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **31 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -942,7 +942,7 @@ _Questions this graph is uniquely positioned to answer:_
 - **Why does `GateDecisionId` connect `Database & Sqlite & Sqliteadapter` to `Models & Sessionmodestate & Configoption`?**
   _High betweenness centrality (0.008) - this node is a cross-community bridge._
 - **What connects `$schema`, `plugin`, `@opencode-ai/plugin` to the rest of the system?**
-  _891 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _890 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Database & Sqlite & Sqliteadapter` be split into smaller, more focused modules?**
   _Cohesion score 0.05222734254992319 - nodes in this community are weakly interconnected._
 - **Should `ACP & Runtime & Agent` be split into smaller, more focused modules?**

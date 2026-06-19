@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::adapters::agent::registry::AgentRegistry;
@@ -88,15 +87,8 @@ impl ExecutionPort for FakeExec {
     fn resolve_home(&self, _: &str) -> Result<String, String> {
         Ok("/tmp".to_string())
     }
-    fn spawn_interactive(
-        &self,
-        _: &str,
-        _: &str,
-        _: &[String],
-        _: &str,
-        _: &HashMap<String, String>,
-    ) -> Result<Box<dyn InteractiveHandle>, String> {
-        Err("not implemented".into())
+    fn spawn_interactive(&self, _: &str, _: &str, _: &[String], _: &str, _: &std::collections::HashMap<String, String>) -> Result<Box<dyn InteractiveHandle>, String> {
+        Err("stub".to_string())
     }
 }
 

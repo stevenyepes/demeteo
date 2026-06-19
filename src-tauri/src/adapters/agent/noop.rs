@@ -8,11 +8,9 @@ use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::SessionInfo;
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
-/// Default runtime used during Phase 7a so the wiring compiles and
-/// `agent_start` returns a structured `AgentStartError::NotFound("noop")`
-/// rather than crashing. The real `AcpRuntime` and the `opencode` /
-/// `hermes` adapters land in Phase 7b. Retained in Phase 7b for tests
-/// and as a fallback when the user hasn't enabled either agent.
+/// Default runtime used so the wiring compiles and `agent_start` returns a
+/// structured `AgentStartError::NotFound("noop")` rather than crashing.
+/// Retained for tests and as a fallback when the user hasn't enabled an agent.
 pub struct NoopRuntime;
 
 impl AgentRuntime for NoopRuntime {

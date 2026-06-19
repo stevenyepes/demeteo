@@ -21,7 +21,7 @@ Each phase has a "Done means…" statement. Phases are sequential; don't start t
 - [x] Create `docs/REDESIGN_DECISIONS.md` (the 33-decision table as a standalone reference).
 - [x] Create `docs/REDESIGN_OPEN_QUESTIONS.md` (deferred items, captured for future).
 - [ ] Update `AGENTS.md` to reference the new docs and add the pivot summary.
-- [ ] Rewrite `AGENT_INTEGRATION.md` to narrow scope to the multi-agent orchestrator.
+- [ ] Rewrite `AGENT_INTEGRATION.md` to replace the `AcpRuntime` spec with the `CliRuntime` spec (one-shot CLI + JSON-lines, no ACP, no JSON-RPC, `OPENCODE_PERMISSION` env var).
 - [ ] Archive `ARCHITECTURE.md`, `DDD_MODEL.md`, `EXECUTION_PLAN.md` as `docs/LEGACY_*.md`.
 
 **Done means:** All six new docs exist; `AGENTS.md` and `AGENT_INTEGRATION.md` are updated; the three legacy docs are archived (not deleted); the 33-decision table is the single source of truth and is referenced from every other doc.
@@ -143,20 +143,21 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib workflow
 **Tasks:**
 
 - [ ] `StepExecutor` trait + `DagStepExecutor` impl.
-- [ ] `agent` step: spawn an ACP session with the step's `(tool, model, mode, prompt)`, drive it to completion, capture output as artifact, emit `step_completed`.
-- [ ] `parallel` step: spawn a planner agent session with a planning prompt; parse the structured output as a subtask DAG; fan out across available workers; collect structured results.
+- [ ] `agent` step: spawn `opencode run --format json --session <uuid> --dir <worktree> [--model <provider/model>] [--agent <name>] "<prompt>"`; stream nd-JSON events; drive to completion; capture output as artifact; emit `step_completed`.
+- [ ] `parallel` step: spawn a planner agent session with a planning prompt; parse the structured output as a subtask DAG; fan out across available workers (each with its own `--session <uuid>`); collect structured results.
 - [ ] `gate` step: emit `gate_required`; wait for `gate_decide`; resume.
 - [ ] Conditional edges: `on_failure → goto <step>`, `on_all_success → continue`, `on_any_failure → goto <gate>`, `max_iterations: u32`.
 - [ ] `StepExecutor` persists every state transition to `step_executions` (checkpoint on every state change).
-- [ ] The `AgentRuntime`'s `AcpRuntime` is called by the executor, not the UI.
+- [ ] The `AgentRuntime`'s `CliRuntime` is called by the executor, not the UI. ACP is not used.
 
 **Done means:**
 
-- A 5-step workflow (research → spec → plan → tasks → implement-stub) runs end-to-end on a local project.
+- A 5-step workflow (research → spec → plan → tasks → implement-stub) runs end-to-end on a local project using `opencode run --format json` with per-step `--session` continuity.
 - The `gate` step between plan and tasks actually pauses; the user clicks Approve; the executor resumes.
 - A `parallel` step with 3 subtasks runs them; the executor collects all 3 results; emits `step_completed` with the structured result.
 - A conditional edge (`on_failure → goto Fix`) loops correctly; `max_iterations: 3` stops the loop.
 - Every state transition is in `step_executions`; killing and restarting demeteo resumes from the last completed step.
+- The `AcpRuntime`, `jsonrpc.rs`, `event_mapper.rs`, `tool_bridge.rs`, `transport_local.rs`, and `transport_ssh.rs` files are deleted. `CliRuntime` (`cli_runtime.rs`) is the sole runtime implementation.
 
 **Verification:**
 

@@ -107,14 +107,15 @@ The git mechanics that make the feature-branch model work.
 The layer that talks to coding agents. Carried from v1 with one big change in the *caller* (now `StepExecutor`, not a per-thread UI stream).
 
 - **Aggregates:** `AgentRegistry`, `AgentSession`
-- **Value Objects:** `AgentKind` (`opencode` | `hermes` | future), `AgentConfig`, `AgentContext`, `AgentEvent`
-- **Ports:** `AgentRuntime`, `AgentTransport`, `ToolBridge`
-- **Adapters:** `AcpRuntime` (one impl, configured per agent), `LocalSubprocessTransport`, `RemoteSshTransport`, `AcpToolBridge`
+- **Value Objects:** `AgentKind` (`opencode` | `hermes` | `claude-code` | `antigravity`), `AgentConfig`, `AgentContext`, `AgentEvent`, `PermissionPolicy`
+- **Ports:** `AgentRuntime`, `PermissionPolicyPort`
+- **Adapters:** `CliRuntime` (one impl, configured per agent), `WorktreeScopedPolicy`
 - **Key invariants:**
-  - One `AcpRuntime` impl serves both opencode and hermes (binary + args + install_command differ).
+  - One `CliRuntime` impl serves all four agents (binary + args + install_command + parse_event differ).
   - Agent sessions are scoped to `(feature_run_id, step_execution_id)` — no global session reuse.
   - The planner is just an agent session with a planning prompt; no special planner port.
   - `AgentEvent` is an internal contract (consumed by `StepExecutor`), not a UI contract. The UI sees step transitions, not agent transcripts.
+  - `OPENCODE_PERMISSION` is injected at spawn time; `external_directory: "deny"` enforces worktree scope.
 
 ### 7. UI & Telemetry (Supporting Subdomain)
 

@@ -43,7 +43,10 @@
 | 30 | Update / migration                 | Greenfield v1; wipe-and-reinit on breaking, silent on additive                 | User pivot       |
 | 31 | Telemetry                          | None in v1                                                                     | User pivot       |
 | 32 | Keyboard shortcuts                 | Standard desktop set; command palette for discoverability                      | Interview Q32    |
-| 33 | Docs                               | Bundled markdown in binary; no separate strategy                                | Interview Q33    |
+| 33 | Docs                               | Bundled markdown in binary; no separate strategy                                | Interview Q33   |
+| 34 | Agent protocol                     | `CliRuntime` (one-shot CLI + JSON-lines); ACP removed — no JSON-RPC, no tool-call bridge, no capability negotiation. `opencode run --format json` for opencode/hermes; `--output-format stream-json` for claude-code; `agy --print -` for antigravity. | 2026-06-19   |
+| 35 | Agent permission enforcement       | `OPENCODE_PERMISSION` env var per spawn; `external_directory: "deny"` to scope the worktree; `PermissionPolicyPort` renders the policy. Gate-step approval is the only real-time human-in-the-loop surface. | 2026-06-19   |
+| 36 | Cross-step session continuity      | `--session <uuid> --continue` flag per `opencode run` invocation so a multi-step workflow shares conversation context. Parallel subtasks each get their own session id. | 2026-06-19   |
 
 ## 2. Cross-References
 

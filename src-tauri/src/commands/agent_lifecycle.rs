@@ -8,7 +8,7 @@ use crate::ports::db::ThreadPatch;
 
 /// Build the `AgentContext` for a (thread, agent_kind) pair. Looks up
 /// the machine's auth type (to pick local vs SSH transport) and the
-/// thread's sandbox (to use as cwd). The `AcpRuntime` uses both.
+/// thread's sandbox (to use as cwd).
 fn build_agent_context(
     ctx: &AppContext,
     thread_id: &str,
@@ -33,16 +33,16 @@ fn build_agent_context(
         }
     });
     let binary = agent_kind.to_string();
-    let args = vec!["acp".to_string()];
 
     Ok(crate::ports::agent_runtime::AgentContext {
         thread_id: thread_id.to_string(),
         machine_id: machine.id.0.clone(),
         binary,
-        args,
+        args: vec![],
         env: crate::ports::agent_runtime::agent_base_env(),
         cwd,
         model: None,
+        title: None,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
     })
@@ -113,7 +113,7 @@ pub async fn agent_install_and_start(
         .ok_or_else(|| format!("No runtime registered for agent kind '{}'", agent_kind))?;
     let install_cmd = runtime.install_command();
 
-    crate::adapters::agent::acp::install::run_official_install(
+    crate::adapters::agent::install::run_official_install(
         ctx.exec.as_ref(),
         thread.machine_id.as_str(),
         install_cmd,
@@ -196,12 +196,9 @@ pub async fn agent_prompt(
                                 }
                             }
 
-                            match &other_event {
-                                crate::domain::agent_event::AgentEvent::Error { message, .. } => {
-                                    final_status = "error".to_string();
-                                    final_reason = Some(message.clone());
-                                }
-                                _ => {}
+                            if let crate::domain::agent_event::AgentEvent::Error { message, .. } = &other_event {
+                                final_status = "error".to_string();
+                                final_reason = Some(message.clone());
                             }
 
                             let payload = serde_json::json!({

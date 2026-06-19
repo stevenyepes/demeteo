@@ -188,14 +188,21 @@ impl ExecutionDriver {
             );
             planner_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
         }
+        // CLI agents: pass model via --model flag, not OPENCODE_CONFIG_CONTENT.
+        if let Some(ref m) = override_model {
+            if planner_kind == "opencode" || planner_kind == "hermes" {
+                // CLI mode: model passed as --model flag at spawn
+            }
+        }
         let planner_ctx = AgentContext {
             thread_id: planner_thread_id.clone(),
             machine_id: machine_str.clone(),
             binary: planner_kind.clone(),
-            args: vec!["acp".to_string()],
+            args: vec![],
             env: planner_env,
             cwd: self.target_dir.clone(),
             model: override_model.clone(),
+            title: Some("plan".to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
         };
@@ -261,11 +268,21 @@ impl ExecutionDriver {
         }
 
         let mut planner_text = String::new();
+        let planner_hb = planner_session.stderr_heartbeat();
         let mut planner_stream = planner_session.prompt(&planner_prompt);
         let mut cancel_watch = self.cancel_watch.clone();
-        let timeout_dur = std::time::Duration::from_secs(300);
-        let sleep_fut = tokio::time::sleep(timeout_dur);
-        tokio::pin!(sleep_fut);
+        let mut first_event_seen = false;
+
+        const PLANNER_FAST_S: u64 = 60;
+        const PLANNER_NORMAL_S: u64 = 300;
+        const PLANNER_WALL_S: u64 = 900;
+
+        let fast_sleep = tokio::time::sleep(std::time::Duration::from_secs(PLANNER_FAST_S));
+        let normal_sleep = tokio::time::sleep(std::time::Duration::from_secs(PLANNER_NORMAL_S));
+        let wall_sleep = tokio::time::sleep(std::time::Duration::from_secs(PLANNER_WALL_S));
+        tokio::pin!(fast_sleep);
+        tokio::pin!(normal_sleep);
+        tokio::pin!(wall_sleep);
         let mut planner_failed = false;
         let mut planner_err = String::new();
 
@@ -276,7 +293,10 @@ impl ExecutionDriver {
                         Some(ev) => ev,
                         None => break,
                     };
-                    sleep_fut.as_mut().reset(tokio::time::Instant::now() + timeout_dur);
+                    first_event_seen = true;
+                    let now = tokio::time::Instant::now();
+                    fast_sleep.as_mut().reset(now + std::time::Duration::from_secs(PLANNER_FAST_S));
+                    normal_sleep.as_mut().reset(now + std::time::Duration::from_secs(PLANNER_NORMAL_S));
                     match event {
                         AgentEvent::Text { delta } => planner_text.push_str(&delta),
                         AgentEvent::Usage { cost_usd, .. } => {
@@ -293,12 +313,33 @@ impl ExecutionDriver {
                         _ => {}
                     }
                 }
-                _ = &mut sleep_fut => {
+                _ = &mut fast_sleep => {
+                    if !first_event_seen {
+                        fast_sleep.as_mut().reset(
+                            tokio::time::Instant::now() + std::time::Duration::from_secs(PLANNER_FAST_S),
+                        );
+                        continue;
+                    }
+                    if planner_hb.as_ref().map_or(false, |h| h.last_activity_ago_ms() > PLANNER_FAST_S * 1000) {
+                        planner_failed = true;
+                        planner_err = format!("Planner blocked: no output for {}s (stdout and stderr both silent)", PLANNER_FAST_S);
+                        break;
+                    }
+                    fast_sleep.as_mut().reset(
+                        tokio::time::Instant::now() + std::time::Duration::from_secs(PLANNER_FAST_S),
+                    );
+                }
+                _ = &mut normal_sleep => {
                     planner_failed = true;
                     planner_err = format_agent_error_message(
-                        "planner agent response timed out (no output for 300s)",
+                        &format!("planner agent response timed out (no output for {}s)", PLANNER_NORMAL_S),
                         &machine_str, &*self.exec,
                     );
+                    break;
+                }
+                _ = &mut wall_sleep => {
+                    planner_failed = true;
+                    planner_err = format!("Planner exceeded wall clock cap ({}s)", PLANNER_WALL_S);
                     break;
                 }
                 _ = cancel_watch.changed() => {
@@ -402,21 +443,27 @@ impl ExecutionDriver {
             let agent_kind = planner_kind.clone();
             let sub_thread_id = format!("{}-{}", self.f_id_str, sub.id);
             let mut worker_env = crate::ports::agent_runtime::agent_base_env();
+            // CLI agents: pass model via --model flag, not OPENCODE_CONFIG_CONTENT.
             if let Some(ref m) = override_model {
-                let config = format!(
-                    r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
-                    m
-                );
-                worker_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
+                if agent_kind == "opencode" || agent_kind == "hermes" {
+                    // CLI mode: model passed as --model flag at spawn
+                } else {
+                    let config = format!(
+                        r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
+                        m
+                    );
+                    worker_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
+                }
             }
             let ctx = AgentContext {
                 thread_id: sub_thread_id.clone(),
                 machine_id: machine_str.clone(),
                 binary: agent_kind.clone(),
-                args: vec!["acp".to_string()],
-            env: worker_env,
-            cwd: wt_path.clone(),
+                args: vec![],
+                env: worker_env,
+                cwd: wt_path.clone(),
                 model: override_model.clone(),
+                title: Some(sub.title.clone()),
                 agent_exec: self.agent_exec.clone(),
                 exec: self.exec.clone(),
             };
@@ -471,13 +518,23 @@ impl ExecutionDriver {
                             println!("[parallel worker {}] model '{}' confirmed in session_info after spawn", sub.id, model);
                         }
                     }
-                    let mut stream = session.prompt(&sub_prompt);
+let mut stream = session.prompt(&sub_prompt);
+                    let worker_hb = session.stderr_heartbeat();
                     let mut produced_artifacts: Vec<Artifact> = Vec::new();
                     let mut legacy_sub_content = String::new();
                     let mut cancel_watch = self.cancel_watch.clone();
-                    let timeout_dur = std::time::Duration::from_secs(180);
-                    let sleep_fut = tokio::time::sleep(timeout_dur);
-                    tokio::pin!(sleep_fut);
+                    let mut first_event_seen = false;
+
+                    const WORKER_FAST_S: u64 = 60;
+                    const WORKER_NORMAL_S: u64 = 180;
+                    const WORKER_WALL_S: u64 = 600;
+
+                    let fast_sleep = tokio::time::sleep(std::time::Duration::from_secs(WORKER_FAST_S));
+                    let normal_sleep = tokio::time::sleep(std::time::Duration::from_secs(WORKER_NORMAL_S));
+                    let wall_sleep = tokio::time::sleep(std::time::Duration::from_secs(WORKER_WALL_S));
+                    tokio::pin!(fast_sleep);
+                    tokio::pin!(normal_sleep);
+                    tokio::pin!(wall_sleep);
 
                     loop {
                         tokio::select! {
@@ -486,7 +543,10 @@ impl ExecutionDriver {
                                     Some(ev) => ev,
                                     None => break,
                                 };
-                                sleep_fut.as_mut().reset(tokio::time::Instant::now() + timeout_dur);
+                                first_event_seen = true;
+                                let now = tokio::time::Instant::now();
+                                fast_sleep.as_mut().reset(now + std::time::Duration::from_secs(WORKER_FAST_S));
+                                normal_sleep.as_mut().reset(now + std::time::Duration::from_secs(WORKER_NORMAL_S));
                                 match event {
                                     AgentEvent::Text { delta } => {
                                         if is_legacy {
@@ -519,19 +579,46 @@ impl ExecutionDriver {
                                     _ => {}
                                 }
                             }
-                            _ = &mut sleep_fut => {
+                            _ = &mut fast_sleep => {
+                                if !first_event_seen {
+                                    fast_sleep.as_mut().reset(
+                                        tokio::time::Instant::now() + std::time::Duration::from_secs(WORKER_FAST_S),
+                                    );
+                                    continue;
+                                }
+                                if worker_hb.as_ref().map_or(false, |h| h.last_activity_ago_ms() > WORKER_FAST_S * 1000) {
+                                    step_failed = true;
+                                    step_err_msg = format!(
+                                        "parallel subtask {} blocked: no output for {}s (stdout and stderr both silent)",
+                                        sub.id, WORKER_FAST_S,
+                                    );
+                                    break;
+                                }
+                                fast_sleep.as_mut().reset(
+                                    tokio::time::Instant::now() + std::time::Duration::from_secs(WORKER_FAST_S),
+                                );
+                            }
+                            _ = &mut normal_sleep => {
                                 eprintln!(
-                                    "[parallel step] Subtask {} agent silent timeout of 180s reached.",
-                                    sub.id
+                                    "[parallel step] Subtask {} agent silent timeout of {}s reached.",
+                                    sub.id, WORKER_NORMAL_S
                                 );
                                 step_failed = true;
                                 let descriptive = format_agent_error_message(
-                                    "agent response timed out (no output for 180s)",
+                                    &format!("agent response timed out (no output for {}s)", WORKER_NORMAL_S),
                                     &machine_str, &*self.exec,
                                 );
                                 step_err_msg = format!(
                                     "parallel subtask agent response timed out ({}) - details: {}",
                                     sub.id, descriptive,
+                                );
+                                break;
+                            }
+                            _ = &mut wall_sleep => {
+                                step_failed = true;
+                                step_err_msg = format!(
+                                    "parallel subtask {} exceeded wall clock cap ({}s)",
+                                    sub.id, WORKER_WALL_S,
                                 );
                                 break;
                             }

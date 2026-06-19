@@ -1,23 +1,21 @@
-use std::collections::HashMap;
 use tauri::State;
 use crate::state::AppContext;
 use crate::ports::agent_runtime::AgentContext;
 use crate::domain::models::ConfigOptionValue;
 
-#[tauri::command]
-pub async fn get_agent_models(
-    ctx: State<'_, AppContext>,
-    machine_id: String,
-    agent_kind: String,
+/// Try to discover models via ACP `session/new` capability negotiation.
+/// Returns `Ok` only if the agent exposes a `"model"` config option with options.
+async fn probe_models_via_acp(
+    ctx: &AppContext,
+    machine_id: &str,
+    agent_kind: &str,
 ) -> Result<Vec<ConfigOptionValue>, String> {
-    // 1. Resolve safe CWD for spawning probe
     let cwd = if machine_id == "local" || machine_id.is_empty() {
         std::env::var("HOME").unwrap_or_else(|_| ".".into())
     } else {
         ".".into()
     };
-    
-    // 2. Build AgentContext
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -25,87 +23,148 @@ pub async fn get_agent_models(
     let temp_thread_id = format!("probe-models-{}", now);
     let agent_ctx = AgentContext {
         thread_id: temp_thread_id.clone(),
-        machine_id: machine_id.clone(),
-        binary: agent_kind.clone(),
-        args: vec!["acp".to_string()],
+        machine_id: machine_id.to_string(),
+        binary: agent_kind.to_string(),
+        args: vec![],
         env: crate::ports::agent_runtime::agent_base_env(),
         cwd,
         model: None,
+        title: None,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
     };
 
-    // 3. Spawns session using registry. This completes initialize & session/new.
     let session = ctx
         .registry
-        .get_or_spawn(&temp_thread_id, &agent_kind, agent_ctx)
+        .get_or_spawn(&temp_thread_id, agent_kind, agent_ctx)
         .await
-        .map_err(|e| format!("Failed to spawn agent for model probe: {}", e))?;
+        .map_err(|e| format!("ACP probe spawn failed: {}", e))?;
 
-    // 4. Retrieve session config options
     let info = session.session_info();
-
-    // 5. Clean up the spawned agent process BEFORE the registry drops
-    // the session Arc. `registry.kill` only removes the map entry; the
-    // session's `JsonRpcClient` background reader thread keeps the
-    // transport Arc alive until the reader thread sees EOF. We must
-    // explicitly call `session.kill()` to close the SSH channel (which
-    // sends SIGHUP to the remote `opencode acp`) so the remote process
-    // is reaped and we don't leak agents on the server.
     let _ = session.kill();
     ctx.registry.kill(&temp_thread_id).await;
-    // `session` Arc drops at end of function; JsonRpcClient Drop is now
-    // a no-op because we already closed the transport above.
 
     if let Some(opts) = info.config_options {
         if let Some(opt) = opts.into_iter().find(|o| o.id == "model") {
             return Ok(opt.options);
         }
     }
-    
-    // Fallback models for CLI/non-ACP agents
-    if agent_kind == "claude-code" {
-        return Ok(vec![
-            ConfigOptionValue {
-                value: "claude-3-5-sonnet-latest".to_string(),
-                name: "Claude 3.5 Sonnet (Latest)".to_string(),
-                description: None,
-            },
-            ConfigOptionValue {
-                value: "claude-3-5-haiku-latest".to_string(),
-                name: "Claude 3.5 Haiku (Latest)".to_string(),
-                description: None,
-            },
-            ConfigOptionValue {
-                value: "claude-3-opus-latest".to_string(),
-                name: "Claude 3 Opus (Latest)".to_string(),
-                description: None,
-            },
-        ]);
-    } else if agent_kind == "antigravity" {
-        return Ok(vec![
-            ConfigOptionValue {
-                value: "gemini-2.5-flash".to_string(),
-                name: "Gemini 2.5 Flash".to_string(),
-                description: None,
-            },
-            ConfigOptionValue {
-                value: "gemini-2.5-pro".to_string(),
-                name: "Gemini 2.5 Pro".to_string(),
-                description: None,
-            },
-            ConfigOptionValue {
-                value: "gemini-1.5-pro".to_string(),
-                name: "Gemini 1.5 Pro".to_string(),
-                description: None,
-            },
-            ConfigOptionValue {
-                value: "gemini-1.5-flash".to_string(),
-                name: "Gemini 1.5 Flash".to_string(),
-                description: None,
-            },
-        ]);
+
+    Err("No model config option in ACP session info".into())
+}
+
+/// Probe models by running `<binary> models` and parsing line-by-line output.
+/// Each line is expected to be a model identifier (e.g. `provider/model`).
+fn probe_models_via_cli(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    binary: &str,
+) -> Result<Vec<ConfigOptionValue>, String> {
+    let output = exec.run_command(machine_id, &format!("{} models", binary))?;
+    let models: Vec<ConfigOptionValue> = output
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .map(|model| ConfigOptionValue {
+            value: model.to_string(),
+            name: model.to_string(),
+            description: None,
+        })
+        .collect();
+
+    if models.is_empty() {
+        return Err("CLI models command returned no output".into());
     }
-    
-    Ok(vec![])
+
+    Ok(models)
+}
+
+fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
+    match agent_kind {
+        "claude-code" => vec![
+            ConfigOptionValue {
+                value: "claude-3-5-sonnet-latest".into(),
+                name: "Claude 3.5 Sonnet (Latest)".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "claude-3-5-haiku-latest".into(),
+                name: "Claude 3.5 Haiku (Latest)".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "claude-3-opus-latest".into(),
+                name: "Claude 3 Opus (Latest)".into(),
+                description: None,
+            },
+        ],
+        "antigravity" => vec![
+            ConfigOptionValue {
+                value: "gemini-2.5-flash".into(),
+                name: "Gemini 2.5 Flash".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "gemini-2.5-pro".into(),
+                name: "Gemini 2.5 Pro".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "gemini-1.5-pro".into(),
+                name: "Gemini 1.5 Pro".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "gemini-1.5-flash".into(),
+                name: "Gemini 1.5 Flash".into(),
+                description: None,
+            },
+        ],
+        "opencode" | "hermes" => vec![
+            ConfigOptionValue {
+                value: "anthropic/claude-3-5-sonnet-20241022".into(),
+                name: "Claude 3.5 Sonnet (Latest)".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "openai/gpt-4o".into(),
+                name: "GPT-4o".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "google/gemini-2.5-flash".into(),
+                name: "Gemini 2.5 Flash".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "deepseek/deepseek-coder-v2".into(),
+                name: "DeepSeek Coder V2".into(),
+                description: None,
+            },
+        ],
+        _ => vec![],
+    }
+}
+
+#[tauri::command]
+pub async fn get_agent_models(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    agent_kind: String,
+) -> Result<Vec<ConfigOptionValue>, String> {
+    // 1. Try ACP session/new probe — currently no agent runtime populates
+    //    config_options, but future ACP-capable agents may.
+    if let Ok(models) = probe_models_via_acp(&ctx, &machine_id, &agent_kind).await {
+        return Ok(models);
+    }
+
+    // 2. CLI model probing for agents that expose a `models` subcommand
+    if agent_kind == "opencode" || agent_kind == "hermes" {
+        if let Ok(models) = probe_models_via_cli(ctx.exec.as_ref(), &machine_id, &agent_kind) {
+            return Ok(models);
+        }
+    }
+
+    // 3. Fallback to hardcoded lists when dynamic probing is unavailable
+    Ok(fallback_models(&agent_kind))
 }

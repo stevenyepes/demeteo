@@ -204,15 +204,8 @@ mod tests {
             fn list_dir(&self, _: &str, _: &str) -> Result<Vec<crate::sftp::SftpEntry>, String> { Ok(vec![]) }
             fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
             fn resolve_home(&self, _: &str) -> Result<String, String> { Ok("/tmp".to_string()) }
-            fn spawn_interactive(
-                &self,
-                _: &str,
-                _: &str,
-                _: &[String],
-                _: &str,
-                _: &HashMap<String, String>,
-            ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
-                Err("not implemented in stub".into())
+            fn spawn_interactive(&self, _: &str, _: &str, _: &[String], _: &str, _: &std::collections::HashMap<String, String>) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+                Err("stub".to_string())
             }
         }
 
@@ -227,6 +220,7 @@ mod tests {
                 env: Default::default(),
                 cwd: ".".into(),
                 model: None,
+                title: None,
                 agent_exec: stub.clone(),
                 exec: stub,
             })

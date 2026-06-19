@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::process::Command;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use crate::ports::execution::{ExecutionPort, InteractiveHandle};
 use crate::sftp::SftpEntry;
@@ -9,6 +11,62 @@ pub struct LocalSubprocessAdapter;
 impl LocalSubprocessAdapter {
     pub fn new() -> Self {
         Self
+    }
+}
+
+struct LocalChildProcess {
+    child: Arc<Mutex<std::process::Child>>,
+    stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
+    stdout: Arc<Mutex<Option<BufReader<std::process::ChildStdout>>>>,
+    stderr: Arc<Mutex<Option<BufReader<std::process::ChildStderr>>>>,
+}
+
+impl LocalChildProcess {
+    fn new(mut child: std::process::Child) -> Self {
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().map(|o| BufReader::new(o));
+        let stderr = child.stderr.take().map(|e| BufReader::new(e));
+        Self {
+            child: Arc::new(Mutex::new(child)),
+            stdin: Arc::new(Mutex::new(stdin)),
+            stdout: Arc::new(Mutex::new(stdout)),
+            stderr: Arc::new(Mutex::new(stderr)),
+        }
+    }
+}
+
+impl InteractiveHandle for LocalChildProcess {
+    fn write_line(&self, line: &str) -> std::io::Result<usize> {
+        let mut stdin = self.stdin.lock().unwrap();
+        let Some(ref mut stdin) = *stdin else {
+            return Ok(0);
+        };
+        stdin.write_all(line.as_bytes())?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()?;
+        Ok(line.len() + 1)
+    }
+
+    fn try_read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut stdout = self.stdout.lock().unwrap();
+        let Some(ref mut stdout) = *stdout else {
+            return Ok(0);
+        };
+        stdout.read(buf)
+    }
+
+    fn kill(&self) -> Result<(), String> {
+        let mut child = self.child.lock().unwrap();
+        child.kill().map_err(|e| e.to_string())
+    }
+
+    fn try_wait(&self) -> Result<Option<i32>, String> {
+        let mut child = self.child.lock().unwrap();
+        match child.try_wait() {
+            Ok(Some(status)) => Ok(status.code()),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
@@ -147,10 +205,6 @@ impl ExecutionPort for LocalSubprocessAdapter {
         let raw = std::env::var("HOME")
             .map_err(|_| "HOME environment variable is not set on the local process".to_string())?;
         let expanded = if raw == "~" || raw.starts_with("~/") {
-            // HOME is the literal "~" or starts with it — bash would still
-            // expand this, but a plain env::var on a degenerate system
-            // might return a non-absolute value. Resolve via the shell so
-            // we get a real path.
             local_run_command("printf %s \"$HOME\"")?
         } else {
             raw
@@ -173,8 +227,16 @@ impl ExecutionPort for LocalSubprocessAdapter {
         cwd: &str,
         env: &HashMap<String, String>,
     ) -> Result<Box<dyn InteractiveHandle>, String> {
-        use crate::adapters::agent::acp::transport_local::LocalSubprocessTransport;
-        LocalSubprocessTransport::spawn(binary, args, cwd, env)
-            .map(|t| Box::new(t) as Box<dyn InteractiveHandle>)
+        let mut cmd = Command::new(binary);
+        cmd.args(args);
+        cmd.current_dir(cwd);
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let child = cmd.spawn().map_err(|e| format!("failed to spawn '{}': {}", binary, e))?;
+        Ok(Box::new(LocalChildProcess::new(child)))
     }
 }

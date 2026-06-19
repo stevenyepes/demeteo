@@ -67,7 +67,7 @@ The vocabulary:
 3. **Workflow Catalog** — workflow templates, versions, starter pack, import/export.
 4. **Feature Orchestration** — features, runs, step executions, gate decisions, retry state.
 5. **Worktree & Git** — per-feature branch, per-subtask worktrees, merge into feature branch, publish MR.
-6. **Agent Runtime** — agent registry, AcpRuntime, transport, tool bridge (carried from v1 with simplifications).
+6. **Agent Runtime** — `CliRuntime` (one-shot CLI + JSON-lines); `AcpRuntime`, `JsonRpcClient`, `ToolBridge`, and both transports deleted. `PermissionPolicyPort` + `WorktreeScopedPolicy` renders `OPENCODE_PERMISSION` env var. `AgentRegistry` simplified (no session dedup needed; `Arc<AgentSession>` lives for one `prompt` call). See [`AGENT_INTEGRATION.md`](AGENT_INTEGRATION.md) for the full spec.
 7. **UI & Telemetry** — UI state, disk usage, migration log, command palette, docs.
 
 Full entities, value objects, and aggregates per context: [`docs/REDESIGN_DDD_MODEL.md`](docs/REDESIGN_DDD_MODEL.md).
@@ -86,8 +86,8 @@ Hexagonal layout preserved. New ports:
 
 Carried from v1 with simplifications:
 - `DatabasePort` — now with the new tables, loses `thread_sessions` complexity.
-- `AgentRuntime` / `AgentTransport` — same `AcpRuntime` for opencode/hermes; planner is a coding-agent session.
-- `ExecutionPort` — `spawn_interactive` is now used for both planner sessions and subtask sessions.
+- `AgentRuntime` — `CliRuntime` replaces `AcpRuntime`; one-shot CLI invocation per step, JSON-lines event stream, no JSON-RPC, no tool-call bridge, no capability negotiation, no 5-minute `session/new` timeout.
+- `ExecutionPort` — `spawn_interactive` is now used only for remote agents (local agents use `tokio::process::Command` directly).
 - `NotificationPort` — fewer events; no per-turn `Text`/`Usage`/`Plan` streams (telemetry events only).
 
 Removed:
@@ -204,7 +204,7 @@ The following docs are **archived** (moved to `docs/LEGACY_*.md`) rather than de
 - `docs/LEGACY_DDD_MODEL.md` (was `DDD_MODEL.md`) — describes the legacy bounded contexts (Thread, Machine, AgentProfile, etc.).
 - `docs/LEGACY_EXECUTION_PLAN.md` (was `EXECUTION_PLAN.md`) — describes Phase 0–5.
 
-`AGENT_INTEGRATION.md` is **rewritten in place**, not archived, because its `AcpRuntime` spec is still the source of truth for that one component — the rewrite narrows scope to the multi-agent orchestrator and removes the chat-stream details.
+`AGENT_INTEGRATION.md` is **rewritten in place**, not archived, because the `CliRuntime` spec is the source of truth for the agent runtime that drives both planner and subtask sessions — the rewrite replaces the `AcpRuntime` spec with the `CliRuntime` spec and removes all ACP-specific details.
 
 The current `AGENTS.md` is updated (not replaced) to:
 - Add a "Redesign" section pointing to the new docs.

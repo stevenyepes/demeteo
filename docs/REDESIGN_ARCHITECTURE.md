@@ -15,9 +15,9 @@
 |  React (Tauri   | ==> |  WorkflowRepository                           | <== |  SqliteAdapter   |
 |  webview)       |     |  ProjectRepository                            |     |  SshClientAdapt. |
 |  - ProjectRail  |     |  ProviderInstanceRepository                   |     |  LocalFsAdapter  |
-|  - ProjectHome  |     |  FeatureOrchestrator / StepExecutor           |     |  AcpRuntime      |
+|  - ProjectHome  |     |  FeatureOrchestrator / StepExecutor           |     |  CliRuntime       |
 |  - FeatureDetail|     |  WorktreeManager / MergeExecutor / MrPublisher|     |  ArtifactStore   |
-|  - WorkflowEdit |     |  AgentRuntime / AgentTransport (carried)      |     |  PricingTable    |
+|  - WorkflowEdit |     |  AgentRuntime / PermissionPolicyPort          |     |  PricingTable    |
 |  - Gates        |     |  UiStateRepository / DiskUsageCalculator      |     |                  |
 |  - Settings     |     |                                               |     |                  |
 +-----------------+     +-----------------------^-----------------------+
@@ -40,9 +40,9 @@ The hexagonal pattern is preserved exactly. The big change is in the *driver* si
 ### Carried from v1 (with simplifications)
 
 - **`DatabasePort`** (`ports/db.rs`) — extends with the new tables; loses `thread_sessions` complexity. The legacy `thread_sessions` table is preserved in v1 for migration safety, marked deprecated, and removed in v2.
-- **`AgentRuntime`** (`ports/agent_runtime.rs`) — `AcpRuntime` unchanged. Caller is now `StepExecutor`, not a per-thread UI stream.
-- **`AgentTransport`** (`ports/agent_runtime.rs`) — `LocalSubprocessTransport` and `RemoteSshTransport` unchanged.
-- **`ExecutionPort`** (`ports/execution.rs`) — `spawn_interactive` now used for both planner sessions and subtask sessions.
+- **`AgentRuntime`** (`ports/agent_runtime.rs`) — `CliRuntime` (one-shot CLI + JSON-lines) for all agents. `opencode` and `hermes` use `opencode run --format json` / `hermes run --format json`. `claude-code` and `antigravity` use their existing `--print --output-format stream-json` / `--print -` modes. ACP is deleted. The trait surface stays the same (same callers in `StepExecutor`); only the implementation changes.
+- **`PermissionPolicyPort`** (`ports/permission_policy.rs`) — renders a `PermissionPolicy` struct to a JSON string for the `OPENCODE_PERMISSION` env var. Default impl: `WorktreeScopedPolicy` injects `external_directory: "deny"` so the agent cannot touch paths outside its worktree.
+- **`ExecutionPort`** (`ports/execution.rs`) — `spawn_interactive` used only for remote agent processes (local agents use `tokio::process::Command` directly).
 - **`NotificationPort`** (`ports/notification.rs`) — slimmed. Per-turn streams removed; telemetry events only.
 
 ### New ports (v1)
@@ -168,15 +168,13 @@ src-tauri/src/
 │   │   └── pty.rs                # (existing)
 │   ├── agent/                    # carried from v1, scoped to feature step
 │   │   ├── mod.rs
-│   │   ├── registry.rs
-│   │   ├── acp/
-│   │   │   ├── mod.rs
-│   │   │   ├── runtime.rs
-│   │   │   ├── event_mapper.rs
-│   │   │   ├── tool_bridge.rs
-│   │   │   └── install.rs
-│   │   ├── opencode/mod.rs
-│   │   └── hermes/mod.rs
+│   │   ├── registry.rs            # simplified: no session dedup
+│   │   ├── cli_runtime.rs         # (existing) one-shot CLI + JSON-lines
+│   │   ├── permission_policy.rs   # NEW: PermissionPolicyPort impl
+│   │   ├── opencode/mod.rs         # CliAgentRuntime + parse_opencode_event
+│   │   ├── hermes/mod.rs           # CliAgentRuntime + parse_hermes_event
+│   │   ├── claude_code/mod.rs      # NEW: CliAgentRuntime + parse_claude_code_event
+│   │   └── antigravity/mod.rs     # NEW: CliAgentRuntime + parse_antigravity_event
 │   ├── workflow/                 # NEW: workflow catalog adapters
 │   │   ├── mod.rs
 │   │   ├── json_format.rs        # import/export

@@ -303,7 +303,7 @@ of silent failure.
 ### S4. No retry on transient SSH drops mid-feature
 
 **Where:** `client.rs:482-554` (`spawn_interactive`); used by
-`AcpRuntime` and the planner in step handlers.
+`CliRuntime` for remote agents and the planner in step handlers.
 
 One dropped network = full pipeline stop. The driver only sees the
 subprocess return and marks the step `Failed`.

@@ -1,13 +1,46 @@
 use crate::ports::db::MachineRepository;
-use crate::ports::execution::ExecutionPort;
+use crate::ports::execution::{ExecutionPort, InteractiveHandle};
 use crate::paths;
 use crate::sftp::SftpEntry;
-use ssh2::{Session, Sftp};
+use ssh2::{Channel, Session, Sftp};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+struct RemoteChannelHandle {
+    channel: Mutex<Channel>,
+    _session: Session,
+}
+
+impl InteractiveHandle for RemoteChannelHandle {
+    fn write_line(&self, line: &str) -> std::io::Result<usize> {
+        let mut channel = self.channel.lock().unwrap();
+        channel.write_all(line.as_bytes())?;
+        channel.write_all(b"\n")?;
+        channel.flush()?;
+        Ok(line.len() + 1)
+    }
+
+    fn try_read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut channel = self.channel.lock().unwrap();
+        channel.read(buf)
+    }
+
+    fn kill(&self) -> Result<(), String> {
+        let mut channel = self.channel.lock().unwrap();
+        channel.close().map_err(|e| e.to_string())
+    }
+
+    fn try_wait(&self) -> Result<Option<i32>, String> {
+        let mut channel = self.channel.lock().unwrap();
+        match channel.exit_status() {
+            Ok(code) => Ok(Some(code)),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
 
 pub struct SftpSession {
     pub sftp: Mutex<Sftp>,
@@ -493,9 +526,7 @@ impl ExecutionPort for SshClientAdapter {
         args: &[String],
         cwd: &str,
         env: &std::collections::HashMap<String, String>,
-    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
-        use crate::adapters::agent::acp::transport_ssh::RemoteSshTransport;
-
+    ) -> Result<Box<dyn InteractiveHandle>, String> {
         let machines = self.machines.get_machines()?;
         let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.to_string());
         let machine = machines.into_iter().find(|m| {
@@ -525,21 +556,14 @@ impl ExecutionPort for SshClientAdapter {
             .channel_session()
             .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
 
-        // Request a PTY so the remote process's stdout uses line-buffered
-        // I/O instead of fully-buffered (pipe) mode. Without this, JSON-RPC
-        // responses from the agent pile up in the stdio buffer and never
-        // reach demeteo until the buffer fills or the process exits.
         channel
             .request_pty("xterm-256color", None, None)
             .map_err(|e| format!("Failed to request PTY on SSH channel: {}", e))?;
 
         let use_login_shell = machine.use_login_shell.unwrap_or(false);
 
-        // Build the remote command.
         let mut env_str = String::new();
         for (k, v) in env {
-            // Quote each value with single quotes; escape any embedded
-            // single quotes by closing/reopening the quoted segment.
             let escaped = v.replace('\'', "'\\''");
             env_str.push_str(&format!("export {}='{}'; ", k, escaped));
         }
@@ -550,17 +574,6 @@ impl ExecutionPort for SshClientAdapter {
             .join(" ");
 
         let cmd = if use_login_shell {
-            // Wrap in bash -l -c to source .bashrc/.profile so user-
-            // configured env vars (API keys, PATH tweaks, etc.) are
-            // available to the agent.  Use `command cd` to bypass any
-            // shell-function overrides (e.g. `mise activate`'s `cd`
-            // hook) and `exec` to avoid an extra shell process.
-            //
-            // Before exec'ing the agent, auto-trust the CWD for common
-            // tool-version managers (mise, rtx) so their config files
-            // don't get rejected as untrusted.  This is a best-effort,
-            // silent operation — if the tool isn't installed, nothing
-            // happens, and the agent always starts regardless.
             let inner = format!(
                 "{} command cd {} && {{ command -v mise >/dev/null 2>&1 && mise trust --yes . || :; }} 2>/dev/null && exec {} {}",
                 env_str,
@@ -570,10 +583,6 @@ impl ExecutionPort for SshClientAdapter {
             );
             format!("bash -l -c {}", paths::shell_escape_posix(&inner))
         } else {
-            // Non-login shell — SSH channel.exec runs the string
-            // through the user's default shell as a non-interactive,
-            // non-login child.  .bashrc is never sourced, so mise
-            // and other activation hooks stay out of the way.
             format!(
                 "cd {} && {} {} {}",
                 paths::shell_escape_posix(cwd),
@@ -583,18 +592,11 @@ impl ExecutionPort for SshClientAdapter {
             )
         };
 
-        // Log the exact command we're about to exec so failures in the
-        // field can be diagnosed by reading the Tauri stderr log. The
-        // command is also the only place the pre-launch `test -d` path
-        // and the agent's `cd` path can drift apart, so logging it is
-        // cheap insurance.
         eprintln!("[SshClientAdapter] spawn_interactive cmd: {}", cmd);
         channel
             .exec(&cmd)
             .map_err(|e| format!("Failed to exec agent over SSH: {}", e))?;
 
-        sess.set_blocking(false);
-
-        Ok(Box::new(RemoteSshTransport::new(channel, sess, tcp, cmd)))
+        Ok(Box::new(RemoteChannelHandle { channel: Mutex::new(channel), _session: sess }))
     }
 }

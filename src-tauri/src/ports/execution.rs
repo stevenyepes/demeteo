@@ -3,37 +3,12 @@ use std::io;
 
 /// A long-lived interactive process. The agent runtime owns both ends of
 /// the stdio: a write half for the agent's stdin, and a read half for
-/// stdout. The trait exposes blocking-style I/O because the JSON-RPC
-/// layer is line-buffered and synchronous; `kill` and `try_wait` let the
-/// runtime clean up without depending on the process exiting on its own.
-///
-/// Implementations are responsible for honoring `kill` (close pipes,
-/// send SIGTERM/EOF) and for surfacing EOF to the reader via a
-/// short-read (0 bytes) on stdout.
+/// stdout. The trait exposes blocking-style I/O so the CLI agent's
+/// event-parsing loop can read stdout line-by-line.
 pub trait InteractiveHandle: Send + Sync {
-    /// Write a single line (the caller is responsible for including the
-    /// trailing newline if the protocol expects it). Returns the number
-    /// of bytes written.
-    fn write_line(&self, line: &str) -> io::Result<usize>;
-
-    /// Read bytes from stdout. Returns Ok(0) on EOF; Ok(n) with n>0 on
-    /// a partial read. The JSON-RPC layer reads byte-by-byte until
-    /// newline, so partial reads are fine.
-    fn read_byte(&self) -> io::Result<u8>;
-
-    /// Read available bytes into `buf` without blocking. Returns Ok(0)
-    /// on EOF and Ok(n) on partial read.
-    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
-
-    /// Block until at least one byte is available or EOF is hit.
-    /// Returns Ok(0) on EOF, Ok(n) on read.
-    fn read(&self, buf: &mut [u8]) -> io::Result<usize>;
-
-    /// Send EOF / SIGTERM to the agent and close pipes. Idempotent.
+    fn write_line(&self, line: &str) -> std::io::Result<usize>;
+    fn try_read(&self, buf: &mut [u8]) -> std::io::Result<usize>;
     fn kill(&self) -> Result<(), String>;
-
-    /// If the agent has exited, return its exit code; else return None.
-    /// The watchdog polls this between read timeouts to detect death.
     fn try_wait(&self) -> Result<Option<i32>, String>;
 }
 
@@ -56,19 +31,12 @@ pub trait ExecutionPort: Send + Sync {
     ) -> Result<(), String>;
 
     /// Resolve the absolute home directory on the target host.
-    ///
-    /// Implementations MUST return an absolute path (no `~`) and SHOULD
-    /// cache the result per `machine_id` because the value is stable for
-    /// the lifetime of the SSH connection. The local adapter returns the
-    /// process `HOME`; the SSH adapter runs `echo $HOME` over a channel
-    /// so the value matches the remote user's actual home regardless of
-    /// how the demeteo process was launched.
     fn resolve_home(&self, machine_id: &str) -> Result<String, String>;
 
     /// Spawn a long-lived interactive process on the target host and
     /// return an owned handle to its stdio. The local case uses
-    /// `tokio::process::Child`; the SSH case uses a long-lived
-    /// `ssh2::Channel`.
+    /// `tokio::process::Command`; the SSH case uses a long-lived
+    /// `ssh2::Channel` with PTY request for line-buffered stdout.
     fn spawn_interactive(
         &self,
         machine_id: &str,

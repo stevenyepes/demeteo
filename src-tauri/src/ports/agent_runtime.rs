@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -22,6 +24,9 @@ pub struct AgentContext {
     /// Optional model identifier to pass as initial configOption
     /// in the `session/new` request (e.g. "deepseek", "gpt-4o").
     pub model: Option<String>,
+    /// Optional step title, passed as `--title <value>` for CLI agents
+    /// that support named sessions (opencode, hermes).
+    pub title: Option<String>,
     /// The policy-enforced execution port. Used by the tool bridge
     /// inside the runtime to dispatch agent-originated file/terminal
     /// requests through the existing policy + scope-fence machinery.
@@ -30,9 +35,19 @@ pub struct AgentContext {
     pub exec: Arc<dyn crate::ports::execution::ExecutionPort>,
 }
 
+/// Default permission policy injected into every opencode agent process as
+/// the `OPENCODE_PERMISSION` env var. The binary enforces this at spawn time;
+/// `external_directory: "deny"` scopes the agent to its worktree.
+const DEFAULT_OPENCODE_PERMISSION: &str = r#"{"edit":"allow","read":"allow","bash":"allow","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"allow"}"#;
+
 /// Standard environment variables injected into every agent process.
 pub fn agent_base_env() -> HashMap<String, String> {
-    HashMap::new()
+    let mut env = HashMap::new();
+    env.insert(
+        "OPENCODE_PERMISSION".to_string(),
+        DEFAULT_OPENCODE_PERMISSION.to_string(),
+    );
+    env
 }
 
 #[derive(Debug, Error)]
@@ -111,6 +126,50 @@ pub trait AgentSession: Send + Sync {
     /// don't hold a transport handle (CLI agents, noop).
     fn kill(&self) -> Result<(), String> {
         Ok(())
+    }
+/// Return a handle that signals stderr activity from the underlying
+    /// agent process. The step executor uses this to differentiate "agent
+    /// is working (API call, model inference)" from "agent is blocked
+    /// (no stdout + no stderr)". Sessions that don't track stderr return
+    /// `None` — the executor falls back to the standard timeout.
+    fn stderr_heartbeat(&self) -> Option<StderrHeartbeat> {
+        None
+    }
+}
+
+/// Cheaply-cloneable handle that tracks how recently the agent's stderr
+/// produced output. The stderr drain thread calls [`beat`] on every
+/// line; the step executor polls [`last_activity_ago_ms`] to decide
+/// whether the process is truly stuck.
+#[derive(Clone)]
+pub struct StderrHeartbeat {
+    last_ts: Arc<AtomicU64>,
+}
+
+impl StderrHeartbeat {
+    pub fn new() -> Self {
+        Self {
+            last_ts: Arc::new(AtomicU64::new(Self::now_ms())),
+        }
+    }
+
+    /// Call from the stderr drain thread every time a complete line is
+    /// received from the agent's stderr pipe.
+    pub fn beat(&self) {
+        self.last_ts.store(Self::now_ms(), Ordering::Relaxed);
+    }
+
+    /// Milliseconds since the last call to [`beat`] (or since construction
+    /// if `beat` was never called).
+    pub fn last_activity_ago_ms(&self) -> u64 {
+        Self::now_ms().saturating_sub(self.last_ts.load(Ordering::Relaxed))
+    }
+
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
     }
 }
 

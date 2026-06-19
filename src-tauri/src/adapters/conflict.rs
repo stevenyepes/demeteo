@@ -47,9 +47,8 @@ impl ConflictResolver for CascadeConflictResolver {
         // The auto-agent path spawns a fresh ACP session with a
         // constrained prompt ("resolve these N files; do not modify
         // unrelated code; produce a resolution commit"). Implementing
-        // it here would duplicate the `AcpRuntime` + worktree
-        // plumbing the parallel step already owns, so we delegate to
-        // the manual path instead for v1.
+        // it here would duplicate the worktree plumbing the parallel
+        // step already owns, so we delegate to the manual path instead for v1.
         //
         // A future phase will replace this stub with a proper
         // resolution-subtask spawn that respects `max_auto_attempts`

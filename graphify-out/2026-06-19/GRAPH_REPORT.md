@@ -1,16 +1,16 @@
-# Graph Report - demeteo  (2026-06-18)
+# Graph Report - demeteo  (2026-06-19)
 
 ## Corpus Check
-- 207 files · ~177,824 words
+- 207 files · ~177,960 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2572 nodes · 4373 edges · 213 communities (182 shown, 31 thin omitted)
+- 2576 nodes · 4381 edges · 214 communities (183 shown, 31 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 25 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `9ad14d27`
+- Built from commit: `a83067a9`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -210,6 +210,7 @@
 - [[_COMMUNITY_Community 208|Community 208]]
 - [[_COMMUNITY_Community 209|Community 209]]
 - [[_COMMUNITY_Community 212|Community 212]]
+- [[_COMMUNITY_Community 213|Community 213]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `String` - 35 edges
@@ -264,7 +265,7 @@
 - **Agent adapters normalize into DemeteoEvent** — prd_agent_adapters, prd_claude_code, prd_openhands_opencode, prd_hermes, prd_mcp, prd_demeteo_event [EXTRACTED 1.00]
 - **index.html mounts React app and loads fonts** — index_html_index_html, index_html_root_div, index_html_main_tsx_entry, public_vite_svg, index_html_fira_code_font, index_html_inter_font, index_html_outfit_font [EXTRACTED 1.00]
 
-## Communities (213 total, 31 thin omitted)
+## Communities (214 total, 31 thin omitted)
 
 ### Community 0 - "Database & Sqlite & Sqliteadapter"
 Cohesion: 0.05
@@ -316,7 +317,7 @@ Nodes (36): SessionKeepalive, AppContext, AppHandle, Arc, Channel, Child, ChildS
 
 ### Community 12 - "Agent & Cli & Runtime"
 Cohesion: 0.08
-Nodes (25): CliAgentRuntime, CliAgentSession, BufReader, EventParser, AgentContext, AgentEvent, AgentRuntime, AgentSession (+17 more)
+Nodes (27): CliAgentRuntime, CliAgentSession, BufReader, EventParser, AgentContext, AgentEvent, AgentRuntime, AgentSession (+19 more)
 
 ### Community 13 - "Schemas & Acl & Manifests"
 Cohesion: 0.10
@@ -463,8 +464,8 @@ Cohesion: 0.22
 Nodes (16): new_id(), new_id_is_16_hex_chars_and_unique_enough(), now_ms(), now_ms_is_monotonic_and_positive(), project_root(), repo_name_from_path(), repo_target_dir(), repo_target_dir_str() (+8 more)
 
 ### Community 51 - "Thread & Session & Get"
-Cohesion: 0.47
-Nodes (10): add_thread_session(), delete_thread_session(), get_thread_sessions(), update_thread_status(), AppContext, Result, State, String (+2 more)
+Cohesion: 0.21
+Nodes (19): append_message(), get_messages(), add_thread_session(), delete_thread_session(), get_thread_sessions(), update_thread_status(), AppContext, Message (+11 more)
 
 ### Community 52 - "Projectsettings & Components & Project"
 Cohesion: 0.18
@@ -731,8 +732,8 @@ Cohesion: 0.10
 Nodes (20): ActionError, AgentAction, AgentExecutionPort, Box, CommandOutcome, DomainEvent, ExecutionPort, ExecutionResult (+12 more)
 
 ### Community 128 - "Community 128"
-Cohesion: 0.10
-Nodes (41): agent_cancel(), agent_get_session_info(), agent_install_and_start(), agent_prompt(), agent_restart(), agent_set_config_option(), agent_set_mode(), agent_start() (+33 more)
+Cohesion: 0.23
+Nodes (11): SqliteAdapter, AgentConfig, MachineId, Message, Result, String, ThreadId, ThreadRepository (+3 more)
 
 ### Community 129 - "Community 129"
 Cohesion: 0.23
@@ -922,8 +923,12 @@ Nodes (3): MergeExecutor, Send, Sync
 Cohesion: 0.50
 Nodes (3): MrPublisher, Send, Sync
 
+### Community 213 - "Community 213"
+Cohesion: 0.30
+Nodes (21): agent_cancel(), agent_get_session_info(), agent_install_and_start(), agent_prompt(), agent_restart(), agent_set_config_option(), agent_set_mode(), agent_start() (+13 more)
+
 ## Knowledge Gaps
-- **883 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+878 more)
+- **885 isolated node(s):** `$schema`, `plugin`, `@opencode-ai/plugin`, `MOCK_PROJECTS`, `MOCK_PROVIDERS_INIT` (+880 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **31 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -931,13 +936,13 @@ Nodes (3): MrPublisher, Send, Sync
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `SqliteAdapter` connect `Community 183` to `Community 129`, `Community 176`, `Community 177`, `Community 178`, `Worktree & Git & Ops`, `Community 150`, `Community 127`?**
-  _High betweenness centrality (0.011) - this node is a cross-community bridge._
+  _High betweenness centrality (0.013) - this node is a cross-community bridge._
 - **Why does `StepExecutionPatch` connect `Database & Sqlite & Sqliteadapter` to `Community 183`?**
-  _High betweenness centrality (0.008) - this node is a cross-community bridge._
+  _High betweenness centrality (0.010) - this node is a cross-community bridge._
 - **Why does `GateDecisionId` connect `Database & Sqlite & Sqliteadapter` to `Models & Sessionmodestate & Configoption`?**
-  _High betweenness centrality (0.006) - this node is a cross-community bridge._
+  _High betweenness centrality (0.008) - this node is a cross-community bridge._
 - **What connects `$schema`, `plugin`, `@opencode-ai/plugin` to the rest of the system?**
-  _889 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _891 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Database & Sqlite & Sqliteadapter` be split into smaller, more focused modules?**
   _Cohesion score 0.05222734254992319 - nodes in this community are weakly interconnected._
 - **Should `ACP & Runtime & Agent` be split into smaller, more focused modules?**

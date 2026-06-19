@@ -74,15 +74,16 @@ graph TD
     subgraph Backend [Tauri Rust Core]
         Orch[FeatureOrchestrator / StepExecutor]
         WT[WorktreeManager / MergeExecutor / MrPublisher]
-        AR[AgentRuntime / AcpRuntime]
+        AR[AgentRuntime / CliRuntime]
         DB[(SQLite DB)]
         Keys[Keyring Crate]
         AS[ArtifactStore]
+        PP[PermissionPolicyPort]
     end
 
     subgraph Project [Project Host: local or remote SSH]
         Repo[Git Repos + Worktrees]
-        Agent[opencode / hermes / future agent]
+        Agent[opencode / hermes / claude-code / antigravity]
     end
 
     Rail & Home --> Cmds
@@ -91,10 +92,11 @@ graph TD
     Orch --> WT
     Orch --> AR
     WT --> AS
-    AR <-->|ACP| Agent
+    AR <-->|CLI + JSON| Agent
     WT <-->|SSH/SFTP| Repo
     Orch --> DB
     WT --> Keys
+    AR --> PP
     Evts --> Frontend
 ```
 
@@ -117,7 +119,7 @@ Demeteo utilizes progressive disclosure to separate high-level concepts from con
 * **[Execution & Verification Plan (docs/REDESIGN_EXECUTION_PLAN.md)](docs/REDESIGN_EXECUTION_PLAN.md)**: phase-by-phase tasks, done-means statements, verification commands, Gantt timeline.
 * **[Locked Decisions Reference (docs/REDESIGN_DECISIONS.md)](docs/REDESIGN_DECISIONS.md)**: the 33-decision table as a standalone reference, cross-linked to all other docs.
 * **[Open & Deferred Questions (docs/REDESIGN_OPEN_QUESTIONS.md)](docs/REDESIGN_OPEN_QUESTIONS.md)**: deferred items with phase placement key and rationale, so they don't get lost.
-* **[Agent Integration Spec (AGENT_INTEGRATION.md)](AGENT_INTEGRATION.md)**: the rewritten (post-pivot) `AcpRuntime` spec — source of truth for the agent runtime that drives both planner and subtask sessions.
+* **[Agent Integration Spec (AGENT_INTEGRATION.md)](AGENT_INTEGRATION.md)**: `CliRuntime` (one-shot `opencode run --format json`) for opencode, hermes, claude-code, and antigravity — no ACP, no JSON-RPC, no tool-call bridge. Permitted actions are controlled per-project via `OPENCODE_PERMISSION` (JSON env var), scoped to the worktree via `external_directory: "deny"`.
 
 ### Carried-forward references
 
