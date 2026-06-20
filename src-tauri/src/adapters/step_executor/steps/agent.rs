@@ -2,15 +2,16 @@ use std::time::Instant;
 
 use tokio_stream::StreamExt;
 
-use crate::adapters::step_executor::artifacts::{inject_artifact_contract, resolve_attached_artifacts, resolve_declared_artifacts};
+use crate::adapters::step_executor::artifacts::{compute_git_diff, inject_artifact_contract, read_worktree_file, resolve_attached_artifacts, resolve_declared_artifacts, WorktreeSnapshot};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::artifact::{Artifact, ArtifactCapture};
+use crate::domain::artifact::Artifact;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
+use crate::paths;
 
 impl ExecutionDriver {
     pub(crate) async fn handle_agent_step(
@@ -78,6 +79,31 @@ impl ExecutionDriver {
         if *self.cancel_watch.borrow() {
             return StepOutcome::Cancelled;
         }
+
+        // Snapshot the worktree's dirty state BEFORE the agent runs.
+        // The delta at step end tells us which files the agent actually
+        // created/modified during this step, isolated from any state
+        // that was already dirty from a prior step. This replaces the
+        // old `git diff <base>..HEAD` strategy, which missed every
+        // file the agent wrote because the agent does not commit.
+        let worktree_snapshot = WorktreeSnapshot::capture(
+            &*self.exec,
+            &machine_str,
+            &self.target_dir,
+        );
+
+        let worktree_base_ref = self
+            .exec
+            .run_command(
+                &machine_str,
+                &format!(
+                    "git -C {} rev-parse {}",
+                    paths::shell_escape_posix(&self.target_dir),
+                    paths::shell_escape_posix(&self.branch_name),
+                ),
+            )
+            .map(|s| s.trim().to_string())
+            .ok();
 
         let spawn_fut = self.registry.get_or_spawn(self.f_id.as_str(), &agent_kind, ctx);
         let mut cancel_watch_spawn = self.cancel_watch.clone();
@@ -306,15 +332,77 @@ impl ExecutionDriver {
                     return StepOutcome::Cancelled;
                 }
 
-                // In declared mode, synthesize ArtifactProduced events from the
-                // accumulated text buffer for every ByName declaration.
-                // CLI agents (opencode, hermes, etc.) don't emit named
-                // ArtifactProduced events — their full output IS the artifact.
+                // Detect the files the agent actually wrote during this
+                // step. The strategy: compare the worktree's `git status
+                // --porcelain` against the snapshot taken before the
+                // agent ran, plus any path explicitly named in a
+                // `LastWriteTo` declaration (so refining a previous
+                // step's artifact still produces the latest body).
+                //
+                // The previous strategy used `git diff <base>..HEAD`,
+                // which was always empty because the agent writes
+                // files to the working tree without committing.
                 if !is_legacy {
-                    for decl in decls {
-                        if matches!(decl.capture, ArtifactCapture::ByName { .. }) {
-                            produced_artifacts.push(Artifact::agent_text(&decl.name, &text_buffer));
+                    let always: Vec<&str> = decls
+                        .iter()
+                        .filter_map(|d| match &d.capture {
+                            crate::domain::artifact::ArtifactCapture::LastWriteTo { path } => {
+                                Some(path.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let changed = worktree_snapshot.delta(
+                        &*self.exec,
+                        &machine_str,
+                        &self.target_dir,
+                        &always,
+                        &[],
+                    );
+                    for rel_path in changed {
+                        let name = std::path::Path::new(&rel_path)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("artifact")
+                            .to_string();
+                        if let Some(content) = read_worktree_file(
+                            &*self.exec,
+                            &machine_str,
+                            &self.target_dir,
+                            &rel_path,
+                        ) {
+                            produced_artifacts
+                                .push(Artifact::tool_write(name, rel_path, content));
                         }
+                    }
+                }
+
+                // Compute the unified diff against the worktree's
+                // base ref and synthesise a diff artifact. Empty for
+                // text-only steps (research, spec, critic, validate
+                // when the agent only writes .md) and useful for
+                // implement-style steps where the agent touches code.
+                //
+                // Per the user-facing rule "always show a code diff",
+                // we attach the diff for every non-legacy step,
+                // regardless of whether code was changed. An empty
+                // diff still renders harmlessly in the diff viewer.
+                if !is_legacy {
+                    let diff_ref = worktree_base_ref.as_deref().unwrap_or("HEAD");
+                    let diff_body =
+                        compute_git_diff(&*self.exec, &machine_str, &self.target_dir, diff_ref);
+                    if !diff_body.trim().is_empty() {
+                        let diff_name = "code-diff".to_string();
+                        produced_artifacts.push(Artifact {
+                            name: diff_name,
+                            mime: "text/x-diff".into(),
+                            content: diff_body,
+                            source: crate::domain::artifact::ArtifactSource::Diff {
+                                base: diff_ref.to_string(),
+                                head: "WORKTREE".to_string(),
+                                path_filter: None,
+                            },
+                        });
                     }
                 }
 
@@ -327,7 +415,20 @@ impl ExecutionDriver {
                         &self.f_id_str,
                         &step_exec.step_id.0,
                     );
-                    let primary = refs.first().cloned();
+                    // For implement-style steps (parallel kind, or any
+                    // step with a `code-diff` artifact), the primary
+                    // view is the unified diff so the user sees the
+                    // change summary first. For text-only steps, the
+                    // primary is the first detected file (research
+                    // report, spec, critic review, validation report).
+                    let primary = if step_conf.kind == "parallel" {
+                        refs.iter()
+                            .find(|r| r.contains("code-diff") || r.ends_with(".diff"))
+                            .cloned()
+                            .or_else(|| refs.first().cloned())
+                    } else {
+                        refs.first().cloned()
+                    };
                     (primary, refs)
                 } else {
                     let mut art_path = self.app_local_data_dir.join("artifacts").join(&self.f_id_str);

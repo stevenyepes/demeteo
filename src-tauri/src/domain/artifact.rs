@@ -118,11 +118,12 @@ pub struct Artifact {
 
 impl Artifact {
     pub fn tool_write(name: impl Into<String>, path: impl Into<String>, content: impl Into<String>) -> Self {
+        let path = path.into();
         Self {
             name: name.into(),
-            mime: "text/markdown".into(),
+            mime: mime_for_path(&path),
             content: content.into(),
-            source: ArtifactSource::ToolWrite { path: path.into() },
+            source: ArtifactSource::ToolWrite { path },
         }
     }
 
@@ -154,6 +155,49 @@ impl Artifact {
     }
 }
 
+/// Best-effort IANA mime for a worktree-relative path, derived from the
+/// file extension. Mirrors `FsArtifactStore::ext_for_mime` in the inverse
+/// direction so the on-disk file extension matches the stored mime.
+///
+/// New mimes should be added to *both* this table and
+/// `FsArtifactStore::ext_for_mime` so the pair stays in sync.
+pub fn mime_for_path(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    if let Some((_, ext)) = lower.rsplit_once('.') {
+        match ext {
+            "md" | "markdown" => return "text/markdown".into(),
+            "diff" | "patch" => return "text/x-diff".into(),
+            "json" => return "application/json".into(),
+            "txt" => return "text/plain".into(),
+            "html" | "htm" => return "text/html".into(),
+            "css" => return "text/css".into(),
+            "csv" => return "text/csv".into(),
+            "xml" => return "application/xml".into(),
+            "ts" => return "text/typescript".into(),
+            "tsx" => return "text/tsx".into(),
+            "js" | "jsx" | "mjs" | "cjs" => return "text/javascript".into(),
+            "py" => return "text/x-python".into(),
+            "rb" => return "text/x-ruby".into(),
+            "rs" => return "text/x-rust".into(),
+            "go" => return "text/x-go".into(),
+            "java" => return "text/x-java".into(),
+            "kt" | "kts" => return "text/x-kotlin".into(),
+            "swift" => return "text/x-swift".into(),
+            "c" | "h" => return "text/x-c".into(),
+            "cpp" | "cc" | "cxx" | "hpp" | "hxx" => return "text/x-c++".into(),
+            "sh" | "bash" | "zsh" => return "text/x-shellscript".into(),
+            "yaml" | "yml" => return "text/yaml".into(),
+            "toml" => return "text/x-toml".into(),
+            "sql" => return "text/x-sql".into(),
+            "vue" => return "text/x-vue".into(),
+            "svelte" => return "text/x-svelte".into(),
+            "lock" => return "application/x-demeteo-skip".into(),
+            _ => {}
+        }
+    }
+    "text/plain".into()
+}
+
 /// What to capture for a single declared artifact. The `name` on the
 /// outer `ArtifactDecl` is what the rest of the codebase sees; this
 /// enum is the *how*.
@@ -171,6 +215,10 @@ pub enum ArtifactCapture {
     /// implement steps that fan out many files. Each becomes its own
     /// artifact reference; last-write-wins is per-name, not per-path.
     AllWrites,
+    /// Detect all files changed since `base_ref` via `git diff --name-only`.
+    /// Artifacts are named from file basenames. `base` describes the left side
+    /// (see [`DiffBase`]). `path_filter` optionally restricts to a glob pattern.
+    ChangedFiles { base: DiffBase, path_filter: Option<String> },
     /// Synthesize a unified diff at materialization time. `base`
     /// describes the left side; `head` is the step's worktree HEAD
     /// unless overridden.
@@ -250,10 +298,35 @@ mod tests {
     }
 
     #[test]
-    fn tool_write_artifact_defaults_mime() {
-        let a = Artifact::tool_write("spec", "docs/spec.md", "# Spec\n");
-        assert_eq!(a.mime, "text/markdown");
-        assert!(matches!(a.source, ArtifactSource::ToolWrite { ref path } if path == "docs/spec.md"));
+    fn tool_write_artifact_infers_mime_from_extension() {
+        let md = Artifact::tool_write("spec", "docs/spec.md", "# Spec\n");
+        assert_eq!(md.mime, "text/markdown");
+
+        let rs = Artifact::tool_write("lib", "src/lib.rs", "// lib\n");
+        assert_eq!(rs.mime, "text/x-rust");
+
+        let diff = Artifact::tool_write("code-diff", "code.diff", "--- a\n+++ b\n");
+        assert_eq!(diff.mime, "text/x-diff");
+
+        let json = Artifact::tool_write("cfg", "config.json", "{}\n");
+        assert_eq!(json.mime, "application/json");
+
+        let plain = Artifact::tool_write("notes", "NOTES", "no extension");
+        assert_eq!(plain.mime, "text/plain");
+
+        let upper = Artifact::tool_write("spec", "Docs/SPEC.MD", "# S\n");
+        assert_eq!(upper.mime, "text/markdown");
+
+        assert!(matches!(md.source, ArtifactSource::ToolWrite { ref path } if path == "docs/spec.md"));
+    }
+
+    #[test]
+    fn mime_for_path_known_extensions() {
+        assert_eq!(mime_for_path("foo.md"), "text/markdown");
+        assert_eq!(mime_for_path("a/b/c.diff"), "text/x-diff");
+        assert_eq!(mime_for_path("x/y/z.tsx"), "text/tsx");
+        assert_eq!(mime_for_path("PY"), "text/plain");
+        assert_eq!(mime_for_path(""), "text/plain");
     }
 
     #[test]

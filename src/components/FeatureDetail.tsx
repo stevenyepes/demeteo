@@ -4,7 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import { StepExecution } from '../types';
 import { getAgentModels } from '../lib/agentModels';
-import { ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X, GitPullRequest, RotateCcw } from 'lucide-react';
+import {
+  ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X,
+  GitPullRequest, RotateCcw, FileText, FileCode, FileJson, GitMerge, FileQuestion,
+} from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
 
 interface FeatureDetailProps {
@@ -22,6 +25,75 @@ const humanizeStepId = (id: string) => {
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
 };
+
+type ArtifactKind = 'markdown' | 'diff' | 'json' | 'code' | 'text' | 'worktree-ref' | 'unknown';
+
+const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
+  'markdown': 'Markdown',
+  'diff': 'Code Diff',
+  'json': 'JSON',
+  'code': 'Code',
+  'text': 'Text',
+  'worktree-ref': 'File Reference',
+  'unknown': 'File',
+};
+
+const classifyArtifact = (path: string): { kind: ArtifactKind; ext: string; basename: string } => {
+  const lower = path.toLowerCase();
+  const filename = path.split('/').pop() || path;
+  if (lower.endsWith('.diff') || lower.endsWith('.patch')) {
+    return { kind: 'diff', ext: filename.split('.').pop() || 'diff', basename: filename };
+  }
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+    return { kind: 'markdown', ext: 'md', basename: filename };
+  }
+  if (lower.endsWith('.json')) {
+    return { kind: 'json', ext: 'json', basename: filename };
+  }
+  if (lower.endsWith('.worktree-ref.json')) {
+    return { kind: 'worktree-ref', ext: 'json', basename: filename };
+  }
+  const codeExts = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'rs', 'go', 'java',
+    'kt', 'kts', 'swift', 'c', 'h', 'cpp', 'cc', 'cxx', 'hpp', 'hxx', 'sh', 'bash', 'zsh',
+    'yaml', 'yml', 'toml', 'sql', 'vue', 'svelte', 'css', 'html', 'htm', 'xml'];
+  const ext = filename.includes('.') ? filename.split('.').pop()!.toLowerCase() : '';
+  if (codeExts.includes(ext)) {
+    return { kind: 'code', ext, basename: filename };
+  }
+  if (ext === 'txt' || ext === 'csv' || !ext) {
+    return { kind: 'text', ext: ext || 'txt', basename: filename };
+  }
+  return { kind: 'unknown', ext, basename: filename };
+};
+
+const ArtifactIcon: React.FC<{ kind: ArtifactKind; className?: string }> = ({ kind, className = 'w-3.5 h-3.5 shrink-0' }) => {
+  switch (kind) {
+    case 'markdown':
+      return <FileText className={className} />;
+    case 'diff':
+      return <GitMerge className={className} />;
+    case 'json':
+    case 'code':
+      return <FileCode className={className} />;
+    case 'worktree-ref':
+      return <FileJson className={className} />;
+    case 'text':
+    case 'unknown':
+    default:
+      return <FileQuestion className={className} />;
+  }
+};
+
+const ARTIFACT_KIND_COLORS: Record<ArtifactKind, string> = {
+  'markdown': 'text-cyan-400',
+  'diff': 'text-violet-400',
+  'json': 'text-amber-400',
+  'code': 'text-emerald-400',
+  'text': 'text-slate-400',
+  'worktree-ref': 'text-cyan-400',
+  'unknown': 'text-slate-500',
+};
+
 
 export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   featureId,
@@ -522,23 +594,31 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                         </div>
                       )}
 
-                      {(step.artifact_paths?.length ? step.artifact_paths : step.artifact_path ? [step.artifact_path] : []).map((path) => (
-                        <button
-                          key={path}
-                          onClick={() => {
-                            setSelectedArtifactPath(path);
-                            setSelectedStepTitle(step.step_id);
-                          }}
-                          className={`mt-3 w-full text-left text-xs font-mono p-3 rounded border flex items-center justify-between transition duration-300 ${
-                            selectedArtifactPath === path
-                              ? 'bg-violet-950/20 border-violet-500/30 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
-                              : 'bg-[#050608] border-white/[0.02] text-slate-400 hover:border-white/10 hover:bg-white/[0.02] hover:text-white cursor-pointer'
-                          }`}
-                        >
-                          <span className="truncate">Artifact: {path.split('/').pop()}</span>
-                          <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">View Output</span>
-                        </button>
-                      ))}
+                      {(step.artifact_paths?.length ? step.artifact_paths : step.artifact_path ? [step.artifact_path] : []).map((path) => {
+                        const cls = classifyArtifact(path);
+                        const Icon = <ArtifactIcon kind={cls.kind} />;
+                        const labelColor = ARTIFACT_KIND_COLORS[cls.kind];
+                        return (
+                          <button
+                            key={path}
+                            onClick={() => {
+                              setSelectedArtifactPath(path);
+                              setSelectedStepTitle(step.step_id);
+                            }}
+                            className={`mt-3 w-full text-left text-xs font-mono p-3 rounded border flex items-center gap-3 transition duration-300 ${
+                              selectedArtifactPath === path
+                                ? 'bg-violet-950/20 border-violet-500/30 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
+                                : 'bg-[#050608] border-white/[0.02] text-slate-400 hover:border-white/10 hover:bg-white/[0.02] hover:text-white cursor-pointer'
+                            }`}
+                          >
+                            <span className={labelColor}>{Icon}</span>
+                            <span className="truncate flex-1">{cls.basename}</span>
+                            <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">
+                              {ARTIFACT_KIND_LABELS[cls.kind]}
+                            </span>
+                          </button>
+                        );
+                      })}
 
                       {step.status === 'running' && (
                         <div className="mt-3 flex gap-2">

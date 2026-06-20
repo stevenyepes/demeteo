@@ -5,6 +5,8 @@ use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::GateRepository;
+use crate::ports::execution::ExecutionPort;
+use crate::paths;
 
 /// Returns `(decision, feedback)` from the most recently *decided* gate step
 /// for a feature.  Used to inject `{{gate_decision}}` and `{{gate_feedback}}`
@@ -163,7 +165,17 @@ pub(crate) fn inject_artifact_contract(
                 format!("- Write `{}` → artifact `{}`", path, d.name)
             }
             ArtifactCapture::AllWrites => {
-                "- Every file you write will be captured".to_string()
+                "- Every file you write will be captured automatically via git".to_string()
+            }
+            ArtifactCapture::ChangedFiles { path_filter, .. } => {
+                if let Some(filter) = path_filter {
+                    format!(
+                        "- All files matching `{}` will be captured automatically via git",
+                        filter
+                    )
+                } else {
+                    "- All changed files will be captured automatically via git".to_string()
+                }
             }
             ArtifactCapture::Diff { .. } => {
                 "- A diff will be computed at the end of the step".to_string()
@@ -180,7 +192,7 @@ pub(crate) fn inject_artifact_contract(
 
     lines.push(String::new());
     lines.push(
-        "Do **not** change the path or name — the orchestrator depends on them."
+        "Your file changes are automatically detected via git — no special naming required."
             .to_string(),
     );
 
@@ -209,7 +221,11 @@ pub(crate) fn resolve_declared_artifacts(
 
     for decl in declarations {
         let matched: Option<&Artifact> = match &decl.capture {
-            ArtifactCapture::ByName { name } => produced.iter().find(|a| a.name == *name),
+            ArtifactCapture::ByName { name } => {
+                produced.iter().find(|a| {
+                    a.name == *name || strip_extension(&a.name).map_or(false, |s| s == *name)
+                })
+            }
             ArtifactCapture::LastWriteTo { path } => produced
                 .iter()
                 .filter(|a| matches!(&a.source, ArtifactSource::ToolWrite { path: p } if p == path))
@@ -219,6 +235,14 @@ pub(crate) fn resolve_declared_artifacts(
                 // named artifacts below; the `AllWrites` catch-all emits
                 // one artifact per unique path.
                 continue; // handled separately below
+            }
+            ArtifactCapture::ChangedFiles { .. } => {
+                // ChangedFiles artifacts are detected directly via git diff
+                // in agent.rs and added to produced_artifacts there. They
+                // are named by their file basenames, so they can be matched
+                // here by name if needed. We just continue — they are already
+                // in the produced list.
+                continue;
             }
             ArtifactCapture::Diff { .. } => {
                 // Diff artifacts are derived at materialisation time by
@@ -284,6 +308,291 @@ pub(crate) fn resolve_declared_artifacts(
     }
 
     refs
+}
+
+/// A pre-step snapshot of the worktree's dirty state. The step
+/// handler calls `WorktreeSnapshot::capture` at the *start* of a
+/// step (before the agent runs), and `WorktreeSnapshot::delta` at
+/// the *end*. The delta is the set of files this step's agent
+/// actually created or modified, isolated from any state that
+/// was already dirty from a prior step.
+///
+/// The snapshot is based on `git status --porcelain` rather than
+/// commit boundaries, because the agent does not commit — it
+/// only writes files into the worktree's working directory. A
+/// commit-based snapshot would miss every file the agent wrote.
+#[derive(Debug, Clone, Default)]
+pub struct WorktreeSnapshot {
+    /// Paths that were dirty at snapshot time, normalised to
+    /// repo-relative form (e.g. `"research-report.md"`).
+    dirty: std::collections::BTreeSet<String>,
+}
+
+impl WorktreeSnapshot {
+    /// Capture a snapshot of `worktree_root`'s dirty state via
+    /// `git status --porcelain`. If the worktree is not a git
+    /// repo, or the command fails, returns an empty snapshot
+    /// (the resulting delta is "everything currently dirty",
+    /// which is a safe fallback for the bootstrap edge case).
+    pub fn capture(
+        exec: &dyn ExecutionPort,
+        machine_id: &str,
+        worktree_root: &str,
+    ) -> Self {
+        let dirty = parse_status_porcelain(
+            &git_status_porcelain(exec, machine_id, worktree_root),
+        );
+        Self { dirty }
+    }
+
+    /// Compute the file-level delta between this snapshot and the
+    /// worktree's current state. Returns `Vec<rel_path>` for files
+    /// that became dirty *during* this step (newly created, newly
+    /// modified, newly staged, or newly deleted). Paths that were
+    /// already dirty at snapshot time are excluded — those belong
+    /// to a prior step.
+    ///
+    /// `always_include` lets the caller force-include specific
+    /// paths (e.g. paths named in `ArtifactDecl::LastWriteTo`)
+    /// even if they were dirty before the step started. This is
+    /// how the orchestrator handles "refine the previous step's
+    /// artifact" cases without losing the latest body.
+    ///
+    /// `.git/`, `.demeteo/`, and any path in `extra_exclude` are
+    /// always filtered out — those are orchestrator scaffolding,
+    /// not the agent's work.
+    pub fn delta(
+        &self,
+        exec: &dyn ExecutionPort,
+        machine_id: &str,
+        worktree_root: &str,
+        always_include: &[&str],
+        extra_exclude: &[&str],
+    ) -> Vec<String> {
+        let now = parse_status_porcelain(
+            &git_status_porcelain(exec, machine_id, worktree_root),
+        );
+
+        let mut out: std::collections::BTreeSet<String> = now
+            .iter()
+            .filter(|p| !self.dirty.contains(p.as_str()))
+            .cloned()
+            .collect();
+
+        for forced in always_include {
+            if !forced.is_empty() {
+                out.insert((*forced).to_string());
+            }
+        }
+
+        out.into_iter()
+            .filter(|p| !is_excluded(p, extra_exclude))
+            .collect()
+    }
+}
+
+fn git_status_porcelain(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    worktree_root: &str,
+) -> String {
+    let cmd = format!(
+        "git -C {} status --porcelain --untracked-files=all",
+        paths::shell_escape_posix(worktree_root),
+    );
+    exec.run_command(machine_id, &cmd).unwrap_or_default()
+}
+
+/// Parse `git status --porcelain` output into a deduplicated set
+/// of repo-relative paths. Renames appear as `R  old -> new`; we
+/// keep `new` because that's the path the agent worked on. Lines
+/// that look like branch info (those starting with `##`) are
+/// dropped.
+fn parse_status_porcelain(raw: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for line in raw.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        // Branch info: "## main...origin/main [ahead 3]"
+        if line.starts_with("##") {
+            continue;
+        }
+        // Strip the leading 2-char XY status and the space.
+        // Layout: "XY path" or "XY old -> new".
+        if line.len() < 4 {
+            continue;
+        }
+        let after_status = &line[3..];
+        let path_part = if let Some(idx) = after_status.find(" -> ") {
+            &after_status[idx + 4..]
+        } else {
+            after_status
+        };
+        // Unquote if necessary (git quotes paths with special chars).
+        let path = path_part
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .map(unquote_git_path)
+            .unwrap_or_else(|| path_part.to_string());
+        if !path.is_empty() {
+            out.insert(path);
+        }
+    }
+    out
+}
+
+fn unquote_git_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(&next) = chars.peek() {
+                chars.next();
+                out.push(next);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn is_excluded(path: &str, extra: &[&str]) -> bool {
+    if path.starts_with(".git/") || path == ".git" {
+        return true;
+    }
+    if path.starts_with(".demeteo/") || path == ".demeteo" {
+        return true;
+    }
+    for ex in extra {
+        if path == *ex {
+            return true;
+        }
+    }
+    false
+}
+
+/// Read the post-write content of `rel_path` (relative to the
+/// worktree root) and return it as a string. Skips binary files
+/// (those containing a NUL byte in the first 8 KiB) and returns
+/// `None` if the file is missing or unreadable.
+///
+/// This is the "snapshot the agent's working tree" primitive that
+/// the step executor calls after the agent turn ends. It is
+/// deliberately simple: read the file, drop binaries, and return
+/// the body. The orchestrator stores the body as the artifact
+/// content and the `rel_path` as the on-disk name suffix in the
+/// `FsArtifactStore`.
+pub fn read_worktree_file(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    worktree_root: &str,
+    rel_path: &str,
+) -> Option<String> {
+    let abs = format!("{}/{}", worktree_root.trim_end_matches('/'), rel_path);
+    let content = exec.read_file(machine_id, &abs).ok()?;
+    if is_likely_binary(&content) {
+        return None;
+    }
+    Some(content)
+}
+
+/// Compute the unified diff of the worktree's working tree (and
+/// index) against `base_ref`. Returns the diff body as a string,
+/// or an empty string if there are no changes or `base_ref` cannot
+/// be resolved.
+///
+/// `base_ref` is whatever `git rev-parse` accepts: a branch name,
+/// a SHA, `HEAD`, `HEAD~1`, the worktree's merge-base against the
+/// default branch, etc. The diff includes both staged and
+/// unstaged changes.
+pub fn compute_git_diff(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    worktree_root: &str,
+    base_ref: &str,
+) -> String {
+    let cmd = format!(
+        "git -C {} diff {}",
+        paths::shell_escape_posix(worktree_root),
+        paths::shell_escape_posix(base_ref),
+    );
+    exec.run_command(machine_id, &cmd).unwrap_or_default()
+}
+
+/// Stage every change in the worktree and commit it with `message`.
+/// Used by the parallel step to make `merge_subtask` meaningful
+/// (the agent only writes files; the orchestrator has to commit
+/// them so the merge has a non-empty tip to bring across).
+///
+/// Pre-condition: a `user.email` and `user.name` are configured for
+/// the worktree's git repo. The orchestrator sets these on
+/// bootstrap for the project repo; if they're missing the commit
+/// fails with a clear error and the caller treats the step as
+/// failed.
+///
+/// Returns the new commit SHA on success, or an error string on
+/// failure.
+pub fn commit_worktree_changes(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    worktree_root: &str,
+    message: &str,
+) -> Result<String, String> {
+    let add_cmd = format!(
+        "git -C {} add -A",
+        paths::shell_escape_posix(worktree_root),
+    );
+    exec.run_command(machine_id, &add_cmd)
+        .map_err(|e| format!("git add failed: {}", e))?;
+
+    let commit_cmd = format!(
+        "git -C {} -c user.email=demeteo@local -c user.name=demeteo commit -m {} --allow-empty",
+        paths::shell_escape_posix(worktree_root),
+        paths::shell_escape_posix(message),
+    );
+    let out = exec
+        .run_command(machine_id, &commit_cmd)
+        .map_err(|e| format!("git commit failed: {}", e))?;
+
+    let sha_cmd = format!(
+        "git -C {} rev-parse HEAD",
+        paths::shell_escape_posix(worktree_root),
+    );
+    exec.run_command(machine_id, &sha_cmd)
+        .map(|s| s.trim().to_string())
+        .map_err(|e| format!("git rev-parse after commit failed: {}", e))
+        .map(|sha| {
+            // Best-effort: print the commit output so operators can see
+            // what was committed. The orchestrator doesn't currently
+            // surface this, but it's useful in the dev console.
+            if !out.is_empty() {
+                eprintln!("[commit_worktree_changes] {}", out.trim());
+            }
+            sha
+        })
+}
+
+fn is_likely_binary(content: &str) -> bool {
+    if content.contains('\0') {
+        return true;
+    }
+    // Heuristic: if the first 8 KiB has no newlines and is "long enough"
+    // it's probably a binary blob. Markdown / code / configs all contain
+    // newlines; PNG/JPG/zlib blobs do not.
+    let head = &content[..content.len().min(8192)];
+    if head.len() > 256 && !head.contains('\n') {
+        return true;
+    }
+    false
+}
+
+fn strip_extension(name: &str) -> Option<String> {
+    std::path::Path::new(name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
 }
 
 #[cfg(test)]
@@ -613,5 +922,219 @@ mod tests {
         assert_eq!(resolved, "Previous: Research content from paths.");
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    // ── WorktreeSnapshot & helpers ──────────────────────────────────
+
+    #[test]
+    fn test_parse_status_porcelain_basic() {
+        let raw = "?? untracked.md\n";
+        let set = parse_status_porcelain(raw);
+        assert!(set.contains("untracked.md"));
+
+        let raw_mod = " M modified.rs\n";
+        let set = parse_status_porcelain(raw_mod);
+        assert!(set.contains("modified.rs"));
+
+        let raw_rename = "R  old.txt -> new.txt\n";
+        let set = parse_status_porcelain(raw_rename);
+        assert!(set.contains("new.txt"));
+        assert!(!set.contains("old.txt"));
+
+        // Branch info line is dropped
+        let raw_branch = "## main...origin/main\n";
+        let set = parse_status_porcelain(raw_branch);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn test_parse_status_porcelain_dedup() {
+        let raw = "?? dup.md\n?? dup.md\n";
+        let set = parse_status_porcelain(raw);
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn test_snapshot_delta_detects_new_files() {
+        let temp = temp_git_repo("snapshot_delta_new");
+        let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+        let machine = "local";
+
+        // Write & commit a baseline file so the repo isn't empty.
+        exec.write_file(machine, &format!("{}/baseline.rs", temp), "fn main() {}").unwrap();
+        exec.run_command(machine, &format!(
+            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
+            shell_esc(&temp), shell_esc(&temp),
+        )).unwrap();
+
+        // Snapshot the clean repo.
+        let snap = WorktreeSnapshot::capture(&exec, machine, &temp);
+        assert!(snap.dirty.is_empty());
+
+        // Simulate the agent writing a new file and modifying
+        // baseline.rs.
+        exec.write_file(machine, &format!("{}/new.md", temp), "# New\n").unwrap();
+        exec.write_file(machine, &format!("{}/baseline.rs", temp), "fn main(){}\n").unwrap();
+
+        // Delta with always_include empty: the new file should appear.
+        let changed = snap.delta(&exec, machine, &temp, &[], &[]);
+        assert!(changed.contains(&"new.md".to_string()),
+            "expected new.md in delta, got {:?}", changed);
+        // baseline.rs was clean *before* the step and is now modified.
+        // `git status --porcelain` will report it as " M" so it's dirty now.
+        assert!(changed.contains(&"baseline.rs".to_string()),
+            "expected baseline.rs in delta (modified by step), got {:?}", changed);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_snapshot_delta_always_include() {
+        let temp = temp_git_repo("snapshot_delta_always");
+        let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+        let machine = "local";
+
+        exec.write_file(machine, &format!("{}/base.md", temp), "# base\n").unwrap();
+        exec.run_command(machine, &format!(
+            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
+            shell_esc(&temp), shell_esc(&temp),
+        )).unwrap();
+
+        // Make base.md dirty before the step starts.
+        exec.write_file(machine, &format!("{}/base.md", temp), "# dirty\n").unwrap();
+        let snap = WorktreeSnapshot::capture(&exec, machine, &temp);
+        assert!(snap.dirty.contains("base.md"));
+
+        // Step refines base.md further.
+        exec.write_file(machine, &format!("{}/base.md", temp), "# final\n").unwrap();
+
+        // Without always_include, base.md is excluded because it was
+        // already dirty at step start.
+        let without = snap.delta(&exec, machine, &temp, &[], &[]);
+        assert!(!without.contains(&"base.md".to_string()),
+            "base.md should NOT appear without always_include, got {:?}", without);
+
+        // With always_include = ["base.md"], it appears regardless.
+        let with = snap.delta(&exec, machine, &temp, &["base.md"], &[]);
+        assert!(with.contains(&"base.md".to_string()),
+            "base.md should appear with always_include, got {:?}", with);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_snapshot_delta_excludes_scaffolding() {
+        let temp = temp_git_repo("snapshot_exclude");
+        let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+        let machine = "local";
+
+        exec.write_file(machine, &format!("{}/base.md", temp), "# b\n").unwrap();
+        exec.run_command(machine, &format!(
+            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
+            shell_esc(&temp), shell_esc(&temp),
+        )).unwrap();
+
+        let snap = WorktreeSnapshot::capture(&exec, machine, &temp);
+
+        // Write scaffolding files that the delta should filter.
+        std::fs::create_dir_all(format!("{}/.git/tmp", temp)).unwrap();
+        std::fs::write(format!("{}/.git/tmp/x", temp), "x").unwrap();
+        std::fs::create_dir_all(format!("{}/.demeteo/data", temp)).unwrap();
+        std::fs::write(format!("{}/.demeteo/data/y", temp), "y").unwrap();
+
+        let changed = snap.delta(&exec, machine, &temp, &[], &[]);
+        assert!(!changed.iter().any(|p| p.starts_with(".git")),
+            "should exclude .git paths, got {:?}", changed);
+        assert!(!changed.iter().any(|p| p.starts_with(".demeteo")),
+            "should exclude .demeteo paths, got {:?}", changed);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_commit_worktree_changes() {
+        let temp = temp_git_repo("commit_worktree");
+        let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+        let machine = "local";
+
+        exec.write_file(machine, &format!("{}/src.rs", temp), "fn a() {}\n").unwrap();
+        exec.run_command(machine, &format!(
+            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m base",
+            shell_esc(&temp), shell_esc(&temp),
+        )).unwrap();
+
+        // Modify a tracked file and add an untracked one — both should
+        // be committed by commit_worktree_changes.
+        exec.write_file(machine, &format!("{}/src.rs", temp), "fn b() {}\n").unwrap();
+        exec.write_file(machine, &format!("{}/new.md", temp), "# Added\n").unwrap();
+
+        let sha = commit_worktree_changes(&exec, machine, &temp, "worker: subtask-1").unwrap();
+        assert!(!sha.is_empty());
+
+        // Verify the commit exists and the tree changed.
+        let log = exec.run_command(machine, &format!(
+            "git -C {} log --oneline -1", shell_esc(&temp))).unwrap();
+        assert!(log.contains("worker: subtask-1"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_compute_git_diff() {
+        let temp = temp_git_repo("compute_diff");
+        let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+        let machine = "local";
+
+        exec.write_file(machine, &format!("{}/src.rs", temp), "fn init() {}\n").unwrap();
+        exec.run_command(machine, &format!(
+            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m base",
+            shell_esc(&temp), shell_esc(&temp),
+        )).unwrap();
+
+        let base_sha = exec.run_command(machine, &format!(
+            "git -C {} rev-parse HEAD", shell_esc(&temp))).unwrap().trim().to_string();
+
+        // Modify the file but don't commit.
+        exec.write_file(machine, &format!("{}/src.rs", temp), "fn new() {}\n").unwrap();
+
+        // Diff against the initial commit.
+        let diff = compute_git_diff(&exec, machine, &temp, &base_sha);
+        assert!(!diff.is_empty());
+        assert!(diff.contains("fn init()"));
+        assert!(diff.contains("fn new()"));
+
+        // Diff against HEAD — should still show uncommitted changes.
+        let diff_head = compute_git_diff(&exec, machine, &temp, "HEAD");
+        assert!(!diff_head.is_empty());
+
+        // Diff against a nonexistent ref — should return empty.
+        let diff_none = compute_git_diff(&exec, machine, &temp, "no-such-ref");
+        assert!(diff_none.is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────
+
+    fn temp_git_repo(label: &str) -> String {
+        let d = std::env::temp_dir().join(format!(
+            "demeteo_test_{}_{}",
+            label,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+        let _ = exec.run_command("local", &format!(
+            "git init -b main {}", shell_esc(&d.to_string_lossy()),
+        ));
+        d.to_string_lossy().to_string()
+    }
+
+    fn shell_esc(s: &str) -> String {
+        crate::paths::shell_escape_posix(s)
     }
 }

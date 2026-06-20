@@ -179,7 +179,23 @@ export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
       style={{ maxHeight }}
     >
       {viewType === 'markdown' ? (
-        <div className="flex-1 overflow-y-auto pr-2 space-y-1 font-sans">
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-2 shrink-0">
+            <span className="flex items-center gap-2 truncate">
+              <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
+                {artifactPath ? artifactPath.split('/').pop() : ''}
+              </span>
+              <span className="text-slate-600">·</span>
+              <span>Markdown</span>
+            </span>
+            <button
+              onClick={() => navigator.clipboard.writeText(content)}
+              className="hover:text-white transition duration-150 shrink-0"
+            >
+              Copy Complete Output
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto pr-2 space-y-1 font-sans">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
@@ -331,14 +347,21 @@ export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
           >
             {content}
           </ReactMarkdown>
+          </div>
         </div>
       ) : (
         <div className="flex-1 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
           <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider">
-            <span>{viewType === 'diff' ? 'Unified Diff' : `${language} Code`}</span>
-            <button 
+            <span className="flex items-center gap-2 truncate">
+              <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
+                {artifactPath ? artifactPath.split('/').pop() : ''}
+              </span>
+              <span className="text-slate-600">·</span>
+              <span>{viewType === 'diff' ? 'Unified Diff' : `${language} Code`}</span>
+            </span>
+            <button
               onClick={() => navigator.clipboard.writeText(content)}
-              className="hover:text-white transition duration-150"
+              className="hover:text-white transition duration-150 shrink-0"
             >
               Copy Complete Output
             </button>

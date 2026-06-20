@@ -32,7 +32,11 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
-use crate::adapters::step_executor::artifacts::{inject_artifact_contract, resolve_attached_artifacts, resolve_declared_artifacts};
+use crate::adapters::step_executor::artifacts::{
+    commit_worktree_changes, compute_git_diff, inject_artifact_contract,
+    read_worktree_file, resolve_attached_artifacts, resolve_declared_artifacts,
+    WorktreeSnapshot,
+};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::adapters::step_executor::steps::agent::format_agent_error_message;
@@ -412,6 +416,18 @@ impl ExecutionDriver {
                 }
             };
 
+            // Snapshot the subtask worktree's dirty state BEFORE the
+            // worker runs. The worktree is fresh (just branched off
+            // the feature branch), so this is empty in the common
+            // case — but the snapshot makes the detector robust to
+            // any files that were left dirty by previous failed
+            // attempts at the same subtask id.
+            let subtask_snapshot = WorktreeSnapshot::capture(
+                &*self.exec,
+                &machine_str,
+                &wt_path,
+            );
+
             let other_files: Vec<String> = subtasks
                 .iter()
                 .enumerate()
@@ -648,6 +664,66 @@ let mut stream = session.prompt(&sub_prompt);
                     if is_legacy {
                         subtask_artifacts.push(format!("### {}\n\n{}", sub.title, legacy_sub_content));
                     } else {
+                        // Detect the worker's actual file writes via
+                        // the worktree-delta snapshot. CLI agents
+                        // (opencode, hermes) don't emit
+                        // `ArtifactProduced` events, so without this
+                        // step the parallel implement step would
+                        // produce no artifacts at all.
+                        let always: Vec<&str> = decls
+                            .iter()
+                            .filter_map(|d| match &d.capture {
+                                crate::domain::artifact::ArtifactCapture::LastWriteTo { path } => {
+                                    Some(path.as_str())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let changed = subtask_snapshot.delta(
+                            &*self.exec,
+                            &machine_str,
+                            &wt_path,
+                            &always,
+                            &[],
+                        );
+                        for rel_path in changed {
+                            let name = std::path::Path::new(&rel_path)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("artifact")
+                                .to_string();
+                            if let Some(content) = read_worktree_file(
+                                &*self.exec,
+                                &machine_str,
+                                &wt_path,
+                                &rel_path,
+                            ) {
+                                produced_artifacts
+                                    .push(Artifact::tool_write(name, rel_path, content));
+                            }
+                        }
+
+                        // Commit the worker's writes so the upcoming
+                        // `merge_subtask` has a non-empty tip to
+                        // bring across. Without this commit, the
+                        // merge is a no-op and the feature branch
+                        // never picks up the agent's work.
+                        //
+                        // If there is nothing to commit (no files
+                        // changed) the command fails harmlessly with
+                        // "nothing to commit" — that's expected for
+                        // a no-op worker and we ignore the error.
+                        let _ = commit_worktree_changes(
+                            &*self.exec,
+                            &machine_str,
+                            &wt_path,
+                            &format!(
+                                "feat({}): {}",
+                                self.f_id.as_str(),
+                                sub.title,
+                            ),
+                        );
+
                         // Resolve declared artifacts for this subtask's
                         // produced artifacts and collect the refs.
                         let refs = resolve_declared_artifacts(
@@ -768,8 +844,41 @@ let mut stream = session.prompt(&sub_prompt);
 
         // Write parallel step artifact summary
         let (artifact_path, artifact_paths) = if !is_legacy {
-            let primary = all_artifact_refs.first().cloned();
-            (primary, all_artifact_refs)
+            // Synthesise a single unified code-diff against the
+            // feature branch's parent and put it FIRST in the
+            // artifact list. The user opens an implement step
+            // expecting to see "what changed", not a single file.
+            // Per-step per-file artifacts follow.
+            let diff_ref = self.branch_name.clone();
+            let diff_body = compute_git_diff(
+                &*self.exec,
+                &machine_str,
+                &self.target_dir,
+                &diff_ref,
+            );
+            let mut refs: Vec<String> = Vec::new();
+            if !diff_body.trim().is_empty() {
+                let diff_artifact = Artifact {
+                    name: "code-diff".into(),
+                    mime: "text/x-diff".into(),
+                    content: diff_body,
+                    source: crate::domain::artifact::ArtifactSource::Diff {
+                        base: diff_ref,
+                        head: "WORKTREE".into(),
+                        path_filter: None,
+                    },
+                };
+                if let Ok(reference) = self.artifacts.put(
+                    &self.f_id_str,
+                    &step_exec.step_id.0,
+                    &diff_artifact,
+                ) {
+                    refs.push(reference);
+                }
+            }
+            refs.extend(all_artifact_refs);
+            let primary = refs.first().cloned();
+            (primary, refs)
         } else {
             let mut art_path = self.app_local_data_dir.join("artifacts").join(&self.f_id_str);
             let _ = std::fs::create_dir_all(&art_path);
