@@ -4,16 +4,18 @@ use crate::adapters::agent::registry::AgentRegistry;
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::DagStepExecutor;
 use crate::domain::action::AgentAction;
-use crate::domain::ids::{FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId};
+use crate::domain::ids::{
+    FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId,
+};
 use crate::domain::intercept::ExecutionResult;
 use crate::domain::models::{Feature, GateDecision, StepExecution};
+use crate::paths;
 use crate::ports::agent_execution::{ActionError, AgentExecutionPort, CommandOutcome};
 use crate::ports::db::{FeatureRepository, GateRepository, ProjectRepository};
 use crate::ports::execution::{ExecutionPort, InteractiveHandle};
-use crate::sftp::SftpEntry;
 use crate::ports::notification::{DomainEvent, NotificationPort};
 use crate::ports::step_executor::{GatePresenter, StepExecutor};
-use crate::paths;
+use crate::sftp::SftpEntry;
 
 struct FakeNotif;
 impl NotificationPort for FakeNotif {
@@ -87,7 +89,14 @@ impl ExecutionPort for FakeExec {
     fn resolve_home(&self, _: &str) -> Result<String, String> {
         Ok("/tmp".to_string())
     }
-    fn spawn_interactive(&self, _: &str, _: &str, _: &[String], _: &str, _: &std::collections::HashMap<String, String>) -> Result<Box<dyn InteractiveHandle>, String> {
+    fn spawn_interactive(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[String],
+        _: &str,
+        _: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn InteractiveHandle>, String> {
         Err("stub".to_string())
     }
 }
@@ -108,8 +117,9 @@ async fn test_executor_instantiation_and_cancel() {
     let notif = Arc::new(FakeNotif);
     let agent_exec = Arc::new(FakeAgentExec);
     let exec = Arc::new(FakeExec);
-    let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> =
-        Arc::new(crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()));
+    let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
+        crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
+    );
 
     let executor = DagStepExecutor::new(
         db.clone(),
@@ -148,8 +158,9 @@ async fn test_executor_gate_decide() {
     let notif = Arc::new(FakeNotif);
     let agent_exec = Arc::new(FakeAgentExec);
     let exec = Arc::new(FakeExec);
-    let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> =
-        Arc::new(crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()));
+    let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
+        crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
+    );
 
     let executor = DagStepExecutor::new(
         db.clone(),

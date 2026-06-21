@@ -13,8 +13,8 @@ mod tests {
     use super::super::super::SqliteAdapter;
     use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId};
     use crate::domain::models::Project;
-    use crate::ports::db::ProjectRepository;
     use crate::domain::models::{Feature, StepExecution};
+    use crate::ports::db::ProjectRepository;
     use crate::ports::db::{FeaturePatch, FeatureRepository, StepExecutionPatch};
 
     fn setup() -> SqliteAdapter {
@@ -26,30 +26,36 @@ mod tests {
         let fid = FeatureId::from(id.to_string());
         let pid = ProjectId::from(project_id.to_string());
         // Ensure the project exists (features.project_id FK).
-        let _ = ProjectRepository::add(adapter, Project {
-            id: pid.clone(),
-            name: format!("project_{}", project_id),
-            compute_type: "local".to_string(),
-            remote_host: None,
-            status: "idle".to_string(),
-            nodes: 1,
-            spend: 0.0,
-            created_at: 1000,
-        });
-        FeatureRepository::add(adapter, Feature {
-            id: fid.clone(),
-            project_id: pid,
-            workflow_id: None,
-            title: "Test Feature".to_string(),
-            status: "running".to_string(),
-            total_cost: 0.0,
-            duration: "0s".to_string(),
-            created_at: 1000,
-            agent_kind: None,
-            model: None,
-            mr_url: None,
-            mr_state: Some("none".to_string()),
-        })
+        let _ = ProjectRepository::add(
+            adapter,
+            Project {
+                id: pid.clone(),
+                name: format!("project_{}", project_id),
+                compute_type: "local".to_string(),
+                remote_host: None,
+                status: "idle".to_string(),
+                nodes: 1,
+                spend: 0.0,
+                created_at: 1000,
+            },
+        );
+        FeatureRepository::add(
+            adapter,
+            Feature {
+                id: fid.clone(),
+                project_id: pid,
+                workflow_id: None,
+                title: "Test Feature".to_string(),
+                status: "running".to_string(),
+                total_cost: 0.0,
+                duration: "0s".to_string(),
+                created_at: 1000,
+                agent_kind: None,
+                model: None,
+                mr_url: None,
+                mr_state: Some("none".to_string()),
+            },
+        )
         .unwrap();
         fid
     }
@@ -262,10 +268,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(
-            read_artifact(&adapter, &sid),
-            Some("/new/path".to_string())
-        );
+        assert_eq!(read_artifact(&adapter, &sid), Some("/new/path".to_string()));
     }
 
     #[test]
@@ -318,10 +321,7 @@ mod tests {
             .step_update(
                 &sid,
                 &StepExecutionPatch {
-                    artifact_paths: Some(vec![
-                        "/a/x.md".to_string(),
-                        "/a/y.diff".to_string(),
-                    ]),
+                    artifact_paths: Some(vec!["/a/x.md".to_string(), "/a/y.diff".to_string()]),
                     ..Default::default()
                 },
             )
@@ -368,7 +368,10 @@ mod tests {
         // (Back-compat: legacy callers can keep writing the single
         // path and the new list stays empty.)
         assert!(read_artifact_paths(&adapter, &sid).is_empty());
-        assert_eq!(read_artifact(&adapter, &sid), Some("/legacy/only".to_string()));
+        assert_eq!(
+            read_artifact(&adapter, &sid),
+            Some("/legacy/only".to_string())
+        );
     }
 
     // ── FeaturePatch: total_cost/duration NOT NULL safety ────────────
@@ -599,8 +602,8 @@ impl FeatureRepository for SqliteAdapter {
 
     fn step_create(&self, s: StepExecution) -> Result<(), String> {
         let conn = self.conn.lock()?;
-        let artifact_paths_json = serde_json::to_string(&s.artifact_paths)
-            .map_err(|e| e.to_string())?;
+        let artifact_paths_json =
+            serde_json::to_string(&s.artifact_paths).map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO step_executions (id,feature_id,step_id,step_index,step_kind,status,cost_usd,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
@@ -626,8 +629,8 @@ impl FeatureRepository for SqliteAdapter {
         let mut iter = stmt
             .query_map(params![id.0], |row| {
                 let artifact_paths_json: String = row.get(9)?;
-                let artifact_paths: Vec<String> = serde_json::from_str(&artifact_paths_json)
-                    .unwrap_or_default();
+                let artifact_paths: Vec<String> =
+                    serde_json::from_str(&artifact_paths_json).unwrap_or_default();
                 Ok(StepExecution {
                     id: row.get(0)?,
                     feature_id: row.get(1)?,
@@ -761,8 +764,8 @@ impl FeatureRepository for SqliteAdapter {
         let iter = stmt
             .query_map(params![feature_id.0], |row| {
                 let artifact_paths_json: String = row.get(9)?;
-                let artifact_paths: Vec<String> = serde_json::from_str(&artifact_paths_json)
-                    .unwrap_or_default();
+                let artifact_paths: Vec<String> =
+                    serde_json::from_str(&artifact_paths_json).unwrap_or_default();
                 Ok(StepExecution {
                     id: row.get(0)?,
                     feature_id: row.get(1)?,

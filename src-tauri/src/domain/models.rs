@@ -85,12 +85,12 @@ pub struct Machine {
     pub username: String,
     pub auth_type: String, // 'key', 'password', 'agent', 'local'
     pub key_path: Option<String>,
-    pub agents: Option<String>,               // JSON-encoded array of {kind, enabled} records
-    pub auto_approved_rules: Option<String>,   // JSON-encoded array of auto-approved commands (regexes, legacy)
+    pub agents: Option<String>, // JSON-encoded array of {kind, enabled} records
+    pub auto_approved_rules: Option<String>, // JSON-encoded array of auto-approved commands (regexes, legacy)
     #[serde(default)]
-    pub use_login_shell: Option<bool>,         // null/false = no login shell; true = bash -l -c
+    pub use_login_shell: Option<bool>, // null/false = no login shell; true = bash -l -c
     #[serde(default)]
-    pub setup_commands: Option<String>,        // JSON array of shell commands run after clone
+    pub setup_commands: Option<String>, // JSON array of shell commands run after clone
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -271,7 +271,7 @@ pub struct WorktreeInfo {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RepoHealthStatus {
-    pub repo_path: String,     // logical path e.g. "org/repo"
+    pub repo_path: String, // logical path e.g. "org/repo"
     pub is_cloned: bool,
     pub head_branch: Option<String>,
     pub worktrees: Vec<WorktreeInfo>,

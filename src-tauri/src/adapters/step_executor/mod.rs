@@ -9,8 +9,8 @@ use crate::domain::models::GateDecision;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::{
-    AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
-    ProjectRepository, WorkflowRepository,
+    AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository, ProjectRepository,
+    WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
 use crate::ports::notification::NotificationPort;

@@ -61,7 +61,12 @@ pub fn resolve_local_binary_path(binary: &str) -> Option<String> {
     // doesn't source ~/.bashrc on macOS/Linux when invoked as "zsh -l".
     #[cfg(not(target_os = "windows"))]
     {
-        let shells = ["/bin/bash", "/usr/local/bin/bash", "/usr/bin/bash", "/bin/sh"];
+        let shells = [
+            "/bin/bash",
+            "/usr/local/bin/bash",
+            "/usr/bin/bash",
+            "/bin/sh",
+        ];
         for shell in shells {
             if std::path::Path::new(shell).exists() {
                 if let Ok(output) = std::process::Command::new(shell)

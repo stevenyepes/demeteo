@@ -42,11 +42,7 @@ pub trait ConflictResolver: Send + Sync {
     /// Emit a `GateRequired` event so the existing `GateView` pops
     /// up. The user will see a "Conflict in <file list>" card and
     /// pick Auto / Manual / Skip / Abort.
-    fn request_manual_resolution(
-        &self,
-        feature_id: &FeatureId,
-        report: &ConflictReport,
-    );
+    fn request_manual_resolution(&self, feature_id: &FeatureId, report: &ConflictReport);
 
     /// Hard cap on auto-agent attempts. Implementations should refuse
     /// to spawn more than this many resolution agents per conflict.

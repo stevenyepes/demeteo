@@ -1,9 +1,11 @@
 //! Hermes agent from Nous Research. Speaks CLI mode with `--format json`.
 
-use crate::adapters::agent::cli_runtime::{CliAgentRuntime, EventParser};
+use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::agent_event::{AgentEvent, StopReason};
+use crate::ports::agent_runtime::AgentContext;
 
-pub const HERMES_INSTALL: &str = "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
+pub const HERMES_INSTALL: &str =
+    "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
 
 fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
     let trimmed = line.trim();
@@ -12,33 +14,62 @@ fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
     }
     let v: serde_json::Value = serde_json::from_str(trimmed).ok()?;
 
-    if let Some(kind) = v.get("kind").or_else(|| v.get("type")).and_then(|v| v.as_str()) {
+    if let Some(kind) = v
+        .get("kind")
+        .or_else(|| v.get("type"))
+        .and_then(|v| v.as_str())
+    {
         match kind {
             "text" | "message" | "assistant" => {
-                let delta = v.get("delta")
+                let delta = v
+                    .get("delta")
                     .or_else(|| v.get("content"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if delta.is_empty() { None } else { Some(AgentEvent::Text { delta }) }
+                if delta.is_empty() {
+                    None
+                } else {
+                    Some(AgentEvent::Text { delta })
+                }
             }
             "tool_call" | "tool_use" => {
-                let tool = v.get("name").or_else(|| v.get("tool")).and_then(|v| v.as_str()).unwrap_or("unknown");
-                let input = serde_json::to_string(&v.get("input").unwrap_or(&serde_json::Value::Null)).ok()?;
-                Some(AgentEvent::Text { delta: format!("[tool: {}] {}", tool, input) })
+                let tool = v
+                    .get("name")
+                    .or_else(|| v.get("tool"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let input =
+                    serde_json::to_string(&v.get("input").unwrap_or(&serde_json::Value::Null))
+                        .ok()?;
+                Some(AgentEvent::Text {
+                    delta: format!("[tool: {}] {}", tool, input),
+                })
             }
             "usage" | "usage_update" => {
                 let input_tokens = v.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 let output_tokens = v.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 let cost_usd = v.get("costUsd").and_then(|v| v.as_f64());
-                Some(AgentEvent::Usage { input_tokens, output_tokens, cost_usd })
+                Some(AgentEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                })
             }
-            "end_turn" | "message_stop" | "done" => {
-                Some(AgentEvent::TurnComplete { stop_reason: StopReason::EndOfTurn })
-            }
+            "end_turn" | "message_stop" | "done" => Some(AgentEvent::TurnComplete {
+                stop_reason: StopReason::EndOfTurn,
+            }),
             "error" => {
-                let message = v.get("message").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                Some(AgentEvent::Error { code: "cli_error".to_string(), message, recoverable: false })
+                let message = v
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                Some(AgentEvent::Error {
+                    code: "cli_error".to_string(),
+                    message,
+                    recoverable: false,
+                })
             }
             _ => None,
         }
@@ -46,19 +77,34 @@ fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
         if let Some(discriminator) = update.get("sessionUpdate").and_then(|v| v.as_str()) {
             match discriminator {
                 "agent_message_chunk" => {
-                    let delta = update.get("content")
+                    let delta = update
+                        .get("content")
                         .and_then(|c| c.get("text"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    if delta.is_empty() { None } else { Some(AgentEvent::Text { delta }) }
+                    if delta.is_empty() {
+                        None
+                    } else {
+                        Some(AgentEvent::Text { delta })
+                    }
                 }
                 "agent_thought_chunk" => None,
                 "usage_update" => {
-                    let input_tokens = update.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let output_tokens = update.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let input_tokens = update
+                        .get("inputTokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let output_tokens = update
+                        .get("outputTokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                     let cost_usd = update.get("costUsd").and_then(|v| v.as_f64());
-                    Some(AgentEvent::Usage { input_tokens, output_tokens, cost_usd })
+                    Some(AgentEvent::Usage {
+                        input_tokens,
+                        output_tokens,
+                        cost_usd,
+                    })
                 }
                 _ => None,
             }
@@ -70,12 +116,26 @@ fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
     }
 }
 
-pub fn runtime() -> CliAgentRuntime {
-    CliAgentRuntime {
+/// Construct command-line arguments for Hermes CLI.
+fn build_hermes_args(ctx: &AgentContext, _captured_session_id: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "run".to_string(),
+        "--format".to_string(),
+        "json".to_string(),
+    ];
+    if let Some(ref m) = ctx.model {
+        args.push("--model".to_string());
+        args.push(m.clone());
+    }
+    args
+}
+
+pub fn runtime() -> UnifiedCliRuntime {
+    UnifiedCliRuntime {
         kind_str: "hermes",
         binary: "hermes",
-        extra_args: &["run", "--format", "json"],
         install_cmd: HERMES_INSTALL,
         parse_event: parse_hermes_event as EventParser,
+        build_args: build_hermes_args,
     }
 }

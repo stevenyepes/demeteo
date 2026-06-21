@@ -12,7 +12,13 @@ impl GateRepository for SqliteAdapter {
         conn.execute(
             "INSERT INTO gate_decisions (id,step_execution_id,decision,feedback,created_at)
              VALUES (?1,?2,?3,?4,?5)",
-            params![g.id, g.step_execution_id, g.decision, g.feedback, g.created_at],
+            params![
+                g.id,
+                g.step_execution_id,
+                g.decision,
+                g.feedback,
+                g.created_at
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -62,10 +68,7 @@ impl GateRepository for SqliteAdapter {
         }
     }
 
-    fn reset_for_step_execution(
-        &self,
-        step_execution_id: &StepExecutionId,
-    ) -> Result<(), String> {
+    fn reset_for_step_execution(&self, step_execution_id: &StepExecutionId) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
             "DELETE FROM gate_decisions WHERE step_execution_id=?1",

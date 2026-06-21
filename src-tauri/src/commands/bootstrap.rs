@@ -1,10 +1,10 @@
-use tauri::{State, Manager};
-use crate::state::AppContext;
+use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{ProjectSettings, WorktreeStrategy};
-use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::paths;
 use crate::ports::db::MachineRepository;
+use crate::state::AppContext;
+use tauri::{Manager, State};
 
 fn get_repo_name(repo_path: &str) -> String {
     paths::repo_name_from_path(repo_path)
@@ -19,11 +19,14 @@ pub async fn bootstrap_project(
     // 1. Resolve project
     let projects = ctx.projects.get_projects()?;
     let project_id_typed = ProjectId::from(project_id.clone());
-    let project = projects.into_iter().find(|p| p.id == project_id_typed)
+    let project = projects
+        .into_iter()
+        .find(|p| p.id == project_id_typed)
         .ok_or_else(|| format!("Project not found: {}", project_id))?;
 
     // Update status to bootstrapping
-    ctx.projects.update_status(&project_id_typed, "bootstrapping")?;
+    ctx.projects
+        .update_status(&project_id_typed, "bootstrapping")?;
 
     match do_bootstrap_inner(&app, &ctx, &project_id, &project).await {
         Ok(strategy) => Ok(strategy),
@@ -93,7 +96,10 @@ async fn do_bootstrap_inner(
                     if let Ok(file_type) = entry.file_type() {
                         if file_type.is_dir() {
                             let dir_name = entry.file_name().to_string_lossy().to_string();
-                            if !repos.iter().any(|r| get_repo_name(&r.repo_path) == dir_name) {
+                            if !repos
+                                .iter()
+                                .any(|r| get_repo_name(&r.repo_path) == dir_name)
+                            {
                                 let _ = std::fs::remove_dir_all(entry.path());
                             }
                         }
@@ -102,7 +108,8 @@ async fn do_bootstrap_inner(
             }
         }
     } else {
-        let allowed_names: Vec<String> = repos.iter().map(|r| get_repo_name(&r.repo_path)).collect();
+        let allowed_names: Vec<String> =
+            repos.iter().map(|r| get_repo_name(&r.repo_path)).collect();
         let allowed_names_str = allowed_names.join(" ");
         let repos_parent_str = repos_parent_dir.to_string_lossy().to_string();
         let cleanup_cmd = format!(
@@ -146,7 +153,10 @@ async fn do_bootstrap_inner(
             .exec
             .run_command(
                 machine_str,
-                &format!("git -C {} rev-parse --is-inside-work-tree", paths::shell_escape_posix(&target_dir)),
+                &format!(
+                    "git -C {} rev-parse --is-inside-work-tree",
+                    paths::shell_escape_posix(&target_dir)
+                ),
             )
             .is_ok();
 
@@ -167,7 +177,10 @@ async fn do_bootstrap_inner(
                 .exec
                 .run_command(
                     machine_str,
-                    &format!("git -C {} rev-parse --is-inside-work-tree", paths::shell_escape_posix(&target_dir)),
+                    &format!(
+                        "git -C {} rev-parse --is-inside-work-tree",
+                        paths::shell_escape_posix(&target_dir)
+                    ),
                 )
                 .is_ok();
             if !verified {

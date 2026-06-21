@@ -59,11 +59,7 @@ impl ConflictResolver for CascadeConflictResolver {
         Err("auto-agent conflict resolution not yet implemented; use manual".to_string())
     }
 
-    fn request_manual_resolution(
-        &self,
-        feature_id: &FeatureId,
-        report: &ConflictReport,
-    ) {
+    fn request_manual_resolution(&self, feature_id: &FeatureId, report: &ConflictReport) {
         // Encode the conflict details as a one-line summary the
         // existing `GateView` can render. The full structured report
         // is also persisted on the `subtask_merges` row by the

@@ -1,9 +1,9 @@
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{ProjectSettings, StepConfig, WorktreeStrategy};
 use crate::domain::prompt_context::PromptContext;
+use crate::paths;
 use crate::ports::db::ProjectRepository;
 use crate::ports::execution::ExecutionPort;
-use crate::paths;
 
 /// The (mostly) sync setup phase that runs before the async execution loop.
 /// Returns all the pre-computed values the async loop needs.
@@ -43,7 +43,9 @@ pub(crate) fn resolve_project_info(
         .ok_or_else(|| format!("Project not found: {}", project_id.0))?;
 
     let repos = projects.get_repositories_for(project_id)?;
-    let repo = repos.first().ok_or("No repository associated with this project.")?;
+    let repo = repos
+        .first()
+        .ok_or("No repository associated with this project.")?;
 
     Ok(ProjectInfo {
         compute_type: project.compute_type,

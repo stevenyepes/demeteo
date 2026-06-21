@@ -8,7 +8,6 @@ pub mod mr_publisher;
 pub mod pricing;
 pub mod router;
 pub mod ssh;
+pub mod step_executor;
 pub mod tauri_ui;
 pub mod worktree;
-pub mod step_executor;
-

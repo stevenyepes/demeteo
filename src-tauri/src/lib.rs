@@ -1,25 +1,25 @@
+pub mod adapters;
+pub mod commands;
 pub mod credential_cache;
 pub mod db;
-pub mod terminal;
-pub mod forward;
-pub mod sftp;
 pub mod domain;
-pub mod ports;
-pub mod adapters;
-pub mod state;
-pub mod ssh_util;
-pub mod commands;
+pub mod forward;
 pub mod paths;
+pub mod ports;
+pub mod sftp;
+pub mod ssh_util;
+pub mod state;
+pub mod terminal;
 
-use state::AppContext;
-use terminal::SessionState;
 use forward::ForwardState;
 use ports::agent_execution::AgentExecutionPort;
 use ports::agent_runtime::AgentRuntime;
 use ports::execution::ExecutionPort;
 use ports::notification::NotificationPort;
-use tauri::Manager;
+use state::AppContext;
 use std::sync::Arc;
+use tauri::Manager;
+use terminal::SessionState;
 
 fn enrich_env_path() {
     // Enrich local PATH so coding agents installed in homebrew, cargo, npm-global, etc.
@@ -29,7 +29,7 @@ fn enrich_env_path() {
         if let Ok(current_path) = std::env::var("PATH") {
             let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(&current_path).collect();
             let home = std::env::var("HOME").unwrap_or_default();
-            
+
             let mut additional_paths = vec![
                 std::path::PathBuf::from("/opt/homebrew/bin"),
                 std::path::PathBuf::from("/usr/local/bin"),
@@ -38,16 +38,22 @@ fn enrich_env_path() {
                 std::path::PathBuf::from("/usr/sbin"),
                 std::path::PathBuf::from("/sbin"),
             ];
-            
+
             if !home.is_empty() {
                 additional_paths.push(std::path::PathBuf::from(format!("{}/.cargo/bin", home)));
                 additional_paths.push(std::path::PathBuf::from(format!("{}/.local/bin", home)));
-                additional_paths.push(std::path::PathBuf::from(format!("{}/.npm-global/bin", home)));
+                additional_paths.push(std::path::PathBuf::from(format!(
+                    "{}/.npm-global/bin",
+                    home
+                )));
                 additional_paths.push(std::path::PathBuf::from(format!("{}/.opencode/bin", home)));
                 // Also common nvm node versions paths
-                additional_paths.push(std::path::PathBuf::from(format!("{}/.nvm/versions/node", home)));
+                additional_paths.push(std::path::PathBuf::from(format!(
+                    "{}/.nvm/versions/node",
+                    home
+                )));
             }
-            
+
             let mut changed = false;
             for p in additional_paths {
                 if p.exists() && !paths.contains(&p) {
@@ -55,7 +61,7 @@ fn enrich_env_path() {
                     changed = true;
                 }
             }
-            
+
             if changed {
                 if let Ok(new_path) = std::env::join_paths(paths) {
                     std::env::set_var("PATH", new_path);
@@ -99,53 +105,53 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let app_data_dir = app.path().app_local_data_dir().expect("Failed to get local data dir");
+            let app_data_dir = app
+                .path()
+                .app_local_data_dir()
+                .expect("Failed to get local data dir");
             let conn = db::init_db(app_data_dir.clone()).expect("Failed to initialize database");
 
-            let db_adapter = Arc::new(adapters::database::SqliteAdapter::new(conn).expect("Failed to initialize database adapter"));
+            let db_adapter = Arc::new(
+                adapters::database::SqliteAdapter::new(conn)
+                    .expect("Failed to initialize database adapter"),
+            );
             let machines_repo: Arc<dyn crate::ports::db::MachineRepository> = db_adapter.clone();
             let projects_repo: Arc<dyn crate::ports::db::ProjectRepository> = db_adapter.clone();
             let features_repo: Arc<dyn crate::ports::db::FeatureRepository> = db_adapter.clone();
             let workflows_repo: Arc<dyn crate::ports::db::WorkflowRepository> = db_adapter.clone();
             let gates_repo: Arc<dyn crate::ports::db::GateRepository> = db_adapter.clone();
-            let app_settings_repo: Arc<dyn crate::ports::db::AppSettingsRepository> = db_adapter.clone();
+            let app_settings_repo: Arc<dyn crate::ports::db::AppSettingsRepository> =
+                db_adapter.clone();
             let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter;
 
             commands::workflows::seed_starter_workflows(&workflows_repo);
-            let ssh_adapter: Arc<dyn ExecutionPort> =
-                Arc::new(adapters::ssh::client::SshClientAdapter::new(machines_repo.clone()));
+            let ssh_adapter: Arc<dyn ExecutionPort> = Arc::new(
+                adapters::ssh::client::SshClientAdapter::new(machines_repo.clone()),
+            );
             let local_adapter: Arc<dyn ExecutionPort> =
                 Arc::new(adapters::local::execution::LocalSubprocessAdapter::new());
-            let exec_inner: Arc<dyn ExecutionPort> = Arc::new(
-                adapters::router::RouterExecutionPort::new(
-                     machines_repo.clone(),
-                     ssh_adapter,
-                     local_adapter,
-                ),
-            );
+            let exec_inner: Arc<dyn ExecutionPort> =
+                Arc::new(adapters::router::RouterExecutionPort::new(
+                    machines_repo.clone(),
+                    ssh_adapter,
+                    local_adapter,
+                ));
             let notif_adapter: Arc<dyn NotificationPort> = Arc::new(
-                adapters::tauri_ui::notification::TauriNotificationAdapter::new(app.handle().clone()),
+                adapters::tauri_ui::notification::TauriNotificationAdapter::new(
+                    app.handle().clone(),
+                ),
             );
             let agent_exec: Arc<dyn AgentExecutionPort> = Arc::new(
-                adapters::agent::direct_execution::DirectExecutionPort::new(
-                    exec_inner.clone(),
-                ),
+                adapters::agent::direct_execution::DirectExecutionPort::new(exec_inner.clone()),
             );
 
-            let agent_registry = Arc::new(
-                adapters::agent::registry::AgentRegistry::new(vec![
-                    Arc::new(adapters::agent::opencode::runtime())
-                        as Arc<dyn AgentRuntime>,
-                    Arc::new(adapters::agent::hermes::runtime())
-                        as Arc<dyn AgentRuntime>,
-                    Arc::new(adapters::agent::claude_code::runtime())
-                        as Arc<dyn AgentRuntime>,
-                    Arc::new(adapters::agent::antigravity::runtime())
-                        as Arc<dyn AgentRuntime>,
-                    Arc::new(adapters::agent::noop::NoopRuntime)
-                        as Arc<dyn AgentRuntime>,
-                ]),
-            );
+            let agent_registry = Arc::new(adapters::agent::registry::AgentRegistry::new(vec![
+                Arc::new(adapters::agent::opencode::runtime()) as Arc<dyn AgentRuntime>,
+                Arc::new(adapters::agent::hermes::runtime()) as Arc<dyn AgentRuntime>,
+                Arc::new(adapters::agent::claude_code::runtime()) as Arc<dyn AgentRuntime>,
+                Arc::new(adapters::agent::antigravity::runtime()) as Arc<dyn AgentRuntime>,
+                Arc::new(adapters::agent::noop::NoopRuntime) as Arc<dyn AgentRuntime>,
+            ]));
             let pricing: Arc<dyn ports::pricing::PricingTable> =
                 Arc::new(adapters::pricing::HardcodedPricingTable::new());
             let mr_publisher: Arc<dyn ports::mr_publisher::MrPublisher> =
@@ -159,10 +165,9 @@ pub fn run() {
             // circular dependency (the executor contains sub-port Arcs;
             // AppContext contains the executor's Arc).
             let step_executor_adapter = {
-                let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> =
-                    Arc::new(adapters::artifact_store::fs::FsArtifactStore::new(
-                        app_data_dir.clone(),
-                    ));
+                let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> = Arc::new(
+                    adapters::artifact_store::fs::FsArtifactStore::new(app_data_dir.clone()),
+                );
                 let exec = Arc::new(adapters::step_executor::DagStepExecutor::new(
                     machines_repo.clone(),
                     projects_repo.clone(),

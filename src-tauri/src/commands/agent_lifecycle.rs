@@ -1,10 +1,10 @@
-use std::sync::Arc;
-use tauri::{Emitter, State};
-use crate::state::{
-    AppContext, ThreadStatusChanged, EVENT_THREAD_STATUS_CHANGED, EVENT_AGENT_EVENT,
-};
 use crate::domain::ids::ThreadId;
 use crate::ports::db::ThreadPatch;
+use crate::state::{
+    AppContext, ThreadStatusChanged, EVENT_AGENT_EVENT, EVENT_THREAD_STATUS_CHANGED,
+};
+use std::sync::Arc;
+use tauri::{Emitter, State};
 
 /// Build the `AgentContext` for a (thread, agent_kind) pair. Looks up
 /// the machine's auth type (to pick local vs SSH transport) and the
@@ -14,7 +14,9 @@ fn build_agent_context(
     thread_id: &str,
     agent_kind: &str,
 ) -> Result<crate::ports::agent_runtime::AgentContext, String> {
-    let threads = ctx.threads.get_thread_sessions_for_thread(&ThreadId::from(thread_id.to_string()))?;
+    let threads = ctx
+        .threads
+        .get_thread_sessions_for_thread(&ThreadId::from(thread_id.to_string()))?;
     let thread = threads
         .into_iter()
         .next()
@@ -56,12 +58,20 @@ async fn apply_thread_model(
     session: &Arc<dyn crate::ports::agent_runtime::AgentSession>,
     thread_id: &str,
 ) {
-    if let Ok(threads) = threads_repo.get_thread_sessions_for_thread(&ThreadId::from(thread_id.to_string())) {
+    if let Ok(threads) =
+        threads_repo.get_thread_sessions_for_thread(&ThreadId::from(thread_id.to_string()))
+    {
         if let Some(thread) = threads.into_iter().next() {
             if let Some(ref model) = thread.model {
                 match session.set_config_option("model", model) {
-                    Ok(_) => println!("[apply_thread_model] set_config_option model to '{}' succeeded", model),
-                    Err(e) => eprintln!("[apply_thread_model] set_config_option model to '{}' failed: {}", model, e),
+                    Ok(_) => println!(
+                        "[apply_thread_model] set_config_option model to '{}' succeeded",
+                        model
+                    ),
+                    Err(e) => eprintln!(
+                        "[apply_thread_model] set_config_option model to '{}' failed: {}",
+                        model, e
+                    ),
                 }
             }
         }
@@ -102,7 +112,9 @@ pub async fn agent_install_and_start(
     thread_id: String,
     agent_kind: String,
 ) -> Result<String, String> {
-    let threads = ctx.threads.get_thread_sessions_for_thread(&ThreadId::from(thread_id.clone()))?;
+    let threads = ctx
+        .threads
+        .get_thread_sessions_for_thread(&ThreadId::from(thread_id.clone()))?;
     let thread = threads
         .into_iter()
         .next()
@@ -164,27 +176,13 @@ pub async fn agent_prompt(
         let mut last_emit = std::time::Instant::now();
 
         loop {
-            let next_event = tokio::time::timeout(std::time::Duration::from_millis(30), stream.next()).await;
+            let next_event =
+                tokio::time::timeout(std::time::Duration::from_millis(30), stream.next()).await;
             match next_event {
-                Ok(Some(ev)) => {
-                    match ev {
-                        crate::domain::agent_event::AgentEvent::Text { delta } => {
-                            buffered_text.push_str(&delta);
-                            if last_emit.elapsed() >= std::time::Duration::from_millis(50) {
-                                if !buffered_text.is_empty() {
-                                    let payload = serde_json::json!({
-                                        "thread_id": tid,
-                                        "event": crate::domain::agent_event::AgentEvent::Text { delta: std::mem::take(&mut buffered_text) },
-                                    });
-                                    if let Err(e) = app_clone.emit(EVENT_AGENT_EVENT, payload) {
-                                        eprintln!("[agent_prompt] emit failed: {}", e);
-                                        break;
-                                    }
-                                    last_emit = std::time::Instant::now();
-                                }
-                            }
-                        }
-                        other_event => {
+                Ok(Some(ev)) => match ev {
+                    crate::domain::agent_event::AgentEvent::Text { delta } => {
+                        buffered_text.push_str(&delta);
+                        if last_emit.elapsed() >= std::time::Duration::from_millis(50) {
                             if !buffered_text.is_empty() {
                                 let payload = serde_json::json!({
                                     "thread_id": tid,
@@ -194,25 +192,40 @@ pub async fn agent_prompt(
                                     eprintln!("[agent_prompt] emit failed: {}", e);
                                     break;
                                 }
+                                last_emit = std::time::Instant::now();
                             }
-
-                            if let crate::domain::agent_event::AgentEvent::Error { message, .. } = &other_event {
-                                final_status = "error".to_string();
-                                final_reason = Some(message.clone());
-                            }
-
+                        }
+                    }
+                    other_event => {
+                        if !buffered_text.is_empty() {
                             let payload = serde_json::json!({
                                 "thread_id": tid,
-                                "event": other_event,
+                                "event": crate::domain::agent_event::AgentEvent::Text { delta: std::mem::take(&mut buffered_text) },
                             });
                             if let Err(e) = app_clone.emit(EVENT_AGENT_EVENT, payload) {
                                 eprintln!("[agent_prompt] emit failed: {}", e);
                                 break;
                             }
-                            last_emit = std::time::Instant::now();
                         }
+
+                        if let crate::domain::agent_event::AgentEvent::Error { message, .. } =
+                            &other_event
+                        {
+                            final_status = "error".to_string();
+                            final_reason = Some(message.clone());
+                        }
+
+                        let payload = serde_json::json!({
+                            "thread_id": tid,
+                            "event": other_event,
+                        });
+                        if let Err(e) = app_clone.emit(EVENT_AGENT_EVENT, payload) {
+                            eprintln!("[agent_prompt] emit failed: {}", e);
+                            break;
+                        }
+                        last_emit = std::time::Instant::now();
                     }
-                }
+                },
                 Ok(None) => {
                     if !buffered_text.is_empty() {
                         let payload = serde_json::json!({
@@ -239,7 +252,13 @@ pub async fn agent_prompt(
             }
         }
 
-        if let Err(e) = db.update_thread(&ThreadId::from(tid.clone()), &ThreadPatch { status: Some(final_status.clone()), ..Default::default() }) {
+        if let Err(e) = db.update_thread(
+            &ThreadId::from(tid.clone()),
+            &ThreadPatch {
+                status: Some(final_status.clone()),
+                ..Default::default()
+            },
+        ) {
             eprintln!("[agent_prompt] failed to update thread status in DB: {}", e);
         }
 
@@ -256,10 +275,7 @@ pub async fn agent_prompt(
 }
 
 #[tauri::command]
-pub async fn agent_cancel(
-    ctx: State<'_, AppContext>,
-    thread_id: String,
-) -> Result<(), String> {
+pub async fn agent_cancel(ctx: State<'_, AppContext>, thread_id: String) -> Result<(), String> {
     if let Some(session) = ctx.registry.session_handle_any(&thread_id).await {
         session.cancel().map_err(|e| format!("cancel: {}", e))?;
     }
@@ -267,10 +283,7 @@ pub async fn agent_cancel(
 }
 
 #[tauri::command]
-pub async fn agent_restart(
-    ctx: State<'_, AppContext>,
-    thread_id: String,
-) -> Result<(), String> {
+pub async fn agent_restart(ctx: State<'_, AppContext>, thread_id: String) -> Result<(), String> {
     let registry = ctx.registry.clone();
     let db = ctx.threads.clone();
     let tid = thread_id.clone();
@@ -312,8 +325,14 @@ async fn resolve_session(
 
     if let Some(ref model) = thread.model {
         match session.set_config_option("model", model) {
-            Ok(_) => println!("[resolve_session] set_config_option model to '{}' succeeded", model),
-            Err(e) => eprintln!("[resolve_session] set_config_option model to '{}' failed: {}", model, e),
+            Ok(_) => println!(
+                "[resolve_session] set_config_option model to '{}' succeeded",
+                model
+            ),
+            Err(e) => eprintln!(
+                "[resolve_session] set_config_option model to '{}' failed: {}",
+                model, e
+            ),
         }
     }
 
@@ -351,7 +370,13 @@ pub async fn agent_set_config_option(
     // (e.g. a prompt is in-flight on the same transport), the model is
     // saved and will be re-applied on the next prompt via apply_thread_model.
     if config_id == "model" {
-        let _ = ctx.threads.update_thread(&ThreadId::from(thread_id.clone()), &ThreadPatch { model: Some(Some(value.clone())), ..Default::default() });
+        let _ = ctx.threads.update_thread(
+            &ThreadId::from(thread_id.clone()),
+            &ThreadPatch {
+                model: Some(Some(value.clone())),
+                ..Default::default()
+            },
+        );
     }
 
     let session = resolve_session(&ctx, &thread_id).await?;

@@ -66,7 +66,14 @@ impl WorkflowRepository for SqliteAdapter {
         conn.execute(
             "INSERT INTO workflows (id, name, description, is_starter, created_at, updated_at)
              VALUES (?1,?2,?3,?4,?5,?6)",
-            params![w.id, w.name, w.description, w.is_starter as i32, w.created_at, w.updated_at],
+            params![
+                w.id,
+                w.name,
+                w.description,
+                w.is_starter as i32,
+                w.created_at,
+                w.updated_at
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -111,7 +118,14 @@ impl WorkflowRepository for SqliteAdapter {
         conn.execute(
             "INSERT INTO workflow_versions (id,workflow_id,version,steps_json,note,created_at)
              VALUES (?1,?2,?3,?4,?5,?6)",
-            params![v.id, v.workflow_id, v.version, v.steps_json, v.note, v.created_at],
+            params![
+                v.id,
+                v.workflow_id,
+                v.version,
+                v.steps_json,
+                v.note,
+                v.created_at
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())

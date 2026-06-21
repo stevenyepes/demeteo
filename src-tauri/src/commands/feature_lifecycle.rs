@@ -97,11 +97,9 @@ pub async fn feature_cleanup(
         "auto_delete" => {
             let merged = mr_state.as_deref() == Some("merged");
             if !merged && !force.unwrap_or(false) {
-                return Err(
-                    "Auto-delete requires the MR to be merged. \
+                return Err("Auto-delete requires the MR to be merged. \
                      Click 'Force delete' to override (not recommended)."
-                        .to_string(),
-                );
+                    .to_string());
             }
             // Resolve the primary repo dir so we can `git branch -D`.
             let machine = resolve_machine(&settings, &feature.project_id.0);
@@ -121,7 +119,8 @@ pub async fn feature_cleanup(
                 shell_escape(&repo_dir),
                 shell_escape(&branch)
             );
-            ctx.exec.run_command(&machine, &delete_cmd)
+            ctx.exec
+                .run_command(&machine, &delete_cmd)
                 .map_err(|e| format!("Failed to delete branch '{}': {}", branch, e))?;
 
             // Delete all subtask branches for this feature.
@@ -160,7 +159,10 @@ pub async fn feature_cleanup(
 /// Best-effort machine id for a project. We resolve via the
 /// project's compute_type + remote_host, mirroring the rest of
 /// the executor's path-resolution rules.
-fn resolve_machine(_settings: &crate::domain::models::ProjectSettings, _project_id: &str) -> String {
+fn resolve_machine(
+    _settings: &crate::domain::models::ProjectSettings,
+    _project_id: &str,
+) -> String {
     // The executor's git_ops helpers take Option<&str>, where None
     // means "local". For auto_delete we currently only support the
     // local branch delete (which is the dominant case for v1); the

@@ -65,8 +65,14 @@ impl SqliteAdapter {
                 .filter_map(|v| {
                     if let Some(s) = v.as_str() {
                         let kind = s.to_lowercase();
-                        if matches!(kind.as_str(), "opencode" | "hermes" | "claude-code" | "antigravity") {
-                            Some(AgentConfig { kind, enabled: true })
+                        if matches!(
+                            kind.as_str(),
+                            "opencode" | "hermes" | "claude-code" | "antigravity"
+                        ) {
+                            Some(AgentConfig {
+                                kind,
+                                enabled: true,
+                            })
                         } else {
                             None
                         }
@@ -76,7 +82,10 @@ impl SqliteAdapter {
                             .and_then(|k| k.as_str())
                             .unwrap_or("")
                             .to_lowercase();
-                        if !matches!(raw_kind.as_str(), "opencode" | "hermes" | "claude-code" | "antigravity") {
+                        if !matches!(
+                            raw_kind.as_str(),
+                            "opencode" | "hermes" | "claude-code" | "antigravity"
+                        ) {
                             return None;
                         }
                         Some(AgentConfig {

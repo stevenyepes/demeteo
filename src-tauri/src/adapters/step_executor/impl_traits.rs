@@ -7,13 +7,11 @@ use crate::adapters::step_executor::setup::{
 };
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::{FeatureId, GateDecisionId, ProjectId, StepExecutionId, WorkflowId};
-use crate::domain::models::{Feature, GateDecision, StepExecution, StepConfig};
-use crate::ports::db::{
-    FeaturePatch, StepExecutionPatch,
-};
+use crate::domain::models::{Feature, GateDecision, StepConfig, StepExecution};
+use crate::paths;
+use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
 use crate::ports::step_executor::{GatePresenter, StepExecutor};
-use crate::paths;
 
 use super::driver::ExecutionDriver;
 use super::DagStepExecutor;
@@ -48,7 +46,9 @@ impl DagStepExecutor {
         };
 
         let repos = self.projects.get_repositories_for(&project_id_typed)?;
-        let repo = repos.first().ok_or("No repository associated with this project.")?;
+        let repo = repos
+            .first()
+            .ok_or("No repository associated with this project.")?;
         let repo_path = repo.repo_path.clone();
 
         let target_dir = paths::repo_target_dir_str(
@@ -110,11 +110,7 @@ impl DagStepExecutor {
         }
 
         let slug = slug_from_description(description);
-        let branch_name = format!(
-            "{}{}",
-            settings.worktree_strategy.branch_prefix,
-            feature_id
-        );
+        let branch_name = format!("{}{}", settings.worktree_strategy.branch_prefix, feature_id);
 
         let machine_id_opt = machine_id.map(|s| s.to_string());
 
@@ -228,7 +224,9 @@ impl StepExecutor for DagStepExecutor {
             .ok_or_else(|| format!("Project not found: {}", project_id))?;
 
         let repos = self.projects.get_repositories_for(&project_id_typed)?;
-        let repo = repos.first().ok_or("No repository associated with this project.")?;
+        let repo = repos
+            .first()
+            .ok_or("No repository associated with this project.")?;
         let repo_path = repo.repo_path.clone();
 
         let _target_dir = paths::repo_target_dir_str(
@@ -308,12 +306,9 @@ impl StepExecutor for DagStepExecutor {
             self.features.step_create(step_exec)?;
         }
 
-        if let Err(e) = self.start_execution_loop(
-            feature_id.as_str(),
-            project_id,
-            workflow_id,
-            description,
-        ) {
+        if let Err(e) =
+            self.start_execution_loop(feature_id.as_str(), project_id, workflow_id, description)
+        {
             let _ = self.features.update(
                 &feature_id,
                 &FeaturePatch {
@@ -323,12 +318,15 @@ impl StepExecutor for DagStepExecutor {
                     ..Default::default()
                 },
             );
-            let all_steps = self.features.steps_for_feature(&feature_id).unwrap_or_default();
+            let all_steps = self
+                .features
+                .steps_for_feature(&feature_id)
+                .unwrap_or_default();
             for s in all_steps {
                 let _ = self.features.step_update(
                     &s.id,
                     &StepExecutionPatch {
-        iteration_count: None,
+                        iteration_count: None,
                         status: Some("failed".to_string()),
                         cost_usd: None,
                         wall_clock_secs: None,
@@ -372,7 +370,10 @@ impl StepExecutor for DagStepExecutor {
             .step_get(&se_id)?
             .ok_or_else(|| format!("Step execution not found: {}", execution_id))?;
 
-        if step_exec.status != "failed" && step_exec.status != "interrupted" && step_exec.status != "pending" {
+        if step_exec.status != "failed"
+            && step_exec.status != "interrupted"
+            && step_exec.status != "pending"
+        {
             return Err(format!(
                 "Cannot retry a step in '{}' status. Only failed or interrupted steps can be retried.",
                 step_exec.status
@@ -404,8 +405,10 @@ impl StepExecutor for DagStepExecutor {
             let workflows = self.workflows.list()?;
             for w in workflows {
                 if let Some(version) = self.workflows.latest_version(&w.id)? {
-                    if let Ok(steps) = serde_json::from_str::<Vec<StepConfig>>(&version.steps_json) {
-                        let w_step_ids: Vec<String> = steps.iter().map(|s| s.id.0.clone()).collect();
+                    if let Ok(steps) = serde_json::from_str::<Vec<StepConfig>>(&version.steps_json)
+                    {
+                        let w_step_ids: Vec<String> =
+                            steps.iter().map(|s| s.id.0.clone()).collect();
                         if w_step_ids == step_ids {
                             self.features.update_workflow_id(feature_id, &w.id)?;
                             workflow_id = Some(w.id);
@@ -432,7 +435,7 @@ impl StepExecutor for DagStepExecutor {
                 self.features.step_update(
                     &s.id,
                     &StepExecutionPatch {
-        iteration_count: None,
+                        iteration_count: None,
                         status: Some("pending".to_string()),
                         cost_usd: s.cost_usd.map(|v| Some(v)),
                         wall_clock_secs: s.wall_clock_secs.map(|v| Some(v)),
@@ -469,7 +472,7 @@ impl StepExecutor for DagStepExecutor {
                 let _ = self.features.step_update(
                     sid,
                     &StepExecutionPatch {
-        iteration_count: None,
+                        iteration_count: None,
                         status: Some(original_status.clone()),
                         cost_usd: None,
                         wall_clock_secs: None,
@@ -542,8 +545,10 @@ impl StepExecutor for DagStepExecutor {
             let workflows = self.workflows.list()?;
             for w in workflows {
                 if let Some(version) = self.workflows.latest_version(&w.id)? {
-                    if let Ok(steps) = serde_json::from_str::<Vec<StepConfig>>(&version.steps_json) {
-                        let w_step_ids: Vec<String> = steps.iter().map(|s| s.id.0.clone()).collect();
+                    if let Ok(steps) = serde_json::from_str::<Vec<StepConfig>>(&version.steps_json)
+                    {
+                        let w_step_ids: Vec<String> =
+                            steps.iter().map(|s| s.id.0.clone()).collect();
                         if w_step_ids == step_ids {
                             self.features.update_workflow_id(feature_id, &w.id)?;
                             workflow_id = Some(w.id);
@@ -707,15 +712,16 @@ impl DagStepExecutor {
                                                 status: Some("interrupted".to_string()),
                                                 cost_usd: s.cost_usd.map(|v| Some(v)),
                                                 wall_clock_secs: s.wall_clock_secs.map(|v| Some(v)),
-                                                artifact_path: s.artifact_path.as_deref().map(|v| Some(v.to_string())),
+                                                artifact_path: s
+                                                    .artifact_path
+                                                    .as_deref()
+                                                    .map(|v| Some(v.to_string())),
                                                 artifact_paths: Some(s.artifact_paths.clone()),
-                                                error_message: Some(Some(
-                                                    if was_awaiting {
-                                                        "Gate interrupted by system restart".to_string()
-                                                    } else {
-                                                        "Step interrupted by system restart".to_string()
-                                                    }
-                                                )),
+                                                error_message: Some(Some(if was_awaiting {
+                                                    "Gate interrupted by system restart".to_string()
+                                                } else {
+                                                    "Step interrupted by system restart".to_string()
+                                                })),
                                                 ..Default::default()
                                             },
                                         );
@@ -725,7 +731,8 @@ impl DagStepExecutor {
                                         // `gate_decisions` already — just emit
                                         // the event so the UI re-shows it.
                                         if !was_awaiting {
-                                            let gate_dec_id = GateDecisionId::from(format!("gd-syn-{}", s.id.0));
+                                            let gate_dec_id =
+                                                GateDecisionId::from(format!("gd-syn-{}", s.id.0));
                                             let gate_dec = GateDecision {
                                                 id: gate_dec_id,
                                                 step_execution_id: s.id.clone(),

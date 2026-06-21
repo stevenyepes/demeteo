@@ -76,11 +76,7 @@ pub trait HttpClient: Send + Sync {
         headers: &[(String, String)],
         body: &serde_json::Value,
     ) -> Result<HttpResponse, String>;
-    fn get_json(
-        &self,
-        url: &str,
-        headers: &[(String, String)],
-    ) -> Result<HttpResponse, String>;
+    fn get_json(&self, url: &str, headers: &[(String, String)]) -> Result<HttpResponse, String>;
 }
 
 impl dyn HttpClient {
@@ -260,8 +256,8 @@ fn extract_number_from_url(url: &str) -> Option<u64> {
 
 fn resolve_pat(provider_id: &str) -> Result<String, String> {
     crate::credential_cache::get_or_fetch(provider_id, || {
-        let entry = Entry::new("demeteo", provider_id)
-            .map_err(|e| format!("Keyring error: {}", e))?;
+        let entry =
+            Entry::new("demeteo", provider_id).map_err(|e| format!("Keyring error: {}", e))?;
         entry
             .get_password()
             .map_err(|e| format!("Provider PAT not found in keyring: {}", e))
@@ -289,7 +285,10 @@ fn publish_github(
     });
     let headers: Vec<(String, String)> = vec![
         ("Authorization".to_string(), format!("Bearer {}", pat)),
-        ("Accept".to_string(), "application/vnd.github+json".to_string()),
+        (
+            "Accept".to_string(),
+            "application/vnd.github+json".to_string(),
+        ),
         ("User-Agent".to_string(), "demeteo".to_string()),
     ];
     let resp = http.post_json(&url, &headers, &payload)?;
@@ -304,7 +303,9 @@ fn publish_github(
         .map_err(|e| format!("Failed to parse GitHub response: {}", e))?;
     Ok(MrInfo {
         url: v.html_url,
-        state: v.state.unwrap_or_else(|| if draft { "draft".into() } else { "open".into() }),
+        state: v
+            .state
+            .unwrap_or_else(|| if draft { "draft".into() } else { "open".into() }),
         number: v.number,
         provider_kind: "github".into(),
         provider_host: host.into(),
@@ -322,7 +323,11 @@ fn publish_gitlab(
     draft: bool,
     pat: &str,
 ) -> Result<MrInfo, String> {
-    let url = format!("https://{}/api/v4/projects/{}/merge_requests", host, urlencoded(repo_path));
+    let url = format!(
+        "https://{}/api/v4/projects/{}/merge_requests",
+        host,
+        urlencoded(repo_path)
+    );
     let payload = serde_json::json!({
         "source_branch": source_branch,
         "target_branch": target_branch,
@@ -425,11 +430,7 @@ impl HttpClient for ReqwestHttp {
         Ok(HttpResponse { status, body })
     }
 
-    fn get_json(
-        &self,
-        url: &str,
-        headers: &[(String, String)],
-    ) -> Result<HttpResponse, String> {
+    fn get_json(&self, url: &str, headers: &[(String, String)]) -> Result<HttpResponse, String> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -463,8 +464,14 @@ mod tests {
 
     #[test]
     fn extract_number_from_github_url() {
-        assert_eq!(extract_number_from_url("https://api.github.com/repos/o/r/pulls/42"), Some(42));
-        assert_eq!(extract_number_from_url("https://gitlab.com/g/p/-/merge_requests/7"), Some(7));
+        assert_eq!(
+            extract_number_from_url("https://api.github.com/repos/o/r/pulls/42"),
+            Some(42)
+        );
+        assert_eq!(
+            extract_number_from_url("https://gitlab.com/g/p/-/merge_requests/7"),
+            Some(7)
+        );
         assert_eq!(extract_number_from_url("https://example.com/"), None);
     }
 

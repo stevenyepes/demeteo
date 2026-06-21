@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -75,7 +75,11 @@ pub trait AgentRuntime: Send + Sync {
     /// Check if the binary is reachable on the target host (which / command
     /// -v). The result is cached per `(machine_id, kind)` by the registry for
     /// the duration of the app session.
-    fn is_available(&self, exec: &dyn crate::ports::execution::ExecutionPort, machine_id: &str) -> bool;
+    fn is_available(
+        &self,
+        exec: &dyn crate::ports::execution::ExecutionPort,
+        machine_id: &str,
+    ) -> bool;
 
     /// The official install command, shown verbatim in the consent prompt.
     fn install_command(&self) -> &'static str;
@@ -127,7 +131,7 @@ pub trait AgentSession: Send + Sync {
     fn kill(&self) -> Result<(), String> {
         Ok(())
     }
-/// Return a handle that signals stderr activity from the underlying
+    /// Return a handle that signals stderr activity from the underlying
     /// agent process. The step executor uses this to differentiate "agent
     /// is working (API call, model inference)" from "agent is blocked
     /// (no stdout + no stderr)". Sessions that don't track stderr return

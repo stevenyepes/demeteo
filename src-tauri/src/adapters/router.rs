@@ -17,7 +17,11 @@ impl RouterExecutionPort {
         ssh: Arc<dyn ExecutionPort>,
         local: Arc<dyn ExecutionPort>,
     ) -> Self {
-        Self { machines, ssh, local }
+        Self {
+            machines,
+            ssh,
+            local,
+        }
     }
 
     fn resolve(&self, machine_id: &str) -> Result<Arc<dyn ExecutionPort>, String> {
@@ -56,7 +60,8 @@ impl ExecutionPort for RouterExecutionPort {
     }
 
     fn write_file(&self, machine_id: &str, path: &str, content: &str) -> Result<(), String> {
-        self.resolve(machine_id)?.write_file(machine_id, path, content)
+        self.resolve(machine_id)?
+            .write_file(machine_id, path, content)
     }
 
     fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String> {
@@ -67,8 +72,15 @@ impl ExecutionPort for RouterExecutionPort {
         self.resolve(machine_id)?.list_dir(machine_id, path)
     }
 
-    fn setup_worktree(&self, machine_id: &str, repo_path: &str, branch: &str, sandbox_path: &str) -> Result<(), String> {
-        self.resolve(machine_id)?.setup_worktree(machine_id, repo_path, branch, sandbox_path)
+    fn setup_worktree(
+        &self,
+        machine_id: &str,
+        repo_path: &str,
+        branch: &str,
+        sandbox_path: &str,
+    ) -> Result<(), String> {
+        self.resolve(machine_id)?
+            .setup_worktree(machine_id, repo_path, branch, sandbox_path)
     }
 
     fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
@@ -83,6 +95,7 @@ impl ExecutionPort for RouterExecutionPort {
         cwd: &str,
         env: &HashMap<String, String>,
     ) -> Result<Box<dyn InteractiveHandle>, String> {
-        self.resolve(machine_id)?.spawn_interactive(machine_id, binary, args, cwd, env)
+        self.resolve(machine_id)?
+            .spawn_interactive(machine_id, binary, args, cwd, env)
     }
 }

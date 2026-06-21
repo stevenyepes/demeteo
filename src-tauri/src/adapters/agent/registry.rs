@@ -74,9 +74,7 @@ impl AgentRegistry {
             let sessions = self.sessions.lock().await;
             if let Some(s) = sessions.get(thread_id) {
                 if s.session_id().is_empty() {
-                    return Err(AgentStartError::SpawnFailed(
-                        "session has no id".into(),
-                    ));
+                    return Err(AgentStartError::SpawnFailed("session has no id".into()));
                 }
                 return Ok(s.clone());
             }
@@ -123,10 +121,7 @@ impl AgentRegistry {
     /// Same as `session_handle` but ignores the kind — we only store
     /// one session per thread. Used by `agent_cancel` which doesn't
     /// know which adapter is in play.
-    pub async fn session_handle_any(
-        &self,
-        thread_id: &str,
-    ) -> Option<Arc<dyn AgentSession>> {
+    pub async fn session_handle_any(&self, thread_id: &str) -> Option<Arc<dyn AgentSession>> {
         let sessions = self.sessions.lock().await;
         sessions.get(thread_id).cloned()
     }
@@ -141,27 +136,56 @@ mod tests {
 
     struct NoopRuntime;
     impl AgentRuntime for NoopRuntime {
-        fn kind(&self) -> &'static str { "noop" }
-        fn is_available(&self, _exec: &dyn crate::ports::execution::ExecutionPort, _machine_id: &str) -> bool { false }
-        fn install_command(&self) -> &'static str { "echo noop" }
+        fn kind(&self) -> &'static str {
+            "noop"
+        }
+        fn is_available(
+            &self,
+            _exec: &dyn crate::ports::execution::ExecutionPort,
+            _machine_id: &str,
+        ) -> bool {
+            false
+        }
+        fn install_command(&self) -> &'static str {
+            "echo noop"
+        }
         fn start(
             &self,
             _ctx: AgentContext,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Arc<dyn AgentSession>, AgentStartError>> + Send + '_>> {
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Arc<dyn AgentSession>, AgentStartError>>
+                    + Send
+                    + '_,
+            >,
+        > {
             Box::pin(async { Err(AgentStartError::SpawnFailed("noop".into())) })
         }
     }
 
     struct FakeSession;
     impl AgentSession for FakeSession {
-        fn session_id(&self) -> &str { "s-1" }
-        fn prompt(&self, _text: &str) -> Pin<Box<dyn Stream<Item = crate::domain::agent_event::AgentEvent> + Send>> {
+        fn session_id(&self) -> &str {
+            "s-1"
+        }
+        fn prompt(
+            &self,
+            _text: &str,
+        ) -> Pin<Box<dyn Stream<Item = crate::domain::agent_event::AgentEvent> + Send>> {
             Box::pin(empty())
         }
-        fn cancel(&self) -> Result<(), String> { Ok(()) }
-        fn set_mode(&self, _mode_id: &str) -> Result<(), String> { Ok(()) }
-        fn set_config_option(&self, _config_id: &str, _value: &str) -> Result<(), String> { Ok(()) }
-        fn kill(&self) -> Result<(), String> { Ok(()) }
+        fn cancel(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_mode(&self, _mode_id: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_config_option(&self, _config_id: &str, _value: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn kill(&self) -> Result<(), String> {
+            Ok(())
+        }
         fn session_info(&self) -> crate::domain::models::SessionInfo {
             crate::domain::models::SessionInfo::default()
         }
@@ -176,35 +200,84 @@ mod tests {
 
     #[tokio::test]
     async fn get_or_spawn_returns_structured_error_for_unknown_kind() {
-        use crate::ports::agent_execution::{ActionError, AgentExecutionPort, CommandOutcome};
         use crate::domain::action::AgentAction;
+        use crate::ports::agent_execution::{ActionError, AgentExecutionPort, CommandOutcome};
 
         struct StubExec;
         impl AgentExecutionPort for StubExec {
-            fn submit(&self, _: &str, _: &str, _: AgentAction) -> Result<CommandOutcome, String> { Ok(CommandOutcome::Executed { output: crate::domain::intercept::ExecutionResult::Bash { output: String::new() } }) }
-            fn submit_agent(&self, _: &str, _: &str, _: AgentAction, _: Option<String>) -> Result<CommandOutcome, ActionError> {
-                Err(ActionError::Internal { message: "stub".into() })
+            fn submit(&self, _: &str, _: &str, _: AgentAction) -> Result<CommandOutcome, String> {
+                Ok(CommandOutcome::Executed {
+                    output: crate::domain::intercept::ExecutionResult::Bash {
+                        output: String::new(),
+                    },
+                })
             }
-            fn approve(&self, _: &str) -> Result<(), String> { Ok(()) }
-            fn reject(&self, _: &str, _: String) -> Result<(), String> { Ok(()) }
+            fn submit_agent(
+                &self,
+                _: &str,
+                _: &str,
+                _: AgentAction,
+                _: Option<String>,
+            ) -> Result<CommandOutcome, ActionError> {
+                Err(ActionError::Internal {
+                    message: "stub".into(),
+                })
+            }
+            fn approve(&self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn reject(&self, _: &str, _: String) -> Result<(), String> {
+                Ok(())
+            }
             fn register_result_responder(
                 &self,
                 _: &str,
-                _: tokio::sync::oneshot::Sender<Result<crate::domain::intercept::ExecutionResult, String>>,
-            ) -> Result<(), String> { Ok(()) }
+                _: tokio::sync::oneshot::Sender<
+                    Result<crate::domain::intercept::ExecutionResult, String>,
+                >,
+            ) -> Result<(), String> {
+                Ok(())
+            }
         }
         impl crate::ports::execution::ExecutionPort for StubExec {
-            fn test_connection(&self, _: &str) -> Result<(), String> { Ok(()) }
-            fn run_command(&self, _: &str, _: &str) -> Result<String, String> { Ok(String::new()) }
-            fn read_file(&self, _: &str, _: &str) -> Result<String, String> { Ok(String::new()) }
-            fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
-            fn get_metadata(&self, _: &str, path: &str) -> Result<crate::sftp::SftpEntry, String> {
-                Ok(crate::sftp::SftpEntry { name: path.into(), path: path.into(), is_dir: false, size: 0, modified: 0 })
+            fn test_connection(&self, _: &str) -> Result<(), String> {
+                Ok(())
             }
-            fn list_dir(&self, _: &str, _: &str) -> Result<Vec<crate::sftp::SftpEntry>, String> { Ok(vec![]) }
-            fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
-            fn resolve_home(&self, _: &str) -> Result<String, String> { Ok("/tmp".to_string()) }
-            fn spawn_interactive(&self, _: &str, _: &str, _: &[String], _: &str, _: &std::collections::HashMap<String, String>) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+            fn run_command(&self, _: &str, _: &str) -> Result<String, String> {
+                Ok(String::new())
+            }
+            fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
+                Ok(String::new())
+            }
+            fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn get_metadata(&self, _: &str, path: &str) -> Result<crate::sftp::SftpEntry, String> {
+                Ok(crate::sftp::SftpEntry {
+                    name: path.into(),
+                    path: path.into(),
+                    is_dir: false,
+                    size: 0,
+                    modified: 0,
+                })
+            }
+            fn list_dir(&self, _: &str, _: &str) -> Result<Vec<crate::sftp::SftpEntry>, String> {
+                Ok(vec![])
+            }
+            fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn resolve_home(&self, _: &str) -> Result<String, String> {
+                Ok("/tmp".to_string())
+            }
+            fn spawn_interactive(
+                &self,
+                _: &str,
+                _: &str,
+                _: &[String],
+                _: &str,
+                _: &std::collections::HashMap<String, String>,
+            ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
                 Err("stub".to_string())
             }
         }
@@ -212,18 +285,22 @@ mod tests {
         let reg = AgentRegistry::new(vec![Arc::new(NoopRuntime)]);
         let stub = Arc::new(StubExec);
         let err = reg
-            .get_or_spawn("t1", "opencode", AgentContext {
-                thread_id: "t1".into(),
-                machine_id: "m1".into(),
-                binary: "opencode".into(),
-                args: vec![],
-                env: Default::default(),
-                cwd: ".".into(),
-                model: None,
-                title: None,
-                agent_exec: stub.clone(),
-                exec: stub,
-            })
+            .get_or_spawn(
+                "t1",
+                "opencode",
+                AgentContext {
+                    thread_id: "t1".into(),
+                    machine_id: "m1".into(),
+                    binary: "opencode".into(),
+                    args: vec![],
+                    env: Default::default(),
+                    cwd: ".".into(),
+                    model: None,
+                    title: None,
+                    agent_exec: stub.clone(),
+                    exec: stub,
+                },
+            )
             .await
             .err()
             .expect("should error");

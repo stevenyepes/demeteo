@@ -34,9 +34,9 @@ use crate::domain::ids::{
     StepExecutionId, StepId, ThreadId, WorkflowId, WorkflowVersionId,
 };
 use crate::domain::models::{
-    AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Project,
-    ProjectSettings, ProviderInstance, Repository, StepExecution, ThreadSession,
-    WorkingMemoryEntry, Workflow, WorkflowVersion,
+    AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Project, ProjectSettings,
+    ProviderInstance, Repository, StepExecution, ThreadSession, Workflow, WorkflowVersion,
+    WorkingMemoryEntry,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,7 +128,10 @@ pub trait MachineRepository: Send + Sync {
 /// per-thread working memory, and the per-machine agent-config records.
 pub trait ThreadRepository: Send + Sync {
     fn get_thread_sessions(&self, machine_id: &MachineId) -> Result<Vec<ThreadSession>, String>;
-    fn get_thread_sessions_for_thread(&self, thread_id: &ThreadId) -> Result<Vec<ThreadSession>, String>;
+    fn get_thread_sessions_for_thread(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Vec<ThreadSession>, String>;
     fn add_thread_session(&self, thread: ThreadSession) -> Result<(), String>;
     fn delete_thread_session(&self, id: &ThreadId) -> Result<(), String>;
     /// Apply a [`ThreadPatch`] to a single thread. The previous 3 separate
@@ -146,7 +149,11 @@ pub trait ThreadRepository: Send + Sync {
     fn get_agent_configs(&self, machine_id: &MachineId) -> Result<Vec<AgentConfig>, String>;
     fn set_agent_configs(&self, machine_id: &MachineId, agents_json: &str) -> Result<(), String>;
 
-    fn upsert_working_memory_entry(&self, thread_id: &ThreadId, entry: WorkingMemoryEntry) -> Result<(), String>;
+    fn upsert_working_memory_entry(
+        &self,
+        thread_id: &ThreadId,
+        entry: WorkingMemoryEntry,
+    ) -> Result<(), String>;
     fn get_working_memory(&self, thread_id: &ThreadId) -> Result<Vec<WorkingMemoryEntry>, String>;
     fn clear_working_memory(&self, thread_id: &ThreadId) -> Result<(), String>;
 }
@@ -233,7 +240,10 @@ pub trait GateRepository: Send + Sync {
         feedback: Option<&str>,
     ) -> Result<(), String>;
     fn pending_for_feature(&self, feature_id: &FeatureId) -> Result<Option<GateDecision>, String>;
-    fn latest_decided_for_feature(&self, feature_id: &FeatureId) -> Result<Option<GateDecision>, String>;
+    fn latest_decided_for_feature(
+        &self,
+        feature_id: &FeatureId,
+    ) -> Result<Option<GateDecision>, String>;
     /// Remove the gate decision row for a given step execution.
     /// Used when replaying from a gate step to clear its pending/decided state.
     fn reset_for_step_execution(&self, step_execution_id: &StepExecutionId) -> Result<(), String>;
@@ -262,6 +272,4 @@ pub trait AppSettingsRepository: Send + Sync {
 // Convenience unused-aliases to silence "unused" warnings for ID newtypes
 // that appear in Patch struct docstrings but not the field list yet.
 #[allow(dead_code)]
-type _DocIdAliases = (
-    MessageId, StepId, WorkflowVersionId, RepositoryId,
-);
+type _DocIdAliases = (MessageId, StepId, WorkflowVersionId, RepositoryId);

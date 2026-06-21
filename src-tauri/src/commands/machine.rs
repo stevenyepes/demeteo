@@ -1,7 +1,7 @@
-use tauri::State;
-use crate::state::AppContext;
 use crate::domain::ids::MachineId;
 use crate::domain::models::Machine;
+use crate::state::AppContext;
+use tauri::State;
 
 #[tauri::command]
 pub fn get_machines(ctx: State<'_, AppContext>) -> Result<Vec<Machine>, String> {

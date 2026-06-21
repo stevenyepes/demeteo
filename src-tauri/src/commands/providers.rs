@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
-use tauri::State;
-use crate::state::AppContext;
 use crate::domain::ids::ProviderId;
 use crate::domain::models::ProviderInstance;
 use crate::paths;
+use crate::state::AppContext;
 use keyring::Entry;
+use serde::{Deserialize, Serialize};
+use tauri::State;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ProviderValidationResult {
@@ -39,7 +39,11 @@ pub async fn validate_provider_pat(
     let host = sanitize_host(&host);
 
     let url = if provider_type.to_lowercase() == "github" {
-        let h = if host.is_empty() { "api.github.com" } else { &host };
+        let h = if host.is_empty() {
+            "api.github.com"
+        } else {
+            &host
+        };
         if h == "api.github.com" {
             format!("https://{}/user", h)
         } else {
@@ -61,7 +65,11 @@ pub async fn validate_provider_pat(
 
     if res.status().is_success() {
         let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-        let username = data["login"].as_str().or_else(|| data["username"].as_str()).unwrap_or("").to_string();
+        let username = data["login"]
+            .as_str()
+            .or_else(|| data["username"].as_str())
+            .unwrap_or("")
+            .to_string();
         let avatar_url = data["avatar_url"].as_str().unwrap_or("").to_string();
 
         Ok(ProviderValidationResult {
@@ -87,13 +95,18 @@ pub async fn fetch_provider_repos(
 ) -> Result<Vec<String>, String> {
     let providers = ctx.app_settings.get_provider_instances()?;
     let provider_id_typed = ProviderId::from(provider_id.clone());
-    let provider = providers.into_iter().find(|p| p.id == provider_id_typed)
+    let provider = providers
+        .into_iter()
+        .find(|p| p.id == provider_id_typed)
         .ok_or_else(|| "Provider not found".to_string())?;
 
     let pat = crate::credential_cache::get_or_fetch(provider.id.as_str(), || {
         let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
         entry.get_password().map_err(|e| {
-            let _ = std::fs::write("/tmp/demeteo_fetch.log", format!("Keyring error for id '{}': {}\n", provider.id, e));
+            let _ = std::fs::write(
+                "/tmp/demeteo_fetch.log",
+                format!("Keyring error for id '{}': {}\n", provider.id, e),
+            );
             e.to_string()
         })
     })?;
@@ -107,7 +120,11 @@ pub async fn fetch_provider_repos(
 
     let host = sanitize_host(&host);
     let url = if provider_type.to_lowercase() == "github" {
-        let h = if host.is_empty() { "api.github.com" } else { &host };
+        let h = if host.is_empty() {
+            "api.github.com"
+        } else {
+            &host
+        };
         if h == "api.github.com" {
             format!("https://{}/user/repos?per_page=100", h)
         } else {
@@ -128,7 +145,10 @@ pub async fn fetch_provider_repos(
     {
         Ok(r) => r,
         Err(e) => {
-            let _ = std::fs::write("/tmp/demeteo_fetch.log", format!("reqwest send error: {}\n", e));
+            let _ = std::fs::write(
+                "/tmp/demeteo_fetch.log",
+                format!("reqwest send error: {}\n", e),
+            );
             return Err(e.to_string());
         }
     };
@@ -139,7 +159,10 @@ pub async fn fetch_provider_repos(
             e.to_string()
         })?;
         let data: Vec<serde_json::Value> = serde_json::from_str(&text).map_err(|e| {
-            let _ = std::fs::write("/tmp/demeteo_fetch.log", format!("json parse error: {}, text: {}\n", e, text));
+            let _ = std::fs::write(
+                "/tmp/demeteo_fetch.log",
+                format!("json parse error: {}, text: {}\n", e, text),
+            );
             e.to_string()
         })?;
         let mut repos = Vec::new();
@@ -154,12 +177,18 @@ pub async fn fetch_provider_repos(
                 }
             }
         }
-        let _ = std::fs::write("/tmp/demeteo_fetch.log", format!("Returning {} repos\n", repos.len()));
+        let _ = std::fs::write(
+            "/tmp/demeteo_fetch.log",
+            format!("Returning {} repos\n", repos.len()),
+        );
         Ok(repos)
     } else {
         let status = res.status();
         let body = res.text().await.unwrap_or_default();
-        let _ = std::fs::write("/tmp/demeteo_fetch.log", format!("HTTP {} error: {}\n", status, body));
+        let _ = std::fs::write(
+            "/tmp/demeteo_fetch.log",
+            format!("HTTP {} error: {}\n", status, body),
+        );
         Err(format!("HTTP {} - {}", status, body))
     }
 }
@@ -171,16 +200,23 @@ pub async fn connect_provider_instance(
     host: String,
     pat: String,
 ) -> Result<ProviderInstance, String> {
-    let validation = validate_provider_pat(provider_type.clone(), host.clone(), pat.clone()).await?;
-    
+    let validation =
+        validate_provider_pat(provider_type.clone(), host.clone(), pat.clone()).await?;
+
     if !validation.valid {
-        return Err(validation.error.unwrap_or_else(|| "Invalid PAT".to_string()));
+        return Err(validation
+            .error
+            .unwrap_or_else(|| "Invalid PAT".to_string()));
     }
 
     let kind = provider_type.to_lowercase();
     let sanitized_host = sanitize_host(&host);
     let h = if sanitized_host.is_empty() {
-        if kind == "github" { "github.com".to_string() } else { "gitlab.com".to_string() }
+        if kind == "github" {
+            "github.com".to_string()
+        } else {
+            "gitlab.com".to_string()
+        }
     } else {
         sanitized_host
     };
@@ -225,7 +261,8 @@ pub async fn delete_provider_instance(
         let _ = entry.delete_credential();
     }
     crate::credential_cache::invalidate(&provider_id);
-    ctx.app_settings.delete_provider_instance(&provider_id_typed)?;
+    ctx.app_settings
+        .delete_provider_instance(&provider_id_typed)?;
     Ok(())
 }
 
@@ -243,10 +280,7 @@ mod tests {
             sanitize_host("http://gitlab.company.com:8080/path"),
             "gitlab.company.com:8080"
         );
-        assert_eq!(
-            sanitize_host("gitlab.company.com"),
-            "gitlab.company.com"
-        );
+        assert_eq!(sanitize_host("gitlab.company.com"), "gitlab.company.com");
         assert_eq!(
             sanitize_host("   https://api.github.com   "),
             "api.github.com"

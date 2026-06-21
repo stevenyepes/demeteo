@@ -27,13 +27,16 @@ pub fn connect(machine: &Machine, secret: Option<String>) -> Result<(Session, Tc
         .next()
         .ok_or_else(|| format!("No addresses for host: {}", machine.host))?;
 
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
-        .map_err(|e| format!("Cannot reach {}:{} (timeout after 5s) — {}", machine.host, machine.port, e))?;
+    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| {
+        format!(
+            "Cannot reach {}:{} (timeout after 5s) — {}",
+            machine.host, machine.port, e
+        )
+    })?;
     let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
 
-    let mut sess = Session::new()
-        .map_err(|e| format!("Failed to create SSH session: {}", e))?;
+    let mut sess = Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
     sess.set_tcp_stream(tcp.try_clone().map_err(|e| e.to_string())?);
     sess.set_timeout(10_000);
     sess.handshake()
@@ -46,7 +49,9 @@ pub fn connect(machine: &Machine, secret: Option<String>) -> Result<(Session, Tc
                 .map_err(|e| format!("Password authentication failed: {}", e))?;
         }
         "key" => {
-            let key_path_str = machine.key_path.as_deref()
+            let key_path_str = machine
+                .key_path
+                .as_deref()
                 .ok_or_else(|| "Private key path is required".to_string())?;
             if key_path_str.trim_end().ends_with(".pub") {
                 return Err("Key path points to a public key (.pub). Provide the private key instead (e.g. ~/.ssh/id_ed25519).".to_string());

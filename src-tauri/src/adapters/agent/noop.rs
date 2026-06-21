@@ -18,7 +18,11 @@ impl AgentRuntime for NoopRuntime {
         "noop"
     }
 
-    fn is_available(&self, _exec: &dyn crate::ports::execution::ExecutionPort, _machine_id: &str) -> bool {
+    fn is_available(
+        &self,
+        _exec: &dyn crate::ports::execution::ExecutionPort,
+        _machine_id: &str,
+    ) -> bool {
         false
     }
 
@@ -31,9 +35,7 @@ impl AgentRuntime for NoopRuntime {
         _ctx: AgentContext,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn AgentSession>, AgentStartError>> + Send + '_>>
     {
-        Box::pin(async {
-            Err(AgentStartError::NotFound(self.kind().to_string()))
-        })
+        Box::pin(async { Err(AgentStartError::NotFound(self.kind().to_string())) })
     }
 }
 

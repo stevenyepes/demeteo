@@ -19,27 +19,34 @@ impl NotificationPort for TauriNotificationAdapter {
         // `PermissionRequested` to preserve the original wire format
         // where the payload was the bare `InterceptPayload`).
         let (name, body): (&str, serde_json::Value) = match event {
-            DomainEvent::PermissionRequested(payload) => {
-                ("permission_requested", serde_json::to_value(payload).map_err(|e| e.to_string())?)
-            }
-            DomainEvent::CommandExecuted { .. } => {
-                ("command_executed", serde_json::to_value(event).map_err(|e| e.to_string())?)
-            }
-            DomainEvent::FeatureStatusChanged { .. } => {
-                ("feature_status_changed", serde_json::to_value(event).map_err(|e| e.to_string())?)
-            }
-            DomainEvent::StepProgress { .. } => {
-                ("step_progress", serde_json::to_value(event).map_err(|e| e.to_string())?)
-            }
-            DomainEvent::GateRequired { .. } => {
-                ("gate_required", serde_json::to_value(event).map_err(|e| e.to_string())?)
-            }
-            DomainEvent::ConflictDetected { .. } => {
-                ("conflict_detected", serde_json::to_value(event).map_err(|e| e.to_string())?)
-            }
-            DomainEvent::AgentStream { .. } => {
-                ("agent_stream", serde_json::to_value(event).map_err(|e| e.to_string())?)
-            }
+            DomainEvent::PermissionRequested(payload) => (
+                "permission_requested",
+                serde_json::to_value(payload).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::CommandExecuted { .. } => (
+                "command_executed",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::FeatureStatusChanged { .. } => (
+                "feature_status_changed",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::StepProgress { .. } => (
+                "step_progress",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::GateRequired { .. } => (
+                "gate_required",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::ConflictDetected { .. } => (
+                "conflict_detected",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::AgentStream { .. } => (
+                "agent_stream",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
         };
 
         self.app

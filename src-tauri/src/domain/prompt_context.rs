@@ -74,7 +74,9 @@ impl PromptContext {
 
 impl Clone for PromptContext {
     fn clone(&self) -> Self {
-        Self { vars: self.vars.clone() }
+        Self {
+            vars: self.vars.clone(),
+        }
     }
 }
 
@@ -155,8 +157,7 @@ mod tests {
 
     #[test]
     fn collapses_unknown_variables_to_empty() {
-        let result = PromptContext::new()
-            .render("Hello {{unknown_var}} world");
+        let result = PromptContext::new().render("Hello {{unknown_var}} world");
 
         assert_eq!(result, "Hello  world");
     }
@@ -190,7 +191,9 @@ mod tests {
         let step2 = base.clone().set("gate_feedback", "Needs more tests");
 
         assert!(step1.render("{{gate_feedback}}").contains("LGTM"));
-        assert!(step2.render("{{gate_feedback}}").contains("Needs more tests"));
+        assert!(step2
+            .render("{{gate_feedback}}")
+            .contains("Needs more tests"));
         // Base is unchanged
         assert!(base.render("{{gate_feedback}}") == "");
     }
@@ -207,7 +210,7 @@ mod tests {
                  Feature: {{feature_description}}\n\
                  Repos: {{repo_list}}\n\
                  Conventions: {{project_conventions}}\n\
-                 Test: {{test_command}}"
+                 Test: {{test_command}}",
             );
 
         assert!(prompt.contains("WebSocket support"));

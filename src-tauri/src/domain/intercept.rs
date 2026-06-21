@@ -65,19 +65,32 @@ impl InterceptPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExecutionResult {
-    Bash { output: String },
-    FileChanged { path: String, lines_added: usize, lines_removed: usize },
-    FileRead { path: String, content_preview: String },
+    Bash {
+        output: String,
+    },
+    FileChanged {
+        path: String,
+        lines_added: usize,
+        lines_removed: usize,
+    },
+    FileRead {
+        path: String,
+        content_preview: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum Resolution {
     Approve,
-    Reject { feedback: String },
+    Reject {
+        feedback: String,
+    },
     /// The action originated from an agent tool call; signal failure as a
     /// tool-call-shaped result (so the agent runtime can return it as a
     /// `tool_call/update` with status: Failed) rather than a synthetic bash output.
-    RejectAsToolFailure { feedback: String },
+    RejectAsToolFailure {
+        feedback: String,
+    },
 }
 
 fn preview_content(content: &str, max_lines: usize) -> String {
@@ -113,12 +126,18 @@ mod tests {
 
     #[test]
     fn preview_truncates_long_content() {
-        let big = (0..50).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let big = (0..50)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
         let p = InterceptPayload::from_action(
             "i1".into(),
             "t1".into(),
             "m1".into(),
-            &AgentAction::Edit { path: "/x".into(), content: big },
+            &AgentAction::Edit {
+                path: "/x".into(),
+                content: big,
+            },
         );
         let preview = p.preview.unwrap();
         assert!(preview.contains("..."));
@@ -131,7 +150,9 @@ mod tests {
             "i1".into(),
             "t1".into(),
             "m1".into(),
-            &AgentAction::RunBash { cmd: "cargo build --release".into() },
+            &AgentAction::RunBash {
+                cmd: "cargo build --release".into(),
+            },
         );
         assert_eq!(p.target, "cargo build --release");
         assert_eq!(p.preview.as_deref(), Some("cargo build --release"));

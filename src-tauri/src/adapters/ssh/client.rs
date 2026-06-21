@@ -1,6 +1,6 @@
+use crate::paths;
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle};
-use crate::paths;
 use crate::sftp::SftpEntry;
 use ssh2::{Channel, Session, Sftp};
 use std::collections::HashMap;
@@ -70,12 +70,18 @@ impl SshClientAdapter {
     }
 
     fn get_sftp(&self, machine_id: &str) -> Result<Arc<SftpSession>, String> {
-        let mut sessions = self.sessions.lock().map_err(|_| "Failed to lock SFTP state".to_string())?;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "Failed to lock SFTP state".to_string())?;
 
         if let Some(s) = sessions.get(machine_id) {
             // Test if connection is still alive by sending a keepalive or checking status
             // If it fails, we will reconnect.
-            let sftp = s.sftp.lock().map_err(|_| "Failed to lock SFTP".to_string())?;
+            let sftp = s
+                .sftp
+                .lock()
+                .map_err(|_| "Failed to lock SFTP".to_string())?;
             if sftp.readdir(std::path::Path::new(".")).is_ok() {
                 drop(sftp);
                 return Ok(s.clone());
@@ -87,13 +93,15 @@ impl SshClientAdapter {
         // Connect new session
         let machines = self.machines.get_machines()?;
         let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.to_string());
-        let machine = machines.into_iter().find(|m| {
-            m.id == machine_id_typed
-                || format!("{}@{}", m.username, m.host) == machine_id
-                || m.host == machine_id
-                || m.name == machine_id
-        })
-        .ok_or_else(|| "Machine not found".to_string())?;
+        let machine = machines
+            .into_iter()
+            .find(|m| {
+                m.id == machine_id_typed
+                    || format!("{}@{}", m.username, m.host) == machine_id
+                    || m.host == machine_id
+                    || m.name == machine_id
+            })
+            .ok_or_else(|| "Machine not found".to_string())?;
 
         let secret = match machine.auth_type.as_str() {
             "password" | "key" => {
@@ -101,8 +109,11 @@ impl SshClientAdapter {
                 crate::credential_cache::get_or_fetch(&key, || {
                     let entry = keyring::Entry::new("demeteo", &key)
                         .map_err(|e| format!("Keyring error: {}", e))?;
-                    entry.get_password().map_err(|e| format!("Keyring error: {}", e))
-                }).ok()
+                    entry
+                        .get_password()
+                        .map_err(|e| format!("Keyring error: {}", e))
+                })
+                .ok()
             }
             _ => None,
         };
@@ -119,10 +130,12 @@ impl SshClientAdapter {
         let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
 
         // SSH Handshake
-        let mut sess = Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
+        let mut sess =
+            Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
         sess.set_tcp_stream(tcp.try_clone().map_err(|e| e.to_string())?);
         sess.set_timeout(10_000);
-        sess.handshake().map_err(|e| format!("SSH Handshake failed: {}", e))?;
+        sess.handshake()
+            .map_err(|e| format!("SSH Handshake failed: {}", e))?;
 
         // Authenticate
         match machine.auth_type.as_str() {
@@ -132,16 +145,23 @@ impl SshClientAdapter {
                     .map_err(|e| format!("Authentication failed: {}", e))?;
             }
             "key" => {
-                let key_path_str = machine.key_path.as_deref().ok_or_else(|| "Key path not provided".to_string())?;
+                let key_path_str = machine
+                    .key_path
+                    .as_deref()
+                    .ok_or_else(|| "Key path not provided".to_string())?;
                 let resolved_path = if key_path_str.starts_with('~') {
-                    let home = std::env::var("HOME").map_err(|_| "Could not find HOME environment variable".to_string())?;
+                    let home = std::env::var("HOME")
+                        .map_err(|_| "Could not find HOME environment variable".to_string())?;
                     key_path_str.replacen('~', &home, 1)
                 } else {
                     key_path_str.to_string()
                 };
                 let key_path = std::path::Path::new(&resolved_path);
                 if !key_path.exists() {
-                    return Err(format!("Private key file does not exist: {}", resolved_path));
+                    return Err(format!(
+                        "Private key file does not exist: {}",
+                        resolved_path
+                    ));
                 }
                 sess.userauth_pubkey_file(&machine.username, None, key_path, secret.as_deref())
                     .map_err(|e| format!("Key authentication failed: {}", e))?;
@@ -154,7 +174,9 @@ impl SshClientAdapter {
         }
 
         sess.set_blocking(true);
-        let sftp = sess.sftp().map_err(|e| format!("SFTP subsystem failed: {}", e))?;
+        let sftp = sess
+            .sftp()
+            .map_err(|e| format!("SFTP subsystem failed: {}", e))?;
 
         let sftp_session = Arc::new(SftpSession {
             sftp: Mutex::new(sftp),
@@ -193,14 +215,16 @@ impl SshClientAdapter {
         channel
             .read_to_string(&mut raw)
             .map_err(|e| format!("Failed to read HOME probe output: {}", e))?;
-        let wait_result = channel.wait_close()
+        let wait_result = channel
+            .wait_close()
             .map_err(|e| format!("Failed to wait for HOME probe channel: {}", e))?;
         // ssh2's `wait_close` returns `Result<(), Error>`; the exit
         // status is on a separate method that returns `Result<i32, Error>`
         // (0 on success, non-zero on remote failure). Drain it so a
         // broken shell session doesn't get cached as a valid HOME.
         let _ = wait_result;
-        let exit_code = channel.exit_status()
+        let exit_code = channel
+            .exit_status()
             .map_err(|e| format!("Failed to read HOME probe exit status: {}", e))?;
         if exit_code != 0 {
             return Err(format!(
@@ -256,8 +280,11 @@ impl ExecutionPort for SshClientAdapter {
                 crate::credential_cache::get_or_fetch(&key, || {
                     let entry = keyring::Entry::new("demeteo", &key)
                         .map_err(|e| format!("Keyring error: {}", e))?;
-                    entry.get_password().map_err(|e| format!("Keyring error: {}", e))
-                }).ok()
+                    entry
+                        .get_password()
+                        .map_err(|e| format!("Keyring error: {}", e))
+                })
+                .ok()
             }
             _ => None,
         };
@@ -280,8 +307,7 @@ impl ExecutionPort for SshClientAdapter {
 
         match machine.auth_type.as_str() {
             "password" => {
-                let password =
-                    secret.ok_or_else(|| "Password not found in keyring".to_string())?;
+                let password = secret.ok_or_else(|| "Password not found in keyring".to_string())?;
                 sess.userauth_password(&machine.username, &password)
                     .map_err(|e| format!("Authentication failed: {}", e))?;
             }
@@ -321,9 +347,13 @@ impl ExecutionPort for SshClientAdapter {
 
     fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String> {
         let sftp_sess = self.get_sftp(machine_id)?;
-        let mut channel = sftp_sess.session.channel_session()
+        let mut channel = sftp_sess
+            .session
+            .channel_session()
             .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
-        channel.exec(cmd).map_err(|e| format!("Failed to execute command: {}", e))?;
+        channel
+            .exec(cmd)
+            .map_err(|e| format!("Failed to execute command: {}", e))?;
 
         // Drain both stdout AND stderr. The previous implementation only
         // read stdout and ignored the channel's exit status, which meant
@@ -334,7 +364,8 @@ impl ExecutionPort for SshClientAdapter {
         // find the dir": the health probe was returning Ok on a path
         // that didn't exist.
         let mut stdout = String::new();
-        channel.read_to_string(&mut stdout)
+        channel
+            .read_to_string(&mut stdout)
             .map_err(|e| format!("Failed to read command stdout: {}", e))?;
 
         // ssh2 keeps stderr on a separate stream. Drain it so the
@@ -346,14 +377,16 @@ impl ExecutionPort for SshClientAdapter {
         let mut err_stream = channel.stderr();
         let _ = err_stream.read_to_string(&mut stderr);
 
-        let wait_result = channel.wait_close()
+        let wait_result = channel
+            .wait_close()
             .map_err(|e| format!("Failed to wait for channel close: {}", e))?;
         let _ = wait_result;
         // `Channel::exit_status` returns the remote process's exit
         // code as `Result<i32, Error>` (0 on success, non-zero on
         // failure). We must check this — see the comment on
         // `run_command` above.
-        let exit_code = channel.exit_status()
+        let exit_code = channel
+            .exit_status()
             .map_err(|e| format!("Failed to read command exit status: {}", e))?;
 
         if exit_code != 0 {
@@ -364,11 +397,7 @@ impl ExecutionPort for SshClientAdapter {
             } else {
                 stderr.trim().to_string()
             };
-            return Err(format!(
-                "Command failed ({}): {}",
-                detail,
-                cmd
-            ));
+            return Err(format!("Command failed ({}): {}", detail, cmd));
         }
 
         Ok(stdout)
@@ -379,8 +408,11 @@ impl ExecutionPort for SshClientAdapter {
     /// round-trip once per session.
     fn read_file(&self, machine_id: &str, path: &str) -> Result<String, String> {
         let sftp_sess = self.get_sftp(machine_id)?;
-        let sftp = sftp_sess.sftp.lock().map_err(|_| "Failed to lock SFTP".to_string())?;
-        
+        let sftp = sftp_sess
+            .sftp
+            .lock()
+            .map_err(|_| "Failed to lock SFTP".to_string())?;
+
         let path_buf = std::path::Path::new(path);
         let mut file = sftp.open(path_buf).map_err(|e| {
             // Invalidate session cache if sftp connection went down
@@ -389,16 +421,20 @@ impl ExecutionPort for SshClientAdapter {
             }
             format!("Failed to open file: {}", e)
         })?;
-        
+
         let mut contents = String::new();
-        file.read_to_string(&mut contents).map_err(|e| format!("Failed to read file content: {}", e))?;
+        file.read_to_string(&mut contents)
+            .map_err(|e| format!("Failed to read file content: {}", e))?;
         Ok(contents)
     }
 
     fn write_file(&self, machine_id: &str, path: &str, content: &str) -> Result<(), String> {
         let sftp_sess = self.get_sftp(machine_id)?;
-        let sftp = sftp_sess.sftp.lock().map_err(|_| "Failed to lock SFTP".to_string())?;
-        
+        let sftp = sftp_sess
+            .sftp
+            .lock()
+            .map_err(|_| "Failed to lock SFTP".to_string())?;
+
         let path_buf = std::path::Path::new(path);
         let mut file = sftp.create(path_buf).map_err(|e| {
             if let Ok(mut sessions) = self.sessions.lock() {
@@ -406,16 +442,21 @@ impl ExecutionPort for SshClientAdapter {
             }
             format!("Failed to create file: {}", e)
         })?;
-        
-        file.write_all(content.as_bytes()).map_err(|e| format!("Failed to write file: {}", e))?;
-        file.flush().map_err(|e| format!("Failed to flush file: {}", e))?;
+
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+        file.flush()
+            .map_err(|e| format!("Failed to flush file: {}", e))?;
         Ok(())
     }
 
     fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String> {
         let sftp_sess = self.get_sftp(machine_id)?;
-        let sftp = sftp_sess.sftp.lock().map_err(|_| "Failed to lock SFTP".to_string())?;
-        
+        let sftp = sftp_sess
+            .sftp
+            .lock()
+            .map_err(|_| "Failed to lock SFTP".to_string())?;
+
         let path_buf = std::path::Path::new(path);
         let stat = sftp.stat(path_buf).map_err(|e| {
             if let Ok(mut sessions) = self.sessions.lock() {
@@ -423,16 +464,17 @@ impl ExecutionPort for SshClientAdapter {
             }
             format!("Failed to stat file: {}", e)
         })?;
-        
-        let name = path_buf.file_name()
+
+        let name = path_buf
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
-            
+
         let size = stat.size.unwrap_or(0);
         let modified = stat.mtime.unwrap_or(0) as u64;
         let is_dir = stat.is_dir();
-        
+
         Ok(SftpEntry {
             name,
             path: path.to_string(),
@@ -444,8 +486,11 @@ impl ExecutionPort for SshClientAdapter {
 
     fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
         let sftp_sess = self.get_sftp(machine_id)?;
-        let sftp = sftp_sess.sftp.lock().map_err(|_| "Failed to lock SFTP".to_string())?;
-        
+        let sftp = sftp_sess
+            .sftp
+            .lock()
+            .map_err(|_| "Failed to lock SFTP".to_string())?;
+
         let path_buf = std::path::Path::new(path);
         let entries = sftp.readdir(path_buf).map_err(|e| {
             if let Ok(mut sessions) = self.sessions.lock() {
@@ -453,14 +498,15 @@ impl ExecutionPort for SshClientAdapter {
             }
             format!("Failed to read directory: {}", e)
         })?;
-        
+
         let mut list = Vec::new();
         for (p, stat) in entries {
-            let name = p.file_name()
+            let name = p
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
-            
+
             if name == "." || name == ".." {
                 continue;
             }
@@ -469,7 +515,7 @@ impl ExecutionPort for SshClientAdapter {
             let size = stat.size.unwrap_or(0);
             let modified = stat.mtime.unwrap_or(0) as u64;
             let is_dir = stat.is_dir();
-            
+
             list.push(SftpEntry {
                 name,
                 path: path_str,
@@ -478,7 +524,7 @@ impl ExecutionPort for SshClientAdapter {
                 modified,
             });
         }
-        
+
         list.sort_by(|a, b| {
             if a.is_dir != b.is_dir {
                 b.is_dir.cmp(&a.is_dir)
@@ -490,9 +536,18 @@ impl ExecutionPort for SshClientAdapter {
         Ok(list)
     }
 
-    fn setup_worktree(&self, machine_id: &str, repo_path: &str, branch: &str, sandbox_path: &str) -> Result<(), String> {
+    fn setup_worktree(
+        &self,
+        machine_id: &str,
+        repo_path: &str,
+        branch: &str,
+        sandbox_path: &str,
+    ) -> Result<(), String> {
         // Step 1: Ensure directory setup
-        self.run_command(machine_id, &format!("mkdir -p {}/.demeteo/worktrees", repo_path))?;
+        self.run_command(
+            machine_id,
+            &format!("mkdir -p {}/.demeteo/worktrees", repo_path),
+        )?;
 
         // Step 2: Configure git info exclude
         let git_exclude_cmd = format!(
@@ -507,7 +562,10 @@ impl ExecutionPort for SshClientAdapter {
             repo_path, branch, sandbox_path
         );
         let output = self.run_command(machine_id, &worktree_add_cmd)?;
-        println!("[SshClientAdapter] Git Worktree provisioning output: {}", output);
+        println!(
+            "[SshClientAdapter] Git Worktree provisioning output: {}",
+            output
+        );
 
         Ok(())
     }
@@ -529,13 +587,15 @@ impl ExecutionPort for SshClientAdapter {
     ) -> Result<Box<dyn InteractiveHandle>, String> {
         let machines = self.machines.get_machines()?;
         let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.to_string());
-        let machine = machines.into_iter().find(|m| {
-            m.id == machine_id_typed
-                || format!("{}@{}", m.username, m.host) == machine_id
-                || m.host == machine_id
-                || m.name == machine_id
-        })
-        .ok_or_else(|| "Machine not found".to_string())?;
+        let machine = machines
+            .into_iter()
+            .find(|m| {
+                m.id == machine_id_typed
+                    || format!("{}@{}", m.username, m.host) == machine_id
+                    || m.host == machine_id
+                    || m.name == machine_id
+            })
+            .ok_or_else(|| "Machine not found".to_string())?;
 
         let secret = match machine.auth_type.as_str() {
             "password" | "key" => {
@@ -543,8 +603,11 @@ impl ExecutionPort for SshClientAdapter {
                 crate::credential_cache::get_or_fetch(&key, || {
                     let entry = keyring::Entry::new("demeteo", &key)
                         .map_err(|e| format!("Keyring error: {}", e))?;
-                    entry.get_password().map_err(|e| format!("Keyring error: {}", e))
-                }).ok()
+                    entry
+                        .get_password()
+                        .map_err(|e| format!("Keyring error: {}", e))
+                })
+                .ok()
             }
             _ => None,
         };
@@ -597,6 +660,9 @@ impl ExecutionPort for SshClientAdapter {
             .exec(&cmd)
             .map_err(|e| format!("Failed to exec agent over SSH: {}", e))?;
 
-        Ok(Box::new(RemoteChannelHandle { channel: Mutex::new(channel), _session: sess }))
+        Ok(Box::new(RemoteChannelHandle {
+            channel: Mutex::new(channel),
+            _session: sess,
+        }))
     }
 }

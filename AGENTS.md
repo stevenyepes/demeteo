@@ -1,196 +1,263 @@
-# Demeteo: Project Constitution & Reference Index
+# Demeteo — Agent Constitution
 
-This document serves as the master constitution and architectural index for **Demeteo**. It governs codebase styling, visual design guidelines, and maps the complete documentation index for developers and AI agents.
-
----
-
-## 1. Project Identity & Philosophy
-
-### Name Origin
-* **Demeteo** plays with the Spanish language (*monitoreo*, *demeteo*) and classical Greek mythology:
-  * **Deméter** (Demeter): The goddess of agriculture and growth, representing the cultivation of data pipelines, server connections, and agent orchestration.
-  * **Prometeo** (Prometheus): The Titan of foresight who brought fire (technology) to humanity, representing developer empowerment.
-
-### Core Vision
-Demeteo is a modern, premium desktop control center for orchestrating local and remote AI agents. It bridges the gap between raw SSH terminal access and structured web-API control panels, providing a seamless visual workspace to monitor processes, chat with remote LLMs/agents, and edit remote codebases in real-time.
-
-### 🚧 Current Pivot: Multi-Agent Orchestrator (June 2026)
-
-> **The chat-style "supervisor for one agent" framing is legacy.** As of
-> the redesign interview (33 locked decisions), demeteo is being pivoted
-> to a **fleet-style multi-agent orchestrator**. The chat UX is removed;
-> the user describes a feature, demeteo decomposes it through a
-> reusable Workflow, delegates work to coding agents, and keeps the
-> user in the loop at explicit Gates.
+> **You are working on a fleet-style multi-agent orchestrator** built with
+> Tauri v2 (Rust) + React 19 (TypeScript). Read this file top-to-bottom
+> before writing any code. Every section is mandatory unless marked *(optional)*.
 >
-> **Source of truth:** [`REDESIGN_PLAN.md`](REDESIGN_PLAN.md) (master) and
-> [`docs/REDESIGN_DECISIONS.md`](docs/REDESIGN_DECISIONS.md) (the 33
-> decisions, rendered as a reference appendix). The plan is executed
-> across phases R0–R8 (see §5 below). The legacy single-agent work is
-> preserved in [`docs/LEGACY_*.md`](docs/) for historical context.
->
-> **Key vocabulary:** Project, Feature, Workflow, Step (`agent` /
-> `parallel` / `gate`), Subtask, Gate, ProviderInstance. See
-> [`docs/REDESIGN_DDD_MODEL.md`](docs/REDESIGN_DDD_MODEL.md) for the
-> full ubiquitous language.
+> **Before writing a single line of code, you must complete the thinking
+> protocol in Section 0.** Skipping it is not allowed.
 
 ---
 
-## 🎨 2. Visual Design Rules (Dark Neon Glassmorphism)
+## 0. Mandatory Thinking Protocol
 
-All frontend components and styling changes must strictly adhere to the following rules:
+> **Complete this before opening any file to edit.**
 
-1. **Background**: Obsidian and deep carbon gradients (`#08090c` and `#0d0f14`), layered with a subtle radial gradient of violet and cyan to give depth.
-2. **Backdrop Blurs**: Translucent cards (`rgba(18, 22, 30, 0.75)`) utilizing CSS `backdrop-filter: blur(12px)` and thin border glows (`rgba(255,255,255,0.05)`).
-3. **Glowing Status Accents**: 
-   * **Violet (`#8b5cf6`)**: Active connection tunnels and core operations.
-   * **Cyan (`#06b6d4`)**: Real-time terminal data streaming and interactive sessions.
-   * **Emerald (`#10b981`)**: Running agent processes and healthy statuses.
-   * **Ruby (`#ef4444`)**: Inactive servers, stopped tasks, or connection failures.
-4. **Typography**: Headings use **Outfit** (sharp, geometric); UI elements use **Inter** (clean, readable sans-serif); Terminals/editors use **Fira Code** or **JetBrains Mono** (monospaced with ligatures).
-5. **Motion**: Subtle pulsing glows for status dots, and smooth transitions when switching workspaces.
+For every task, reason through the following in order — write your answers
+as a short scratchpad response before producing any code:
+
+1. **Locate the layer.** Which layer does this change live in?
+   - `domain/` (pure logic, no I/O)
+   - `ports/` (trait definitions)
+   - `adapters/` (port implementations)
+   - `commands/` (thin IPC handlers)
+   - `src/lib/` (typed frontend wrappers)
+   - `src/components/` (React UI)
+
+2. **Map the ripple.** List every file that will need to change as a
+   consequence — including types, IPC wrappers, and tests.
+
+3. **Check the hexagon.** Confirm the change does not:
+   - Put business logic in a `commands/` handler
+   - Call an adapter directly from a React component
+   - Cross a layer boundary that ports are meant to abstract
+
+4. **Identify the Gate.** Does this touch a Gate-policy area
+   (migrations, capabilities, agent spawn, worktree merge)?
+   If yes, stop and ask the user before proceeding.
+
+5. **State your plan.** One sentence per file: what changes and why.
+
+Only after completing steps 1–5 may you write or modify code.
 
 ---
 
-## 📐 3. Architecture & Technical Map
+## Quick Reference
 
-Demeteo leverages a lightweight Rust-backend and web-frontend architecture. The post-pivot shape is a multi-agent orchestrator; the diagram below reflects the active plan.
+| What                    | Command                                      |
+|-------------------------|----------------------------------------------|
+| Start dev app           | `npm run tauri dev`                          |
+| Frontend only           | `npm run dev`                                |
+| Build frontend          | `npm run build`                              |
+| Type-check              | `npx tsc --noEmit`                           |
+| Rust check              | `cargo check` (inside `src-tauri/`)          |
+| Rust fmt                | `cargo fmt` (inside `src-tauri/`)            |
+| Rust clippy             | `cargo clippy -- -D warnings`               |
 
-```mermaid
-graph TD
-    subgraph Frontend [React Webview]
-        Rail[ProjectRail]
-        Home[ProjectHome]
-        Detail[FeatureDetail]
-        Gate[GateView]
-        Editor[WorkflowEditor]
-    end
+**Done means:** `tsc --noEmit` exits 0, `cargo clippy` exits 0, the app boots without console errors.
 
-    subgraph IPC [Tauri v2 IPC]
-        Cmds[Tauri Commands]
-        Evts[feature_status_changed / step_progress / gate_required / conflict_detected]
-    end
+---
 
-    subgraph Backend [Tauri Rust Core]
-        Orch[FeatureOrchestrator / StepExecutor]
-        WT[WorktreeManager / MergeExecutor / MrPublisher]
-        AR[AgentRuntime / CliRuntime]
-        DB[(SQLite DB)]
-        Keys[Keyring Crate]
-        AS[ArtifactStore]
-        PP[PermissionPolicyPort]
-    end
+## 1. Project Identity
 
-    subgraph Project [Project Host: local or remote SSH]
-        Repo[Git Repos + Worktrees]
-        Agent[opencode / hermes / claude-code / antigravity]
-    end
+**Demeteo** is a premium desktop app that lets a developer describe a feature in plain language; the app decomposes it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes, antigravity), manages Git worktrees per Step, and presents human-approval Gates before merging.
 
-    Rail & Home --> Cmds
-    Detail & Gate & Editor --> Cmds
-    Cmds --> Orch
-    Orch --> WT
-    Orch --> AR
-    WT --> AS
-    AR <-->|CLI + JSON| Agent
-    WT <-->|SSH/SFTP| Repo
-    Orch --> DB
-    WT --> Keys
-    AR --> PP
-    Evts --> Frontend
+> **Current phase: R1 — Greenfield schema & ports** (SQLite + Rust ports, no agent spawns yet).
+> See [REDESIGN_PLAN.md](REDESIGN_PLAN.md) for the full R0–R8 roadmap.
+
+**Core vocabulary** *(use these exact names in code and comments)*:
+
+| Term               | Meaning                                                                 |
+|--------------------|-------------------------------------------------------------------------|
+| `Project`          | A local or remote Git repo tracked by Demeteo                          |
+| `Feature`          | A user-described piece of work decomposed by a Workflow                |
+| `Workflow`         | Reusable, versioned DAG of Steps                                        |
+| `Step`             | One node in the DAG: `agent`, `parallel`, or `gate`                    |
+| `Subtask`          | Work assigned to one agent in one worktree                             |
+| `Gate`             | Human-approval checkpoint before the orchestrator continues            |
+| `ProviderInstance` | A configured AI provider (model + key + endpoint)                      |
+
+---
+
+## 2. Tech Stack
+
+### Frontend
+- **React 19** · **TypeScript ~5.8** · **Vite 7**
+- **TailwindCSS v4** (via `@tailwindcss/vite`) — utility classes only, no inline `style=` props
+- **Monaco Editor** (`@monaco-editor/react`) for code views
+- **xterm.js v6** (`@xterm/xterm`) for terminal output
+- **lucide-react** for icons — never import SVGs manually
+- **Tauri v2 API** (`@tauri-apps/api`) for all IPC
+
+### Backend (Rust — `src-tauri/`)
+- **Tauri v2**, **tokio 1 (full)**, **rusqlite 0.31 + refinery 0.8** for migrations
+- **ssh2 0.9** for SSH/SFTP, **keyring 3** for secrets, **reqwest 0.12** for HTTP
+- **thiserror 1** for typed errors — never use `unwrap()` in commands
+
+### Key constraints
+- `external_directory: "deny"` — agents are scoped to their worktree; never allow FS access outside it
+- Agent integration is **one-shot CLI + JSON only** — no ACP, no JSON-RPC, no tool-call bridge
+- Secrets live in the OS keyring only — never write credentials to SQLite or disk files
+
+---
+
+## 3. Architecture in 30 Seconds
+
+```
+React Webview ──IPC──► Tauri Commands ──► FeatureOrchestrator
+                                              │
+                          ┌───────────────────┤
+                          ▼                   ▼
+                    AgentRuntime        WorktreeManager
+                    (CliRuntime)        (MergeExecutor)
+                          │                   │
+                  opencode / hermes     Git worktrees
+                  claude-code / ag      SSH/SFTP repos
 ```
 
-For the full hexagon, port catalogue, and file layout see
-[`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md). For the
-domain entities and bounded contexts see
-[`docs/REDESIGN_DDD_MODEL.md`](docs/REDESIGN_DDD_MODEL.md).
+Frontend components → Tauri IPC → Rust core → SQLite + OS + Agents
+
+For the full hexagon, port catalogue, and directory layout → [docs/REDESIGN_ARCHITECTURE.md](docs/REDESIGN_ARCHITECTURE.md)
 
 ---
 
-## 🗂️ 4. Documentation & Schema Index
+## 4. Code Conventions
 
-Demeteo utilizes progressive disclosure to separate high-level concepts from concrete implementations. The active plan lives under the redesign branch; legacy docs are preserved for historical context.
+### TypeScript / React
+- Named exports only — no default exports
+- File names: `PascalCase.tsx` for components, `camelCase.ts` for utilities
+- One component per file; keep files under ~400 LOC — extract when larger
+- All Tauri commands called through typed wrappers in `src/lib/` — never call `invoke()` raw in components
+- `async/await` everywhere — no raw `.then()` chains
+- No `any` types — use `unknown` + a type guard if the shape is uncertain
+- Prefer `interface` over `type` for object shapes; use `type` for unions/aliases
 
-### Active plan (multi-agent orchestrator)
+### Rust
+- Return `Result<T, String>` from `#[tauri::command]` functions — map errors with `.map_err(|e| e.to_string())`
+- Use `thiserror` for domain error enums in `src-tauri/src/domain/`
+- All DB access goes through `src-tauri/src/db.rs` — no raw `rusqlite` calls in commands
+- Never use `.unwrap()` or `.expect()` in production paths — use `?` or match
+- Format: `cargo fmt` before every commit; lint: `cargo clippy -- -D warnings` must be clean
 
-* **[Master Plan (REDESIGN_PLAN.md)](REDESIGN_PLAN.md)**: pivot summary, 33-decision table, bounded contexts, phase plan, list of deferred questions.
-* **[Domain Model & Bounded Contexts (docs/REDESIGN_DDD_MODEL.md)](docs/REDESIGN_DDD_MODEL.md)**: ubiquitous language, 7 bounded contexts with aggregates, value objects, ports, and invariants.
-* **[Ports & Adapters Blueprint (docs/REDESIGN_ARCHITECTURE.md)](docs/REDESIGN_ARCHITECTURE.md)**: hexagon, full port catalogue, directory layout, Tauri command surface, frontend state model, migration strategy.
-* **[Execution & Verification Plan (docs/REDESIGN_EXECUTION_PLAN.md)](docs/REDESIGN_EXECUTION_PLAN.md)**: phase-by-phase tasks, done-means statements, verification commands, Gantt timeline.
-* **[Locked Decisions Reference (docs/REDESIGN_DECISIONS.md)](docs/REDESIGN_DECISIONS.md)**: the 33-decision table as a standalone reference, cross-linked to all other docs.
-* **[Open & Deferred Questions (docs/REDESIGN_OPEN_QUESTIONS.md)](docs/REDESIGN_OPEN_QUESTIONS.md)**: deferred items with phase placement key and rationale, so they don't get lost.
-* **[Agent Integration Spec (AGENT_INTEGRATION.md)](AGENT_INTEGRATION.md)**: `CliRuntime` (one-shot `opencode run --format json`) for opencode, hermes, claude-code, and antigravity — no ACP, no JSON-RPC, no tool-call bridge. Permitted actions are controlled per-project via `OPENCODE_PERMISSION` (JSON env var), scoped to the worktree via `external_directory: "deny"`.
-
-### Carried-forward references
-
-* **[SQLite Database Schema Specification (DATABASE_SCHEMA.md)](DATABASE_SCHEMA.md)**: SQLite tables configuration (carried forward; will be superseded by the new schema in Phase R1).
-* **[SSH & Connection Flow Protocols (CONNECTION_FLOWS.md)](CONNECTION_FLOWS.md)**: low-level terminal channels, port forwarding, keyring, and SFTP synchronization flows.
-
-### Legacy single-agent work (preserved for historical context)
-
-* [`docs/LEGACY_DDD_MODEL.md`](docs/LEGACY_DDD_MODEL.md) — was `DDD_MODEL.md`.
-* [`docs/LEGACY_ARCHITECTURE.md`](docs/LEGACY_ARCHITECTURE.md) — was `ARCHITECTURE.md`.
-* [`docs/LEGACY_EXECUTION_PLAN.md`](docs/LEGACY_EXECUTION_PLAN.md) — was `EXECUTION_PLAN.md`.
-
-These describe the chat-style supervisor for one coding agent. They are not the active plan; the `AcpRuntime` spec inside is the only portion that survived the pivot (now in `AGENT_INTEGRATION.md`).
+### Naming
+- Rust structs/enums: `PascalCase`; functions/variables: `snake_case`
+- React components: `PascalCase`; hooks: `useCamelCase`; event handlers: `handleCamelCase`
+- Tauri command names: `snake_case` (e.g., `create_project`, `start_feature`)
 
 ---
 
-## 🎯 5. Implementation Phases
+## 5. Visual Design Rules
 
-### Active plan: R0–R8 (multi-agent orchestrator)
+> Every UI change **must** follow these rules without exception.
 
-Detailed tasks, done-means, and verification per phase:
-[`docs/REDESIGN_EXECUTION_PLAN.md`](docs/REDESIGN_EXECUTION_PLAN.md).
+| Token        | Value                      | Semantic use                          |
+|--------------|----------------------------|---------------------------------------|
+| Background   | `#08090c` / `#0d0f14`      | App shell, page backgrounds           |
+| Card surface | `rgba(18,22,30,0.75)`      | Glassmorphism panels                  |
+| Border glow  | `rgba(255,255,255,0.05)`   | Card borders                          |
+| Violet       | `#8b5cf6`                  | Active connections, primary actions   |
+| Cyan         | `#06b6d4`                  | Terminal streams, interactive states  |
+| Emerald      | `#10b981`                  | Running agents, healthy statuses      |
+| Ruby         | `#ef4444`                  | Errors, stopped tasks, failures       |
 
-1. **Phase R0: Domain & docs** *(in progress on this branch)*
-   * The six `REDESIGN_*.md` docs exist; legacy docs archived.
-2. **Phase R1: Greenfield schema & ports** *(next)*
-   * New SQLite tables, new ports, no UI changes, no agent spawns.
-3. **Phase R2: Project bootstrap & provider wiring**
-   * Project create, clone repos via PAT, bootstrap detection, worktree strategy proposal.
-4. **Phase R3: Workflow catalog & authoring**
-   * Workflow CRUD + versioning + import/export, starter pack bundled.
-5. **Phase R4: Step executor**
-   * The small DAG engine; `agent` / `parallel` / `gate` step types; conditional edges.
-6. **Phase R5: Feature orchestrator + UI**
-   * "Start feature" modal, ProjectHome, FeatureDetail, telemetry, re-entry.
-7. **Phase R6: Worktree & merge**
-   * Per-feature `feature/<slug>` branch, per-subtask worktrees, sequential merge, conflict resolution cascade, optional MR.
-8. **Phase R7: UX polish & docs**
-   * Project rail, settings, first-run UX, sample project, docs panel, command palette, keyboard shortcuts.
-9. **Phase R8: Hardening & migration**
-   * Additive migrations (silent), breaking migrations (wipe-and-reinit), pre-migration backups, migration log.
+- **Cards**: `backdrop-filter: blur(12px)` + `rgba(18,22,30,0.75)` background
+- **Typography**: headings → `Outfit`; UI text → `Inter`; terminal/code → `Fira Code` / `JetBrains Mono`
+- **Motion**: pulsing glows for status dots; smooth transitions on view switches — no jarring snaps
+- **Never**: plain system colors, `style=` props for design tokens, static grey cards with no depth
 
-### Legacy single-agent work (Phases 1–6, completed before the pivot)
+---
 
-> These phases shipped a chat-style supervisor for one coding agent.
-> The work is preserved in git history and the `docs/LEGACY_*.md`
-> archives. It is **not** the active plan.
+## 6. File Layout (active code)
 
-1. **Phase 1: Foundation & Project Setup** *(Completed, legacy)*
-   * App scaffolding, configuration directories, styling design system.
-2. **Phase 2: Database & Keyring Setup** *(Completed, legacy)*
-   * SQLite tables creation, Rust bindings for machines and agent profiles database commands.
-3. **Phase 3: SSH Connections & Terminal I/O** *(Completed, legacy)*
-   * Rust PTY controller, Tauri channel streaming, live terminal display.
-4. **Phase 4: SSH Port Forwarding & Agent API Interface** *(Completed, legacy)*
-   * Port forwarding listeners, Ollama/CLI modular adapters, agent chat screen.
-5. **Phase 5: SFTP File Explorer & Monaco Editor** *(Completed, legacy)*
-   * SFTP read/write commands, tree sidebar, Monaco editor tab.
-6. **Phase 6: UX Polish, Animations & Dark Neon Themes** *(Completed, legacy)*
-   * Custom indicators, active connection animations, robust error-handling.
+```
+demeteo/
+├── src/                        # React frontend
+│   ├── components/             # One file = one component
+│   ├── hooks/                  # Custom React hooks
+│   ├── lib/                    # Tauri IPC wrappers, utilities
+│   ├── types.ts                # Shared TypeScript types
+│   └── App.tsx                 # Root router / layout
+├── src-tauri/
+│   ├── src/
+│   │   ├── commands/           # #[tauri::command] handlers (thin)
+│   │   ├── domain/             # Domain structs, enums, errors
+│   │   ├── ports/              # Trait definitions (hexagon ports)
+│   │   ├── adapters/           # Port implementations
+│   │   ├── db.rs               # DB connection + query helpers
+│   │   ├── state.rs            # AppState (Mutex-wrapped shared state)
+│   │   └── lib.rs              # Plugin registration, command registration
+│   └── migrations/             # SQL migration files (refinery)
+└── docs/                       # Architecture & design docs (read-only for agents)
+```
+
+> **Do not** create files outside this structure without first updating this layout map.
+
+---
+
+## 7. Negative Constraints
+
+Things an agent must **never** do without explicit user approval:
+
+- ❌ Add a new `npm` or `cargo` dependency
+- ❌ Delete or rename existing migration files in `src-tauri/migrations/`
+- ❌ Write credentials, tokens, or secrets to SQLite or any file
+- ❌ Call `invoke()` directly in a React component — use a typed wrapper in `src/lib/`
+- ❌ Use `unwrap()` / `expect()` in Rust command handlers or domain logic
+- ❌ Hard-code `localhost`, port numbers, or paths — read from config/state
+- ❌ Break the hexagon: commands must not contain business logic; adapters must not be called from the frontend directly
+- ❌ Skip `cargo fmt` + `cargo clippy` before finalizing Rust changes
+- ❌ Bypass the `PermissionPolicyPort` when spawning agent processes
+
+---
+
+## 8. Gate Policy (Human Approval)
+
+Any task that touches the items below requires a **Gate** (pause and ask the user) before executing:
+
+- Schema migrations that drop or rename columns
+- Changes to `src-tauri/capabilities/` (Tauri permission surfaces)
+- Changes to agent spawn logic or `OPENCODE_PERMISSION` env construction
+- Merging worktrees back to a feature branch when conflicts are detected
+
+---
+
+## 9. Documentation Index
+
+> Read the relevant doc before modifying the corresponding area.
+
+| Area                        | Document                                                                              |
+|-----------------------------|---------------------------------------------------------------------------------------|
+| Master plan & decisions     | [REDESIGN_PLAN.md](REDESIGN_PLAN.md)                                                 |
+| Domain model (ubiquitous language, aggregates) | [docs/REDESIGN_DDD_MODEL.md](docs/REDESIGN_DDD_MODEL.md)          |
+| Ports, adapters, directory layout | [docs/REDESIGN_ARCHITECTURE.md](docs/REDESIGN_ARCHITECTURE.md)               |
+| Phase tasks & done-means    | [docs/REDESIGN_EXECUTION_PLAN.md](docs/REDESIGN_EXECUTION_PLAN.md)                   |
+| 33 locked decisions         | [docs/REDESIGN_DECISIONS.md](docs/REDESIGN_DECISIONS.md)                             |
+| Open & deferred questions   | [docs/REDESIGN_OPEN_QUESTIONS.md](docs/REDESIGN_OPEN_QUESTIONS.md)                   |
+| Agent CLI integration spec  | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)                                         |
+| SQLite schema (legacy)      | [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) *(superseded in R1)*                        |
+| SSH/SFTP flows              | [CONNECTION_FLOWS.md](CONNECTION_FLOWS.md)                                           |
+
+Legacy docs in `docs/LEGACY_*.md` are preserved history only — not the active plan.
+
+---
+
+## 10. Verification Checklist
+
+Run this before marking any task done:
+
+```bash
+# Frontend
+npx tsc --noEmit
+
+# Rust
+cd src-tauri && cargo fmt && cargo clippy -- -D warnings && cd ..
+
+# App boots
+npm run tauri dev   # open the app, confirm no console errors
+```
+
+If any step fails, fix it before handing back to the user.
+
+---
 
 
-## graphify
-
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-When the user types `/graphify`, invoke the `skill` tool with `skill: "graphify"` before doing anything else.
-
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

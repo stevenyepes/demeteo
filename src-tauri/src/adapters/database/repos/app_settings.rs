@@ -50,8 +50,11 @@ impl AppSettingsRepository for SqliteAdapter {
 
     fn delete_provider_instance(&self, id: &ProviderId) -> Result<(), String> {
         let conn = self.conn.lock()?;
-        conn.execute("DELETE FROM provider_instances WHERE id = ?1", params![id.0])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM provider_instances WHERE id = ?1",
+            params![id.0],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 

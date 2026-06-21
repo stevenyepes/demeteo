@@ -117,7 +117,11 @@ pub struct Artifact {
 }
 
 impl Artifact {
-    pub fn tool_write(name: impl Into<String>, path: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn tool_write(
+        name: impl Into<String>,
+        path: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
         let path = path.into();
         Self {
             name: name.into(),
@@ -136,7 +140,12 @@ impl Artifact {
         }
     }
 
-    pub fn worktree_ref(name: impl Into<String>, machine_id: impl Into<String>, branch: impl Into<String>, path: impl Into<String>) -> Self {
+    pub fn worktree_ref(
+        name: impl Into<String>,
+        machine_id: impl Into<String>,
+        branch: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
         let machine_id = machine_id.into();
         let branch = branch.into();
         let path = path.into();
@@ -150,7 +159,11 @@ impl Artifact {
             name: name.into(),
             mime: "application/x-demeteo-worktree-ref".into(),
             content,
-            source: ArtifactSource::WorktreeRef { machine_id, branch, path },
+            source: ArtifactSource::WorktreeRef {
+                machine_id,
+                branch,
+                path,
+            },
         }
     }
 }
@@ -218,11 +231,17 @@ pub enum ArtifactCapture {
     /// Detect all files changed since `base_ref` via `git diff --name-only`.
     /// Artifacts are named from file basenames. `base` describes the left side
     /// (see [`DiffBase`]). `path_filter` optionally restricts to a glob pattern.
-    ChangedFiles { base: DiffBase, path_filter: Option<String> },
+    ChangedFiles {
+        base: DiffBase,
+        path_filter: Option<String>,
+    },
     /// Synthesize a unified diff at materialization time. `base`
     /// describes the left side; `head` is the step's worktree HEAD
     /// unless overridden.
-    Diff { base: DiffBase, path_filter: Option<String> },
+    Diff {
+        base: DiffBase,
+        path_filter: Option<String>,
+    },
     /// Emit one `WorktreeRef` artifact per file matched by `path`
     /// (or one for the worktree root if `path` is `None`). Stored in
     /// `artifact_paths`; `mode: None` is the typical choice since
@@ -317,7 +336,9 @@ mod tests {
         let upper = Artifact::tool_write("spec", "Docs/SPEC.MD", "# S\n");
         assert_eq!(upper.mime, "text/markdown");
 
-        assert!(matches!(md.source, ArtifactSource::ToolWrite { ref path } if path == "docs/spec.md"));
+        assert!(
+            matches!(md.source, ArtifactSource::ToolWrite { ref path } if path == "docs/spec.md")
+        );
     }
 
     #[test]
@@ -333,7 +354,9 @@ mod tests {
     fn artifact_decl_serializes_with_tag() {
         let d = ArtifactDecl {
             name: "spec".into(),
-            capture: ArtifactCapture::LastWriteTo { path: "docs/spec.md".into() },
+            capture: ArtifactCapture::LastWriteTo {
+                path: "docs/spec.md".into(),
+            },
             mode: ArtifactMode::Full,
         };
         let s = serde_json::to_string(&d).unwrap();

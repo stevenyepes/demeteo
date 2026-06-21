@@ -33,9 +33,5 @@ pub trait MrPublisher: Send + Sync {
     /// Best-effort fetch of the current MR state (draft / open /
     /// merged / closed). Used to refresh `features.mr_state` on
     /// launch so the UI can show "MR merged" without re-publishing.
-    fn fetch_mr_state(
-        &self,
-        project_id: &str,
-        mr_url: &str,
-    ) -> Result<String, String>;
+    fn fetch_mr_state(&self, project_id: &str, mr_url: &str) -> Result<String, String>;
 }

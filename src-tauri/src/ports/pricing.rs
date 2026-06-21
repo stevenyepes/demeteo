@@ -15,7 +15,10 @@ pub struct ModelPrice {
 
 impl ModelPrice {
     /// Free model (local Ollama, etc.). $0 on both sides.
-    pub const FREE: ModelPrice = ModelPrice { input_per_million: 0.0, output_per_million: 0.0 };
+    pub const FREE: ModelPrice = ModelPrice {
+        input_per_million: 0.0,
+        output_per_million: 0.0,
+    };
 
     /// Compute the USD cost for `input_tokens` + `output_tokens`.
     pub fn cost_usd(&self, input_tokens: u64, output_tokens: u64) -> f64 {

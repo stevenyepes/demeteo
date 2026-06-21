@@ -20,8 +20,8 @@
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::db::{
-    AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
-    ProjectRepository, ThreadRepository, WorkflowRepository,
+    AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository, ProjectRepository,
+    ThreadRepository, WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;

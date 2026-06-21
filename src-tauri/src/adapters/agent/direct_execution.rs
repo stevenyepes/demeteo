@@ -27,11 +27,18 @@ impl DirectExecutionPort {
             AgentAction::Read { path } => {
                 let content = inner.read_file(&machine_id, &path)?;
                 let preview = content.lines().take(40).collect::<Vec<_>>().join("\n");
-                Ok(ExecutionResult::FileRead { path, content_preview: preview })
+                Ok(ExecutionResult::FileRead {
+                    path,
+                    content_preview: preview,
+                })
             }
             AgentAction::Edit { path, content } | AgentAction::Write { path, content } => {
                 inner.write_file(&machine_id, &path, &content)?;
-                Ok(ExecutionResult::FileChanged { path, lines_added: 0, lines_removed: 0 })
+                Ok(ExecutionResult::FileChanged {
+                    path,
+                    lines_added: 0,
+                    lines_removed: 0,
+                })
             }
             AgentAction::RunBash { cmd } => {
                 let output = inner.run_command(&machine_id, &cmd)?;

@@ -23,12 +23,7 @@ pub trait ArtifactStore: Send + Sync {
     ///
     /// The reference is implementation-defined. The FS adapter returns
     /// the absolute path; an S3 adapter would return an S3 URI.
-    fn put(
-        &self,
-        feature_id: &str,
-        step_id: &str,
-        artifact: &Artifact,
-    ) -> Result<String, String>;
+    fn put(&self, feature_id: &str, step_id: &str, artifact: &Artifact) -> Result<String, String>;
 
     /// Read the artifact content by reference. Returns the raw
     /// content string; for `WorktreeRef` artifacts this is the JSON
@@ -39,11 +34,7 @@ pub trait ArtifactStore: Send + Sync {
     /// by `resolve_attached_artifacts` to materialize a step's
     /// contribution when a downstream step's template references it
     /// by step-id only.
-    fn list_for_step(
-        &self,
-        feature_id: &str,
-        step_id: &str,
-    ) -> Result<Vec<String>, String>;
+    fn list_for_step(&self, feature_id: &str, step_id: &str) -> Result<Vec<String>, String>;
 
     /// Drop all artifacts for a step. Used when the executor rolls
     /// back a step (e.g. `step_retry` resets the row, so the old

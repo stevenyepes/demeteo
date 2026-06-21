@@ -28,7 +28,10 @@ impl FsArtifactStore {
     pub fn new(app_local_data_dir: PathBuf) -> Self {
         let root = app_local_data_dir.join("artifacts");
         let _ = std::fs::create_dir_all(&root);
-        Self { root, _marker: Arc::new(()) }
+        Self {
+            root,
+            _marker: Arc::new(()),
+        }
     }
 
     fn step_dir(&self, feature_id: &str, step_id: &str) -> PathBuf {
@@ -51,17 +54,18 @@ impl FsArtifactStore {
 
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
 impl ArtifactStore for FsArtifactStore {
-    fn put(
-        &self,
-        feature_id: &str,
-        step_id: &str,
-        artifact: &Artifact,
-    ) -> Result<String, String> {
+    fn put(&self, feature_id: &str, step_id: &str, artifact: &Artifact) -> Result<String, String> {
         let dir = self.step_dir(feature_id, step_id);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let ext = FsArtifactStore::ext_for_mime(&artifact.mime);
@@ -82,7 +86,12 @@ impl ArtifactStore for FsArtifactStore {
         // it from the JSON envelope in `get` works, but for tooling
         // that scrapes the artifact directory directly, the sentinel
         // is the canonical record.
-        if let ArtifactSource::WorktreeRef { machine_id, branch, path: file_path } = &artifact.source {
+        if let ArtifactSource::WorktreeRef {
+            machine_id,
+            branch,
+            path: file_path,
+        } = &artifact.source
+        {
             let env = serde_json::json!({
                 "name": artifact.name,
                 "mime": artifact.mime,
@@ -100,11 +109,7 @@ impl ArtifactStore for FsArtifactStore {
         std::fs::read_to_string(Path::new(reference)).map_err(|e| e.to_string())
     }
 
-    fn list_for_step(
-        &self,
-        feature_id: &str,
-        step_id: &str,
-    ) -> Result<Vec<String>, String> {
+    fn list_for_step(&self, feature_id: &str, step_id: &str) -> Result<Vec<String>, String> {
         let dir = self.step_dir(feature_id, step_id);
         if !dir.exists() {
             return Ok(Vec::new());
@@ -118,7 +123,10 @@ impl ArtifactStore for FsArtifactStore {
             // The sentinel ends with `.env.json` but `Path::extension`
             // only returns the last component (`json`), so we compare
             // the file name string directly.
-            if p.file_name().and_then(|s| s.to_str()).map_or(false, |n| n.ends_with(".env.json")) {
+            if p.file_name()
+                .and_then(|s| s.to_str())
+                .map_or(false, |n| n.ends_with(".env.json"))
+            {
                 continue;
             }
             if p.is_file() {
@@ -173,8 +181,22 @@ mod tests {
     #[test]
     fn put_uses_correct_extension_per_mime() {
         let (store, _dir) = temp_store();
-        let md = Artifact { name: "spec".into(), mime: "text/markdown".into(), content: "x".into(), source: ArtifactSource::AgentText };
-        let diff = Artifact { name: "diff".into(), mime: "application/x-diff".into(), content: "y".into(), source: ArtifactSource::Diff { base: "a".into(), head: "b".into(), path_filter: None } };
+        let md = Artifact {
+            name: "spec".into(),
+            mime: "text/markdown".into(),
+            content: "x".into(),
+            source: ArtifactSource::AgentText,
+        };
+        let diff = Artifact {
+            name: "diff".into(),
+            mime: "application/x-diff".into(),
+            content: "y".into(),
+            source: ArtifactSource::Diff {
+                base: "a".into(),
+                head: "b".into(),
+                path_filter: None,
+            },
+        };
         let r1 = store.put("f1", "s1", &md).unwrap();
         let r2 = store.put("f1", "s1", &diff).unwrap();
         assert!(r1.ends_with("spec.md"));
@@ -184,9 +206,15 @@ mod tests {
     #[test]
     fn list_for_step_returns_insertion_order() {
         let (store, _dir) = temp_store();
-        store.put("f1", "s1", &Artifact::agent_text("a", "1")).unwrap();
-        store.put("f1", "s1", &Artifact::agent_text("b", "2")).unwrap();
-        store.put("f1", "s2", &Artifact::agent_text("c", "3")).unwrap();
+        store
+            .put("f1", "s1", &Artifact::agent_text("a", "1"))
+            .unwrap();
+        store
+            .put("f1", "s1", &Artifact::agent_text("b", "2"))
+            .unwrap();
+        store
+            .put("f1", "s2", &Artifact::agent_text("c", "3"))
+            .unwrap();
         let mut s1 = store.list_for_step("f1", "s1").unwrap();
         s1.sort();
         assert_eq!(s1.len(), 2);
@@ -197,7 +225,9 @@ mod tests {
     #[test]
     fn clear_step_removes_artifacts() {
         let (store, _dir) = temp_store();
-        store.put("f1", "s1", &Artifact::agent_text("a", "1")).unwrap();
+        store
+            .put("f1", "s1", &Artifact::agent_text("a", "1"))
+            .unwrap();
         assert_eq!(store.list_for_step("f1", "s1").unwrap().len(), 1);
         store.clear_step("f1", "s1").unwrap();
         assert!(store.list_for_step("f1", "s1").unwrap().is_empty());

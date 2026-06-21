@@ -5,8 +5,13 @@ static CACHE: std::sync::LazyLock<Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Retrieve a cached credential, or fetch + cache it.
-pub fn get_or_fetch(key: &str, fetcher: impl FnOnce() -> Result<String, String>) -> Result<String, String> {
-    let mut cache = CACHE.lock().map_err(|e| format!("Cache lock error: {}", e))?;
+pub fn get_or_fetch(
+    key: &str,
+    fetcher: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Cache lock error: {}", e))?;
     if let Some(value) = cache.get(key) {
         return Ok(value.clone());
     }

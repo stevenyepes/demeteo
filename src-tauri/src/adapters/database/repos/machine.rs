@@ -33,7 +33,8 @@ impl MachineRepository for SqliteAdapter {
                 })
             })
             .map_err(|e| e.to_string())?;
-        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     fn get_machine(&self, id: &MachineId) -> Result<Option<Machine>, String> {
@@ -88,7 +89,19 @@ impl MachineRepository for SqliteAdapter {
                  auth_type = ?6, key_path = ?7, agents = ?8, auto_approved_rules = ?9,
                  use_login_shell = ?10, setup_commands = ?11
              WHERE id = ?1",
-            params![m.id, m.name, m.host, m.port, m.username, m.auth_type, m.key_path, m.agents, m.auto_approved_rules, m.use_login_shell, m.setup_commands],
+            params![
+                m.id,
+                m.name,
+                m.host,
+                m.port,
+                m.username,
+                m.auth_type,
+                m.key_path,
+                m.agents,
+                m.auto_approved_rules,
+                m.use_login_shell,
+                m.setup_commands
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -123,7 +136,8 @@ impl MachineRepository for SqliteAdapter {
                 })
             })
             .map_err(|e| e.to_string())?;
-        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     fn add_agent_profile(&self, a: AgentProfile) -> Result<(), String> {

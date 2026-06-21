@@ -1,4 +1,4 @@
-use crate::domain::models::{StepExecution, GateDecision, Feature};
+use crate::domain::models::{Feature, GateDecision, StepExecution};
 
 pub trait StepExecutor: Send + Sync {
     /// Start a new feature run.

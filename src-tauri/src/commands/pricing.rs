@@ -19,13 +19,11 @@ pub fn pricing_list(ctx: State<'_, AppContext>) -> Vec<ModelPricingDto> {
         .known_models()
         .into_iter()
         .filter_map(|m| {
-            ctx.pricing
-                .price_for(&m)
-                .map(|p| ModelPricingDto {
-                    model: m,
-                    input_per_million: p.input_per_million,
-                    output_per_million: p.output_per_million,
-                })
+            ctx.pricing.price_for(&m).map(|p| ModelPricingDto {
+                model: m,
+                input_per_million: p.input_per_million,
+                output_per_million: p.output_per_million,
+            })
         })
         .collect()
 }

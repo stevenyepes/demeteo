@@ -1,7 +1,7 @@
-use tauri::State;
-use crate::state::AppContext;
-use crate::ports::agent_runtime::AgentContext;
 use crate::domain::models::ConfigOptionValue;
+use crate::ports::agent_runtime::AgentContext;
+use crate::state::AppContext;
+use tauri::State;
 
 /// Try to discover models via ACP `session/new` capability negotiation.
 /// Returns `Ok` only if the agent exposes a `"model"` config option with options.

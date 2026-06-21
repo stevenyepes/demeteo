@@ -1,9 +1,9 @@
+use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
+use crate::domain::models::{Project, RepoHealthStatus, Repository};
+use crate::paths;
+use crate::state::AppContext;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
-use crate::state::AppContext;
-use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
-use crate::domain::models::{Project, Repository, RepoHealthStatus};
-use crate::paths;
 
 /// Compute the absolute target dir for a (project, repo) pair.
 ///
@@ -103,16 +103,12 @@ pub async fn create_project(
 }
 
 #[tauri::command]
-pub fn get_projects(
-    ctx: State<'_, AppContext>,
-) -> Result<Vec<Project>, String> {
+pub fn get_projects(ctx: State<'_, AppContext>) -> Result<Vec<Project>, String> {
     ctx.projects.get_projects()
 }
 
 #[tauri::command]
-pub fn seed_sample_project(
-    ctx: State<'_, AppContext>,
-) -> Result<Project, String> {
+pub fn seed_sample_project(ctx: State<'_, AppContext>) -> Result<Project, String> {
     let now = paths::now_ms();
     let id = ProjectId::from("p_sample_1".to_string());
 
@@ -142,7 +138,9 @@ pub async fn update_project(
     // Fetch current project to preserve spend, created_at
     let existing_projects = ctx.projects.get_projects()?;
     let project_id = ProjectId::from(id.clone());
-    let existing = existing_projects.into_iter().find(|p| p.id == project_id)
+    let existing = existing_projects
+        .into_iter()
+        .find(|p| p.id == project_id)
         .ok_or_else(|| format!("Project {} not found", id))?;
 
     let updated_project = Project {
@@ -185,7 +183,9 @@ pub async fn delete_project(
     // Fetch project
     let projects = ctx.projects.get_projects()?;
     let project_id = ProjectId::from(id.clone());
-    let project = projects.into_iter().find(|p| p.id == project_id)
+    let project = projects
+        .into_iter()
+        .find(|p| p.id == project_id)
         .ok_or_else(|| format!("Project {} not found", id))?;
 
     // Delete project from database
@@ -244,7 +244,9 @@ pub async fn check_repos_dirty(
 
     let projects = ctx.projects.get_projects()?;
     let project_id_typed = ProjectId::from(project_id.clone());
-    let project = projects.into_iter().find(|p| p.id == project_id_typed)
+    let project = projects
+        .into_iter()
+        .find(|p| p.id == project_id_typed)
         .ok_or_else(|| format!("Project not found: {}", project_id))?;
 
     let machine_id = if project.compute_type.to_lowercase() == "local" {
@@ -257,15 +259,11 @@ pub async fn check_repos_dirty(
     let mut results = Vec::new();
 
     for repo_path in repo_paths {
-        let target_dir = resolve_target_dir(
-            &app,
-            &ctx.exec,
-            &project,
-            &project_id,
-            &repo_path,
-        )?;
+        let target_dir = resolve_target_dir(&app, &ctx.exec, &project, &project_id, &repo_path)?;
 
-        let (has_uncommitted, has_unpushed) = git_ops.check_repo_dirty(machine_id, &target_dir).unwrap_or((false, false));
+        let (has_uncommitted, has_unpushed) = git_ops
+            .check_repo_dirty(machine_id, &target_dir)
+            .unwrap_or((false, false));
         results.push(RepoDirtyStatus {
             repo_path,
             has_uncommitted,
@@ -281,7 +279,8 @@ pub fn get_repositories_for_project(
     ctx: State<'_, AppContext>,
     project_id: String,
 ) -> Result<Vec<Repository>, String> {
-    ctx.projects.get_repositories_for(&ProjectId::from(project_id))
+    ctx.projects
+        .get_repositories_for(&ProjectId::from(project_id))
 }
 
 #[tauri::command]
@@ -310,20 +309,18 @@ pub async fn get_workspace_health(
     let mut results = Vec::new();
 
     for repo in repos {
-        let target_dir = resolve_target_dir(
-            &app,
-            &ctx.exec,
-            &project,
-            &project_id,
-            &repo.repo_path,
-        )?;
+        let target_dir =
+            resolve_target_dir(&app, &ctx.exec, &project, &project_id, &repo.repo_path)?;
 
         // Determine if the repo is actually cloned by checking for a git repo.
         // We log the exact path and the raw command output so a field
         // diagnosis can compare the path the backend *thinks* it is
         // probing against the path the user sees in their terminal.
         let machine_str = machine_id.unwrap_or("local");
-        let probe_cmd = format!("git -C {} rev-parse --is-inside-work-tree", paths::shell_escape_posix(&target_dir));
+        let probe_cmd = format!(
+            "git -C {} rev-parse --is-inside-work-tree",
+            paths::shell_escape_posix(&target_dir)
+        );
         let probe_result = ctx.exec.run_command(machine_str, &probe_cmd);
         let is_cloned = probe_result.is_ok();
         eprintln!(
@@ -344,13 +341,17 @@ pub async fn get_workspace_health(
         };
 
         let worktrees = if is_cloned {
-            git_ops.list_worktrees(machine_id, &target_dir).unwrap_or_default()
+            git_ops
+                .list_worktrees(machine_id, &target_dir)
+                .unwrap_or_default()
         } else {
             vec![]
         };
 
         let (has_uncommitted, has_unpushed) = if is_cloned {
-            git_ops.check_repo_dirty(machine_id, &target_dir).unwrap_or((false, false))
+            git_ops
+                .check_repo_dirty(machine_id, &target_dir)
+                .unwrap_or((false, false))
         } else {
             (false, false)
         };

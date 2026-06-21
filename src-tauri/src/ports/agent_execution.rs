@@ -2,14 +2,19 @@ use serde::{Deserialize, Serialize};
 
 use tokio::sync::oneshot;
 
-use crate::domain::intercept::{ExecutionResult, InterceptPayload};
 use crate::domain::action::AgentAction;
+use crate::domain::intercept::{ExecutionResult, InterceptPayload};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CommandOutcome {
-    Executed { output: ExecutionResult },
-    Intercepted { intercept_id: String, payload: InterceptPayload },
+    Executed {
+        output: ExecutionResult,
+    },
+    Intercepted {
+        intercept_id: String,
+        payload: InterceptPayload,
+    },
 }
 
 /// Typed error envelope. Per AGENT_INTEGRATION §9.1, every new error path
@@ -24,9 +29,21 @@ pub enum ActionError {
 }
 
 impl ActionError {
-    pub fn network(msg: impl Into<String>) -> Self { ActionError::Network { message: msg.into() } }
-    pub fn not_found(msg: impl Into<String>) -> Self { ActionError::NotFound { message: msg.into() } }
-    pub fn internal(msg: impl Into<String>) -> Self { ActionError::Internal { message: msg.into() } }
+    pub fn network(msg: impl Into<String>) -> Self {
+        ActionError::Network {
+            message: msg.into(),
+        }
+    }
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        ActionError::NotFound {
+            message: msg.into(),
+        }
+    }
+    pub fn internal(msg: impl Into<String>) -> Self {
+        ActionError::Internal {
+            message: msg.into(),
+        }
+    }
 }
 
 pub trait AgentExecutionPort: Send + Sync {

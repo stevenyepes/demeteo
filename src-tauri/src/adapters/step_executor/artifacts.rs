@@ -3,10 +3,10 @@ use std::sync::Arc;
 use crate::domain::artifact::{Artifact, ArtifactCapture, ArtifactDecl, ArtifactSource};
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
+use crate::paths;
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::GateRepository;
 use crate::ports::execution::ExecutionPort;
-use crate::paths;
 
 /// Returns `(decision, feedback)` from the most recently *decided* gate step
 /// for a feature.  Used to inject `{{gate_decision}}` and `{{gate_feedback}}`
@@ -71,7 +71,9 @@ pub(crate) fn resolve_attached_artifacts(
                             for p in &paths {
                                 match std::fs::read_to_string(p) {
                                     Ok(c) => parts.push(c),
-                                    Err(_) => parts.push(format!("(Error reading artifact at {})", p)),
+                                    Err(_) => {
+                                        parts.push(format!("(Error reading artifact at {})", p))
+                                    }
                                 }
                             }
                             replacement = if parts.len() == 1 {
@@ -112,10 +114,8 @@ pub(crate) fn resolve_attached_artifacts(
                     if found {
                         replacement = matched_contents.join("\n\n");
                     } else {
-                        replacement = format!(
-                            "(Artifact '{}' not found or not yet generated)",
-                            content
-                        );
+                        replacement =
+                            format!("(Artifact '{}' not found or not yet generated)", content);
                     }
                 }
 
@@ -183,9 +183,7 @@ pub(crate) fn inject_artifact_contract(
             ArtifactCapture::Worktree { path: Some(p) } => {
                 format!("- Worktree pointer for `{}`", p)
             }
-            ArtifactCapture::Worktree { path: None } => {
-                "- Worktree root pointer".to_string()
-            }
+            ArtifactCapture::Worktree { path: None } => "- Worktree root pointer".to_string(),
         };
         lines.push(hint);
     }
@@ -221,11 +219,9 @@ pub(crate) fn resolve_declared_artifacts(
 
     for decl in declarations {
         let matched: Option<&Artifact> = match &decl.capture {
-            ArtifactCapture::ByName { name } => {
-                produced.iter().find(|a| {
-                    a.name == *name || strip_extension(&a.name).map_or(false, |s| s == *name)
-                })
-            }
+            ArtifactCapture::ByName { name } => produced.iter().find(|a| {
+                a.name == *name || strip_extension(&a.name).map_or(false, |s| s == *name)
+            }),
             ArtifactCapture::LastWriteTo { path } => produced
                 .iter()
                 .filter(|a| matches!(&a.source, ArtifactSource::ToolWrite { path: p } if p == path))
@@ -270,10 +266,10 @@ pub(crate) fn resolve_declared_artifacts(
             match store.put(feature_id, step_id, artifact) {
                 Ok(reference) => refs.push(reference),
                 Err(e) => {
-                eprintln!(
-                    "[artifacts] step={} decl={}: Failed to store artifact: {}",
-                    step_id, decl.name, e,
-                );
+                    eprintln!(
+                        "[artifacts] step={} decl={}: Failed to store artifact: {}",
+                        step_id, decl.name, e,
+                    );
                 }
             }
         } else {
@@ -296,7 +292,7 @@ pub(crate) fn resolve_declared_artifacts(
                     match store.put(feature_id, step_id, artifact) {
                         Ok(reference) => refs.push(reference),
                         Err(e) => {
-                        eprintln!(
+                            eprintln!(
                             "[artifacts] step={} path={}: Failed to store AllWrites artifact: {}",
                             step_id, path, e,
                         );
@@ -334,14 +330,8 @@ impl WorktreeSnapshot {
     /// repo, or the command fails, returns an empty snapshot
     /// (the resulting delta is "everything currently dirty",
     /// which is a safe fallback for the bootstrap edge case).
-    pub fn capture(
-        exec: &dyn ExecutionPort,
-        machine_id: &str,
-        worktree_root: &str,
-    ) -> Self {
-        let dirty = parse_status_porcelain(
-            &git_status_porcelain(exec, machine_id, worktree_root),
-        );
+    pub fn capture(exec: &dyn ExecutionPort, machine_id: &str, worktree_root: &str) -> Self {
+        let dirty = parse_status_porcelain(&git_status_porcelain(exec, machine_id, worktree_root));
         Self { dirty }
     }
 
@@ -369,9 +359,7 @@ impl WorktreeSnapshot {
         always_include: &[&str],
         extra_exclude: &[&str],
     ) -> Vec<String> {
-        let now = parse_status_porcelain(
-            &git_status_porcelain(exec, machine_id, worktree_root),
-        );
+        let now = parse_status_porcelain(&git_status_porcelain(exec, machine_id, worktree_root));
 
         let mut out: std::collections::BTreeSet<String> = now
             .iter()
@@ -391,11 +379,7 @@ impl WorktreeSnapshot {
     }
 }
 
-fn git_status_porcelain(
-    exec: &dyn ExecutionPort,
-    machine_id: &str,
-    worktree_root: &str,
-) -> String {
+fn git_status_porcelain(exec: &dyn ExecutionPort, machine_id: &str, worktree_root: &str) -> String {
     let cmd = format!(
         "git -C {} status --porcelain --untracked-files=all",
         paths::shell_escape_posix(worktree_root),
@@ -540,10 +524,7 @@ pub fn commit_worktree_changes(
     worktree_root: &str,
     message: &str,
 ) -> Result<String, String> {
-    let add_cmd = format!(
-        "git -C {} add -A",
-        paths::shell_escape_posix(worktree_root),
-    );
+    let add_cmd = format!("git -C {} add -A", paths::shell_escape_posix(worktree_root),);
     exec.run_command(machine_id, &add_cmd)
         .map_err(|e| format!("git add failed: {}", e))?;
 
@@ -598,8 +579,8 @@ fn strip_extension(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::ids::StepExecutionId;
     use crate::domain::ids::FeatureId;
+    use crate::domain::ids::StepExecutionId;
 
     #[test]
     fn test_resolve_attached_artifacts() {
@@ -620,42 +601,43 @@ mod tests {
         std::fs::write(&path2, "This is the research content.").unwrap();
         let path2_str = path2.to_string_lossy().to_string();
 
-    let step_execs = vec![
-        StepExecution {
-            id: StepExecutionId::from("se-1"),
-            feature_id: FeatureId::from("f-1"),
-            step_id: crate::domain::ids::StepId::from("s-research"),
-            step_index: 0,
-            step_kind: "agent".to_string(),
-            status: "completed".to_string(),
-            cost_usd: Some(0.0),
-            wall_clock_secs: Some(0),
-            artifact_path: Some(path2_str),
-            artifact_paths: vec![],
-            error_message: None,
-            iteration_count: 0,
-            created_at: 0,
-            updated_at: 0,
-        },
-        StepExecution {
-            id: StepExecutionId::from("se-2"),
-            feature_id: FeatureId::from("f-1"),
-            step_id: crate::domain::ids::StepId::from("s-spec"),
-            step_index: 1,
-            step_kind: "agent".to_string(),
-            status: "completed".to_string(),
-            cost_usd: Some(0.0),
-            wall_clock_secs: Some(0),
-            artifact_path: Some(path1_str),
-            artifact_paths: vec![],
-            error_message: None,
-            iteration_count: 0,
-            created_at: 0,
-            updated_at: 0,
-        },
-    ];
+        let step_execs = vec![
+            StepExecution {
+                id: StepExecutionId::from("se-1"),
+                feature_id: FeatureId::from("f-1"),
+                step_id: crate::domain::ids::StepId::from("s-research"),
+                step_index: 0,
+                step_kind: "agent".to_string(),
+                status: "completed".to_string(),
+                cost_usd: Some(0.0),
+                wall_clock_secs: Some(0),
+                artifact_path: Some(path2_str),
+                artifact_paths: vec![],
+                error_message: None,
+                iteration_count: 0,
+                created_at: 0,
+                updated_at: 0,
+            },
+            StepExecution {
+                id: StepExecutionId::from("se-2"),
+                feature_id: FeatureId::from("f-1"),
+                step_id: crate::domain::ids::StepId::from("s-spec"),
+                step_index: 1,
+                step_kind: "agent".to_string(),
+                status: "completed".to_string(),
+                cost_usd: Some(0.0),
+                wall_clock_secs: Some(0),
+                artifact_path: Some(path1_str),
+                artifact_paths: vec![],
+                error_message: None,
+                iteration_count: 0,
+                created_at: 0,
+                updated_at: 0,
+            },
+        ];
 
-        let template = "Read the research: [attached — s-research] and the spec: [attached — s-spec]";
+        let template =
+            "Read the research: [attached — s-research] and the spec: [attached — s-spec]";
         let resolved = resolve_attached_artifacts(template, &step_execs, 1);
         assert_eq!(
             resolved,
@@ -664,7 +646,10 @@ mod tests {
 
         let template_prev = "Previous content: [attached — previous step artifact]";
         let resolved_prev = resolve_attached_artifacts(template_prev, &step_execs, 1);
-        assert_eq!(resolved_prev, "Previous content: This is the research content.");
+        assert_eq!(
+            resolved_prev,
+            "Previous content: This is the research content."
+        );
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
@@ -682,9 +667,7 @@ mod tests {
     #[test]
     fn test_inject_artifact_contract_with_decls() {
         let prompt = "Write the spec.";
-        let decls = vec![
-            ArtifactDecl::full_path("spec", "docs/spec.md"),
-        ];
+        let decls = vec![ArtifactDecl::full_path("spec", "docs/spec.md")];
         let result = inject_artifact_contract(prompt, Some(&decls));
         assert!(result.contains("## Expected Artifacts (orchestrator contract)"));
         assert!(result.contains("Write `docs/spec.md`"));
@@ -705,12 +688,17 @@ mod tests {
             },
             ArtifactDecl {
                 name: "diff".into(),
-                capture: ArtifactCapture::Diff { base: DiffBase::WorktreeBase, path_filter: None },
+                capture: ArtifactCapture::Diff {
+                    base: DiffBase::WorktreeBase,
+                    path_filter: None,
+                },
                 mode: crate::domain::artifact::ArtifactMode::Full,
             },
             ArtifactDecl {
                 name: "wt".into(),
-                capture: ArtifactCapture::Worktree { path: Some("src/".into()) },
+                capture: ArtifactCapture::Worktree {
+                    path: Some("src/".into()),
+                },
                 mode: crate::domain::artifact::ArtifactMode::None,
             },
         ];
@@ -732,24 +720,15 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let store: Arc<dyn ArtifactStore> =
-            Arc::new(crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()));
-
-        let declarations = vec![
-            ArtifactDecl::full_path("spec", "docs/spec.md"),
-        ];
-
-        let produced = vec![
-            Artifact::tool_write("spec", "docs/spec.md", "# My Spec\n"),
-        ];
-
-        let refs = resolve_declared_artifacts(
-            &declarations,
-            &produced,
-            &store,
-            "f-test",
-            "s-impl",
+        let store: Arc<dyn ArtifactStore> = Arc::new(
+            crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
         );
+
+        let declarations = vec![ArtifactDecl::full_path("spec", "docs/spec.md")];
+
+        let produced = vec![Artifact::tool_write("spec", "docs/spec.md", "# My Spec\n")];
+
+        let refs = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
         assert_eq!(refs.len(), 1);
         assert!(refs[0].contains("artifacts/f-test/s-impl/spec"));
@@ -771,12 +750,15 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let store: Arc<dyn ArtifactStore> =
-            Arc::new(crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()));
+        let store: Arc<dyn ArtifactStore> = Arc::new(
+            crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
+        );
 
         let declarations = vec![ArtifactDecl {
             name: "final-spec".into(),
-                capture: ArtifactCapture::LastWriteTo { path: "docs/spec.md".into() },
+            capture: ArtifactCapture::LastWriteTo {
+                path: "docs/spec.md".into(),
+            },
             mode: crate::domain::artifact::ArtifactMode::Full,
         }];
 
@@ -785,13 +767,7 @@ mod tests {
             Artifact::tool_write("final", "docs/spec.md", "# Final\n"),
         ];
 
-        let refs = resolve_declared_artifacts(
-            &declarations,
-            &produced,
-            &store,
-            "f-test",
-            "s-impl",
-        );
+        let refs = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
         assert_eq!(refs.len(), 1);
         let content = store.get(&refs[0]).unwrap();
@@ -811,8 +787,9 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let store: Arc<dyn ArtifactStore> =
-            Arc::new(crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()));
+        let store: Arc<dyn ArtifactStore> = Arc::new(
+            crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
+        );
 
         let declarations = vec![ArtifactDecl {
             name: "all-files".into(),
@@ -827,13 +804,7 @@ mod tests {
             Artifact::tool_write("f1-v2", "src/lib.rs", "// lib v2\n"),
         ];
 
-        let refs = resolve_declared_artifacts(
-            &declarations,
-            &produced,
-            &store,
-            "f-test",
-            "s-impl",
-        );
+        let refs = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
         // Two unique paths: src/lib.rs (last write wins for content, but ref deduped)
         assert_eq!(refs.len(), 2);
@@ -853,13 +824,17 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let store: Arc<dyn ArtifactStore> =
-            Arc::new(crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()));
+        let store: Arc<dyn ArtifactStore> = Arc::new(
+            crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
+        );
 
         let declarations = vec![
             ArtifactDecl {
                 name: "code-diff".into(),
-                capture: ArtifactCapture::Diff { base: DiffBase::WorktreeBase, path_filter: None },
+                capture: ArtifactCapture::Diff {
+                    base: DiffBase::WorktreeBase,
+                    path_filter: None,
+                },
                 mode: crate::domain::artifact::ArtifactMode::Full,
             },
             ArtifactDecl {
@@ -870,13 +845,7 @@ mod tests {
         ];
 
         // Produced has no matching artifact — diff/worktree are derived
-        let refs = resolve_declared_artifacts(
-            &declarations,
-            &[],
-            &store,
-            "f-test",
-            "s-impl",
-        );
+        let refs = resolve_declared_artifacts(&declarations, &[], &store, "f-test", "s-impl");
 
         assert!(refs.is_empty());
 
@@ -898,24 +867,22 @@ mod tests {
         std::fs::write(&artifact_file, "Research content from paths.").unwrap();
         let artifact_str = artifact_file.to_string_lossy().to_string();
 
-        let step_execs = vec![
-            StepExecution {
-                id: StepExecutionId::from("se-1"),
-                feature_id: FeatureId::from("f-1"),
-                step_id: crate::domain::ids::StepId::from("s-research"),
-                step_index: 0,
-                step_kind: "agent".to_string(),
-                status: "completed".to_string(),
-                cost_usd: Some(0.0),
-                wall_clock_secs: Some(0),
-                artifact_path: None,
-                artifact_paths: vec![artifact_str],
-                error_message: None,
-                iteration_count: 0,
-                created_at: 0,
-                updated_at: 0,
-            },
-        ];
+        let step_execs = vec![StepExecution {
+            id: StepExecutionId::from("se-1"),
+            feature_id: FeatureId::from("f-1"),
+            step_id: crate::domain::ids::StepId::from("s-research"),
+            step_index: 0,
+            step_kind: "agent".to_string(),
+            status: "completed".to_string(),
+            cost_usd: Some(0.0),
+            wall_clock_secs: Some(0),
+            artifact_path: None,
+            artifact_paths: vec![artifact_str],
+            error_message: None,
+            iteration_count: 0,
+            created_at: 0,
+            updated_at: 0,
+        }];
 
         let template = "Previous: [attached — previous step artifact]";
         let resolved = resolve_attached_artifacts(template, &step_execs, 1);
@@ -961,11 +928,17 @@ mod tests {
         let machine = "local";
 
         // Write & commit a baseline file so the repo isn't empty.
-        exec.write_file(machine, &format!("{}/baseline.rs", temp), "fn main() {}").unwrap();
-        exec.run_command(machine, &format!(
-            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
-            shell_esc(&temp), shell_esc(&temp),
-        )).unwrap();
+        exec.write_file(machine, &format!("{}/baseline.rs", temp), "fn main() {}")
+            .unwrap();
+        exec.run_command(
+            machine,
+            &format!(
+                "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
+                shell_esc(&temp),
+                shell_esc(&temp),
+            ),
+        )
+        .unwrap();
 
         // Snapshot the clean repo.
         let snap = WorktreeSnapshot::capture(&exec, machine, &temp);
@@ -973,17 +946,25 @@ mod tests {
 
         // Simulate the agent writing a new file and modifying
         // baseline.rs.
-        exec.write_file(machine, &format!("{}/new.md", temp), "# New\n").unwrap();
-        exec.write_file(machine, &format!("{}/baseline.rs", temp), "fn main(){}\n").unwrap();
+        exec.write_file(machine, &format!("{}/new.md", temp), "# New\n")
+            .unwrap();
+        exec.write_file(machine, &format!("{}/baseline.rs", temp), "fn main(){}\n")
+            .unwrap();
 
         // Delta with always_include empty: the new file should appear.
         let changed = snap.delta(&exec, machine, &temp, &[], &[]);
-        assert!(changed.contains(&"new.md".to_string()),
-            "expected new.md in delta, got {:?}", changed);
+        assert!(
+            changed.contains(&"new.md".to_string()),
+            "expected new.md in delta, got {:?}",
+            changed
+        );
         // baseline.rs was clean *before* the step and is now modified.
         // `git status --porcelain` will report it as " M" so it's dirty now.
-        assert!(changed.contains(&"baseline.rs".to_string()),
-            "expected baseline.rs in delta (modified by step), got {:?}", changed);
+        assert!(
+            changed.contains(&"baseline.rs".to_string()),
+            "expected baseline.rs in delta (modified by step), got {:?}",
+            changed
+        );
 
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -994,30 +975,44 @@ mod tests {
         let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
         let machine = "local";
 
-        exec.write_file(machine, &format!("{}/base.md", temp), "# base\n").unwrap();
-        exec.run_command(machine, &format!(
-            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
-            shell_esc(&temp), shell_esc(&temp),
-        )).unwrap();
+        exec.write_file(machine, &format!("{}/base.md", temp), "# base\n")
+            .unwrap();
+        exec.run_command(
+            machine,
+            &format!(
+                "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
+                shell_esc(&temp),
+                shell_esc(&temp),
+            ),
+        )
+        .unwrap();
 
         // Make base.md dirty before the step starts.
-        exec.write_file(machine, &format!("{}/base.md", temp), "# dirty\n").unwrap();
+        exec.write_file(machine, &format!("{}/base.md", temp), "# dirty\n")
+            .unwrap();
         let snap = WorktreeSnapshot::capture(&exec, machine, &temp);
         assert!(snap.dirty.contains("base.md"));
 
         // Step refines base.md further.
-        exec.write_file(machine, &format!("{}/base.md", temp), "# final\n").unwrap();
+        exec.write_file(machine, &format!("{}/base.md", temp), "# final\n")
+            .unwrap();
 
         // Without always_include, base.md is excluded because it was
         // already dirty at step start.
         let without = snap.delta(&exec, machine, &temp, &[], &[]);
-        assert!(!without.contains(&"base.md".to_string()),
-            "base.md should NOT appear without always_include, got {:?}", without);
+        assert!(
+            !without.contains(&"base.md".to_string()),
+            "base.md should NOT appear without always_include, got {:?}",
+            without
+        );
 
         // With always_include = ["base.md"], it appears regardless.
         let with = snap.delta(&exec, machine, &temp, &["base.md"], &[]);
-        assert!(with.contains(&"base.md".to_string()),
-            "base.md should appear with always_include, got {:?}", with);
+        assert!(
+            with.contains(&"base.md".to_string()),
+            "base.md should appear with always_include, got {:?}",
+            with
+        );
 
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -1028,11 +1023,17 @@ mod tests {
         let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
         let machine = "local";
 
-        exec.write_file(machine, &format!("{}/base.md", temp), "# b\n").unwrap();
-        exec.run_command(machine, &format!(
-            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
-            shell_esc(&temp), shell_esc(&temp),
-        )).unwrap();
+        exec.write_file(machine, &format!("{}/base.md", temp), "# b\n")
+            .unwrap();
+        exec.run_command(
+            machine,
+            &format!(
+                "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m init",
+                shell_esc(&temp),
+                shell_esc(&temp),
+            ),
+        )
+        .unwrap();
 
         let snap = WorktreeSnapshot::capture(&exec, machine, &temp);
 
@@ -1043,10 +1044,16 @@ mod tests {
         std::fs::write(format!("{}/.demeteo/data/y", temp), "y").unwrap();
 
         let changed = snap.delta(&exec, machine, &temp, &[], &[]);
-        assert!(!changed.iter().any(|p| p.starts_with(".git")),
-            "should exclude .git paths, got {:?}", changed);
-        assert!(!changed.iter().any(|p| p.starts_with(".demeteo")),
-            "should exclude .demeteo paths, got {:?}", changed);
+        assert!(
+            !changed.iter().any(|p| p.starts_with(".git")),
+            "should exclude .git paths, got {:?}",
+            changed
+        );
+        assert!(
+            !changed.iter().any(|p| p.starts_with(".demeteo")),
+            "should exclude .demeteo paths, got {:?}",
+            changed
+        );
 
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -1057,23 +1064,35 @@ mod tests {
         let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
         let machine = "local";
 
-        exec.write_file(machine, &format!("{}/src.rs", temp), "fn a() {}\n").unwrap();
-        exec.run_command(machine, &format!(
-            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m base",
-            shell_esc(&temp), shell_esc(&temp),
-        )).unwrap();
+        exec.write_file(machine, &format!("{}/src.rs", temp), "fn a() {}\n")
+            .unwrap();
+        exec.run_command(
+            machine,
+            &format!(
+                "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m base",
+                shell_esc(&temp),
+                shell_esc(&temp),
+            ),
+        )
+        .unwrap();
 
         // Modify a tracked file and add an untracked one — both should
         // be committed by commit_worktree_changes.
-        exec.write_file(machine, &format!("{}/src.rs", temp), "fn b() {}\n").unwrap();
-        exec.write_file(machine, &format!("{}/new.md", temp), "# Added\n").unwrap();
+        exec.write_file(machine, &format!("{}/src.rs", temp), "fn b() {}\n")
+            .unwrap();
+        exec.write_file(machine, &format!("{}/new.md", temp), "# Added\n")
+            .unwrap();
 
         let sha = commit_worktree_changes(&exec, machine, &temp, "worker: subtask-1").unwrap();
         assert!(!sha.is_empty());
 
         // Verify the commit exists and the tree changed.
-        let log = exec.run_command(machine, &format!(
-            "git -C {} log --oneline -1", shell_esc(&temp))).unwrap();
+        let log = exec
+            .run_command(
+                machine,
+                &format!("git -C {} log --oneline -1", shell_esc(&temp)),
+            )
+            .unwrap();
         assert!(log.contains("worker: subtask-1"));
 
         let _ = std::fs::remove_dir_all(&temp);
@@ -1085,17 +1104,30 @@ mod tests {
         let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
         let machine = "local";
 
-        exec.write_file(machine, &format!("{}/src.rs", temp), "fn init() {}\n").unwrap();
-        exec.run_command(machine, &format!(
-            "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m base",
-            shell_esc(&temp), shell_esc(&temp),
-        )).unwrap();
+        exec.write_file(machine, &format!("{}/src.rs", temp), "fn init() {}\n")
+            .unwrap();
+        exec.run_command(
+            machine,
+            &format!(
+                "git -C {} add -A && git -c user.email=t@t.com -c user.name=t -C {} commit -m base",
+                shell_esc(&temp),
+                shell_esc(&temp),
+            ),
+        )
+        .unwrap();
 
-        let base_sha = exec.run_command(machine, &format!(
-            "git -C {} rev-parse HEAD", shell_esc(&temp))).unwrap().trim().to_string();
+        let base_sha = exec
+            .run_command(
+                machine,
+                &format!("git -C {} rev-parse HEAD", shell_esc(&temp)),
+            )
+            .unwrap()
+            .trim()
+            .to_string();
 
         // Modify the file but don't commit.
-        exec.write_file(machine, &format!("{}/src.rs", temp), "fn new() {}\n").unwrap();
+        exec.write_file(machine, &format!("{}/src.rs", temp), "fn new() {}\n")
+            .unwrap();
 
         // Diff against the initial commit.
         let diff = compute_git_diff(&exec, machine, &temp, &base_sha);
@@ -1128,9 +1160,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
-        let _ = exec.run_command("local", &format!(
-            "git init -b main {}", shell_esc(&d.to_string_lossy()),
-        ));
+        let _ = exec.run_command(
+            "local",
+            &format!("git init -b main {}", shell_esc(&d.to_string_lossy()),),
+        );
         d.to_string_lossy().to_string()
     }
 

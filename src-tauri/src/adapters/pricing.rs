@@ -19,24 +19,102 @@ fn default_prices() -> HashMap<String, ModelPrice> {
     let mut m: HashMap<String, ModelPrice> = HashMap::new();
 
     // Anthropic Claude (USD per 1M tokens, as of 2026).
-    m.insert("claude-opus-4".to_string(), ModelPrice { input_per_million: 15.00, output_per_million: 75.00 });
-    m.insert("claude-sonnet-4".to_string(), ModelPrice { input_per_million: 3.00, output_per_million: 15.00 });
-    m.insert("claude-haiku-4".to_string(), ModelPrice { input_per_million: 0.80, output_per_million: 4.00 });
+    m.insert(
+        "claude-opus-4".to_string(),
+        ModelPrice {
+            input_per_million: 15.00,
+            output_per_million: 75.00,
+        },
+    );
+    m.insert(
+        "claude-sonnet-4".to_string(),
+        ModelPrice {
+            input_per_million: 3.00,
+            output_per_million: 15.00,
+        },
+    );
+    m.insert(
+        "claude-haiku-4".to_string(),
+        ModelPrice {
+            input_per_million: 0.80,
+            output_per_million: 4.00,
+        },
+    );
     // Legacy family aliases — same prices, broader matching.
-    m.insert("claude-3-5-sonnet".to_string(), ModelPrice { input_per_million: 3.00, output_per_million: 15.00 });
-    m.insert("claude-3-opus".to_string(), ModelPrice { input_per_million: 15.00, output_per_million: 75.00 });
-    m.insert("claude-3-haiku".to_string(), ModelPrice { input_per_million: 0.25, output_per_million: 1.25 });
+    m.insert(
+        "claude-3-5-sonnet".to_string(),
+        ModelPrice {
+            input_per_million: 3.00,
+            output_per_million: 15.00,
+        },
+    );
+    m.insert(
+        "claude-3-opus".to_string(),
+        ModelPrice {
+            input_per_million: 15.00,
+            output_per_million: 75.00,
+        },
+    );
+    m.insert(
+        "claude-3-haiku".to_string(),
+        ModelPrice {
+            input_per_million: 0.25,
+            output_per_million: 1.25,
+        },
+    );
 
     // OpenAI GPT family.
-    m.insert("gpt-4o".to_string(), ModelPrice { input_per_million: 2.50, output_per_million: 10.00 });
-    m.insert("gpt-4o-mini".to_string(), ModelPrice { input_per_million: 0.15, output_per_million: 0.60 });
-    m.insert("o1".to_string(), ModelPrice { input_per_million: 15.00, output_per_million: 60.00 });
-    m.insert("o1-mini".to_string(), ModelPrice { input_per_million: 3.00, output_per_million: 12.00 });
-    m.insert("o3-mini".to_string(), ModelPrice { input_per_million: 1.10, output_per_million: 4.40 });
+    m.insert(
+        "gpt-4o".to_string(),
+        ModelPrice {
+            input_per_million: 2.50,
+            output_per_million: 10.00,
+        },
+    );
+    m.insert(
+        "gpt-4o-mini".to_string(),
+        ModelPrice {
+            input_per_million: 0.15,
+            output_per_million: 0.60,
+        },
+    );
+    m.insert(
+        "o1".to_string(),
+        ModelPrice {
+            input_per_million: 15.00,
+            output_per_million: 60.00,
+        },
+    );
+    m.insert(
+        "o1-mini".to_string(),
+        ModelPrice {
+            input_per_million: 3.00,
+            output_per_million: 12.00,
+        },
+    );
+    m.insert(
+        "o3-mini".to_string(),
+        ModelPrice {
+            input_per_million: 1.10,
+            output_per_million: 4.40,
+        },
+    );
 
     // Google Gemini.
-    m.insert("gemini-2.5-pro".to_string(), ModelPrice { input_per_million: 1.25, output_per_million: 10.00 });
-    m.insert("gemini-pro".to_string(), ModelPrice { input_per_million: 0.50, output_per_million: 1.50 });
+    m.insert(
+        "gemini-2.5-pro".to_string(),
+        ModelPrice {
+            input_per_million: 1.25,
+            output_per_million: 10.00,
+        },
+    );
+    m.insert(
+        "gemini-pro".to_string(),
+        ModelPrice {
+            input_per_million: 0.50,
+            output_per_million: 1.50,
+        },
+    );
 
     // Local / free.
     m.insert("ollama".to_string(), ModelPrice::FREE);
@@ -53,7 +131,9 @@ pub struct HardcodedPricingTable {
 
 impl HardcodedPricingTable {
     pub fn new() -> Self {
-        Self { by_name: default_prices() }
+        Self {
+            by_name: default_prices(),
+        }
     }
 }
 
@@ -147,7 +227,11 @@ mod tests {
     fn known_models_is_nonempty_and_sorted() {
         let t = HardcodedPricingTable::new();
         let v = t.known_models();
-        assert!(v.len() >= 5, "R1 requires 5-10 known models, got {}", v.len());
+        assert!(
+            v.len() >= 5,
+            "R1 requires 5-10 known models, got {}",
+            v.len()
+        );
         let mut sorted = v.clone();
         sorted.sort();
         assert_eq!(v, sorted, "known_models() should be sorted");

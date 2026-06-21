@@ -33,16 +33,16 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
 use crate::adapters::step_executor::artifacts::{
-    commit_worktree_changes, compute_git_diff, inject_artifact_contract,
-    read_worktree_file, resolve_attached_artifacts, resolve_declared_artifacts,
-    WorktreeSnapshot,
+    commit_worktree_changes, compute_git_diff, inject_artifact_contract, read_worktree_file,
+    resolve_attached_artifacts, resolve_declared_artifacts, WorktreeSnapshot,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
-use crate::adapters::step_executor::steps::StepOutcome;
 use crate::adapters::step_executor::steps::agent::format_agent_error_message;
-use crate::domain::artifact::Artifact;
+use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::agent_event::AgentEvent;
+use crate::domain::artifact::Artifact;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
@@ -85,7 +85,11 @@ pub(crate) fn extract_subtask_dag(text: &str) -> Option<SubtaskDag> {
     if let Some(start) = text.find("```") {
         let after = &text[start + 3..];
         // skip optional language tag on the same line
-        let after = if let Some(nl) = after.find('\n') { &after[nl + 1..] } else { after };
+        let after = if let Some(nl) = after.find('\n') {
+            &after[nl + 1..]
+        } else {
+            after
+        };
         if let Some(end) = after.find("```") {
             let body = after[..end].trim();
             if let Ok(d) = serde_json::from_str::<SubtaskDag>(body) {
@@ -111,20 +115,32 @@ fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
     let mut depth: i32 = 0;
     let mut start: Option<usize> = None;
     for (i, &b) in bytes.iter().enumerate() {
-        if escape { escape = false; continue; }
+        if escape {
+            escape = false;
+            continue;
+        }
         if in_str {
-            if b == b'\\' { escape = true; continue; }
-            if b == b'"' { in_str = false; }
+            if b == b'\\' {
+                escape = true;
+                continue;
+            }
+            if b == b'"' {
+                in_str = false;
+            }
             continue;
         }
         match b {
             b'"' => in_str = true,
             b'{' => {
-                if depth == 0 { start = Some(i); }
+                if depth == 0 {
+                    start = Some(i);
+                }
                 depth += 1;
             }
             b'}' => {
-                if depth > 0 { depth -= 1; }
+                if depth > 0 {
+                    depth -= 1;
+                }
                 if depth == 0 {
                     if let Some(st) = start {
                         if st < i {
@@ -184,6 +200,19 @@ impl ExecutionDriver {
             .machine_id_opt
             .clone()
             .unwrap_or_else(|| "local".to_string());
+
+        let base_sha = self
+            .exec
+            .run_command(
+                &machine_str,
+                &format!(
+                    "git -C {} rev-parse {}",
+                    paths::shell_escape_posix(&self.target_dir),
+                    paths::shell_escape_posix(&self.branch_name),
+                ),
+            )
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "HEAD".to_string());
         let mut planner_env = crate::ports::agent_runtime::agent_base_env();
         if let Some(ref m) = override_model {
             let config = format!(
@@ -211,7 +240,9 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
         };
 
-        let spawn_fut = self.registry.get_or_spawn(&planner_thread_id, &planner_kind, planner_ctx);
+        let spawn_fut = self
+            .registry
+            .get_or_spawn(&planner_thread_id, &planner_kind, planner_ctx);
         let mut cancel_watch_spawn = self.cancel_watch.clone();
         let spawn_res = tokio::select! {
             res = spawn_fut => Some(res),
@@ -224,7 +255,8 @@ impl ExecutionDriver {
             Some(Ok(s)) => s,
             Some(Err(e)) => {
                 return StepOutcome::Failed(format!(
-                    "parallel step: planner spawn failed: {:?}", e
+                    "parallel step: planner spawn failed: {:?}",
+                    e
                 ));
             }
             None => {
@@ -234,40 +266,58 @@ impl ExecutionDriver {
         };
 
         if let Some(ref model) = override_model {
-            let info = planner_session.session_info();
-            let applied = info.config_options.as_ref().and_then(|opts|
-                opts.iter().find(|o| o.id == "model")
-            ).map(|o| o.current_value == *model).unwrap_or(false);
-            if !applied {
-                eprintln!(
-                    "[parallel planner] model '{}' not applied in session/new (current={:?}), trying set_config_option",
-                    model,
-                    info.config_options.as_ref().and_then(|opts|
-                        opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
-                    )
-                );
-                match planner_session.set_config_option("model", model) {
-                    Ok(_) => {
-                        let info2 = planner_session.session_info();
-                        let really = info2.config_options.as_ref().and_then(|opts|
-                            opts.iter().find(|o| o.id == "model")
-                        ).map(|o| o.current_value == *model).unwrap_or(false);
-                        if really {
-                            println!("[parallel planner] set_config_option model to '{}' confirmed", model);
-                        } else {
-                            eprintln!(
-                                "[parallel planner] set_config_option returned Ok but model '{}' STILL not applied (current={:?})",
-                                model,
-                                info2.config_options.as_ref().and_then(|opts|
-                                    opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
-                                )
-                            );
+            let is_cli_agent = planner_kind == "opencode" || planner_kind == "hermes";
+            if !is_cli_agent {
+                let info = planner_session.session_info();
+                let applied = info
+                    .config_options
+                    .as_ref()
+                    .and_then(|opts| opts.iter().find(|o| o.id == "model"))
+                    .map(|o| o.current_value == *model)
+                    .unwrap_or(false);
+                if !applied {
+                    eprintln!(
+                        "[parallel planner] model '{}' not applied in session/new (current={:?}), trying set_config_option",
+                        model,
+                        info.config_options.as_ref().and_then(|opts|
+                            opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
+                        )
+                    );
+                    match planner_session.set_config_option("model", model) {
+                        Ok(_) => {
+                            let info2 = planner_session.session_info();
+                            let really = info2
+                                .config_options
+                                .as_ref()
+                                .and_then(|opts| opts.iter().find(|o| o.id == "model"))
+                                .map(|o| o.current_value == *model)
+                                .unwrap_or(false);
+                            if really {
+                                println!(
+                                    "[parallel planner] set_config_option model to '{}' confirmed",
+                                    model
+                                );
+                            } else {
+                                eprintln!(
+                                    "[parallel planner] set_config_option returned Ok but model '{}' STILL not applied (current={:?})",
+                                    model,
+                                    info2.config_options.as_ref().and_then(|opts|
+                                        opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
+                                    )
+                                );
+                            }
                         }
+                        Err(e) => eprintln!(
+                            "[parallel planner] set_config_option model to '{}' failed: {}",
+                            model, e
+                        ),
                     }
-                    Err(e) => eprintln!("[parallel planner] set_config_option model to '{}' failed: {}", model, e),
+                } else {
+                    println!(
+                        "[parallel planner] model '{}' confirmed in session_info after spawn",
+                        model
+                    );
                 }
-            } else {
-                println!("[parallel planner] model '{}' confirmed in session_info after spawn", model);
             }
         }
 
@@ -277,7 +327,7 @@ impl ExecutionDriver {
         let mut cancel_watch = self.cancel_watch.clone();
         let mut first_event_seen = false;
 
-        const PLANNER_FAST_S: u64 = 60;
+        const PLANNER_FAST_S: u64 = 180;
         const PLANNER_NORMAL_S: u64 = 300;
         const PLANNER_WALL_S: u64 = 900;
 
@@ -334,6 +384,14 @@ impl ExecutionDriver {
                     );
                 }
                 _ = &mut normal_sleep => {
+                    if let Some(ref h) = planner_hb {
+                        if h.last_activity_ago_ms() < PLANNER_NORMAL_S * 1000 {
+                            normal_sleep.as_mut().reset(
+                                tokio::time::Instant::now() + std::time::Duration::from_secs(PLANNER_NORMAL_S),
+                            );
+                            continue;
+                        }
+                    }
                     planner_failed = true;
                     planner_err = format_agent_error_message(
                         &format!("planner agent response timed out (no output for {}s)", PLANNER_NORMAL_S),
@@ -359,9 +417,7 @@ impl ExecutionDriver {
         let _ = self.registry.kill(&planner_thread_id).await;
 
         if planner_failed {
-            return StepOutcome::Failed(format!(
-                "parallel step: planner failed: {}", planner_err
-            ));
+            return StepOutcome::Failed(format!("parallel step: planner failed: {}", planner_err));
         }
 
         // Parse the planner's text into a subtask DAG.
@@ -381,7 +437,10 @@ impl ExecutionDriver {
         };
 
         let subtasks = dag.subtasks;
-        eprintln!("[parallel step] planner produced {} subtask(s)", subtasks.len());
+        eprintln!(
+            "[parallel step] planner produced {} subtask(s)",
+            subtasks.len()
+        );
 
         // ── 2. Fan out: one worker per subtask.
         let mut subtask_artifacts = Vec::new();
@@ -389,7 +448,8 @@ impl ExecutionDriver {
         let mut step_failed = false;
         let mut step_err_msg = String::new();
         let is_legacy = step_conf.artifacts.as_ref().map_or(true, |d| d.is_empty());
-        let decls: &[crate::domain::artifact::ArtifactDecl] = step_conf.artifacts.as_deref().unwrap_or(&[]);
+        let decls: &[crate::domain::artifact::ArtifactDecl] =
+            step_conf.artifacts.as_deref().unwrap_or(&[]);
 
         for (sub_idx, sub) in subtasks.iter().enumerate() {
             if *self.cancel_watch.borrow() {
@@ -422,11 +482,7 @@ impl ExecutionDriver {
             // case — but the snapshot makes the detector robust to
             // any files that were left dirty by previous failed
             // attempts at the same subtask id.
-            let subtask_snapshot = WorktreeSnapshot::capture(
-                &*self.exec,
-                &machine_str,
-                &wt_path,
-            );
+            let subtask_snapshot = WorktreeSnapshot::capture(&*self.exec, &machine_str, &wt_path);
 
             let other_files: Vec<String> = subtasks
                 .iter()
@@ -450,11 +506,15 @@ impl ExecutionDriver {
                 .set("partition_id", &sub.id)
                 .render(step_conf.prompt_template.as_deref().unwrap_or(""));
             let sub_prompt = if sub_prompt.trim().is_empty() {
-                format!("Subtask: {}. Files: {}. Code inside: {}", sub.title, sub_files_str, wt_path)
+                format!(
+                    "Subtask: {}. Files: {}. Code inside: {}",
+                    sub.title, sub_files_str, wt_path
+                )
             } else {
                 resolve_attached_artifacts(&sub_prompt, step_execs, step_index)
             };
-            let sub_prompt = inject_artifact_contract(&sub_prompt, if is_legacy { None } else { Some(decls) });
+            let sub_prompt =
+                inject_artifact_contract(&sub_prompt, if is_legacy { None } else { Some(decls) });
 
             let agent_kind = planner_kind.clone();
             let sub_thread_id = format!("{}-{}", self.f_id_str, sub.id);
@@ -484,9 +544,7 @@ impl ExecutionDriver {
                 exec: self.exec.clone(),
             };
 
-            let spawn_fut =
-                self.registry
-                    .get_or_spawn(&sub_thread_id, &agent_kind, ctx);
+            let spawn_fut = self.registry.get_or_spawn(&sub_thread_id, &agent_kind, ctx);
             let mut cancel_watch_spawn = self.cancel_watch.clone();
             let spawn_res = tokio::select! {
                 res = spawn_fut => Some(res),
@@ -497,57 +555,66 @@ impl ExecutionDriver {
 
             match spawn_res {
                 Some(Ok(session)) => {
-                    if let Some(ref model) = override_model {
-                        let info = session.session_info();
-                        let applied = info.config_options.as_ref().and_then(|opts|
-                            opts.iter().find(|o| o.id == "model")
-                        ).map(|o| o.current_value == *model).unwrap_or(false);
-                        if !applied {
-                            eprintln!(
-                                "[parallel worker {}] model '{}' not applied in session/new (current={:?}), trying set_config_option",
-                                sub.id, model,
-                                info.config_options.as_ref().and_then(|opts|
-                                    opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
-                                )
-                            );
-                            match session.set_config_option("model", model) {
-                                Ok(_) => {
-                                    let info2 = session.session_info();
-                                    let really = info2.config_options.as_ref().and_then(|opts|
-                                        opts.iter().find(|o| o.id == "model")
-                                    ).map(|o| o.current_value == *model).unwrap_or(false);
-                                    if really {
-                                        println!("[parallel worker {}] set_config_option model to '{}' confirmed", sub.id, model);
-                                    } else {
-                                        eprintln!(
-                                            "[parallel worker {}] set_config_option returned Ok but model '{}' STILL not applied (current={:?})",
-                                            sub.id, model,
-                                            info2.config_options.as_ref().and_then(|opts|
-                                                opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
-                                            )
-                                        );
+                    let is_cli_agent = agent_kind == "opencode" || agent_kind == "hermes";
+                    if !is_cli_agent {
+                        if let Some(ref model) = override_model {
+                            let info = session.session_info();
+                            let applied = info
+                                .config_options
+                                .as_ref()
+                                .and_then(|opts| opts.iter().find(|o| o.id == "model"))
+                                .map(|o| o.current_value == *model)
+                                .unwrap_or(false);
+                            if !applied {
+                                eprintln!(
+                                    "[parallel worker {}] model '{}' not applied in session/new (current={:?}), trying set_config_option",
+                                    sub.id, model,
+                                    info.config_options.as_ref().and_then(|opts|
+                                        opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
+                                    )
+                                );
+                                match session.set_config_option("model", model) {
+                                    Ok(_) => {
+                                        let info2 = session.session_info();
+                                        let really = info2.config_options.as_ref().and_then(|opts|
+                                            opts.iter().find(|o| o.id == "model")
+                                        ).map(|o| o.current_value == *model).unwrap_or(false);
+                                        if really {
+                                            println!("[parallel worker {}] set_config_option model to '{}' confirmed", sub.id, model);
+                                        } else {
+                                            eprintln!(
+                                                "[parallel worker {}] set_config_option returned Ok but model '{}' STILL not applied (current={:?})",
+                                                sub.id, model,
+                                                info2.config_options.as_ref().and_then(|opts|
+                                                    opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
+                                                )
+                                            );
+                                        }
                                     }
+                                    Err(e) => eprintln!("[parallel worker {}] set_config_option model to '{}' failed: {}", sub.id, model, e),
                                 }
-                                Err(e) => eprintln!("[parallel worker {}] set_config_option model to '{}' failed: {}", sub.id, model, e),
+                            } else {
+                                println!("[parallel worker {}] model '{}' confirmed in session_info after spawn", sub.id, model);
                             }
-                        } else {
-                            println!("[parallel worker {}] model '{}' confirmed in session_info after spawn", sub.id, model);
                         }
                     }
-let mut stream = session.prompt(&sub_prompt);
+                    let mut stream = session.prompt(&sub_prompt);
                     let worker_hb = session.stderr_heartbeat();
                     let mut produced_artifacts: Vec<Artifact> = Vec::new();
                     let mut legacy_sub_content = String::new();
                     let mut cancel_watch = self.cancel_watch.clone();
                     let mut first_event_seen = false;
 
-                    const WORKER_FAST_S: u64 = 60;
-                    const WORKER_NORMAL_S: u64 = 180;
+                    const WORKER_FAST_S: u64 = 180;
+                    const WORKER_NORMAL_S: u64 = 300;
                     const WORKER_WALL_S: u64 = 600;
 
-                    let fast_sleep = tokio::time::sleep(std::time::Duration::from_secs(WORKER_FAST_S));
-                    let normal_sleep = tokio::time::sleep(std::time::Duration::from_secs(WORKER_NORMAL_S));
-                    let wall_sleep = tokio::time::sleep(std::time::Duration::from_secs(WORKER_WALL_S));
+                    let fast_sleep =
+                        tokio::time::sleep(std::time::Duration::from_secs(WORKER_FAST_S));
+                    let normal_sleep =
+                        tokio::time::sleep(std::time::Duration::from_secs(WORKER_NORMAL_S));
+                    let wall_sleep =
+                        tokio::time::sleep(std::time::Duration::from_secs(WORKER_WALL_S));
                     tokio::pin!(fast_sleep);
                     tokio::pin!(normal_sleep);
                     tokio::pin!(wall_sleep);
@@ -615,6 +682,14 @@ let mut stream = session.prompt(&sub_prompt);
                                 );
                             }
                             _ = &mut normal_sleep => {
+                                if let Some(ref h) = worker_hb {
+                                    if h.last_activity_ago_ms() < WORKER_NORMAL_S * 1000 {
+                                        normal_sleep.as_mut().reset(
+                                            tokio::time::Instant::now() + std::time::Duration::from_secs(WORKER_NORMAL_S),
+                                        );
+                                        continue;
+                                    }
+                                }
                                 eprintln!(
                                     "[parallel step] Subtask {} agent silent timeout of {}s reached.",
                                     sub.id, WORKER_NORMAL_S
@@ -662,7 +737,8 @@ let mut stream = session.prompt(&sub_prompt);
                     }
 
                     if is_legacy {
-                        subtask_artifacts.push(format!("### {}\n\n{}", sub.title, legacy_sub_content));
+                        subtask_artifacts
+                            .push(format!("### {}\n\n{}", sub.title, legacy_sub_content));
                     } else {
                         // Detect the worker's actual file writes via
                         // the worktree-delta snapshot. CLI agents
@@ -679,25 +755,38 @@ let mut stream = session.prompt(&sub_prompt);
                                 _ => None,
                             })
                             .collect();
-                        let changed = subtask_snapshot.delta(
+                        let mut changed = subtask_snapshot.delta(
                             &*self.exec,
                             &machine_str,
                             &wt_path,
                             &always,
                             &[],
                         );
+                        if changed.is_empty() {
+                            if let Ok(git_diff_files) = self.exec.run_command(
+                                &machine_str,
+                                &format!(
+                                    "git -C {} diff --name-only {}",
+                                    paths::shell_escape_posix(&wt_path),
+                                    paths::shell_escape_posix(&self.branch_name),
+                                ),
+                            ) {
+                                changed = git_diff_files
+                                    .lines()
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                            }
+                        }
                         for rel_path in changed {
                             let name = std::path::Path::new(&rel_path)
                                 .file_stem()
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("artifact")
                                 .to_string();
-                            if let Some(content) = read_worktree_file(
-                                &*self.exec,
-                                &machine_str,
-                                &wt_path,
-                                &rel_path,
-                            ) {
+                            if let Some(content) =
+                                read_worktree_file(&*self.exec, &machine_str, &wt_path, &rel_path)
+                            {
                                 produced_artifacts
                                     .push(Artifact::tool_write(name, rel_path, content));
                             }
@@ -717,11 +806,7 @@ let mut stream = session.prompt(&sub_prompt);
                             &*self.exec,
                             &machine_str,
                             &wt_path,
-                            &format!(
-                                "feat({}): {}",
-                                self.f_id.as_str(),
-                                sub.title,
-                            ),
+                            &format!("feat({}): {}", self.f_id.as_str(), sub.title,),
                         );
 
                         // Resolve declared artifacts for this subtask's
@@ -759,10 +844,7 @@ let mut stream = session.prompt(&sub_prompt);
                             subtask_id: format!("{}_subtask_{}", self.branch_name, sub.id),
                         });
                         step_failed = true;
-                        step_err_msg = format!(
-                            "parallel subtask merge failed ({}): {}",
-                            sub.id, e
-                        );
+                        step_err_msg = format!("parallel subtask merge failed ({}): {}", sub.id, e);
                         let _ = self.registry.kill(&sub_thread_id).await;
                         let _ = tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         let _ = self.git_ops.cleanup_subtask_worktree(
@@ -776,10 +858,8 @@ let mut stream = session.prompt(&sub_prompt);
                 }
                 Some(Err(e)) => {
                     step_failed = true;
-                    step_err_msg = format!(
-                        "parallel subtask agent spawn failed ({}): {:?}",
-                        sub.id, e
-                    );
+                    step_err_msg =
+                        format!("parallel subtask agent spawn failed ({}): {:?}", sub.id, e);
                     let _ = self.registry.kill(&sub_thread_id).await;
                     let _ = tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     let _ = self.git_ops.cleanup_subtask_worktree(
@@ -818,17 +898,24 @@ let mut stream = session.prompt(&sub_prompt);
 
         if step_failed {
             let is_cancelled = *self.cancel_watch.borrow();
-            let status_str = if is_cancelled { "interrupted" } else { "failed" };
+            let status_str = if is_cancelled {
+                "interrupted"
+            } else {
+                "failed"
+            };
             let wall = step_start.elapsed().as_secs();
-            let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-        iteration_count: None,
-                status: Some(status_str.to_string()),
-                cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                wall_clock_secs: Some(wall).map(|v| Some(wall)),
-                artifact_path: None,
-                artifact_paths: None,
-                error_message: Some(Some(step_err_msg.clone())),
-            });
+            let _ = self.features.step_update(
+                &step_exec.id,
+                &StepExecutionPatch {
+                    iteration_count: None,
+                    status: Some(status_str.to_string()),
+                    cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
+                    wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                    artifact_path: None,
+                    artifact_paths: None,
+                    error_message: Some(Some(step_err_msg.clone())),
+                },
+            );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
                 step_id: step_exec.step_id.0.clone(),
@@ -849,13 +936,9 @@ let mut stream = session.prompt(&sub_prompt);
             // artifact list. The user opens an implement step
             // expecting to see "what changed", not a single file.
             // Per-step per-file artifacts follow.
-            let diff_ref = self.branch_name.clone();
-            let diff_body = compute_git_diff(
-                &*self.exec,
-                &machine_str,
-                &self.target_dir,
-                &diff_ref,
-            );
+            let diff_ref = base_sha;
+            let diff_body =
+                compute_git_diff(&*self.exec, &machine_str, &self.target_dir, &diff_ref);
             let mut refs: Vec<String> = Vec::new();
             if !diff_body.trim().is_empty() {
                 let diff_artifact = Artifact {
@@ -868,11 +951,10 @@ let mut stream = session.prompt(&sub_prompt);
                         path_filter: None,
                     },
                 };
-                if let Ok(reference) = self.artifacts.put(
-                    &self.f_id_str,
-                    &step_exec.step_id.0,
-                    &diff_artifact,
-                ) {
+                if let Ok(reference) =
+                    self.artifacts
+                        .put(&self.f_id_str, &step_exec.step_id.0, &diff_artifact)
+                {
                     refs.push(reference);
                 }
             }
@@ -880,7 +962,10 @@ let mut stream = session.prompt(&sub_prompt);
             let primary = refs.first().cloned();
             (primary, refs)
         } else {
-            let mut art_path = self.app_local_data_dir.join("artifacts").join(&self.f_id_str);
+            let mut art_path = self
+                .app_local_data_dir
+                .join("artifacts")
+                .join(&self.f_id_str);
             let _ = std::fs::create_dir_all(&art_path);
             let file_name = format!("{}.md", step_exec.step_id.0);
             art_path.push(&file_name);
@@ -890,15 +975,18 @@ let mut stream = session.prompt(&sub_prompt);
         };
 
         let wall = step_start.elapsed().as_secs();
-        let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-        iteration_count: None,
-            status: Some("completed".to_string()),
-            cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-            wall_clock_secs: Some(wall).map(|v| Some(wall)),
-            artifact_path: Some(artifact_path),
-            artifact_paths: Some(artifact_paths),
-            error_message: Some(None),
-        });
+        let _ = self.features.step_update(
+            &step_exec.id,
+            &StepExecutionPatch {
+                iteration_count: None,
+                status: Some("completed".to_string()),
+                cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
+                wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                artifact_path: Some(artifact_path),
+                artifact_paths: Some(artifact_paths),
+                error_message: Some(None),
+            },
+        );
         let _ = self.notif.emit(&DomainEvent::StepProgress {
             feature_id: self.f_id.clone(),
             step_id: step_exec.step_id.0.clone(),

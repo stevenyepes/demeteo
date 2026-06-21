@@ -2,16 +2,19 @@ use std::time::Instant;
 
 use tokio_stream::StreamExt;
 
-use crate::adapters::step_executor::artifacts::{compute_git_diff, inject_artifact_contract, read_worktree_file, resolve_attached_artifacts, resolve_declared_artifacts, WorktreeSnapshot};
+use crate::adapters::step_executor::artifacts::{
+    compute_git_diff, inject_artifact_contract, read_worktree_file, resolve_attached_artifacts,
+    resolve_declared_artifacts, WorktreeSnapshot,
+};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::artifact::Artifact;
 use crate::domain::agent_event::AgentEvent;
+use crate::domain::artifact::Artifact;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
-use crate::paths;
 
 impl ExecutionDriver {
     pub(crate) async fn handle_agent_step(
@@ -31,12 +34,15 @@ impl ExecutionDriver {
             .or_else(|| step_conf.agent_kind.clone())
             .unwrap_or_else(|| "opencode".to_string());
 
-        let (gate_decision, gate_feedback) = crate::adapters::step_executor::artifacts::get_latest_gate_decision(
-            &*self.gates,
-            self.f_id.as_str(),
-        );
+        let (gate_decision, gate_feedback) =
+            crate::adapters::step_executor::artifacts::get_latest_gate_decision(
+                &*self.gates,
+                self.f_id.as_str(),
+            );
 
-        let prompt = self.base_ctx.clone()
+        let prompt = self
+            .base_ctx
+            .clone()
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)
             .render(step_conf.prompt_template.as_deref().unwrap_or(""));
@@ -45,10 +51,14 @@ impl ExecutionDriver {
         // Inject the machine-readable artifact contract into the prompt
         // so the agent knows exactly what files to produce.
         let is_legacy = step_conf.artifacts.as_ref().map_or(true, |d| d.is_empty());
-        let decls: &[crate::domain::artifact::ArtifactDecl] = step_conf.artifacts.as_deref().unwrap_or(&[]);
+        let decls: &[crate::domain::artifact::ArtifactDecl] =
+            step_conf.artifacts.as_deref().unwrap_or(&[]);
         let prompt = inject_artifact_contract(&prompt, if is_legacy { None } else { Some(decls) });
 
-        let machine_str = self.machine_id_opt.clone().unwrap_or_else(|| "local".to_string());
+        let machine_str = self
+            .machine_id_opt
+            .clone()
+            .unwrap_or_else(|| "local".to_string());
         let mut agent_env = crate::ports::agent_runtime::agent_base_env();
         // CLI agents (opencode, hermes): pass model via --model flag, not OPENCODE_CONFIG_CONTENT.
         // ACP agents: pass model via OPENCODE_CONFIG_CONTENT.
@@ -86,11 +96,8 @@ impl ExecutionDriver {
         // that was already dirty from a prior step. This replaces the
         // old `git diff <base>..HEAD` strategy, which missed every
         // file the agent wrote because the agent does not commit.
-        let worktree_snapshot = WorktreeSnapshot::capture(
-            &*self.exec,
-            &machine_str,
-            &self.target_dir,
-        );
+        let worktree_snapshot =
+            WorktreeSnapshot::capture(&*self.exec, &machine_str, &self.target_dir);
 
         let worktree_base_ref = self
             .exec
@@ -105,7 +112,9 @@ impl ExecutionDriver {
             .map(|s| s.trim().to_string())
             .ok();
 
-        let spawn_fut = self.registry.get_or_spawn(self.f_id.as_str(), &agent_kind, ctx);
+        let spawn_fut = self
+            .registry
+            .get_or_spawn(self.f_id.as_str(), &agent_kind, ctx);
         let mut cancel_watch_spawn = self.cancel_watch.clone();
         let spawn_res = tokio::select! {
             res = spawn_fut => Some(res),
@@ -123,65 +132,77 @@ impl ExecutionDriver {
                 // post-spawn verification for them.
                 let is_cli_agent = agent_kind == "opencode" || agent_kind == "hermes";
                 if !is_cli_agent {
-                if let Some(ref model) = override_model {
-                    let info = session.session_info();
-                    let applied = info.config_options.as_ref().and_then(|opts|
-                        opts.iter().find(|o| o.id == "model")
-                    ).map(|o| o.current_value == *model).unwrap_or(false);
-                    if !applied {
-                        eprintln!(
+                    if let Some(ref model) = override_model {
+                        let info = session.session_info();
+                        let applied = info
+                            .config_options
+                            .as_ref()
+                            .and_then(|opts| opts.iter().find(|o| o.id == "model"))
+                            .map(|o| o.current_value == *model)
+                            .unwrap_or(false);
+                        if !applied {
+                            eprintln!(
                             "[agent step] model '{}' not applied in session/new (current={:?}), trying set_config_option",
                             model,
                             info.config_options.as_ref().and_then(|opts|
                                 opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
                             )
                         );
-                        let config_ok = match session.set_config_option("model", model) {
-                            Ok(_) => {
-                                let info2 = session.session_info();
-                                let really_applied = info2.config_options.as_ref().and_then(|opts|
-                                    opts.iter().find(|o| o.id == "model")
-                                ).map(|o| o.current_value == *model).unwrap_or(false);
-                                if really_applied {
-                                    println!("[agent step] set_config_option model to '{}' confirmed in session_info", model);
-                                    true
-                                } else {
-                                    eprintln!(
+                            let config_ok = match session.set_config_option("model", model) {
+                                Ok(_) => {
+                                    let info2 = session.session_info();
+                                    let really_applied = info2
+                                        .config_options
+                                        .as_ref()
+                                        .and_then(|opts| opts.iter().find(|o| o.id == "model"))
+                                        .map(|o| o.current_value == *model)
+                                        .unwrap_or(false);
+                                    if really_applied {
+                                        println!("[agent step] set_config_option model to '{}' confirmed in session_info", model);
+                                        true
+                                    } else {
+                                        eprintln!(
                                         "[agent step] set_config_option returned Ok but model '{}' STILL not applied (current={:?})",
                                         model,
                                         info2.config_options.as_ref().and_then(|opts|
                                             opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
                                         )
                                     );
+                                        false
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[agent step] set_config_option model to '{}' failed: {}",
+                                        model, e
+                                    );
                                     false
                                 }
-                            }
-                            Err(e) => {
-                                eprintln!("[agent step] set_config_option model to '{}' failed: {}", model, e);
-                                false
-                            }
-                        };
-                        if !config_ok {
-                            let _ = self.registry.kill(self.f_id.as_str()).await;
-                            let descriptive = format!(
+                            };
+                            if !config_ok {
+                                let _ = self.registry.kill(self.f_id.as_str()).await;
+                                let descriptive = format!(
                                 "Model '{}' could not be applied to the agent session. \
                                  The agent rejected the model selection via set_config_option. \
                                  Try selecting a different model, or check that the model is valid for this provider.",
                                 model
                             );
-                            return StepOutcome::Failed(descriptive);
+                                return StepOutcome::Failed(descriptive);
+                            }
+                        } else {
+                            println!(
+                                "[agent step] model '{}' confirmed in session_info after spawn",
+                                model
+                            );
                         }
-                    } else {
-                        println!("[agent step] model '{}' confirmed in session_info after spawn", model);
                     }
-                }
                 } // end if !is_cli_agent
-                // Collect ArtifactProduced events emitted by the runtime
-                // during the agent turn. In legacy mode (no declarations)
-                // we fall back to the old text-dump approach.
-                // In declared mode we accumulate text and synthesize
-                // ArtifactProduced events at TurnComplete so the
-                // orchestrator can match them against declarations.
+                  // Collect ArtifactProduced events emitted by the runtime
+                  // during the agent turn. In legacy mode (no declarations)
+                  // we fall back to the old text-dump approach.
+                  // In declared mode we accumulate text and synthesize
+                  // ArtifactProduced events at TurnComplete so the
+                  // orchestrator can match them against declarations.
                 let mut produced_artifacts: Vec<Artifact> = Vec::new();
                 let mut text_buffer = String::new();
                 let hb = session.stderr_heartbeat();
@@ -194,7 +215,8 @@ impl ExecutionDriver {
                 const WALL_CAP_S: u64 = 600;
 
                 let fast_sleep = tokio::time::sleep(std::time::Duration::from_secs(FAST_TIMEOUT_S));
-                let normal_sleep = tokio::time::sleep(std::time::Duration::from_secs(NORMAL_TIMEOUT_S));
+                let normal_sleep =
+                    tokio::time::sleep(std::time::Duration::from_secs(NORMAL_TIMEOUT_S));
                 let wall_sleep = tokio::time::sleep(std::time::Duration::from_secs(WALL_CAP_S));
                 tokio::pin!(fast_sleep);
                 tokio::pin!(normal_sleep);
@@ -283,6 +305,14 @@ impl ExecutionDriver {
                             );
                         }
                         _ = &mut normal_sleep => {
+                            if let Some(ref h) = hb {
+                                if h.last_activity_ago_ms() < NORMAL_TIMEOUT_S * 1000 {
+                                    normal_sleep.as_mut().reset(
+                                        tokio::time::Instant::now() + std::time::Duration::from_secs(NORMAL_TIMEOUT_S),
+                                    );
+                                    continue;
+                                }
+                            }
                             let elapsed = step_start.elapsed().as_secs();
                             eprintln!("[agent step] Agent silent timeout of {}s reached (wall: {}s).", NORMAL_TIMEOUT_S, elapsed);
                             let _ = self.registry.kill(self.f_id.as_str()).await;
@@ -312,15 +342,18 @@ impl ExecutionDriver {
 
                 if *self.cancel_watch.borrow() {
                     let wall = step_start.elapsed().as_secs();
-                    let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-        iteration_count: None,
-                        status: Some("interrupted".to_string()),
-                        cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                        wall_clock_secs: Some(wall).map(|v| Some(wall)),
-                        artifact_path: None,
-                        artifact_paths: None,
-                        error_message: Some(Some("Execution cancelled by user".to_string())),
-                    });
+                    let _ = self.features.step_update(
+                        &step_exec.id,
+                        &StepExecutionPatch {
+                            iteration_count: None,
+                            status: Some("interrupted".to_string()),
+                            cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
+                            wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                            artifact_path: None,
+                            artifact_paths: None,
+                            error_message: Some(Some("Execution cancelled by user".to_string())),
+                        },
+                    );
                     let _ = self.notif.emit(&DomainEvent::StepProgress {
                         feature_id: self.f_id.clone(),
                         step_id: step_exec.step_id.0.clone(),
@@ -371,8 +404,7 @@ impl ExecutionDriver {
                             &self.target_dir,
                             &rel_path,
                         ) {
-                            produced_artifacts
-                                .push(Artifact::tool_write(name, rel_path, content));
+                            produced_artifacts.push(Artifact::tool_write(name, rel_path, content));
                         }
                     }
                 }
@@ -431,7 +463,10 @@ impl ExecutionDriver {
                     };
                     (primary, refs)
                 } else {
-                    let mut art_path = self.app_local_data_dir.join("artifacts").join(&self.f_id_str);
+                    let mut art_path = self
+                        .app_local_data_dir
+                        .join("artifacts")
+                        .join(&self.f_id_str);
                     let _ = std::fs::create_dir_all(&art_path);
                     let file_name = format!("{}.md", step_exec.step_id.0);
                     art_path.push(&file_name);
@@ -441,15 +476,18 @@ impl ExecutionDriver {
                 };
 
                 let wall = step_start.elapsed().as_secs();
-                let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-        iteration_count: None,
-                    status: Some("completed".to_string()),
-                    cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                    wall_clock_secs: Some(wall).map(|v| Some(wall)),
-                    artifact_path: Some(artifact_path),
-                    artifact_paths: Some(artifact_paths),
-                    error_message: Some(None),
-                });
+                let _ = self.features.step_update(
+                    &step_exec.id,
+                    &StepExecutionPatch {
+                        iteration_count: None,
+                        status: Some("completed".to_string()),
+                        cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
+                        wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                        artifact_path: Some(artifact_path),
+                        artifact_paths: Some(artifact_paths),
+                        error_message: Some(None),
+                    },
+                );
                 let _ = self.notif.emit(&DomainEvent::StepProgress {
                     feature_id: self.f_id.clone(),
                     step_id: step_exec.step_id.0.clone(),
@@ -461,7 +499,8 @@ impl ExecutionDriver {
                 StepOutcome::Completed
             }
             Some(Err(e)) => {
-                let descriptive = format_agent_error_message(&e.to_string(), &machine_str, &*self.exec);
+                let descriptive =
+                    format_agent_error_message(&e.to_string(), &machine_str, &*self.exec);
                 StepOutcome::Failed(descriptive)
             }
             None => StepOutcome::Cancelled,

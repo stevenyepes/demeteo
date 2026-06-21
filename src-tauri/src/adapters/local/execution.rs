@@ -84,7 +84,11 @@ fn local_run_command(cmd: &str) -> Result<String, String> {
             result.push('\n');
         }
         result.push_str(&stderr);
-        return Err(format!("Command failed (exit code: {:?}): {}", output.status.code(), result));
+        return Err(format!(
+            "Command failed (exit code: {:?}): {}",
+            output.status.code(),
+            result
+        ));
     }
 
     Ok(result)
@@ -100,8 +104,7 @@ impl ExecutionPort for LocalSubprocessAdapter {
     }
 
     fn read_file(&self, _machine_id: &str, path: &str) -> Result<String, String> {
-        std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file '{}': {}", path, e))
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read file '{}': {}", path, e))
     }
 
     fn write_file(&self, _machine_id: &str, path: &str, content: &str) -> Result<(), String> {
@@ -109,21 +112,22 @@ impl ExecutionPort for LocalSubprocessAdapter {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create parent directories: {}", e))?;
         }
-        std::fs::write(path, content)
-            .map_err(|e| format!("Failed to write file '{}': {}", path, e))
+        std::fs::write(path, content).map_err(|e| format!("Failed to write file '{}': {}", path, e))
     }
 
     fn get_metadata(&self, _machine_id: &str, path: &str) -> Result<SftpEntry, String> {
         let path_buf = std::path::Path::new(path);
-        let meta = std::fs::metadata(path)
-            .map_err(|e| format!("Failed to stat '{}': {}", path, e))?;
+        let meta =
+            std::fs::metadata(path).map_err(|e| format!("Failed to stat '{}': {}", path, e))?;
 
-        let name = path_buf.file_name()
+        let name = path_buf
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
 
-        let modified = meta.modified()
+        let modified = meta
+            .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
@@ -146,7 +150,8 @@ impl ExecutionPort for LocalSubprocessAdapter {
         for entry in entries {
             let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
             let path_buf = entry.path();
-            let name = path_buf.file_name()
+            let name = path_buf
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
@@ -155,8 +160,11 @@ impl ExecutionPort for LocalSubprocessAdapter {
                 continue;
             }
 
-            let meta = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
-            let modified = meta.modified()
+            let meta = entry
+                .metadata()
+                .map_err(|e| format!("Failed to read metadata: {}", e))?;
+            let modified = meta
+                .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
@@ -182,7 +190,13 @@ impl ExecutionPort for LocalSubprocessAdapter {
         Ok(list)
     }
 
-    fn setup_worktree(&self, _machine_id: &str, repo_path: &str, branch: &str, sandbox_path: &str) -> Result<(), String> {
+    fn setup_worktree(
+        &self,
+        _machine_id: &str,
+        repo_path: &str,
+        branch: &str,
+        sandbox_path: &str,
+    ) -> Result<(), String> {
         local_run_command(&format!("mkdir -p {}/.demeteo/worktrees", repo_path))?;
 
         let git_exclude_cmd = format!(
@@ -196,7 +210,10 @@ impl ExecutionPort for LocalSubprocessAdapter {
             repo_path, branch, sandbox_path
         );
         let output = local_run_command(&worktree_add_cmd)?;
-        println!("[LocalSubprocessAdapter] Git Worktree provisioning output: {}", output);
+        println!(
+            "[LocalSubprocessAdapter] Git Worktree provisioning output: {}",
+            output
+        );
 
         Ok(())
     }
@@ -214,7 +231,10 @@ impl ExecutionPort for LocalSubprocessAdapter {
             return Err("Resolved local HOME is empty".to_string());
         }
         if !trimmed.starts_with('/') {
-            return Err(format!("Resolved local HOME is not absolute: '{}'", trimmed));
+            return Err(format!(
+                "Resolved local HOME is not absolute: '{}'",
+                trimmed
+            ));
         }
         Ok(trimmed)
     }
@@ -236,7 +256,9 @@ impl ExecutionPort for LocalSubprocessAdapter {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        let child = cmd.spawn().map_err(|e| format!("failed to spawn '{}': {}", binary, e))?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to spawn '{}': {}", binary, e))?;
         Ok(Box::new(LocalChildProcess::new(child)))
     }
 }

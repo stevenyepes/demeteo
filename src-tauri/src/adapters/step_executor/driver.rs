@@ -13,10 +13,7 @@ use crate::domain::models::{GateDecision, StepConfig, StepExecution};
 use crate::domain::prompt_context::PromptContext;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
-use crate::ports::db::{
-    FeatureRepository, FeaturePatch, GateRepository,
-    StepExecutionPatch,
-};
+use crate::ports::db::{FeaturePatch, FeatureRepository, GateRepository, StepExecutionPatch};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::notification::{DomainEvent, NotificationPort};
 
@@ -88,15 +85,18 @@ impl ExecutionDriver {
             };
 
             // Mark step as running (preserve existing cost / wall_clock from DB)
-            let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-        iteration_count: None,
-                status: Some("running".to_string()),
-                cost_usd: step_exec.cost_usd.map(|v| Some(v)),
-                wall_clock_secs: step_exec.wall_clock_secs.map(|v| Some(v)),
-                artifact_path: None,
-                artifact_paths: None,
-                error_message: Some(None),
-            });
+            let _ = self.features.step_update(
+                &step_exec.id,
+                &StepExecutionPatch {
+                    iteration_count: None,
+                    status: Some("running".to_string()),
+                    cost_usd: step_exec.cost_usd.map(|v| Some(v)),
+                    wall_clock_secs: step_exec.wall_clock_secs.map(|v| Some(v)),
+                    artifact_path: None,
+                    artifact_paths: None,
+                    error_message: Some(None),
+                },
+            );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
                 step_id: step_exec.step_id.0.clone(),
@@ -109,9 +109,39 @@ impl ExecutionDriver {
             let mut accumulated_cost = step_exec.cost_usd.unwrap_or(0.0);
 
             let outcome = match step_conf.kind.as_str() {
-                "agent" => self.handle_agent_step(step_exec, step_conf, &mut accumulated_cost, step_start, self.step_index, &step_execs).await,
-                "gate" => self.handle_gate_step(step_exec, step_conf, &mut accumulated_cost, step_start, self.step_index, &step_execs).await,
-                "parallel" => self.handle_parallel_step(step_exec, step_conf, &mut accumulated_cost, step_start, self.step_index, &step_execs).await,
+                "agent" => {
+                    self.handle_agent_step(
+                        step_exec,
+                        step_conf,
+                        &mut accumulated_cost,
+                        step_start,
+                        self.step_index,
+                        &step_execs,
+                    )
+                    .await
+                }
+                "gate" => {
+                    self.handle_gate_step(
+                        step_exec,
+                        step_conf,
+                        &mut accumulated_cost,
+                        step_start,
+                        self.step_index,
+                        &step_execs,
+                    )
+                    .await
+                }
+                "parallel" => {
+                    self.handle_parallel_step(
+                        step_exec,
+                        step_conf,
+                        &mut accumulated_cost,
+                        step_start,
+                        self.step_index,
+                        &step_execs,
+                    )
+                    .await
+                }
                 _ => StepOutcome::Cancelled,
             };
 
@@ -131,18 +161,21 @@ impl ExecutionDriver {
                         // stay stuck on "running" because no event is
                         // emitted and the DB is never updated.
                         let wall = step_start.elapsed().as_secs();
-                        let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-        iteration_count: None,
-                            status: Some("interrupted".to_string()),
-                            cost_usd: Some(accumulated_cost).map(|v| Some(v)),
-                            wall_clock_secs: Some(wall).map(|v| Some(wall)),
-                            artifact_path: None,
-                            artifact_paths: None,
-                            error_message: Some(Some(format!(
-                                "Cancelled while step was failing: {}",
-                                msg
-                            ))),
-                        });
+                        let _ = self.features.step_update(
+                            &step_exec.id,
+                            &StepExecutionPatch {
+                                iteration_count: None,
+                                status: Some("interrupted".to_string()),
+                                cost_usd: Some(accumulated_cost).map(|v| Some(v)),
+                                wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                                artifact_path: None,
+                                artifact_paths: None,
+                                error_message: Some(Some(format!(
+                                    "Cancelled while step was failing: {}",
+                                    msg
+                                ))),
+                            },
+                        );
                         let _ = self.notif.emit(&DomainEvent::StepProgress {
                             feature_id: self.f_id.clone(),
                             step_id: step_exec.step_id.0.clone(),
@@ -167,7 +200,8 @@ impl ExecutionDriver {
                             // Continue the loop, do NOT return.
                             continue;
                         }
-                        self.fail_step_and_feature(step_exec, &msg, accumulated_cost, step_start).await;
+                        self.fail_step_and_feature(step_exec, &msg, accumulated_cost, step_start)
+                            .await;
                     }
                     return;
                 }
@@ -188,12 +222,15 @@ impl ExecutionDriver {
             .map(|list| list.iter().map(|s| s.cost_usd.unwrap_or(0.0)).sum::<f64>())
             .unwrap_or(0.0);
         let total_dur = format!("{}s", self.start_time.elapsed().as_secs());
-        let _ = self.features.update(&self.f_id, &FeaturePatch {
-            status: Some("completed".to_string()),
-            total_cost: Some(total_cost).map(|v| Some(v)),
-            duration: Some(&total_dur).map(|v| Some(v.to_string())),
-            ..Default::default()
-        });
+        let _ = self.features.update(
+            &self.f_id,
+            &FeaturePatch {
+                status: Some("completed".to_string()),
+                total_cost: Some(total_cost).map(|v| Some(v)),
+                duration: Some(&total_dur).map(|v| Some(v.to_string())),
+                ..Default::default()
+            },
+        );
         let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
             feature_id: self.f_id.clone(),
             status: "completed".into(),
@@ -208,15 +245,18 @@ impl ExecutionDriver {
         step_start: Instant,
     ) {
         let wall = step_start.elapsed().as_secs();
-        let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-        iteration_count: None,
-            status: Some("failed".to_string()),
-            cost_usd: Some(accumulated_cost).map(|v| Some(v)),
-            wall_clock_secs: Some(wall).map(|v| Some(wall)),
-            artifact_path: None,
-            artifact_paths: None,
-            error_message: Some(Some(msg.to_string())),
-        });
+        let _ = self.features.step_update(
+            &step_exec.id,
+            &StepExecutionPatch {
+                iteration_count: None,
+                status: Some("failed".to_string()),
+                cost_usd: Some(accumulated_cost).map(|v| Some(v)),
+                wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                artifact_path: None,
+                artifact_paths: None,
+                error_message: Some(Some(msg.to_string())),
+            },
+        );
         let _ = self.notif.emit(&DomainEvent::StepProgress {
             feature_id: self.f_id.clone(),
             step_id: step_exec.step_id.0.clone(),
@@ -231,12 +271,15 @@ impl ExecutionDriver {
             .map(|list| list.iter().map(|s| s.cost_usd.unwrap_or(0.0)).sum::<f64>())
             .unwrap_or(0.0);
         let total_dur = format!("{}s", self.start_time.elapsed().as_secs());
-        let _ = self.features.update(&self.f_id, &FeaturePatch {
-            status: Some("failed".to_string()),
-            total_cost: Some(total_cost).map(|v| Some(v)),
-            duration: Some(&total_dur).map(|v| Some(v.to_string())),
-            ..Default::default()
-        });
+        let _ = self.features.update(
+            &self.f_id,
+            &FeaturePatch {
+                status: Some("failed".to_string()),
+                total_cost: Some(total_cost).map(|v| Some(v)),
+                duration: Some(&total_dur).map(|v| Some(v.to_string())),
+                ..Default::default()
+            },
+        );
         let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
             feature_id: self.f_id.clone(),
             status: "failed".into(),
@@ -251,12 +294,15 @@ impl ExecutionDriver {
             .map(|list| list.iter().map(|s| s.cost_usd.unwrap_or(0.0)).sum::<f64>())
             .unwrap_or(0.0);
         let total_dur = format!("{}s", wall);
-        let _ = self.features.update(&self.f_id, &FeaturePatch {
-            status: Some("cancelled".to_string()),
-            total_cost: Some(total_cost).map(|v| Some(v)),
-            duration: Some(&total_dur).map(|v| Some(v.to_string())),
-            ..Default::default()
-        });
+        let _ = self.features.update(
+            &self.f_id,
+            &FeaturePatch {
+                status: Some("cancelled".to_string()),
+                total_cost: Some(total_cost).map(|v| Some(v)),
+                duration: Some(&total_dur).map(|v| Some(v.to_string())),
+                ..Default::default()
+            },
+        );
         let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
             feature_id: self.f_id.clone(),
             status: "cancelled".into(),
@@ -301,18 +347,21 @@ impl ExecutionDriver {
             // Budget exhausted. Persist a clear error on the step so the
             // user understands why the loop ended.
             let wall = step_start.elapsed().as_secs();
-            let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-        iteration_count: None,
-                status: Some("failed".to_string()),
-                cost_usd: Some(accumulated_cost).map(|v| Some(v)),
-                wall_clock_secs: Some(wall).map(|v| Some(wall)),
-                artifact_path: None,
-                artifact_paths: None,
-                error_message: Some(Some(format!(
-                    "{} (retry budget exhausted: {} of {} attempts on '{}')",
-                    msg, already, max, target_id.0
-                ))),
-            });
+            let _ = self.features.step_update(
+                &step_exec.id,
+                &StepExecutionPatch {
+                    iteration_count: None,
+                    status: Some("failed".to_string()),
+                    cost_usd: Some(accumulated_cost).map(|v| Some(v)),
+                    wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                    artifact_path: None,
+                    artifact_paths: None,
+                    error_message: Some(Some(format!(
+                        "{} (retry budget exhausted: {} of {} attempts on '{}')",
+                        msg, already, max, target_id.0
+                    ))),
+                },
+            );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
                 step_id: step_exec.step_id.0.clone(),
@@ -326,18 +375,24 @@ impl ExecutionDriver {
         let target_idx = self.steps.iter().position(|s| s.id == *target_id)?;
         // Bump the failing step's iteration counter so the next time we
         // hit this branch we know we've used one of the budgeted retries.
-        let _ = self.features.step_update(&step_exec.id, &StepExecutionPatch {
-            status: Some("failed".to_string()),
-            cost_usd: Some(accumulated_cost).map(|v| Some(v)),
-            artifact_path: None,
-            artifact_paths: None,
-            error_message: Some(Some(format!(
-                "{} (retrying: will jump to '{}' on attempt {} of {})",
-                msg, target_id.0, already + 1, max
-            ))),
-            iteration_count: Some(already + 1),
-            ..Default::default()
-        });
+        let _ = self.features.step_update(
+            &step_exec.id,
+            &StepExecutionPatch {
+                status: Some("failed".to_string()),
+                cost_usd: Some(accumulated_cost).map(|v| Some(v)),
+                artifact_path: None,
+                artifact_paths: None,
+                error_message: Some(Some(format!(
+                    "{} (retrying: will jump to '{}' on attempt {} of {})",
+                    msg,
+                    target_id.0,
+                    already + 1,
+                    max
+                ))),
+                iteration_count: Some(already + 1),
+                ..Default::default()
+            },
+        );
         let _ = self.notif.emit(&DomainEvent::StepProgress {
             feature_id: self.f_id.clone(),
             step_id: step_exec.step_id.0.clone(),

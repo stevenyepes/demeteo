@@ -38,7 +38,11 @@ fn run_local(install_command: &str) -> Result<(), String> {
             "Install script failed (exit {:?}): {}{}",
             status.code(),
             err.trim(),
-            if !out.is_empty() { format!("\nstdout: {}", out.trim()) } else { String::new() }
+            if !out.is_empty() {
+                format!("\nstdout: {}", out.trim())
+            } else {
+                String::new()
+            }
         ));
     }
     Ok(())
@@ -60,17 +64,44 @@ mod tests {
 
     struct StubExec;
     impl ExecutionPort for StubExec {
-        fn test_connection(&self, _: &str) -> Result<(), String> { Ok(()) }
-        fn run_command(&self, _: &str, _: &str) -> Result<String, String> { Ok(String::new()) }
-        fn read_file(&self, _: &str, _: &str) -> Result<String, String> { Ok(String::new()) }
-        fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
-        fn get_metadata(&self, _: &str, path: &str) -> Result<SftpEntry, String> {
-            Ok(SftpEntry { name: path.into(), path: path.into(), is_dir: false, size: 0, modified: 0 })
+        fn test_connection(&self, _: &str) -> Result<(), String> {
+            Ok(())
         }
-        fn list_dir(&self, _: &str, _: &str) -> Result<Vec<SftpEntry>, String> { Ok(vec![]) }
-        fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
-        fn resolve_home(&self, _: &str) -> Result<String, String> { Ok("/tmp".to_string()) }
-        fn spawn_interactive(&self, _: &str, _: &str, _: &[String], _: &str, _: &std::collections::HashMap<String, String>) -> Result<Box<dyn InteractiveHandle>, String> {
+        fn run_command(&self, _: &str, _: &str) -> Result<String, String> {
+            Ok(String::new())
+        }
+        fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
+            Ok(String::new())
+        }
+        fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn get_metadata(&self, _: &str, path: &str) -> Result<SftpEntry, String> {
+            Ok(SftpEntry {
+                name: path.into(),
+                path: path.into(),
+                is_dir: false,
+                size: 0,
+                modified: 0,
+            })
+        }
+        fn list_dir(&self, _: &str, _: &str) -> Result<Vec<SftpEntry>, String> {
+            Ok(vec![])
+        }
+        fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn resolve_home(&self, _: &str) -> Result<String, String> {
+            Ok("/tmp".to_string())
+        }
+        fn spawn_interactive(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[String],
+            _: &str,
+            _: &std::collections::HashMap<String, String>,
+        ) -> Result<Box<dyn InteractiveHandle>, String> {
             Err("stub".to_string())
         }
     }

@@ -34,10 +34,14 @@ impl ThreadRepository for SqliteAdapter {
                 })
             })
             .map_err(|e| e.to_string())?;
-        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
-    fn get_thread_sessions_for_thread(&self, thread_id: &ThreadId) -> Result<Vec<ThreadSession>, String> {
+    fn get_thread_sessions_for_thread(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Vec<ThreadSession>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
@@ -63,7 +67,8 @@ impl ThreadRepository for SqliteAdapter {
                 })
             })
             .map_err(|e| e.to_string())?;
-        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     fn add_thread_session(&self, t: ThreadSession) -> Result<(), String> {
@@ -146,7 +151,8 @@ impl ThreadRepository for SqliteAdapter {
                 })
             })
             .map_err(|e| e.to_string())?;
-        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     fn append_message(&self, msg: &Message) -> Result<(), String> {
@@ -154,7 +160,14 @@ impl ThreadRepository for SqliteAdapter {
         conn.execute(
             "INSERT INTO messages (id, thread_id, role, content, metadata, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![msg.id, msg.thread_id, msg.role, msg.content, msg.metadata, msg.created_at],
+            params![
+                msg.id,
+                msg.thread_id,
+                msg.role,
+                msg.content,
+                msg.metadata,
+                msg.created_at
+            ],
         )
         .map_err(|e| e.to_string())?;
         // Bump the thread's updated_at so the sidebar reorders.
@@ -172,8 +185,11 @@ impl ThreadRepository for SqliteAdapter {
 
     fn delete_messages(&self, thread_id: &ThreadId) -> Result<(), String> {
         let conn = self.conn.lock()?;
-        conn.execute("DELETE FROM messages WHERE thread_id = ?1", params![thread_id.0])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM messages WHERE thread_id = ?1",
+            params![thread_id.0],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -255,7 +271,8 @@ impl ThreadRepository for SqliteAdapter {
                 })
             })
             .map_err(|e| e.to_string())?;
-        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     fn clear_working_memory(&self, thread_id: &ThreadId) -> Result<(), String> {

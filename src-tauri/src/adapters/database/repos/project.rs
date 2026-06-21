@@ -29,7 +29,8 @@ impl ProjectRepository for SqliteAdapter {
                 })
             })
             .map_err(|e| e.to_string())?;
-        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     fn get_project(&self, id: &ProjectId) -> Result<Option<Project>, String> {
@@ -77,7 +78,14 @@ impl ProjectRepository for SqliteAdapter {
         conn.execute(
             "UPDATE projects SET name = ?2, compute_type = ?3, remote_host = ?4,
              status = ?5, nodes = ?6 WHERE id = ?1",
-            params![p.id, p.name, p.compute_type, p.remote_host, p.status, p.nodes],
+            params![
+                p.id,
+                p.name,
+                p.compute_type,
+                p.remote_host,
+                p.status,
+                p.nodes
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -102,8 +110,11 @@ impl ProjectRepository for SqliteAdapter {
 
     fn delete_repositories_for(&self, project_id: &ProjectId) -> Result<(), String> {
         let conn = self.conn.lock()?;
-        conn.execute("DELETE FROM repositories WHERE project_id = ?1", params![project_id.0])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM repositories WHERE project_id = ?1",
+            params![project_id.0],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -136,7 +147,8 @@ impl ProjectRepository for SqliteAdapter {
                 })
             })
             .map_err(|e| e.to_string())?;
-        iter.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     fn get_settings(&self, project_id: &ProjectId) -> Result<Option<ProjectSettings>, String> {

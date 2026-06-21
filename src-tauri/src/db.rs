@@ -15,7 +15,7 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<Connection> {
 
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
-         PRAGMA journal_mode = WAL;"
+         PRAGMA journal_mode = WAL;",
     )?;
 
     Ok(conn)

@@ -27,8 +27,16 @@ pub struct SqliteMergeExecutor {
 }
 
 impl SqliteMergeExecutor {
-    pub fn new(conn: SqliteConnection, git_ops: GitOpsHelper, exec: Arc<dyn ExecutionPort>) -> Self {
-        Self { conn, git_ops, exec }
+    pub fn new(
+        conn: SqliteConnection,
+        git_ops: GitOpsHelper,
+        exec: Arc<dyn ExecutionPort>,
+    ) -> Self {
+        Self {
+            conn,
+            git_ops,
+            exec,
+        }
     }
 }
 
@@ -62,7 +70,11 @@ impl MergeExecutor for SqliteMergeExecutor {
         // Ensure we're on the target branch before merging.
         if let Err(e) = self.exec.run_command(
             machine_str,
-            &format!("git -C {} checkout {}", shell_escape(&repo_dir), shell_escape(target_branch)),
+            &format!(
+                "git -C {} checkout {}",
+                shell_escape(&repo_dir),
+                shell_escape(target_branch)
+            ),
         ) {
             return Err(ConflictReport {
                 source_branch: source_branch.to_string(),
@@ -119,11 +131,7 @@ impl MergeExecutor for SqliteMergeExecutor {
             Err(raw_err) => {
                 // Conflict. Inspect `git status` for the actual
                 // unmerged files and record the structured report.
-                let files = list_unmerged_files(
-                    self.exec.as_ref(),
-                    machine_str,
-                    &repo_dir,
-                );
+                let files = list_unmerged_files(self.exec.as_ref(), machine_str, &repo_dir);
 
                 let report = ConflictReport {
                     source_branch: source_branch.to_string(),
@@ -177,7 +185,10 @@ impl MergeExecutor for SqliteMergeExecutor {
         // alone is enough to scope the git invocation (the user is
         // responsible for being on the right host via `cwd`).
         let _ = target_branch;
-        Err("abort_in_progress must be invoked through the executor that owns the ExecutionPort".to_string())
+        Err(
+            "abort_in_progress must be invoked through the executor that owns the ExecutionPort"
+                .to_string(),
+        )
     }
 }
 
@@ -314,9 +325,30 @@ fn shell_escape(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
     }
-    let needs_quote = s
-        .chars()
-        .any(|c| c.is_whitespace() || matches!(c, '\'' | '"' | '$' | '`' | '\\' | '!' | '*' | '?' | '|' | '&' | ';' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}'));
+    let needs_quote = s.chars().any(|c| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '\'' | '"'
+                    | '$'
+                    | '`'
+                    | '\\'
+                    | '!'
+                    | '*'
+                    | '?'
+                    | '|'
+                    | '&'
+                    | ';'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+            )
+    });
     if !needs_quote {
         return s.to_string();
     }
@@ -422,7 +454,9 @@ mod tests {
             .lines()
             .filter_map(|line| {
                 let line = line.trim_start();
-                if line.len() < 3 { return None; }
+                if line.len() < 3 {
+                    return None;
+                }
                 let xy = &line[..2];
                 let path = line[3..].trim().to_string();
                 let kind = match xy {

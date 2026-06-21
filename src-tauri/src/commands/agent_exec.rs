@@ -1,6 +1,6 @@
-use tauri::State;
-use crate::state::AppContext;
 use crate::domain::action::AgentAction;
+use crate::state::AppContext;
+use tauri::State;
 
 #[tauri::command]
 pub async fn request_action(
