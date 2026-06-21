@@ -1,94 +1,129 @@
-# Agent Integration Spec (v1)
+# Agent Integration Spec (v1, post-pivot, CLI)
 
-This document is the **source of truth** for how Demeteo integrates coding agents. It captures every locked design decision from the v1 design interview, the data model, the port surface, the Tauri command surface, the UI behavior, and the phase plan. **If something here conflicts with code or other docs, this document wins** for v1 scope; flag the conflict and update the others.
+This document is the **source of truth for how Demeteo integrates coding
+agents** in the multi-agent orchestrator. It captures the runtime trait,
+the `CliRuntime` implementation, and the *narrowed* surface that flows
+from the pivot: agents are invoked via their CLI as one-shot processes
+(`opencode run --format json`, `hermes run --format json`, etc.), not via
+ACP JSON-RPC. The `StepExecutor` drives the session (one per step).
 
-For the surrounding architecture (hexagonal layout, plugin host, port trait catalogue), see **[ARCHITECTURE.md](file:///home/jsteven/Projects/demeteo/ARCHITECTURE.md)**.
+The pivot's locked decisions are in [`docs/REDESIGN_DECISIONS.md`](docs/REDESIGN_DECISIONS.md).
+The full architecture is in [`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md).
+The master plan is in [`REDESIGN_PLAN.md`](REDESIGN_PLAN.md).
+
+For the surrounding architecture (hexagonal layout, plugin host, port
+trait catalogue), see [`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md).
 
 ---
 
-## 1. Scope and Non-Goals
+## 1. Scope and Non-Goals (post-pivot)
 
 ### v1 ships
 
-- A pluggable `AgentRuntime` trait with one concrete implementation: `AcpRuntime` (JSON-RPC over stdio, per the [Agent Client Protocol](https://agentclientprotocol.com/) v1).
-- Two agent configurations out of the box: **`hermes`** and **`opencode`** (the `anomalyco/opencode` project, the open-source coding agent — *not* the archived `opencode-ai/opencode`).
-- Lazy agent session lifecycle bound to thread lifecycle.
-- A scope fence in the policy engine that auto-rejects any file path resolving outside the thread's worktree.
-- A typed three-layer error model (per-action / per-turn / per-session).
-- Persistent per-thread working memory (DB-backed, populated by `Read` tool calls, with file metadata).
-- Auto-Inspector behavior on the first `Read` of a turn.
+- A pluggable `AgentRuntime` trait with one concrete implementation: `CliRuntime` (one-shot CLI process + JSON-lines event stream).
+- Four agent configurations out of the box: **`opencode`**, **`hermes`**, **`claude-code`**, and **`antigravity`** — all via their CLI's JSON-output mode (`opencode run --format json`, `hermes run --format json`, `claude --print --output-format stream-json`, `agy --print -`).
+- The runtime serves **both** the planner (an agent session that decomposes the feature into a step DAG) and the subtask agents (sessions that execute a single `agent` or `parallel` step's work). Same trait, same plumbing, different prompts.
+- Eager agent session lifecycle scoped to step executions (a process is spawned per `prompt` call, torn down on completion).
+- `OPENCODE_PERMISSION` env var per spawn; `external_directory: "deny"` to scope the worktree. The `PermissionPolicyPort` renders the policy JSON.
+- Cross-step conversation continuity via `--session <uuid> --continue` flags so a multi-step workflow shares the agent's context.
+- A typed three-layer error model (per-action / per-step / per-feature).
+- Per-step checkpoint persistence (DB-backed, populated on every state transition).
+- The `AgentEvent` vocabulary is **internal** — consumed by the `StepExecutor`, not by the UI. The UI sees step transitions, not agent transcripts.
 
 ### v1 explicitly does NOT include
 
-- **Secret management.** The user pre-configures their agent (provider, API key, model) on the host where the agent runs. Demeteo does not read, store, or inject model API keys. Phase 8 candidate.
-- **Resume / context replay across restarts.** A Demeteo thread is a C-strict opaque cursor; the agent session id is internal. Phase 8 candidate (persisted transcript + replay).
-- **Non-ACP transports.** The `AcpRuntime` is the only runtime in v1. Adding HTTP/Server / stdio JSON-lines / MCP-as-agent transports is Phase 7e and explicitly chosen to be a *different* protocol so the abstraction gets a real test.
-- **WASM policy plugins.** Designed in `ARCHITECTURE.md`; deferred. The policy decorator + scope fence cover v1 approval needs.
-- **Per-agent settings UI (model picker, working dir override, etc.).** The picker shows "Default settings" + a "Configure…" stub. Full settings UI is Phase 7d.
+- **Secret management for the brain's API keys.** The user pre-configures their agent (provider, API key, model) on the host where the agent runs. Demeteo does not read, store, or inject model API keys. **The planner is just another agent session in this respect.** Phase 8+ candidate.
+- **A demeteo-side LLM.** The "brain" is a coding agent (opencode, hermes, claude-code, or antigravity) invoked by the `StepExecutor`. Demeteo never calls a model provider directly.
+- **Resume / context replay across restarts.** A Feature Run is a C-strict opaque cursor; the agent session id is internal. The orchestrator *does* re-enter a feature at the last completed step on launch (synthetic gate on mid-step interrupt), but it does not replay prior agent transcripts to the new session. The step's *artifact* is the cross-restart state.
+- **ACP.** The `AcpRuntime`, `JsonRpcClient`, `ToolBridge`, and both transport adapters are deleted in v1. A future `OpencodeServerRuntime` (HTTP client to `opencode serve`) is a v1.1 candidate that would re-introduce a structured protocol for real-time permission approval via the server's `POST /session/:id/permissions/:permissionID` endpoint.
+- **Real-time permission approval UX.** The agent enforces permissions via `OPENCODE_PERMISSION`. Demeteo writes the policy at spawn time; the agent enforces it. The gate-step approval surface (user clicks Approve/Reject on the step timeline) is the only real-time human-in-the-loop affordance demeteo provides.
+- **Per-agent settings UI (model picker, working dir override, etc.).** The user configures their agent on the host. Demeteo passes `--model` and `--dir` at spawn time; the UI writes the model selection to the DB, which the `StepExecutor` reads at spawn. v1.1 candidate.
 - **Auto-restart on transient errors.** Single restart on user request only.
-- **Token/cost usage dashboard.** The `Usage` event is wired into the protocol stack but the UI indicator is stubbed in v1.
+- **Token/cost usage dashboard.** The `Usage` event is wired into the JSON-lines stream but the UI surfaces per-step cost from the `PricingTable`, not a token counter. A v1.x polish item.
+- **A chat-style supervisor UI.** The chat UX is gone (per the pivot). The UI is a fleet-control surface; the agent's own chat is not demeteo's concern.
+- **Working memory.** No chat, no working memory sidecar. The per-step artifact is the durable record.
 
-### Why "ACP only" is the right bet for v1
+### Why CLI is the right bet for v1
 
-In mid-2026 the two leading open-source coding agents (Hermes and anomalyco/opencode) both ship **ACP as a first-class, documented surface** in their main navigation. ACP is JSON-RPC 2.0 over stdio (local) or Streamable HTTP / WebSocket (remote), with stable v1 wire format, official SDKs for Rust/Python/TS/Java/Kotlin, and an active RFD process. The bet is not "will ACP be adopted" — it's "every serious agent in this category speaks ACP or will have to."
+The ACP approach (JSON-RPC 2.0 over stdio, capability negotiation, `initialize` / `session/new` / `session/prompt`, tool-call bridging) proved to have five structural failure modes in practice: (1) wire-format drift between agent versions breaking the event mapper, (2) capability-detection hacks for `toolCallUpdate` / `sessionCancel` in two naming conventions, (3) concurrent-call serialization corrupting the JSON-RPC transport when `set_config_option` raced with an in-flight `prompt`, (4) a 5-minute `session/new` timeout with no recovery, and (5) an SSH-process-leak risk when the transport's background reader held an `Arc` past the session's lifetime.
 
-We design the runtime trait to be transport-neutral so we can add non-ACP runtimes later, but the v1 surface area is intentionally narrow: one trait, one implementation, two configs. This keeps the dispatcher, the policy decorator, the channels, and the UI ignorant of which agent is in use. The "second adapter must be non-ACP" rule from the design interview is a Phase 7e commitment to validate the abstraction, not a v1 requirement.
-
----
-
-## 2. Locked Design Decisions
-
-The 17 decisions from the v1 design interview, in order. Each has a one-line summary and a pointer to the section of this doc that implements it.
-
-| # | Decision | Section |
-|---|---|---|
-| 1 | Agent session lazy on first directive, idle-timeout teardown | §4 |
-| 2 | Thread is the only UI-visible key; agent session id is internal | §3.1 |
-| 3 | C-strict: no resume, no transcript persistence | §3.1 |
-| 4 | Per-turn `Channel<AgentEvent>` for content; global Tauri events for side effects | §6 |
-| 5 | `AcpRuntime` only; two agents: `hermes`, `opencode` | §5 |
-| 6 | Agent runs on same host as worktree (local→local, server→SSH) | §5.2 |
-| 7 | Official install scripts only, explicit consent, eager on first thread per machine | §5.3 |
-| 8 | Scope fence pre-rule in policy engine, overridable by explicit user rules | §7 |
-| 9 | No secret management; user pre-configures agent | §1 (non-goal) |
-| 10 | Stacked agent card in `NewThreadModal`, auto-default, blocks if none | §8.1 |
-| 11 | `Machine.agents` migrates to `{kind, enabled}[]`; `ThreadSession` gets `agent_kind` | §8.2 |
-| 12 | Frontend optimistic status, backend confirms; adds `spawning / installing / error` | §8.3 |
-| 13 | Stop replaces Send during running; implicit cancel+redirect on Enter; idempotent cancel; drains pending intercepts | §8.4 |
-| 14 | Minimal info event on turn complete; refocus input; no summary card | §8.5 |
-| 15 | Three-layer error model with typed variants and recovery affordances | §9 |
-| 16 | New `thread_working_memory` table; cap 20; cleared on restart; metadata via SFTP | §10 |
-| 17 | Inspector auto-opens on first Read (or after 5s+ gap); updates on subsequent Reads; never on writes; yes on re-reads-after-writes | §8.6 |
+The CLI approach (`opencode run --format json`) sidesteps all five: it is one `Command::spawn` and one stdout pipe with no handshake, no capability negotiation, no session state to leak, and no concurrent calls to serialize. The `opencode serve` HTTP API (v1.1 candidate) would re-introduce a session concept and real-time permission approval for users who need it, without paying the ACP complexity cost in v1.
 
 ---
 
-## 3. Domain Model
+## 2. Locked Decisions (the runtime-relevant ones)
 
-### 3.1 Thread is the only key
+Cross-reference: full table in [`docs/REDESIGN_DECISIONS.md`](docs/REDESIGN_DECISIONS.md).
 
-`ThreadSession` (`src-tauri/src/domain/models.rs:56`) gains one new field:
+| #  | Decision                           | Section here |
+|----|------------------------------------|--------------|
+| 1  | Top-level entity shape             | §3.1         |
+| 2  | Demeteo's role                     | §0 (preamble)|
+| 3  | Brain role                         | §1 (scope)   |
+| 4  | LLM provider scope                 | §1 (scope)   |
+| 5  | Planner selection                  | §3.2         |
+| 6  | Project structure                  | §3.3         |
+| 8  | Step execution model               | §3.4, §4     |
+| 13 | `parallel` failure semantics       | §4.3         |
+| 14 | Workflow re-entry / resume         | §3.5         |
+| 16 | Repo merge model                   | §3.6         |
+| 17 | PAT scope                          | §3.3         |
+| 20 | Conflict resolution UX             | §4.4         |
+| 34 | Agent protocol                     | §1 (scope)   |
+| 35 | Permission enforcement             | §6           |
+| 36 | Cross-step session continuity       | §4.1         |
+
+---
+
+## 3. Domain Model (post-pivot)
+
+### 3.1 The agent session is scoped to a step execution
+
+`StepExecution` (`src-tauri/src/domain/feature.rs`) is the new top-level agent-session owner:
 
 ```rust
-pub struct ThreadSession {
+pub struct StepExecution {
     pub id: String,
-    pub machine_id: String,
-    pub title: String,
-    pub mode: String,               // 'worktree', 'adhoc'
-    pub branch: Option<String>,
-    pub repo_path: Option<String>,
-    pub sandbox_path: Option<String>,
-    pub status: String,             // extended: see §8.3
-    pub agent_kind: Option<String>, // NEW: "opencode" | "hermes" | None
+    pub feature_run_id: String,
+    pub step_index: u32,
+    pub step_type: String,         // "agent" | "parallel" | "gate"
+    pub status: String,            // see §3.5
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub wall_clock_seconds: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub agent_kind: Option<String>,    // "opencode" | "hermes" | None (for gates)
+    pub agent_session_id: Option<String>,  // internal; never crosses the IPC boundary
+    pub artifact_paths: Vec<String>,
+    pub gate_decision_id: Option<String>,  // Some(...) iff this is a gate step
 }
 ```
 
-The agent *session* identifier (ACP's `sessionId`) is owned by the `AgentRegistry` and never crosses the Rust↔TypeScript boundary. From the UI's perspective, a thread *is* the session. The ACP `sessionId` is allowed to change (auto-compact, reconnect) and if the UI held it, we'd have a synchronization nightmare. If we ever need to display it, surface it as a *display string* that may auto-update.
+The agent *session* identifier is the CLI `--session <uuid>` argument passed to `opencode run`. It is owned by the `StepExecutor` (in memory) and recorded in `step_executions.agent_session_id` for cross-step continuity within a feature run. It never crosses the Rust↔TypeScript boundary.
 
-**No resume across restarts.** A restarted Demeteo app finds the thread row in SQLite, but the agent subprocess is gone. The next directive creates a fresh agent session. The thread is "remembered as a place" but the agent starts from scratch on every (re)launch.
+**Cross-step continuity.** A multi-step workflow (e.g., research → spec → plan → tasks → implement) shares one agent session id across all `agent` steps within the same feature run, via `--session <uuid> --continue`. Each `parallel` subtask gets its own session id (so subtasks don't pollute each other's context). On feature re-entry after a crash, a fresh session is created; the step's *artifact* is the cross-restart state.
 
-### 3.2 `AgentEvent` vocabulary
+**No resume across restarts at the session level.** A restarted Demeteo finds the `step_executions` row in SQLite; if it was `running`, the orchestrator marks it `interrupted` and surfaces a synthetic gate (see §3.5). The next directive (i.e., the user clicking "Resume" or the orchestrator continuing) creates a fresh agent session for the step. The step's *artifact* is the cross-restart state.
 
-`src-tauri/src/domain/agent_event.rs` (NEW):
+### 3.2 The planner is just an agent session
+
+There's no special "planner port" or "planner runtime." The planner is a coding agent session (opencode, hermes, claude-code, or antigravity) invoked with a *planning prompt* — the same `CliRuntime`, the same CLI invocation, the same JSON-lines event stream. The only special thing is the prompt template, which lives in the workflow step's config (the first `agent` step in the starter pack's Research → Spec → Plan → Tasks → Implement → Validate workflow, for example).
+
+The planner's selection is per-project (`Project.planner: { machine_id, agent_kind }` — see `ProjectRepository` in [`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md) §2). The user picks the planner when creating the project. The orchestrator resolves it at feature-start time.
+
+### 3.3 Project host + provider instance
+
+Each project has exactly one host (`Project.host: { type: "local" | "remote", ... }`). A project is bound to a provider instance at creation; the instance's PAT is used for both `git clone` (via `SshRepositoryCloner` / `LocalFsRepositoryCloner`) and `mr_publish` (via `MrPublisher`). The provider instance is keyed by `(kind, host)` to support multiple GitLab instances and GitHub Enterprise Server.
+
+The agent runs on the **same host as the worktree**:
+- `auth_type == "local"` → `tokio::process::Command` with the user's shell env inherited. `CliRuntime::start` resolves the binary from `PATH` and spawns directly.
+- `auth_type in {"key", "password", "agent"}` → SSH channel via `ExecutionPort::spawn_interactive`. Demeteo connects over the existing authenticated SSH session, runs the agent binary over a long-lived `ssh2::Channel`, and owns both ends of the stdio.
+
+**No per-machine override.** The location is implied by the project's host. One less way to misconfigure.
+
+### 3.4 The `AgentEvent` vocabulary is internal
+
+`src-tauri/src/domain/agent_event.rs`:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -97,11 +132,12 @@ use crate::domain::policy::ActionKind;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
-    /// Streamed assistant text delta. The frontend appends to the most recent text block.
+    /// Streamed assistant text delta. The StepExecutor appends to the current
+    /// artifact buffer; not surfaced to the UI.
     Text { delta: String },
 
     /// Agent wants to do something. The `tool_call_id` is the agent's id; the
-    /// `intercept_id` is Demeteo's internal handle (always minted for traceability).
+    /// `intercept_id` is Demeteo's internal handle.
     ToolCall {
         tool_call_id: String,
         intercept_id: String,
@@ -117,9 +153,6 @@ pub enum AgentEvent {
         preview: Option<String>,
     },
 
-    /// Agent publishes an execution plan (opencode plan mode, etc.)
-    Plan { entries: Vec<PlanEntry> },
-
     /// Token / cost telemetry
     Usage {
         input_tokens: u64,
@@ -129,7 +162,7 @@ pub enum AgentEvent {
 
     /// Soft error from the agent
     Error {
-        code: String,        // "rate_limit" | "auth_failed" | "context_overflow" | "internal" | "cancelled"
+        code: String,
         message: String,
         recoverable: bool,
     },
@@ -148,12 +181,6 @@ pub enum ToolCallStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanEntry {
-    pub step: String,
-    pub status: String, // "pending" | "in_progress" | "done" | "blocked"
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     EndOfTurn,
@@ -163,39 +190,31 @@ pub enum StopReason {
 }
 ```
 
-### 3.3 `InterceptPayload` extension
+The `Text` and `Plan` events are consumed by the `StepExecutor` to build the step's artifact (per the type-driven defaults in `REDESIGN_PLAN.md` §1 decision 28). The `Usage` event feeds the per-step `cost_usd` and the per-feature telemetry (per the locked decision 15). The `TurnComplete` event drives the step's state transition.
 
-`src-tauri/src/domain/intercept.rs:6`:
+The UI does **not** consume the agent event stream. It consumes `feature_status_changed` / `step_progress` / `gate_required` / `conflict_detected` events from the `NotificationPort`.
 
-```rust
-pub struct InterceptPayload {
-    pub intercept_id: String,
-    pub thread_id: String,
-    pub machine_id: String,
-    pub action: ActionKind,
-    pub target: String,
-    pub preview: Option<String>,
-    pub created_at: String,
-    pub tool_call_id: Option<String>, // NEW: Some(...) for agent-originated; None for hand-rolled
-}
-```
+### 3.5 Step status state machine
 
-The `tool_call_id` is opaque to the UI. It's used by `tool_bridge.rs` to correlate ACP `tool_call/update` messages with in-flight `PendingIntercept` entries, and to scope the result returned to the agent.
+`StepExecution.status` values:
 
-### 3.4 Policy rejection shaped as a tool result
+| Value             | Meaning                                              | Set by                                |
+|-------------------|------------------------------------------------------|---------------------------------------|
+| `pending`         | Step is next up, not yet started                     | `StepExecutor` on run start           |
+| `running`         | Agent session is active                              | `StepExecutor` on first AgentEvent    |
+| `awaiting_gate`   | A gate is awaiting user decision                     | `StepExecutor` on `gate_required`     |
+| `completed`       | Step finished; artifact written                      | `StepExecutor` on `TurnComplete`      |
+| `failed`          | Step failed; user action required                    | `StepExecutor` on terminal Error      |
+| `skipped`         | Step was skipped (e.g., conflict resolution skip)    | `StepExecutor` on user skip           |
+| `interrupted`     | App was killed mid-step; synthetic gate on re-entry  | `StepExecutor` on shutdown watchdog   |
 
-`src-tauri/src/domain/intercept.rs:55`:
+Per-step checkpoints (decision 14) are atomic: a step transitions to `completed` only when its artifact is written and (if it's a gate) its `gate_decision` is recorded. Mid-step crashes surface as `interrupted`, and the next launch offers a synthetic gate with "Resume" (re-run the step) or "Skip" options.
 
-```rust
-pub enum Resolution {
-    Approve,
-    Reject { feedback: String },
-    // NEW: explicit "this is a tool-call-shaped failure, not a bash output"
-    RejectAsToolFailure { feedback: String },
-}
-```
+### 3.6 The worktree-of-record is `feature/<slug>`
 
-`PolicyEnforcedExecutionPort::submit` is updated so that, when the action originated from an agent tool call (the `tool_call_id` is set), rejections are returned to the agent as a structured `tool_call/update { status: Failed, content: [{type: "text", text: feedback}] }` rather than as a synthetic bash output. The existing bash-shaped path is preserved for legacy / hand-rolled `request_action` calls.
+Subtask worktrees branch off `feature/<slug>` (decision 16). The orchestrator creates `feature/<slug>` off the project's canonical branch at feature start. Each subtask's worktree is branched off the *latest* `feature/<slug>` (i.e., after any prior subtask merges). Subtask branches merge into `feature/<slug>` in topological DAG order via the `MergeExecutor`.
+
+The worktree scope is enforced via the agent's own `external_directory: "deny"` permission rule (rendered by `PermissionPolicyPort::render_for` into the `OPENCODE_PERMISSION` env var). The `PermissionPolicy` struct maps to the JSON shape `{"external_directory": "deny", "edit": "allow", ...}`. The user's `feature/<slug>` branch is touched only at merge time, never by an agent directly.
 
 ---
 
@@ -203,7 +222,7 @@ pub enum Resolution {
 
 ### 4.1 The trait
 
-`src-tauri/src/ports/agent_runtime.rs` (NEW):
+`src-tauri/src/ports/agent_runtime.rs`:
 
 ```rust
 use std::pin::Pin;
@@ -216,7 +235,8 @@ use crate::domain::agent_event::AgentEvent;
 
 #[derive(Debug, Clone)]
 pub struct AgentContext {
-    pub thread_id: String,
+    pub step_execution_id: String,  // NEW: scoped to a step, not a thread
+    pub feature_run_id: String,
     pub machine_id: String,
     pub binary: String,        // resolved absolute path
     pub args: Vec<String>,
@@ -240,129 +260,127 @@ pub enum AgentStartError {
 }
 
 pub trait AgentRuntime: Send + Sync {
-    /// Stable identifier; matches `AgentConfig.kind`
     fn kind(&self) -> &'static str;
 
-    /// Check if the binary is reachable (which / command -v on the target host)
     fn is_available(&self, machine_id: &str) -> bool;
 
-    /// The official install command, shown verbatim in the consent prompt
     fn install_command(&self) -> &'static str;
 
-    /// Spawn the agent and return a session handle. The session is fully
-    /// initialized (capability negotiation, session/new, etc.) before this returns.
     fn start(&self, ctx: AgentContext) -> Result<Arc<dyn AgentSession>, AgentStartError>;
 }
 
 pub trait AgentSession: Send + Sync {
-    /// The runtime's own session id; never escapes the backend
     fn session_id(&self) -> &str;
 
-    /// Submit a directive. The returned stream yields `AgentEvent`s until
-    /// `TurnComplete` (or terminal `Error`) is emitted, at which point the
-    /// stream closes.
     fn prompt(&self, text: &str) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>>;
 
-    /// Cancel the in-flight turn. Idempotent: no-op if turn is already done.
     fn cancel(&self) -> Result<(), String>;
 }
 ```
 
-### 4.2 Lifecycle: lazy on first directive
+The `AgentContext` holds the resolved binary, CLI args, env vars (including `OPENCODE_PERMISSION` and `OPENCODE_CONFIG_CONTENT`), and the worktree `cwd`. The `AgentRegistry` is simplified: each call to `CliRuntime::start` spawns a fresh `Command::spawn` and returns an `Arc<dyn AgentSession>`; there is no session deduplication or reuse across step executions. The `StepExecutor` holds the `Arc<AgentSession>` for the duration of one `prompt` call.
 
-A `ThreadSession` row exists in SQLite before any agent does. The agent session is created at the moment the user submits the first directive for that thread, and torn down on:
+### 4.2 Lifecycle: one-shot per prompt call, scoped to step execution
 
-- **Idle timeout**: configurable, default 5 minutes after last `TurnComplete`.
-- **Thread delete**: clean kill, drain pending intercepts.
-- **Thread restart** (per §9.3): clean kill, working memory cleared.
-- **App shutdown**: clean kill, drain pending intercepts.
+A `StepExecution` row exists in SQLite before any agent does. The agent process is spawned at the moment the executor calls `session.prompt(text)`, and torn down on:
 
-The `AgentRegistry` (in `adapters/agent/registry.rs`) holds the `HashMap<ThreadId, Arc<AgentSession>>` and is the only thing that knows which threads have live agents. When a thread is deleted or the app shuts down, the registry iterates and calls `kill()` on each session.
+- **Step completion** (terminal `TurnComplete` or terminal `Error`): process exits, stdout drain completes.
+- **Step failure** (terminal `Error`): process exits, working state preserved.
+- **Step retry** (per Q14 retry policy): the previous process is killed; a new one is spawned on the next `prompt` call.
+- **Feature pause / cancel / re-run**: the `StepExecutor` holds the `Arc<AgentSession>`; calling `session.cancel()` kills the child process.
+- **App shutdown**: the `StepExecutor`'s `Arc<AgentSession>` is dropped; `AgentSession::kill()` is called in the `Drop` impl, ensuring the process is reaped.
+
+There is no session registry or deduplication. The `AgentContext` carries `--session <uuid>` (for cross-step continuity) and `--continue` (to append to the same conversation). The `Arc<AgentSession>` lives for the duration of one `prompt` call.
 
 ### 4.3 Where the process lives
 
-The agent process runs on the **same host as the worktree**:
+The agent process runs on the **same host as the worktree** (the project's host, per §3.3):
 
-- `Machine.auth_type == "local"` → `tokio::process::Command` with the user's shell env inherited.
-- `Machine.auth_type in {"key", "password", "agent"}` → SSH channel via the new `ExecutionPort::spawn_interactive` method. Demeteo connects over the existing authenticated SSH session, runs the agent binary over a long-lived `ssh2::Channel`, and Demeteo owns both ends of the stdio.
+- `auth_type == "local"` → `tokio::process::Command::new(binary)` with the user's shell env inherited. `CliRuntime` resolves the binary from `PATH` and spawns directly.
+- `auth_type in {"key", "password", "agent"}` → SSH channel via `ExecutionPort::spawn_interactive`. Demeteo connects over the existing authenticated SSH session, runs the agent binary over a long-lived `ssh2::Channel`, and owns both ends of the stdio.
 
-**No per-machine override.** The location is implied by the machine's auth type. One less way to misconfigure.
+**No per-machine override.** The location is implied by the project's host. One less way to misconfigure.
 
-### 4.4 The transport layer
+### 4.4 The CLI event stream
 
-The `AgentRuntime` operates on `bytes-in, bytes-out`. The transport layer that produces those bytes is a separate concern, factored out as `AgentTransport` so the runtime is transport-blind:
+`CliRuntime` produces an `AgentEvent` stream by spawning `opencode run --format json [args...]`, draining `stdout` line-by-line, and passing each nd-JSON line through a per-agent `parse_event` function:
 
 ```rust
-pub trait AgentTransport: Send {
-    fn stdin(&mut self) -> &mut dyn std::io::Write;
-    fn stdout(&mut self) -> &mut dyn std::io::Read;
-    fn kill(&mut self) -> Result<(), String>;
-    fn try_wait(&mut self) -> Result<Option<i32>, String>;
+pub type EventParser = fn(line: &str) -> Option<AgentEvent>;
+
+pub struct CliAgentRuntime {
+    pub kind_str: &'static str,
+    pub binary: &'static str,
+    pub extra_args: &'static [&'static str],
+    pub install_cmd: &'static str,
+    pub parse_event: EventParser,
 }
 ```
 
-Two implementations:
+The `parse_event` function is registered per agent kind and maps the agent's JSON-line shape onto `AgentEvent` variants (`Text`, `Usage`, `TurnComplete`, `Error`). Unknown event types are silently dropped so future agent versions don't break the stream.
 
-- `LocalSubprocessTransport` — wraps `tokio::process::Child`.
-- `RemoteSshTransport` — wraps an `ssh2::Channel` held open by `SshClientAdapter::spawn_interactive`.
+The `AgentTransport` trait and its two implementations (`LocalSubprocessTransport`, `RemoteSshTransport`) are deleted. The `JsonRpcClient` is deleted. The `AcpRuntime` is deleted.
 
-`AcpRuntime` takes an `AgentTransport` and a `NotificationPort` (for emitting the global intercept/result events). It produces an `AgentEvent` stream by parsing the transport's stdout as JSON-RPC and mapping ACP methods onto `AgentEvent` variants.
+### 4.5 Conflict resolution cascade (decision 20)
+
+When a `parallel` step's subtask merge conflicts with the `feature/<slug>` branch, the `MergeExecutor` produces a `ConflictReport` and the `ConflictResolver` cascade kicks in:
+
+1. **Auto-agent** (default `conflict_policy: "auto_agent"`): spawn a conflict-resolution subtask — a fresh agent session with a constrained prompt ("resolve the conflicts in these N files; do not modify unrelated code; produce a resolution commit"). Cost-capped (default 2 attempts, $0.50).
+2. **Manual** (on auto-agent failure or `conflict_policy: "auto_human"`): open the `ConflictResolver` UI (Monaco 3-way merge).
+3. **Skip / Abort** (always available): mark the subtask `skipped` or the feature `aborted`.
+
+The cascade is enforced by the `StepExecutor` and `ConflictPolicy` (per-project setting). See [`docs/REDESIGN_OPEN_QUESTIONS.md`](docs/REDESIGN_OPEN_QUESTIONS.md) §1 for the deferred per-step retry policy.
 
 ---
 
-## 5. The AcpRuntime
+## 5. The CliRuntime
 
-### 5.1 Why ACP
+### 5.1 Why CLI
 
-[Agent Client Protocol](https://agentclientprotocol.com/) v1 is the standard protocol for agent↔client communication. It's JSON-RPC 2.0 over stdio (local) or Streamable HTTP / WebSocket (remote). v1 wire format is stable. Official SDKs exist for Rust (`agent-client-protocol` crate), Python, TypeScript, Kotlin, Java.
+The CLI approach (one-shot `opencode run --format json`) sidesteps five structural failure modes that plagued the ACP approach: (1) wire-format drift between agent versions breaking the event mapper, (2) capability-detection hacks for `toolCallUpdate` / `sessionCancel` in two naming conventions, (3) concurrent-call serialization corrupting the JSON-RPC transport when `set_config_option` raced with an in-flight `prompt`, (4) a 5-minute `session/new` timeout with no recovery, and (5) an SSH-process-leak risk when the JSON-RPC transport's background reader held an `Arc` past the session's lifetime.
 
-Both target agents in v1 speak ACP as a first-class feature:
-- **Hermes** has a dedicated `acp_adapter/` module and `acp_registry/` in its repo.
-- **anomalyco/opencode** lists **ACP Support** in the main navigation of its docs site (`opencode.ai/docs/acp/`).
+The CLI approach is: one `Command::spawn`, one stdout pipe, no handshake, no capability negotiation, no session state to leak, no concurrent calls to serialize. The `opencode serve` HTTP API (v1.1 candidate) would re-introduce a session concept and real-time permission approval via `POST /session/:id/permissions/:permissionID`.
 
-### 5.2 Method surface (v1 subset)
+### 5.2 The wire format
 
-We implement the *client* side (Demeteo is the ACP client, the agent is the ACP server). v1 needs:
+Each agent emits nd-JSON on stdout when run with the JSON-output flag:
 
-| Method | Direction | Maps to |
-|---|---|---|
-| `initialize` | client → agent | one-time capability negotiation |
-| `authenticate` | client → agent | only if agent advertises `authMethods` |
-| `session/new` | client → agent | creates the per-turn session; returns `sessionId` |
-| `session/prompt` | client → agent | sends user directive; response is a stream of `session/update` notifications |
-| `session/cancel` | client → agent | stops in-flight turn |
-| `session/set_mode` | client → agent | optional: switch build/plan modes |
-| `fs/read_text_file` | agent → client | delegated to `PolicyEnforcedExecutionPort::read_file` |
-| `fs/write_text_file` | agent → client | delegated to `PolicyEnforcedExecutionPort::write_file` |
-| `terminal/create` | agent → client | delegated to `ExecutionPort::run_command` (returns handle) |
-| `terminal/output` | agent → client | streamed |
-| `terminal/wait_for_exit` | agent → client | blocks |
-| `terminal/release` | agent → client | cleanup |
+| Agent        | CLI invocation                                           | Event shape                                      |
+|--------------|---------------------------------------------------------|-------------------------------------------------|
+| opencode     | `opencode run --format json [args...]`                 | `{"type":"text","content":"..."}`               |
+| hermes       | `hermes run --format json [args...]`                    | (same as opencode; confirm at implementation)    |
+| claude-code  | `claude --print --output-format stream-json [args...]`  | `{"type":"text","content":"..."}`               |
+| antigravity  | `agy --print - [args...]`                              | `{"type":"text_delta","data":{"text":"..."}}`  |
 
-Agent-initiated notifications we listen for:
+### 5.3 Cross-step session continuity
 
-| Notification | Maps to |
-|---|---|
-| `session/update` (text chunk) | `AgentEvent::Text` |
-| `session/update` (tool_call) | `AgentEvent::ToolCall` |
-| `tool_call/update` | `AgentEvent::ToolCallUpdate` |
-| `session/update` (plan) | `AgentEvent::Plan` |
-| `session/usage_update` | `AgentEvent::Usage` |
-| end of stream | `AgentEvent::TurnComplete` |
-
-### 5.3 Install flow
-
-The `EnvModal` lets the user toggle `enabled` for each `AgentConfig`. When the user clicks "Launch Thread" with an agent selected, the dispatcher checks availability:
+A multi-step feature run uses one session id across all `agent` steps:
 
 ```
-agent_start(thread_id, agent_kind)
-  → registry.spawn(kind, ctx)
-  → runtime.is_available(machine_id) ?
-       yes → spawn
+# Step 1 (planner): spawn with a new session id
+opencode run --format json --session <uuid-1> --title "plan" "<prompt>"
+
+# Step 2 (implement): continue the same session
+opencode run --format json --session <uuid-1> --continue "<prompt>"
+
+# Step 3 (validate): same session
+opencode run --format json --session <uuid-1> --continue "<prompt>"
+```
+
+Parallel subtasks each get their own session id so subtask sessions don't pollute each other's context. Planner and workers have separate session ids.
+
+### 5.4 Install flow
+
+When the `StepExecutor` needs to spawn a step, it calls `runtime.is_available(exec, machine_id)`:
+
+```
+step_executor.spawn_step(step_execution_id, agent_kind)
+  → runtime.is_available(exec, machine_id) ?
+       yes → runtime.start(ctx)
        no  → return AgentStartError::NotFound(binary_name) + install_command
 ```
 
-On `NotFound`, the frontend shows a consent modal with the install command shown verbatim:
+On `NotFound`, the UI shows a consent modal with the install command shown verbatim:
 
 > **Install opencode on `spectacular`?**
 > The following official script will be run via SSH:
@@ -371,322 +389,72 @@ On `NotFound`, the frontend shows a consent modal with the install command shown
 > ```
 > [Cancel] [Install and continue]
 
-On consent, the frontend invokes `agent_install_and_start(thread_id, agent_kind)` which:
-
+On consent, the frontend invokes `agent_install_and_start(step_execution_id, agent_kind)` which:
 1. Runs the install command over the appropriate transport (local shell or SSH).
 2. Re-checks availability.
 3. If available, spawns the agent and returns the session handle.
-4. If still not found after install, returns an error and the thread is left in `error` state.
+4. If still not found after install, returns an error and the step is left in `error` state.
 
-**Eager on first thread per machine, lazy after.** The result of the availability check is cached per `(machine_id, agent_kind)` for the duration of the app session. If the user later uninstalls the agent, the lazy fallback (the spawn itself fails with ENOENT) re-triggers the install flow.
+**Lazy after first failure.** If the user later uninstalls the agent, the spawn fails with ENOENT and re-triggers the install flow.
 
 **No user-editable install commands.** The command is static per adapter, baked into the source. The user can only consent or cancel.
 
-### 5.4 The tool bridge
+### 5.5 Permission policy per spawn
 
-When the agent sends `fs/read_text_file { path }`, the runtime doesn't have direct filesystem access. It calls into the `tool_bridge.rs` module, which:
+Each `CliRuntime::start` call injects the spawn-time policy as an env var:
 
-1. Resolves `path` against the thread's `sandbox_path` (absolute path, no `..`, symlinks resolved via the existing `SftpEntry` metadata).
-2. Calls `PolicyEnforcedExecutionPort::submit` with `AgentAction::Read { path: resolved }` — same path as the UI's `Test Intercept` button.
-3. The policy engine runs the existing rules **plus the scope fence pre-rule** (see §7).
-4. If approved (or auto-approved by rule), the file is read via the underlying `ExecutionPort` and the result is returned to the agent.
-5. If rejected (by rule, by scope fence, or by user), a `tool_call/update { status: Failed, content: [{type: "text", text: reason}] }` is sent to the agent.
+```
+OPENCODE_PERMISSION={"edit":"allow","read":"allow","bash":"ask","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"ask"}
+```
 
-This means every file operation the agent attempts is subject to *the same policy and scope checks* as a hand-rolled `request_action` call. The agent has no back door.
+The policy object is resolved from `AppContext.permission_policy` and written to `AgentContext.permission_policy_json` before spawn. The binary receives it as `OPENCODE_PERMISSION` in its env. The worktree scope is enforced by `external_directory: "deny"` (the binary refuses to operate on paths outside `cwd`).
 
-### 5.5 Adapters (v1)
+`bash: "ask"` is the only gate that requires real-time human-in-the-loop. When the agent emits a bash action, the step pauses at the gate and the user approves or rejects via the `GateView` UI before the agent receives the result.
 
-Two agents, both via `AcpRuntime`:
+When the `OPENCODE_PERMISSION` env var is absent (e.g., direct CLI invocation outside demeteo), the agent applies its own default policy.
 
-- `adapters/agent/opencode/mod.rs` — wraps `AcpRuntime` with config `{ binary: "opencode", args: ["acp"], env: {}, install_command: "curl -fsSL https://opencode.ai/install | bash" }`.
-- `adapters/agent/hermes/mod.rs` — wraps `AcpRuntime` with config `{ binary: "hermes", args: ["acp"], env: {}, install_command: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash" }`.
+### 5.6 Adapters
 
-The `AcpRuntime` itself is generic over the binary — the agent-specific logic is just the `AgentConfig` and the availability check (which binary name to look up).
+Four agents, all via `CliRuntime`:
 
-### 5.6 Disclaimer
+- `adapters/agent/opencode/mod.rs` — wraps `CliRuntime` with config `{ binary: "opencode", args: [], env: {}, install_command: "curl -fsSL https://opencode.ai/install | bash" }`.
+- `adapters/agent/hermes/mod.rs` — wraps `CliRuntime` with config `{ binary: "hermes", args: [], env: {}, install_command: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash" }`.
+- `adapters/agent/claude_code/mod.rs` — wraps `CliRuntime` with config `{ binary: "claude", args: ["--print", "--output-format", "stream-json"], env: {}, install_command: "npm install -g @anthropic-ai/claude-code" }`.
+- `adapters/agent/antigravity/mod.rs` — wraps `CliRuntime` with config `{ binary: "agy", args: ["--print", "-"], env: {}, install_command: "curl -fsSL https://raw.githubusercontent.com/everestVentures/antigravity/main/install.sh | bash" }`.
 
-Both the README and the `EnvModal` UI strings should clarify that Demeteo's `opencode` integration targets `anomalyco/opencode` (the open-source coding agent project) and that Demeteo is **not affiliated with the opencode project**. The `anomalyco/opencode` README explicitly asks projects using "opencode" in their name to make this clear.
+The `CliRuntime` is generic over the binary — the agent-specific logic is just the `AgentConfig`, the availability check (which binary name to look up), and the `parse_event` function.
+
+### 5.7 Disclaimer
+
+Both the README and the `ProviderSettings` UI strings should clarify that Demeteo's `opencode` integration targets `anomalyco/opencode` (the open-source coding agent project) and that Demeteo is **not affiliated with the opencode project**. The `anomalyco/opencode` README explicitly asks projects using "opencode" in their name to make this clear.
 
 ---
 
-## 6. Streaming: Per-Turn Channels
+## 6. The Scope Fence
 
-### 6.1 Why per-turn channels
+### 6.1 The problem
 
-Multiple threads can be active concurrently. A global Tauri event bus would interleave events from different turns; the UI would have to filter by `thread_id` and accept best-effort ordering. Per-turn channels give us:
+Without a fence, an agent running with `cwd = <worktree>` can `cd ..` out of the worktree, read `/etc/passwd`, write to `~/.ssh/authorized_keys`, etc. The policy decorator catches writes and bash, but the bash-prefix match isn't a *path* check — `cat /etc/passwd` slips through unless the user has a `Reject` rule for `cat /etc/*`.
 
-- Scoped event stream per turn (no global multiplexing).
-- No frontend-side filtering.
-- Clean lifetime: the channel closes on `TurnComplete` or terminal `Error`, the React `for await` loop exits, the UI flips to `idle`.
+### 6.2 The implementation
 
-The codebase already uses `Channel<T>` for streaming (SSH terminal data via `sessionRegistry.ts:8-11`), so this extends an existing pattern, not a new one.
+The scope fence is `external_directory: "deny"` in the `OPENCODE_PERMISSION` env var (§5.5). The binary itself enforces this — paths outside `cwd` are refused at the binary level. No `PolicyEngine` involvement, no path canonicalization, no pre-rule.
 
-### 6.2 Tauri command shape
+Bash commands that escape the worktree are caught by `bash: "ask"` — the user is prompted at the gate and can reject. There is no path-level bash prefix check.
 
-```rust
-#[tauri::command]
-async fn agent_prompt(
-    state: tauri::State<'_, AgentRegistryState>,
-    thread_id: String,
-    text: String,
-) -> Result<Channel<AgentEvent>, String> {
-    let registry = state.registry.clone();
-    let session = registry.get_or_spawn(&thread_id).await?;
-    let (tx, rx) = tokio::sync::mpsc::channel::<AgentEvent>(64);
-    let stream = session.prompt(&text);
+### 6.3 What this does NOT solve
 
-    tokio::spawn(async move {
-        tokio::pin!(stream);
-        while let Some(event) = stream.next().await {
-            if tx.send(event).await.is_err() {
-                break; // frontend dropped the channel; turn is dead
-            }
-        }
-    });
-
-    Channel::from(rx) // Tauri Channel wraps the receiver
-}
-```
-
-### 6.3 Global events stay
-
-The existing `permission_requested` and `command_executed` Tauri events are unchanged. They are *side effects* of the turn, conceptually outside the per-turn stream. The supervisor plane already listens to them globally. Adding a third event, `thread_status_changed`, lets the backend correct the frontend's optimistic status.
-
-### 6.4 Frontend handler
-
-`src/agentSessionRegistry.ts` (NEW) holds the per-thread session metadata. `App.tsx` wires `sendDirective`:
-
-```typescript
-const sendDirective = async (threadId: string) => {
-  if (!supervisorInput.trim()) return;
-  const text = supervisorInput;
-  setSupervisorInput("");
-
-  if (threads.find(t => t.id === threadId)?.status === "running") {
-    // Implicit cancel + redirect
-    await invoke("agent_cancel", { threadId });
-  }
-
-  const channel = new Channel<AgentEvent>();
-  channel.onmessage = (event) => handleAgentEvent(threadId, event);
-  await invoke("agent_prompt", { threadId, text, tauriChannel: channel });
-};
-```
-
-`handleAgentEvent` dispatches on `event.kind`:
-- `text` → append to current text block in `streams[threadId]`.
-- `tool_call` → emit intercept card; route through `request_action` which now respects the `tool_call_id`.
-- `tool_call_update` → update the in-flight intercept card.
-- `plan` → render as a special block in the stream.
-- `usage` → update the (stub) sidebar indicator.
-- `error` → render as a `directive`-style event with error styling; if not recoverable, disable input.
-- `turn_complete` → append the completion info event; flip status to `idle`; refocus input.
+- **Bash command scope.** `cd / && cat /etc/passwd` is subject to `bash: "ask"`, not a path fence. The user must be attentive at gate prompts.
+- **TOCTOU.** Symlink races between resolution and execution are best-effort.
+- **Cross-worktree access in the feature branch.** The scope fence protects the subtask's worktree. A subtask that *should* see prior subtask merges gets them via the merge into `feature/<slug>` (not via a separate read path).
 
 ---
 
-## 7. The Scope Fence
+## 7. Error Model
 
-### 7.1 The problem
+### 7.1 Per-action errors (typed)
 
-Without a fence, an agent running with `cwd = sandbox_path` can `cd ..` out of the worktree, read `/etc/passwd`, write to `~/.ssh/authorized_keys`, etc. The policy decorator catches writes and bash, but the bash-prefix match isn't a *path* check — `cat /etc/passwd` slips through unless the user has a `Reject` rule for `cat /etc/*`.
-
-The scope fence is a *path-only* pre-rule that runs before any user rule.
-
-### 7.2 The implementation
-
-Extend `src-tauri/src/domain/policy_engine.rs` with a pre-rule check. The pre-rule is constructed at policy-compile time from the thread's `sandbox_path` and is evaluated *first* on every `AgentAction`:
-
-```rust
-pub struct ScopeFence {
-    pub sandbox_path: PathBuf,
-}
-
-impl ScopeFence {
-    pub fn check(&self, action: &AgentAction) -> Option<PolicyDecision> {
-        let target_path = match action {
-            AgentAction::Read { path }
-            | AgentAction::Edit { path, .. }
-            | AgentAction::Write { path, .. } => path,
-            AgentAction::RunBash { .. } => return None, // bash handled by prefix policy
-        };
-
-        let resolved = match resolve_path(&self.sandbox_path, target_path) {
-            Ok(p) => p,
-            Err(_) => return Some(PolicyDecision::Reject {
-                reason: "path resolution failed".into(),
-            }),
-        };
-
-        if !resolved.starts_with(&self.sandbox_path) {
-            return Some(PolicyDecision::Reject {
-                reason: format!("path '{}' is outside thread scope", target_path),
-            });
-        }
-
-        None // inside scope; defer to user rules
-    }
-}
-```
-
-`PolicyEngine::evaluate` is updated to call `ScopeFence::check` first. A returned `Some(decision)` short-circuits the user rules. Bash actions return `None` from `check`, so the scope fence is *invisible* for bash and the existing prefix policy still applies.
-
-### 7.3 Path resolution
-
-`resolve_path(sandbox, target)`:
-- If `target` is absolute, canonicalize it (resolving symlinks via the existing SFTP `get_metadata`).
-- If `target` is relative, join with `sandbox`, then canonicalize.
-- Return `Err` if the path doesn't exist *or* if canonicalization fails (we want to fail closed).
-
-For `Edit` and `Write` actions, the target is the *destination*, not a path being read. The fence applies to the destination the same way.
-
-### 7.4 Overriding the fence
-
-The fence returns `Reject`, not `EscalateToUser`. So a user rule with `Approve` for a specific outside-scope path *won't* override it — the fence is evaluated first and short-circuits.
-
-The escape hatch for power users: a new `source` on `PolicyRule` (already in the schema at `domain/policy.rs:76` as `#[serde(default)] pub source: String`) gains a new value: `"scope_override"`. The policy engine, when compiling rules, **skips the scope fence for any rule with `source = "scope_override"`**. The `PolicyEditor` UI gets a "Scope override" toggle on a rule row that's disabled by default.
-
-This means a user can write a rule like `Approve all reads under /opt/shared` and mark it as `scope_override`, and the fence yields to it. Without the override, the fence is hard. This is the right shape: defaults are safe, escape hatches are explicit.
-
-### 7.5 What this does NOT solve
-
-- **Bash command scope.** `RunBash { cmd: "cat /etc/passwd" }` is still subject to the bash-prefix policy, not the scope fence. The user writes rules like `Reject("cat /etc/*")` for that.
-- **TOCTOU.** Symlink races between resolution and execution are best-effort, not bulletproof. The existing policy layer was never TOCTOU-tight and this doesn't change that.
-
----
-
-## 8. UI Behavior
-
-### 8.1 NewThreadModal agent card
-
-`src/components/NewThreadModal.tsx` gains a second card stacked above the existing sandbox card. On open, the modal calls `get_agent_configs(machineId)`. If the list is empty or all disabled, the launch button is disabled with a tooltip pointing to `EnvModal` for configuration.
-
-The card auto-selects the first enabled agent. The user can override via a `<select>` or pill row. No "Configure agent…" link is wired in v1 — the pill row is the only control. Per-agent settings UI is Phase 7d.
-
-The card payload sent to `onLaunch` includes the selected `agent_kind`. The parent's `launchThread` puts it on the `ThreadSession` row.
-
-### 8.2 Schema migration
-
-`Machine.agents` field changes from a string array to a JSON array of structured records. Migration is a one-shot at app startup:
-
-```rust
-fn migrate_machine_agents(raw: Option<String>) -> String {
-    let parsed: Vec<serde_json::Value> = raw
-        .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_default();
-
-    let migrated: Vec<AgentConfig> = parsed.into_iter().map(|v| {
-        if let Some(s) = v.as_str() {
-            // Legacy: bare string like "OpenCode"
-            let kind = s.to_lowercase();
-            let known = matches!(kind.as_str(), "opencode" | "hermes");
-            AgentConfig { kind, enabled: known }
-        } else if let Some(obj) = v.as_object() {
-            AgentConfig {
-                kind: obj.get("kind").and_then(|k| k.as_str()).unwrap_or("").to_string(),
-                enabled: obj.get("enabled").and_then(|e| e.as_bool()).unwrap_or(false),
-            }
-        } else {
-            AgentConfig { kind: "unknown".into(), enabled: false }
-        }
-    }).collect();
-
-    serde_json::to_string(&migrated).unwrap_or_else(|_| "[]".into())
-}
-```
-
-The migration is conservative: legacy bare strings for unknown agents (e.g. "Claude Code") become `enabled: false` rows that the UI hides. They're not deleted; the user can re-enable them once a real adapter exists.
-
-### 8.3 Status state machine
-
-`ThreadSession.status` gains four values:
-
-| Value | Meaning | Set by |
-|---|---|---|
-| `idle` | No agent turn in flight; awaiting directive | backend, on TurnComplete |
-| `running` | Agent turn in flight | backend, on first AgentEvent of a turn |
-| `pending_approval` | An intercept is awaiting user decision | existing |
-| `spawning` | Agent process is being launched | frontend (optimistic) → backend confirms |
-| `installing` | Install script is running | frontend (optimistic) → backend confirms |
-| `error` | Session is in a failed state; user action required | backend, on spawn/process death |
-
-The frontend sets the initial `spawning` / `installing` state on `launchThread` *before* invoking `agent_start`, so the status bar updates in the same React frame as the click. The backend emits a `thread_status_changed` event when it confirms (or corrects to `error`).
-
-The status bar in `SupervisorPlane.tsx:308-321` extends the status map:
-
-```typescript
-const statusMap: Record<string, string> = {
-  idle: "Thread Idle • Awaiting Directive",
-  running: "Agent Running • Supervisor Active",
-  pending_approval: "Pending Supervisor Approval",
-  spawning: "Spawning Agent…",
-  installing: "Installing Agent…",
-  error: "Agent Error • Action Required",
-};
-```
-
-### 8.4 Steering
-
-`SupervisorPlane.tsx:209-228` (the input row) becomes a stateful component:
-
-- `thread.status === "running"`: Send button is replaced by a Stop button (red, square icon, `onClick → agent_cancel`).
-- `thread.status === "idle" | "spawning" | "installing" | "error"`: Send button as today.
-- `thread.status === "pending_approval"`: button is disabled with text "Resolve pending action first".
-
-Typing in the input and pressing Enter during `running` is an **implicit cancel + redirect**: `App.tsx:sendDirective` first calls `agent_cancel`, awaits the cancellation confirmation (idempotent — returns `Ok` even if the turn already completed), then calls `agent_prompt` with the new text.
-
-On cancel, pending intercepts for the session are drained: each `PendingIntercept` has its oneshot fired with `Resolution::Reject { feedback: "session cancelled" }`. This reuses the same drain path as `agent_restart`.
-
-Partial text from the cancelled turn stays in the stream. An info event is appended: `"[cancelled by user]"`. The status bar flips to `idle`.
-
-### 8.5 Turn complete
-
-When the per-turn channel closes (after `TurnComplete`), the frontend:
-
-1. Appends an info event: `"Turn complete. N actions in T s."` (counts come from the runtime's per-turn tally; we add a counter on the `AgentSession` or sum events on the frontend — frontend is simpler, the events are already there).
-2. Flips status to `idle`.
-3. Refocuses the input.
-
-No summary card, no suggestion chips, no "what's next" affordance. The intercept cards from the turn stay in the stream as the audit trail.
-
-### 8.6 Inspector auto-open
-
-The `handleInspectContext` function in `App.tsx:393-402` is called by:
-
-- The existing `Inspect Context` button on intercept cards (unchanged).
-- Sidebar working-memory entries (NEW).
-- **The agent event handler** (NEW, conditional).
-
-The auto-open rule:
-
-```typescript
-const handleAgentEvent = (threadId: string, event: AgentEvent) => {
-  if (event.kind === "tool_call" && event.action === "read") {
-    const lastEventAt = lastStreamEventAt[threadId] ?? 0;
-    const now = Date.now();
-    const isFirstOrAfterPause = !inspectedFile || (now - lastEventAt > 5000);
-    if (isFirstOrAfterPause) {
-      handleInspectContext(event.target);
-    } else if (inspectedFile) {
-      // Inspector is already open; update it to the new file
-      handleInspectContext(event.target);
-    }
-    // else: inspector was dismissed; respect the dismissal
-  }
-  // ... other event types ...
-  lastStreamEventAt[threadId] = Date.now();
-};
-```
-
-Writes never trigger auto-open. Re-reads after writes *do* trigger auto-open (post-write inspection is the natural follow-up).
-
----
-
-## 9. Error Model
-
-### 9.1 Per-action errors (typed)
-
-Today, `Err("Failed to provision worktree sandbox: ...")` is a free-form string. We add a typed error enum on the Tauri command return type:
+`ActionError` (carried from v1, unchanged in shape):
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
@@ -700,346 +468,230 @@ pub enum ActionError {
 }
 ```
 
-The frontend maps each variant to a small set of recovery chips:
+The frontend maps each variant to a small set of recovery chips (per the legacy v1 spec). The Tauri commands that return this are: `project_*`, `workflow_*`, `feature_*`, `step_*`, `gate_*`, `merge_*`, `conflict_*`, `mr_*`, `sftp_*`, `test_ssh_connection`, etc. Existing free-form `Err` returns are migrated incrementally — the rule is "every new error path returns `ActionError`."
 
-| Variant | Recovery chip |
-|---|---|
-| `Network` | `[Retry]` |
-| `Permission` | `[Inspect as supervisor]` |
-| `NotFound` | `[Open file tree]` |
-| `Policy` | `[Edit policy]` |
-| `Internal` | `[Copy error]` |
+### 7.2 Per-step errors (`AgentEvent::Error`)
 
-The Tauri commands that return this are: `add_thread_session`, `request_action`, `sftp_*`, `test_ssh_connection`. Existing free-form `Err` returns are migrated incrementally — the rule is "every new error path returns `ActionError`."
+The agent emits structured errors. The `StepExecutor` consumes them and transitions the `StepExecution.status` to `failed` (terminal) or stays in `running` (recoverable). The UI renders the failed step in the `FeatureDetail` step timeline with the agent's error code + message, styled with the design-system ruby accent (`AGENTS.md` §2). If `recoverable: true`, the user has a "Retry step" affordance (per the opt-in retry policy). If `recoverable: false`, the user has "Skip" or "Abort feature."
 
-### 9.2 Per-turn errors (`AgentEvent::Error`)
+### 7.3 Per-feature errors (watchdog)
 
-The agent emits structured errors. The frontend renders them as a distinct `StreamEvent.type = "agent_error"` (new variant), styled with the design-system ruby accent (`AGENTS.md:29`). If `recoverable: true`, the input stays enabled with a hint: "Agent reported a recoverable error. You can retry or redirect." If `recoverable: false`, the input is disabled and a banner appears: "Agent stopped: <reason>. [Restart thread] [Pick different agent]."
+The `AgentTransport::try_wait` is polled by a watchdog task per active step execution. When the underlying process exits (or the SSH channel closes), the watchdog:
 
-### 9.3 Per-session errors (watchdog)
-
-The `AgentTransport::try_wait` is polled by a watchdog task. When the underlying process exits (or the SSH channel closes), the watchdog:
-
-1. Sets `ThreadSession.status = "error"` with a reason.
-2. Drains all `PendingIntercept` entries for the session with `Resolution::Reject { feedback: "session cancelled" }`.
-3. Emits `thread_status_changed { thread_id, status: "error" }`.
-
-The frontend renders the `error` state in the status bar and offers two actions:
-
-- **Restart thread**: same agent, same worktree. Kills the session, clears working memory (§10.4), flips status to `idle`, ready for a new directive.
-- **Pick different agent**: re-opens the agent picker; on selection, kills the session, flips status to `spawning`, starts the new agent.
+1. Sets `StepExecution.status = "failed"` with a reason.
+2. Drains any pending gate decisions for the step with `Resolution::Reject { feedback: "agent process exited" }`.
+3. Emits `feature_status_changed { feature_id, status: "step_failed" }`.
+4. Surfaces the failure to the user in `FeatureDetail` with a "Retry step / Skip / Abort feature" affordance.
 
 ---
 
-## 10. Working Memory
+## 8. Tauri Command Surface (post-pivot)
 
-### 10.1 Data model
-
-New table in `db.rs`:
-
-```sql
-CREATE TABLE thread_working_memory (
-    thread_id      TEXT NOT NULL,
-    file_path      TEXT NOT NULL,
-    line_count     INTEGER,
-    size_bytes     INTEGER,
-    modified_at    INTEGER,           -- unix seconds, from SFTP get_metadata
-    first_read_at  INTEGER NOT NULL,
-    last_read_at   INTEGER NOT NULL,
-    PRIMARY KEY (thread_id, file_path),
-    FOREIGN KEY (thread_id) REFERENCES thread_sessions(id) ON DELETE CASCADE
-);
-
-CREATE INDEX idx_twm_thread_last_read ON thread_working_memory(thread_id, last_read_at DESC);
-```
-
-Domain model in `domain/models.rs`:
+The full list of new commands is in [`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md) §4. The runtime-relevant commands (the ones the `StepExecutor` and `FeatureOrchestrator` invoke on the agent runtime):
 
 ```rust
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct WorkingMemoryEntry {
-    pub file_path: String,
-    pub line_count: Option<u32>,
-    pub size_bytes: Option<u64>,
-    pub modified_at: Option<i64>,
-    pub first_read_at: i64,
-    pub last_read_at: i64,
-}
-```
-
-### 10.2 Port methods
-
-`DatabasePort` (in `ports/db.rs`) gains:
-
-```rust
-fn upsert_working_memory_entry(
-    &self,
-    thread_id: &str,
-    entry: WorkingMemoryEntry,
-) -> Result<(), String>;
-
-fn get_working_memory(
-    &self,
-    thread_id: &str,
-) -> Result<Vec<WorkingMemoryEntry>, String>;
-
-fn clear_working_memory(
-    &self,
-    thread_id: &str,
-) -> Result<(), String>;
-```
-
-### 10.3 Population
-
-In `tool_bridge.rs`, when an `fs/read_text_file` is approved (by policy or by user) and the file is read successfully, the bridge:
-
-1. Fetches metadata via `ExecutionPort::get_metadata(machine_id, path)` (already a port method).
-2. Constructs a `WorkingMemoryEntry { file_path, line_count, size_bytes, modified_at, first_read_at: now, last_read_at: now }`.
-3. Calls `db.upsert_working_memory_entry(thread_id, entry)`.
-4. Loads `get_working_memory(thread_id)`; if `len > 20`, deletes the oldest entries until `len == 20`.
-
-The cap-of-20 is enforced in Rust (lazy, one extra read per upsert). The SQL has no cap — the application layer owns the policy.
-
-### 10.4 Restart and delete behavior
-
-- **Thread delete** (`ON DELETE CASCADE`): the working memory rows go with the thread.
-- **Thread restart** (§9.3): `db.clear_working_memory(thread_id)` is called. The new agent session has no context and shouldn't see stale "I read this file" entries.
-- **Thread switch** (user changes `activeThreadId`): the existing `useEffect` in `App.tsx:182-185` already clears the in-memory `workingMemory` state. The DB rows remain; on re-selection, the frontend reloads them via `get_working_memory`.
-
-### 10.5 UI
-
-`Sidebar.tsx`'s `workingMemory` section is wired to the new Tauri commands. Each entry renders as a clickable row with the file path and the line count / size / relative-modified-time. Clicking calls `handleInspectContext(entry.file_path)` to open the Code Inspector.
-
-The "4.2K TKNS" indicator at the top of the section is **stayed as a stub** in v1 — it shows "—" or "idle" rather than fake token counts. Wiring it to the `Usage` event is a Phase 7f polish item.
-
----
-
-## 11. Tauri Command Surface
-
-The full list of new and modified Tauri commands. All commands return `Result<T, String>` where `T` is the typed success payload; failures use the new `ActionError` shape where applicable.
-
-### New commands
-
-```rust
-// Phase 7a
-#[tauri::command]
-async fn get_agent_configs(
-    state: tauri::State<'_, DatabaseState>,
-    machine_id: String,
-) -> Result<Vec<AgentConfig>, String>;
-
-#[tauri::command]
-async fn get_working_memory(
-    state: tauri::State<'_, DatabaseState>,
-    thread_id: String,
-) -> Result<Vec<WorkingMemoryEntry>, String>;
-
-// Phase 7c
+// Phase R5
 #[tauri::command]
 async fn agent_start(
     state: tauri::State<'_, AgentRegistryState>,
-    thread_id: String,
+    step_execution_id: String,
     agent_kind: String,
 ) -> Result<AgentStartResult, String>;
 
 #[tauri::command]
 async fn agent_install_and_start(
     state: tauri::State<'_, AgentRegistryState>,
-    thread_id: String,
+    step_execution_id: String,
     agent_kind: String,
-) -> Result<Channel<AgentEvent>, String>;
+) -> Result<(), String>;
 
 #[tauri::command]
 async fn agent_prompt(
     state: tauri::State<'_, AgentRegistryState>,
-    thread_id: String,
+    step_execution_id: String,
     text: String,
-) -> Result<Channel<AgentEvent>, String>;
+) -> Result<(), String>;  // prompt is enqueued; events flow via NotificationPort
 
 #[tauri::command]
 async fn agent_cancel(
     state: tauri::State<'_, AgentRegistryState>,
-    thread_id: String,
-) -> Result<(), String>;
-
-#[tauri::command]
-async fn agent_restart(
-    state: tauri::State<'_, AgentRegistryState>,
-    thread_id: String,
+    step_execution_id: String,
 ) -> Result<(), String>;
 ```
 
-### Modified commands
-
-- `add_thread_session` — accepts and persists the new `agent_kind: Option<String>` field.
-- `request_action` — accepts an optional `tool_call_id: Option<String>` parameter. When set, the result is returned both via the global `command_executed` event (for the UI) and as a `tool_call/update` back to the agent session.
-- `delete_thread_session` — `ON DELETE CASCADE` handles working memory cleanup; no code change needed beyond the schema migration.
-- All commands that return `Err(String)` on the policy / SFTP / worktree paths — migrate to `Err(ActionError)` incrementally.
-
-### New event payloads
-
-```rust
-pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";
-
-#[derive(Serialize, Clone)]
-pub struct ThreadStatusChanged {
-    pub thread_id: String,
-    pub status: String,         // "spawning" | "installing" | "running" | "idle" | "error"
-    pub reason: Option<String>, // present when status == "error"
-}
-```
+The legacy `agent_prompt` returned a `Channel<AgentEvent>` for per-turn UI streaming. In the post-pivot design, the prompt is enqueued on the `StepExecutor`'s internal channel; the UI never subscribes to per-turn streams. The `StepExecutor` consumes the `AgentEvent` stream and emits `step_progress` / `feature_status_changed` / `gate_required` events that the UI does subscribe to.
 
 ---
 
-## 12. File Layout (Concretely)
+## 9. File Layout (post-pivot)
 
-The files touched or created by v1, organized by phase. Existing files modified are marked with `(modified)`; new files are marked with `(new)`.
+The files touched by the agent integration work, organized by phase. Existing files modified are marked with `(modified)`; new files are marked with `(new)`.
 
-### Phase 7a — Port + domain skeleton
+### Phase R1 — Port + domain skeleton
 
 ```
 src-tauri/src/domain/
-  agent_event.rs                  (new)    AgentEvent, ToolCallStatus, PlanEntry, StopReason
-  intercept.rs                    (modified) add tool_call_id: Option<String> to InterceptPayload
-  policy.rs                       (modified) add source = "scope_override" semantics to PolicyRule docs
-  policy_engine.rs                (modified) add ScopeFence pre-rule
-  models.rs                       (modified) add WorkingMemoryEntry
+  agent_event.rs                  (modified) AgentEvent vocabulary (Text/ToolCall/Usage/TurnComplete; Plan dropped)
+  models.rs                       (modified) add StepExecution, GateDecision, ConflictReport
 
 src-tauri/src/ports/
-  db.rs                           (modified) add 3 working_memory methods; update Machine.agents parsing
-  execution.rs                    (modified) add spawn_interactive + InteractiveHandle trait
-  agent_runtime.rs                (new)    AgentRuntime, AgentSession, AgentContext, AgentStartError
-  agent_execution.rs              (modified) doc comment: "InterceptPayload now carries tool_call_id"
+  agent_runtime.rs                (modified) AgentContext adds step_execution_id
+  db.rs                           (modified) extend DatabasePort with new tables
 
 src-tauri/src/adapters/database/
-  sqlite.rs                       (modified) implement 3 new methods; add thread_working_memory migration
-
-src-tauri/Cargo.toml              (modified) add tokio-stream, thiserror (if not already), agent-client-protocol (Phase 7b)
-
-src/
-  types.ts                        (modified) add AgentEvent, AgentKind, AgentConfig, WorkingMemoryEntry
+  sqlite.rs                       (modified) implement new tables; legacy thread_sessions preserved
 ```
 
-### Phase 7b — AcpRuntime
+### Phase R4 — Step executor + CliRuntime
 
 ```
 src-tauri/src/adapters/agent/
-  mod.rs                          (modified) declare registry, acp, opencode, hermes submodules
-  registry.rs                     (new)    AgentRegistry: spawn(kind, ctx) -> Arc<dyn AgentSession>
-  acp/
-    mod.rs                        (new)
-    runtime.rs                    (new)    AcpRuntime: spawns agent, owns transport, drives ACP session
-    event_mapper.rs               (new)    ACP notifications -> AgentEvent
-    tool_bridge.rs                (new)    ACP fs/* + terminal/* -> PolicyEnforcedExecutionPort
-    install.rs                    (new)    run_official_install() over local or SSH transport
+  mod.rs                          (modified) remove acp submodule; add claude_code, antigravity submodules
+  registry.rs                     (simplified) remove session dedup; Arc<AgentSession> per prompt call
   opencode/
-    mod.rs                        (new)    AgentConfig + availability check; delegates to AcpRuntime
+    mod.rs                        (modified) return CliAgentRuntime; add parse_opencode_event
   hermes/
-    mod.rs                        (new)    same shape
+    mod.rs                        (modified) return CliAgentRuntime; add parse_hermes_event
+  claude_code/
+    mod.rs                        (new) CliAgentRuntime + parse_claude_code_event
+  antigravity/
+    mod.rs                        (new) CliAgentRuntime + parse_antigravity_event
+  cli_runtime.rs                  (modified) inject OPENCODE_PERMISSION env var; add --session --continue wiring
+  permission_policy.rs            (new) PermissionPolicyPort + WorktreeScopedPolicy
 ```
 
-### Phase 7c — UI wire-up
+### Phase R5 — Feature orchestrator
 
 ```
 src-tauri/src/
-  lib.rs                          (modified) construct AgentRegistry; register new Tauri commands
+  domain/feature.rs               (new) Feature, FeatureRun, StepExecution, GateDecision, SubtaskRun
+  ports/feature_orchestrator.rs   (new) FeatureOrchestrator
+  ports/step_executor.rs          (new) StepExecutor, GatePresenter
+  ports/notification.rs           (modified) add feature_status_changed, step_progress, gate_required, conflict_detected
+  adapters/database/sqlite.rs     (modified) implement FeatureOrchestrator, StepExecutor against SQLite
+  adapters/tauri_ui/commands.rs   (modified) feature_start, feature_pause, feature_resume, feature_cancel, feature_get, feature_list, feature_archive, feature_restore, feature_rerun
+```
 
+### Phase R6 — Worktree & merge
+
+```
+src-tauri/src/
+  domain/worktree.rs              (new) SubtaskRun, SubtaskMerge, MergeStrategy
+  domain/conflict.rs              (new) ConflictReport, ConflictPolicy
+  ports/worktree_mgr.rs           (new) WorktreeManager, MergeExecutor, MrPublisher, ConflictResolver
+  adapters/worktree/
+    mod.rs                        (new)
+    git_ops.rs                    (new) worktree create/remove, branch checkout
+    merge.rs                      (new) rebase + merge into feature branch
+    conflict.rs                   (new) detect conflicts, surface report
+    publish.rs                    (new) open MR via provider instance
+```
+
+### Phase R7 — UI
+
+```
 src/
-  App.tsx                         (modified) useAgentSession hook; sendDirective -> agent_prompt
+  App.tsx                         (rewritten) navigation shell; subscribes to NotificationPort events
   components/
-    NewThreadModal.tsx            (modified) add agent selection card
-    SupervisorPlane.tsx           (modified) Stop button; auto-inspector; agent_error event type
-    EnvModal.tsx                  (modified) agents[] renders as structured AgentConfig[]
-  agentSessionRegistry.ts         (new)    per-thread session metadata (mirrors sessionRegistry.ts)
-```
+    ProjectRail.tsx               (new) Q24-A
+    ProjectHome.tsx               (new) Q21-B
+    FeatureDetail.tsx             (new) Q13
+    GateView.tsx                  (new) Q13
+    WorkflowEditor.tsx            (new) Q19
+    WorkflowList.tsx              (new)
+    StartFeatureModal.tsx         (new) Q22
+    PreFlightPanel.tsx            (new) Q23
+    ProviderSettings.tsx          (new) Q17a
+    PreferencesScreen.tsx         (new) Q29
+    EmptyStateCard.tsx            (new) Q27
+    DocsPanel.tsx                 (new) Q27
+    ConflictResolver.tsx          (new) Q20 (Monaco 3-way)
+    CommandPalette.tsx            (new) Q24 / Q32
+    ... (carries: Sidebar, TerminalTabs, SSHTerminal; EnvModal removed in favor of ProviderSettings)
 
-### Phase 7d — Per-agent settings (after v1 ships)
-
-```
-src-tauri/src/
-  domain/models.rs                (modified) add AgentConfig struct (kind, model, work_dir, env_refs, ...)
-src/
-  types.ts                        (modified) add full AgentConfig type
-src/components/
-  AgentConfigEditor.tsx           (new)    per-agent settings modal
-  EnvModal.tsx                    (modified) link from "Enabled Agents" to AgentConfigEditor
-```
-
-### Phase 7e — Second transport (after v1 ships)
-
-```
-src-tauri/src/adapters/agent/
-  http/                           (new)    HttpRuntime for non-ACP agents
-  registry.rs                     (modified) pick runtime by AgentConfig.transport
+src/docs/                         (new) bundled markdown
+  index.md
+  first-project.md
+  how-workflows-work.md
+  connecting-providers.md
+  feature-branch-model.md
+  conflict-resolution.md
 ```
 
 ---
 
-## 13. Phase Plan with Verification
+## 10. Phase Plan (R0–R8)
 
-Each phase has a "Done means…" statement. Phases are sequential; don't start the next until the current is verified.
+Each phase has a "Done means…" statement. Phases are sequential; don't start the next until the current is verified. Full breakdown with task checkboxes and verification commands: [`docs/REDESIGN_EXECUTION_PLAN.md`](docs/REDESIGN_EXECUTION_PLAN.md).
 
-### Phase 7a — Port + domain skeleton
+### Phase R1 — Greenfield schema & ports
 
-**Scope**: introduce the `AgentRuntime` trait, the `AgentEvent` enum, the `ScopeFence`, the new DB methods, the `spawn_interactive` port method. No UI changes, no actual agent spawns.
+**Scope:** Add the new tables; add the new ports; no UI changes, no agent spawns.
 
-**Done means**:
-- `cargo build` passes; `cargo test` passes; existing tests in `policy_decorator.rs` and `policy_engine.rs` still pass.
-- The SQLite migration adds the `thread_working_memory` table and the index; existing test fixtures still work.
-- The `ScopeFence` has unit tests covering: absolute paths inside scope (allow), absolute paths outside (reject), relative paths with `..` (reject), symlinks pointing out (reject), bash actions (defer to prefix policy).
-- A `NoopRuntime` is registered in `AgentRegistry` so the wiring compiles and the `agent_start` command returns a structured `AgentStartError::NotFound("noop")` instead of crashing.
+**Done means:**
+- `cargo build` passes; `cargo test` passes; the new tables and port contracts are covered.
+- The `PricingTable` is hard-coded with the 5–10 most common models.
+- The legacy `thread_sessions` table is preserved (for migration safety) but no port surfaces it.
 
-### Phase 7b — AcpRuntime
+### Phase R4 — Step executor + CliRuntime
 
-**Scope**: implement the ACP client. Add `acp_agent_client_protocol` (or hand-rolled JSON-RPC). Map `session/update` and `tool_call` to `AgentEvent`. Implement `fs/*` and `terminal/*` client methods.
+**Scope:** Implement the `StepExecutor` and the `CliRuntime`. The runtime is called by the executor, not the UI.
 
-**Done means**:
-- `cargo test` includes an integration test that spawns a mock ACP agent (a small Rust binary that emits canned `session/update` notifications) and verifies the runtime produces the expected `AgentEvent` stream.
-- The `tool_bridge` unit tests cover: `fs/read_text_file` happy path (returns file content), `fs/read_text_file` blocked by scope fence (returns Failed with reason), `fs/write_text_file` blocked by user policy (returns Failed, agent sees the rejection as a tool result).
-- Manual smoke: launch Hermes locally, send a directive, see the text stream and a tool call come through the per-turn channel.
+**Done means:**
+- A 5-step workflow (research → spec → plan → tasks → implement-stub) runs end-to-end on a local project.
+- The `gate` step between plan and tasks actually pauses; the user clicks Approve; the executor resumes.
+- A `parallel` step with 3 subtasks runs them; the executor collects all 3 results.
+- Every state transition is in `step_executions`; killing and restarting demeteo resumes from the last completed step.
+- `AcpRuntime`, `jsonrpc.rs`, `event_mapper.rs`, `tool_bridge.rs`, `transport_local.rs`, `transport_ssh.rs` are deleted from the codebase.
 
-### Phase 7c — UI wire-up
+### Phase R5 — Feature orchestrator
 
-**Scope**: Tauri commands, modal card, supervisor plane, sidebar working memory, status state machine, error model, inspector auto-open.
+**Scope:** The user-facing "Start a feature" flow. Per-feature lifecycle. Re-entry on launch.
 
-**Done means**:
-- A new thread can be launched with an agent selected, the agent spawns, a directive is sent, text streams in, a tool call is intercepted, the user approves, the agent continues, the turn completes.
-- A thread can be restarted; the working memory is cleared.
-- A thread with no agents enabled blocks the launch with a clear error.
-- Cancelling a running turn drains the pending intercepts and flips the status to `idle`.
-- The first `Read` of a turn auto-opens the inspector; subsequent reads update it; a dismissed inspector does not re-open.
-- The `4.2K TKNS` indicator is a stub showing "—" or "idle."
-- All existing tests still pass; new Tauri commands are wired in `lib.rs` and `invoke_handler!`.
+**Done means:**
+- A user can: open a project → click "New feature" → describe a feature → click "Launch" → see the feature running in ProjectHome → click into FeatureDetail → see the step timeline + telemetry → reach a gate → make a decision → watch the next step run.
+- Killing demeteo mid-feature and relaunching surfaces a synthetic gate; the user can resume or restart the interrupted step.
 
-### Phase 7d — Per-agent settings (post-v1)
+### Phase R6 — Worktree & merge
 
-**Scope**: structured `AgentConfig` with model, work_dir, env_refs. Settings UI in `EnvModal`.
+**Scope:** Per-feature branch, per-subtask worktree, sequential merge, conflict resolution, optional MR.
 
-**Done means**:
-- The user can pick the model for opencode and Hermes per machine.
-- A working-dir override per agent works (the agent's `cwd` is the override, not the worktree).
-- The thread picker remembers the last-used `agent_kind` per machine.
+**Done means:**
+- A `parallel` step's subtasks land in `feature/<slug>` via the engine.
+- A conflict between two subtasks surfaces at a gate; the user picks auto-agent (spawn resolution) or manual (3-way merge).
+- A `publish` step at the end of the workflow opens a draft MR with the right title, body, and source/target branches.
 
-### Phase 7e — Second transport (post-v1)
+### Phase R7 — UX polish & docs
 
-**Scope**: add a non-ACP runtime (HTTP/Server for whatever the next agent is). The pick of which agent is *based on demand* — we don't pre-commit.
+**Scope:** All the "feel" surfaces. Project rail. Settings. First-run. Docs. Shortcuts.
 
-**Done means**:
-- The second runtime uses a different IPC pattern (HTTP + SSE, not stdio JSON-RPC).
-- The `AcpRuntime` and the new runtime coexist; the dispatcher is unaware of which is in use.
-- A non-ACP agent can be configured and used in a thread, end-to-end.
+**Done means:**
+- The app is usable end-to-end by a new user with no prior context.
+- The state-driven empty card guides the user through provider → project → first feature.
+- The sample project runs a real feature on a real public repo, end-to-end, with the full Research → Spec → Plan → Tasks → Implement → Validate loop visible.
+- The docs panel has 5+ pages accessible from the "?" icon.
+- The command palette fuzzy-finds projects, features, workflows, settings, and actions.
+
+### Phase R8 — Hardening & migration
+
+**Scope:** Schema migration infrastructure. Wipe-and-reinit. Backups. Migration log.
+
+**Done means:**
+- The app can ship v1.1 with additive schema changes silently, with no user prompt.
+- The app can ship v2.0 with a breaking change; the user is prompted to wipe-and-reinit, with an option to export first.
+- A pre-migration backup is always taken; the user can manually restore from `demeteo.db.bak.<timestamp>`.
+- The migration log records every migration with timestamp and outcome.
 
 ---
 
-## 14. Open Questions for Future Phases
+## 11. Open Questions (the runtime-relevant subset)
 
-Captured here so they don't get lost, but explicitly **not v1 scope**:
+Full list with phase placement: [`docs/REDESIGN_OPEN_QUESTIONS.md`](docs/REDESIGN_OPEN_QUESTIONS.md). The runtime-relevant deferred items:
 
-1. **Transcript persistence + context replay** (Phase 8): persist every prompt + every `AgentEvent` to a `thread_messages` table. Resume = new agent session + replay the transcript as a single initial context block. Enables real resume across restarts and lets the user swap agents mid-thread.
-2. **Secret management** (Phase 8): the keyring-backed `AgentSecretStore` design from the design interview. Deferred because the user pre-configures the agent for v1.
-3. **WASM policy plugins** (Phase 8+): the `ARCHITECTURE.md` plugin host. The scope fence + `PolicyEnforcedExecutionPort` cover v1's needs.
-4. **Token/cost usage dashboard** (Phase 7f polish): wire the "4.2K TKNS" indicator to the `Usage` event. Add a per-thread cost summary in the sidebar.
-5. **Turn-summary card** (Phase 7f polish): the "what changed in this turn" summary. Deferred because the per-intercept cards are the actionable unit in v1.
-6. **Crash report collection / telemetry** (Phase 8): out of scope for v1.
-7. **Auto-restart on transient errors** (Phase 8): single restart on user request only in v1.
-8. **Plan card visual design** (Phase 7f polish): v1 renders `Plan` events as a text block; a proper card with stepper UI is a polish item.
+1. **Second non-ACP runtime** (Anthropic) → v1.1. The runtime trait is transport-neutral; adding a non-ACP adapter is the v1.1 commitment from the legacy design interview.
+2. **Per-machine `AgentConfig`** (model, workdir, env) → deferred. Users configure their agents on the host. v1.1 candidate.
+3. **WASM provider plugins** → v2+. Third parties shipping provider adapters as WASM modules.
+4. **WASM policy plugins** → v2+. The original WASM plugin host from the legacy architecture, deferred with the legacy spec.
+5. **Per-step retry policy with planner-as-advisor** → v1.x. The `RetryPolicy` struct on `StepConfig` is reserved but the planner-driven redirect is v1.x.
+
+The full set of deferred items (Q1 multi-feature concurrency, Q19 YAML editor, Q19 save-run-as-template, Q20 deep dry-run, Q21 cost rollup, Q21 smart project home, Q24 tabs/split view, Q8 `command` step type, Q11 telemetry, Q12 auto-update) is in [`docs/REDESIGN_OPEN_QUESTIONS.md`](docs/REDESIGN_OPEN_QUESTIONS.md).

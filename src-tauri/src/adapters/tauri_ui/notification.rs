@@ -1,7 +1,5 @@
-use crate::domain::intercept::{ExecutionResult, InterceptPayload};
-use crate::ports::notification::{NotificationPort, EVENT_COMMAND_EXECUTED, EVENT_PERMISSION_REQUESTED};
-use tauri::AppHandle;
-use tauri::Emitter;
+use crate::ports::notification::{DomainEvent, NotificationPort};
+use tauri::{AppHandle, Emitter};
 
 pub struct TauriNotificationAdapter {
     app: AppHandle,
@@ -14,27 +12,45 @@ impl TauriNotificationAdapter {
 }
 
 impl NotificationPort for TauriNotificationAdapter {
-    fn emit_permission_requested(&self, payload: &InterceptPayload) -> Result<(), String> {
-        self.app
-            .emit(EVENT_PERMISSION_REQUESTED, payload.clone())
-            .map_err(|e| format!("Failed to emit permission_requested: {}", e))
-    }
+    fn emit(&self, event: &DomainEvent) -> Result<(), String> {
+        // Map each `DomainEvent` variant to its (event_name, body) pair.
+        // The body is the `serde_json::Value` form of the *same* event
+        // (we strip the `kind` tag and emit just the inner data for
+        // `PermissionRequested` to preserve the original wire format
+        // where the payload was the bare `InterceptPayload`).
+        let (name, body): (&str, serde_json::Value) = match event {
+            DomainEvent::PermissionRequested(payload) => (
+                "permission_requested",
+                serde_json::to_value(payload).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::CommandExecuted { .. } => (
+                "command_executed",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::FeatureStatusChanged { .. } => (
+                "feature_status_changed",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::StepProgress { .. } => (
+                "step_progress",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::GateRequired { .. } => (
+                "gate_required",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::ConflictDetected { .. } => (
+                "conflict_detected",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::AgentStream { .. } => (
+                "agent_stream",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+        };
 
-    fn emit_command_executed(
-        &self,
-        thread_id: &str,
-        machine_id: &str,
-        result: &ExecutionResult,
-        intercept_id: Option<&str>,
-    ) -> Result<(), String> {
-        let body = serde_json::json!({
-            "thread_id": thread_id,
-            "machine_id": machine_id,
-            "result": result,
-            "intercept_id": intercept_id,
-        });
         self.app
-            .emit(EVENT_COMMAND_EXECUTED, body)
-            .map_err(|e| format!("Failed to emit command_executed: {}", e))
+            .emit(name, body)
+            .map_err(|e| format!("Failed to emit {}: {}", name, e))
     }
 }

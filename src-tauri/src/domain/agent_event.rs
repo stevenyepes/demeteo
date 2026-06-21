@@ -1,12 +1,21 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::action::ActionKind;
+use crate::domain::artifact::Artifact;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
     /// Streamed assistant text delta. The frontend appends to the most recent text block.
     Text { delta: String },
+
+    /// A durable artifact was produced (a file the agent just wrote,
+    /// a derived diff, a worktree navigation pointer, etc.). The
+    /// `StepExecutor` collects these into a per-step buffer and
+    /// resolves them against the step's declared `ArtifactDecl`s at
+    /// `TurnComplete`. **This is the cross-restart durable record** —
+    /// text events are ephemeral UI signals, this is what survives.
+    ArtifactProduced { artifact: Artifact },
 
     /// Agent wants to do something. The `tool_call_id` is the agent's id; the
     /// `intercept_id` is Demeteo's internal handle (always minted for traceability).
@@ -88,15 +97,35 @@ mod tests {
     }
 
     #[test]
+    fn artifact_produced_event_round_trips() {
+        use crate::domain::artifact::Artifact;
+        let a = Artifact::agent_text("spec", "# Spec\n");
+        let e = AgentEvent::ArtifactProduced {
+            artifact: a.clone(),
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains("\"kind\":\"artifact_produced\""));
+        let back: AgentEvent = serde_json::from_str(&s).unwrap();
+        match back {
+            AgentEvent::ArtifactProduced { artifact } => assert_eq!(artifact.name, "spec"),
+            other => panic!("expected ArtifactProduced, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn turn_complete_serializes_with_snake_case_stop_reason() {
-        let e = AgentEvent::TurnComplete { stop_reason: StopReason::EndOfTurn };
+        let e = AgentEvent::TurnComplete {
+            stop_reason: StopReason::EndOfTurn,
+        };
         let s = serde_json::to_string(&e).unwrap();
         assert!(s.contains("\"stop_reason\":\"end_of_turn\""));
     }
 
     #[test]
     fn tool_call_status_failed_carries_reason() {
-        let e = ToolCallStatus::Failed { reason: "no".into() };
+        let e = ToolCallStatus::Failed {
+            reason: "no".into(),
+        };
         let s = serde_json::to_string(&e).unwrap();
         assert!(s.contains("\"status\":\"failed\""));
         assert!(s.contains("\"reason\":\"no\""));
@@ -104,7 +133,9 @@ mod tests {
 
     #[test]
     fn mode_changed_serializes_with_snake_case_kind() {
-        let e = AgentEvent::ModeChanged { mode_id: "code".into() };
+        let e = AgentEvent::ModeChanged {
+            mode_id: "code".into(),
+        };
         let s = serde_json::to_string(&e).unwrap();
         assert!(s.contains("\"kind\":\"mode_changed\""));
         assert!(s.contains("\"mode_id\":\"code\""));
@@ -112,7 +143,10 @@ mod tests {
 
     #[test]
     fn config_changed_serializes_correctly() {
-        let e = AgentEvent::ConfigChanged { config_id: "model".into(), value: "claude-4".into() };
+        let e = AgentEvent::ConfigChanged {
+            config_id: "model".into(),
+            value: "claude-4".into(),
+        };
         let s = serde_json::to_string(&e).unwrap();
         assert!(s.contains("\"kind\":\"config_changed\""));
         assert!(s.contains("\"config_id\":\"model\""));

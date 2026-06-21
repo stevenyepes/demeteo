@@ -24,9 +24,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ssh2 = "0.9"
 rusqlite = { version = "0.31", features = ["bundled"] }
-keyring = "3"
+refinery = { version = "0.8", features = ["rusqlite"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 thiserror = "1"
 tauri-plugin-dialog = "2.7.1"
+reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
 

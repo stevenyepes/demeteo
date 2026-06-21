@@ -1,15 +1,18 @@
+use crate::domain::models::Machine;
+use crate::state::AppContext;
+use serde::Serialize;
+use ssh2::Session;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
 use std::time::Duration;
-use serde::Serialize;
-use ssh2::Session;
-use tauri::{AppHandle, Emitter, ipc::Channel, State};
-use crate::DatabaseState;
-use crate::domain::models::Machine;
+use tauri::{ipc::Channel, AppHandle, Emitter, State};
 
 static SESSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -67,8 +70,10 @@ const IDLE_TIMEOUT_SECS: u64 = 600;
 pub fn set_machine_secret(machine_id: String, secret: String) -> Result<(), String> {
     let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine_id))
         .map_err(|e| format!("Keyring error: {}", e))?;
-    entry.set_password(&secret)
+    entry
+        .set_password(&secret)
         .map_err(|e| format!("Failed to store secret in keyring: {}", e))?;
+    crate::credential_cache::invalidate(&format!("machine_{}", machine_id));
     Ok(())
 }
 
@@ -77,10 +82,14 @@ pub fn delete_machine_secret(machine_id: String) -> Result<(), String> {
     let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine_id))
         .map_err(|e| format!("Keyring error: {}", e))?;
     let _ = entry.delete_credential();
+    crate::credential_cache::invalidate(&format!("machine_{}", machine_id));
     Ok(())
 }
 
-pub fn connect_ssh(machine: &Machine, secret: Option<String>) -> Result<(Session, TcpStream), String> {
+pub fn connect_ssh(
+    machine: &Machine,
+    secret: Option<String>,
+) -> Result<(Session, TcpStream), String> {
     crate::ssh_util::connect(machine, secret)
 }
 
@@ -90,29 +99,46 @@ fn spawn_local_shell() -> Result<(Child, ChildStdin, ChildStdout), String> {
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn local shell ({}): {}", shell, e))?;
-    let stdin = child.stdin.take().ok_or_else(|| "Failed to capture shell stdin".to_string())?;
-    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture shell stdout".to_string())?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn local shell ({}): {}", shell, e))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to capture shell stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture shell stdout".to_string())?;
     Ok((child, stdin, stdout))
 }
 
 #[tauri::command]
 pub fn start_terminal_session(
     app: AppHandle,
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     session_state: State<'_, SessionState>,
     machine_id: String,
     tauri_channel: Channel<Vec<u8>>,
 ) -> Result<String, String> {
-    let machines = state.db.get_machines()?;
-    let machine = machines.into_iter().find(|m| m.id == machine_id)
+    let machines = ctx.machines.get_machines()?;
+    let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.clone());
+    let machine = machines
+        .into_iter()
+        .find(|m| m.id == machine_id_typed)
         .ok_or_else(|| "Machine not found".to_string())?;
 
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
-            let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id))
-                .map_err(|e| format!("Keyring error: {}", e))?;
-            entry.get_password().ok()
+            let key = format!("machine_{}", machine.id);
+            crate::credential_cache::get_or_fetch(&key, || {
+                let entry = keyring::Entry::new("demeteo", &key)
+                    .map_err(|e| format!("Keyring error: {}", e))?;
+                entry
+                    .get_password()
+                    .map_err(|e| format!("Keyring error: {}", e))
+            })
+            .ok()
         }
         _ => None,
     };
@@ -122,7 +148,8 @@ pub fn start_terminal_session(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>> = Arc::new(Mutex::new(Some(tauri_channel)));
+    let frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>> =
+        Arc::new(Mutex::new(Some(tauri_channel)));
 
     let (read_source, write_sink, keepalive) = if machine.auth_type == "local" {
         let (child, stdin, stdout) = spawn_local_shell()?;
@@ -136,10 +163,16 @@ pub fn start_terminal_session(
         )
     } else {
         let (sess, tcp) = connect_ssh(&machine, secret)?;
-        let _ = sess.set_keepalive(true, 30);
-        let mut ssh_chan = sess.channel_session().map_err(|e| format!("Failed to open SSH channel: {}", e))?;
-        ssh_chan.request_pty("xterm-256color", None, None).map_err(|e| format!("Failed to request PTY: {}", e))?;
-        ssh_chan.shell().map_err(|e| format!("Failed to start shell: {}", e))?;
+        sess.set_keepalive(true, 30);
+        let mut ssh_chan = sess
+            .channel_session()
+            .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+        ssh_chan
+            .request_pty("xterm-256color", None, None)
+            .map_err(|e| format!("Failed to request PTY: {}", e))?;
+        ssh_chan
+            .shell()
+            .map_err(|e| format!("Failed to start shell: {}", e))?;
         sess.set_blocking(false);
         let arc_chan = Arc::new(Mutex::new(ssh_chan));
         (
@@ -226,7 +259,10 @@ pub fn start_terminal_session(
         }
     });
 
-    let mut sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
+    let mut sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
     sessions.insert(
         session_id.clone(),
         ActiveSession {
@@ -257,18 +293,31 @@ pub fn write_terminal_session(
     session_id: String,
     data: String,
 ) -> Result<(), String> {
-    let sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
+    let sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.get(&session_id) {
         match &active.write_sink {
             WriteSink::Ssh(ch) => {
-                let mut chan = ch.lock().map_err(|_| "Failed to lock channel".to_string())?;
-                chan.write_all(data.as_bytes()).map_err(|e| format!("Failed to write to terminal: {}", e))?;
-                chan.flush().map_err(|e| format!("Failed to flush terminal: {}", e))?;
+                let mut chan = ch
+                    .lock()
+                    .map_err(|_| "Failed to lock channel".to_string())?;
+                chan.write_all(data.as_bytes())
+                    .map_err(|e| format!("Failed to write to terminal: {}", e))?;
+                chan.flush()
+                    .map_err(|e| format!("Failed to flush terminal: {}", e))?;
             }
             WriteSink::Local(stdin) => {
-                let mut stdin = stdin.lock().map_err(|_| "Failed to lock stdin".to_string())?;
-                stdin.write_all(data.as_bytes()).map_err(|e| format!("Failed to write to terminal: {}", e))?;
-                stdin.flush().map_err(|e| format!("Failed to flush terminal: {}", e))?;
+                let mut stdin = stdin
+                    .lock()
+                    .map_err(|_| "Failed to lock stdin".to_string())?;
+                stdin
+                    .write_all(data.as_bytes())
+                    .map_err(|e| format!("Failed to write to terminal: {}", e))?;
+                stdin
+                    .flush()
+                    .map_err(|e| format!("Failed to flush terminal: {}", e))?;
             }
         }
         Ok(())
@@ -284,11 +333,16 @@ pub fn resize_terminal_session(
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
-    let sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
+    let sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.get(&session_id) {
         match &active.write_sink {
             WriteSink::Ssh(ch) => {
-                let mut chan = ch.lock().map_err(|_| "Failed to lock channel".to_string())?;
+                let mut chan = ch
+                    .lock()
+                    .map_err(|_| "Failed to lock channel".to_string())?;
                 chan.request_pty_size(cols, rows, None, None)
                     .map_err(|e| format!("Failed to resize terminal: {}", e))?;
             }
@@ -307,11 +361,16 @@ pub fn close_terminal_session(
     session_state: State<'_, SessionState>,
     session_id: String,
 ) -> Result<(), String> {
-    let mut sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
+    let mut sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.remove(&session_id) {
         match &active.write_sink {
             WriteSink::Ssh(ch) => {
-                let mut chan = ch.lock().map_err(|_| "Failed to lock channel".to_string())?;
+                let mut chan = ch
+                    .lock()
+                    .map_err(|_| "Failed to lock channel".to_string())?;
                 let _ = chan.close();
             }
             WriteSink::Local(_) => {
@@ -335,7 +394,10 @@ pub fn close_terminal_session(
 pub fn list_terminal_sessions(
     session_state: State<'_, SessionState>,
 ) -> Result<Vec<SessionInfo>, String> {
-    let sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
+    let sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
     Ok(sessions
         .iter()
         .map(|(id, s)| SessionInfo {
@@ -351,7 +413,10 @@ pub fn close_machine_sessions(
     session_state: State<'_, SessionState>,
     machine_id: String,
 ) -> Result<usize, String> {
-    let mut sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
+    let mut sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
     let to_close: Vec<String> = sessions
         .iter()
         .filter(|(_, s)| s.machine_id == machine_id)
@@ -370,7 +435,10 @@ pub fn attach_terminal_session(
     session_id: String,
     tauri_channel: Channel<Vec<u8>>,
 ) -> Result<(), String> {
-    let sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
+    let sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
     let active = sessions
         .get(&session_id)
         .ok_or_else(|| "Session not found".to_string())?;
@@ -387,7 +455,10 @@ pub fn detach_terminal_session(
     session_state: State<'_, SessionState>,
     session_id: String,
 ) -> Result<(), String> {
-    let sessions = session_state.sessions.lock().map_err(|_| "Failed to lock sessions".to_string())?;
+    let sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.get(&session_id) {
         if let Ok(mut slot) = active.frontend_channel.lock() {
             *slot = None;

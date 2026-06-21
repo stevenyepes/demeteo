@@ -1,3 +1,4 @@
+use crate::domain::ids::MachineId;
 use crate::domain::models::Machine;
 
 /// Tests SSH connectivity using parameters passed directly from the UI form.
@@ -17,7 +18,7 @@ pub fn test_ssh_connection(
     }
 
     let machine = Machine {
-        id: String::new(),
+        id: MachineId::from(String::new()),
         name: String::new(),
         host,
         port,
@@ -26,6 +27,8 @@ pub fn test_ssh_connection(
         key_path,
         agents: None,
         auto_approved_rules: None,
+        use_login_shell: None,
+        setup_commands: None,
     };
 
     let (sess, _tcp) = crate::ssh_util::connect(&machine, secret)?;

@@ -1,13 +1,16 @@
+use crate::state::AppContext;
+use crate::terminal::connect_ssh;
+use ssh2::Session;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
 use std::time::Duration;
-use ssh2::Session;
 use tauri::State;
-use crate::DatabaseState;
-use crate::terminal::connect_ssh;
 
 pub struct ActiveForward {
     pub local_port: u16,
@@ -24,12 +27,15 @@ pub struct ForwardState {
 
 #[tauri::command]
 pub fn start_port_forward(
-    state: State<'_, DatabaseState>,
+    ctx: State<'_, AppContext>,
     forward_state: State<'_, ForwardState>,
     machine_id: String,
     remote_port: i32,
 ) -> Result<u16, String> {
-    let mut forwards = forward_state.forwards.lock().map_err(|_| "Failed to lock forwards state".to_string())?;
+    let mut forwards = forward_state
+        .forwards
+        .lock()
+        .map_err(|_| "Failed to lock forwards state".to_string())?;
 
     // 1. Check if already forwarding
     if let Some(forward) = forwards.get(&(machine_id.clone(), remote_port)) {
@@ -37,8 +43,11 @@ pub fn start_port_forward(
     }
 
     // 2. Fetch machine details
-    let machines = state.db.get_machines()?;
-    let machine = machines.into_iter().find(|m| m.id == machine_id)
+    let machines = ctx.machines.get_machines()?;
+    let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.clone());
+    let machine = machines
+        .into_iter()
+        .find(|m| m.id == machine_id_typed)
         .ok_or_else(|| "Machine not found".to_string())?;
 
     // Local machines don't need port forwarding
@@ -49,9 +58,15 @@ pub fn start_port_forward(
     // 3. Resolve keyring credentials
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
-            let entry = keyring::Entry::new("demeteo", &format!("machine_{}", machine.id))
-                .map_err(|e| format!("Keyring error: {}", e))?;
-            entry.get_password().ok()
+            let key = format!("machine_{}", machine.id);
+            crate::credential_cache::get_or_fetch(&key, || {
+                let entry = keyring::Entry::new("demeteo", &key)
+                    .map_err(|e| format!("Keyring error: {}", e))?;
+                entry
+                    .get_password()
+                    .map_err(|e| format!("Keyring error: {}", e))
+            })
+            .ok()
         }
         _ => None,
     };
@@ -80,7 +95,7 @@ pub fn start_port_forward(
                 }
                 let sess_inner = sess_clone.clone();
                 let stop_inner = stop_clone.clone();
-                
+
                 if let Err(e) = local_stream.set_nonblocking(true) {
                     println!("[Forward] Failed to set local stream to nonblocking: {}", e);
                     continue;
@@ -92,7 +107,8 @@ pub fn start_port_forward(
                             return;
                         }
                         let sess_guard = sess_inner.lock().unwrap();
-                        match sess_guard.channel_direct_tcpip("127.0.0.1", remote_port as u16, None) {
+                        match sess_guard.channel_direct_tcpip("127.0.0.1", remote_port as u16, None)
+                        {
                             Ok(chan) => break chan,
                             Err(ref e) if e.code() == ssh2::ErrorCode::Session(-37) => {
                                 drop(sess_guard);
@@ -129,7 +145,9 @@ pub fn start_port_forward(
                                         Ok(nw) => {
                                             written += nw;
                                         }
-                                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                        Err(ref e)
+                                            if e.kind() == std::io::ErrorKind::WouldBlock =>
+                                        {
                                             drop(sess_guard);
                                             thread::sleep(Duration::from_millis(5));
                                         }
@@ -162,7 +180,9 @@ pub fn start_port_forward(
                                         Ok(nw) => {
                                             written += nw;
                                         }
-                                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                        Err(ref e)
+                                            if e.kind() == std::io::ErrorKind::WouldBlock =>
+                                        {
                                             thread::sleep(Duration::from_millis(5));
                                         }
                                         Err(_) => return,
@@ -177,7 +197,7 @@ pub fn start_port_forward(
                             thread::sleep(Duration::from_millis(15));
                         }
                     }
-                    
+
                     let _sess_guard = sess_inner.lock().unwrap();
                     let _ = channel.close();
                 });
@@ -204,14 +224,20 @@ pub fn stop_port_forward(
     machine_id: String,
     remote_port: i32,
 ) -> Result<(), String> {
-    let mut forwards = forward_state.forwards.lock().map_err(|_| "Failed to lock forwards state".to_string())?;
-    
+    let mut forwards = forward_state
+        .forwards
+        .lock()
+        .map_err(|_| "Failed to lock forwards state".to_string())?;
+
     if let Some(forward) = forwards.remove(&(machine_id, remote_port)) {
         forward.stop_flag.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(format!("127.0.0.1:{}", forward.local_port));
-        let sess_guard = forward.session.lock().map_err(|_| "Failed to lock session".to_string())?;
+        let sess_guard = forward
+            .session
+            .lock()
+            .map_err(|_| "Failed to lock session".to_string())?;
         let _ = sess_guard.disconnect(None, "Port forwarding stopped", None);
     }
-    
+
     Ok(())
 }
