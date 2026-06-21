@@ -22,13 +22,14 @@ use serde::Deserialize;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{MrInfo, PublishOptions};
 use crate::ports::db::{AppSettingsRepository, FeaturePatch, FeatureRepository, ProjectRepository};
+use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;
-use crate::ports::pricing::PricingTable;
 
 pub struct HttpMrPublisher {
     app_settings: Arc<dyn AppSettingsRepository>,
     projects: Arc<dyn ProjectRepository>,
     features: Arc<dyn FeatureRepository>,
+    exec: Arc<dyn ExecutionPort>,
     /// Used by tests + dry-runs. When `Some`, skip the live HTTP
     /// call and synthesize a fake URL/state. Production wiring leaves
     /// this `None`.
@@ -40,11 +41,13 @@ impl HttpMrPublisher {
         app_settings: Arc<dyn AppSettingsRepository>,
         projects: Arc<dyn ProjectRepository>,
         features: Arc<dyn FeatureRepository>,
+        exec: Arc<dyn ExecutionPort>,
     ) -> Self {
         Self {
             app_settings,
             projects,
             features,
+            exec,
             http_override: None,
         }
     }
@@ -56,12 +59,14 @@ impl HttpMrPublisher {
         app_settings: Arc<dyn AppSettingsRepository>,
         projects: Arc<dyn ProjectRepository>,
         features: Arc<dyn FeatureRepository>,
+        exec: Arc<dyn ExecutionPort>,
         http: Arc<dyn HttpClient>,
     ) -> Self {
         Self {
             app_settings,
             projects,
             features,
+            exec,
             http_override: Some(http),
         }
     }
@@ -77,18 +82,6 @@ pub trait HttpClient: Send + Sync {
         body: &serde_json::Value,
     ) -> Result<HttpResponse, String>;
     fn get_json(&self, url: &str, headers: &[(String, String)]) -> Result<HttpResponse, String>;
-}
-
-impl dyn HttpClient {
-    /// Shorthand for "unwrap to the trait object reference or panic".
-    /// Used by the call sites that hold `Option<Arc<dyn HttpClient>>`
-    /// and want to operate on the inner `&dyn HttpClient`.
-    fn as_ref_or_panic(opt: &Option<Arc<dyn HttpClient>>) -> &dyn HttpClient {
-        match opt {
-            Some(arc) => arc.as_ref(),
-            None => &ReqwestHttp,
-        }
-    }
 }
 
 /// HTTP response. Body is always captured as text so we can log it
@@ -185,6 +178,39 @@ impl MrPublisher for HttpMrPublisher {
                     })
             });
 
+        // Resolve local target directory of the repository.
+        let target_dir = crate::paths::repo_target_dir_str(
+            &self.exec,
+            &project.compute_type,
+            project.remote_host.as_ref().map(|m| m.as_str()),
+            project_id,
+            &repo.repo_path,
+        )?;
+
+        let source_branch = format!(
+            "{}{}",
+            settings.worktree_strategy.branch_prefix,
+            feature_id.as_str()
+        );
+
+        let machine_str = project
+            .remote_host
+            .as_ref()
+            .map(|m| m.as_str())
+            .unwrap_or("local");
+
+        // Push the local feature branch to origin remote before creating MR.
+        // We use `-f` to force push so subsequent publish_mr calls can update
+        // the remote branch if the feature was retried/replayed.
+        let push_cmd = format!(
+            "git -C {} push -f origin {}",
+            crate::paths::shell_escape_posix(&target_dir),
+            crate::paths::shell_escape_posix(&source_branch)
+        );
+        self.exec
+            .run_command(machine_str, &push_cmd)
+            .map_err(|e| format!("Failed to push feature branch to origin: {}", e))?;
+
         let http: &dyn HttpClient = match self.http_override.as_ref() {
             Some(arc) => arc.as_ref(),
             None => &ReqwestHttp,
@@ -195,7 +221,7 @@ impl MrPublisher for HttpMrPublisher {
                 http,
                 &provider.host,
                 &repo_path,
-                feature_id_to_branch(&feature.title, feature_id),
+                source_branch,
                 settings.worktree_strategy.default_branch.as_str(),
                 &title,
                 &body,
@@ -206,7 +232,7 @@ impl MrPublisher for HttpMrPublisher {
                 http,
                 &provider.host,
                 &repo_path,
-                feature_id_to_branch(&feature.title, feature_id),
+                source_branch,
                 settings.worktree_strategy.default_branch.as_str(),
                 &title,
                 &body,
@@ -244,6 +270,7 @@ impl MrPublisher for HttpMrPublisher {
     }
 }
 
+#[allow(dead_code)]
 fn feature_id_to_branch(_title: &str, fid: &FeatureId) -> String {
     fid.as_str().to_string()
 }
@@ -264,6 +291,7 @@ fn resolve_pat(provider_id: &str) -> Result<String, String> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish_github(
     http: &dyn HttpClient,
     host: &str,
@@ -312,6 +340,7 @@ fn publish_github(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish_gitlab(
     http: &dyn HttpClient,
     host: &str,
@@ -411,40 +440,66 @@ impl HttpClient for ReqwestHttp {
         headers: &[(String, String)],
         body: &serde_json::Value,
     ) -> Result<HttpResponse, String> {
-        // Synchronous reqwest — the rest of the codebase already
-        // pulls in `reqwest` (see `Cargo.toml`) and using the
-        // blocking client here keeps the call site simple.
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-        let mut req = client.post(url).json(body);
-        for (k, v) in headers {
-            req = req.header(k.as_str(), v.as_str());
-        }
-        let resp = req
-            .send()
-            .map_err(|e| format!("Git provider request failed: {}", e))?;
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        Ok(HttpResponse { status, body })
+        let url_str = url.to_string();
+        let headers_vec = headers.to_vec();
+        let body_val = body.clone();
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("Failed to build local tokio runtime: {}", e))?;
+            rt.block_on(async {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+                let mut req = client.post(&url_str).json(&body_val);
+                for (k, v) in &headers_vec {
+                    req = req.header(k.as_str(), v.as_str());
+                }
+                let resp = req
+                    .send()
+                    .await
+                    .map_err(|e| format!("Git provider request failed: {}", e))?;
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                Ok(HttpResponse { status, body })
+            })
+        })
+        .join()
+        .map_err(|_| "HTTP request thread panicked".to_string())?
     }
 
     fn get_json(&self, url: &str, headers: &[(String, String)]) -> Result<HttpResponse, String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-        let mut req = client.get(url);
-        for (k, v) in headers {
-            req = req.header(k.as_str(), v.as_str());
-        }
-        let resp = req
-            .send()
-            .map_err(|e| format!("Git provider request failed: {}", e))?;
-        let status = resp.status().as_u16();
-        let body = resp.text().unwrap_or_default();
-        Ok(HttpResponse { status, body })
+        let url_str = url.to_string();
+        let headers_vec = headers.to_vec();
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("Failed to build local tokio runtime: {}", e))?;
+            rt.block_on(async {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+                let mut req = client.get(&url_str);
+                for (k, v) in &headers_vec {
+                    req = req.header(k.as_str(), v.as_str());
+                }
+                let resp = req
+                    .send()
+                    .await
+                    .map_err(|e| format!("Git provider request failed: {}", e))?;
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                Ok(HttpResponse { status, body })
+            })
+        })
+        .join()
+        .map_err(|_| "HTTP request thread panicked".to_string())?
     }
 }
 

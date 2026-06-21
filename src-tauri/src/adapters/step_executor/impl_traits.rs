@@ -437,8 +437,8 @@ impl StepExecutor for DagStepExecutor {
                     &StepExecutionPatch {
                         iteration_count: None,
                         status: Some("pending".to_string()),
-                        cost_usd: s.cost_usd.map(|v| Some(v)),
-                        wall_clock_secs: s.wall_clock_secs.map(|v| Some(v)),
+                        cost_usd: s.cost_usd.map(Some),
+                        wall_clock_secs: s.wall_clock_secs.map(Some),
                         artifact_path: None,
                         artifact_paths: Some(Vec::new()),
                         error_message: Some(None),
@@ -517,7 +517,7 @@ impl StepExecutor for DagStepExecutor {
             self.feature_cancel(feature_id.as_str())?;
             let reg = self.registry.clone();
             let fid = feature_id.to_string();
-            let _ = tokio::task::block_in_place(|| {
+            tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     reg.kill(&fid).await;
                 })
@@ -576,8 +576,8 @@ impl StepExecutor for DagStepExecutor {
                     &s.id,
                     &StepExecutionPatch {
                         status: Some("pending".to_string()),
-                        cost_usd: s.cost_usd.map(|v| Some(v)),
-                        wall_clock_secs: s.wall_clock_secs.map(|v| Some(v)),
+                        cost_usd: s.cost_usd.map(Some),
+                        wall_clock_secs: s.wall_clock_secs.map(Some),
                         artifact_path: None,
                         artifact_paths: Some(Vec::new()),
                         error_message: Some(None),
@@ -710,8 +710,8 @@ impl DagStepExecutor {
                                             &s.id,
                                             &StepExecutionPatch {
                                                 status: Some("interrupted".to_string()),
-                                                cost_usd: s.cost_usd.map(|v| Some(v)),
-                                                wall_clock_secs: s.wall_clock_secs.map(|v| Some(v)),
+                                                cost_usd: s.cost_usd.map(Some),
+                                                wall_clock_secs: s.wall_clock_secs.map(Some),
                                                 artifact_path: s
                                                     .artifact_path
                                                     .as_deref()

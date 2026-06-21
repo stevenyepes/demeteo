@@ -3,7 +3,6 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::ports::pricing::PricingTable;
 use crate::state::AppContext;
 
 #[derive(Serialize)]

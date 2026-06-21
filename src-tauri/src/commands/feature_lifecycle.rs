@@ -4,8 +4,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::domain::ids::{FeatureId, ProjectId};
-use crate::ports::db::{FeaturePatch, ProjectRepository};
-use crate::ports::mr_publisher::MrPublisher;
+use crate::ports::db::FeaturePatch;
 use crate::state::AppContext;
 
 #[derive(Serialize)]

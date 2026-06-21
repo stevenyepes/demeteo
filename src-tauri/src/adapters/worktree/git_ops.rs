@@ -89,16 +89,28 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or("local");
 
         // 1. Detect Default Branch name
-        // Immediately after cloning, checking HEAD is the most reliable way to get the default branch
+        // Try origin/HEAD first. Fallback to local HEAD, but reject feature/subtask branch names.
         let default_branch = match self.exec.run_command(
             machine_str,
             &format!(
-                "git -C {} rev-parse --abbrev-ref HEAD",
+                "git -C {} rev-parse --abbrev-ref origin/HEAD",
                 paths::shell_escape_posix(repo_dir)
             ),
         ) {
-            Ok(out) => out.trim().to_string(),
-            Err(_) => "main".to_string(), // Fallback
+            Ok(out) => {
+                let trimmed = out.trim().to_string();
+                if let Some(stripped) = trimmed.strip_prefix("origin/") {
+                    let branch = stripped.to_string();
+                    if branch == "HEAD" {
+                        self.fallback_default_branch(machine_str, repo_dir)
+                    } else {
+                        branch
+                    }
+                } else {
+                    trimmed
+                }
+            }
+            Err(_) => self.fallback_default_branch(machine_str, repo_dir),
         };
 
         // 2. Detect PR/MR template
@@ -190,6 +202,28 @@ impl GitOpsHelper {
             conventions_file,
             pr_template,
         })
+    }
+
+    fn fallback_default_branch(&self, machine_str: &str, repo_dir: &str) -> String {
+        let local_head = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} rev-parse --abbrev-ref HEAD",
+                    paths::shell_escape_posix(repo_dir)
+                ),
+            )
+            .unwrap_or_else(|_| "main".to_string());
+        let local_trimmed = local_head.trim();
+        if local_trimmed.contains("features/")
+            || local_trimmed.contains("subtask")
+            || local_trimmed.starts_with("f-")
+        {
+            "main".to_string()
+        } else {
+            local_trimmed.to_string()
+        }
     }
 
     /// Check if a repository has uncommitted changes or unpushed commits

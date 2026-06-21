@@ -46,8 +46,8 @@ impl ExecutionDriver {
             &StepExecutionPatch {
                 iteration_count: None,
                 status: Some("awaiting_gate".to_string()),
-                cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                cost_usd: Some(Some(*accumulated_cost)),
+                wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                 artifact_path: prev_artifact_path.as_ref().map(|p| Some(p.clone())),
                 artifact_paths: Some(prev_artifact_paths.clone()),
                 error_message: Some(None),
@@ -93,9 +93,7 @@ impl ExecutionDriver {
         let mut cancel_watch_gate = self.cancel_watch.clone();
         let gate_res = tokio::select! {
             res = gate_rx => Some(res),
-            _ = cancel_watch_gate.changed() => {
-                if *cancel_watch_gate.borrow() { None } else { None }
-            }
+            _ = cancel_watch_gate.changed() => None,
         };
 
         match gate_res {
@@ -107,8 +105,8 @@ impl ExecutionDriver {
                         &StepExecutionPatch {
                             iteration_count: None,
                             status: Some("completed".to_string()),
-                            cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                            wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                            cost_usd: Some(Some(*accumulated_cost)),
+                            wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                             artifact_path: prev_artifact_path.as_ref().map(|p| Some(p.clone())),
                             artifact_paths: Some(prev_artifact_paths.clone()),
                             error_message: Some(None),

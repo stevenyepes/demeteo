@@ -481,7 +481,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         <div className="flex-1 flex flex-row overflow-hidden w-full h-full">
           {/* Left Column: Timeline */}
           <div className={`overflow-y-auto p-8 transition-all duration-500 ${
-            selectedArtifactPath ? 'w-[40%] border-r border-white/5 bg-[#08090c]/40' : 'w-full max-w-3xl mx-auto'
+            selectedArtifactPath ? 'w-[40%] border-r border-white/5 bg-[#08090c]/40' : 'w-full max-w-6xl mx-auto'
           }`}>
             <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
               {steps.map((step, idx) => {
@@ -580,7 +580,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                               <select
                                 value={selectedModel}
                                 onChange={(e) => setSelectedModel(e.target.value)}
-                                className="flex-1 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
+                                className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
                               >
                                 <option value="">Default (From Workflow)</option>
                                 {availableModels.map((m) => (
@@ -730,7 +730,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                 <select
                   value={selectedModel}
                   onChange={(e) => setSelectedModel(e.target.value)}
-                  className="flex-1 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
+                  className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
                 >
                   <option value="">Default (From Workflow)</option>
                   {availableModels.map((m) => (

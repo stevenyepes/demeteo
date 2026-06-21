@@ -99,6 +99,7 @@ pub(crate) fn resolve_path_probe(
 }
 
 /// Build the feature-level base PromptContext, shared by every step.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_base_ctx(
     description: &str,
     slug: &str,

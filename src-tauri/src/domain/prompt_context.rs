@@ -16,6 +16,12 @@ pub struct PromptContext {
     vars: Vec<(String, String)>,
 }
 
+impl Default for PromptContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PromptContext {
     pub fn new() -> Self {
         Self { vars: Vec::new() }

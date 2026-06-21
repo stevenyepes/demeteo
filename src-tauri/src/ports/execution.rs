@@ -1,5 +1,4 @@
 use crate::sftp::SftpEntry;
-use std::io;
 
 /// A long-lived interactive process. The agent runtime owns both ends of
 /// the stdio: a write half for the agent's stdin, and a read half for

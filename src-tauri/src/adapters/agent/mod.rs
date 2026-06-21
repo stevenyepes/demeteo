@@ -70,7 +70,7 @@ pub fn resolve_local_binary_path(binary: &str) -> Option<String> {
         for shell in shells {
             if std::path::Path::new(shell).exists() {
                 if let Ok(output) = std::process::Command::new(shell)
-                    .args(&["-l", "-c", &format!("which {}", binary)])
+                    .args(["-l", "-c", &format!("which {}", binary)])
                     .output()
                 {
                     if output.status.success() {

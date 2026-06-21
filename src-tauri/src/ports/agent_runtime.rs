@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -12,6 +12,9 @@ use tokio_stream::Stream;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::SessionInfo;
 use crate::ports::agent_execution::AgentExecutionPort;
+
+pub type AgentStartFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Arc<dyn AgentSession>, AgentStartError>> + Send + 'a>>;
 
 #[derive(Clone)]
 pub struct AgentContext {
@@ -91,10 +94,7 @@ pub trait AgentRuntime: Send + Sync {
     /// Async because the runtime may need to do network I/O during
     /// `initialize` / `session/new`; the return is a boxed future so
     /// the trait stays dyn-safe.
-    fn start(
-        &self,
-        ctx: AgentContext,
-    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn AgentSession>, AgentStartError>> + Send + '_>>;
+    fn start(&self, ctx: AgentContext) -> AgentStartFuture<'_>;
 }
 
 pub trait AgentSession: Send + Sync {
@@ -148,6 +148,12 @@ pub trait AgentSession: Send + Sync {
 #[derive(Clone)]
 pub struct StderrHeartbeat {
     last_ts: Arc<AtomicU64>,
+}
+
+impl Default for StderrHeartbeat {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StderrHeartbeat {

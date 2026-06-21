@@ -38,12 +38,13 @@ pub(crate) fn resolve_attached_artifacts(
 ) -> String {
     let mut resolved_prompt = prompt.to_string();
     let mut search_start = 0;
+    let mut attachments = Vec::new();
 
     while let Some(start_idx) = resolved_prompt[search_start..].find("[attached") {
         let absolute_start = search_start + start_idx;
         if let Some(end_offset) = resolved_prompt[absolute_start..].find(']') {
             let absolute_end = absolute_start + end_offset;
-            let full_placeholder = &resolved_prompt[absolute_start..=absolute_end];
+            let full_placeholder = resolved_prompt[absolute_start..=absolute_end].to_string();
 
             let inside = &full_placeholder[1..full_placeholder.len() - 1];
 
@@ -67,20 +68,26 @@ pub(crate) fn resolve_attached_artifacts(
                             } else {
                                 prev_step.artifact_path.as_ref().into_iter().collect()
                             };
-                            let mut parts = Vec::new();
+                            let mut parts_content = Vec::new();
                             for p in &paths {
                                 match std::fs::read_to_string(p) {
-                                    Ok(c) => parts.push(c),
+                                    Ok(c) => parts_content.push(c),
                                     Err(_) => {
-                                        parts.push(format!("(Error reading artifact at {})", p))
+                                        parts_content.push(format!("(Error reading artifact at {})", p))
                                     }
                                 }
                             }
-                            replacement = if parts.len() == 1 {
-                                parts.into_iter().next().unwrap_or_default()
+                            let art_content = if parts_content.len() == 1 {
+                                parts_content.into_iter().next().unwrap_or_default()
                             } else {
-                                parts.join("\n\n---\n\n")
+                                parts_content.join("\n\n---\n\n")
                             };
+                            attachments.push((
+                                prev_step.step_index as usize,
+                                prev_step.step_id.0.clone(),
+                                art_content,
+                            ));
+                            replacement = format!("[See attached {} at the beginning of the prompt]", prev_step.step_id.0);
                         }
                     } else {
                         replacement = "(No previous step exists)".to_string();
@@ -88,6 +95,8 @@ pub(crate) fn resolve_attached_artifacts(
                 } else {
                     let mut found = false;
                     let mut matched_contents = Vec::new();
+                    let mut matched_step_index = 0;
+                    let mut matched_step_id = String::new();
 
                     for s in step_execs {
                         let sid = s.step_id.0.to_lowercase();
@@ -101,10 +110,9 @@ pub(crate) fn resolve_attached_artifacts(
                             };
                             for p in &paths {
                                 if let Ok(art_content) = std::fs::read_to_string(p) {
-                                    matched_contents.push(format!(
-                                        "### Artifact from Step {}\n\n{}",
-                                        s.step_id.0, art_content
-                                    ));
+                                    matched_contents.push(art_content);
+                                    matched_step_index = s.step_index as usize;
+                                    matched_step_id = s.step_id.0.clone();
                                     found = true;
                                 }
                             }
@@ -112,19 +120,34 @@ pub(crate) fn resolve_attached_artifacts(
                     }
 
                     if found {
-                        replacement = matched_contents.join("\n\n");
+                        let art_content = matched_contents.join("\n\n");
+                        attachments.push((matched_step_index, matched_step_id.clone(), art_content));
+                        replacement = format!("[See attached {} at the beginning of the prompt]", matched_step_id);
                     } else {
                         replacement =
                             format!("(Artifact '{}' not found or not yet generated)", content);
                     }
                 }
 
-                resolved_prompt = resolved_prompt.replace(full_placeholder, &replacement);
+                resolved_prompt = resolved_prompt.replace(&full_placeholder, &replacement);
                 search_start = 0;
                 continue;
             }
         }
         search_start += start_idx + 1;
+    }
+
+    if !attachments.is_empty() {
+        attachments.sort_by_key(|a| a.0);
+
+        let mut prepended = String::new();
+        for (_, step_id, content) in attachments {
+            prepended.push_str(&format!(
+                "=== ATTACHED CONTEXT: {} ===\n{}\n================================\n\n",
+                step_id, content
+            ));
+        }
+        resolved_prompt = format!("{}{}", prepended, resolved_prompt);
     }
 
     resolved_prompt
@@ -219,13 +242,12 @@ pub(crate) fn resolve_declared_artifacts(
 
     for decl in declarations {
         let matched: Option<&Artifact> = match &decl.capture {
-            ArtifactCapture::ByName { name } => produced.iter().find(|a| {
-                a.name == *name || strip_extension(&a.name).map_or(false, |s| s == *name)
-            }),
+            ArtifactCapture::ByName { name } => produced
+                .iter()
+                .find(|a| a.name == *name || strip_extension(&a.name).is_some_and(|s| s == *name)),
             ArtifactCapture::LastWriteTo { path } => produced
                 .iter()
-                .filter(|a| matches!(&a.source, ArtifactSource::ToolWrite { path: p } if p == path))
-                .last(),
+                .rfind(|a| matches!(&a.source, ArtifactSource::ToolWrite { path: p } if p == path)),
             ArtifactCapture::AllWrites => {
                 // Collect all tool-write artifacts. We still produce the
                 // named artifacts below; the `AllWrites` catch-all emits
@@ -544,14 +566,13 @@ pub fn commit_worktree_changes(
     exec.run_command(machine_id, &sha_cmd)
         .map(|s| s.trim().to_string())
         .map_err(|e| format!("git rev-parse after commit failed: {}", e))
-        .map(|sha| {
+        .inspect(|_sha| {
             // Best-effort: print the commit output so operators can see
             // what was committed. The orchestrator doesn't currently
             // surface this, but it's useful in the dev console.
             if !out.is_empty() {
                 eprintln!("[commit_worktree_changes] {}", out.trim());
             }
-            sha
         })
 }
 
@@ -641,14 +662,14 @@ mod tests {
         let resolved = resolve_attached_artifacts(template, &step_execs, 1);
         assert_eq!(
             resolved,
-            "Read the research: ### Artifact from Step s-research\n\nThis is the research content. and the spec: ### Artifact from Step s-spec\n\nThis is the spec content."
+            "=== ATTACHED CONTEXT: s-research ===\nThis is the research content.\n================================\n\n=== ATTACHED CONTEXT: s-spec ===\nThis is the spec content.\n================================\n\nRead the research: [See attached s-research at the beginning of the prompt] and the spec: [See attached s-spec at the beginning of the prompt]"
         );
 
         let template_prev = "Previous content: [attached — previous step artifact]";
         let resolved_prev = resolve_attached_artifacts(template_prev, &step_execs, 1);
         assert_eq!(
             resolved_prev,
-            "Previous content: This is the research content."
+            "=== ATTACHED CONTEXT: s-research ===\nThis is the research content.\n================================\n\nPrevious content: [See attached s-research at the beginning of the prompt]"
         );
 
         let _ = std::fs::remove_dir_all(temp_dir);
@@ -886,7 +907,10 @@ mod tests {
 
         let template = "Previous: [attached — previous step artifact]";
         let resolved = resolve_attached_artifacts(template, &step_execs, 1);
-        assert_eq!(resolved, "Previous: Research content from paths.");
+        assert_eq!(
+            resolved,
+            "=== ATTACHED CONTEXT: s-research ===\nResearch content from paths.\n================================\n\nPrevious: [See attached s-research at the beginning of the prompt]"
+        );
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

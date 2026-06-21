@@ -9,6 +9,7 @@ use crate::ports::notification::{DomainEvent, NotificationPort};
 /// and emit the corresponding notification. Always sets cost_usd and wall_clock_secs to the
 /// caller-provided values.
 #[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn update_step_status(
     features: &dyn FeatureRepository,
     notif: &dyn NotificationPort,
@@ -27,9 +28,9 @@ pub(crate) fn update_step_status(
             status: Some(status.to_string()),
             cost_usd: Some(Some(cost_usd)),
             wall_clock_secs: Some(Some(wall_clock_secs)),
-            artifact_path: artifact_path.map(|p| Some(p)),
+            artifact_path: artifact_path.map(Some),
             artifact_paths: None,
-            error_message: error_message.map(|msg| Some(msg)),
+            error_message: error_message.map(Some),
         },
     );
     let _ = notif.emit(&DomainEvent::StepProgress {

@@ -68,7 +68,15 @@ impl ArtifactStore for FsArtifactStore {
     fn put(&self, feature_id: &str, step_id: &str, artifact: &Artifact) -> Result<String, String> {
         let dir = self.step_dir(feature_id, step_id);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let ext = FsArtifactStore::ext_for_mime(&artifact.mime);
+        let ext = match &artifact.source {
+            ArtifactSource::ToolWrite { path } => {
+                Path::new(path)
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_else(|| FsArtifactStore::ext_for_mime(&artifact.mime))
+            }
+            _ => FsArtifactStore::ext_for_mime(&artifact.mime),
+        };
         let safe_name = sanitize(&artifact.name);
         let path: PathBuf = dir.join(format!("{safe_name}.{ext}"));
 
@@ -125,7 +133,7 @@ impl ArtifactStore for FsArtifactStore {
             // the file name string directly.
             if p.file_name()
                 .and_then(|s| s.to_str())
-                .map_or(false, |n| n.ends_with(".env.json"))
+                .is_some_and(|n| n.ends_with(".env.json"))
             {
                 continue;
             }

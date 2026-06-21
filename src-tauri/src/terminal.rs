@@ -163,7 +163,7 @@ pub fn start_terminal_session(
         )
     } else {
         let (sess, tcp) = connect_ssh(&machine, secret)?;
-        let _ = sess.set_keepalive(true, 30);
+        sess.set_keepalive(true, 30);
         let mut ssh_chan = sess
             .channel_session()
             .map_err(|e| format!("Failed to open SSH channel: {}", e))?;

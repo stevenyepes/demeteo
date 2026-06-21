@@ -2,7 +2,6 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{ProjectSettings, WorktreeStrategy};
 use crate::paths;
-use crate::ports::db::MachineRepository;
 use crate::state::AppContext;
 use tauri::{Manager, State};
 

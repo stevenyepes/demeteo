@@ -171,7 +171,7 @@ impl UnifiedCliSession {
             let kind = self.ctx.binary.clone();
             std::thread::spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
-                for line in reader.lines().flatten() {
+                for line in reader.lines().map_while(Result::ok) {
                     let trimmed = line.trim();
                     if !trimmed.is_empty() {
                         eprintln!("[{} stderr] {}", kind, trimmed);
@@ -661,7 +661,7 @@ mod tests {
             handle_for_exit
                 .lock()
                 .ok()
-                .and_then(|mut h| h.try_wait().ok().flatten())
+                .and_then(|h| h.try_wait().ok().flatten())
         });
         assert_eq!(events.len(), 2, "got: {:?}", events);
         match &events[0] {

@@ -182,18 +182,18 @@ pub async fn agent_prompt(
                 Ok(Some(ev)) => match ev {
                     crate::domain::agent_event::AgentEvent::Text { delta } => {
                         buffered_text.push_str(&delta);
-                        if last_emit.elapsed() >= std::time::Duration::from_millis(50) {
-                            if !buffered_text.is_empty() {
-                                let payload = serde_json::json!({
-                                    "thread_id": tid,
-                                    "event": crate::domain::agent_event::AgentEvent::Text { delta: std::mem::take(&mut buffered_text) },
-                                });
-                                if let Err(e) = app_clone.emit(EVENT_AGENT_EVENT, payload) {
-                                    eprintln!("[agent_prompt] emit failed: {}", e);
-                                    break;
-                                }
-                                last_emit = std::time::Instant::now();
+                        if last_emit.elapsed() >= std::time::Duration::from_millis(50)
+                            && !buffered_text.is_empty()
+                        {
+                            let payload = serde_json::json!({
+                                "thread_id": tid,
+                                "event": crate::domain::agent_event::AgentEvent::Text { delta: std::mem::take(&mut buffered_text) },
+                            });
+                            if let Err(e) = app_clone.emit(EVENT_AGENT_EVENT, payload) {
+                                eprintln!("[agent_prompt] emit failed: {}", e);
+                                break;
                             }
+                            last_emit = std::time::Instant::now();
                         }
                     }
                     other_event => {

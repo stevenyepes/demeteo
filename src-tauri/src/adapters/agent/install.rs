@@ -1,7 +1,6 @@
 use std::io::Read;
 
 use crate::ports::execution::ExecutionPort;
-use crate::sftp::SftpEntry;
 
 pub fn run_official_install(
     exec: &dyn ExecutionPort,
@@ -61,6 +60,7 @@ fn run_remote(
 mod tests {
     use super::*;
     use crate::ports::execution::InteractiveHandle;
+    use crate::sftp::SftpEntry;
 
     struct StubExec;
     impl ExecutionPort for StubExec {

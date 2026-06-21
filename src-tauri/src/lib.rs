@@ -159,6 +159,7 @@ pub fn run() {
                     app_settings_repo.clone(),
                     projects_repo.clone(),
                     features_repo.clone(),
+                    exec_inner.clone(),
                 ));
 
             // Build the DagStepExecutor before AppContext to avoid a
@@ -195,7 +196,7 @@ pub fn run() {
                 gates: gates_repo.clone(),
                 app_settings: app_settings_repo.clone(),
                 exec: exec_inner,
-                agent_exec: agent_exec,
+                agent_exec,
                 notif: notif_adapter,
                 registry: agent_registry,
                 executor: step_executor_adapter.clone(),

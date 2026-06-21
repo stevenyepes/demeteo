@@ -34,7 +34,7 @@ impl InteractiveHandle for RemoteChannelHandle {
     }
 
     fn try_wait(&self) -> Result<Option<i32>, String> {
-        let mut channel = self.channel.lock().unwrap();
+        let channel = self.channel.lock().unwrap();
         match channel.exit_status() {
             Ok(code) => Ok(Some(code)),
             Err(e) => Err(e.to_string()),
@@ -215,14 +215,13 @@ impl SshClientAdapter {
         channel
             .read_to_string(&mut raw)
             .map_err(|e| format!("Failed to read HOME probe output: {}", e))?;
-        let wait_result = channel
+        channel
             .wait_close()
             .map_err(|e| format!("Failed to wait for HOME probe channel: {}", e))?;
         // ssh2's `wait_close` returns `Result<(), Error>`; the exit
         // status is on a separate method that returns `Result<i32, Error>`
         // (0 on success, non-zero on remote failure). Drain it so a
         // broken shell session doesn't get cached as a valid HOME.
-        let _ = wait_result;
         let exit_code = channel
             .exit_status()
             .map_err(|e| format!("Failed to read HOME probe exit status: {}", e))?;
@@ -377,10 +376,9 @@ impl ExecutionPort for SshClientAdapter {
         let mut err_stream = channel.stderr();
         let _ = err_stream.read_to_string(&mut stderr);
 
-        let wait_result = channel
+        channel
             .wait_close()
             .map_err(|e| format!("Failed to wait for channel close: {}", e))?;
-        let _ = wait_result;
         // `Channel::exit_status` returns the remote process's exit
         // code as `Result<i32, Error>` (0 on success, non-zero on
         // failure). We must check this — see the comment on
@@ -472,7 +470,7 @@ impl ExecutionPort for SshClientAdapter {
             .to_string();
 
         let size = stat.size.unwrap_or(0);
-        let modified = stat.mtime.unwrap_or(0) as u64;
+        let modified = stat.mtime.unwrap_or(0);
         let is_dir = stat.is_dir();
 
         Ok(SftpEntry {
@@ -513,7 +511,7 @@ impl ExecutionPort for SshClientAdapter {
 
             let path_str = p.to_str().unwrap_or("").to_string();
             let size = stat.size.unwrap_or(0);
-            let modified = stat.mtime.unwrap_or(0) as u64;
+            let modified = stat.mtime.unwrap_or(0);
             let is_dir = stat.is_dir();
 
             list.push(SftpEntry {
@@ -612,8 +610,8 @@ impl ExecutionPort for SshClientAdapter {
             _ => None,
         };
 
-        let (sess, tcp) = crate::terminal::connect_ssh(&machine, secret)?;
-        let _ = sess.set_keepalive(true, 30);
+        let (sess, _tcp) = crate::terminal::connect_ssh(&machine, secret)?;
+        sess.set_keepalive(true, 30);
 
         let mut channel = sess
             .channel_session()

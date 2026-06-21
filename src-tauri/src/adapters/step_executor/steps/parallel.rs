@@ -222,10 +222,8 @@ impl ExecutionDriver {
             planner_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
         }
         // CLI agents: pass model via --model flag, not OPENCODE_CONFIG_CONTENT.
-        if let Some(ref m) = override_model {
-            if planner_kind == "opencode" || planner_kind == "hermes" {
-                // CLI mode: model passed as --model flag at spawn
-            }
+        if override_model.is_some() && (planner_kind == "opencode" || planner_kind == "hermes") {
+            // CLI mode: model passed as --model flag at spawn
         }
         let planner_ctx = AgentContext {
             thread_id: planner_thread_id.clone(),
@@ -246,9 +244,7 @@ impl ExecutionDriver {
         let mut cancel_watch_spawn = self.cancel_watch.clone();
         let spawn_res = tokio::select! {
             res = spawn_fut => Some(res),
-            _ = cancel_watch_spawn.changed() => {
-                if *cancel_watch_spawn.borrow() { None } else { None }
-            }
+            _ = cancel_watch_spawn.changed() => None,
         };
 
         let planner_session = match spawn_res {
@@ -353,8 +349,8 @@ impl ExecutionDriver {
                     normal_sleep.as_mut().reset(now + std::time::Duration::from_secs(PLANNER_NORMAL_S));
                     match event {
                         AgentEvent::Text { delta } => planner_text.push_str(&delta),
-                        AgentEvent::Usage { cost_usd, .. } => {
-                            if let Some(c) = cost_usd { *accumulated_cost += c; }
+                        AgentEvent::Usage { cost_usd: Some(c), .. } => {
+                            *accumulated_cost += c;
                         }
                         AgentEvent::TurnComplete { .. } => break,
                         AgentEvent::Error { message, .. } => {
@@ -374,7 +370,7 @@ impl ExecutionDriver {
                         );
                         continue;
                     }
-                    if planner_hb.as_ref().map_or(false, |h| h.last_activity_ago_ms() > PLANNER_FAST_S * 1000) {
+                    if planner_hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > PLANNER_FAST_S * 1000) {
                         planner_failed = true;
                         planner_err = format!("Planner blocked: no output for {}s (stdout and stderr both silent)", PLANNER_FAST_S);
                         break;
@@ -447,7 +443,7 @@ impl ExecutionDriver {
         let mut all_artifact_refs: Vec<String> = Vec::new();
         let mut step_failed = false;
         let mut step_err_msg = String::new();
-        let is_legacy = step_conf.artifacts.as_ref().map_or(true, |d| d.is_empty());
+        let is_legacy = step_conf.artifacts.as_ref().is_none_or(|d| d.is_empty());
         let decls: &[crate::domain::artifact::ArtifactDecl] =
             step_conf.artifacts.as_deref().unwrap_or(&[]);
 
@@ -548,9 +544,7 @@ impl ExecutionDriver {
             let mut cancel_watch_spawn = self.cancel_watch.clone();
             let spawn_res = tokio::select! {
                 res = spawn_fut => Some(res),
-                _ = cancel_watch_spawn.changed() => {
-                    if *cancel_watch_spawn.borrow() { None } else { None }
-                }
+                _ = cancel_watch_spawn.changed() => None,
             };
 
             match spawn_res {
@@ -644,8 +638,8 @@ impl ExecutionDriver {
                                     AgentEvent::ArtifactProduced { artifact } => {
                                         produced_artifacts.push(artifact);
                                     }
-                                    AgentEvent::Usage { cost_usd, .. } => {
-                                        if let Some(c) = cost_usd { *accumulated_cost += c; }
+                                    AgentEvent::Usage { cost_usd: Some(c), .. } => {
+                                        *accumulated_cost += c;
                                     }
                                     AgentEvent::TurnComplete { .. } => break,
                                     AgentEvent::Error { message, .. } => {
@@ -669,7 +663,7 @@ impl ExecutionDriver {
                                     );
                                     continue;
                                 }
-                                if worker_hb.as_ref().map_or(false, |h| h.last_activity_ago_ms() > WORKER_FAST_S * 1000) {
+                                if worker_hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > WORKER_FAST_S * 1000) {
                                     step_failed = true;
                                     step_err_msg = format!(
                                         "parallel subtask {} blocked: no output for {}s (stdout and stderr both silent)",
@@ -826,25 +820,202 @@ impl ExecutionDriver {
                     // R7) can surface the cascade. We still fail the
                     // step here so the existing `step_retry` flow
                     // remains the user's escape hatch.
-                    if let Err(e) = self.git_ops.merge_subtask(
+                    let mut merge_result = self.git_ops.merge_subtask(
                         self.machine_id_opt.as_deref(),
                         &self.target_dir,
                         &self.branch_name,
                         &sub.id,
-                    ) {
-                        // Best-effort structured conflict signal. The
-                        // full `ConflictReport` (file list, raw
-                        // stderr) is parsed by `MergeExecutor` in
-                        // a later iteration; for now we emit a
-                        // typed event with the subtask id so the
-                        // frontend can show a toast and link into
-                        // the project's repo for manual review.
+                    );
+
+                    if let Err(ref e) = merge_result {
+                        // Try to resolve merge conflict using the agent.
+                        let merge_back_cmd = format!(
+                            "git -C {} merge {}",
+                            paths::shell_escape_posix(&wt_path),
+                            paths::shell_escape_posix(&self.branch_name)
+                        );
+                        let _ = self.exec.run_command(&machine_str, &merge_back_cmd);
+
+                        let unmerged = list_unmerged_files(&*self.exec, &machine_str, &wt_path);
+                        if !unmerged.is_empty() {
+                            let files_list = unmerged
+                                .iter()
+                                .map(|f| format!("- {} ({})", f.path, f.kind))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            let conflict_prompt = format!(
+                                "We encountered a merge conflict while merging the latest changes from the feature branch '{}' into your workspace.\n\
+                                 Please resolve the conflicts in the following files:\n\
+                                 {}\n\n\
+                                 Ensure you edit these files to remove conflict markers (<<<<<<<, =======, >>>>>>>) and integrate the changes correctly. \
+                                 Make sure all code builds and passes tests. Once done, let me know.",
+                                self.branch_name, files_list
+                            );
+
+                            let mut conflict_stream = session.prompt(&conflict_prompt);
+                            let mut cancel_watch_conflict = self.cancel_watch.clone();
+                            let mut first_event_seen = false;
+
+                            let fast_sleep =
+                                tokio::time::sleep(std::time::Duration::from_secs(WORKER_FAST_S));
+                            let normal_sleep =
+                                tokio::time::sleep(std::time::Duration::from_secs(WORKER_NORMAL_S));
+                            let wall_sleep =
+                                tokio::time::sleep(std::time::Duration::from_secs(WORKER_WALL_S));
+                            tokio::pin!(fast_sleep);
+                            tokio::pin!(normal_sleep);
+                            tokio::pin!(wall_sleep);
+
+                            let mut conflict_failed = None;
+                            let mut conflict_cancelled = false;
+
+                            loop {
+                                tokio::select! {
+                                    event_opt = conflict_stream.next() => {
+                                        let event = match event_opt {
+                                            Some(ev) => ev,
+                                            None => break,
+                                        };
+                                        first_event_seen = true;
+
+                                        let now = tokio::time::Instant::now();
+                                        let next_fast = now + std::time::Duration::from_secs(WORKER_FAST_S);
+                                        let next_normal = now + std::time::Duration::from_secs(WORKER_NORMAL_S);
+                                        fast_sleep.as_mut().reset(next_fast);
+                                        normal_sleep.as_mut().reset(next_normal);
+
+                                        match event {
+                                            AgentEvent::Text { delta } => {
+                                                let _ = self.notif.emit(&DomainEvent::AgentStream {
+                                                    feature_id: self.f_id.clone(),
+                                                    step_execution_id: step_exec.id.clone(),
+                                                    content: delta.clone(),
+                                                });
+                                            }
+                                            AgentEvent::Usage { cost_usd: Some(c), .. } => {
+                                                *accumulated_cost += c;
+                                            }
+                                            AgentEvent::TurnComplete { .. } => break,
+                                            AgentEvent::Error { message, .. } => {
+                                                let descriptive = format_agent_error_message(&message, &machine_str, &*self.exec);
+                                                conflict_failed = Some(descriptive);
+                                                break;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    _ = &mut fast_sleep => {
+                                        if !first_event_seen {
+                                            fast_sleep.as_mut().reset(
+                                                tokio::time::Instant::now() + std::time::Duration::from_secs(WORKER_FAST_S),
+                                            );
+                                            continue;
+                                        }
+                                        if worker_hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > WORKER_FAST_S * 1000) {
+                                            let descriptive = format_agent_error_message(
+                                                &format!("Agent blocked: no output for {}s (stdout and stderr both silent)", WORKER_FAST_S),
+                                                &machine_str, &*self.exec,
+                                            );
+                                            conflict_failed = Some(descriptive);
+                                            break;
+                                        }
+                                        fast_sleep.as_mut().reset(
+                                            tokio::time::Instant::now() + std::time::Duration::from_secs(WORKER_FAST_S),
+                                        );
+                                    }
+                                    _ = &mut normal_sleep => {
+                                        if let Some(ref h) = worker_hb {
+                                            if h.last_activity_ago_ms() < WORKER_NORMAL_S * 1000 {
+                                                normal_sleep.as_mut().reset(
+                                                    tokio::time::Instant::now() + std::time::Duration::from_secs(WORKER_NORMAL_S),
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                        let descriptive = format_agent_error_message(
+                                            &format!("Agent response timed out (no output for {}s)", WORKER_NORMAL_S),
+                                            &machine_str, &*self.exec,
+                                        );
+                                        conflict_failed = Some(descriptive);
+                                        break;
+                                    }
+                                    _ = &mut wall_sleep => {
+                                        conflict_failed = Some("Agent conflict resolution exceeded wall clock cap".to_string());
+                                        break;
+                                    }
+                                    _ = cancel_watch_conflict.changed() => {
+                                        if *cancel_watch_conflict.borrow() {
+                                            let _ = session.cancel();
+                                            conflict_cancelled = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if conflict_cancelled || *self.cancel_watch.borrow() {
+                                step_failed = true;
+                                step_err_msg = "Execution cancelled by user".to_string();
+                            } else if let Some(failed_msg) = conflict_failed {
+                                step_failed = true;
+                                step_err_msg = format!("parallel subtask agent error during conflict resolution ({}): {}", sub.id, failed_msg);
+                            } else {
+                                // Verify conflicts are resolved.
+                                let still_unmerged =
+                                    list_unmerged_files(&*self.exec, &machine_str, &wt_path);
+                                if still_unmerged.is_empty() {
+                                    let commit_resolved = self.exec.run_command(
+                                        &machine_str,
+                                        &format!(
+                                            "git -C {} commit -am \"Resolve merge conflicts with {}\"",
+                                            paths::shell_escape_posix(&wt_path),
+                                            paths::shell_escape_posix(&self.branch_name)
+                                        ),
+                                    );
+                                    if commit_resolved.is_ok() {
+                                        merge_result = self.git_ops.merge_subtask(
+                                            self.machine_id_opt.as_deref(),
+                                            &self.target_dir,
+                                            &self.branch_name,
+                                            &sub.id,
+                                        );
+                                    } else {
+                                        merge_result =
+                                            Err("Failed to commit merge conflict resolution"
+                                                .to_string());
+                                    }
+                                } else {
+                                    merge_result = Err(format!(
+                                        "Agent failed to resolve merge conflicts in: {:?}",
+                                        still_unmerged.iter().map(|f| &f.path).collect::<Vec<_>>()
+                                    ));
+                                }
+                            }
+                        } else {
+                            merge_result = Err(format!("parallel subtask merge failed: {}", e));
+                        }
+                    }
+
+                    if step_failed {
+                        let _ = self.registry.kill(&sub_thread_id).await;
+                        let _ = tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let _ = self.git_ops.cleanup_subtask_worktree(
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &sub.id,
+                        );
+                        break;
+                    }
+
+                    if let Err(err) = merge_result {
                         let _ = self.notif.emit(&DomainEvent::ConflictDetected {
                             feature_id: self.f_id.clone(),
                             subtask_id: format!("{}_subtask_{}", self.branch_name, sub.id),
                         });
                         step_failed = true;
-                        step_err_msg = format!("parallel subtask merge failed ({}): {}", sub.id, e);
+                        step_err_msg =
+                            format!("parallel subtask merge failed ({}): {}", sub.id, err);
                         let _ = self.registry.kill(&sub_thread_id).await;
                         let _ = tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         let _ = self.git_ops.cleanup_subtask_worktree(
@@ -909,8 +1080,8 @@ impl ExecutionDriver {
                 &StepExecutionPatch {
                     iteration_count: None,
                     status: Some(status_str.to_string()),
-                    cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                    wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                    cost_usd: Some(Some(*accumulated_cost)),
+                    wall_clock_secs: Some(Some(wall)),
                     artifact_path: None,
                     artifact_paths: None,
                     error_message: Some(Some(step_err_msg.clone())),
@@ -980,8 +1151,8 @@ impl ExecutionDriver {
             &StepExecutionPatch {
                 iteration_count: None,
                 status: Some("completed".to_string()),
-                cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                cost_usd: Some(Some(*accumulated_cost)),
+                wall_clock_secs: Some(Some(wall)),
                 artifact_path: Some(artifact_path),
                 artifact_paths: Some(artifact_paths),
                 error_message: Some(None),
@@ -1064,4 +1235,45 @@ Done."#;
         let d = extract_subtask_dag(text).expect("should parse");
         assert_eq!(d.subtasks[0].id, "p");
     }
+}
+
+struct ConflictFile {
+    path: String,
+    kind: String,
+}
+
+fn list_unmerged_files(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    repo_dir: &str,
+) -> Vec<ConflictFile> {
+    let raw = match exec.run_command(
+        machine_id,
+        &format!(
+            "git -C {} status --porcelain --untracked-files=no",
+            paths::shell_escape_posix(repo_dir)
+        ),
+    ) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    raw.lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            if line.len() < 3 {
+                return None;
+            }
+            let xy = &line[..2];
+            let path = line[3..].trim().to_string();
+            let kind = match xy {
+                "UU" | "AA" | "DD" => "both-modified".to_string(),
+                "UA" => "added-by-them".to_string(),
+                "AU" => "added-by-us".to_string(),
+                "UD" => "deleted-by-them".to_string(),
+                "DU" => "deleted-by-us".to_string(),
+                _ => return None,
+            };
+            Some(ConflictFile { path, kind })
+        })
+        .collect()
 }

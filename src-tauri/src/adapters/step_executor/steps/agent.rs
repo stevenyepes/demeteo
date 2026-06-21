@@ -50,7 +50,7 @@ impl ExecutionDriver {
 
         // Inject the machine-readable artifact contract into the prompt
         // so the agent knows exactly what files to produce.
-        let is_legacy = step_conf.artifacts.as_ref().map_or(true, |d| d.is_empty());
+        let is_legacy = step_conf.artifacts.as_ref().is_none_or(|d| d.is_empty());
         let decls: &[crate::domain::artifact::ArtifactDecl] =
             step_conf.artifacts.as_deref().unwrap_or(&[]);
         let prompt = inject_artifact_contract(&prompt, if is_legacy { None } else { Some(decls) });
@@ -73,13 +73,30 @@ impl ExecutionDriver {
                 agent_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
             }
         }
+
+        let subtask_id = format!("step-{}", step_exec.step_id.0);
+        let wt_path = match self.git_ops.provision_subtask_worktree(
+            self.machine_id_opt.as_deref(),
+            &self.target_dir,
+            &self.branch_name,
+            &subtask_id,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                return StepOutcome::Failed(format!(
+                    "agent step worktree provision failed ({}): {}",
+                    subtask_id, e
+                ));
+            }
+        };
+
         let ctx = AgentContext {
             thread_id: self.f_id_str.clone(),
             machine_id: machine_str.clone(),
             binary: agent_kind.clone(),
             args: vec![],
             env: agent_env,
-            cwd: self.target_dir.clone(),
+            cwd: wt_path.clone(),
             model: override_model.clone(),
             title: Some(step_conf.title.clone()),
             agent_exec: self.agent_exec.clone(),
@@ -87,17 +104,17 @@ impl ExecutionDriver {
         };
 
         if *self.cancel_watch.borrow() {
+            let _ = self.git_ops.cleanup_subtask_worktree(
+                self.machine_id_opt.as_deref(),
+                &self.target_dir,
+                &self.branch_name,
+                &subtask_id,
+            );
             return StepOutcome::Cancelled;
         }
 
         // Snapshot the worktree's dirty state BEFORE the agent runs.
-        // The delta at step end tells us which files the agent actually
-        // created/modified during this step, isolated from any state
-        // that was already dirty from a prior step. This replaces the
-        // old `git diff <base>..HEAD` strategy, which missed every
-        // file the agent wrote because the agent does not commit.
-        let worktree_snapshot =
-            WorktreeSnapshot::capture(&*self.exec, &machine_str, &self.target_dir);
+        let worktree_snapshot = WorktreeSnapshot::capture(&*self.exec, &machine_str, &wt_path);
 
         let worktree_base_ref = self
             .exec
@@ -118,18 +135,11 @@ impl ExecutionDriver {
         let mut cancel_watch_spawn = self.cancel_watch.clone();
         let spawn_res = tokio::select! {
             res = spawn_fut => Some(res),
-            _ = cancel_watch_spawn.changed() => {
-                if *cancel_watch_spawn.borrow() { None } else { None }
-            }
+            _ = cancel_watch_spawn.changed() => None,
         };
 
-        match spawn_res {
+        let outcome = match spawn_res {
             Some(Ok(session)) => {
-                // Verify the model from session/new — fall back to
-                // set_config_option if the agent didn't apply it.
-                // For CLI agents (opencode, hermes), set_config_option is a no-op
-                // and the model is passed as --model at spawn time, so we skip
-                // post-spawn verification for them.
                 let is_cli_agent = agent_kind == "opencode" || agent_kind == "hermes";
                 if !is_cli_agent {
                     if let Some(ref model) = override_model {
@@ -141,68 +151,30 @@ impl ExecutionDriver {
                             .map(|o| o.current_value == *model)
                             .unwrap_or(false);
                         if !applied {
-                            eprintln!(
-                            "[agent step] model '{}' not applied in session/new (current={:?}), trying set_config_option",
-                            model,
-                            info.config_options.as_ref().and_then(|opts|
-                                opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
-                            )
-                        );
-                            let config_ok = match session.set_config_option("model", model) {
-                                Ok(_) => {
-                                    let info2 = session.session_info();
-                                    let really_applied = info2
-                                        .config_options
-                                        .as_ref()
-                                        .and_then(|opts| opts.iter().find(|o| o.id == "model"))
-                                        .map(|o| o.current_value == *model)
-                                        .unwrap_or(false);
-                                    if really_applied {
-                                        println!("[agent step] set_config_option model to '{}' confirmed in session_info", model);
-                                        true
-                                    } else {
-                                        eprintln!(
-                                        "[agent step] set_config_option returned Ok but model '{}' STILL not applied (current={:?})",
-                                        model,
-                                        info2.config_options.as_ref().and_then(|opts|
-                                            opts.iter().find(|o| o.id == "model").map(|o| &o.current_value)
-                                        )
-                                    );
-                                        false
-                                    }
+                            let mut config_ok = false;
+                            if session.set_config_option("model", model).is_ok() {
+                                let info2 = session.session_info();
+                                let really_applied = info2
+                                    .config_options
+                                    .as_ref()
+                                    .and_then(|opts| opts.iter().find(|o| o.id == "model"))
+                                    .map(|o| o.current_value == *model)
+                                    .unwrap_or(false);
+                                if really_applied {
+                                    config_ok = true;
                                 }
-                                Err(e) => {
-                                    eprintln!(
-                                        "[agent step] set_config_option model to '{}' failed: {}",
-                                        model, e
-                                    );
-                                    false
-                                }
-                            };
+                            }
                             if !config_ok {
-                                let _ = self.registry.kill(self.f_id.as_str()).await;
                                 let descriptive = format!(
-                                "Model '{}' could not be applied to the agent session. \
-                                 The agent rejected the model selection via set_config_option. \
-                                 Try selecting a different model, or check that the model is valid for this provider.",
-                                model
-                            );
+                                    "Model '{}' could not be applied to the agent session.",
+                                    model
+                                );
                                 return StepOutcome::Failed(descriptive);
                             }
-                        } else {
-                            println!(
-                                "[agent step] model '{}' confirmed in session_info after spawn",
-                                model
-                            );
                         }
                     }
-                } // end if !is_cli_agent
-                  // Collect ArtifactProduced events emitted by the runtime
-                  // during the agent turn. In legacy mode (no declarations)
-                  // we fall back to the old text-dump approach.
-                  // In declared mode we accumulate text and synthesize
-                  // ArtifactProduced events at TurnComplete so the
-                  // orchestrator can match them against declarations.
+                }
+
                 let mut produced_artifacts: Vec<Artifact> = Vec::new();
                 let mut text_buffer = String::new();
                 let hb = session.stderr_heartbeat();
@@ -222,6 +194,9 @@ impl ExecutionDriver {
                 tokio::pin!(normal_sleep);
                 tokio::pin!(wall_sleep);
 
+                let mut run_failed = None;
+                let mut run_cancelled = false;
+
                 loop {
                     tokio::select! {
                         event_opt = stream.next() => {
@@ -239,7 +214,6 @@ impl ExecutionDriver {
 
                             match event {
                                 AgentEvent::Text { delta } => {
-                                    // Always emit stream events for the UI
                                     let _ = self.notif.emit(&DomainEvent::AgentStream {
                                         feature_id: self.f_id.clone(),
                                         step_execution_id: step_exec.id.clone(),
@@ -252,34 +226,23 @@ impl ExecutionDriver {
                                         cost_usd: Some(*accumulated_cost),
                                         wall_clock_secs: Some(step_start.elapsed().as_secs()),
                                     });
-                                    // Accumulate text for artifact synthesis at TurnComplete.
-                                        // In legacy mode this becomes the text-dump file;
-                                        // in declared mode it is used to synthesize
-                                        // ArtifactProduced events for ByName declarations.
-                                        //
-                                        // Tool-use breadcrumbs (formatted as Text events by
-                                        // the agent adapters for UI streaming) are excluded
-                                        // from artifact accumulation so downstream steps
-                                        // don't see "[tool write ...] Wrote file." noise.
-                                        let is_tool_breadcrumb =
-                                            delta.starts_with("[tool ") || delta.starts_with("[tool:");
-                                        if !is_tool_breadcrumb {
-                                            text_buffer.push_str(&delta);
-                                        }
+                                    let is_tool_breadcrumb =
+                                        delta.starts_with("[tool ") || delta.starts_with("[tool:");
+                                    if !is_tool_breadcrumb {
+                                        text_buffer.push_str(&delta);
                                     }
+                                }
                                 AgentEvent::ArtifactProduced { artifact } => {
                                     produced_artifacts.push(artifact);
                                 }
-                                AgentEvent::Usage { cost_usd, .. } => {
-                                    if let Some(c) = cost_usd {
-                                        *accumulated_cost += c;
-                                    }
+                                AgentEvent::Usage { cost_usd: Some(c), .. } => {
+                                    *accumulated_cost += c;
                                 }
                                 AgentEvent::TurnComplete { .. } => break,
                                 AgentEvent::Error { message, .. } => {
-                                    let _ = self.registry.kill(self.f_id.as_str()).await;
                                     let descriptive = format_agent_error_message(&message, &machine_str, &*self.exec);
-                                    return StepOutcome::Failed(descriptive);
+                                    run_failed = Some(StepOutcome::Failed(descriptive));
+                                    break;
                                 }
                                 _ => {}
                             }
@@ -291,14 +254,13 @@ impl ExecutionDriver {
                                 );
                                 continue;
                             }
-                            if hb.as_ref().map_or(false, |h| h.last_activity_ago_ms() > FAST_TIMEOUT_S * 1000) {
-                                eprintln!("[agent step] Fast timeout ({}s): both stdout and stderr silent — agent is blocked.", FAST_TIMEOUT_S);
-                                let _ = self.registry.kill(self.f_id.as_str()).await;
+                            if hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > FAST_TIMEOUT_S * 1000) {
                                 let descriptive = format_agent_error_message(
                                     &format!("Agent blocked: no output for {}s (stdout and stderr both silent)", FAST_TIMEOUT_S),
                                     &machine_str, &*self.exec,
                                 );
-                                return StepOutcome::Failed(descriptive);
+                                run_failed = Some(StepOutcome::Failed(descriptive));
+                                break;
                             }
                             fast_sleep.as_mut().reset(
                                 tokio::time::Instant::now() + std::time::Duration::from_secs(FAST_TIMEOUT_S),
@@ -306,49 +268,47 @@ impl ExecutionDriver {
                         }
                         _ = &mut normal_sleep => {
                             if let Some(ref h) = hb {
-                                if h.last_activity_ago_ms() < NORMAL_TIMEOUT_S * 1000 {
-                                    normal_sleep.as_mut().reset(
-                                        tokio::time::Instant::now() + std::time::Duration::from_secs(NORMAL_TIMEOUT_S),
-                                    );
-                                    continue;
-                                }
+                                  if h.last_activity_ago_ms() < NORMAL_TIMEOUT_S * 1000 {
+                                      normal_sleep.as_mut().reset(
+                                          tokio::time::Instant::now() + std::time::Duration::from_secs(NORMAL_TIMEOUT_S),
+                                      );
+                                      continue;
+                                  }
                             }
-                            let elapsed = step_start.elapsed().as_secs();
-                            eprintln!("[agent step] Agent silent timeout of {}s reached (wall: {}s).", NORMAL_TIMEOUT_S, elapsed);
-                            let _ = self.registry.kill(self.f_id.as_str()).await;
                             let descriptive = format_agent_error_message(
                                 &format!("Agent response timed out (no output for {}s)", NORMAL_TIMEOUT_S),
                                 &machine_str, &*self.exec,
                             );
-                            return StepOutcome::Failed(descriptive);
+                            run_failed = Some(StepOutcome::Failed(descriptive));
+                            break;
                         }
                         _ = &mut wall_sleep => {
                             let elapsed = step_start.elapsed().as_secs();
-                            eprintln!("[agent step] Wall clock cap of {}s reached (elapsed: {}s).", WALL_CAP_S, elapsed);
-                            let _ = self.registry.kill(self.f_id.as_str()).await;
-                            return StepOutcome::Failed(format!(
+                            run_failed = Some(StepOutcome::Failed(format!(
                                 "Agent step exceeded wall clock cap ({}s / {}s elapsed)",
                                 WALL_CAP_S, elapsed,
-                            ));
+                            )));
+                            break;
                         }
                         _ = cancel_watch.changed() => {
                             if *cancel_watch.borrow() {
                                 let _ = session.cancel();
+                                run_cancelled = true;
                                 break;
                             }
                         }
                     }
                 }
 
-                if *self.cancel_watch.borrow() {
+                if run_cancelled || *self.cancel_watch.borrow() {
                     let wall = step_start.elapsed().as_secs();
                     let _ = self.features.step_update(
                         &step_exec.id,
                         &StepExecutionPatch {
                             iteration_count: None,
                             status: Some("interrupted".to_string()),
-                            cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                            wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                            cost_usd: Some(Some(*accumulated_cost)),
+                            wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                             artifact_path: None,
                             artifact_paths: None,
                             error_message: Some(Some("Execution cancelled by user".to_string())),
@@ -361,142 +321,337 @@ impl ExecutionDriver {
                         cost_usd: Some(*accumulated_cost),
                         wall_clock_secs: Some(wall),
                     });
-                    let _ = self.registry.kill(self.f_id.as_str()).await;
-                    return StepOutcome::Cancelled;
-                }
-
-                // Detect the files the agent actually wrote during this
-                // step. The strategy: compare the worktree's `git status
-                // --porcelain` against the snapshot taken before the
-                // agent ran, plus any path explicitly named in a
-                // `LastWriteTo` declaration (so refining a previous
-                // step's artifact still produces the latest body).
-                //
-                // The previous strategy used `git diff <base>..HEAD`,
-                // which was always empty because the agent writes
-                // files to the working tree without committing.
-                if !is_legacy {
-                    let always: Vec<&str> = decls
-                        .iter()
-                        .filter_map(|d| match &d.capture {
-                            crate::domain::artifact::ArtifactCapture::LastWriteTo { path } => {
-                                Some(path.as_str())
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    let changed = worktree_snapshot.delta(
-                        &*self.exec,
-                        &machine_str,
-                        &self.target_dir,
-                        &always,
-                        &[],
-                    );
-                    for rel_path in changed {
-                        let name = std::path::Path::new(&rel_path)
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("artifact")
-                            .to_string();
-                        if let Some(content) = read_worktree_file(
+                    StepOutcome::Cancelled
+                } else if let Some(failed_outcome) = run_failed {
+                    failed_outcome
+                } else {
+                    // Process artifacts from the worktree path.
+                    if !is_legacy {
+                        let always: Vec<&str> = decls
+                            .iter()
+                            .filter_map(|d| match &d.capture {
+                                crate::domain::artifact::ArtifactCapture::LastWriteTo { path } => {
+                                    Some(path.as_str())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let changed = worktree_snapshot.delta(
                             &*self.exec,
                             &machine_str,
-                            &self.target_dir,
-                            &rel_path,
-                        ) {
-                            produced_artifacts.push(Artifact::tool_write(name, rel_path, content));
+                            &wt_path,
+                            &always,
+                            &[],
+                        );
+                        for rel_path in changed {
+                            let name = std::path::Path::new(&rel_path)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("artifact")
+                                .to_string();
+                            if let Some(content) =
+                                read_worktree_file(&*self.exec, &machine_str, &wt_path, &rel_path)
+                            {
+                                produced_artifacts
+                                    .push(Artifact::tool_write(name, rel_path, content));
+                            }
+                        }
+                    }
+
+                    if !is_legacy {
+                        let diff_ref = worktree_base_ref.as_deref().unwrap_or("HEAD");
+                        let diff_body =
+                            compute_git_diff(&*self.exec, &machine_str, &wt_path, diff_ref);
+                        if !diff_body.trim().is_empty() {
+                            let diff_name = "code-diff".to_string();
+                            produced_artifacts.push(Artifact {
+                                name: diff_name,
+                                mime: "text/x-diff".into(),
+                                content: diff_body,
+                                source: crate::domain::artifact::ArtifactSource::Diff {
+                                    base: diff_ref.to_string(),
+                                    head: "WORKTREE".to_string(),
+                                    path_filter: None,
+                                },
+                            });
+                        }
+                    }
+
+                    // Commit worktree changes.
+                    let _ = crate::adapters::step_executor::artifacts::commit_worktree_changes(
+                        &*self.exec,
+                        &machine_str,
+                        &wt_path,
+                        &format!("feat({}): {}", self.f_id.as_str(), step_conf.title),
+                    );
+
+                    // Merge subtask branch back.
+                    let mut merge_result = self.git_ops.merge_subtask(
+                        self.machine_id_opt.as_deref(),
+                        &self.target_dir,
+                        &self.branch_name,
+                        &subtask_id,
+                    );
+
+                    // Resolve conflicts if merge failed.
+                    if let Err(ref e) = merge_result {
+                        // Try to resolve merge conflict using the agent.
+                        let merge_back_cmd = format!(
+                            "git -C {} merge {}",
+                            paths::shell_escape_posix(&wt_path),
+                            paths::shell_escape_posix(&self.branch_name)
+                        );
+                        let _ = self.exec.run_command(&machine_str, &merge_back_cmd);
+
+                        let unmerged = list_unmerged_files(&*self.exec, &machine_str, &wt_path);
+                        if !unmerged.is_empty() {
+                            let files_list = unmerged
+                                .iter()
+                                .map(|f| format!("- {} ({})", f.path, f.kind))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            let conflict_prompt = format!(
+                                "We encountered a merge conflict while merging the latest changes from the feature branch '{}' into your workspace.\n\
+                                 Please resolve the conflicts in the following files:\n\
+                                 {}\n\n\
+                                 Ensure you edit these files to remove conflict markers (<<<<<<<, =======, >>>>>>>) and integrate the changes correctly. \
+                                 Make sure all code builds and passes tests. Once done, let me know.",
+                                self.branch_name, files_list
+                            );
+
+                            let mut conflict_stream = session.prompt(&conflict_prompt);
+                            let mut cancel_watch_conflict = self.cancel_watch.clone();
+                            let mut first_event_seen = false;
+
+                            let fast_sleep =
+                                tokio::time::sleep(std::time::Duration::from_secs(FAST_TIMEOUT_S));
+                            let normal_sleep = tokio::time::sleep(std::time::Duration::from_secs(
+                                NORMAL_TIMEOUT_S,
+                            ));
+                            let wall_sleep =
+                                tokio::time::sleep(std::time::Duration::from_secs(WALL_CAP_S));
+                            tokio::pin!(fast_sleep);
+                            tokio::pin!(normal_sleep);
+                            tokio::pin!(wall_sleep);
+
+                            let mut conflict_failed = None;
+                            let mut conflict_cancelled = false;
+
+                            loop {
+                                tokio::select! {
+                                    event_opt = conflict_stream.next() => {
+                                        let event = match event_opt {
+                                            Some(ev) => ev,
+                                            None => break,
+                                        };
+                                        first_event_seen = true;
+
+                                        let now = tokio::time::Instant::now();
+                                        let next_fast = now + std::time::Duration::from_secs(FAST_TIMEOUT_S);
+                                        let next_normal = now + std::time::Duration::from_secs(NORMAL_TIMEOUT_S);
+                                        fast_sleep.as_mut().reset(next_fast);
+                                        normal_sleep.as_mut().reset(next_normal);
+
+                                        match event {
+                                            AgentEvent::Text { delta } => {
+                                                let _ = self.notif.emit(&DomainEvent::AgentStream {
+                                                    feature_id: self.f_id.clone(),
+                                                    step_execution_id: step_exec.id.clone(),
+                                                    content: delta.clone(),
+                                                });
+                                            }
+                                            AgentEvent::Usage { cost_usd: Some(c), .. } => {
+                                                *accumulated_cost += c;
+                                            }
+                                            AgentEvent::TurnComplete { .. } => break,
+                                            AgentEvent::Error { message, .. } => {
+                                                let descriptive = format_agent_error_message(&message, &machine_str, &*self.exec);
+                                                conflict_failed = Some(StepOutcome::Failed(descriptive));
+                                                break;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    _ = &mut fast_sleep => {
+                                        if !first_event_seen {
+                                            fast_sleep.as_mut().reset(
+                                                tokio::time::Instant::now() + std::time::Duration::from_secs(FAST_TIMEOUT_S),
+                                            );
+                                            continue;
+                                        }
+                                        if hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > FAST_TIMEOUT_S * 1000) {
+                                            let descriptive = format_agent_error_message(
+                                                &format!("Agent blocked: no output for {}s (stdout and stderr both silent)", FAST_TIMEOUT_S),
+                                                &machine_str, &*self.exec,
+                                            );
+                                            conflict_failed = Some(StepOutcome::Failed(descriptive));
+                                            break;
+                                        }
+                                        fast_sleep.as_mut().reset(
+                                            tokio::time::Instant::now() + std::time::Duration::from_secs(FAST_TIMEOUT_S),
+                                        );
+                                    }
+                                    _ = &mut normal_sleep => {
+                                        if let Some(ref h) = hb {
+                                            if h.last_activity_ago_ms() < NORMAL_TIMEOUT_S * 1000 {
+                                                normal_sleep.as_mut().reset(
+                                                    tokio::time::Instant::now() + std::time::Duration::from_secs(NORMAL_TIMEOUT_S),
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                        let descriptive = format_agent_error_message(
+                                            &format!("Agent response timed out (no output for {}s)", NORMAL_TIMEOUT_S),
+                                            &machine_str, &*self.exec,
+                                        );
+                                        conflict_failed = Some(StepOutcome::Failed(descriptive));
+                                        break;
+                                    }
+                                    _ = &mut wall_sleep => {
+                                        conflict_failed = Some(StepOutcome::Failed("Agent conflict resolution exceeded wall clock cap".to_string()));
+                                        break;
+                                    }
+                                    _ = cancel_watch_conflict.changed() => {
+                                        if *cancel_watch_conflict.borrow() {
+                                            let _ = session.cancel();
+                                            conflict_cancelled = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if conflict_cancelled || *self.cancel_watch.borrow() {
+                                run_cancelled = true;
+                            } else if let Some(failed_outcome) = conflict_failed {
+                                run_failed = Some(failed_outcome);
+                            } else {
+                                // Verify conflicts are resolved.
+                                let still_unmerged =
+                                    list_unmerged_files(&*self.exec, &machine_str, &wt_path);
+                                if still_unmerged.is_empty() {
+                                    let commit_resolved = self.exec.run_command(
+                                        &machine_str,
+                                        &format!(
+                                            "git -C {} commit -am \"Resolve merge conflicts with {}\"",
+                                            paths::shell_escape_posix(&wt_path),
+                                            paths::shell_escape_posix(&self.branch_name)
+                                        ),
+                                    );
+                                    if commit_resolved.is_ok() {
+                                        merge_result = self.git_ops.merge_subtask(
+                                            self.machine_id_opt.as_deref(),
+                                            &self.target_dir,
+                                            &self.branch_name,
+                                            &subtask_id,
+                                        );
+                                    } else {
+                                        merge_result =
+                                            Err("Failed to commit merge conflict resolution"
+                                                .to_string());
+                                    }
+                                } else {
+                                    merge_result = Err(format!(
+                                        "Agent failed to resolve merge conflicts in: {:?}",
+                                        still_unmerged.iter().map(|f| &f.path).collect::<Vec<_>>()
+                                    ));
+                                }
+                            }
+                        } else {
+                            merge_result = Err(format!("agent step merge failed: {}", e));
+                        }
+                    }
+
+                    if run_cancelled || *self.cancel_watch.borrow() {
+                        let wall = step_start.elapsed().as_secs();
+                        let _ = self.features.step_update(
+                            &step_exec.id,
+                            &StepExecutionPatch {
+                                iteration_count: None,
+                                status: Some("interrupted".to_string()),
+                                cost_usd: Some(Some(*accumulated_cost)),
+                                wall_clock_secs: Some(wall).map(|_v| Some(wall)),
+                                artifact_path: None,
+                                artifact_paths: None,
+                                error_message: Some(Some(
+                                    "Execution cancelled by user".to_string(),
+                                )),
+                            },
+                        );
+                        let _ = self.notif.emit(&DomainEvent::StepProgress {
+                            feature_id: self.f_id.clone(),
+                            step_id: step_exec.step_id.0.clone(),
+                            status: "interrupted".into(),
+                            cost_usd: Some(*accumulated_cost),
+                            wall_clock_secs: Some(wall),
+                        });
+                        StepOutcome::Cancelled
+                    } else if let Some(failed_outcome) = run_failed {
+                        failed_outcome
+                    } else {
+                        match merge_result {
+                            Ok(()) => {
+                                // Resolve artifacts: either declared (new) or text-dump (legacy)
+                                let (artifact_path, artifact_paths) = if !is_legacy {
+                                    let refs = resolve_declared_artifacts(
+                                        decls,
+                                        &produced_artifacts,
+                                        &self.artifacts,
+                                        &self.f_id_str,
+                                        &step_exec.step_id.0,
+                                    );
+                                    let primary = if step_conf.kind == "parallel" {
+                                        refs.iter()
+                                            .find(|r| {
+                                                r.contains("code-diff") || r.ends_with(".diff")
+                                            })
+                                            .cloned()
+                                            .or_else(|| refs.first().cloned())
+                                    } else {
+                                        refs.first().cloned()
+                                    };
+                                    (primary, refs)
+                                } else {
+                                    let mut art_path = self
+                                        .app_local_data_dir
+                                        .join("artifacts")
+                                        .join(&self.f_id_str);
+                                    let _ = std::fs::create_dir_all(&art_path);
+                                    let file_name = format!("{}.md", step_exec.step_id.0);
+                                    art_path.push(&file_name);
+                                    let _ = std::fs::write(&art_path, &text_buffer);
+                                    let art_path_str = art_path.to_string_lossy().to_string();
+                                    (Some(art_path_str.clone()), vec![art_path_str])
+                                };
+
+                                let wall = step_start.elapsed().as_secs();
+                                let _ = self.features.step_update(
+                                    &step_exec.id,
+                                    &StepExecutionPatch {
+                                        iteration_count: None,
+                                        status: Some("completed".to_string()),
+                                        cost_usd: Some(Some(*accumulated_cost)),
+                                        wall_clock_secs: Some(wall).map(|_v| Some(wall)),
+                                        artifact_path: Some(artifact_path),
+                                        artifact_paths: Some(artifact_paths),
+                                        error_message: Some(None),
+                                    },
+                                );
+                                let _ = self.notif.emit(&DomainEvent::StepProgress {
+                                    feature_id: self.f_id.clone(),
+                                    step_id: step_exec.step_id.0.clone(),
+                                    status: "completed".into(),
+                                    cost_usd: Some(*accumulated_cost),
+                                    wall_clock_secs: Some(wall),
+                                });
+                                StepOutcome::Completed
+                            }
+                            Err(err) => {
+                                StepOutcome::Failed(format!("agent step merge failed: {}", err))
+                            }
                         }
                     }
                 }
-
-                // Compute the unified diff against the worktree's
-                // base ref and synthesise a diff artifact. Empty for
-                // text-only steps (research, spec, critic, validate
-                // when the agent only writes .md) and useful for
-                // implement-style steps where the agent touches code.
-                //
-                // Per the user-facing rule "always show a code diff",
-                // we attach the diff for every non-legacy step,
-                // regardless of whether code was changed. An empty
-                // diff still renders harmlessly in the diff viewer.
-                if !is_legacy {
-                    let diff_ref = worktree_base_ref.as_deref().unwrap_or("HEAD");
-                    let diff_body =
-                        compute_git_diff(&*self.exec, &machine_str, &self.target_dir, diff_ref);
-                    if !diff_body.trim().is_empty() {
-                        let diff_name = "code-diff".to_string();
-                        produced_artifacts.push(Artifact {
-                            name: diff_name,
-                            mime: "text/x-diff".into(),
-                            content: diff_body,
-                            source: crate::domain::artifact::ArtifactSource::Diff {
-                                base: diff_ref.to_string(),
-                                head: "WORKTREE".to_string(),
-                                path_filter: None,
-                            },
-                        });
-                    }
-                }
-
-                // Resolve artifacts: either declared (new) or text-dump (legacy)
-                let (artifact_path, artifact_paths) = if !is_legacy {
-                    let refs = resolve_declared_artifacts(
-                        decls,
-                        &produced_artifacts,
-                        &self.artifacts,
-                        &self.f_id_str,
-                        &step_exec.step_id.0,
-                    );
-                    // For implement-style steps (parallel kind, or any
-                    // step with a `code-diff` artifact), the primary
-                    // view is the unified diff so the user sees the
-                    // change summary first. For text-only steps, the
-                    // primary is the first detected file (research
-                    // report, spec, critic review, validation report).
-                    let primary = if step_conf.kind == "parallel" {
-                        refs.iter()
-                            .find(|r| r.contains("code-diff") || r.ends_with(".diff"))
-                            .cloned()
-                            .or_else(|| refs.first().cloned())
-                    } else {
-                        refs.first().cloned()
-                    };
-                    (primary, refs)
-                } else {
-                    let mut art_path = self
-                        .app_local_data_dir
-                        .join("artifacts")
-                        .join(&self.f_id_str);
-                    let _ = std::fs::create_dir_all(&art_path);
-                    let file_name = format!("{}.md", step_exec.step_id.0);
-                    art_path.push(&file_name);
-                    let _ = std::fs::write(&art_path, &text_buffer);
-                    let art_path_str = art_path.to_string_lossy().to_string();
-                    (Some(art_path_str.clone()), vec![art_path_str])
-                };
-
-                let wall = step_start.elapsed().as_secs();
-                let _ = self.features.step_update(
-                    &step_exec.id,
-                    &StepExecutionPatch {
-                        iteration_count: None,
-                        status: Some("completed".to_string()),
-                        cost_usd: Some(*accumulated_cost).map(|v| Some(v)),
-                        wall_clock_secs: Some(wall).map(|v| Some(wall)),
-                        artifact_path: Some(artifact_path),
-                        artifact_paths: Some(artifact_paths),
-                        error_message: Some(None),
-                    },
-                );
-                let _ = self.notif.emit(&DomainEvent::StepProgress {
-                    feature_id: self.f_id.clone(),
-                    step_id: step_exec.step_id.0.clone(),
-                    status: "completed".into(),
-                    cost_usd: Some(*accumulated_cost),
-                    wall_clock_secs: Some(wall),
-                });
-                let _ = self.registry.kill(self.f_id.as_str()).await;
-                StepOutcome::Completed
             }
             Some(Err(e)) => {
                 let descriptive =
@@ -504,7 +659,19 @@ impl ExecutionDriver {
                 StepOutcome::Failed(descriptive)
             }
             None => StepOutcome::Cancelled,
-        }
+        };
+
+        // Cleanup temporary worktree in all cases.
+        let _ = self.git_ops.cleanup_subtask_worktree(
+            self.machine_id_opt.as_deref(),
+            &self.target_dir,
+            &self.branch_name,
+            &subtask_id,
+        );
+
+        let _ = self.registry.kill(self.f_id.as_str()).await;
+
+        outcome
     }
 }
 
@@ -542,4 +709,45 @@ pub(crate) fn format_agent_error_message(
         }
     }
     message.to_string()
+}
+
+struct ConflictFile {
+    path: String,
+    kind: String,
+}
+
+fn list_unmerged_files(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    repo_dir: &str,
+) -> Vec<ConflictFile> {
+    let raw = match exec.run_command(
+        machine_id,
+        &format!(
+            "git -C {} status --porcelain --untracked-files=no",
+            paths::shell_escape_posix(repo_dir)
+        ),
+    ) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    raw.lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            if line.len() < 3 {
+                return None;
+            }
+            let xy = &line[..2];
+            let path = line[3..].trim().to_string();
+            let kind = match xy {
+                "UU" | "AA" | "DD" => "both-modified".to_string(),
+                "UA" => "added-by-them".to_string(),
+                "AU" => "added-by-us".to_string(),
+                "UD" => "deleted-by-them".to_string(),
+                "DU" => "deleted-by-us".to_string(),
+                _ => return None,
+            };
+            Some(ConflictFile { path, kind })
+        })
+        .collect()
 }

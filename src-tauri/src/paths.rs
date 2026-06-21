@@ -145,8 +145,7 @@ pub fn repo_target_dir_str(
 pub fn repo_name_from_path(repo_path: &str) -> String {
     repo_path
         .split('/')
-        .filter(|s| !s.is_empty())
-        .last()
+        .rfind(|s| !s.is_empty())
         .unwrap_or(repo_path)
         .to_string()
 }

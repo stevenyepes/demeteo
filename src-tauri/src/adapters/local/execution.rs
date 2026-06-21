@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +7,12 @@ use crate::ports::execution::{ExecutionPort, InteractiveHandle};
 use crate::sftp::SftpEntry;
 
 pub struct LocalSubprocessAdapter;
+
+impl Default for LocalSubprocessAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl LocalSubprocessAdapter {
     pub fn new() -> Self {
@@ -18,19 +24,19 @@ struct LocalChildProcess {
     child: Arc<Mutex<std::process::Child>>,
     stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     stdout: Arc<Mutex<Option<BufReader<std::process::ChildStdout>>>>,
-    stderr: Arc<Mutex<Option<BufReader<std::process::ChildStderr>>>>,
+    _stderr: Arc<Mutex<Option<BufReader<std::process::ChildStderr>>>>,
 }
 
 impl LocalChildProcess {
     fn new(mut child: std::process::Child) -> Self {
         let stdin = child.stdin.take();
-        let stdout = child.stdout.take().map(|o| BufReader::new(o));
-        let stderr = child.stderr.take().map(|e| BufReader::new(e));
+        let stdout = child.stdout.take().map(BufReader::new);
+        let stderr = child.stderr.take().map(BufReader::new);
         Self {
             child: Arc::new(Mutex::new(child)),
             stdin: Arc::new(Mutex::new(stdin)),
             stdout: Arc::new(Mutex::new(stdout)),
-            stderr: Arc::new(Mutex::new(stderr)),
+            _stderr: Arc::new(Mutex::new(stderr)),
         }
     }
 }

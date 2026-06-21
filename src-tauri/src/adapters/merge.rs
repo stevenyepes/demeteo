@@ -6,11 +6,9 @@
 //! file list + raw stderr is stored as a JSON `ConflictReport` so
 //! downstream resolvers and the UI can render the cascade.
 
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use rusqlite::params;
-use serde_json::json;
 
 use crate::adapters::database::SqliteConnection;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
@@ -285,6 +283,7 @@ fn list_unmerged_files(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_merge_outcome(
     conn: &SqliteConnection,
     subtask_run_id: &str,

@@ -4,7 +4,6 @@ use tauri::State;
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{MrInfo, PublishOptions};
-use crate::ports::mr_publisher::MrPublisher;
 use crate::state::AppContext;
 
 #[tauri::command]

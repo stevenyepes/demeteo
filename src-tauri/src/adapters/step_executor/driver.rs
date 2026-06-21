@@ -90,8 +90,8 @@ impl ExecutionDriver {
                 &StepExecutionPatch {
                     iteration_count: None,
                     status: Some("running".to_string()),
-                    cost_usd: step_exec.cost_usd.map(|v| Some(v)),
-                    wall_clock_secs: step_exec.wall_clock_secs.map(|v| Some(v)),
+                    cost_usd: step_exec.cost_usd.map(Some),
+                    wall_clock_secs: step_exec.wall_clock_secs.map(Some),
                     artifact_path: None,
                     artifact_paths: None,
                     error_message: Some(None),
@@ -166,8 +166,8 @@ impl ExecutionDriver {
                             &StepExecutionPatch {
                                 iteration_count: None,
                                 status: Some("interrupted".to_string()),
-                                cost_usd: Some(accumulated_cost).map(|v| Some(v)),
-                                wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                                cost_usd: Some(Some(accumulated_cost)),
+                                wall_clock_secs: Some(Some(wall)),
                                 artifact_path: None,
                                 artifact_paths: None,
                                 error_message: Some(Some(format!(
@@ -226,8 +226,8 @@ impl ExecutionDriver {
             &self.f_id,
             &FeaturePatch {
                 status: Some("completed".to_string()),
-                total_cost: Some(total_cost).map(|v| Some(v)),
-                duration: Some(&total_dur).map(|v| Some(v.to_string())),
+                total_cost: Some(Some(total_cost)),
+                duration: Some(Some(total_dur.clone())),
                 ..Default::default()
             },
         );
@@ -250,8 +250,8 @@ impl ExecutionDriver {
             &StepExecutionPatch {
                 iteration_count: None,
                 status: Some("failed".to_string()),
-                cost_usd: Some(accumulated_cost).map(|v| Some(v)),
-                wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                cost_usd: Some(Some(accumulated_cost)),
+                wall_clock_secs: Some(Some(wall)),
                 artifact_path: None,
                 artifact_paths: None,
                 error_message: Some(Some(msg.to_string())),
@@ -275,8 +275,8 @@ impl ExecutionDriver {
             &self.f_id,
             &FeaturePatch {
                 status: Some("failed".to_string()),
-                total_cost: Some(total_cost).map(|v| Some(v)),
-                duration: Some(&total_dur).map(|v| Some(v.to_string())),
+                total_cost: Some(Some(total_cost)),
+                duration: Some(Some(total_dur.clone())),
                 ..Default::default()
             },
         );
@@ -298,8 +298,8 @@ impl ExecutionDriver {
             &self.f_id,
             &FeaturePatch {
                 status: Some("cancelled".to_string()),
-                total_cost: Some(total_cost).map(|v| Some(v)),
-                duration: Some(&total_dur).map(|v| Some(v.to_string())),
+                total_cost: Some(Some(total_cost)),
+                duration: Some(Some(total_dur.clone())),
                 ..Default::default()
             },
         );
@@ -352,8 +352,8 @@ impl ExecutionDriver {
                 &StepExecutionPatch {
                     iteration_count: None,
                     status: Some("failed".to_string()),
-                    cost_usd: Some(accumulated_cost).map(|v| Some(v)),
-                    wall_clock_secs: Some(wall).map(|v| Some(wall)),
+                    cost_usd: Some(Some(accumulated_cost)),
+                    wall_clock_secs: Some(Some(wall)),
                     artifact_path: None,
                     artifact_paths: None,
                     error_message: Some(Some(format!(
@@ -379,7 +379,7 @@ impl ExecutionDriver {
             &step_exec.id,
             &StepExecutionPatch {
                 status: Some("failed".to_string()),
-                cost_usd: Some(accumulated_cost).map(|v| Some(v)),
+                cost_usd: Some(Some(accumulated_cost)),
                 artifact_path: None,
                 artifact_paths: None,
                 error_message: Some(Some(format!(
