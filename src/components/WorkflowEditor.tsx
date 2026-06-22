@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { WorkflowWithSteps, StepConfig } from '../types';
-import { ArrowLeft, Plus, Trash, ChevronUp, ChevronDown, Save } from 'lucide-react';
+import { ArrowLeft, Plus, Trash, ChevronUp, ChevronDown, Save, Zap } from 'lucide-react';
 
 interface WorkflowEditorProps {
   workflowId: string | null; // null means create new
@@ -19,7 +19,22 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
   const [version, setVersion] = useState(1);
   const [loading, setLoading] = useState(false);
 
+  const [projectsList, setProjectsList] = useState<{ id: string; name: string }[]>([]);
+  const [cron, setCron] = useState('');
+  const [titleTemplate, setTitleTemplate] = useState('');
+  const [scheduleProjectId, setScheduleProjectId] = useState('');
+
+  const loadProjects = async () => {
+    try {
+      const list = await invoke<any[]>('get_projects');
+      setProjectsList(list.map(p => ({ id: p.id, name: p.name })));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
+    loadProjects();
     if (workflowId) {
       loadWorkflow(workflowId);
     } else {
@@ -47,6 +62,15 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
       setDescription(w.description);
       setSteps(w.steps);
       setVersion(w.version);
+      if (w.schedule) {
+        setCron(w.schedule.cron);
+        setTitleTemplate(w.schedule.title_template);
+        setScheduleProjectId(w.schedule.project_id);
+      } else {
+        setCron('');
+        setTitleTemplate('');
+        setScheduleProjectId('');
+      }
     } catch (err: any) {
       console.error(err);
     } finally {
@@ -104,11 +128,32 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
       return;
     }
 
+    // Schedule validation
+    if (cron || titleTemplate || scheduleProjectId) {
+      if (!scheduleProjectId) {
+        alert('Please select a target project for the schedule.');
+        return;
+      }
+      if (!cron.trim()) {
+        alert('Please enter a cron expression.');
+        return;
+      }
+      if (!titleTemplate.trim()) {
+        alert('Please enter a feature title template.');
+        return;
+      }
+      if (cron.trim().split(/\s+/).length !== 5) {
+        alert('Cron expression must have exactly 5 fields (minute hour day-of-month month day-of-week).');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
+      let savedWorkflow: WorkflowWithSteps;
       if (workflowId) {
         // Update
-        await invoke('workflow_update', {
+        savedWorkflow = await invoke<WorkflowWithSteps>('workflow_update', {
           workflowId,
           name,
           description,
@@ -117,12 +162,32 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
         });
       } else {
         // Create
-        await invoke('workflow_create', {
+        savedWorkflow = await invoke<WorkflowWithSteps>('workflow_create', {
           name,
           description,
           steps,
         });
       }
+
+      // Save schedule configurations
+      const currentWorkflowId = workflowId || savedWorkflow.id;
+      if (cron || titleTemplate || scheduleProjectId) {
+        await invoke('workflow_save_schedule', {
+          workflowId: currentWorkflowId,
+          schedule: {
+            cron,
+            title_template: titleTemplate,
+            project_id: scheduleProjectId,
+            next_run_at: null,
+          },
+        });
+      } else {
+        await invoke('workflow_save_schedule', {
+          workflowId: currentWorkflowId,
+          schedule: null,
+        });
+      }
+
       onSaved();
     } catch (err: any) {
       alert(err.toString());
@@ -205,6 +270,57 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                   />
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Scheduling Section */}
+          <div className="p-6 rounded-xl border border-white/5 bg-white/[0.02] backdrop-blur-xl space-y-4">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-violet-400" />
+              <h3 className="text-sm uppercase tracking-wider text-slate-400 font-bold">Workflow Scheduling</h3>
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Define a schedule to automatically start feature executions for this workflow. Leave fields blank to disable scheduling.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1 font-semibold uppercase">Target Project</label>
+                <select
+                  value={scheduleProjectId}
+                  onChange={(e) => setScheduleProjectId(e.target.value)}
+                  className="w-full bg-[#0d0f14] border border-white/10 focus:border-violet-500 rounded-lg p-3 text-sm text-white focus:outline-none transition"
+                >
+                  <option value="">-- Select Project --</option>
+                  {projectsList.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1 font-semibold uppercase">Cron Expression</label>
+                <input
+                  type="text"
+                  value={cron}
+                  onChange={(e) => setCron(e.target.value)}
+                  placeholder="e.g. 0 0 * * * (daily at midnight)"
+                  className="w-full bg-[#0d0f14] border border-white/10 focus:border-violet-500 rounded-lg p-3 text-sm text-white focus:outline-none transition font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1 font-semibold uppercase">Feature Title Template</label>
+                <input
+                  type="text"
+                  value={titleTemplate}
+                  onChange={(e) => setTitleTemplate(e.target.value)}
+                  placeholder="e.g. Nightly Run {{datetime}}"
+                  className="w-full bg-[#0d0f14] border border-white/10 focus:border-violet-500 rounded-lg p-3 text-sm text-white focus:outline-none transition"
+                />
+              </div>
             </div>
           </div>
 
@@ -407,6 +523,115 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                             </div>
                           )}
                         </div>
+
+                        {/* Maker-Checker Verifier Section */}
+                        {step.kind !== 'gate' && (
+                          <div className="border-t border-white/5 pt-4 space-y-3">
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (step.verifier) {
+                                    handleUpdateStep(idx, { verifier: null });
+                                  } else {
+                                    handleUpdateStep(idx, {
+                                      verifier: {
+                                        instructions: 'Verify that the changes are correct and the tests pass.',
+                                        agent_kind: null,
+                                        harness_name: null,
+                                        verdict_key: 'verdict'
+                                      }
+                                    });
+                                  }
+                                }}
+                                className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
+                                  step.verifier 
+                                    ? 'bg-violet-500 border-violet-500 text-white' 
+                                    : 'border-slate-600 hover:border-slate-500'
+                                }`}
+                              >
+                                {step.verifier && <span className="text-[10px] font-bold">✓</span>}
+                              </button>
+                              <label className="text-xs text-slate-300 font-semibold select-none cursor-pointer" onClick={() => {
+                                if (step.verifier) {
+                                  handleUpdateStep(idx, { verifier: null });
+                                } else {
+                                  handleUpdateStep(idx, {
+                                    verifier: {
+                                      instructions: 'Verify that the changes are correct and the tests pass.',
+                                      agent_kind: null,
+                                      harness_name: null,
+                                      verdict_key: 'verdict'
+                                    }
+                                  });
+                                }
+                              }}>
+                                Enable Maker-Checker Verification
+                              </label>
+                            </div>
+
+                            {step.verifier && (
+                              <div className="pl-6 space-y-3 bg-white/[0.01] p-3 rounded-lg border border-white/5">
+                                <div>
+                                  <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">Verifier Prompt / Verification Instructions</label>
+                                  <textarea
+                                    value={step.verifier.instructions}
+                                    onChange={(e) => handleUpdateStep(idx, {
+                                      verifier: { ...step.verifier!, instructions: e.target.value }
+                                    })}
+                                    placeholder="Explain how the verifier should decide if the implementation succeeded."
+                                    rows={2}
+                                    className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2.5 text-xs text-white focus:outline-none focus:border-violet-500 font-mono resize-none leading-relaxed"
+                                  />
+                                </div>
+
+                                <div className="grid grid-cols-3 gap-3">
+                                  <div>
+                                    <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">Verifier Agent Kind</label>
+                                    <select
+                                      value={step.verifier.agent_kind || ''}
+                                      onChange={(e) => handleUpdateStep(idx, {
+                                        verifier: { ...step.verifier!, agent_kind: e.target.value || null }
+                                      })}
+                                      className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500 font-sans"
+                                    >
+                                      <option value="">Same as Step Agent</option>
+                                      {AGENT_KINDS.map((ak) => (
+                                        <option key={ak} value={ak}>{ak}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">Test Harness Name</label>
+                                    <input
+                                      type="text"
+                                      value={step.verifier.harness_name || ''}
+                                      onChange={(e) => handleUpdateStep(idx, {
+                                        verifier: { ...step.verifier!, harness_name: e.target.value || null }
+                                      })}
+                                      placeholder="e.g. lint (blank = default test)"
+                                      className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">JSON Verdict Key</label>
+                                    <input
+                                      type="text"
+                                      value={step.verifier.verdict_key || ''}
+                                      onChange={(e) => handleUpdateStep(idx, {
+                                        verifier: { ...step.verifier!, verdict_key: e.target.value }
+                                      })}
+                                      placeholder="verdict"
+                                      className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

@@ -6,6 +6,7 @@ use super::ids::{
     AgentProfileId, FeatureId, GateDecisionId, MachineId, MessageId, ProjectId, ProviderId,
     RepositoryId, StepExecutionId, StepId, ThreadId, WorkflowId, WorkflowVersionId,
 };
+use super::verifier::VerifierConfig;
 
 /// Captured session info from the ACP `session/new` response.
 /// Used by the frontend to display available modes, models, etc.
@@ -248,6 +249,8 @@ pub struct WorktreeStrategy {
     #[serde(default)]
     pub conventions_file: Option<String>,
     pub pr_template: Option<String>,
+    #[serde(default)]
+    pub harnesses: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -284,6 +287,15 @@ pub struct RepoHealthStatus {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A versioned, reusable template that defines the steps to build a feature.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkflowSchedule {
+    pub cron: String,             // standard 5-field cron expression
+    pub title_template: String,   // e.g. "Daily sweep {{date}}"
+    pub project_id: ProjectId,    // which project to spawn features on
+    pub next_run_at: Option<i64>, // unix ms; maintained by scheduler
+}
+
+/// A versioned, reusable template that defines the steps to build a feature.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Workflow {
     pub id: WorkflowId,
@@ -293,6 +305,8 @@ pub struct Workflow {
     pub is_starter: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub schedule: Option<WorkflowSchedule>,
 }
 
 /// A single immutable snapshot of a workflow's step list.
@@ -339,6 +353,8 @@ pub struct StepConfig {
     /// workflows keep running during migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<Vec<ArtifactDecl>>,
+    #[serde(default)]
+    pub verifier: Option<VerifierConfig>,
 }
 
 impl StepConfig {

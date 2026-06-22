@@ -157,12 +157,13 @@ impl ProjectRepository for SqliteAdapter {
             .prepare(
                 "SELECT project_id, default_branch, branch_prefix, test_command, pr_template,
                         conflict_policy, feature_lifecycle, build_command, coverage_command,
-                        conventions_file, default_agent_kind, default_model
+                        conventions_file, default_agent_kind, default_model, harnesses
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
             .query_map(params![project_id.0], |row| {
+                let harnesses: Option<String> = row.get(12)?;
                 Ok(ProjectSettings {
                     project_id: row.get(0)?,
                     worktree_strategy: WorktreeStrategy {
@@ -173,6 +174,7 @@ impl ProjectRepository for SqliteAdapter {
                         coverage_command: row.get(8)?,
                         conventions_file: row.get(9)?,
                         pr_template: row.get(4)?,
+                        harnesses: harnesses.and_then(|s| serde_json::from_str(&s).ok()),
                     },
                     conflict_policy: row.get(5)?,
                     feature_lifecycle: row.get(6)?,
@@ -190,12 +192,17 @@ impl ProjectRepository for SqliteAdapter {
 
     fn save_settings(&self, s: ProjectSettings) -> Result<(), String> {
         let conn = self.conn.lock()?;
+        let harnesses_json = s
+            .worktree_strategy
+            .harnesses
+            .as_ref()
+            .and_then(|h| serde_json::to_string(h).ok());
         conn.execute(
             "INSERT OR REPLACE INTO project_settings
              (project_id, default_branch, branch_prefix, test_command, build_command,
               coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
-              default_agent_kind, default_model)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              default_agent_kind, default_model, harnesses)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -208,7 +215,8 @@ impl ProjectRepository for SqliteAdapter {
                 s.conflict_policy,
                 s.feature_lifecycle,
                 s.default_agent_kind,
-                s.default_model
+                s.default_model,
+                harnesses_json
             ],
         )
         .map_err(|e| e.to_string())?;

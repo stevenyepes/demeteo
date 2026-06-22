@@ -24,6 +24,7 @@ export interface Workflow {
   is_starter: boolean;
   created_at: number;
   updated_at: number;
+  schedule?: WorkflowSchedule | null;
 }
 
 export type StepConfig = {
@@ -35,6 +36,7 @@ export type StepConfig = {
   artifact_mode: 'full' | 'summary_only' | 'none' | string;
   on_failure?: string | null;
   max_iterations?: number | null;
+  verifier?: VerifierConfig | null;
 };
 
 export interface WorkflowWithSteps extends Workflow {
@@ -81,4 +83,29 @@ export interface Feature {
 export interface Repository {
   id: string;
   repo_path: string;
+}
+
+export interface VerifierConfig {
+  agent_kind?: string | null;
+  instructions: string;
+  harness_name?: string | null;
+  verdict_key?: string;
+}
+
+export interface WorkflowSchedule {
+  cron: string;
+  title_template: string;
+  project_id: string;
+  next_run_at?: number | null;
+}
+
+export interface ProjectMemoryEntry {
+  id: string;
+  project_id: string;
+  key: string;
+  value: string;
+  source: 'agent' | 'human';
+  confidence: number;
+  created_at: number;
+  updated_at: number;
 }

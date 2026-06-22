@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { WorkflowWithSteps } from '../types';
-import { Play, Pencil, Download, Trash, RefreshCw, Plus, Cpu, GitBranch, ShieldAlert } from 'lucide-react';
+import { Play, Pencil, Download, Trash, RefreshCw, Plus, Cpu, GitBranch, ShieldAlert, Clock } from 'lucide-react';
 
 interface WorkflowListProps {
   onEdit: (id: string) => void;
@@ -121,9 +121,16 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-white">{w.name}</span>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
-                        Starter
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {w.schedule && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 border border-violet-500/30 text-violet-300 flex items-center gap-1">
+                            <Clock className="w-2.5 h-2.5" /> Scheduled
+                          </span>
+                        )}
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
+                          Starter
+                        </span>
+                      </div>
                     </div>
                     <p className="text-xs text-slate-400 mt-1 line-clamp-2">{w.description}</p>
                   </div>
@@ -148,9 +155,16 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-white">{w.name}</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-bold uppercase tracking-wider">
-                          Custom
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {w.schedule && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 border border-violet-500/30 text-violet-300 flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5" /> Scheduled
+                            </span>
+                          )}
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-bold uppercase tracking-wider">
+                            Custom
+                          </span>
+                        </div>
                       </div>
                       <p className="text-xs text-slate-400 mt-1 line-clamp-2">{w.description}</p>
                     </div>
@@ -218,6 +232,29 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                 )}
               </div>
             </div>
+
+            {selectedWorkflow.schedule && (
+              <div className="p-4 rounded-xl border border-white/5 bg-violet-500/[0.02] flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Clock className="w-5 h-5 text-violet-400" />
+                  <div>
+                    <h4 className="text-sm font-semibold text-white">Cron Execution Schedule</h4>
+                    <p className="text-xs text-slate-400">
+                      Cron: <code className="text-violet-300 font-mono">{selectedWorkflow.schedule.cron}</code> &bull; 
+                      Title: <code className="text-cyan-300">{selectedWorkflow.schedule.title_template}</code>
+                    </p>
+                  </div>
+                </div>
+                {selectedWorkflow.schedule.next_run_at && (
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block mb-0.5">Next Run</span>
+                    <div className="text-xs text-slate-300 font-mono bg-black/30 border border-white/5 px-2 py-1 rounded">
+                      {new Date(selectedWorkflow.schedule.next_run_at * 1000).toLocaleString()}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Steps Timeline preview */}
             <div className="space-y-4">

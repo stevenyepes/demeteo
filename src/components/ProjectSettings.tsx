@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { 
     Settings, Save, Check, RotateCw, GitBranch, ShieldAlert, 
     Trash2, Box, Search, Plus, X, AlertTriangle, HardDrive, Server, Globe,
-    Activity, RefreshCw, ChevronDown, ChevronUp, Zap, CircleAlert
+    Activity, RefreshCw, ChevronDown, ChevronUp, Zap, CircleAlert, Brain, Edit
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { ConfigOptionValue } from '../types';
+import { ConfigOptionValue, ProjectMemoryEntry } from '../types';
 import { getAgentModels } from '../lib/agentModels';
 
 interface Project {
@@ -60,6 +60,7 @@ interface WorktreeStrategy {
     branch_prefix: string;
     test_command: string | null;
     pr_template: string | null;
+    harnesses?: { [key: string]: string } | null;
 }
 
 interface ProjectSettings {
@@ -108,9 +109,17 @@ export default function ProjectSettingsView({
     providers 
 }: ProjectSettingsProps) {
     const [isLoading, setIsLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<'general' | 'strategy'>('general');
+    const [activeTab, setActiveTab] = useState<'general' | 'strategy' | 'memory'>('general');
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
     const [errorMsg, setErrorMsg] = useState('');
+
+    // Project Memory states
+    const [memories, setMemories] = useState<ProjectMemoryEntry[]>([]);
+    const [isMemoriesLoading, setIsMemoriesLoading] = useState(false);
+    const [editingMemory, setEditingMemory] = useState<ProjectMemoryEntry | null>(null);
+    const [newMemKey, setNewMemKey] = useState('');
+    const [newMemVal, setNewMemVal] = useState('');
+    const [memError, setMemError] = useState('');
 
     // General Configuration States
     const [projectName, setProjectName] = useState(activeProject.name);
@@ -143,6 +152,7 @@ export default function ProjectSettingsView({
     const [defaultBranch, setDefaultBranch] = useState('main');
     const [branchPrefix, setBranchPrefix] = useState('demeteo/features/');
     const [testCommand, setTestCommand] = useState('');
+    const [harnesses, setHarnesses] = useState<{ [key: string]: string }>({});
     const [prTemplate, setPrTemplate] = useState('');
     const [conflictPolicy, setConflictPolicy] = useState('always_gate');
     const [featureLifecycle, setFeatureLifecycle] = useState('archive');
@@ -268,6 +278,7 @@ export default function ProjectSettingsView({
                     setDefaultBranch(res.worktree_strategy.default_branch);
                     setBranchPrefix(res.worktree_strategy.branch_prefix);
                     setTestCommand(res.worktree_strategy.test_command || '');
+                    setHarnesses(res.worktree_strategy.harnesses || {});
                     setPrTemplate(res.worktree_strategy.pr_template || '');
                     setConflictPolicy(res.conflict_policy);
                     setFeatureLifecycle(res.feature_lifecycle);
@@ -310,6 +321,77 @@ export default function ProjectSettingsView({
             fetchWorkspaceHealth();
         }
     }, [activeProject.id]);
+
+    const fetchMemories = async () => {
+        setIsMemoriesLoading(true);
+        setMemError('');
+        try {
+            const list = await invoke<ProjectMemoryEntry[]>('project_memory_list', {
+                projectId: activeProject.id
+            });
+            setMemories(list ?? []);
+        } catch (err: any) {
+            console.error("Failed to load project memory:", err);
+            setMemError(String(err));
+        } finally {
+            setIsMemoriesLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab === 'memory') {
+            fetchMemories();
+        }
+    }, [activeTab, activeProject.id]);
+
+    const handleSaveMemory = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const key = newMemKey.trim();
+        const value = newMemVal.trim();
+        if (!key || !value) {
+            setMemError("Key and Value cannot be empty.");
+            return;
+        }
+
+        try {
+            await invoke('project_memory_upsert', {
+                id: editingMemory ? editingMemory.id : null,
+                projectId: activeProject.id,
+                key,
+                value,
+                source: editingMemory ? editingMemory.source : 'human'
+            });
+            setNewMemKey('');
+            setNewMemVal('');
+            setEditingMemory(null);
+            fetchMemories();
+        } catch (err: any) {
+            console.error("Failed to save memory:", err);
+            setMemError(String(err));
+        }
+    };
+
+    const handleDeleteMemory = async (id: string) => {
+        try {
+            await invoke('project_memory_delete', { id });
+            fetchMemories();
+        } catch (err: any) {
+            console.error("Failed to delete memory:", err);
+            setMemError(String(err));
+        }
+    };
+
+    const handleEditMemoryClick = (entry: ProjectMemoryEntry) => {
+        setEditingMemory(entry);
+        setNewMemKey(entry.key);
+        setNewMemVal(entry.value);
+    };
+
+    const handleCancelEdit = () => {
+        setEditingMemory(null);
+        setNewMemKey('');
+        setNewMemVal('');
+    };
 
     const fetchAllReposFromProviders = async () => {
         if (providers.length === 0) return;
@@ -453,7 +535,8 @@ export default function ProjectSettingsView({
                             default_branch: defaultBranch,
                             branch_prefix: branchPrefix,
                             test_command: testCommand || null,
-                            pr_template: prTemplate || null
+                            pr_template: prTemplate || null,
+                            harnesses: Object.keys(harnesses).length > 0 ? harnesses : null
                         },
                         conflict_policy: conflictPolicy,
                         feature_lifecycle: featureLifecycle,
@@ -509,6 +592,7 @@ export default function ProjectSettingsView({
             setDefaultBranch(strategy.default_branch);
             setBranchPrefix(strategy.branch_prefix);
             setTestCommand(strategy.test_command || '');
+            setHarnesses(strategy.harnesses || {});
             setPrTemplate(strategy.pr_template || '');
             setBootstrapStep('strategy_proposal');
         } catch (err: any) {
@@ -528,7 +612,8 @@ export default function ProjectSettingsView({
                         default_branch: defaultBranch,
                         branch_prefix: branchPrefix,
                         test_command: testCommand || null,
-                        pr_template: prTemplate || null
+                        pr_template: prTemplate || null,
+                        harnesses: Object.keys(harnesses).length > 0 ? harnesses : null
                     },
                     conflict_policy: conflictPolicy,
                     feature_lifecycle: featureLifecycle,
@@ -988,6 +1073,12 @@ export default function ProjectSettingsView({
                 >
                     Agent Strategy & Policies
                 </button>
+                <button
+                    onClick={() => setActiveTab('memory')}
+                    className={`px-4 py-2.5 text-sm font-outfit font-medium border-b-2 transition-all ${activeTab === 'memory' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+                >
+                    Project Memory
+                </button>
             </div>
 
             <div className="z-10">
@@ -1292,7 +1383,7 @@ export default function ProjectSettingsView({
                             </button>
                         </div>
                     </div>
-                ) : (
+                ) : activeTab === 'strategy' ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="glass-panel p-6 rounded-xl space-y-4">
                             <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -1328,6 +1419,72 @@ export default function ProjectSettingsView({
                                     placeholder="e.g. npm test or cargo test"
                                     className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
                                 />
+                            </div>
+                        </div>
+
+                        {/* Test Harnesses Card */}
+                        <div className="glass-panel p-6 rounded-xl space-y-4">
+                            <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                <Zap className="w-4 h-4 text-cyan-400" /> Named Test Harnesses
+                            </h3>
+                            <p className="text-xs text-slate-400 leading-relaxed">
+                                Define named test harness commands to verify agent-generated code (e.g., key: <code>lint</code>, command: <code>npm run lint</code>).
+                            </p>
+
+                            <div className="space-y-3">
+                                {Object.entries(harnesses).map(([name, cmd]) => (
+                                    <div key={name} className="flex gap-2 items-center">
+                                        <div className="flex-1 font-mono text-xs bg-black/40 border border-white/10 rounded-lg p-2 text-white truncate">
+                                            <span className="text-cyan-400">{name}</span>: <span className="text-slate-300">{cmd}</span>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const copy = { ...harnesses };
+                                                delete copy[name];
+                                                setHarnesses(copy);
+                                            }}
+                                            className="p-2 text-slate-500 hover:text-ruby-400 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 shrink-0"
+                                            title="Delete harness"
+                                        >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                ))}
+
+                                <div className="border-t border-white/5 pt-3 flex gap-2">
+                                    <input
+                                        type="text"
+                                        placeholder="Name"
+                                        id="new-harness-name"
+                                        className="w-1/3 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Command"
+                                        id="new-harness-cmd"
+                                        className="flex-1 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const nameEl = document.getElementById('new-harness-name') as HTMLInputElement;
+                                            const cmdEl = document.getElementById('new-harness-cmd') as HTMLInputElement;
+                                            if (nameEl && cmdEl) {
+                                                const name = nameEl.value.trim();
+                                                const cmd = cmdEl.value.trim();
+                                                if (name && cmd) {
+                                                    setHarnesses(prev => ({ ...prev, [name]: cmd }));
+                                                    nameEl.value = '';
+                                                    cmdEl.value = '';
+                                                }
+                                            }
+                                        }}
+                                        className="px-3 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors flex items-center gap-1 font-semibold shrink-0"
+                                    >
+                                        <Plus className="w-3 h-3" /> Add
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -1521,6 +1678,133 @@ export default function ProjectSettingsView({
                                     </div>
                                 ))}
                             </div>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fadeIn">
+                        {/* Memory Entries List */}
+                        <div className="md:col-span-2 space-y-4">
+                            <div className="glass-panel p-6 rounded-xl space-y-4">
+                                <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                    <Brain className="w-4 h-4 text-violet-400" /> Project Context Memory
+                                </h3>
+                                <p className="text-xs text-slate-400 leading-relaxed">
+                                    This memory stores context, instructions, and lessons learned from past runs. These entries are automatically injected into the agent's prompts for this project.
+                                </p>
+
+                                {isMemoriesLoading ? (
+                                    <div className="flex items-center justify-center py-8">
+                                        <RotateCw className="w-6 h-6 text-cyan-400 animate-spin" />
+                                    </div>
+                                ) : memories.length === 0 ? (
+                                    <div className="text-center py-12 border border-dashed border-white/10 rounded-xl bg-black/20">
+                                        <Brain className="w-8 h-8 text-slate-600 mx-auto mb-3" />
+                                        <p className="text-sm font-medium text-slate-400">No memory entries found</p>
+                                        <p className="text-xs text-slate-500 mt-1">Manual additions or feedback captured from gate re-runs will appear here.</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4 max-h-[600px] overflow-y-auto pr-1">
+                                        {memories.map((entry) => (
+                                            <div key={entry.id} className="p-4 rounded-xl border border-white/5 bg-[#0a0c10]/60 backdrop-blur-md flex flex-col relative group hover:border-white/10 transition-all">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className="font-mono text-xs font-bold text-white max-w-[70%] truncate">
+                                                        {entry.key}
+                                                    </span>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`px-2 py-0.5 text-[9px] font-mono rounded-full ${
+                                                            entry.source === 'human' 
+                                                                ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400' 
+                                                                : 'bg-violet-500/10 border border-violet-500/20 text-violet-400'
+                                                        }`}>
+                                                            {entry.source.toUpperCase()}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleEditMemoryClick(entry)}
+                                                            className="p-1 rounded text-slate-400 hover:text-cyan-400 hover:bg-white/5 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                                            title="Edit entry"
+                                                        >
+                                                            <Edit className="w-3.5 h-3.5" />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteMemory(entry.id)}
+                                                            className="p-1 rounded text-slate-400 hover:text-ruby-400 hover:bg-white/5 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                                            title="Delete entry"
+                                                        >
+                                                            <Trash2 className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div className="text-xs text-slate-300 font-mono bg-black/40 border border-white/5 rounded-lg p-2.5 whitespace-pre-wrap leading-relaxed">
+                                                    {entry.value}
+                                                </div>
+                                                <div className="mt-2 text-[10px] text-slate-500 flex justify-between">
+                                                    <span>Confidence: {(entry.confidence * 100).toFixed(0)}%</span>
+                                                    <span>Updated: {new Date(entry.updated_at).toLocaleString()}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Add/Edit Memory Form */}
+                        <div className="space-y-4">
+                            <form onSubmit={handleSaveMemory} className="glass-panel p-5 rounded-xl border border-white/10 space-y-4">
+                                <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                    {editingMemory ? <Edit className="w-4 h-4 text-cyan-400" /> : <Plus className="w-4 h-4 text-cyan-400" />}
+                                    {editingMemory ? 'Edit Memory' : 'Add Memory'}
+                                </h3>
+
+                                <div>
+                                    <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Memory Key</label>
+                                    <input 
+                                        type="text" 
+                                        value={newMemKey} 
+                                        onChange={e => setNewMemKey(e.target.value)}
+                                        placeholder="e.g. build_warning_fix"
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-xs text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600"
+                                        disabled={!!editingMemory}
+                                    />
+                                    {editingMemory && <p className="text-[10px] text-slate-500 mt-1">Keys cannot be changed after creation.</p>}
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Memory Value / Context</label>
+                                    <textarea 
+                                        value={newMemVal} 
+                                        onChange={e => setNewMemVal(e.target.value)}
+                                        placeholder="Enter context, instructions or fixes..."
+                                        rows={8}
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-xs text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600 resize-none"
+                                    />
+                                </div>
+
+                                {memError && (
+                                    <p className="text-xs text-ruby-400 bg-ruby-500/10 border border-ruby-500/20 rounded p-2">{memError}</p>
+                                )}
+
+                                <div className="flex gap-2 justify-end pt-2">
+                                    {editingMemory && (
+                                        <button 
+                                            type="button"
+                                            onClick={handleCancelEdit} 
+                                            className="px-4 py-2 text-xs bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all"
+                                        >
+                                            Cancel
+                                        </button>
+                                    )}
+                                    <button 
+                                        type="submit"
+                                        className="px-4 py-2 text-xs bg-cyan-600 hover:bg-cyan-500 text-white font-semibold rounded-lg transition-all flex items-center gap-1.5"
+                                    >
+                                        <Save className="w-3.5 h-3.5" />
+                                        {editingMemory ? 'Save Changes' : 'Add Entry'}
+                                    </button>
+                                </div>
+                            </form>
                         </div>
                     </div>
                 )}

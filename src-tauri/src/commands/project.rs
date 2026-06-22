@@ -392,3 +392,57 @@ pub fn resolve_repo_dir(
         .ok_or_else(|| format!("Project not found: {}", project_id))?;
     resolve_target_dir(&app, &ctx.exec, &project, &project_id, &repo_path)
 }
+
+#[tauri::command]
+pub fn project_memory_list(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+) -> Result<Vec<crate::domain::memory::ProjectMemoryEntry>, String> {
+    ctx.memory.memory_list(&ProjectId::from(project_id), 100)
+}
+
+#[tauri::command]
+pub fn project_memory_upsert(
+    ctx: State<'_, AppContext>,
+    id: Option<String>,
+    project_id: String,
+    key: String,
+    value: String,
+    source: String,
+) -> Result<(), String> {
+    let now = paths::now_ms();
+    let source_enum = match source.as_str() {
+        "agent" => crate::domain::memory::MemorySource::Agent,
+        _ => crate::domain::memory::MemorySource::Human,
+    };
+
+    let resolved_id = if let Some(existing_id) = id {
+        existing_id
+    } else {
+        let existing = ctx
+            .memory
+            .memory_list(&ProjectId::from(project_id.clone()), 100)?;
+        if let Some(found) = existing.iter().find(|e| e.key == key) {
+            found.id.clone()
+        } else {
+            format!("pm-{}", paths::new_id())
+        }
+    };
+
+    let entry = crate::domain::memory::ProjectMemoryEntry {
+        id: resolved_id,
+        project_id: ProjectId::from(project_id),
+        key,
+        value,
+        source: source_enum,
+        confidence: 1.0,
+        created_at: now,
+        updated_at: now,
+    };
+    ctx.memory.memory_upsert(entry)
+}
+
+#[tauri::command]
+pub fn project_memory_delete(ctx: State<'_, AppContext>, id: String) -> Result<(), String> {
+    ctx.memory.memory_delete(&id)
+}

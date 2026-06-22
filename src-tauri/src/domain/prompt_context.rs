@@ -237,4 +237,14 @@ mod tests {
         // This test documents the current behaviour (first-set-wins via Vec order).
         assert_eq!(result, "first");
     }
+
+    #[test]
+    fn renders_project_memory_markdown() {
+        let memory_md = "- **test_key**: test_value (Source: Human)\n- **other_key**: other_value (Source: Agent)\n";
+        let result = PromptContext::new()
+            .set("project_memory", memory_md)
+            .render("Memory list:\n{{project_memory}}");
+
+        assert_eq!(result, "Memory list:\n- **test_key**: test_value (Source: Human)\n- **other_key**: other_value (Source: Agent)\n");
+    }
 }

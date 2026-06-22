@@ -109,6 +109,7 @@ pub(crate) fn build_base_ctx(
     build_cmd: &str,
     coverage_cmd: &str,
     conventions_content: &str,
+    project_memory: &str,
 ) -> PromptContext {
     PromptContext::new()
         .set("feature_description", description)
@@ -119,6 +120,7 @@ pub(crate) fn build_base_ctx(
         .set("build_command", build_cmd)
         .set("coverage_command", coverage_cmd)
         .set("project_conventions", conventions_content)
+        .set("project_memory", project_memory)
 }
 
 const MAX_SLUG_LEN: usize = 50;
@@ -161,6 +163,7 @@ pub(crate) fn fetch_default_settings() -> ProjectSettings {
             coverage_command: None,
             conventions_file: None,
             pr_template: None,
+            harnesses: None,
         },
         conflict_policy: "always_gate".to_string(),
         feature_lifecycle: "archive".to_string(),

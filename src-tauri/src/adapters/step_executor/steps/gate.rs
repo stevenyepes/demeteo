@@ -99,6 +99,25 @@ impl ExecutionDriver {
         match gate_res {
             Some(Ok(decision_recvd)) => match decision_recvd.decision.as_deref() {
                 Some("approve") => {
+                    if let Some(ref fb) = decision_recvd.feedback {
+                        let cleaned = fb.trim();
+                        if !cleaned.is_empty() {
+                            if let Ok(Some(feature)) = self.features.get(&self.f_id) {
+                                let entry = crate::domain::memory::ProjectMemoryEntry {
+                                    id: format!("mem-{}", paths::now_ms()),
+                                    project_id: feature.project_id.clone(),
+                                    key: format!("feedback_{}", step_exec.step_id.0),
+                                    value: cleaned.to_string(),
+                                    source: crate::domain::memory::MemorySource::Human,
+                                    confidence: 1.0,
+                                    created_at: paths::now_ms(),
+                                    updated_at: paths::now_ms(),
+                                };
+                                let _ = self.memory.memory_upsert(entry);
+                            }
+                        }
+                    }
+
                     let wall = step_start.elapsed().as_secs();
                     let _ = self.features.step_update(
                         &step_exec.id,
@@ -123,17 +142,38 @@ impl ExecutionDriver {
                 }
                 Some("cancel") => StepOutcome::Failed("Gate Cancelled".to_string()),
                 Some("redirect") => {
-                    let target = decision_recvd
-                        .feedback
-                        .clone()
-                        .and_then(|s| if s.is_empty() { None } else { Some(s) })
-                        .unwrap_or_else(|| {
-                            _step_conf
-                                .on_failure
-                                .as_ref()
-                                .map(|id| id.0.clone())
-                                .unwrap_or_default()
-                        });
+                    let mut target = None;
+                    if let Some(ref fb) = decision_recvd.feedback {
+                        let cleaned = fb.trim();
+                        if !cleaned.is_empty() {
+                            if self.steps.iter().any(|s| s.id.0 == cleaned) {
+                                target = Some(cleaned.to_string());
+                            } else {
+                                // Write to project memory since it's human instruction feedback, not a target step ID
+                                if let Ok(Some(feature)) = self.features.get(&self.f_id) {
+                                    let entry = crate::domain::memory::ProjectMemoryEntry {
+                                        id: format!("mem-{}", paths::now_ms()),
+                                        project_id: feature.project_id.clone(),
+                                        key: format!("feedback_{}", step_exec.step_id.0),
+                                        value: cleaned.to_string(),
+                                        source: crate::domain::memory::MemorySource::Human,
+                                        confidence: 1.0,
+                                        created_at: paths::now_ms(),
+                                        updated_at: paths::now_ms(),
+                                    };
+                                    let _ = self.memory.memory_upsert(entry);
+                                }
+                            }
+                        }
+                    }
+
+                    let target = target.unwrap_or_else(|| {
+                        _step_conf
+                            .on_failure
+                            .as_ref()
+                            .map(|id| id.0.clone())
+                            .unwrap_or_default()
+                    });
                     if let Some(target_idx) = self.steps.iter().position(|s| s.id.0 == target) {
                         StepOutcome::RedirectTo(target_idx)
                     } else {

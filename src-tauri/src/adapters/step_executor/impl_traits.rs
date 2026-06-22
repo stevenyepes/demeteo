@@ -148,6 +148,22 @@ impl DagStepExecutor {
             .map(|r| r.repo_path.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        let memories = self
+            .memory
+            .memory_list(&project_id_typed, 100)
+            .unwrap_or_default();
+        let mut memory_md = String::new();
+        for m in memories {
+            let source_label = match m.source {
+                crate::domain::memory::MemorySource::Agent => "Agent",
+                crate::domain::memory::MemorySource::Human => "Human",
+            };
+            memory_md.push_str(&format!(
+                "- **{}**: {} (Source: {})\n",
+                m.key, m.value, source_label
+            ));
+        }
+
         let base_ctx = build_base_ctx(
             description,
             &slug,
@@ -157,11 +173,14 @@ impl DagStepExecutor {
             &build_cmd,
             &coverage_cmd,
             &conventions_content,
+            &memory_md,
         );
 
         let driver = ExecutionDriver {
             features: self.features.clone(),
             gates: self.gates.clone(),
+            projects: self.projects.clone(),
+            memory: self.memory.clone(),
             notif: self.notif.clone(),
             registry: self.registry.clone(),
             agent_exec: self.agent_exec.clone(),

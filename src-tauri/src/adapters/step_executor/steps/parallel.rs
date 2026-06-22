@@ -1100,6 +1100,41 @@ impl ExecutionDriver {
             return StepOutcome::Failed(step_err_msg);
         }
 
+        // Run verifier check if configured on the parallel step
+        if let Some(ref verifier_cfg) = step_conf.verifier {
+            let agent_kind = step_conf
+                .agent_kind
+                .clone()
+                .unwrap_or_else(|| "opencode".to_string());
+            let feature = self.features.get(&self.f_id).ok().flatten();
+            let override_model = feature.as_ref().and_then(|f| f.model.clone());
+            let machine_str = self
+                .machine_id_opt
+                .clone()
+                .unwrap_or_else(|| "local".to_string());
+
+            if let Err(verdict_err) = self
+                .run_verifier_logic(
+                    step_exec,
+                    verifier_cfg,
+                    &self.target_dir,
+                    &[], // no explicit artifacts list, verifier checks workspace
+                    accumulated_cost,
+                    step_start,
+                    &agent_kind,
+                    &override_model,
+                    &machine_str,
+                )
+                .await
+            {
+                let _ = self
+                    .registry
+                    .kill(&format!("{}-verifier", self.f_id.as_str()))
+                    .await;
+                return StepOutcome::Failed(verdict_err);
+            }
+        }
+
         // Write parallel step artifact summary
         let (artifact_path, artifact_paths) = if !is_legacy {
             // Synthesise a single unified code-diff against the

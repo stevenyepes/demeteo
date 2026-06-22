@@ -85,6 +85,7 @@ pub fn seed_starter_workflows(workflows: &Arc<dyn WorkflowRepository>) {
                         is_starter,
                         created_at: now,
                         updated_at: now,
+                        schedule: None,
                     };
                     let _ = workflows.create(workflow);
                     let version = WorkflowVersion {
@@ -118,6 +119,7 @@ pub struct WorkflowWithSteps {
     pub steps: Vec<StepConfig>,
     pub version: u32,
     pub version_id: String,
+    pub schedule: Option<crate::domain::models::WorkflowSchedule>,
 }
 
 #[tauri::command]
@@ -143,6 +145,7 @@ pub async fn workflow_list(ctx: State<'_, AppContext>) -> Result<Vec<WorkflowWit
             steps,
             version,
             version_id,
+            schedule: w.schedule.clone(),
         });
     }
     Ok(result)
@@ -173,6 +176,7 @@ pub async fn workflow_get(
         steps,
         version,
         version_id,
+        schedule: w.schedule.clone(),
     })
 }
 
@@ -195,6 +199,7 @@ pub async fn workflow_create(
         is_starter: false,
         created_at: now,
         updated_at: now,
+        schedule: None,
     };
     workflows.create(workflow)?;
 
@@ -219,6 +224,7 @@ pub async fn workflow_create(
         steps,
         version: 1,
         version_id: version_id.0,
+        schedule: None,
     })
 }
 
@@ -234,6 +240,7 @@ pub async fn workflow_update(
     let workflows = &ctx.workflows;
     let now = paths::now_ms();
     let wf_id = WorkflowId::from(workflow_id.clone());
+    let w = workflows.get(&wf_id)?.ok_or("Workflow not found")?;
     workflows.update_meta(&wf_id, &name, &description)?;
 
     // Calculate next version number
@@ -261,11 +268,12 @@ pub async fn workflow_update(
         name,
         description,
         is_starter: false,
-        created_at: now,
+        created_at: w.created_at,
         updated_at: now,
         steps,
         version: next_version,
         version_id: version_id.0,
+        schedule: w.schedule,
     })
 }
 
@@ -336,6 +344,7 @@ pub async fn workflow_import(
         is_starter: false,
         created_at: now,
         updated_at: now,
+        schedule: None,
     };
     workflows.create(workflow)?;
     let version_id = WorkflowVersionId::from(format!("{}-v1", id.as_str()));
@@ -359,6 +368,7 @@ pub async fn workflow_import(
         steps,
         version: 1,
         version_id: version_id.0,
+        schedule: None,
     })
 }
 
@@ -420,9 +430,28 @@ pub async fn workflow_revert_to_default(
                     steps,
                     version: next_version,
                     version_id: version_id.0,
+                    schedule: w.schedule.clone(),
                 });
             }
         }
     }
     Err("Starter pack source not found for this workflow id.".to_string())
+}
+
+#[tauri::command]
+pub async fn workflow_save_schedule(
+    workflow_id: String,
+    schedule: Option<crate::domain::models::WorkflowSchedule>,
+    ctx: State<'_, AppContext>,
+) -> Result<(), String> {
+    let wf_id = WorkflowId::from(workflow_id);
+    let mut schedule_to_save = schedule;
+    if let Some(ref mut s) = schedule_to_save {
+        if s.next_run_at.is_none() {
+            let now_secs = crate::paths::now_ms() / 1000;
+            s.next_run_at = crate::adapters::scheduler::calculate_next_run(&s.cron, now_secs);
+        }
+    }
+    ctx.workflows.update_schedule(&wf_id, schedule_to_save)?;
+    Ok(())
 }

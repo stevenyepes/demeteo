@@ -77,6 +77,10 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
     const [activeRepoPath, setActiveRepoPath] = useState<string>('');
 
+    useEffect(() => {
+        setActiveTab('pipelines');
+    }, [activeProject.id]);
+
     // Repositories and Workflows integration
     const [repositories, setRepositories] = useState<any[]>([]);
     const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
@@ -503,24 +507,26 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                 </div>
 
                 {/* Tabs Selector */}
-                <div className="tabs-bar shrink-0">
-                    <button
-                        onClick={() => setActiveTab('pipelines')}
-                        className={`tab ${activeTab === 'pipelines' ? 'active' : ''}`}
-                    >
-                        <Sliders className="w-3.5 h-3.5" />
-                        <span>Pipelines</span>
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('terminal')}
-                        className={`tab ${activeTab === 'terminal' ? 'active' : ''}`}
-                    >
-                        <Terminal className="w-3.5 h-3.5" />
-                        <span>Terminal</span>
-                    </button>
-                </div>
+                {activeProject.compute_type === 'remote' && (
+                    <div className="tabs-bar shrink-0">
+                        <button
+                            onClick={() => setActiveTab('pipelines')}
+                            className={`tab ${activeTab === 'pipelines' ? 'active' : ''}`}
+                        >
+                            <Sliders className="w-3.5 h-3.5" />
+                            <span>Pipelines</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('terminal')}
+                            className={`tab ${activeTab === 'terminal' ? 'active' : ''}`}
+                        >
+                            <Terminal className="w-3.5 h-3.5" />
+                            <span>Terminal</span>
+                        </button>
+                    </div>
+                )}
 
-                {activeTab === 'pipelines' ? (
+                {activeTab === 'pipelines' || activeProject.compute_type !== 'remote' ? (
                     <div className="flex-1 overflow-y-auto space-y-8 pr-1 min-h-0">
                         {/* Start Feature Expanded Card */}
                 <div className={`glass-panel rounded-2xl overflow-hidden transition-[padding] duration-300 ${isExpanded ? 'p-6' : 'p-2 relative group'}`}>
@@ -580,6 +586,11 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                                     <span className="px-2 py-0.5 rounded bg-violet-500/20 border border-violet-500/30 text-violet-300 font-medium font-outfit">
                                                         {selectedWorkflow.name}
                                                     </span>
+                                                    {selectedWorkflow.schedule && (
+                                                        <span className="px-2 py-0.5 rounded bg-violet-500/25 border border-violet-500/40 text-violet-300 text-[10px] font-medium font-outfit flex items-center gap-1">
+                                                            <Clock className="w-3 h-3 text-violet-400" /> Scheduled: {selectedWorkflow.schedule.cron}
+                                                        </span>
+                                                    )}
                                                     {userOverriddenWorkflow && (
                                                         <span className="text-[10px] text-slate-500">(custom override)</span>
                                                     )}
@@ -645,7 +656,9 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                                         className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500/50"
                                                     >
                                                         {workflows.map(wf => (
-                                                            <option key={wf.id} value={wf.id}>{wf.name} ({wf.is_starter ? 'Starter' : 'Custom'})</option>
+                                                            <option key={wf.id} value={wf.id}>
+                                                              {wf.name} ({wf.is_starter ? 'Starter' : 'Custom'}){wf.schedule ? ' ⏰' : ''}
+                                                            </option>
                                                         ))}
                                                     </select>
                                                 </div>

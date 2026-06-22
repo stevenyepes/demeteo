@@ -122,6 +122,7 @@ pub fn run() {
             let gates_repo: Arc<dyn crate::ports::db::GateRepository> = db_adapter.clone();
             let app_settings_repo: Arc<dyn crate::ports::db::AppSettingsRepository> =
                 db_adapter.clone();
+            let memory_repo: Arc<dyn crate::ports::memory::ProjectMemoryPort> = db_adapter.clone();
             let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter;
 
             commands::workflows::seed_starter_workflows(&workflows_repo);
@@ -176,6 +177,7 @@ pub fn run() {
                     workflows_repo.clone(),
                     gates_repo.clone(),
                     app_settings_repo.clone(),
+                    memory_repo.clone(),
                     agent_registry.clone(),
                     notif_adapter.clone(),
                     agent_exec.clone(),
@@ -187,6 +189,12 @@ pub fn run() {
                 exec
             };
 
+            // Start workflow scheduler background task
+            adapters::scheduler::start_scheduler(
+                workflows_repo.clone(),
+                step_executor_adapter.clone(),
+            );
+
             app.manage(AppContext {
                 machines: machines_repo.clone(),
                 threads: threads_repo.clone(),
@@ -195,6 +203,7 @@ pub fn run() {
                 workflows: workflows_repo.clone(),
                 gates: gates_repo.clone(),
                 app_settings: app_settings_repo.clone(),
+                memory: memory_repo,
                 exec: exec_inner,
                 agent_exec,
                 notif: notif_adapter,
@@ -299,6 +308,9 @@ pub fn run() {
             commands::project::get_workspace_health,
             commands::project::get_project_by_id,
             commands::project::resolve_repo_dir,
+            commands::project::project_memory_list,
+            commands::project::project_memory_upsert,
+            commands::project::project_memory_delete,
             commands::features::fetch_active_features,
             commands::features::start_feature,
             commands::features::feature_pause,
@@ -320,6 +332,7 @@ pub fn run() {
             commands::workflows::workflow_export,
             commands::workflows::workflow_import,
             commands::workflows::workflow_revert_to_default,
+            commands::workflows::workflow_save_schedule,
             commands::bootstrap::bootstrap_project,
             commands::bootstrap::get_proposed_strategy,
             commands::bootstrap::save_project_settings,

@@ -385,6 +385,30 @@ impl ExecutionDriver {
                         &format!("feat({}): {}", self.f_id.as_str(), step_conf.title),
                     );
 
+                    // Run verifier check if configured
+                    if let Some(ref verifier_cfg) = step_conf.verifier {
+                        if let Err(verdict_err) = self
+                            .run_verifier_logic(
+                                step_exec,
+                                verifier_cfg,
+                                &wt_path,
+                                &produced_artifacts,
+                                accumulated_cost,
+                                step_start,
+                                &agent_kind,
+                                &override_model,
+                                &machine_str,
+                            )
+                            .await
+                        {
+                            let _ = self
+                                .registry
+                                .kill(&format!("{}-verifier", self.f_id.as_str()))
+                                .await;
+                            return StepOutcome::Failed(verdict_err);
+                        }
+                    }
+
                     // Merge subtask branch back.
                     let mut merge_result = self.git_ops.merge_subtask(
                         self.machine_id_opt.as_deref(),
@@ -670,6 +694,10 @@ impl ExecutionDriver {
         );
 
         let _ = self.registry.kill(self.f_id.as_str()).await;
+        let _ = self
+            .registry
+            .kill(&format!("{}-verifier", self.f_id.as_str()))
+            .await;
 
         outcome
     }

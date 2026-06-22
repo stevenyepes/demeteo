@@ -54,6 +54,8 @@ pub struct AppContext {
     pub gates: Arc<dyn GateRepository>,
     /// App-wide settings: provider instances, app-session KV, first-launch flags.
     pub app_settings: Arc<dyn AppSettingsRepository>,
+    /// Project memory persistence.
+    pub memory: Arc<dyn crate::ports::memory::ProjectMemoryPort>,
 
     /// Process + filesystem execution port (local subprocess or remote SSH).
     pub exec: Arc<dyn ExecutionPort>,

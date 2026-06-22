@@ -35,8 +35,8 @@ use crate::domain::ids::{
 };
 use crate::domain::models::{
     AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Project, ProjectSettings,
-    ProviderInstance, Repository, StepExecution, ThreadSession, Workflow, WorkflowVersion,
-    WorkingMemoryEntry,
+    ProviderInstance, Repository, StepExecution, ThreadSession, Workflow, WorkflowSchedule,
+    WorkflowVersion, WorkingMemoryEntry,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,6 +223,17 @@ pub trait WorkflowRepository: Send + Sync {
     fn versions(&self, workflow_id: &WorkflowId) -> Result<Vec<WorkflowVersion>, String>;
     /// Used by the first-launch seed step.
     fn count(&self) -> Result<u32, String>;
+    fn update_schedule(
+        &self,
+        id: &WorkflowId,
+        schedule: Option<WorkflowSchedule>,
+    ) -> Result<(), String>;
+    fn update_schedule_next_run(
+        &self,
+        id: &WorkflowId,
+        next_run_at: Option<i64>,
+    ) -> Result<(), String>;
+    fn list_scheduled(&self) -> Result<Vec<Workflow>, String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -222,6 +222,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       let hasFailed = false;
       let isRunning = false;
       let hasInterrupted = false;
+      let isVerifying = false;
 
       for (const s of list) {
         totalCost += s.cost_usd || 0.0;
@@ -230,6 +231,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         if (s.status === 'failed') hasFailed = true;
         if (s.status === 'running') isRunning = true;
         if (s.status === 'interrupted') hasInterrupted = true;
+        if (s.status === 'verifying') isVerifying = true;
       }
 
       setCost(totalCost);
@@ -240,6 +242,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       else if (hasFailed) setStatus('failed');
       else if (hasInterrupted) setStatus('cancelled');
       else if (isRunning) setStatus('running');
+      else if (isVerifying) setStatus('verifying');
       else if (list.every(s => s.status === 'completed')) setStatus('completed');
 
       setError(null);
@@ -403,6 +406,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
               className={`text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
                 status === 'running'
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 animate-pulse'
+                  : status === 'verifying'
+                  ? 'bg-violet-500/10 text-violet-400 border-violet-500/20 animate-pulse shadow-[0_0_10px_rgba(139,92,246,0.2)]'
                   : status === 'gated'
                   ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
                   : status === 'completed'
@@ -425,7 +430,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
             <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Cost</div>
             <div className="text-lg font-bold font-mono text-cyan-400">${cost.toFixed(3)}</div>
           </div>
-          {status === 'running' && (
+          {(status === 'running' || status === 'verifying') && (
             <button
               onClick={handleCancelFeature}
               className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300"
@@ -497,6 +502,9 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                 } else if (step.status === 'running') {
                   icon = <Cpu className="w-4 h-4 text-cyan-400 animate-spin" />;
                   statusBg = 'border-cyan-500/30 bg-cyan-950/10 shadow-[0_0_15px_rgba(6,182,212,0.05)]';
+                } else if (step.status === 'verifying') {
+                  icon = <RefreshCw className="w-4 h-4 text-violet-400 animate-spin" />;
+                  statusBg = 'border-violet-500/30 bg-violet-950/10 shadow-[0_0_15px_rgba(139,92,246,0.05)]';
                 } else if (step.status === 'awaiting_gate') {
                   icon = <ShieldAlert className="w-4 h-4 text-amber-400 animate-bounce" />;
                   statusBg = 'border-amber-500/40 bg-amber-950/10 shadow-[0_0_15px_rgba(245,158,11,0.08)]';
@@ -620,7 +628,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                         );
                       })}
 
-                      {step.status === 'running' && (
+                      {(step.status === 'running' || step.status === 'verifying') && (
                         <div className="mt-3 flex gap-2">
                           <button
                             onClick={() => setActiveStreamId(activeStreamId === step.id ? null : step.id)}

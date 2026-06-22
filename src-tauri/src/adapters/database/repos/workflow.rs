@@ -1,7 +1,7 @@
 use rusqlite::params;
 
-use crate::domain::ids::WorkflowId;
-use crate::domain::models::{Workflow, WorkflowVersion};
+use crate::domain::ids::{ProjectId, WorkflowId};
+use crate::domain::models::{Workflow, WorkflowSchedule, WorkflowVersion};
 use crate::ports::db::WorkflowRepository;
 
 use super::super::SqliteAdapter;
@@ -11,12 +11,31 @@ impl WorkflowRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, description, is_starter, created_at, updated_at
+                "SELECT id, name, description, is_starter, created_at, updated_at,
+                        schedule_cron, schedule_title_template, schedule_next_run_at, schedule_project_id
                  FROM workflows WHERE id=?1",
             )
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
             .query_map(params![id.0], |row| {
+                let cron: Option<String> = row.get(6)?;
+                let title_template: Option<String> = row.get(7)?;
+                let next_run_at: Option<i64> = row.get(8)?;
+                let project_id_str: Option<String> = row.get(9)?;
+
+                let schedule = if let (Some(cron), Some(title_template), Some(p_id)) =
+                    (cron, title_template, project_id_str)
+                {
+                    Some(WorkflowSchedule {
+                        cron,
+                        title_template,
+                        project_id: ProjectId(p_id),
+                        next_run_at,
+                    })
+                } else {
+                    None
+                };
+
                 Ok(Workflow {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -24,6 +43,7 @@ impl WorkflowRepository for SqliteAdapter {
                     is_starter: row.get::<_, i32>(3)? != 0,
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
+                    schedule,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -38,12 +58,31 @@ impl WorkflowRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, description, is_starter, created_at, updated_at
+                "SELECT id, name, description, is_starter, created_at, updated_at,
+                        schedule_cron, schedule_title_template, schedule_next_run_at, schedule_project_id
                  FROM workflows ORDER BY is_starter DESC, created_at ASC",
             )
             .map_err(|e| e.to_string())?;
         let iter = stmt
             .query_map([], |row| {
+                let cron: Option<String> = row.get(6)?;
+                let title_template: Option<String> = row.get(7)?;
+                let next_run_at: Option<i64> = row.get(8)?;
+                let project_id_str: Option<String> = row.get(9)?;
+
+                let schedule = if let (Some(cron), Some(title_template), Some(p_id)) =
+                    (cron, title_template, project_id_str)
+                {
+                    Some(WorkflowSchedule {
+                        cron,
+                        title_template,
+                        project_id: ProjectId(p_id),
+                        next_run_at,
+                    })
+                } else {
+                    None
+                };
+
                 Ok(Workflow {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -51,6 +90,7 @@ impl WorkflowRepository for SqliteAdapter {
                     is_starter: row.get::<_, i32>(3)? != 0,
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
+                    schedule,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -63,16 +103,31 @@ impl WorkflowRepository for SqliteAdapter {
 
     fn create(&self, w: Workflow) -> Result<(), String> {
         let conn = self.conn.lock()?;
+        let (cron, title_template, next_run_at, project_id) = if let Some(ref s) = w.schedule {
+            (
+                Some(s.cron.clone()),
+                Some(s.title_template.clone()),
+                s.next_run_at,
+                Some(s.project_id.0.clone()),
+            )
+        } else {
+            (None, None, None, None)
+        };
         conn.execute(
-            "INSERT INTO workflows (id, name, description, is_starter, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO workflows (id, name, description, is_starter, created_at, updated_at,
+                                    schedule_cron, schedule_title_template, schedule_next_run_at, schedule_project_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 w.id,
                 w.name,
                 w.description,
                 w.is_starter as i32,
                 w.created_at,
-                w.updated_at
+                w.updated_at,
+                cron,
+                title_template,
+                next_run_at,
+                project_id
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -192,5 +247,94 @@ impl WorkflowRepository for SqliteAdapter {
             .query_row("SELECT COUNT(*) FROM workflows", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         Ok(count as u32)
+    }
+
+    fn update_schedule(
+        &self,
+        id: &WorkflowId,
+        schedule: Option<WorkflowSchedule>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        let (cron, title_template, next_run_at, project_id) = if let Some(ref s) = schedule {
+            (
+                Some(s.cron.clone()),
+                Some(s.title_template.clone()),
+                s.next_run_at,
+                Some(s.project_id.0.clone()),
+            )
+        } else {
+            (None, None, None, None)
+        };
+        conn.execute(
+            "UPDATE workflows
+             SET schedule_cron=?2, schedule_title_template=?3, schedule_next_run_at=?4, schedule_project_id=?5
+             WHERE id=?1",
+            params![id.0, cron, title_template, next_run_at, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn update_schedule_next_run(
+        &self,
+        id: &WorkflowId,
+        next_run_at: Option<i64>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        conn.execute(
+            "UPDATE workflows SET schedule_next_run_at=?2 WHERE id=?1",
+            params![id.0, next_run_at],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn list_scheduled(&self) -> Result<Vec<Workflow>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, description, is_starter, created_at, updated_at,
+                        schedule_cron, schedule_title_template, schedule_next_run_at, schedule_project_id
+                 FROM workflows
+                 WHERE schedule_cron IS NOT NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map([], |row| {
+                let cron: Option<String> = row.get(6)?;
+                let title_template: Option<String> = row.get(7)?;
+                let next_run_at: Option<i64> = row.get(8)?;
+                let project_id_str: Option<String> = row.get(9)?;
+
+                let schedule = if let (Some(cron), Some(title_template), Some(p_id)) =
+                    (cron, title_template, project_id_str)
+                {
+                    Some(WorkflowSchedule {
+                        cron,
+                        title_template,
+                        project_id: ProjectId(p_id),
+                        next_run_at,
+                    })
+                } else {
+                    None
+                };
+
+                Ok(Workflow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    is_starter: row.get::<_, i32>(3)? != 0,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                    schedule,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut list = Vec::new();
+        for r in iter {
+            list.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(list)
     }
 }

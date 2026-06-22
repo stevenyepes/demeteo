@@ -7,6 +7,7 @@ pub mod merge;
 pub mod mr_publisher;
 pub mod pricing;
 pub mod router;
+pub mod scheduler;
 pub mod ssh;
 pub mod step_executor;
 pub mod tauri_ui;

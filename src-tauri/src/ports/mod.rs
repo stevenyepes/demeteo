@@ -4,6 +4,7 @@ pub mod artifact_store;
 pub mod conflict;
 pub mod db;
 pub mod execution;
+pub mod memory;
 pub mod merge;
 pub mod mr_publisher;
 pub mod notification;

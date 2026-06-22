@@ -128,6 +128,7 @@ async fn test_executor_instantiation_and_cancel() {
         db.clone(),
         db.clone(),
         db.clone(),
+        db.clone(), // memory
         registry,
         notif,
         agent_exec,
@@ -169,6 +170,7 @@ async fn test_executor_gate_decide() {
         db.clone(),
         db.clone(),
         db.clone(),
+        db.clone(), // memory
         registry,
         notif,
         agent_exec,

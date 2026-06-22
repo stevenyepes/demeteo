@@ -201,6 +201,7 @@ impl GitOpsHelper {
             coverage_command: None,
             conventions_file,
             pr_template,
+            harnesses: None,
         })
     }
 
