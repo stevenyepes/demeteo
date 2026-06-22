@@ -1,4 +1,5 @@
 use crate::domain::models::{Feature, GateDecision, StepExecution};
+use serde::Serialize;
 
 pub trait StepExecutor: Send + Sync {
     /// Start a new feature run.
@@ -32,6 +33,67 @@ pub trait StepExecutor: Send + Sync {
     /// status (completed, failed, interrupted, awaiting_gate, running).
     fn replay_from_step(&self, execution_id: &str, new_model: Option<&str>) -> Result<(), String>;
     fn step_list_for_run(&self, feature_id: &str) -> Result<Vec<StepExecution>, String>;
+
+    /// Sync the feature branch with `origin/<default_branch>`. Returns
+    /// the audit-shaped result so the UI can show a clean merge, no
+    /// changes, or a conflict list. The optional
+    /// `revalidate_step_execution_id` is used after conflict
+    /// resolution: the executor replays that step so the validation
+    /// runs again on the freshly-synced tree.
+    fn feature_sync(
+        &self,
+        feature_id: &str,
+        revalidate_step_execution_id: Option<&str>,
+    ) -> Result<SyncOutcomeView, String>;
+
+    /// Spawn a fresh agent session to resolve the merge conflicts left
+    /// over from `feature_sync`. The agent runs in a temporary
+    /// worktree on the conflicted feature branch, edits the conflict
+    /// files to remove markers, and commits the resolution. After
+    /// committing, the resolution is merged back into the feature
+    /// branch on the main repo. If `revalidate_step_execution_id` is
+    /// provided, the named step is replayed so the workflow's
+    /// validation re-runs on the freshly-merged tree.
+    fn feature_resolve_sync_conflicts(
+        &self,
+        feature_id: &str,
+        conflict_files: &[String],
+        revalidate_step_execution_id: Option<&str>,
+    ) -> Result<SyncOutcomeView, String>;
+}
+
+/// What `feature_sync` and `feature_resolve_sync_conflicts` return to
+/// the UI. Serialized verbatim so the React side can render the
+/// outcome without re-parsing the database.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SyncOutcomeView {
+    /// The merge produced a clean commit (or there was nothing to
+    /// merge from upstream).
+    Ok {
+        merge_commit_sha: String,
+        changed: bool,
+    },
+    /// The merge left the working tree in a conflicted state and no
+    /// resolution was attempted. `conflict_files` is the parsed list
+    /// of unmerged paths.
+    Conflict {
+        conflict_files: Vec<crate::domain::models::ConflictFile>,
+        raw_error: String,
+    },
+    /// A previous conflict was successfully resolved by an agent and
+    /// the feature branch is now clean.
+    Resolved {
+        merge_commit_sha: String,
+        revalidated_step_id: Option<String>,
+    },
+    /// The resolution agent was spawned but failed to clean up the
+    /// conflicts. The user is expected to take over (the working
+    /// tree is still conflicted).
+    ResolutionFailed {
+        reason: String,
+        conflict_files: Vec<crate::domain::models::ConflictFile>,
+    },
 }
 
 pub trait GatePresenter: Send + Sync {

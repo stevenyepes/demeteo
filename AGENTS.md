@@ -80,19 +80,6 @@ Only after completing steps 1–5 may you write or modify code.
 
 ## 2. Tech Stack
 
-### Frontend
-- **React 19** · **TypeScript ~5.8** · **Vite 7**
-- **TailwindCSS v4** (via `@tailwindcss/vite`) — utility classes only, no inline `style=` props
-- **Monaco Editor** (`@monaco-editor/react`) for code views
-- **xterm.js v6** (`@xterm/xterm`) for terminal output
-- **lucide-react** for icons — never import SVGs manually
-- **Tauri v2 API** (`@tauri-apps/api`) for all IPC
-
-### Backend (Rust — `src-tauri/`)
-- **Tauri v2**, **tokio 1 (full)**, **rusqlite 0.31 + refinery 0.8** for migrations
-- **ssh2 0.9** for SSH/SFTP, **keyring 3** for secrets, **reqwest 0.12** for HTTP
-- **thiserror 1** for typed errors — never use `unwrap()` in commands
-
 ### Key constraints
 - `external_directory: "deny"` — agents are scoped to their worktree; never allow FS access outside it
 - Agent integration is **one-shot CLI + JSON only** — no ACP, no JSON-RPC, no tool-call bridge

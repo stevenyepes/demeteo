@@ -13,3 +13,4 @@ pub(crate) enum StepOutcome {
 pub(crate) mod agent;
 pub(crate) mod gate;
 pub(crate) mod parallel;
+pub(crate) mod sync;

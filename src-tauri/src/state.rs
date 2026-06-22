@@ -24,6 +24,7 @@ use crate::ports::db::{
     ThreadRepository, WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
+use crate::ports::merge::MergeExecutor;
 use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::NotificationPort;
 use crate::ports::pricing::PricingTable;
@@ -83,6 +84,11 @@ pub struct AppContext {
     /// so the orchestrator can publish from any code path without
     /// threading the port through every layer.
     pub mr_publisher: Arc<dyn MrPublisher>,
+
+    /// Merge executor — wraps `git merge` for both subtask→feature
+    /// and feature→upstream flows with structured conflict detection
+    /// and an audit trail.
+    pub merge_executor: Arc<dyn MergeExecutor>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

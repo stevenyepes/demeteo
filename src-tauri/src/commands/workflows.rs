@@ -27,6 +27,10 @@ pub fn seed_starter_workflows(workflows: &Arc<dyn WorkflowRepository>) {
             "experiment",
         ),
         (include_str!("../../workflows/ci-fix.json"), "ci-fix"),
+        (
+            include_str!("../../workflows/simple-task.json"),
+            "simple-task",
+        ),
     ];
 
     for (json, _slug) in starters {
@@ -392,6 +396,7 @@ pub async fn workflow_revert_to_default(
         include_str!("../../workflows/refactor.json"),
         include_str!("../../workflows/experiment.json"),
         include_str!("../../workflows/ci-fix.json"),
+        include_str!("../../workflows/simple-task.json"),
     ];
     for json in starters {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {

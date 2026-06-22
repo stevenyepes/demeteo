@@ -1,16 +1,20 @@
 use rusqlite::Connection;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Thin wrapper around `Mutex<Connection>` that provides a clean
-/// `lock()` method returning a structured error.
+/// Thin wrapper around `Arc<Mutex<Connection>>` that provides a
+/// clean `lock()` method returning a structured error. The `Arc`
+/// keeps the connection cheaply cloneable so multiple sub-adapters
+/// (e.g. `SqliteMergeExecutor` and the existing repos) can share a
+/// single underlying handle without opening a second SQLite file.
+#[derive(Clone)]
 pub struct SqliteConnection {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl SqliteConnection {
     pub fn new(conn: Connection) -> Self {
         Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         }
     }
 

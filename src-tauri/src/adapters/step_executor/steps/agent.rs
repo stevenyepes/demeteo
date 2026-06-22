@@ -409,10 +409,10 @@ impl ExecutionDriver {
                         }
                     }
 
-                    // Merge subtask branch back.
+                    // Merge subtask branch back (in the worktree, isolated).
                     let mut merge_result = self.git_ops.merge_subtask(
                         self.machine_id_opt.as_deref(),
-                        &self.target_dir,
+                        &wt_path,
                         &self.branch_name,
                         &subtask_id,
                     );
@@ -565,7 +565,7 @@ impl ExecutionDriver {
                                     if commit_resolved.is_ok() {
                                         merge_result = self.git_ops.merge_subtask(
                                             self.machine_id_opt.as_deref(),
-                                            &self.target_dir,
+                                            &wt_path,
                                             &self.branch_name,
                                             &subtask_id,
                                         );

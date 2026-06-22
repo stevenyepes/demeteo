@@ -121,6 +121,20 @@ async fn test_executor_instantiation_and_cancel() {
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
     );
 
+    let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
+        // The git_ops helper needs an `AppSettingsRepository`; the
+        // adapter also implements that port so we can hand a
+        // second clone of the same Arc to the helper. The merge
+        // executor itself only needs the SQLite connection.
+        let git_ops =
+            crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
+        Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
+            db.conn.clone(),
+            git_ops,
+            exec.clone(),
+        ))
+    };
+
     let executor = DagStepExecutor::new(
         db.clone(),
         db.clone(),
@@ -133,6 +147,7 @@ async fn test_executor_instantiation_and_cancel() {
         notif,
         agent_exec,
         exec,
+        merge_executor,
         artifacts,
         temp_dir.clone(),
     );
@@ -163,6 +178,20 @@ async fn test_executor_gate_decide() {
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
     );
 
+    let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
+        // The git_ops helper needs an `AppSettingsRepository`; the
+        // adapter also implements that port so we can hand a
+        // second clone of the same Arc to the helper. The merge
+        // executor itself only needs the SQLite connection.
+        let git_ops =
+            crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
+        Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
+            db.conn.clone(),
+            git_ops,
+            exec.clone(),
+        ))
+    };
+
     let executor = DagStepExecutor::new(
         db.clone(),
         db.clone(),
@@ -175,6 +204,7 @@ async fn test_executor_gate_decide() {
         notif,
         agent_exec,
         exec,
+        merge_executor,
         artifacts,
         temp_dir.clone(),
     );

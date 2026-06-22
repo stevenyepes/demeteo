@@ -472,6 +472,10 @@ pub struct MergeOutcome {
     pub merge_commit_sha: String,
     pub target_branch: String,
     pub source_branch: String,
+    /// True when the subtask was already an ancestor of the feature
+    /// branch — nothing needed to be merged. The SHA is the feature
+    /// branch tip at the time of the check.
+    pub already_merged: bool,
 }
 
 /// One file in a conflict set. Path is repo-relative.
@@ -496,6 +500,34 @@ pub struct ConflictReport {
     pub raw_error: String,
     /// Detected at: ms-since-epoch. Helps the UI render "X minutes ago".
     pub detected_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+}
+
+/// Result of `MergeExecutor::sync_feature_with_upstream` on a clean
+/// merge. The caller is expected to record the audit row and let
+/// the workflow execution continue.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpstreamSyncOutcome {
+    /// SHA of the merge commit (empty when there was nothing to merge).
+    pub merge_commit_sha: String,
+    /// `false` when `origin/<default>` had no new commits since the
+    /// last sync.
+    pub changed: bool,
+    /// The default branch we synced against.
+    pub default_branch: String,
+}
+
+/// Result of a failed upstream sync — the merge left the working
+/// tree in a conflicted state. Same `ConflictReport` shape as the
+/// subtask merge failure so the cascade has a uniform input.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpstreamSyncFailure {
+    pub report: ConflictReport,
+    /// Path to the sync worktree where the conflict lives (if one was
+    /// provisioned). `None` when the sync was aborted before a working
+    /// tree was needed.
+    pub worktree_path: Option<String>,
 }
 
 /// Per-project setting that controls how a merge conflict is

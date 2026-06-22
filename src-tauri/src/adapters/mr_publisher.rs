@@ -199,6 +199,25 @@ impl MrPublisher for HttpMrPublisher {
             .map(|m| m.as_str())
             .unwrap_or("local");
 
+        // Update remote URL with the fresh PAT so token rotation during
+        // a feature's lifetime doesn't cause authentication failure on push.
+        let remote_url = if provider.kind.to_lowercase() == "github" {
+            format!(
+                "https://x-access-token:{}@{}/{}",
+                pat, provider.host, repo_path
+            )
+        } else {
+            format!("https://oauth2:{}@{}/{}", pat, provider.host, repo_path)
+        };
+        let set_url_cmd = format!(
+            "git -C {} remote set-url origin {}",
+            crate::paths::shell_escape_posix(&target_dir),
+            crate::paths::shell_escape_posix(&remote_url)
+        );
+        self.exec
+            .run_command(machine_str, &set_url_cmd)
+            .map_err(|e| format!("Failed to update remote origin URL: {}", e))?;
+
         // Push the local feature branch to origin remote before creating MR.
         // We use `-f` to force push so subsequent publish_mr calls can update
         // the remote branch if the feature was retried/replayed.
@@ -244,12 +263,16 @@ impl MrPublisher for HttpMrPublisher {
 
         // Persist the URL + state on the feature so subsequent
         // publish_mr calls are idempotent and the UI can show the
-        // MR link without a second round-trip.
+        // MR link without a second round-trip. If the feature was
+        // sitting in `awaiting_mr` (i.e. all steps done but MR not
+        // yet published), promote it to `completed` now that the MR
+        // is on the provider.
         let _ = self.features.update(
             feature_id,
             &FeaturePatch {
                 mr_url: Some(Some(info.url.clone())),
                 mr_state: Some(Some(info.state.clone())),
+                status: Some("completed".to_string()),
                 ..Default::default()
             },
         );
@@ -258,16 +281,151 @@ impl MrPublisher for HttpMrPublisher {
     }
 
     fn fetch_mr_state(&self, project_id: &str, mr_url: &str) -> Result<String, String> {
-        let _ = project_id;
-        let _ = mr_url;
-        // Best-effort state refresh. Without parsing the URL we
-        // can't know whether this is a GitHub PR or GitLab MR; the
-        // full implementation would do an HTTP GET and return the
-        // provider's `state` field. The first version returns
-        // "open" so the UI has something to render — the user can
-        // click through to the URL for the authoritative state.
-        Ok("open".to_string())
+        if mr_url.is_empty() {
+            return Ok("none".to_string());
+        }
+
+        // Resolve the project's provider to know which URL shape /
+        // auth header to use. Falls back to URL-shape inference when
+        // no provider is configured (offline / cancelled-installation
+        // project) — `none` is returned so the UI doesn't have to
+        // special-case missing config.
+        let pid = crate::domain::ids::ProjectId::from(project_id.to_string());
+        let repos = self.projects.get_repositories_for(&pid).ok();
+        let provider = repos
+            .as_ref()
+            .and_then(|rs| rs.first())
+            .and_then(|_r| self.app_settings.get_provider_instances().ok())
+            .and_then(|list| {
+                let repo_kind = match repos
+                    .as_ref()
+                    .and_then(|rs| rs.first())
+                    .map(|r| r.provider_id.0.as_str())
+                    .unwrap_or("")
+                {
+                    h if h.starts_with("github") => "github",
+                    h if h.starts_with("gitlab") => "gitlab",
+                    _ => "",
+                };
+                if repo_kind.is_empty() {
+                    None
+                } else {
+                    list.into_iter().find(|p| p.kind == repo_kind)
+                }
+            });
+
+        // Pick the HTTP client (test override or production reqwest).
+        let http: &dyn HttpClient = match self.http_override.as_ref() {
+            Some(arc) => arc.as_ref(),
+            None => &ReqwestHttp,
+        };
+
+        match provider {
+            Some(p) if p.kind == "github" => fetch_github_pr_state(http, &p.host, mr_url),
+            Some(p) if p.kind == "gitlab" => fetch_gitlab_mr_state(http, &p.host, mr_url),
+            _ => Ok("open".to_string()),
+        }
     }
+}
+
+/// Pull the current state of a GitHub PR. The MR URL is the user-facing
+/// `https://github.com/<owner>/<repo>/pull/<n>` shape; we derive the API
+/// URL from it and hit the public REST endpoint (no PAT needed for
+/// public repos; for private repos the user must have configured the
+/// provider's PAT, but at this point we don't have it cached in
+/// `fetch_mr_state`'s signature — best-effort is fine because the
+/// "open" fallback matches the stub's behavior for offline cases).
+fn fetch_github_pr_state(
+    http: &dyn HttpClient,
+    host: &str,
+    mr_url: &str,
+) -> Result<String, String> {
+    let (owner, repo, number) = parse_github_pr_url(mr_url)?;
+    let url = format!("https://{}/repos/{}/{}/pulls/{}", host, owner, repo, number);
+    let headers: Vec<(String, String)> = vec![
+        (
+            "Accept".to_string(),
+            "application/vnd.github+json".to_string(),
+        ),
+        ("User-Agent".to_string(), "demeteo".to_string()),
+    ];
+    let resp = http.get_json(&url, &headers)?;
+    if resp.status >= 300 {
+        return Ok("open".to_string());
+    }
+    let v: serde_json::Value = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("Failed to parse GitHub PR response: {}", e))?;
+    if v.get("merged").and_then(|m| m.as_bool()).unwrap_or(false) {
+        return Ok("merged".to_string());
+    }
+    Ok(v.get("state")
+        .and_then(|s| s.as_str())
+        .unwrap_or("open")
+        .to_string())
+}
+
+/// Pull the current state of a GitLab MR. Mirrors `fetch_github_pr_state`
+/// for the GitLab API shape.
+fn fetch_gitlab_mr_state(
+    http: &dyn HttpClient,
+    host: &str,
+    mr_url: &str,
+) -> Result<String, String> {
+    let (project_path, iid) = parse_gitlab_mr_url(mr_url)?;
+    let url = format!(
+        "https://{}/api/v4/projects/{}/merge_requests/{}",
+        host,
+        urlencoded(&project_path),
+        iid
+    );
+    let headers: Vec<(String, String)> =
+        vec![("Accept".to_string(), "application/json".to_string())];
+    let resp = http.get_json(&url, &headers)?;
+    if resp.status >= 300 {
+        return Ok("open".to_string());
+    }
+    let v: serde_json::Value = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("Failed to parse GitLab MR response: {}", e))?;
+    Ok(v.get("state")
+        .and_then(|s| s.as_str())
+        .unwrap_or("opened")
+        .to_string())
+}
+
+/// Parse a `https://github.com/<owner>/<repo>/pull/<n>` URL.
+fn parse_github_pr_url(url: &str) -> Result<(String, String, u64), String> {
+    // Strip the scheme + host prefix if present so we can split on `/`.
+    let trimmed = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let parts: Vec<&str> = trimmed.split('/').collect();
+    // Expected: ["github.com", "<owner>", "<repo>", "pull", "<n>"]
+    if parts.len() < 5 || parts[3] != "pull" {
+        return Err(format!("Not a GitHub PR URL: {}", url));
+    }
+    let number: u64 = parts[4]
+        .parse()
+        .map_err(|_| format!("Invalid PR number in URL: {}", url))?;
+    Ok((parts[1].to_string(), parts[2].to_string(), number))
+}
+
+/// Parse a `https://gitlab.com/<group>/<sub>/<project>/-/merge_requests/<iid>` URL.
+fn parse_gitlab_mr_url(url: &str) -> Result<(String, u64), String> {
+    let trimmed = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let marker_idx = trimmed.find("/-/merge_requests/");
+    let path = match marker_idx {
+        Some(i) => &trimmed[..i],
+        None => return Err(format!("Not a GitLab MR URL: {}", url)),
+    };
+    let project_path = path.split_once('/').map(|(_, after)| after).unwrap_or(path);
+    let iid_str = &trimmed[marker_idx.unwrap() + "/-/merge_requests/".len()..];
+    let iid: u64 = iid_str
+        .trim_end_matches(|c: char| !c.is_ascii_digit())
+        .parse()
+        .map_err(|_| format!("Invalid MR iid in URL: {}", url))?;
+    Ok((project_path.to_string(), iid))
 }
 
 #[allow(dead_code)]

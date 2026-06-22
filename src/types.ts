@@ -78,6 +78,47 @@ export interface Feature {
   total_cost: number;
   duration: string;
   created_at: number;
+  agent_kind?: string | null;
+  model?: string | null;
+  /** URL of the published PR/MR, if any. Set by the `MrPublisher`. */
+  mr_url?: string | null;
+  /**
+   * State of the PR/MR on the provider: `none | draft | open | merged | closed`.
+   * `none` → no MR has been published. `open` is the typical "review pending"
+   * state. The UI shows this as a badge on the feature detail.
+   */
+  mr_state?: string | null;
+}
+
+export type MrState = 'none' | 'draft' | 'open' | 'merged' | 'closed';
+
+/** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */
+export type SyncOutcomeView =
+  | {
+      status: 'ok';
+      merge_commit_sha: string;
+      changed: boolean;
+    }
+  | {
+      status: 'conflict';
+      conflict_files: ConflictFile[];
+      raw_error: string;
+    }
+  | {
+      status: 'resolved';
+      merge_commit_sha: string;
+      revalidated_step_id: string | null;
+    }
+  | {
+      status: 'resolution_failed';
+      reason: string;
+      conflict_files: ConflictFile[];
+    };
+
+export interface ConflictFile {
+  path: string;
+  /** "both-modified" | "added-by-them" | "added-by-us" | "deleted-by-them" | "deleted-by-us". */
+  kind: string;
 }
 
 export interface Repository {

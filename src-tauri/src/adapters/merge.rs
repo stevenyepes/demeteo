@@ -13,7 +13,9 @@ use rusqlite::params;
 use crate::adapters::database::SqliteConnection;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{ConflictFile, ConflictReport, MergeOutcome};
+use crate::domain::models::{
+    ConflictFile, ConflictReport, MergeOutcome, UpstreamSyncFailure, UpstreamSyncOutcome,
+};
 use crate::paths;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
@@ -37,8 +39,8 @@ impl SqliteMergeExecutor {
         }
     }
 }
-
 impl MergeExecutor for SqliteMergeExecutor {
+    #[allow(clippy::result_large_err)]
     fn merge_subtask_into_feature(
         &self,
         feature_id: &FeatureId,
@@ -46,60 +48,114 @@ impl MergeExecutor for SqliteMergeExecutor {
         target_branch: &str,
         subtask_run_id: &str,
     ) -> Result<MergeOutcome, ConflictReport> {
-        // 1. Run the existing merge. `GitOpsHelper::merge_subtask`
-        //    requires a `repo_dir` and `subtask_id`; we derive those
-        //    from the source branch name (matches the contract used
-        //    in `steps/parallel.rs`).
-        let (machine_id_opt, repo_dir) = match lookup_repo_context(&self.conn, feature_id) {
-            Ok(v) => v,
+        // 1. Resolve the worktree + repo context from the subtask_run_id.
+        //    The worktree is private to this subtask — no race with other
+        //    pipelines. The repo_dir is still needed for the precheck
+        //    (ref/object operations only, no checkout).
+        let (compute_type, remote_host, project_id, repo_path, wt_path) =
+            match lookup_worktree_context(&self.conn, feature_id, subtask_run_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err(ConflictReport {
+                        source_branch: source_branch.to_string(),
+                        target_branch: target_branch.to_string(),
+                        files: vec![],
+                        raw_error: format!("Failed to resolve worktree context: {}", e),
+                        detected_at: paths::now_ms(),
+                        worktree_path: None,
+                    });
+                }
+            };
+        let machine_id_opt = if compute_type.eq_ignore_ascii_case("local") {
+            None
+        } else {
+            remote_host.clone()
+        };
+        let repo_dir = match paths::repo_target_dir_str(
+            &self.exec,
+            &compute_type,
+            remote_host.as_deref(),
+            &project_id,
+            &repo_path,
+        ) {
+            Ok(dir) => dir,
             Err(e) => {
                 return Err(ConflictReport {
                     source_branch: source_branch.to_string(),
                     target_branch: target_branch.to_string(),
                     files: vec![],
-                    raw_error: format!("Failed to resolve repo context: {}", e),
+                    raw_error: format!("Failed to resolve repo directory: {}", e),
                     detected_at: paths::now_ms(),
+                    worktree_path: None,
                 });
             }
         };
         let subtask_id = extract_subtask_id(source_branch).unwrap_or_else(|| "sub".to_string());
         let machine_str = machine_id_opt.as_deref().unwrap_or("local");
+        let subtask_branch = format!("{}_subtask_{}", target_branch, subtask_id);
+        let now = paths::now_ms();
 
-        // Ensure we're on the target branch before merging.
-        if let Err(e) = self.exec.run_command(
-            machine_str,
-            &format!(
-                "git -C {} checkout {}",
-                shell_escape(&repo_dir),
-                shell_escape(target_branch)
-            ),
-        ) {
-            return Err(ConflictReport {
-                source_branch: source_branch.to_string(),
-                target_branch: target_branch.to_string(),
-                files: vec![],
-                raw_error: format!("Failed to checkout target branch: {}", e),
-                detected_at: paths::now_ms(),
-            });
-        }
-
-        let merge_result = self.git_ops.merge_subtask(
-            machine_id_opt.as_deref(),
+        // 2. Pre-check: already merged?  Uses `merge-base` on remote
+        //    refs — no working tree touched.
+        let precheck = self.git_ops.precheck_merge(
+            Some(machine_str),
             &repo_dir,
             target_branch,
-            &subtask_id,
+            &subtask_branch,
         );
 
-        let now = paths::now_ms();
+        if let Ok(crate::adapters::worktree::git_ops::MergePreCheck::AlreadyMerged) = precheck {
+            let sha = self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "git -C {} rev-parse refs/remotes/origin/{}",
+                        paths::shell_escape_posix(&repo_dir),
+                        paths::shell_escape_posix(target_branch),
+                    ),
+                )
+                .ok()
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let outcome = MergeOutcome {
+                merge_commit_sha: sha,
+                source_branch: source_branch.to_string(),
+                target_branch: target_branch.to_string(),
+                already_merged: true,
+            };
+
+            let _ = record_merge_outcome(
+                &self.conn,
+                subtask_run_id,
+                feature_id,
+                source_branch,
+                target_branch,
+                "ok",
+                Some(&outcome.merge_commit_sha),
+                None,
+                now,
+            );
+
+            return Ok(outcome);
+        }
+
+        // 3. Merge in the worktree (private, no shared-checkout race).
+        let merge_result =
+            self.git_ops
+                .merge_subtask(Some(machine_str), &wt_path, target_branch, &subtask_id);
+
         match merge_result {
             Ok(()) => {
-                // Capture the merge commit SHA. `merge_subtask` already
-                // committed; we just need the HEAD sha.
                 let sha = self
                     .exec
                     .run_command(
                         machine_str,
-                        &format!("git -C {} rev-parse HEAD", shell_escape(&repo_dir)),
+                        &format!(
+                            "git -C {} rev-parse HEAD",
+                            paths::shell_escape_posix(&wt_path)
+                        ),
                     )
                     .ok()
                     .map(|s| s.trim().to_string())
@@ -110,6 +166,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                     merge_commit_sha: sha,
                     source_branch: source_branch.to_string(),
                     target_branch: target_branch.to_string(),
+                    already_merged: false,
                 };
 
                 let _ = record_merge_outcome(
@@ -127,9 +184,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                 Ok(outcome)
             }
             Err(raw_err) => {
-                // Conflict. Inspect `git status` for the actual
-                // unmerged files and record the structured report.
-                let files = list_unmerged_files(self.exec.as_ref(), machine_str, &repo_dir);
+                let files = list_unmerged_files(self.exec.as_ref(), machine_str, &wt_path);
 
                 let report = ConflictReport {
                     source_branch: source_branch.to_string(),
@@ -137,6 +192,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                     files,
                     raw_error: raw_err,
                     detected_at: now,
+                    worktree_path: Some(wt_path.clone()),
                 };
 
                 let json_blob = serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string());
@@ -188,19 +244,203 @@ impl MergeExecutor for SqliteMergeExecutor {
                 .to_string(),
         )
     }
+
+    fn sync_feature_with_upstream(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+        default_branch: &str,
+    ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure> {
+        // Resolve the project / machine / repo dir from the feature row.
+        let (compute_type, remote_host, project_id, repo_path) =
+            match lookup_repo_context(&self.conn, feature_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err(UpstreamSyncFailure {
+                        report: ConflictReport {
+                            source_branch: format!("origin/{}", default_branch),
+                            target_branch: feature_branch.to_string(),
+                            files: Vec::new(),
+                            raw_error: format!("Failed to resolve repo context: {}", e),
+                            detected_at: paths::now_ms(),
+                            worktree_path: None,
+                        },
+                        worktree_path: None,
+                    });
+                }
+            };
+
+        let machine_id_opt = if compute_type.eq_ignore_ascii_case("local") {
+            None
+        } else {
+            remote_host.clone()
+        };
+
+        let repo_dir = match paths::repo_target_dir_str(
+            &self.exec,
+            &compute_type,
+            remote_host.as_deref(),
+            &project_id,
+            &repo_path,
+        ) {
+            Ok(dir) => dir,
+            Err(e) => {
+                return Err(UpstreamSyncFailure {
+                    report: ConflictReport {
+                        source_branch: format!("origin/{}", default_branch),
+                        target_branch: feature_branch.to_string(),
+                        files: Vec::new(),
+                        raw_error: format!("Failed to resolve repo directory: {}", e),
+                        detected_at: paths::now_ms(),
+                        worktree_path: None,
+                    },
+                    worktree_path: None,
+                });
+            }
+        };
+
+        // Delegate the git work to GitOpsHelper and translate the
+        // SyncOutcome / SyncFailure into the upstream-sync domain
+        // types. The repo context is already resolved; the helper
+        // doesn't need to look it up again.
+        match self.git_ops.sync_feature_with_upstream(
+            machine_id_opt.as_deref(),
+            &repo_dir,
+            feature_branch,
+            default_branch,
+        ) {
+            Ok(outcome) => {
+                let machine_str = machine_id_opt.as_deref().unwrap_or("local");
+                let _ = self.exec.run_command(
+                    machine_str,
+                    &format!(
+                        "git -C {} rev-parse HEAD",
+                        paths::shell_escape_posix(&repo_dir)
+                    ),
+                );
+                let _ = record_sync_outcome(
+                    &self.conn,
+                    feature_id,
+                    feature_branch,
+                    default_branch,
+                    "ok",
+                    Some(&outcome.merge_commit_sha),
+                    None,
+                    paths::now_ms(),
+                );
+                Ok(UpstreamSyncOutcome {
+                    merge_commit_sha: outcome.merge_commit_sha,
+                    changed: outcome.changed,
+                    default_branch: default_branch.to_string(),
+                })
+            }
+            Err(failure) => {
+                let now = paths::now_ms();
+                let report = ConflictReport {
+                    source_branch: format!("origin/{}", default_branch),
+                    target_branch: feature_branch.to_string(),
+                    files: failure.files,
+                    raw_error: failure.raw_error,
+                    detected_at: now,
+                    worktree_path: failure.worktree_path.clone(),
+                };
+                let json_blob = serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string());
+                let _ = record_sync_outcome(
+                    &self.conn,
+                    feature_id,
+                    feature_branch,
+                    default_branch,
+                    "conflict",
+                    None,
+                    Some(&json_blob),
+                    now,
+                );
+                Err(UpstreamSyncFailure {
+                    report,
+                    worktree_path: failure.worktree_path,
+                })
+            }
+        }
+    }
+
+    fn get_last_sync_worktree_path(
+        &self,
+        feature_id: &FeatureId,
+    ) -> Result<Option<String>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT conflict_report
+                 FROM feature_syncs
+                 WHERE feature_id = ?1 AND status = 'conflict'
+                 ORDER BY created_at DESC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![feature_id.0], |row| row.get::<_, Option<String>>(0))
+            .map_err(|e| e.to_string())?;
+
+        match rows.next() {
+            Some(Ok(Some(json_str))) => {
+                let report: ConflictReport = serde_json::from_str(&json_str)
+                    .map_err(|e| format!("Failed to parse conflict report JSON: {}", e))?;
+                Ok(report.worktree_path)
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
-/// `repo_dir` is the *primary* repo on the feature's project. We
-/// record it once at merge time so the audit row is self-contained.
+/// Resolve the machine, repo dir, and worktree path for a subtask merge.
+/// The repo dir is used for pre-check operations (ref/object reads via
+/// `git fetch` + `git merge-base` + `git merge-tree`) while the worktree
+/// is used for the actual merge (isolated per subtask, no shared state).
+fn lookup_worktree_context(
+    conn: &SqliteConnection,
+    feature_id: &FeatureId,
+    subtask_run_id: &str,
+) -> Result<(String, Option<String>, String, String, String), String> {
+    let conn = conn.lock()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.compute_type, p.remote_host, p.id, r.repo_path, sr.worktree_path
+             FROM features f
+             JOIN projects p ON p.id = f.project_id
+             JOIN repositories r ON r.project_id = p.id
+             JOIN subtask_runs sr ON sr.feature_id = f.id
+             WHERE f.id = ?1 AND sr.id = ?2
+             ORDER BY r.id ASC LIMIT 1",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut rows = stmt
+        .query_map(params![feature_id.0, subtask_run_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    match rows.next() {
+        Some(Ok((compute_type, remote_host, project_id, repo_path, wt_path))) => {
+            Ok((compute_type, remote_host, project_id, repo_path, wt_path))
+        }
+        Some(Err(e)) => Err(e.to_string()),
+        None => Err("Feature has no project repository configured".to_string()),
+    }
+}
+
+/// Resolve the machine and repo dir for a feature (used by upstream sync).
 fn lookup_repo_context(
     conn: &SqliteConnection,
     feature_id: &FeatureId,
-) -> Result<(Option<String>, String), String> {
+) -> Result<(String, Option<String>, String, String), String> {
     let conn = conn.lock()?;
-    // features.project_id → projects.compute_type + remote_host + repositories.repo_path.
     let mut stmt = conn
         .prepare(
-            "SELECT p.compute_type, p.remote_host, r.repo_path
+            "SELECT p.compute_type, p.remote_host, p.id, r.repo_path
              FROM features f
              JOIN projects p ON p.id = f.project_id
              JOIN repositories r ON r.project_id = p.id
@@ -214,17 +454,13 @@ fn lookup_repo_context(
                 row.get::<_, String>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })
         .map_err(|e| e.to_string())?;
     match rows.next() {
-        Some(Ok((compute_type, remote_host, repo_path))) => {
-            let machine = if compute_type == "local" {
-                None
-            } else {
-                remote_host
-            };
-            Ok((machine, repo_path))
+        Some(Ok((compute_type, remote_host, project_id, repo_path))) => {
+            Ok((compute_type, remote_host, project_id, repo_path))
         }
         Some(Err(e)) => Err(e.to_string()),
         None => Err("Feature has no project repository configured".to_string()),
@@ -308,6 +544,42 @@ fn record_merge_outcome(
             feature_id.0,
             source_branch,
             target_branch,
+            status,
+            merge_sha,
+            conflict_json,
+            now
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Insert a `feature_syncs` audit row. Mirrors `record_merge_outcome`
+/// but for upstream syncs (origin/<default> into feature branch).
+/// The schema is the V9 migration.
+#[allow(clippy::too_many_arguments)]
+fn record_sync_outcome(
+    conn: &SqliteConnection,
+    feature_id: &FeatureId,
+    feature_branch: &str,
+    default_branch: &str,
+    status: &str,
+    merge_sha: Option<&str>,
+    conflict_json: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
+    let conn = conn.lock()?;
+    let id = format!("fs-{}-{}", feature_id.0, now);
+    conn.execute(
+        "INSERT INTO feature_syncs
+         (id, feature_id, feature_branch, default_branch, status,
+          merge_commit_sha, conflict_report, resolution_attempts, created_at, completed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?8)",
+        params![
+            id,
+            feature_id.0,
+            feature_branch,
+            default_branch,
             status,
             merge_sha,
             conflict_json,

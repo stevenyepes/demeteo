@@ -6,7 +6,9 @@
 //! `subtask_merges` table so the audit trail survives step teardown.
 
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{ConflictReport, MergeOutcome};
+use crate::domain::models::{
+    ConflictReport, MergeOutcome, UpstreamSyncFailure, UpstreamSyncOutcome,
+};
 
 pub trait MergeExecutor: Send + Sync {
     /// Merge `source_branch` into `target_branch` (the feature branch).
@@ -16,6 +18,7 @@ pub trait MergeExecutor: Send + Sync {
     /// - `Err(ConflictReport)` if git reports a conflict. The caller
     ///   is responsible for routing this through the project's
     ///   `conflict_policy` (cascade).
+    #[allow(clippy::result_large_err)]
     fn merge_subtask_into_feature(
         &self,
         feature_id: &FeatureId,
@@ -33,4 +36,31 @@ pub trait MergeExecutor: Send + Sync {
     /// `subtask_merges` row — the existing pending row stays
     /// pending until the next attempt resolves it.
     fn abort_in_progress(&self, target_branch: &str) -> Result<(), String>;
+
+    /// Sync a feature branch with the latest `origin/<default_branch>`.
+    ///
+    /// This is the **upstream** counterpart of `merge_subtask_into_feature`:
+    /// the source is `origin/<default>` and the target is the user's
+    /// feature branch. The result has the same shape as the subtask
+    /// merge result so the same conflict-resolver cascade can be
+    /// reused.
+    ///
+    /// - `Ok(UpstreamSyncOutcome)` when the feature branch was
+    ///   fast-forwarded or a merge commit was created cleanly. The
+    ///   `changed` flag is `false` when there was nothing to pull.
+    /// - `Err(UpstreamSyncFailure)` when the merge produced
+    ///   conflicts. The `ConflictReport` embedded inside carries
+    ///   the same `ConflictFile` list that the subtask merge
+    ///   produces, so the resolver sees a uniform data shape.
+    #[allow(clippy::result_large_err)]
+    fn sync_feature_with_upstream(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+        default_branch: &str,
+    ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure>;
+
+    /// Retrieve the worktree path from the last sync conflict report.
+    fn get_last_sync_worktree_path(&self, feature_id: &FeatureId)
+        -> Result<Option<String>, String>;
 }

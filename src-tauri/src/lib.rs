@@ -123,7 +123,7 @@ pub fn run() {
             let app_settings_repo: Arc<dyn crate::ports::db::AppSettingsRepository> =
                 db_adapter.clone();
             let memory_repo: Arc<dyn crate::ports::memory::ProjectMemoryPort> = db_adapter.clone();
-            let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter;
+            let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter.clone();
 
             commands::workflows::seed_starter_workflows(&workflows_repo);
             let ssh_adapter: Arc<dyn ExecutionPort> = Arc::new(
@@ -163,6 +163,22 @@ pub fn run() {
                     exec_inner.clone(),
                 ));
 
+            // Merge executor — owns the SQL audit table + the
+            // structured conflict-report shape. Wired here so the
+            // feature_sync command and the existing subtask→feature
+            // merge share the same conflict-detection code path.
+            let merge_executor: Arc<dyn ports::merge::MergeExecutor> = {
+                let git_ops_for_merge = adapters::worktree::git_ops::GitOpsHelper::new(
+                    app_settings_repo.clone(),
+                    exec_inner.clone(),
+                );
+                Arc::new(adapters::merge::SqliteMergeExecutor::new(
+                    db_adapter.conn.clone(),
+                    git_ops_for_merge,
+                    exec_inner.clone(),
+                ))
+            };
+
             // Build the DagStepExecutor before AppContext to avoid a
             // circular dependency (the executor contains sub-port Arcs;
             // AppContext contains the executor's Arc).
@@ -182,6 +198,7 @@ pub fn run() {
                     notif_adapter.clone(),
                     agent_exec.clone(),
                     exec_inner.clone(),
+                    merge_executor.clone(),
                     artifact_store,
                     app_data_dir.clone(),
                 ));
@@ -212,6 +229,7 @@ pub fn run() {
                 presenter: step_executor_adapter,
                 pricing,
                 mr_publisher,
+                merge_executor,
             });
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
@@ -323,6 +341,8 @@ pub fn run() {
             commands::features::gate_decide,
             commands::features::step_retry,
             commands::features::replay_from_step,
+            commands::features::feature_sync,
+            commands::features::feature_resolve_sync_conflicts,
             commands::workflows::workflow_list,
             commands::workflows::workflow_get,
             commands::workflows::workflow_create,

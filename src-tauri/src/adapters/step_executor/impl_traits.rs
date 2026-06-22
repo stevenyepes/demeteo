@@ -11,7 +11,7 @@ use crate::domain::models::{Feature, GateDecision, StepConfig, StepExecution};
 use crate::paths;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
-use crate::ports::step_executor::{GatePresenter, StepExecutor};
+use crate::ports::step_executor::{GatePresenter, StepExecutor, SyncOutcomeView};
 
 use super::driver::ExecutionDriver;
 use super::DagStepExecutor;
@@ -188,6 +188,7 @@ impl DagStepExecutor {
             artifacts: self.artifacts.clone(),
             app_local_data_dir: self.app_local_data_dir.clone(),
             git_ops: GitOpsHelper::new(self.app_settings.clone(), self.exec.clone()),
+            merge_executor: self.merge_executor.clone(),
             gate_senders: self.gate_senders.clone(),
             f_id: FeatureId::from(feature_id.to_string()),
             f_id_str: feature_id.to_string(),
@@ -282,6 +283,18 @@ impl StepExecutor for DagStepExecutor {
         let machine_id_opt = machine_id.map(|s| s.to_string());
 
         let git_ops = GitOpsHelper::new(self.app_settings.clone(), self.exec.clone());
+
+        // Refresh the local default_branch from origin so a feature
+        // started *after* other PRs merged is cut from a current
+        // base. Best-effort: if the fetch fails (offline, no remote,
+        // auth) we still proceed with whatever is local — the new
+        // feature is not blocked by a sync failure.
+        let _ = git_ops.ensure_default_branch_updated(
+            machine_id_opt.as_deref(),
+            &_target_dir,
+            &settings.worktree_strategy.default_branch,
+        );
+
         git_ops.create_feature_branch(
             machine_id_opt.as_deref(),
             &_target_dir,
@@ -663,6 +676,36 @@ impl StepExecutor for DagStepExecutor {
     fn step_list_for_run(&self, feature_id: &str) -> Result<Vec<StepExecution>, String> {
         self.features
             .steps_for_feature(&FeatureId::from(feature_id.to_string()))
+    }
+
+    fn feature_sync(
+        &self,
+        feature_id: &str,
+        revalidate_step_execution_id: Option<&str>,
+    ) -> Result<SyncOutcomeView, String> {
+        // The forward to the implementation in `sync.rs`. The method
+        // lives there so the orchestration (project settings, machine
+        // resolution, merge-executor call) is testable without an
+        // `Arc<AgentRegistry>` in scope.
+        self.feature_sync_impl(feature_id, revalidate_step_execution_id)
+    }
+
+    fn feature_resolve_sync_conflicts(
+        &self,
+        feature_id: &str,
+        conflict_files: &[String],
+        revalidate_step_execution_id: Option<&str>,
+    ) -> Result<SyncOutcomeView, String> {
+        // The async orchestrator is in `sync.rs`; we block-in-place
+        // so the trait stays sync. The resolution typically takes
+        // seconds, not minutes.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.feature_resolve_sync_conflicts_impl(
+                feature_id,
+                conflict_files,
+                revalidate_step_execution_id,
+            ))
+        })
     }
 }
 

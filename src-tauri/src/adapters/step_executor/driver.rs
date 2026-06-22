@@ -20,6 +20,7 @@ use crate::ports::db::{
     FeaturePatch, FeatureRepository, GateRepository, ProjectRepository, StepExecutionPatch,
 };
 use crate::ports::execution::ExecutionPort;
+use crate::ports::merge::MergeExecutor;
 use crate::ports::notification::{DomainEvent, NotificationPort};
 use tokio_stream::StreamExt;
 
@@ -38,6 +39,10 @@ pub(crate) struct ExecutionDriver {
     pub artifacts: Arc<dyn ArtifactStore>,
     pub app_local_data_dir: PathBuf,
     pub git_ops: GitOpsHelper,
+    /// Merge executor — owned by the driver so the `sync` step kind
+    /// can call `sync_feature_with_upstream` and so the conflict
+    /// resolver has access to the audit table.
+    pub merge_executor: Arc<dyn MergeExecutor>,
     pub gate_senders: Arc<Mutex<HashMap<String, oneshot::Sender<GateDecision>>>>,
 
     // Feature identity
@@ -150,6 +155,10 @@ impl ExecutionDriver {
                     )
                     .await
                 }
+                "sync" => {
+                    self.handle_sync_step(step_exec, step_conf, &mut accumulated_cost, step_start)
+                        .await
+                }
                 _ => StepOutcome::Cancelled,
             };
 
@@ -223,17 +232,29 @@ impl ExecutionDriver {
             }
         }
 
-        // All steps completed
+        // All steps completed. Transition the feature to
+        // `awaiting_mr` so the UI prompts the user to publish a
+        // PR/MR — a feature is not "done" until the MR is on the
+        // provider. Cleanup remains available regardless of this
+        // status; the awaiting_mr is a UX nudge, not a hard block.
         let total_cost = self
             .features
             .steps_for_feature(&self.f_id)
             .map(|list| list.iter().map(|s| s.cost_usd.unwrap_or(0.0)).sum::<f64>())
             .unwrap_or(0.0);
         let total_dur = format!("{}s", self.start_time.elapsed().as_secs());
+
+        // If the feature already has an MR URL, treat the workflow
+        // as fully complete (this is a replay / step_retry path).
+        let target_status = match self.features.get(&self.f_id) {
+            Ok(Some(f)) if f.mr_url.as_ref().is_some_and(|u| !u.is_empty()) => "completed",
+            _ => "awaiting_mr",
+        };
+
         let _ = self.features.update(
             &self.f_id,
             &FeaturePatch {
-                status: Some("completed".to_string()),
+                status: Some(target_status.to_string()),
                 total_cost: Some(Some(total_cost)),
                 duration: Some(Some(total_dur.clone())),
                 ..Default::default()
@@ -241,7 +262,7 @@ impl ExecutionDriver {
         );
         let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
             feature_id: self.f_id.clone(),
-            status: "completed".into(),
+            status: target_status.into(),
         });
     }
 

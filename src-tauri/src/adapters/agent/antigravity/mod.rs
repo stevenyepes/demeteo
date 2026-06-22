@@ -46,14 +46,12 @@ fn parse_antigravity_event(line: &str) -> Option<AgentEvent> {
             }
             _ => None,
         }
+    } else if line.is_empty() {
+        None
     } else {
-        if line.is_empty() {
-            None
-        } else {
-            Some(AgentEvent::Text {
-                delta: format!("{}\n", line),
-            })
-        }
+        Some(AgentEvent::Text {
+            delta: format!("{}\n", line),
+        })
     }
 }
 
