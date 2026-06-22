@@ -316,7 +316,7 @@ impl ExecutionDriver {
     /// and continue the loop, or `None` if the step should be treated as
     /// terminal and the feature should fail.
     ///
-    /// Rules (per `REDESIGN_PLAN.md` §1 decision 8 + `AGENT_INTEGRATION.md`
+    /// Rules (per `docs/DECISIONS.md` decision 8 + `AGENT_INTEGRATION.md`
     /// §3.5):
     ///
     /// - No `on_failure` set: terminal → return `None`.

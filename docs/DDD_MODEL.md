@@ -1,9 +1,7 @@
-# Demeteo Redesign: Domain Model & Bounded Contexts
+# Demeteo: Domain Model & Bounded Contexts
 
-> **Source of truth for the multi-agent orchestrator pivot.** See
-> [`REDESIGN_PLAN.md`](../REDESIGN_PLAN.md) §0 for the pivot summary and
-> §1 for the locked decision table. See [`REDESIGN_DECISIONS.md`](REDESIGN_DECISIONS.md)
-> for the same table rendered as a reference appendix.
+> **Source of truth for the multi-agent orchestrator.** See [`DECISIONS.md`](DECISIONS.md)
+> for the locked decision table. This document covers the ubiquitous language and core domain bounded contexts.
 
 ## Ubiquitous Language
 

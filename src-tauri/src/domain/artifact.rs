@@ -6,7 +6,7 @@
 //! derived content (diffs, worktree pointers) and inline agent output
 //! uniformly.
 //!
-//! See `docs/REDESIGN_DDD_MODEL.md` for the bounded context and
+//! See `docs/DDD_MODEL.md` for the bounded context and
 //! `AGENT_INTEGRATION.md` §3.4 for the AgentEvent side of this contract.
 
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// How much of the artifact the executor should persist and how the
 /// next step should consume it. Mirrors the per-step `artifact_mode`
 /// in the workflow JSON (locked decision 28 in
-/// `docs/REDESIGN_DECISIONS.md`).
+/// `docs/DECISIONS.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactMode {

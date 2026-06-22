@@ -1,6 +1,6 @@
 //! Hard-coded pricing table.
 //!
-//! Per `docs/REDESIGN_EXECUTION_PLAN.md` Phase R1 "Done means":
+//! Per system pricing specifications:
 //!
 //! > The `PricingTable` is hard-coded with the 5–10 most common models
 //! > (Claude Sonnet/Opus/Haiku, GPT-4o/o1/o3-mini, Gemini Pro, Llama via

@@ -1,4 +1,4 @@
-# Demeteo Redesign: Open & Deferred Questions
+# Demeteo: Open & Deferred Questions
 
 > **Captured here so they don't get lost.** These are the questions and
 > features that came up during the multi-agent orchestrator redesign
@@ -228,7 +228,7 @@ These came up briefly but weren't deep-dived in the interview. Captured here for
 ## 18. How to Use This Doc
 
 When picking up a deferred item:
-1. Move the relevant entry from this doc into the active phase plan (`REDESIGN_EXECUTION_PLAN.md`).
+1. Move the relevant entry from this doc into the active implementation plan.
 2. Update the "Phase Placement Key" at the top of this doc to mark the item as in-progress.
 3. When the item ships, mark it as shipped and link to the doc section that describes the implementation.
 

@@ -1,6 +1,6 @@
 //! Parallel step handler.
 //!
-//! The `parallel` step (per `REDESIGN_PLAN.md` Phase R4) drives a
+//! The `parallel` step drives a
 //! planner agent session that produces a structured subtask DAG as
 //! JSON, then fans out one worker agent per subtask. Subtask results
 //! are merged into the feature branch via `GitOpsHelper::merge_subtask`.

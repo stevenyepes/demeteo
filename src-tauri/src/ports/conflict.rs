@@ -1,6 +1,6 @@
 //! Conflict resolver port (Phase R6).
 //!
-//! Cascade driver per `REDESIGN_PLAN.md` decision 20:
+//! Cascade driver per `docs/DECISIONS.md` decision 20:
 //!   1. **Auto-agent** (default `conflict_policy: "auto_agent"`):
 //!      spawn a resolution subtask — a fresh agent session with a
 //!      constrained prompt ("resolve these N conflicts; do not

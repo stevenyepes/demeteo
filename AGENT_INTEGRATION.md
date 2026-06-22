@@ -7,12 +7,11 @@ from the pivot: agents are invoked via their CLI as one-shot processes
 (`opencode run --format json`, `hermes run --format json`, etc.), not via
 ACP JSON-RPC. The `StepExecutor` drives the session (one per step).
 
-The pivot's locked decisions are in [`docs/REDESIGN_DECISIONS.md`](docs/REDESIGN_DECISIONS.md).
-The full architecture is in [`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md).
-The master plan is in [`REDESIGN_PLAN.md`](REDESIGN_PLAN.md).
+The locked decisions are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+The full architecture is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 For the surrounding architecture (hexagonal layout, plugin host, port
-trait catalogue), see [`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md).
+trait catalogue), see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
@@ -53,7 +52,7 @@ The CLI approach (`opencode run --format json`) sidesteps all five: it is one `C
 
 ## 2. Locked Decisions (the runtime-relevant ones)
 
-Cross-reference: full table in [`docs/REDESIGN_DECISIONS.md`](docs/REDESIGN_DECISIONS.md).
+Cross-reference: full table in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 | #  | Decision                           | Section here |
 |----|------------------------------------|--------------|
@@ -109,7 +108,7 @@ The agent *session* identifier is the CLI `--session <uuid>` argument passed to 
 
 There's no special "planner port" or "planner runtime." The planner is a coding agent session (opencode, hermes, claude-code, or antigravity) invoked with a *planning prompt* — the same `CliRuntime`, the same CLI invocation, the same JSON-lines event stream. The only special thing is the prompt template, which lives in the workflow step's config (the first `agent` step in the starter pack's Research → Spec → Plan → Tasks → Implement → Validate workflow, for example).
 
-The planner's selection is per-project (`Project.planner: { machine_id, agent_kind }` — see `ProjectRepository` in [`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md) §2). The user picks the planner when creating the project. The orchestrator resolves it at feature-start time.
+The planner's selection is per-project (`Project.planner: { machine_id, agent_kind }` — see `ProjectRepository` in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §2). The user picks the planner when creating the project. The orchestrator resolves it at feature-start time.
 
 ### 3.3 Project host + provider instance
 
@@ -190,7 +189,7 @@ pub enum StopReason {
 }
 ```
 
-The `Text` and `Plan` events are consumed by the `StepExecutor` to build the step's artifact (per the type-driven defaults in `REDESIGN_PLAN.md` §1 decision 28). The `Usage` event feeds the per-step `cost_usd` and the per-feature telemetry (per the locked decision 15). The `TurnComplete` event drives the step's state transition.
+The `Text` and `Plan` events are consumed by the `StepExecutor` to build the step's artifact (per the type-driven defaults in [`docs/DECISIONS.md`](docs/DECISIONS.md) decision 28). The `Usage` event feeds the per-step `cost_usd` and the per-feature telemetry (per the locked decision 15). The `TurnComplete` event drives the step's state transition.
 
 The UI does **not** consume the agent event stream. It consumes `feature_status_changed` / `step_progress` / `gate_required` / `conflict_detected` events from the `NotificationPort`.
 
@@ -329,7 +328,7 @@ When a `parallel` step's subtask merge conflicts with the `feature/<slug>` branc
 2. **Manual** (on auto-agent failure or `conflict_policy: "auto_human"`): open the `ConflictResolver` UI (Monaco 3-way merge).
 3. **Skip / Abort** (always available): mark the subtask `skipped` or the feature `aborted`.
 
-The cascade is enforced by the `StepExecutor` and `ConflictPolicy` (per-project setting). See [`docs/REDESIGN_OPEN_QUESTIONS.md`](docs/REDESIGN_OPEN_QUESTIONS.md) §1 for the deferred per-step retry policy.
+The cascade is enforced by the `StepExecutor` and `ConflictPolicy` (per-project setting). See [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md) §1 for the deferred per-step retry policy.
 
 ---
 
@@ -487,7 +486,7 @@ The `AgentTransport::try_wait` is polled by a watchdog task per active step exec
 
 ## 8. Tauri Command Surface (post-pivot)
 
-The full list of new commands is in [`docs/REDESIGN_ARCHITECTURE.md`](docs/REDESIGN_ARCHITECTURE.md) §4. The runtime-relevant commands (the ones the `StepExecutor` and `FeatureOrchestrator` invoke on the agent runtime):
+The full list of new commands is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4. The runtime-relevant commands (the ones the `StepExecutor` and `FeatureOrchestrator` invoke on the agent runtime):
 
 ```rust
 // Phase R5
@@ -622,7 +621,7 @@ src/docs/                         (new) bundled markdown
 
 ## 10. Phase Plan (R0–R8)
 
-Each phase has a "Done means…" statement. Phases are sequential; don't start the next until the current is verified. Full breakdown with task checkboxes and verification commands: [`docs/REDESIGN_EXECUTION_PLAN.md`](docs/REDESIGN_EXECUTION_PLAN.md).
+Each phase has a "Done means…" statement. Phases are sequential; don't start the next until the current is verified. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the active structure.
 
 ### Phase R1 — Greenfield schema & ports
 
@@ -686,7 +685,7 @@ Each phase has a "Done means…" statement. Phases are sequential; don't start t
 
 ## 11. Open Questions (the runtime-relevant subset)
 
-Full list with phase placement: [`docs/REDESIGN_OPEN_QUESTIONS.md`](docs/REDESIGN_OPEN_QUESTIONS.md). The runtime-relevant deferred items:
+Full list with phase placement: [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md). The runtime-relevant deferred items:
 
 1. **Second non-ACP runtime** (Anthropic) → v1.1. The runtime trait is transport-neutral; adding a non-ACP adapter is the v1.1 commitment from the legacy design interview.
 2. **Per-machine `AgentConfig`** (model, workdir, env) → deferred. Users configure their agents on the host. v1.1 candidate.
@@ -694,4 +693,4 @@ Full list with phase placement: [`docs/REDESIGN_OPEN_QUESTIONS.md`](docs/REDESIG
 4. **WASM policy plugins** → v2+. The original WASM plugin host from the legacy architecture, deferred with the legacy spec.
 5. **Per-step retry policy with planner-as-advisor** → v1.x. The `RetryPolicy` struct on `StepConfig` is reserved but the planner-driven redirect is v1.x.
 
-The full set of deferred items (Q1 multi-feature concurrency, Q19 YAML editor, Q19 save-run-as-template, Q20 deep dry-run, Q21 cost rollup, Q21 smart project home, Q24 tabs/split view, Q8 `command` step type, Q11 telemetry, Q12 auto-update) is in [`docs/REDESIGN_OPEN_QUESTIONS.md`](docs/REDESIGN_OPEN_QUESTIONS.md).
+The full set of deferred items (Q1 multi-feature concurrency, Q19 YAML editor, Q19 save-run-as-template, Q20 deep dry-run, Q21 cost rollup, Q21 smart project home, Q24 tabs/split view, Q8 `command` step type, Q11 telemetry, Q12 auto-update) is in [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md).

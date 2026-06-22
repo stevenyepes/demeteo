@@ -1,11 +1,9 @@
-# Demeteo Redesign: Locked Decisions Reference
+# Demeteo: Locked Decisions Reference
 
-> **Standalone reference for the 33 locked design decisions** that emerged
-> from the multi-agent orchestrator redesign interview. This is the same
-> table that lives in [`REDESIGN_PLAN.md`](../REDESIGN_PLAN.md) §1, rendered
-> here for easy linking from other docs. If the two ever disagree, this
-> doc and the master plan should be considered the source of truth; flag
-> the conflict and re-align.
+> **Standalone reference for the 36 locked design decisions** that emerged
+> from the multi-agent orchestrator design. This is the same
+> table that guides the project. If any conflicts ever arise, this
+> doc should be considered a source of truth; flag the conflict and re-align.
 
 ## 1. The 33 Decisions
 
@@ -50,8 +48,7 @@
 
 ## 2. Cross-References
 
-- **Domain model** (entities, value objects, aggregates, ports): [`REDESIGN_DDD_MODEL.md`](REDESIGN_DDD_MODEL.md)
-- **Architecture** (hexagon, port surface, file layout, Tauri commands, frontend state): [`REDESIGN_ARCHITECTURE.md`](REDESIGN_ARCHITECTURE.md)
-- **Execution plan** (phase breakdown, file touch list, verification): [`REDESIGN_EXECUTION_PLAN.md`](REDESIGN_EXECUTION_PLAN.md)
-- **Open / deferred questions**: [`REDESIGN_OPEN_QUESTIONS.md`](REDESIGN_OPEN_QUESTIONS.md)
-- **Master plan** (pivot summary, this table, phase plan summary): [`REDESIGN_PLAN.md`](../REDESIGN_PLAN.md)
+- **Domain model** (entities, value objects, aggregates, ports): [`DDD_MODEL.md`](DDD_MODEL.md)
+- **Architecture** (hexagon, port surface, file layout, Tauri commands, frontend state): [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- **Open / deferred questions**: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
+- **Reliability plan**: [`RELIABILITY_PLAN.md`](RELIABILITY_PLAN.md)

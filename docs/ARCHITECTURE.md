@@ -1,8 +1,8 @@
-# Demeteo Redesign: Architecture
+# Demeteo: Architecture
 
 > **Source of truth for the multi-agent orchestrator's structure.** See
-> [`REDESIGN_PLAN.md`](../REDESIGN_PLAN.md) for the master plan and
-> [`REDESIGN_DDD_MODEL.md`](REDESIGN_DDD_MODEL.md) for the domain entities
+> [`DECISIONS.md`](DECISIONS.md) for the master decisions table and
+> [`DDD_MODEL.md`](DDD_MODEL.md) for the domain entities
 > referenced here. This doc covers the hexagonal layout, the port surface,
 > the file layout, the Tauri command surface, and the frontend state model.
 
@@ -311,4 +311,4 @@ The "Mng" button at the bottom of the rail opens a project list / create / delet
 - **Pre-migration backup**: `cp demeteo.db demeteo.db.bak.<timestamp>` before any migration runs. 7-day retention, auto-pruned.
 - **Migration log**: `~/.local/share/demeteo/migrations.log`, always written, viewable from Preferences → Storage.
 
-See `REDESIGN_PLAN.md` §4 (Phase R8) for the hardening phase.
+See [`DECISIONS.md`](DECISIONS.md) for details on the migration strategy and system decisions.

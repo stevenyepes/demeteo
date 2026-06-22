@@ -44,7 +44,7 @@ pub struct DagStepExecutor {
     /// Artifact persistence port. The step executor and the tool
     /// bridge both route artifact I/O through this so a future S3
     /// or SFTP-on-remote adapter can swap in without touching either
-    /// caller. See `REDESIGN_PLAN.md` §3 (locked port catalogue).
+    /// caller. See `docs/ARCHITECTURE.md` §2 (locked port catalogue).
     artifacts: Arc<dyn ArtifactStore>,
     app_local_data_dir: PathBuf,
     gate_senders: Arc<Mutex<HashMap<String, oneshot::Sender<GateDecision>>>>,

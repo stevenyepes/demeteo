@@ -1,8 +1,7 @@
 //! Pricing table port.
 //!
 //! Maps an agent's model name to a per-million-token input/output USD cost.
-//! The v1 implementation is a hard-coded table (R1 "Done means" — see
-//! `docs/REDESIGN_EXECUTION_PLAN.md`). A later phase will let the user
+//! The v1 implementation is a hard-coded table. A later phase will let the user
 //! override entries from Preferences; the trait is the only thing
 //! downstream code touches, so that swap is local.
 

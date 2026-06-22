@@ -1,6 +1,6 @@
 //! [`ConflictResolver`] implementation.
 //!
-//! Cascade driver per `REDESIGN_PLAN.md` decision 20:
+//! Cascade driver per `docs/DECISIONS.md` decision 20:
 //!
 //! - [`ConflictResolver::resolve_via_agent`] is a stub for v1: the
 //!   auto-agent resolution needs to spawn a fresh ACP session with

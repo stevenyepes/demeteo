@@ -1,4 +1,4 @@
-# Demeteo Redesign: UX Specifications & User Journeys
+# Demeteo: UX Specifications & User Journeys
 
 > **Purpose:** This document is intended for UI/UX designers to translate Demeteo's multi-agent orchestrator architecture into concrete UI mockups. It maps the locked architectural decisions into end-to-end user journeys and defines the exact screens to be designed.
 

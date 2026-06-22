@@ -9,7 +9,7 @@ use crate::domain::intercept::{ExecutionResult, InterceptPayload};
 /// name (e.g. `"feature_status_changed"`). The body shape for each
 /// variant mirrors the legacy per-method payload 1:1, so the wire
 /// format is byte-identical to the previous 6-method port surface.
-/// See the migration plan in `REDESIGN_PLAN.md` (PR1).
+/// See the documentation in `docs/DECISIONS.md` for details on system events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DomainEvent {

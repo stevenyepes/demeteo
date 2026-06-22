@@ -3,8 +3,8 @@
 > **Scope:** Improvements to the `DagStepExecutor` pipeline and the SSH
 > transport that materially reduce silent-failure modes, lost work on
 > crash / network drop, and accumulated state drift. Source of truth for
-> v1 reliability work; cross-references `REDESIGN_PLAN.md` for the
-> locked decisions and `CONNECTION_FLOWS.md` for transport-level
+> v1 reliability work; cross-references [`DECISIONS.md`](DECISIONS.md) for the
+> locked decisions and [`ARCHITECTURE.md`](ARCHITECTURE.md) for transport-level
 > invariants.
 >
 > **Status:** Plan only. No code changes. Sequenced in the order
@@ -19,16 +19,16 @@
 ## 0. Invariants this plan must preserve
 
 1. **Strict serial per project** — at most one running feature per
-   project at a time (`REDESIGN_PLAN.md` Q18).
+   project at a time (see [`DECISIONS.md`](DECISIONS.md) decision 18).
 2. **Per-step checkpoints are atomic** — a step is "complete" only when
    its artifact is written and (if it's a gate) its decision is recorded
-   (`docs/REDESIGN_DDD_MODEL.md` §4 Feature Orchestration).
+   (see [`DDD_MODEL.md`](DDD_MODEL.md) §4 Feature Orchestration).
 3. **Cost and duration are computed at step completion, not estimated
-   mid-step** (`REDESIGN_PLAN.md` Q15).
+   mid-step** (see [`DECISIONS.md`](DECISIONS.md) decision 15).
 4. **Step transitions are the UI contract, not agent transcripts**
-   (`docs/REDESIGN_DDD_MODEL.md` §6 Agent Runtime).
+   (see [`DDD_MODEL.md`](DDD_MODEL.md) §6 Agent Runtime).
 5. **Keyring + ssh-agent for credentials, never plaintext**
-   (`CONNECTION_FLOWS.md` §1).
+   (see [`ARCHITECTURE.md`](ARCHITECTURE.md) §2).
 
 ---
 
@@ -114,8 +114,8 @@ lost".
 `driver.rs:131`, partially). On launch, if any step is in `interrupted`
 or `running`, insert a synthetic `GateDecision` row with
 `decision = None, feedback = None` and emit `GateRequired` — the UI must
-clear the gate before the step re-runs. Aligns with `REDESIGN_PLAN.md`
-Q14-B.
+clear the gate before the step re-runs. Aligns with [`DECISIONS.md`](DECISIONS.md)
+decision 14.
 
 **Cost:** ~1 day (Rust) + UI work in `FeatureDetail.tsx` /
 `GateView.tsx`. **Risk:** medium — touches gate UX; needs UI buy-in.
@@ -135,8 +135,7 @@ let subtasks = vec![
 
 Every user gets the same two subtasks regardless of their workflow.
 
-**Fix.** Wire the planner-driven DAG decomposition per `REDESIGN_PLAN.md`
-§4 Phase R4 "parallel step":
+**Fix.** Wire the planner-driven DAG decomposition:
 
 1. Spawn a planner agent session with a structured-output prompt.
 2. Parse the response into `Vec<SubtaskSpec>` (already typed in
@@ -165,7 +164,7 @@ planner's output shape.
 `steps/mod.rs:2-11`.
 
 `StepOutcome::RedirectTo(usize)` only fires from a gate's "redirect"
-decision. `REDESIGN_PLAN.md` Q14 lists `on_failure → goto`,
+decision. [`DECISIONS.md`](DECISIONS.md) decision 14 lists `on_failure → goto`,
 `on_all_success`, `on_any_failure`, `max_iterations` as v1 truth; none
 are in the driver.
 
@@ -423,10 +422,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib ssh
 
 ## 6. Cross-references
 
-- `REDESIGN_PLAN.md` §1 Q14, Q15 — feature re-entry, telemetry.
-- `docs/REDESIGN_DDD_MODEL.md` §4 Feature Orchestration invariants.
-- `docs/REDESIGN_ARCHITECTURE.md` §2 Port Catalogue (StepExecutor,
-  GatePresenter).
-- `docs/REDESIGN_EXECUTION_PLAN.md` Phase R4 / R5 — when each item
-  should land.
-- `CONNECTION_FLOWS.md` §1–§4 — SSH invariants preserved by this plan.
+- [`DECISIONS.md`](DECISIONS.md) decisions 14, 15 — feature re-entry, telemetry.
+- [`DDD_MODEL.md`](DDD_MODEL.md) §4 Feature Orchestration invariants.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) §2 Port Catalogue (StepExecutor, GatePresenter).

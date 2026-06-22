@@ -5,7 +5,7 @@
 //! `src-tauri/src/adapters/artifact_store/fs.rs`; future
 //! implementations could be S3, SFTP-remote, or in-memory for tests.
 //!
-//! See `REDESIGN_PLAN.md` §3 (`ArtifactStore` is in the locked port
+//! See `docs/ARCHITECTURE.md` §2 (`ArtifactStore` is in the locked port
 //! catalogue) and `AGENT_INTEGRATION.md` §3.4 for the AgentEvent side
 //! of this contract.
 

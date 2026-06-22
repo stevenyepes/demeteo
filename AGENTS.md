@@ -62,8 +62,7 @@ Only after completing steps 1–5 may you write or modify code.
 
 **Demeteo** is a premium desktop app that lets a developer describe a feature in plain language; the app decomposes it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes, antigravity), manages Git worktrees per Step, and presents human-approval Gates before merging.
 
-> **Current phase: R1 — Greenfield schema & ports** (SQLite + Rust ports, no agent spawns yet).
-> See [REDESIGN_PLAN.md](REDESIGN_PLAN.md) for the full R0–R8 roadmap.
+> **Current phase: V1 — Core fleet-style multi-agent orchestrator** (fully implemented).
 
 **Core vocabulary** *(use these exact names in code and comments)*:
 
@@ -117,7 +116,7 @@ React Webview ──IPC──► Tauri Commands ──► FeatureOrchestrator
 
 Frontend components → Tauri IPC → Rust core → SQLite + OS + Agents
 
-For the full hexagon, port catalogue, and directory layout → [docs/REDESIGN_ARCHITECTURE.md](docs/REDESIGN_ARCHITECTURE.md)
+For the full hexagon, port catalogue, and directory layout → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---
 
@@ -227,17 +226,14 @@ Any task that touches the items below requires a **Gate** (pause and ask the use
 
 | Area                        | Document                                                                              |
 |-----------------------------|---------------------------------------------------------------------------------------|
-| Master plan & decisions     | [REDESIGN_PLAN.md](REDESIGN_PLAN.md)                                                 |
-| Domain model (ubiquitous language, aggregates) | [docs/REDESIGN_DDD_MODEL.md](docs/REDESIGN_DDD_MODEL.md)          |
-| Ports, adapters, directory layout | [docs/REDESIGN_ARCHITECTURE.md](docs/REDESIGN_ARCHITECTURE.md)               |
-| Phase tasks & done-means    | [docs/REDESIGN_EXECUTION_PLAN.md](docs/REDESIGN_EXECUTION_PLAN.md)                   |
-| 33 locked decisions         | [docs/REDESIGN_DECISIONS.md](docs/REDESIGN_DECISIONS.md)                             |
-| Open & deferred questions   | [docs/REDESIGN_OPEN_QUESTIONS.md](docs/REDESIGN_OPEN_QUESTIONS.md)                   |
-| Agent CLI integration spec  | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)                                         |
-| SQLite schema (legacy)      | [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) *(superseded in R1)*                        |
-| SSH/SFTP flows              | [CONNECTION_FLOWS.md](CONNECTION_FLOWS.md)                                           |
-
-Legacy docs in `docs/LEGACY_*.md` are preserved history only — not the active plan.
+| Domain model (ubiquitous language, aggregates) | [docs/DDD_MODEL.md](docs/DDD_MODEL.md)                              |
+| Ports, adapters, directory layout | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                       |
+| 36 locked decisions         | [docs/DECISIONS.md](docs/DECISIONS.md)                                                 |
+| Open & deferred questions   | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)                                       |
+| Agent CLI integration spec  | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)                                           |
+| Reliability & DAG pipeline  | [docs/RELIABILITY_PLAN.md](docs/RELIABILITY_PLAN.md)                                   |
+| User stories & agent tasks  | [docs/USER_STORIES.md](docs/USER_STORIES.md)                                           |
+| UX spec & journeys          | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md)                                             |
 
 ---
 

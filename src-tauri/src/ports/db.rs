@@ -6,7 +6,7 @@
 //! was coupled to the entire schema, the test surface was huge, and the
 //! adapter was 1300+ lines. This file splits the trait into 7 narrow
 //! sub-ports aligned with the bounded contexts defined in
-//! `REDESIGN_DDD_MODEL.md`:
+//! `docs/DDD_MODEL.md`:
 //!
 //! | Sub-port                  | Bounded context | Owns                                         |
 //! |---------------------------|-----------------|----------------------------------------------|
