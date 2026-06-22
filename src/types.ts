@@ -53,6 +53,7 @@ export interface StepExecution {
   step_kind: string;
   status: 'pending' | 'running' | 'awaiting_gate' | 'completed' | 'failed' | 'skipped' | 'interrupted' | string;
   cost_usd?: number | null;
+  tokens?: number | null;
   wall_clock_secs?: number | null;
   artifact_path?: string | null;
   artifact_paths: string[];
@@ -76,6 +77,7 @@ export interface Feature {
   title: string;
   status: string;
   total_cost: number;
+  tokens?: number | null;
   duration: string;
   created_at: number;
   agent_kind?: string | null;

@@ -156,11 +156,13 @@ fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
 }
 
 impl ExecutionDriver {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_parallel_step(
         &self,
         step_exec: &StepExecution,
         step_conf: &StepConfig,
         accumulated_cost: &mut f64,
+        accumulated_tokens: &mut i64,
         step_start: Instant,
         step_index: usize,
         step_execs: &[StepExecution],
@@ -322,6 +324,8 @@ impl ExecutionDriver {
         let mut planner_stream = planner_session.prompt(&planner_prompt);
         let mut cancel_watch = self.cancel_watch.clone();
         let mut first_event_seen = false;
+        let mut latest_planner_cost = 0.0;
+        let mut latest_planner_tokens = 0;
 
         const PLANNER_FAST_S: u64 = 180;
         const PLANNER_NORMAL_S: u64 = 300;
@@ -349,8 +353,11 @@ impl ExecutionDriver {
                     normal_sleep.as_mut().reset(now + std::time::Duration::from_secs(PLANNER_NORMAL_S));
                     match event {
                         AgentEvent::Text { delta } => planner_text.push_str(&delta),
-                        AgentEvent::Usage { cost_usd: Some(c), .. } => {
-                            *accumulated_cost += c;
+                        AgentEvent::Usage { input_tokens, output_tokens, cost_usd } => {
+                            if let Some(c) = cost_usd {
+                                latest_planner_cost = c;
+                            }
+                            latest_planner_tokens = (input_tokens + output_tokens) as i64;
                         }
                         AgentEvent::TurnComplete { .. } => break,
                         AgentEvent::Error { message, .. } => {
@@ -411,6 +418,9 @@ impl ExecutionDriver {
         }
 
         let _ = self.registry.kill(&planner_thread_id).await;
+
+        *accumulated_cost += latest_planner_cost;
+        *accumulated_tokens += latest_planner_tokens;
 
         if planner_failed {
             return StepOutcome::Failed(format!("parallel step: planner failed: {}", planner_err));
@@ -598,6 +608,8 @@ impl ExecutionDriver {
                     let mut legacy_sub_content = String::new();
                     let mut cancel_watch = self.cancel_watch.clone();
                     let mut first_event_seen = false;
+                    let mut latest_worker_cost = 0.0;
+                    let mut latest_worker_tokens = 0;
 
                     const WORKER_FAST_S: u64 = 180;
                     const WORKER_NORMAL_S: u64 = 300;
@@ -634,12 +646,23 @@ impl ExecutionDriver {
                                             step_execution_id: step_exec.id.clone(),
                                             content: delta.clone(),
                                         });
+                                        let _ = self.notif.emit(&DomainEvent::StepProgress {
+                                            feature_id: self.f_id.clone(),
+                                            step_id: step_exec.step_id.0.clone(),
+                                            status: "running".into(),
+                                            cost_usd: Some(*accumulated_cost + latest_worker_cost),
+                                            tokens: Some(*accumulated_tokens + latest_worker_tokens),
+                                            wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                                        });
                                     }
                                     AgentEvent::ArtifactProduced { artifact } => {
                                         produced_artifacts.push(artifact);
                                     }
-                                    AgentEvent::Usage { cost_usd: Some(c), .. } => {
-                                        *accumulated_cost += c;
+                                    AgentEvent::Usage { input_tokens, output_tokens, cost_usd } => {
+                                        if let Some(c) = cost_usd {
+                                            latest_worker_cost = c;
+                                        }
+                                        latest_worker_tokens = (input_tokens + output_tokens) as i64;
                                     }
                                     AgentEvent::TurnComplete { .. } => break,
                                     AgentEvent::Error { message, .. } => {
@@ -717,6 +740,9 @@ impl ExecutionDriver {
                             }
                         }
                     }
+
+                    *accumulated_cost += latest_worker_cost;
+                    *accumulated_tokens += latest_worker_tokens;
 
                     if step_failed {
                         let _ = self.registry.kill(&sub_thread_id).await;
@@ -855,6 +881,8 @@ impl ExecutionDriver {
                             let mut conflict_stream = session.prompt(&conflict_prompt);
                             let mut cancel_watch_conflict = self.cancel_watch.clone();
                             let mut first_event_seen = false;
+                            let mut latest_conflict_cost = 0.0;
+                            let mut latest_conflict_tokens = 0;
 
                             let fast_sleep =
                                 tokio::time::sleep(std::time::Duration::from_secs(WORKER_FAST_S));
@@ -891,9 +919,20 @@ impl ExecutionDriver {
                                                     step_execution_id: step_exec.id.clone(),
                                                     content: delta.clone(),
                                                 });
+                                                let _ = self.notif.emit(&DomainEvent::StepProgress {
+                                                    feature_id: self.f_id.clone(),
+                                                    step_id: step_exec.step_id.0.clone(),
+                                                    status: "running".into(),
+                                                    cost_usd: Some(*accumulated_cost + latest_conflict_cost),
+                                                    tokens: Some(*accumulated_tokens + latest_conflict_tokens),
+                                                    wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                                                });
                                             }
-                                            AgentEvent::Usage { cost_usd: Some(c), .. } => {
-                                                *accumulated_cost += c;
+                                            AgentEvent::Usage { input_tokens, output_tokens, cost_usd } => {
+                                                if let Some(c) = cost_usd {
+                                                    latest_conflict_cost = c;
+                                                }
+                                                latest_conflict_tokens = (input_tokens + output_tokens) as i64;
                                             }
                                             AgentEvent::TurnComplete { .. } => break,
                                             AgentEvent::Error { message, .. } => {
@@ -952,6 +991,9 @@ impl ExecutionDriver {
                                     }
                                 }
                             }
+
+                            *accumulated_cost += latest_conflict_cost;
+                            *accumulated_tokens += latest_conflict_tokens;
 
                             if conflict_cancelled || *self.cancel_watch.borrow() {
                                 step_failed = true;
@@ -1081,6 +1123,7 @@ impl ExecutionDriver {
                     iteration_count: None,
                     status: Some(status_str.to_string()),
                     cost_usd: Some(Some(*accumulated_cost)),
+                    tokens: Some(Some(*accumulated_tokens)),
                     wall_clock_secs: Some(Some(wall)),
                     artifact_path: None,
                     artifact_paths: None,
@@ -1092,6 +1135,7 @@ impl ExecutionDriver {
                 step_id: step_exec.step_id.0.clone(),
                 status: status_str.into(),
                 cost_usd: Some(*accumulated_cost),
+                tokens: Some(*accumulated_tokens),
                 wall_clock_secs: Some(wall),
             });
             if is_cancelled {
@@ -1120,6 +1164,7 @@ impl ExecutionDriver {
                     &self.target_dir,
                     &[], // no explicit artifacts list, verifier checks workspace
                     accumulated_cost,
+                    accumulated_tokens,
                     step_start,
                     &agent_kind,
                     &override_model,
@@ -1187,6 +1232,7 @@ impl ExecutionDriver {
                 iteration_count: None,
                 status: Some("completed".to_string()),
                 cost_usd: Some(Some(*accumulated_cost)),
+                tokens: Some(Some(*accumulated_tokens)),
                 wall_clock_secs: Some(Some(wall)),
                 artifact_path: Some(artifact_path),
                 artifact_paths: Some(artifact_paths),
@@ -1198,6 +1244,7 @@ impl ExecutionDriver {
             step_id: step_exec.step_id.0.clone(),
             status: "completed".into(),
             cost_usd: Some(*accumulated_cost),
+            tokens: Some(*accumulated_tokens),
             wall_clock_secs: Some(wall),
         });
         StepOutcome::Completed

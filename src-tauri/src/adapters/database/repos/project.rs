@@ -11,7 +11,11 @@ impl ProjectRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, compute_type, remote_host, status, nodes, spend, created_at
+                "SELECT id, name, compute_type, remote_host, status,
+                        ((SELECT COUNT(*) FROM step_executions se JOIN features f ON se.feature_id = f.id WHERE f.project_id = projects.id AND se.status = 'running' AND se.step_kind = 'agent') + (SELECT COUNT(*) FROM subtask_runs sr JOIN features f ON sr.feature_id = f.id WHERE f.project_id = projects.id AND sr.status = 'running')) AS nodes,
+                        spend,
+                        COALESCE((SELECT SUM(tokens) FROM features WHERE project_id = projects.id), 0) AS tokens,
+                        created_at
                  FROM projects ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -25,7 +29,8 @@ impl ProjectRepository for SqliteAdapter {
                     status: row.get(4)?,
                     nodes: row.get(5)?,
                     spend: row.get(6)?,
-                    created_at: row.get(7)?,
+                    tokens: row.get(7)?,
+                    created_at: row.get(8)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -37,7 +42,11 @@ impl ProjectRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, compute_type, remote_host, status, nodes, spend, created_at
+                "SELECT id, name, compute_type, remote_host, status,
+                        ((SELECT COUNT(*) FROM step_executions se JOIN features f ON se.feature_id = f.id WHERE f.project_id = projects.id AND se.status = 'running' AND se.step_kind = 'agent') + (SELECT COUNT(*) FROM subtask_runs sr JOIN features f ON sr.feature_id = f.id WHERE f.project_id = projects.id AND sr.status = 'running')) AS nodes,
+                        spend,
+                        COALESCE((SELECT SUM(tokens) FROM features WHERE project_id = projects.id), 0) AS tokens,
+                        created_at
                  FROM projects WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -51,7 +60,8 @@ impl ProjectRepository for SqliteAdapter {
                     status: row.get(4)?,
                     nodes: row.get(5)?,
                     spend: row.get(6)?,
-                    created_at: row.get(7)?,
+                    tokens: row.get(7)?,
+                    created_at: row.get(8)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -65,9 +75,9 @@ impl ProjectRepository for SqliteAdapter {
     fn add(&self, p: Project) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
-            "INSERT INTO projects (id, name, compute_type, remote_host, status, nodes, spend, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![p.id, p.name, p.compute_type, p.remote_host, p.status, p.nodes, p.spend, p.created_at],
+            "INSERT INTO projects (id, name, compute_type, remote_host, status, nodes, spend, tokens, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![p.id, p.name, p.compute_type, p.remote_host, p.status, p.nodes, p.spend, p.tokens, p.created_at],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -77,14 +87,15 @@ impl ProjectRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         conn.execute(
             "UPDATE projects SET name = ?2, compute_type = ?3, remote_host = ?4,
-             status = ?5, nodes = ?6 WHERE id = ?1",
+             status = ?5, nodes = ?6, tokens = ?7 WHERE id = ?1",
             params![
                 p.id,
                 p.name,
                 p.compute_type,
                 p.remote_host,
                 p.status,
-                p.nodes
+                p.nodes,
+                p.tokens
             ],
         )
         .map_err(|e| e.to_string())?;

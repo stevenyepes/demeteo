@@ -588,19 +588,56 @@ impl GitOpsHelper {
         let safe_fb = paths::shell_escape_posix(feature_branch);
         let safe_sb = paths::shell_escape_posix(&subtask_branch);
 
-        // Checkout the feature branch in the worktree, then merge.
-        self.exec.run_command(
+        // Find if the feature branch is checked out in any worktree (including the main repo).
+        let mut checked_out_path = None;
+        if let Ok(worktree_list) = self.exec.run_command(
             machine_str,
-            &format!("git -C {} checkout {}", safe_wt, safe_fb),
-        )?;
+            &format!("git -C {} worktree list --porcelain", safe_wt),
+        ) {
+            let mut current_path = None;
+            for line in worktree_list.lines() {
+                if line.starts_with("worktree ") {
+                    current_path = Some(line.trim_start_matches("worktree ").trim().to_string());
+                } else if line.starts_with("branch ") {
+                    let branch_name = line
+                        .trim_start_matches("branch refs/heads/")
+                        .trim_start_matches("branch ")
+                        .trim();
+                    if branch_name == feature_branch {
+                        checked_out_path = current_path.clone();
+                        break;
+                    }
+                }
+            }
+        }
 
-        let cmd = format!(
-            "git -C {} merge {} -m \"Merge subtask {}\"",
-            safe_wt,
-            safe_sb,
-            paths::shell_escape_posix(subtask_id),
-        );
-        self.exec.run_command(machine_str, &cmd)?;
+        if let Some(ref active_wt) = checked_out_path {
+            // The feature branch is already checked out in a worktree (e.g. main repo).
+            // Merge the subtask branch directly into that worktree.
+            let safe_active_wt = paths::shell_escape_posix(active_wt);
+            let cmd = format!(
+                "git -C {} merge {} -m \"Merge subtask {}\"",
+                safe_active_wt,
+                safe_sb,
+                paths::shell_escape_posix(subtask_id),
+            );
+            self.exec.run_command(machine_str, &cmd)?;
+        } else {
+            // The feature branch is not checked out in any worktree.
+            // Checkout the feature branch in the subtask worktree, then merge.
+            self.exec.run_command(
+                machine_str,
+                &format!("git -C {} checkout {}", safe_wt, safe_fb),
+            )?;
+
+            let cmd = format!(
+                "git -C {} merge {} -m \"Merge subtask {}\"",
+                safe_wt,
+                safe_sb,
+                paths::shell_escape_posix(subtask_id),
+            );
+            self.exec.run_command(machine_str, &cmd)?;
+        }
         Ok(())
     }
 

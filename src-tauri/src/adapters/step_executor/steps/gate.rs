@@ -47,6 +47,7 @@ impl ExecutionDriver {
                 iteration_count: None,
                 status: Some("awaiting_gate".to_string()),
                 cost_usd: Some(Some(*accumulated_cost)),
+                tokens: None,
                 wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                 artifact_path: prev_artifact_path.as_ref().map(|p| Some(p.clone())),
                 artifact_paths: Some(prev_artifact_paths.clone()),
@@ -58,6 +59,7 @@ impl ExecutionDriver {
             step_id: step_exec.step_id.0.clone(),
             status: "awaiting_gate".into(),
             cost_usd: Some(*accumulated_cost),
+            tokens: None,
             wall_clock_secs: Some(wall),
         });
         let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -65,6 +67,7 @@ impl ExecutionDriver {
             step_id: step_exec.step_id.0.clone(),
             status: "awaiting_gate".into(),
             cost_usd: Some(*accumulated_cost),
+            tokens: None,
             wall_clock_secs: Some(wall),
         });
 
@@ -125,6 +128,7 @@ impl ExecutionDriver {
                             iteration_count: None,
                             status: Some("completed".to_string()),
                             cost_usd: Some(Some(*accumulated_cost)),
+                            tokens: None,
                             wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                             artifact_path: prev_artifact_path.as_ref().map(|p| Some(p.clone())),
                             artifact_paths: Some(prev_artifact_paths.clone()),
@@ -136,6 +140,7 @@ impl ExecutionDriver {
                         step_id: step_exec.step_id.0.clone(),
                         status: "completed".into(),
                         cost_usd: Some(*accumulated_cost),
+                        tokens: None,
                         wall_clock_secs: Some(wall),
                     });
                     StepOutcome::Completed

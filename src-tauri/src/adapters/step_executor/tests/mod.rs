@@ -230,6 +230,7 @@ async fn test_executor_gate_decide() {
             status: "idle".to_string(),
             nodes: 0,
             spend: 0.0,
+            tokens: 0,
             created_at: now,
         })
         .unwrap();
@@ -242,6 +243,7 @@ async fn test_executor_gate_decide() {
             title: "test feature".to_string(),
             status: "running".to_string(),
             total_cost: 0.0,
+            tokens: 0,
             duration: "0s".to_string(),
             agent_kind: None,
             model: None,
@@ -260,6 +262,7 @@ async fn test_executor_gate_decide() {
             step_kind: "gate".to_string(),
             status: "awaiting_gate".to_string(),
             cost_usd: Some(0.0),
+            tokens: Some(0),
             wall_clock_secs: Some(0),
             artifact_path: None,
             artifact_paths: Vec::new(),

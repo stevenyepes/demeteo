@@ -26,6 +26,7 @@ interface Project {
   repos: number;
   nodes: number;
   spend: number;
+  tokens: number;
   compute_type?: string;
   remote_host?: string | null;
 }
@@ -117,6 +118,7 @@ function App() {
             repos: reposList.length,
             nodes: p.nodes,
             spend: p.spend,
+            tokens: p.tokens || 0,
             compute_type: p.compute_type,
             remote_host: p.remote_host
           };
@@ -198,6 +200,7 @@ function App() {
         repos: 2,
         nodes: sample.nodes,
         spend: sample.spend,
+        tokens: sample.tokens || 0,
         compute_type: sample.compute_type,
         remote_host: sample.remote_host
       };

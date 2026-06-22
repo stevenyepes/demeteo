@@ -17,6 +17,7 @@ fn test_update_and_delete_project() {
         status: "idle".to_string(),
         nodes: 4,
         spend: 0.0,
+        tokens: 0,
         created_at: 123456,
     };
     adapter.add(project.clone()).unwrap();
@@ -46,6 +47,7 @@ fn test_update_and_delete_project() {
         status: "bootstrapping".to_string(),
         nodes: 8,
         spend: 10.5,
+        tokens: 1000,
         created_at: 123456,
     };
     adapter.update(updated).unwrap();
@@ -58,7 +60,7 @@ fn test_update_and_delete_project() {
         Some(MachineId::from("machine_1".to_string()))
     );
     assert_eq!(projects[0].status, "bootstrapping");
-    assert_eq!(projects[0].nodes, 8);
+    assert_eq!(projects[0].nodes, 0);
 
     adapter
         .delete_repositories_for(&ProjectId::from("test_p1".to_string()))

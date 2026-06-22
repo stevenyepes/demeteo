@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Zap, Cpu, Play, Clock, DollarSign, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
+import { Zap, Cpu, Play, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue } from '../types';
 import { getAgentModels } from '../lib/agentModels';
@@ -45,6 +45,7 @@ interface Project {
   repos: number;
   nodes: number;
   spend: number;
+  tokens: number;
   compute_type?: string;
   remote_host?: string | null;
 }
@@ -55,11 +56,22 @@ interface Feature {
   title: string;
   status: string;
   total_cost: number;
+  tokens?: number | null;
   duration: string;
   created_at: number;
   agent_kind?: string | null;
   model?: string | null;
 }
+
+const formatTokens = (tokens: number): string => {
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  }
+  return tokens.toString();
+};
 
 interface ProjectHomeProps {
   setView: (view: string) => void;
@@ -207,6 +219,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                         title: f.title,
                         status: f.status,
                         totalCost: f.total_cost,
+                        tokens: f.tokens || 0,
                         duration: f.duration,
                         steps: []
                     }));
@@ -316,11 +329,15 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                 title: res.title,
                 status: res.status,
                 totalCost: res.total_cost,
+                tokens: res.tokens || 0,
                 duration: res.duration,
                 steps: []
             };
             setFeatures(prev => [newFeature, ...prev]);
             setActiveFeatureId(res.id);
+            if (setActiveFeatureTitle) {
+                setActiveFeatureTitle(res.title);
+            }
             setView('detail');
         } catch (err) {
             console.error("Failed to start feature pipeline:", err);
@@ -502,7 +519,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                     <div className="glass-panel px-4 py-2 rounded-lg flex gap-4 text-xs font-mono">
                         <div className="flex flex-col"><span className="text-slate-500">Fleet Active</span><span className="text-emerald-400 font-bold">{activeProject.nodes} Nodes</span></div>
                         <div className="w-px bg-white/10"></div>
-                        <div className="flex flex-col"><span className="text-slate-500">Cumulative Spend</span><span className="text-white">${activeProject.spend.toFixed(2)}</span></div>
+                        <div className="flex flex-col"><span className="text-slate-500">Token Spend</span><span className="text-white">{formatTokens(activeProject.tokens)}</span></div>
                     </div>
                 </div>
 
@@ -901,8 +918,8 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                                 <div className="text-sm font-medium text-white">{feature.duration}</div>
                                             </div>
                                             <div>
-                                                <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><DollarSign className="w-3 h-3" /> Cost</div>
-                                                <div className="text-sm font-medium text-white">${feature.totalCost.toFixed(2)}</div>
+                                                <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><Zap className="w-3 h-3 text-cyan-400 animate-pulse" /> Tokens</div>
+                                                <div className="text-sm font-medium text-white">{formatTokens(feature.tokens || 0)}</div>
                                             </div>
                                             <ChevronRight className="w-5 h-5 text-slate-500 mt-2 opacity-0 group-hover:opacity-100 transition-opacity" />
                                         </div>

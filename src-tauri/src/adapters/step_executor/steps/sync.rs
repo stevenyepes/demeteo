@@ -49,6 +49,7 @@ impl ExecutionDriver {
                 iteration_count: None,
                 status: Some("running".to_string()),
                 cost_usd: Some(Some(*accumulated_cost)),
+                tokens: None,
                 wall_clock_secs: Some(Some(0)),
                 artifact_path: None,
                 artifact_paths: None,
@@ -60,6 +61,7 @@ impl ExecutionDriver {
             step_id: step_exec.step_id.0.clone(),
             status: "running".into(),
             cost_usd: Some(*accumulated_cost),
+            tokens: None,
             wall_clock_secs: Some(0),
         });
 
@@ -97,6 +99,7 @@ impl ExecutionDriver {
                         iteration_count: None,
                         status: Some("completed".to_string()),
                         cost_usd: Some(Some(*accumulated_cost)),
+                        tokens: None,
                         wall_clock_secs: Some(Some(wall)),
                         artifact_path: None,
                         artifact_paths: None,
@@ -108,6 +111,7 @@ impl ExecutionDriver {
                     step_id: step_exec.step_id.0.clone(),
                     status: "completed".into(),
                     cost_usd: Some(*accumulated_cost),
+                    tokens: None,
                     wall_clock_secs: Some(wall),
                 });
                 let _ = outcome.merge_commit_sha;
@@ -211,6 +215,7 @@ impl ExecutionDriver {
                         iteration_count: None,
                         status: Some("completed".to_string()),
                         cost_usd: None,
+                        tokens: None,
                         wall_clock_secs: Some(Some(wall)),
                         artifact_path: None,
                         artifact_paths: None,
@@ -222,6 +227,7 @@ impl ExecutionDriver {
                     step_id: step_exec.step_id.0.clone(),
                     status: "completed".into(),
                     cost_usd: None,
+                    tokens: None,
                     wall_clock_secs: Some(wall),
                 });
 
@@ -244,6 +250,7 @@ impl ExecutionDriver {
                         iteration_count: None,
                         status: Some("failed".to_string()),
                         cost_usd: None,
+                        tokens: None,
                         wall_clock_secs: Some(Some(wall)),
                         artifact_path: None,
                         artifact_paths: None,
@@ -255,6 +262,7 @@ impl ExecutionDriver {
                     step_id: step_exec.step_id.0.clone(),
                     status: "failed".into(),
                     cost_usd: None,
+                    tokens: None,
                     wall_clock_secs: Some(wall),
                 });
                 StepOutcome::Failed(reason)

@@ -36,6 +36,7 @@ mod tests {
                 status: "idle".to_string(),
                 nodes: 1,
                 spend: 0.0,
+                tokens: 0,
                 created_at: 1000,
             },
         );
@@ -48,6 +49,7 @@ mod tests {
                 title: "Test Feature".to_string(),
                 status: "running".to_string(),
                 total_cost: 0.0,
+                tokens: 0,
                 duration: "0s".to_string(),
                 created_at: 1000,
                 agent_kind: None,
@@ -80,6 +82,7 @@ mod tests {
                 step_kind: "agent".to_string(),
                 status: "failed".to_string(),
                 cost_usd: Some(1.0),
+                tokens: Some(0),
                 wall_clock_secs: Some(60),
                 artifact_path: Some("/tmp/artifact".to_string()),
                 artifact_paths: vec![],
@@ -456,7 +459,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, created_at, agent_kind, model, mr_url, mr_state
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -470,11 +473,12 @@ impl FeatureRepository for SqliteAdapter {
                     status: row.get(4)?,
                     total_cost: row.get(5)?,
                     duration: row.get(6)?,
-                    created_at: row.get(7)?,
-                    agent_kind: row.get(8)?,
-                    model: row.get(9)?,
-                    mr_url: row.get(10)?,
-                    mr_state: row.get(11)?,
+                    tokens: row.get(7)?,
+                    created_at: row.get(8)?,
+                    agent_kind: row.get(9)?,
+                    model: row.get(10)?,
+                    mr_url: row.get(11)?,
+                    mr_state: row.get(12)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -489,7 +493,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, created_at, agent_kind, model, mr_url, mr_state
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state
                  FROM features WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -503,11 +507,12 @@ impl FeatureRepository for SqliteAdapter {
                     status: row.get(4)?,
                     total_cost: row.get(5)?,
                     duration: row.get(6)?,
-                    created_at: row.get(7)?,
-                    agent_kind: row.get(8)?,
-                    model: row.get(9)?,
-                    mr_url: row.get(10)?,
-                    mr_state: row.get(11)?,
+                    tokens: row.get(7)?,
+                    created_at: row.get(8)?,
+                    agent_kind: row.get(9)?,
+                    model: row.get(10)?,
+                    mr_url: row.get(11)?,
+                    mr_state: row.get(12)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -521,11 +526,11 @@ impl FeatureRepository for SqliteAdapter {
     fn add(&self, f: Feature) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, created_at, agent_kind, model, mr_url, mr_state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
-                f.total_cost, f.duration, f.created_at, f.agent_kind, f.model,
+                f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
                 f.mr_url, f.mr_state
             ],
         )
@@ -537,6 +542,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let cost: Option<f64> = patch.total_cost.flatten();
         let dur: Option<String> = patch.duration.clone().flatten();
+        let tokens: Option<i64> = patch.tokens.flatten();
         let agent_kind: Option<Option<String>> = patch.agent_kind.clone();
         let model: Option<Option<String>> = patch.model.clone();
         let mr_url: Option<Option<String>> = patch.mr_url.clone();
@@ -562,6 +568,10 @@ impl FeatureRepository for SqliteAdapter {
         if let Some(d) = &dur {
             sets.push("duration=?");
             binds.push(Box::new(d.clone()));
+        }
+        if let Some(t) = tokens {
+            sets.push("tokens=?");
+            binds.push(Box::new(t));
         }
         if let Some(ak) = agent_kind {
             sets.push("agent_kind=?");
@@ -605,11 +615,11 @@ impl FeatureRepository for SqliteAdapter {
         let artifact_paths_json =
             serde_json::to_string(&s.artifact_paths).map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO step_executions (id,feature_id,step_id,step_index,step_kind,status,cost_usd,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            "INSERT INTO step_executions (id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 s.id, s.feature_id, s.step_id, s.step_index, s.step_kind, s.status,
-                s.cost_usd, s.wall_clock_secs.map(|v| v as i64),
+                s.cost_usd, s.tokens, s.wall_clock_secs.map(|v| v as i64),
                 s.artifact_path, artifact_paths_json, s.error_message, s.iteration_count,
                 s.created_at, s.updated_at
             ],
@@ -622,13 +632,13 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at
+                "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at
                  FROM step_executions WHERE id=?1",
             )
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
             .query_map(params![id.0], |row| {
-                let artifact_paths_json: String = row.get(9)?;
+                let artifact_paths_json: String = row.get(10)?;
                 let artifact_paths: Vec<String> =
                     serde_json::from_str(&artifact_paths_json).unwrap_or_default();
                 Ok(StepExecution {
@@ -639,13 +649,14 @@ impl FeatureRepository for SqliteAdapter {
                     step_kind: row.get(4)?,
                     status: row.get(5)?,
                     cost_usd: row.get(6)?,
-                    wall_clock_secs: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-                    artifact_path: row.get(8)?,
+                    tokens: row.get(7)?,
+                    wall_clock_secs: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+                    artifact_path: row.get(9)?,
                     artifact_paths,
-                    error_message: row.get(10)?,
-                    iteration_count: row.get::<_, u32>(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
+                    error_message: row.get(11)?,
+                    iteration_count: row.get::<_, u32>(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -677,6 +688,16 @@ impl FeatureRepository for SqliteAdapter {
             }
             Some(None) => {
                 sets.push("cost_usd=NULL");
+            }
+            None => {}
+        }
+        match &patch.tokens {
+            Some(Some(t)) => {
+                sets.push("tokens=?");
+                binds.push(Box::new(*t));
+            }
+            Some(None) => {
+                sets.push("tokens=NULL");
             }
             None => {}
         }
@@ -757,13 +778,13 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at
+                "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at
                  FROM step_executions WHERE feature_id=?1 ORDER BY step_index ASC",
             )
             .map_err(|e| e.to_string())?;
         let iter = stmt
             .query_map(params![feature_id.0], |row| {
-                let artifact_paths_json: String = row.get(9)?;
+                let artifact_paths_json: String = row.get(10)?;
                 let artifact_paths: Vec<String> =
                     serde_json::from_str(&artifact_paths_json).unwrap_or_default();
                 Ok(StepExecution {
@@ -774,13 +795,14 @@ impl FeatureRepository for SqliteAdapter {
                     step_kind: row.get(4)?,
                     status: row.get(5)?,
                     cost_usd: row.get(6)?,
-                    wall_clock_secs: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-                    artifact_path: row.get(8)?,
+                    tokens: row.get(7)?,
+                    wall_clock_secs: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+                    artifact_path: row.get(9)?,
                     artifact_paths,
-                    error_message: row.get(10)?,
-                    iteration_count: row.get::<_, u32>(11)?,
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
+                    error_message: row.get(11)?,
+                    iteration_count: row.get::<_, u32>(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
                 })
             })
             .map_err(|e| e.to_string())?;

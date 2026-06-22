@@ -97,13 +97,14 @@ impl ExecutionDriver {
                 None => break,
             };
 
-            // Mark step as running (preserve existing cost / wall_clock from DB)
+            // Mark step as running (preserve existing cost / wall_clock / tokens from DB)
             let _ = self.features.step_update(
                 &step_exec.id,
                 &StepExecutionPatch {
                     iteration_count: None,
                     status: Some("running".to_string()),
                     cost_usd: step_exec.cost_usd.map(Some),
+                    tokens: step_exec.tokens.map(Some),
                     wall_clock_secs: step_exec.wall_clock_secs.map(Some),
                     artifact_path: None,
                     artifact_paths: None,
@@ -115,11 +116,13 @@ impl ExecutionDriver {
                 step_id: step_exec.step_id.0.clone(),
                 status: "running".into(),
                 cost_usd: step_exec.cost_usd,
+                tokens: step_exec.tokens,
                 wall_clock_secs: step_exec.wall_clock_secs,
             });
 
             let step_start = Instant::now();
             let mut accumulated_cost = step_exec.cost_usd.unwrap_or(0.0);
+            let mut accumulated_tokens = step_exec.tokens.unwrap_or(0);
 
             let outcome = match step_conf.kind.as_str() {
                 "agent" => {
@@ -127,6 +130,7 @@ impl ExecutionDriver {
                         step_exec,
                         step_conf,
                         &mut accumulated_cost,
+                        &mut accumulated_tokens,
                         step_start,
                         self.step_index,
                         &step_execs,
@@ -149,6 +153,7 @@ impl ExecutionDriver {
                         step_exec,
                         step_conf,
                         &mut accumulated_cost,
+                        &mut accumulated_tokens,
                         step_start,
                         self.step_index,
                         &step_execs,
@@ -184,6 +189,7 @@ impl ExecutionDriver {
                                 iteration_count: None,
                                 status: Some("interrupted".to_string()),
                                 cost_usd: Some(Some(accumulated_cost)),
+                                tokens: Some(Some(accumulated_tokens)),
                                 wall_clock_secs: Some(Some(wall)),
                                 artifact_path: None,
                                 artifact_paths: None,
@@ -198,6 +204,7 @@ impl ExecutionDriver {
                             step_id: step_exec.step_id.0.clone(),
                             status: "interrupted".into(),
                             cost_usd: Some(accumulated_cost),
+                            tokens: Some(accumulated_tokens),
                             wall_clock_secs: Some(wall),
                         });
                         self.cancel_feature().await;
@@ -211,14 +218,21 @@ impl ExecutionDriver {
                             step_conf,
                             &msg,
                             accumulated_cost,
+                            accumulated_tokens,
                             step_start,
                         ) {
                             self.step_index = redirect_idx;
                             // Continue the loop, do NOT return.
                             continue;
                         }
-                        self.fail_step_and_feature(step_exec, &msg, accumulated_cost, step_start)
-                            .await;
+                        self.fail_step_and_feature(
+                            step_exec,
+                            &msg,
+                            accumulated_cost,
+                            accumulated_tokens,
+                            step_start,
+                        )
+                        .await;
                     }
                     return;
                 }
@@ -271,6 +285,7 @@ impl ExecutionDriver {
         step_exec: &StepExecution,
         msg: &str,
         accumulated_cost: f64,
+        accumulated_tokens: i64,
         step_start: Instant,
     ) {
         let wall = step_start.elapsed().as_secs();
@@ -280,6 +295,7 @@ impl ExecutionDriver {
                 iteration_count: None,
                 status: Some("failed".to_string()),
                 cost_usd: Some(Some(accumulated_cost)),
+                tokens: Some(Some(accumulated_tokens)),
                 wall_clock_secs: Some(Some(wall)),
                 artifact_path: None,
                 artifact_paths: None,
@@ -291,6 +307,7 @@ impl ExecutionDriver {
             step_id: step_exec.step_id.0.clone(),
             status: "failed".into(),
             cost_usd: Some(accumulated_cost),
+            tokens: Some(accumulated_tokens),
             wall_clock_secs: Some(wall),
         });
 
@@ -363,6 +380,7 @@ impl ExecutionDriver {
         step_conf: &StepConfig,
         msg: &str,
         accumulated_cost: f64,
+        accumulated_tokens: i64,
         step_start: Instant,
     ) -> Option<usize> {
         let target_id = match step_conf.on_failure.as_ref() {
@@ -382,6 +400,7 @@ impl ExecutionDriver {
                     iteration_count: None,
                     status: Some("failed".to_string()),
                     cost_usd: Some(Some(accumulated_cost)),
+                    tokens: Some(Some(accumulated_tokens)),
                     wall_clock_secs: Some(Some(wall)),
                     artifact_path: None,
                     artifact_paths: None,
@@ -396,6 +415,7 @@ impl ExecutionDriver {
                 step_id: step_exec.step_id.0.clone(),
                 status: "failed".into(),
                 cost_usd: Some(accumulated_cost),
+                tokens: Some(accumulated_tokens),
                 wall_clock_secs: Some(wall),
             });
             return None;
@@ -409,6 +429,7 @@ impl ExecutionDriver {
             &StepExecutionPatch {
                 status: Some("failed".to_string()),
                 cost_usd: Some(Some(accumulated_cost)),
+                tokens: Some(Some(accumulated_tokens)),
                 artifact_path: None,
                 artifact_paths: None,
                 error_message: Some(Some(format!(
@@ -427,6 +448,7 @@ impl ExecutionDriver {
             step_id: step_exec.step_id.0.clone(),
             status: "failed".into(),
             cost_usd: Some(accumulated_cost),
+            tokens: Some(accumulated_tokens),
             wall_clock_secs: Some(step_start.elapsed().as_secs()),
         });
         Some(target_idx)
@@ -440,6 +462,7 @@ impl ExecutionDriver {
         wt_path: &str,
         produced_artifacts: &[crate::domain::artifact::Artifact],
         accumulated_cost: &mut f64,
+        accumulated_tokens: &mut i64,
         step_start: Instant,
         default_agent_kind: &str,
         override_model: &Option<String>,
@@ -451,6 +474,7 @@ impl ExecutionDriver {
             step_id: step_exec.step_id.0.clone(),
             status: "verifying".into(),
             cost_usd: Some(*accumulated_cost),
+            tokens: Some(*accumulated_tokens),
             wall_clock_secs: Some(step_start.elapsed().as_secs()),
         });
 
@@ -592,6 +616,8 @@ impl ExecutionDriver {
 
         let mut run_failed = None;
         let mut run_cancelled = false;
+        let mut latest_cost = 0.0;
+        let mut latest_tokens = 0;
 
         loop {
             tokio::select! {
@@ -617,8 +643,11 @@ impl ExecutionDriver {
                             });
                             text_buffer.push_str(&delta);
                         }
-                        AgentEvent::Usage { cost_usd: Some(c), .. } => {
-                            *accumulated_cost += c;
+                        AgentEvent::Usage { input_tokens, output_tokens, cost_usd } => {
+                            if let Some(c) = cost_usd {
+                                latest_cost = c;
+                            }
+                            latest_tokens = (input_tokens + output_tokens) as i64;
                         }
                         AgentEvent::TurnComplete { .. } => break,
                         AgentEvent::Error { message, .. } => {
@@ -670,6 +699,9 @@ impl ExecutionDriver {
         }
 
         let _ = self.registry.kill(&verifier_thread_id).await;
+
+        *accumulated_cost += latest_cost;
+        *accumulated_tokens += latest_tokens;
 
         if run_cancelled || *self.cancel_watch.borrow() {
             return Err("Verifier cancelled by user".to_string());

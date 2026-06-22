@@ -36,13 +36,14 @@ pub enum DomainEvent {
     },
 
     /// Emitted on every step state transition inside a feature, with
-    /// accumulated cost and elapsed time so the UI can render progress
+    /// accumulated cost, tokens and elapsed time so the UI can render progress
     /// without a poll.
     StepProgress {
         feature_id: FeatureId,
         step_id: String,
         status: String,
         cost_usd: Option<f64>,
+        tokens: Option<i64>,
         wall_clock_secs: Option<u64>,
     },
 

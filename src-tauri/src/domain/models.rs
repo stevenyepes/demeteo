@@ -194,6 +194,8 @@ pub struct Project {
     pub status: String,
     pub nodes: i32,
     pub spend: f64,
+    #[serde(default)]
+    pub tokens: i64,
     pub created_at: i64,
 }
 
@@ -214,6 +216,8 @@ pub struct Feature {
     pub status: String,
     pub total_cost: f64,
     pub duration: String,
+    #[serde(default)]
+    pub tokens: i64,
     pub created_at: i64,
     #[serde(default)]
     pub agent_kind: Option<String>,
@@ -381,6 +385,8 @@ pub struct StepExecution {
     /// pending | running | awaiting_gate | completed | failed | skipped | interrupted
     pub status: String,
     pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub tokens: Option<i64>,
     pub wall_clock_secs: Option<u64>,
     /// Legacy single-path field. Kept so existing readers (gate display,
     /// pre-refactor tests, the startup watchdog) still see a sensible
@@ -440,6 +446,8 @@ pub struct SubtaskRun {
     /// pending | running | completed | failed | skipped
     pub status: String,
     pub cost_usd: f64,
+    #[serde(default)]
+    pub tokens: i64,
     pub error_message: Option<String>,
     pub started_at: i64,
     pub ended_at: Option<i64>,

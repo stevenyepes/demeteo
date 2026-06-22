@@ -7,6 +7,7 @@ interface Project {
   status: string;
   repos: number;
   nodes?: number;
+  tokens?: number;
 }
 
 interface ProjectRailProps {

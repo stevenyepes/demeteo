@@ -80,6 +80,7 @@ pub async fn create_project(
         status: "bootstrapping".to_string(),
         nodes: if config.compute_type == "local" { 4 } else { 8 },
         spend: 0.0,
+        tokens: 0,
         created_at: now,
     };
 
@@ -120,6 +121,7 @@ pub fn seed_sample_project(ctx: State<'_, AppContext>) -> Result<Project, String
         status: "idle".to_string(),
         nodes: 4,
         spend: 0.0,
+        tokens: 0,
         created_at: now,
     };
 
@@ -151,6 +153,7 @@ pub async fn update_project(
         status: "bootstrapping".to_string(),
         nodes: if config.compute_type == "local" { 4 } else { 8 },
         spend: existing.spend,
+        tokens: existing.tokens,
         created_at: existing.created_at,
     };
 

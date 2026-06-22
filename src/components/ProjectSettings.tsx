@@ -15,6 +15,7 @@ interface Project {
     repos: number;
     nodes: number;
     spend: number;
+    tokens: number;
     compute_type?: string;
     remote_host?: string | null;
 }

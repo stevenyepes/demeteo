@@ -98,6 +98,16 @@ const ARTIFACT_KIND_COLORS: Record<ArtifactKind, string> = {
 };
 
 
+const formatTokens = (tokens: number): string => {
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  }
+  return tokens.toString();
+};
+
 export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   featureId,
   projectId,
@@ -107,7 +117,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
 }) => {
   const [steps, setSteps] = useState<StepExecution[]>([]);
   const [status, setStatus] = useState('running');
-  const [cost, setCost] = useState(0.0);
+  const [tokens, setTokens] = useState<number>(0);
   const [duration, setDuration] = useState('0s');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +129,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [replayTarget, setReplayTarget] = useState<{ id: string; name: string; downstreamCount: number } | null>(null);
+  const [featureTitle, setFeatureTitle] = useState<string>(title || 'Feature Pipeline');
 
   useEffect(() => {
     loadFeatureData();
@@ -149,6 +160,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           step_id: string;
           status: string;
           cost_usd: number | null;
+          tokens: number | null;
           wall_clock_secs: number | null;
         }>('step_progress', (event) => {
           if (event.payload.feature_id === featureId) {
@@ -211,8 +223,13 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       let f: any = null;
       try {
         f = await invoke('feature_get', { featureId });
-        if (f && selectedModel === '') {
-          setSelectedModel(f.model || '');
+        if (f) {
+          if (selectedModel === '') {
+            setSelectedModel(f.model || '');
+          }
+          if (f.title) {
+            setFeatureTitle(f.title);
+          }
         }
       } catch (err) {
         console.error('Failed to fetch feature detail:', err);
@@ -220,6 +237,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
 
       // Compute telemetry
       let totalCost = 0.0;
+      let totalTokens = 0;
       let totalSecs = 0;
       let isGated = false;
       let hasFailed = false;
@@ -229,6 +247,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
 
       for (const s of list) {
         totalCost += s.cost_usd || 0.0;
+        totalTokens += s.tokens || 0;
         totalSecs += s.wall_clock_secs || 0;
         if (s.status === 'awaiting_gate') isGated = true;
         if (s.status === 'failed') hasFailed = true;
@@ -237,7 +256,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         if (s.status === 'verifying') isVerifying = true;
       }
 
-      setCost(totalCost);
+      setTokens(totalTokens);
       setDuration(`${totalSecs}s`);
 
       if (f?.status === 'cancelled') setStatus('cancelled');
@@ -495,7 +514,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
             >
               Back
             </button>
-            <h1 className="text-xl font-bold font-display text-white tracking-wide">Feature Pipeline</h1>
+            <h1 className="text-xl font-bold font-display text-white tracking-wide">{featureTitle}</h1>
             <span
               className={`text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
                 status === 'running'
@@ -521,8 +540,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
             <div className="text-lg font-bold font-mono text-white">{duration}</div>
           </div>
           <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Cost</div>
-            <div className="text-lg font-bold font-mono text-cyan-400">${cost.toFixed(3)}</div>
+            <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Tokens</div>
+            <div className="text-lg font-bold font-mono text-cyan-400">{formatTokens(tokens)}</div>
           </div>
           {(status === 'running' || status === 'verifying') && (
             <button
@@ -698,7 +717,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                         </div>
 
                         <div className="flex items-center gap-4 text-xs font-mono">
-                          {typeof step.cost_usd === 'number' && <span className="text-cyan-400">${step.cost_usd.toFixed(3)}</span>}
+                          {typeof step.tokens === 'number' && <span className="text-cyan-400">{formatTokens(step.tokens)}</span>}
                           {step.wall_clock_secs !== null && <span className="text-slate-400">{step.wall_clock_secs}s</span>}
                         </div>
                       </div>

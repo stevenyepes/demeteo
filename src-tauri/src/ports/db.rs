@@ -67,6 +67,7 @@ pub struct FeaturePatch {
     pub status: Option<String>,
     pub total_cost: Option<Option<f64>>,
     pub duration: Option<Option<String>>,
+    pub tokens: Option<Option<i64>>,
     pub agent_kind: Option<Option<String>>,
     pub model: Option<Option<String>>,
     /// Set/clear the MR/PR URL after [`MrPublisher::publish_mr`].
@@ -82,6 +83,7 @@ pub struct FeaturePatch {
 pub struct StepExecutionPatch {
     pub status: Option<String>,
     pub cost_usd: Option<Option<f64>>,
+    pub tokens: Option<Option<i64>>,
     pub wall_clock_secs: Option<Option<u64>>,
     /// Legacy single-path field. The repo adapter also writes the first
     /// entry of `artifact_paths` here when the latter is set, so older
