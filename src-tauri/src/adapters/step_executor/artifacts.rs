@@ -72,9 +72,8 @@ pub(crate) fn resolve_attached_artifacts(
                             for p in &paths {
                                 match std::fs::read_to_string(p) {
                                     Ok(c) => parts_content.push(c),
-                                    Err(_) => {
-                                        parts_content.push(format!("(Error reading artifact at {})", p))
-                                    }
+                                    Err(_) => parts_content
+                                        .push(format!("(Error reading artifact at {})", p)),
                                 }
                             }
                             let art_content = if parts_content.len() == 1 {
@@ -87,7 +86,10 @@ pub(crate) fn resolve_attached_artifacts(
                                 prev_step.step_id.0.clone(),
                                 art_content,
                             ));
-                            replacement = format!("[See attached {} at the beginning of the prompt]", prev_step.step_id.0);
+                            replacement = format!(
+                                "[See attached {} at the beginning of the prompt]",
+                                prev_step.step_id.0
+                            );
                         }
                     } else {
                         replacement = "(No previous step exists)".to_string();
@@ -121,8 +123,15 @@ pub(crate) fn resolve_attached_artifacts(
 
                     if found {
                         let art_content = matched_contents.join("\n\n");
-                        attachments.push((matched_step_index, matched_step_id.clone(), art_content));
-                        replacement = format!("[See attached {} at the beginning of the prompt]", matched_step_id);
+                        attachments.push((
+                            matched_step_index,
+                            matched_step_id.clone(),
+                            art_content,
+                        ));
+                        replacement = format!(
+                            "[See attached {} at the beginning of the prompt]",
+                            matched_step_id
+                        );
                     } else {
                         replacement =
                             format!("(Artifact '{}' not found or not yet generated)", content);

@@ -5,7 +5,6 @@ use ssh2::Session;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -16,22 +15,20 @@ use tauri::{ipc::Channel, AppHandle, Emitter, State};
 
 static SESSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
-/// Wraps either an SSH channel or a local subprocess stdout for reading.
+/// Wraps an SSH channel for reading.
 pub enum ReadSource {
     Ssh(Arc<Mutex<ssh2::Channel>>),
-    Local(Arc<Mutex<ChildStdout>>),
 }
 
-/// Wraps either an SSH channel or a local subprocess stdin for writing.
+/// Wraps an SSH channel for writing.
 pub enum WriteSink {
     Ssh(Arc<Mutex<ssh2::Channel>>),
-    Local(Arc<Mutex<ChildStdin>>),
 }
 
 pub struct ActiveSession {
     pub read_source: ReadSource,
     pub write_sink: WriteSink,
-    /// Kept alive for the lifetime of the session (SSH or local process).
+    /// Kept alive for the lifetime of the session.
     pub _keepalive: Arc<Mutex<SessionKeepalive>>,
     pub machine_id: String,
     pub created_at: u64,
@@ -39,16 +36,12 @@ pub struct ActiveSession {
 }
 
 /// SSH sessions need both the Session and TcpStream kept alive.
-/// Local processes need the Child kept alive.
 pub enum SessionKeepalive {
     Ssh {
         #[allow(dead_code)]
         session: Session,
         #[allow(dead_code)]
         tcp: TcpStream,
-    },
-    Local {
-        child: Arc<Mutex<Child>>,
     },
 }
 
@@ -93,26 +86,6 @@ pub fn connect_ssh(
     crate::ssh_util::connect(machine, secret)
 }
 
-fn spawn_local_shell() -> Result<(Child, ChildStdin, ChildStdout), String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-    let mut cmd = Command::new(&shell);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn local shell ({}): {}", shell, e))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Failed to capture shell stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture shell stdout".to_string())?;
-    Ok((child, stdin, stdout))
-}
-
 #[tauri::command]
 pub fn start_terminal_session(
     app: AppHandle,
@@ -120,6 +93,7 @@ pub fn start_terminal_session(
     session_state: State<'_, SessionState>,
     machine_id: String,
     tauri_channel: Channel<Vec<u8>>,
+    work_dir: Option<String>,
 ) -> Result<String, String> {
     let machines = ctx.machines.get_machines()?;
     let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.clone());
@@ -151,38 +125,29 @@ pub fn start_terminal_session(
     let frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>> =
         Arc::new(Mutex::new(Some(tauri_channel)));
 
-    let (read_source, write_sink, keepalive) = if machine.auth_type == "local" {
-        let (child, stdin, stdout) = spawn_local_shell()?;
-        let child = Arc::new(Mutex::new(child));
-        let stdin = Arc::new(Mutex::new(stdin));
-        let stdout = Arc::new(Mutex::new(stdout));
-        (
-            ReadSource::Local(stdout),
-            WriteSink::Local(stdin),
-            SessionKeepalive::Local { child },
-        )
-    } else {
-        let (sess, tcp) = connect_ssh(&machine, secret)?;
-        sess.set_keepalive(true, 30);
-        let mut ssh_chan = sess
-            .channel_session()
-            .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
-        ssh_chan
-            .request_pty("xterm-256color", None, None)
-            .map_err(|e| format!("Failed to request PTY: {}", e))?;
-        ssh_chan
-            .shell()
-            .map_err(|e| format!("Failed to start shell: {}", e))?;
-        sess.set_blocking(false);
-        let arc_chan = Arc::new(Mutex::new(ssh_chan));
-        (
-            ReadSource::Ssh(arc_chan.clone()),
-            WriteSink::Ssh(arc_chan),
-            SessionKeepalive::Ssh { session: sess, tcp },
-        )
-    };
+    let (sess, tcp) = connect_ssh(&machine, secret)?;
+    sess.set_keepalive(true, 30);
+    let mut ssh_chan = sess
+        .channel_session()
+        .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+    ssh_chan
+        .request_pty("xterm-256color", None, None)
+        .map_err(|e| format!("Failed to request PTY: {}", e))?;
+    ssh_chan
+        .shell()
+        .map_err(|e| format!("Failed to start shell: {}", e))?;
 
-    let keepalive = Arc::new(Mutex::new(keepalive));
+    if let Some(ref dir) = work_dir {
+        let cd_cmd = format!("cd {} && clear\n", crate::paths::shell_escape_posix(dir));
+        let _ = ssh_chan.write_all(cd_cmd.as_bytes());
+        let _ = ssh_chan.flush();
+    }
+
+    sess.set_blocking(false);
+    let arc_chan = Arc::new(Mutex::new(ssh_chan));
+    let read_source = ReadSource::Ssh(arc_chan.clone());
+    let write_sink = WriteSink::Ssh(arc_chan);
+    let keepalive = Arc::new(Mutex::new(SessionKeepalive::Ssh { session: sess, tcp }));
 
     let read_app = app.clone();
     let read_session_id = session_id.clone();
@@ -190,7 +155,6 @@ pub fn start_terminal_session(
     let read_frontend_channel = frontend_channel.clone();
     let read_source_for_thread = match &read_source {
         ReadSource::Ssh(ch) => ReadSource::Ssh(ch.clone()),
-        ReadSource::Local(out) => ReadSource::Local(out.clone()),
     };
 
     thread::spawn(move || {
@@ -199,7 +163,6 @@ pub fn start_terminal_session(
         loop {
             let result = match &read_source_for_thread {
                 ReadSource::Ssh(ch) => ch.lock().unwrap().read(&mut buffer),
-                ReadSource::Local(out) => out.lock().unwrap().read(&mut buffer),
             };
 
             match result {
@@ -308,17 +271,6 @@ pub fn write_terminal_session(
                 chan.flush()
                     .map_err(|e| format!("Failed to flush terminal: {}", e))?;
             }
-            WriteSink::Local(stdin) => {
-                let mut stdin = stdin
-                    .lock()
-                    .map_err(|_| "Failed to lock stdin".to_string())?;
-                stdin
-                    .write_all(data.as_bytes())
-                    .map_err(|e| format!("Failed to write to terminal: {}", e))?;
-                stdin
-                    .flush()
-                    .map_err(|e| format!("Failed to flush terminal: {}", e))?;
-            }
         }
         Ok(())
     } else {
@@ -346,9 +298,6 @@ pub fn resize_terminal_session(
                 chan.request_pty_size(cols, rows, None, None)
                     .map_err(|e| format!("Failed to resize terminal: {}", e))?;
             }
-            WriteSink::Local(_) => {
-                // Local subprocess terminals don't support PTY resize
-            }
         }
         Ok(())
     } else {
@@ -372,16 +321,6 @@ pub fn close_terminal_session(
                     .lock()
                     .map_err(|_| "Failed to lock channel".to_string())?;
                 let _ = chan.close();
-            }
-            WriteSink::Local(_) => {
-                if let Ok(keepalive) = active._keepalive.lock() {
-                    if let SessionKeepalive::Local { ref child } = *keepalive {
-                        if let Ok(mut child) = child.lock() {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                        }
-                    }
-                }
             }
         }
         Ok(())

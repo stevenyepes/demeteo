@@ -69,12 +69,10 @@ impl ArtifactStore for FsArtifactStore {
         let dir = self.step_dir(feature_id, step_id);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let ext = match &artifact.source {
-            ArtifactSource::ToolWrite { path } => {
-                Path::new(path)
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_else(|| FsArtifactStore::ext_for_mime(&artifact.mime))
-            }
+            ArtifactSource::ToolWrite { path } => Path::new(path)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or_else(|| FsArtifactStore::ext_for_mime(&artifact.mime)),
             _ => FsArtifactStore::ext_for_mime(&artifact.mime),
         };
         let safe_name = sanitize(&artifact.name);

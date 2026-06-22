@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Zap, Cpu, Play, Clock, DollarSign, ChevronRight, Settings, AlertTriangle, RotateCw, Check } from 'lucide-react';
+import { Zap, Cpu, Play, Clock, DollarSign, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue } from '../types';
 import { getAgentModels } from '../lib/agentModels';
+import { TerminalWindow } from './TerminalWindow';
 
 export const MOCK_FEATURES = [
     {
@@ -73,6 +74,8 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
     const [isExpanded, setIsExpanded] = useState(false);
     const [features, setFeatures] = useState<any[]>([]);
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
+    const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
+    const [activeRepoPath, setActiveRepoPath] = useState<string>('');
 
     // Repositories and Workflows integration
     const [repositories, setRepositories] = useState<any[]>([]);
@@ -222,6 +225,9 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                     name: r.repo_path.split('/').pop() || r.repo_path
                 }));
                 setRepositories(mapped);
+                if (mapped.length > 0) {
+                    setActiveRepoPath(mapped[0].path);
+                }
             } else if (reposRes.status === 'rejected') {
                 console.error("Failed to fetch repositories:", reposRes.reason);
             }
@@ -471,11 +477,11 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
     }
 
     return (
-        <div className="flex-1 overflow-y-auto p-8 relative">
-            <div className="max-w-7xl mx-auto space-y-8">
+        <div className="flex-1 flex flex-col p-8 relative overflow-hidden bg-[#0a0c10]">
+            <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col min-h-0 space-y-6">
 
                 {/* Header Block with Telemetry */}
-                <div className="flex justify-between items-end">
+                <div className="flex justify-between items-end shrink-0">
                     <div>
                         <div className="flex items-center gap-2 mb-2">
                             <h1 className="text-3xl font-outfit font-bold text-white tracking-tight">{activeProject.name}</h1>
@@ -496,7 +502,27 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                     </div>
                 </div>
 
-                {/* Start Feature Expanded Card */}
+                {/* Tabs Selector */}
+                <div className="tabs-bar shrink-0">
+                    <button
+                        onClick={() => setActiveTab('pipelines')}
+                        className={`tab ${activeTab === 'pipelines' ? 'active' : ''}`}
+                    >
+                        <Sliders className="w-3.5 h-3.5" />
+                        <span>Pipelines</span>
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('terminal')}
+                        className={`tab ${activeTab === 'terminal' ? 'active' : ''}`}
+                    >
+                        <Terminal className="w-3.5 h-3.5" />
+                        <span>Terminal</span>
+                    </button>
+                </div>
+
+                {activeTab === 'pipelines' ? (
+                    <div className="flex-1 overflow-y-auto space-y-8 pr-1 min-h-0">
+                        {/* Start Feature Expanded Card */}
                 <div className={`glass-panel rounded-2xl overflow-hidden transition-[padding] duration-300 ${isExpanded ? 'p-6' : 'p-2 relative group'}`}>
                     {!isExpanded && (
                         <div className="absolute inset-0 bg-gradient-to-r from-violet-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
@@ -873,6 +899,41 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                         )}
                     </div>
                 </div>
+                </div>
+                ) : (
+                    <div className="flex-1 min-h-0 flex flex-col gap-4">
+                        {repositories.length > 1 && (
+                            <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-white/5 border border-white/5 rounded-lg p-2.5 shrink-0">
+                                <span>Select Repository:</span>
+                                <select
+                                    value={activeRepoPath}
+                                    onChange={(e) => setActiveRepoPath(e.target.value)}
+                                    className="bg-[#08090c] border border-white/10 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                >
+                                    {repositories.map((repo) => (
+                                        <option key={repo.path} value={repo.path}>
+                                            {repo.path}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+                        <div className="flex-1 min-h-0">
+                            {activeRepoPath ? (
+                                <TerminalWindow
+                                    projectId={activeProject.id}
+                                    computeType={activeProject.compute_type || 'local'}
+                                    remoteHost={activeProject.remote_host || null}
+                                    repoPath={activeRepoPath}
+                                />
+                            ) : (
+                                <div className="flex-1 flex items-center justify-center p-8 bg-[#050608] border border-white/5 rounded-xl">
+                                    <span className="text-xs text-slate-500 italic">No repositories configured.</span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
 
             </div>
         </div>

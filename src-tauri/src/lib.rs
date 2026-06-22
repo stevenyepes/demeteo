@@ -228,7 +228,6 @@ pub fn run() {
                                         let _ = chan.close();
                                     }
                                 }
-                                terminal::WriteSink::Local(_) => {}
                             }
                         }
                     }
@@ -299,6 +298,7 @@ pub fn run() {
             commands::project::get_repositories_for_project,
             commands::project::get_workspace_health,
             commands::project::get_project_by_id,
+            commands::project::resolve_repo_dir,
             commands::features::fetch_active_features,
             commands::features::start_feature,
             commands::features::feature_pause,

@@ -376,3 +376,19 @@ pub fn get_project_by_id(
 ) -> Result<Option<Project>, String> {
     ctx.projects.get_project(&ProjectId::from(project_id))
 }
+
+#[tauri::command]
+pub fn resolve_repo_dir(
+    app: tauri::AppHandle,
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    repo_path: String,
+) -> Result<String, String> {
+    let projects = ctx.projects.get_projects()?;
+    let project_id_typed = ProjectId::from(project_id.clone());
+    let project = projects
+        .into_iter()
+        .find(|p| p.id == project_id_typed)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+    resolve_target_dir(&app, &ctx.exec, &project, &project_id, &repo_path)
+}
