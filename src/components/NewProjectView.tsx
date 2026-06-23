@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Server, RotateCw, AlertTriangle, Key } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { formatError } from '../lib/errors';
+import { useErrorBus } from '../lib/errorBus';
 
 interface Provider {
     id: string;
@@ -49,6 +51,7 @@ interface WorktreeStrategy {
 }
 
 const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, setCurrentProjectId, providers, onOpenMachinesSettings }) => {
+    const { reportError } = useErrorBus();
     const [projectName, setProjectName] = useState('');
     const [computeType, setComputeType] = useState('local');
     const [remoteHost, setRemoteHost] = useState('');
@@ -84,7 +87,7 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
                     });
                     return repos.map(r => ({ path: r, providerId: p.id }));
                 } catch (err) {
-                    console.error(`Failed to fetch repos for provider ${p.name}:`, err);
+                    reportError(err, { kind: "provider" });
                     return [];
                 }
             }));
@@ -100,7 +103,7 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
             }
             setAvailableRepos(uniqueRepos);
         } catch (err) {
-            console.error("Error fetching repositories:", err);
+            reportError(err, { kind: "internal" });
         } finally {
             setIsLoadingRepos(false);
         }
@@ -121,7 +124,7 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
                 const list: Machine[] = await invoke('get_machines');
                 if (!cancelled) setMachines(list ?? []);
             } catch (err) {
-                console.warn('Failed to fetch machines:', err);
+                reportError(err, { kind: "internal" });
             }
         })();
         return () => { cancelled = true; };
@@ -226,7 +229,7 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
             }
         } catch (err: any) {
             setBootstrapStep('error');
-            setBootstrapError(String(err));
+            setBootstrapError(formatError(err));
         }
     };
 
@@ -261,7 +264,7 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
             setView('home');
         } catch (err: any) {
             setBootstrapStep('error');
-            setBootstrapError(String(err));
+            setBootstrapError(formatError(err));
         }
     };
 

@@ -1,0 +1,562 @@
+use std::time::Instant;
+
+use super::list_unmerged::list_unmerged_files;
+use super::planner::PlannedSubtask;
+use crate::adapters::step_executor::artifacts::{
+    commit_worktree_changes, inject_artifact_contract, read_worktree_file,
+    resolve_attached_artifacts, resolve_declared_artifacts, WorktreeSnapshot,
+};
+use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::domain::agent_event::AgentEvent;
+use crate::domain::artifact::Artifact;
+use crate::domain::models::{StepConfig, StepExecution};
+use crate::paths;
+use crate::ports::agent_runtime::AgentContext;
+use crate::ports::notification::DomainEvent;
+
+impl ExecutionDriver {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn run_subtasks_loop(
+        &self,
+        step_exec: &StepExecution,
+        step_conf: &StepConfig,
+        accumulated_cost: &mut f64,
+        accumulated_tokens: &mut i64,
+        step_start: Instant,
+        step_index: usize,
+        step_execs: &[StepExecution],
+        subtasks: &[PlannedSubtask],
+        machine_str: &str,
+        _base_sha: &str,
+        planner_kind: &str,
+        override_model: &Option<String>,
+        all_artifact_refs: &mut Vec<String>,
+        subtask_artifacts: &mut Vec<String>,
+    ) -> Result<(), String> {
+        let mut step_failed = false;
+        let mut step_err_msg = String::new();
+        let is_legacy = step_conf.artifacts.as_ref().is_none_or(|d| d.is_empty());
+        let decls: &[crate::domain::artifact::ArtifactDecl] =
+            step_conf.artifacts.as_deref().unwrap_or(&[]);
+
+        for (sub_idx, sub) in subtasks.iter().enumerate() {
+            if *self.cancel_watch.borrow() {
+                step_failed = true;
+                step_err_msg = "Execution cancelled by user".to_string();
+                break;
+            }
+
+            // Provision subtask worktree
+            let wt_path = match self
+                .git_ops
+                .provision_subtask_worktree(
+                    self.machine_id_opt.as_deref(),
+                    &self.target_dir,
+                    &self.branch_name,
+                    &sub.id,
+                )
+                .await
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    step_failed = true;
+                    step_err_msg = format!(
+                        "parallel subtask worktree provision failed ({}): {}",
+                        sub.id, e
+                    );
+                    break;
+                }
+            };
+
+            // Snapshot the subtask worktree's dirty state BEFORE the worker runs.
+            let subtask_snapshot =
+                WorktreeSnapshot::capture(&*self.exec, machine_str, &wt_path).await;
+
+            let other_files: Vec<String> = subtasks
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != sub_idx)
+                .flat_map(|(_, s)| s.files.clone())
+                .collect();
+            let other_files_str = other_files.join(", ");
+            let sub_files_str = sub.files.join(", ");
+
+            // Render the worker prompt template
+            let sub_prompt = self
+                .base_ctx
+                .clone()
+                .set("subtask_description", &sub.description)
+                .set("subtask_files", &sub_files_str)
+                .set("other_subtask_files", &other_files_str)
+                .set("partition_id", &sub.id)
+                .render(step_conf.prompt_template.as_deref().unwrap_or(""));
+            let sub_prompt = if sub_prompt.trim().is_empty() {
+                format!(
+                    "Subtask: {}. Files: {}. Code inside: {}",
+                    sub.title, sub_files_str, wt_path
+                )
+            } else {
+                resolve_attached_artifacts(&sub_prompt, step_execs, step_index, &*self.artifacts)
+            };
+            let sub_prompt =
+                inject_artifact_contract(&sub_prompt, if is_legacy { None } else { Some(decls) });
+
+            let agent_kind = planner_kind.to_string();
+            let sub_thread_id = format!("{}-{}", self.f_id_str, sub.id);
+            let mut worker_env = crate::ports::agent_runtime::agent_base_env();
+            // CLI agents: pass model via --model flag, not OPENCODE_CONFIG_CONTENT.
+            if let Some(ref m) = override_model {
+                if agent_kind == "opencode" || agent_kind == "hermes" {
+                    // CLI mode: model passed as --model flag at spawn
+                } else {
+                    let config = format!(
+                        r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
+                        m
+                    );
+                    worker_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
+                }
+            }
+            let ctx = AgentContext {
+                thread_id: sub_thread_id.clone(),
+                machine_id: machine_str.to_string(),
+                binary: agent_kind.clone(),
+                args: vec![],
+                env: worker_env,
+                cwd: wt_path.clone(),
+                model: override_model.clone(),
+                title: Some(sub.title.clone()),
+                agent_exec: self.agent_exec.clone(),
+                exec: self.exec.clone(),
+            };
+
+            let spawn_fut = self.registry.get_or_spawn(&sub_thread_id, &agent_kind, ctx);
+            let mut cancel_watch_spawn = self.cancel_watch.clone();
+            let spawn_res = tokio::select! {
+                res = spawn_fut => Some(res),
+                _ = cancel_watch_spawn.changed() => None,
+            };
+
+            match spawn_res {
+                Some(Ok(session)) => {
+                    let is_cli_agent = agent_kind == "opencode" || agent_kind == "hermes";
+                    if !is_cli_agent {
+                        if let Some(ref model) = override_model {
+                            let info = session.session_info();
+                            let applied = info
+                                .config_options
+                                .as_ref()
+                                .and_then(|opts| opts.iter().find(|o| o.id == "model"))
+                                .map(|o| o.current_value == *model)
+                                .unwrap_or(false);
+                            if !applied {
+                                let _ = session.set_config_option("model", model);
+                            }
+                        }
+                    }
+                    let mut produced_artifacts: Vec<Artifact> = Vec::new();
+                    let mut legacy_sub_content = String::new();
+
+                    const WORKER_FAST_S: u64 = 180;
+                    const WORKER_NORMAL_S: u64 = 300;
+                    const WORKER_WALL_S: u64 = 600;
+
+                    let timeouts = crate::adapters::agent::event_stream::Timeouts {
+                        fast_timeout_s: WORKER_FAST_S,
+                        normal_timeout_s: WORKER_NORMAL_S,
+                        wall_cap_s: WORKER_WALL_S,
+                    };
+
+                    let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
+                        &*session,
+                        &sub_prompt,
+                        timeouts,
+                        Some(self.cancel_watch.clone()),
+                        machine_str,
+                        &*self.exec,
+                        |event| {
+                            if let AgentEvent::Text { delta } = event {
+                                if is_legacy {
+                                    legacy_sub_content.push_str(delta);
+                                }
+                                let _ = self.notif.emit(&DomainEvent::AgentStream {
+                                    feature_id: self.f_id.clone(),
+                                    step_execution_id: step_exec.id.clone(),
+                                    content: delta.clone(),
+                                });
+                                let _ = self.notif.emit(&DomainEvent::StepProgress {
+                                    feature_id: self.f_id.clone(),
+                                    step_id: step_exec.step_id.0.clone(),
+                                    status: "running".into(),
+                                    cost_usd: Some(*accumulated_cost),
+                                    tokens: Some(*accumulated_tokens),
+                                    wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                                });
+                            }
+                        },
+                    )
+                    .await;
+
+                    match turn_res {
+                        crate::adapters::agent::event_stream::TurnResult::Interrupted => {
+                            step_failed = true;
+                            step_err_msg = "Execution cancelled by user".to_string();
+                        }
+                        crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+                            step_failed = true;
+                            step_err_msg = format!(
+                                "parallel subtask agent error ({}): {}",
+                                sub.id, descriptive
+                            );
+                        }
+                        crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
+                            *accumulated_cost += outcome.cost_usd;
+                            *accumulated_tokens += outcome.tokens;
+                            produced_artifacts = outcome.produced_artifacts;
+                        }
+                    }
+
+                    if step_failed {
+                        crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                            &self.registry,
+                            &self.git_ops,
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &sub.id,
+                            &sub_thread_id,
+                        )
+                        .await;
+                        break;
+                    }
+
+                    if is_legacy {
+                        subtask_artifacts
+                            .push(format!("### {}\n\n{}", sub.title, legacy_sub_content));
+                    } else {
+                        let always: Vec<&str> = decls
+                            .iter()
+                            .filter_map(|d| match &d.capture {
+                                crate::domain::artifact::ArtifactCapture::LastWriteTo { path } => {
+                                    Some(path.as_str())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let mut changed = subtask_snapshot
+                            .delta(&*self.exec, machine_str, &wt_path, &always, &[])
+                            .await;
+                        if changed.is_empty() {
+                            if let Ok(git_diff_files) = self
+                                .exec
+                                .run_command(
+                                    machine_str,
+                                    &format!(
+                                        "git -C {} diff --name-only {}",
+                                        paths::shell_escape_posix(&wt_path),
+                                        paths::shell_escape_posix(&self.branch_name),
+                                    ),
+                                )
+                                .await
+                            {
+                                changed = git_diff_files
+                                    .lines()
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                            }
+                        }
+                        for rel_path in changed {
+                            let name = std::path::Path::new(&rel_path)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("artifact")
+                                .to_string();
+                            if let Some(content) =
+                                read_worktree_file(&*self.exec, machine_str, &wt_path, &rel_path)
+                                    .await
+                            {
+                                produced_artifacts
+                                    .push(Artifact::tool_write(name, rel_path, content));
+                            }
+                        }
+
+                        let _ = commit_worktree_changes(
+                            &*self.exec,
+                            machine_str,
+                            &wt_path,
+                            &format!("feat({}): {}", self.f_id.as_str(), sub.title,),
+                        )
+                        .await;
+
+                        let refs = resolve_declared_artifacts(
+                            decls,
+                            &produced_artifacts,
+                            &self.artifacts,
+                            &self.f_id_str,
+                            &step_exec.step_id.0,
+                        );
+                        all_artifact_refs.extend(refs);
+                    }
+
+                    // Merge back
+                    let mut merge_result = self
+                        .git_ops
+                        .merge_subtask(
+                            self.machine_id_opt.as_deref(),
+                            &wt_path,
+                            &self.branch_name,
+                            &sub.id,
+                        )
+                        .await;
+
+                    if merge_result.is_err() {
+                        // Handle merge conflicts via helper function
+                        let conflict_res = self
+                            .handle_subtask_conflict(
+                                step_exec,
+                                &*session,
+                                machine_str,
+                                &wt_path,
+                                &sub.id,
+                                accumulated_cost,
+                                accumulated_tokens,
+                                step_start,
+                            )
+                            .await;
+
+                        match conflict_res {
+                            Ok(()) => {
+                                // Try merging again
+                                merge_result = self
+                                    .git_ops
+                                    .merge_subtask(
+                                        self.machine_id_opt.as_deref(),
+                                        &wt_path,
+                                        &self.branch_name,
+                                        &sub.id,
+                                    )
+                                    .await;
+                            }
+                            Err(conflict_err) => {
+                                merge_result = Err(conflict_err);
+                            }
+                        }
+                    }
+
+                    if step_failed {
+                        let _ = self.registry.kill(&sub_thread_id).await;
+                        let _ = tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let _ = self
+                            .git_ops
+                            .cleanup_subtask_worktree(
+                                self.machine_id_opt.as_deref(),
+                                &self.target_dir,
+                                &self.branch_name,
+                                &sub.id,
+                            )
+                            .await;
+                        break;
+                    }
+
+                    if let Err(err) = merge_result {
+                        let _ = self.notif.emit(&DomainEvent::ConflictDetected {
+                            feature_id: self.f_id.clone(),
+                            subtask_id: format!("{}_subtask_{}", self.branch_name, sub.id),
+                        });
+                        step_failed = true;
+                        step_err_msg =
+                            format!("parallel subtask merge failed ({}): {}", sub.id, err);
+                        crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                            &self.registry,
+                            &self.git_ops,
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &sub.id,
+                            &sub_thread_id,
+                        )
+                        .await;
+                        break;
+                    }
+                }
+                Some(Err(e)) => {
+                    step_failed = true;
+                    step_err_msg =
+                        format!("parallel subtask agent spawn failed ({}): {:?}", sub.id, e);
+                    crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                        &self.registry,
+                        &self.git_ops,
+                        self.machine_id_opt.as_deref(),
+                        &self.target_dir,
+                        &self.branch_name,
+                        &sub.id,
+                        &sub_thread_id,
+                    )
+                    .await;
+                    break;
+                }
+                None => {
+                    step_failed = true;
+                    step_err_msg = "Execution cancelled by user".to_string();
+                    crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                        &self.registry,
+                        &self.git_ops,
+                        self.machine_id_opt.as_deref(),
+                        &self.target_dir,
+                        &self.branch_name,
+                        &sub.id,
+                        &sub_thread_id,
+                    )
+                    .await;
+                    break;
+                }
+            }
+
+            // Cleanup worktree (success path)
+            crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                &self.registry,
+                &self.git_ops,
+                self.machine_id_opt.as_deref(),
+                &self.target_dir,
+                &self.branch_name,
+                &sub.id,
+                &sub_thread_id,
+            )
+            .await;
+        }
+
+        if step_failed {
+            Err(step_err_msg)
+        } else {
+            Ok(())
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_subtask_conflict(
+        &self,
+        step_exec: &StepExecution,
+        session: &dyn crate::ports::agent_runtime::AgentSession,
+        machine_str: &str,
+        wt_path: &str,
+        sub_id: &str,
+        accumulated_cost: &mut f64,
+        accumulated_tokens: &mut i64,
+        step_start: Instant,
+    ) -> Result<(), String> {
+        let merge_back_cmd = format!(
+            "git -C {} merge {}",
+            paths::shell_escape_posix(wt_path),
+            paths::shell_escape_posix(&self.branch_name)
+        );
+        let _ = self.exec.run_command(machine_str, &merge_back_cmd).await;
+
+        let unmerged = list_unmerged_files(&*self.exec, machine_str, wt_path).await;
+        if unmerged.is_empty() {
+            return Ok(());
+        }
+
+        let files_list = unmerged
+            .iter()
+            .map(|f| format!("- {} ({})", f.path, f.kind))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let conflict_prompt = format!(
+            "We encountered a merge conflict while merging the latest changes from the feature branch '{}' into your workspace.\n\
+             Please resolve the conflicts in the following files:\n\
+             {}\n\n\
+             Ensure you edit these files to remove conflict markers (<<<<<<<, =======, >>>>>>>) and integrate the changes correctly. \
+             Make sure all code builds and passes tests. Once done, let me know.",
+            self.branch_name, files_list
+        );
+
+        const WORKER_FAST_S: u64 = 180;
+        const WORKER_NORMAL_S: u64 = 300;
+        const WORKER_WALL_S: u64 = 600;
+
+        let timeouts = crate::adapters::agent::event_stream::Timeouts {
+            fast_timeout_s: WORKER_FAST_S,
+            normal_timeout_s: WORKER_NORMAL_S,
+            wall_cap_s: WORKER_WALL_S,
+        };
+
+        let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
+            session,
+            &conflict_prompt,
+            timeouts,
+            Some(self.cancel_watch.clone()),
+            machine_str,
+            &*self.exec,
+            |event| {
+                if let AgentEvent::Text { delta } = event {
+                    let _ = self.notif.emit(&DomainEvent::AgentStream {
+                        feature_id: self.f_id.clone(),
+                        step_execution_id: step_exec.id.clone(),
+                        content: delta.clone(),
+                    });
+                    let _ = self.notif.emit(&DomainEvent::StepProgress {
+                        feature_id: self.f_id.clone(),
+                        step_id: step_exec.step_id.0.clone(),
+                        status: "running".into(),
+                        cost_usd: Some(*accumulated_cost),
+                        tokens: Some(*accumulated_tokens),
+                        wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                    });
+                }
+            },
+        )
+        .await;
+
+        let mut conflict_failed = None;
+        let mut conflict_cancelled = false;
+
+        match turn_res {
+            crate::adapters::agent::event_stream::TurnResult::Interrupted => {
+                conflict_cancelled = true;
+            }
+            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+                conflict_failed = Some(descriptive);
+            }
+            crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
+                *accumulated_cost += outcome.cost_usd;
+                *accumulated_tokens += outcome.tokens;
+            }
+        }
+
+        if conflict_cancelled || *self.cancel_watch.borrow() {
+            return Err("Execution cancelled by user".to_string());
+        }
+        if let Some(failed_msg) = conflict_failed {
+            return Err(format!(
+                "parallel subtask agent error during conflict resolution ({}): {}",
+                sub_id, failed_msg
+            ));
+        }
+
+        // Verify conflicts are resolved.
+        let still_unmerged = list_unmerged_files(&*self.exec, machine_str, wt_path).await;
+        if still_unmerged.is_empty() {
+            let commit_resolved = self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "git -C {} commit -am \"Resolve merge conflicts with {}\"",
+                        paths::shell_escape_posix(wt_path),
+                        paths::shell_escape_posix(&self.branch_name)
+                    ),
+                )
+                .await;
+            if commit_resolved.is_ok() {
+                Ok(())
+            } else {
+                Err("Failed to commit merge conflict resolution".to_string())
+            }
+        } else {
+            Err(format!(
+                "Agent failed to resolve merge conflicts in: {:?}",
+                still_unmerged.iter().map(|f| &f.path).collect::<Vec<_>>()
+            ))
+        }
+    }
+}

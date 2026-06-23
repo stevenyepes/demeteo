@@ -1,5 +1,6 @@
 use crate::domain::ids::MachineId;
 use crate::domain::models::Machine;
+use crate::error::AppError;
 
 /// Tests SSH connectivity using parameters passed directly from the UI form.
 /// This avoids stale-state bugs where the DB has outdated auth settings that the
@@ -12,7 +13,7 @@ pub fn test_ssh_connection(
     auth_type: String,
     key_path: Option<String>,
     secret: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if auth_type == "local" {
         return Ok(());
     }

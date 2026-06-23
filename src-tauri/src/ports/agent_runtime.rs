@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_stream::Stream;
@@ -71,6 +72,7 @@ pub enum AgentStartError {
 /// Transport-neutral runtime for a single agent. The runtime takes a binary
 /// and a config and owns the lifecycle of one agent session: spawning,
 /// initialization, prompt streaming, cancel, and clean teardown.
+#[async_trait]
 pub trait AgentRuntime: Send + Sync {
     /// Stable identifier; matches `AgentConfig.kind`.
     fn kind(&self) -> &'static str;
@@ -78,7 +80,7 @@ pub trait AgentRuntime: Send + Sync {
     /// Check if the binary is reachable on the target host (which / command
     /// -v). The result is cached per `(machine_id, kind)` by the registry for
     /// the duration of the app session.
-    fn is_available(
+    async fn is_available(
         &self,
         exec: &dyn crate::ports::execution::ExecutionPort,
         machine_id: &str,

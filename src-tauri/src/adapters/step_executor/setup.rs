@@ -55,7 +55,7 @@ pub(crate) fn resolve_project_info(
 }
 
 #[allow(dead_code)]
-pub(crate) fn resolve_path_probe(
+pub(crate) async fn resolve_path_probe(
     exec: &dyn ExecutionPort,
     project_info: &ProjectInfo,
     _project_id: &ProjectId,
@@ -83,6 +83,7 @@ pub(crate) fn resolve_path_probe(
     );
     let probe_output = exec
         .run_command(&machine_id_for_check, &probe)
+        .await
         .unwrap_or_else(|e| format!("probe failed: {}", e));
     let path_ok = probe_output.contains("__DEMETEO_DIAG__ exists");
     if !path_ok {

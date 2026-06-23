@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { formatError } from '../lib/errors';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -107,9 +108,9 @@ export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
           };
           setLanguage(langMap[ext] || 'plaintext');
         }
-      } catch (err: any) {
+      } catch (err) {
         console.error('Failed to read artifact:', err);
-        setError(err.toString() || 'Failed to read artifact file from disk.');
+        setError(formatError(err) || 'Failed to read artifact file from disk.');
       } finally {
         setLoading(false);
       }

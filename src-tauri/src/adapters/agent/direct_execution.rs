@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use tokio::sync::oneshot;
 
 use crate::domain::action::AgentAction;
@@ -18,14 +19,14 @@ impl DirectExecutionPort {
         Self { inner }
     }
 
-    fn execute(
+    async fn execute(
         inner: Arc<dyn ExecutionPort>,
         machine_id: String,
         action: AgentAction,
     ) -> Result<ExecutionResult, String> {
         match action {
             AgentAction::Read { path } => {
-                let content = inner.read_file(&machine_id, &path)?;
+                let content = inner.read_file(&machine_id, &path).await?;
                 let preview = content.lines().take(40).collect::<Vec<_>>().join("\n");
                 Ok(ExecutionResult::FileRead {
                     path,
@@ -33,7 +34,7 @@ impl DirectExecutionPort {
                 })
             }
             AgentAction::Edit { path, content } | AgentAction::Write { path, content } => {
-                inner.write_file(&machine_id, &path, &content)?;
+                inner.write_file(&machine_id, &path, &content).await?;
                 Ok(ExecutionResult::FileChanged {
                     path,
                     lines_added: 0,
@@ -41,25 +42,26 @@ impl DirectExecutionPort {
                 })
             }
             AgentAction::RunBash { cmd } => {
-                let output = inner.run_command(&machine_id, &cmd)?;
+                let output = inner.run_command(&machine_id, &cmd).await?;
                 Ok(ExecutionResult::Bash { output })
             }
         }
     }
 }
 
+#[async_trait]
 impl AgentExecutionPort for DirectExecutionPort {
-    fn submit(
+    async fn submit(
         &self,
         _thread_id: &str,
         machine_id: &str,
         action: AgentAction,
     ) -> Result<CommandOutcome, String> {
-        let result = Self::execute(self.inner.clone(), machine_id.to_string(), action)?;
+        let result = Self::execute(self.inner.clone(), machine_id.to_string(), action).await?;
         Ok(CommandOutcome::Executed { output: result })
     }
 
-    fn submit_agent(
+    async fn submit_agent(
         &self,
         _thread_id: &str,
         machine_id: &str,
@@ -67,19 +69,20 @@ impl AgentExecutionPort for DirectExecutionPort {
         _tool_call_id: Option<String>,
     ) -> Result<CommandOutcome, ActionError> {
         let result = Self::execute(self.inner.clone(), machine_id.to_string(), action)
+            .await
             .map_err(ActionError::internal)?;
         Ok(CommandOutcome::Executed { output: result })
     }
 
-    fn approve(&self, _intercept_id: &str) -> Result<(), String> {
+    async fn approve(&self, _intercept_id: &str) -> Result<(), String> {
         Err("no pending intercepts (policy engine removed)".into())
     }
 
-    fn reject(&self, _intercept_id: &str, _feedback: String) -> Result<(), String> {
+    async fn reject(&self, _intercept_id: &str, _feedback: String) -> Result<(), String> {
         Err("no pending intercepts (policy engine removed)".into())
     }
 
-    fn register_result_responder(
+    async fn register_result_responder(
         &self,
         _intercept_id: &str,
         _tx: oneshot::Sender<Result<ExecutionResult, String>>,

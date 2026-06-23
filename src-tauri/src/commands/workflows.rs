@@ -1,5 +1,6 @@
 use crate::domain::ids::{WorkflowId, WorkflowVersionId};
 use crate::domain::models::{StepConfig, Workflow, WorkflowVersion};
+use crate::error::AppError;
 use crate::paths;
 use crate::ports::db::WorkflowRepository;
 use crate::state::AppContext;
@@ -127,7 +128,7 @@ pub struct WorkflowWithSteps {
 }
 
 #[tauri::command]
-pub async fn workflow_list(ctx: State<'_, AppContext>) -> Result<Vec<WorkflowWithSteps>, String> {
+pub fn workflow_list(ctx: State<'_, AppContext>) -> Result<Vec<WorkflowWithSteps>, AppError> {
     let workflows = &ctx.workflows;
     let ws = workflows.list()?;
     let mut result = Vec::new();
@@ -156,14 +157,17 @@ pub async fn workflow_list(ctx: State<'_, AppContext>) -> Result<Vec<WorkflowWit
 }
 
 #[tauri::command]
-pub async fn workflow_get(
+pub fn workflow_get(
     workflow_id: String,
     ctx: State<'_, AppContext>,
-) -> Result<WorkflowWithSteps, String> {
+) -> Result<WorkflowWithSteps, AppError> {
     let workflows = &ctx.workflows;
     let wf_id = WorkflowId::from(workflow_id.clone());
-    let w = workflows.get(&wf_id)?.ok_or("Workflow not found")?;
-    let latest = workflows.latest_version(&wf_id)?;
+    let w = workflows
+        .get(&wf_id)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("Workflow not found: {}", workflow_id)))?;
+    let latest = workflows.latest_version(&wf_id).map_err(AppError::from)?;
     let (steps, version, version_id) = if let Some(v) = latest {
         let steps = serde_json::from_str::<Vec<StepConfig>>(&v.steps_json).unwrap_or_default();
         (steps, v.version, v.id.0)
@@ -185,12 +189,12 @@ pub async fn workflow_get(
 }
 
 #[tauri::command]
-pub async fn workflow_create(
+pub fn workflow_create(
     name: String,
     description: String,
     steps: Vec<StepConfig>,
     ctx: State<'_, AppContext>,
-) -> Result<WorkflowWithSteps, String> {
+) -> Result<WorkflowWithSteps, AppError> {
     let workflows = &ctx.workflows;
     let now = paths::now_ms();
     let id = WorkflowId::from(format!("wf-{}", paths::new_id()));
@@ -233,22 +237,27 @@ pub async fn workflow_create(
 }
 
 #[tauri::command]
-pub async fn workflow_update(
+pub fn workflow_update(
     workflow_id: String,
     name: String,
     description: String,
     steps: Vec<StepConfig>,
     note: Option<String>,
     ctx: State<'_, AppContext>,
-) -> Result<WorkflowWithSteps, String> {
+) -> Result<WorkflowWithSteps, AppError> {
     let workflows = &ctx.workflows;
     let now = paths::now_ms();
     let wf_id = WorkflowId::from(workflow_id.clone());
-    let w = workflows.get(&wf_id)?.ok_or("Workflow not found")?;
-    workflows.update_meta(&wf_id, &name, &description)?;
+    let w = workflows
+        .get(&wf_id)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("Workflow not found: {}", workflow_id)))?;
+    workflows
+        .update_meta(&wf_id, &name, &description)
+        .map_err(AppError::from)?;
 
     // Calculate next version number
-    let existing_versions = workflows.versions(&wf_id)?;
+    let existing_versions = workflows.versions(&wf_id).map_err(AppError::from)?;
     let next_version = existing_versions
         .iter()
         .map(|v| v.version)
@@ -282,34 +291,39 @@ pub async fn workflow_update(
 }
 
 #[tauri::command]
-pub async fn workflow_delete(
-    workflow_id: String,
-    ctx: State<'_, AppContext>,
-) -> Result<(), String> {
-    ctx.workflows.delete(&WorkflowId::from(workflow_id))
+pub fn workflow_delete(workflow_id: String, ctx: State<'_, AppContext>) -> Result<(), AppError> {
+    ctx.workflows
+        .delete(&WorkflowId::from(workflow_id))
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
-pub async fn workflow_versions(
+pub fn workflow_versions(
     workflow_id: String,
     ctx: State<'_, AppContext>,
-) -> Result<Vec<WorkflowVersion>, String> {
-    ctx.workflows.versions(&WorkflowId::from(workflow_id))
+) -> Result<Vec<WorkflowVersion>, AppError> {
+    ctx.workflows
+        .versions(&WorkflowId::from(workflow_id))
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
-pub async fn workflow_export(
+pub fn workflow_export(
     workflow_id: String,
     ctx: State<'_, AppContext>,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let workflows = &ctx.workflows;
     let wf_id = WorkflowId::from(workflow_id);
-    let w = workflows.get(&wf_id)?.ok_or("Workflow not found")?;
+    let w = workflows
+        .get(&wf_id)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found("Workflow not found"))?;
     let latest = workflows
-        .latest_version(&wf_id)?
-        .ok_or("No versions found")?;
+        .latest_version(&wf_id)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found("No versions found"))?;
     let steps: Vec<StepConfig> =
-        serde_json::from_str(&latest.steps_json).map_err(|e| e.to_string())?;
+        serde_json::from_str(&latest.steps_json).map_err(|e| AppError::from(e.to_string()))?;
 
     let export = serde_json::json!({
         "id": w.id,
@@ -318,14 +332,14 @@ pub async fn workflow_export(
         "is_starter": w.is_starter,
         "steps": steps
     });
-    serde_json::to_string_pretty(&export).map_err(|e| e.to_string())
+    serde_json::to_string_pretty(&export).map_err(|e| e.to_string().into())
 }
 
 #[tauri::command]
-pub async fn workflow_import(
+pub fn workflow_import(
     json: String,
     ctx: State<'_, AppContext>,
-) -> Result<WorkflowWithSteps, String> {
+) -> Result<WorkflowWithSteps, AppError> {
     let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     let name = v["name"]
         .as_str()
@@ -378,15 +392,20 @@ pub async fn workflow_import(
 
 /// Revert a starter pack workflow to its bundled default version.
 #[tauri::command]
-pub async fn workflow_revert_to_default(
+pub fn workflow_revert_to_default(
     workflow_id: String,
     ctx: State<'_, AppContext>,
-) -> Result<WorkflowWithSteps, String> {
+) -> Result<WorkflowWithSteps, AppError> {
     let workflows = &ctx.workflows;
     let wf_id = WorkflowId::from(workflow_id.clone());
-    let w = workflows.get(&wf_id)?.ok_or("Workflow not found")?;
+    let w = workflows
+        .get(&wf_id)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("Workflow not found: {}", workflow_id)))?;
     if !w.is_starter {
-        return Err("Only starter pack workflows can be reverted to default.".to_string());
+        return Err(AppError::validation(
+            "Only starter pack workflows can be reverted to default.",
+        ));
     }
 
     let starters: &[&str] = &[
@@ -440,15 +459,17 @@ pub async fn workflow_revert_to_default(
             }
         }
     }
-    Err("Starter pack source not found for this workflow id.".to_string())
+    Err(AppError::not_found(
+        "Starter pack source not found for this workflow id.",
+    ))
 }
 
 #[tauri::command]
-pub async fn workflow_save_schedule(
+pub fn workflow_save_schedule(
     workflow_id: String,
     schedule: Option<crate::domain::models::WorkflowSchedule>,
     ctx: State<'_, AppContext>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let wf_id = WorkflowId::from(workflow_id);
     let mut schedule_to_save = schedule;
     if let Some(ref mut s) = schedule_to_save {

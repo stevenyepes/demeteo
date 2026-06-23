@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import { StepExecution } from '../types';
 import { getAgentModels } from '../lib/agentModels';
+import { useErrorBus } from '../lib/errorBus';
+import { formatError } from '../lib/errors';
 import {
   ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X,
   GitPullRequest, RotateCcw, FileText, FileCode, FileJson, GitMerge, FileQuestion,
@@ -115,6 +117,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   onDecideGate,
   onBack,
 }) => {
+  const { reportError } = useErrorBus();
   const [steps, setSteps] = useState<StepExecution[]>([]);
   const [status, setStatus] = useState('running');
   const [tokens, setTokens] = useState<number>(0);
@@ -204,7 +207,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           cleanups.push(unlistenStream);
         }
       } catch (err) {
-        console.error('Failed to setup Tauri event listeners:', err);
+        reportError(err, { kind: "internal" });
       }
     };
 
@@ -232,7 +235,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           }
         }
       } catch (err) {
-        console.error('Failed to fetch feature detail:', err);
+        reportError(err, { kind: "internal" });
       }
 
       // Compute telemetry
@@ -281,14 +284,14 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
             const models = await getAgentModels(machineId, agentKind);
             setAvailableModels(models as Array<{ value: string; name: string }>);
           } catch (err) {
-            console.warn('Failed to fetch available models:', err);
+            reportError(err, { kind: "internal" });
           } finally {
             setIsLoadingModels(false);
           }
         })();
       }
-    } catch (err: any) {
-      setError(err.toString());
+    } catch (err) {
+      setError(formatError(err));
       setLoading(false);
     }
   };
@@ -312,8 +315,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         if (f2?.status === 'cancelled' || f2?.status === 'failed') break;
         await loadFeatureData();
       }
-    } catch (err: any) {
-      await messageDialog(err.toString(), { title: 'Cancel Failed', kind: 'error' });
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Cancel Failed', kind: 'error' });
     }
   };
 
@@ -334,8 +337,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         if (f2?.status === 'cancelled' || f2?.status === 'failed') break;
         await loadFeatureData();
       }
-    } catch (err: any) {
-      await messageDialog(err.toString(), { title: 'Stop Failed', kind: 'error' });
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Stop Failed', kind: 'error' });
     }
   };
 
@@ -344,8 +347,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       const modelParam = selectedModel || null;
       await invoke('step_retry', { stepExecutionId, newModel: modelParam });
       loadFeatureData();
-    } catch (err: any) {
-      await messageDialog(err.toString(), { title: 'Retry Failed', kind: 'error' });
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Retry Failed', kind: 'error' });
     }
   };
 
@@ -356,8 +359,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       await invoke('replay_from_step', { stepExecutionId: replayTarget.id, newModel: modelParam });
       setReplayTarget(null);
       loadFeatureData();
-    } catch (err: any) {
-      await messageDialog(err.toString(), { title: 'Replay Failed', kind: 'error' });
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Replay Failed', kind: 'error' });
     }
   };
 
@@ -385,8 +388,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       const outcome = await syncFeature(featureId, null);
       setSyncBanner(outcome);
       loadFeatureData();
-    } catch (err: any) {
-      await messageDialog(err.toString(), { title: 'Sync failed', kind: 'error' });
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Sync failed', kind: 'error' });
     } finally {
       setSyncing(false);
     }
@@ -412,8 +415,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       );
       setSyncBanner(outcome);
       loadFeatureData();
-    } catch (err: any) {
-      await messageDialog(err.toString(), { title: 'Resolution failed', kind: 'error' });
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Resolution failed', kind: 'error' });
     } finally {
       setResolving(false);
     }
@@ -449,7 +452,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         setMrUrl(f?.mr_url ?? null);
         setMrState((f?.mr_state ?? 'none') as MrState);
       } catch (err) {
-        console.warn('Failed to load feature for MR badge', err);
+        reportError(err, { kind: "internal" });
       }
     })();
     return () => {
@@ -479,8 +482,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         { title: 'Published', kind: 'info' },
       );
       loadFeatureData();
-    } catch (err: any) {
-      await messageDialog(err.toString(), { title: 'Publish failed', kind: 'error' });
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Publish failed', kind: 'error' });
     } finally {
       setPublishing(false);
     }
@@ -489,16 +492,26 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   /** Apply the project's `feature_lifecycle` policy (R6 decision 26).
    *  `archive` → soft-delete; `auto_delete` → git branch -D +
    *  soft-delete; `keep` → no-op. */
-  const handleCleanup = async () => {
+  const handleCleanup = async (force = false) => {
     try {
-      const result: any = await invoke('feature_cleanup', { featureId });
-      await messageDialog(
-        `Cleanup (${result.policy}): ${result.action}`,
-        { title: 'Lifecycle applied', kind: 'info' },
-      );
-      loadFeatureData();
-    } catch (err: any) {
-      await messageDialog(err.toString(), { title: 'Cleanup failed', kind: 'error' });
+      const result: any = await invoke('feature_cleanup', { featureId, force });
+      let msg = `Cleanup (${result.policy}): ${result.action}`;
+      if (result.warnings?.length) {
+        msg += `\n\nWarnings:\n${result.warnings.join('\n')}`;
+      }
+      await messageDialog(msg, { title: 'Lifecycle applied', kind: 'info' });
+      onBack();
+    } catch (err) {
+      const msg = formatError(err);
+      if (msg.includes('Auto-delete requires the MR to be merged')) {
+        const ok = await confirmDialog(
+          'The branch has not been merged yet. Force delete anyway?',
+          { title: 'Force delete branch?', kind: 'warning', okLabel: 'Force Delete', cancelLabel: 'Cancel' },
+        );
+        if (ok) handleCleanup(true);
+      } else {
+        await messageDialog(msg, { title: 'Cleanup failed', kind: 'error' });
+      }
     }
   };
 
@@ -572,7 +585,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                 Publish MR
               </button>
               <button
-                onClick={handleCleanup}
+                onClick={() => handleCleanup()}
                 className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-bold transition duration-300"
                 title="Apply the project's feature_lifecycle (archive / keep / auto_delete)"
               >

@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use keyring::Entry;
 use serde::Deserialize;
 
@@ -74,14 +75,19 @@ impl HttpMrPublisher {
 
 /// The HTTP abstraction. Lets us inject a fake for tests; in
 /// production this is `ReqwestHttp`.
+#[async_trait]
 pub trait HttpClient: Send + Sync {
-    fn post_json(
+    async fn post_json(
         &self,
         url: &str,
         headers: &[(String, String)],
         body: &serde_json::Value,
     ) -> Result<HttpResponse, String>;
-    fn get_json(&self, url: &str, headers: &[(String, String)]) -> Result<HttpResponse, String>;
+    async fn get_json(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<HttpResponse, String>;
 }
 
 /// HTTP response. Body is always captured as text so we can log it
@@ -91,8 +97,9 @@ pub struct HttpResponse {
     pub body: String,
 }
 
+#[async_trait]
 impl MrPublisher for HttpMrPublisher {
-    fn publish_mr(
+    async fn publish_mr(
         &self,
         project_id: &str,
         feature_id: &FeatureId,
@@ -185,7 +192,8 @@ impl MrPublisher for HttpMrPublisher {
             project.remote_host.as_ref().map(|m| m.as_str()),
             project_id,
             &repo.repo_path,
-        )?;
+        )
+        .await?;
 
         let source_branch = format!(
             "{}{}",
@@ -216,6 +224,7 @@ impl MrPublisher for HttpMrPublisher {
         );
         self.exec
             .run_command(machine_str, &set_url_cmd)
+            .await
             .map_err(|e| format!("Failed to update remote origin URL: {}", e))?;
 
         // Push the local feature branch to origin remote before creating MR.
@@ -228,6 +237,7 @@ impl MrPublisher for HttpMrPublisher {
         );
         self.exec
             .run_command(machine_str, &push_cmd)
+            .await
             .map_err(|e| format!("Failed to push feature branch to origin: {}", e))?;
 
         let http: &dyn HttpClient = match self.http_override.as_ref() {
@@ -236,28 +246,34 @@ impl MrPublisher for HttpMrPublisher {
         };
 
         let info = match provider.kind.as_str() {
-            "github" => publish_github(
-                http,
-                &provider.host,
-                &repo_path,
-                source_branch,
-                settings.worktree_strategy.default_branch.as_str(),
-                &title,
-                &body,
-                options.draft,
-                &pat,
-            )?,
-            "gitlab" => publish_gitlab(
-                http,
-                &provider.host,
-                &repo_path,
-                source_branch,
-                settings.worktree_strategy.default_branch.as_str(),
-                &title,
-                &body,
-                options.draft,
-                &pat,
-            )?,
+            "github" => {
+                publish_github(
+                    http,
+                    &provider.host,
+                    &repo_path,
+                    source_branch,
+                    settings.worktree_strategy.default_branch.as_str(),
+                    &title,
+                    &body,
+                    options.draft,
+                    &pat,
+                )
+                .await?
+            }
+            "gitlab" => {
+                publish_gitlab(
+                    http,
+                    &provider.host,
+                    &repo_path,
+                    source_branch,
+                    settings.worktree_strategy.default_branch.as_str(),
+                    &title,
+                    &body,
+                    options.draft,
+                    &pat,
+                )
+                .await?
+            }
             other => return Err(format!("Unsupported provider kind: {}", other)),
         };
 
@@ -280,7 +296,7 @@ impl MrPublisher for HttpMrPublisher {
         Ok(info)
     }
 
-    fn fetch_mr_state(&self, project_id: &str, mr_url: &str) -> Result<String, String> {
+    async fn fetch_mr_state(&self, project_id: &str, mr_url: &str) -> Result<String, String> {
         if mr_url.is_empty() {
             return Ok("none".to_string());
         }
@@ -321,8 +337,8 @@ impl MrPublisher for HttpMrPublisher {
         };
 
         match provider {
-            Some(p) if p.kind == "github" => fetch_github_pr_state(http, &p.host, mr_url),
-            Some(p) if p.kind == "gitlab" => fetch_gitlab_mr_state(http, &p.host, mr_url),
+            Some(p) if p.kind == "github" => fetch_github_pr_state(http, &p.host, mr_url).await,
+            Some(p) if p.kind == "gitlab" => fetch_gitlab_mr_state(http, &p.host, mr_url).await,
             _ => Ok("open".to_string()),
         }
     }
@@ -335,7 +351,7 @@ impl MrPublisher for HttpMrPublisher {
 /// provider's PAT, but at this point we don't have it cached in
 /// `fetch_mr_state`'s signature — best-effort is fine because the
 /// "open" fallback matches the stub's behavior for offline cases).
-fn fetch_github_pr_state(
+async fn fetch_github_pr_state(
     http: &dyn HttpClient,
     host: &str,
     mr_url: &str,
@@ -349,7 +365,7 @@ fn fetch_github_pr_state(
         ),
         ("User-Agent".to_string(), "demeteo".to_string()),
     ];
-    let resp = http.get_json(&url, &headers)?;
+    let resp = http.get_json(&url, &headers).await?;
     if resp.status >= 300 {
         return Ok("open".to_string());
     }
@@ -366,7 +382,7 @@ fn fetch_github_pr_state(
 
 /// Pull the current state of a GitLab MR. Mirrors `fetch_github_pr_state`
 /// for the GitLab API shape.
-fn fetch_gitlab_mr_state(
+async fn fetch_gitlab_mr_state(
     http: &dyn HttpClient,
     host: &str,
     mr_url: &str,
@@ -380,7 +396,7 @@ fn fetch_gitlab_mr_state(
     );
     let headers: Vec<(String, String)> =
         vec![("Accept".to_string(), "application/json".to_string())];
-    let resp = http.get_json(&url, &headers)?;
+    let resp = http.get_json(&url, &headers).await?;
     if resp.status >= 300 {
         return Ok("open".to_string());
     }
@@ -450,7 +466,7 @@ fn resolve_pat(provider_id: &str) -> Result<String, String> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn publish_github(
+async fn publish_github(
     http: &dyn HttpClient,
     host: &str,
     repo_path: &str,
@@ -477,7 +493,7 @@ fn publish_github(
         ),
         ("User-Agent".to_string(), "demeteo".to_string()),
     ];
-    let resp = http.post_json(&url, &headers, &payload)?;
+    let resp = http.post_json(&url, &headers, &payload).await?;
     if resp.status >= 300 {
         return Err(format!(
             "GitHub returned HTTP {}: {}",
@@ -499,7 +515,7 @@ fn publish_github(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn publish_gitlab(
+async fn publish_gitlab(
     http: &dyn HttpClient,
     host: &str,
     repo_path: &str,
@@ -528,7 +544,7 @@ fn publish_gitlab(
         ("PRIVATE-TOKEN".to_string(), pat.to_string()),
         ("Content-Type".to_string(), "application/json".to_string()),
     ];
-    let resp = http.post_json(&url, &headers, &payload)?;
+    let resp = http.post_json(&url, &headers, &payload).await?;
     if resp.status >= 300 {
         return Err(format!(
             "GitLab returned HTTP {}: {}",
@@ -591,107 +607,56 @@ struct GitlabMr {
 
 pub struct ReqwestHttp;
 
+#[async_trait]
 impl HttpClient for ReqwestHttp {
-    fn post_json(
+    async fn post_json(
         &self,
         url: &str,
         headers: &[(String, String)],
         body: &serde_json::Value,
     ) -> Result<HttpResponse, String> {
-        let url_str = url.to_string();
-        let headers_vec = headers.to_vec();
-        let body_val = body.clone();
-
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| format!("Failed to build local tokio runtime: {}", e))?;
-            rt.block_on(async {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()
-                    .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-                let mut req = client.post(&url_str).json(&body_val);
-                for (k, v) in &headers_vec {
-                    req = req.header(k.as_str(), v.as_str());
-                }
-                let resp = req
-                    .send()
-                    .await
-                    .map_err(|e| format!("Git provider request failed: {}", e))?;
-                let status = resp.status().as_u16();
-                let body = resp.text().await.unwrap_or_default();
-                Ok(HttpResponse { status, body })
-            })
-        })
-        .join()
-        .map_err(|_| "HTTP request thread panicked".to_string())?
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+        let mut req = client.post(url).json(body);
+        for (k, v) in headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("Git provider request failed: {}", e))?;
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        Ok(HttpResponse { status, body })
     }
 
-    fn get_json(&self, url: &str, headers: &[(String, String)]) -> Result<HttpResponse, String> {
-        let url_str = url.to_string();
-        let headers_vec = headers.to_vec();
-
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| format!("Failed to build local tokio runtime: {}", e))?;
-            rt.block_on(async {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()
-                    .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-                let mut req = client.get(&url_str);
-                for (k, v) in &headers_vec {
-                    req = req.header(k.as_str(), v.as_str());
-                }
-                let resp = req
-                    .send()
-                    .await
-                    .map_err(|e| format!("Git provider request failed: {}", e))?;
-                let status = resp.status().as_u16();
-                let body = resp.text().await.unwrap_or_default();
-                Ok(HttpResponse { status, body })
-            })
-        })
-        .join()
-        .map_err(|_| "HTTP request thread panicked".to_string())?
+    async fn get_json(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<HttpResponse, String> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+        let mut req = client.get(url);
+        for (k, v) in headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("Git provider request failed: {}", e))?;
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        Ok(HttpResponse { status, body })
     }
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn urlencoded_handles_slashes() {
-        assert_eq!(urlencoded("owner/repo"), "owner%2Frepo");
-        assert_eq!(urlencoded("group/sub/proj"), "group%2Fsub%2Fproj");
-        assert_eq!(urlencoded("plain"), "plain");
-        assert_eq!(urlencoded("with space"), "with%20space");
-    }
-
-    #[test]
-    fn extract_number_from_github_url() {
-        assert_eq!(
-            extract_number_from_url("https://api.github.com/repos/o/r/pulls/42"),
-            Some(42)
-        );
-        assert_eq!(
-            extract_number_from_url("https://gitlab.com/g/p/-/merge_requests/7"),
-            Some(7)
-        );
-        assert_eq!(extract_number_from_url("https://example.com/"), None);
-    }
-
-    #[test]
-    fn feature_id_to_branch_returns_feature_id() {
-        let fid = FeatureId::from("f-12345");
-        let branch = feature_id_to_branch("any title", &fid);
-        assert_eq!(branch, "f-12345");
-    }
-}
+#[path = "../../tests/infrastructure/mr_publisher.rs"]
+mod tests;

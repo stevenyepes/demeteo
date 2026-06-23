@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle};
 use crate::sftp::SftpEntry;
@@ -28,17 +30,10 @@ impl RouterExecutionPort {
         if machine_id.is_empty() || machine_id == "local" {
             return Ok(self.local.clone());
         }
-        let machines = self.machines.get_machines()?;
-        let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.to_string());
-        let machine = machines
-            .into_iter()
-            .find(|m| {
-                m.id == machine_id_typed
-                    || format!("{}@{}", m.username, m.host) == machine_id
-                    || m.host == machine_id
-                    || m.name == machine_id
-            })
-            .ok_or_else(|| format!("Machine not found: {}", machine_id))?;
+        let machine = crate::infrastructure::worktree::machine_resolver::resolve_machine(
+            &*self.machines,
+            machine_id,
+        )?;
         match machine.auth_type.as_str() {
             "local" => Ok(self.local.clone()),
             _ => Ok(self.ssh.clone()),
@@ -46,33 +41,37 @@ impl RouterExecutionPort {
     }
 }
 
+#[async_trait]
 impl ExecutionPort for RouterExecutionPort {
-    fn test_connection(&self, machine_id: &str) -> Result<(), String> {
-        self.resolve(machine_id)?.test_connection(machine_id)
+    async fn test_connection(&self, machine_id: &str) -> Result<(), String> {
+        self.resolve(machine_id)?.test_connection(machine_id).await
     }
 
-    fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String> {
-        self.resolve(machine_id)?.run_command(machine_id, cmd)
+    async fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String> {
+        self.resolve(machine_id)?.run_command(machine_id, cmd).await
     }
 
-    fn read_file(&self, machine_id: &str, path: &str) -> Result<String, String> {
-        self.resolve(machine_id)?.read_file(machine_id, path)
+    async fn read_file(&self, machine_id: &str, path: &str) -> Result<String, String> {
+        self.resolve(machine_id)?.read_file(machine_id, path).await
     }
 
-    fn write_file(&self, machine_id: &str, path: &str, content: &str) -> Result<(), String> {
+    async fn write_file(&self, machine_id: &str, path: &str, content: &str) -> Result<(), String> {
         self.resolve(machine_id)?
             .write_file(machine_id, path, content)
+            .await
     }
 
-    fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String> {
-        self.resolve(machine_id)?.get_metadata(machine_id, path)
+    async fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String> {
+        self.resolve(machine_id)?
+            .get_metadata(machine_id, path)
+            .await
     }
 
-    fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
-        self.resolve(machine_id)?.list_dir(machine_id, path)
+    async fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
+        self.resolve(machine_id)?.list_dir(machine_id, path).await
     }
 
-    fn setup_worktree(
+    async fn setup_worktree(
         &self,
         machine_id: &str,
         repo_path: &str,
@@ -81,10 +80,11 @@ impl ExecutionPort for RouterExecutionPort {
     ) -> Result<(), String> {
         self.resolve(machine_id)?
             .setup_worktree(machine_id, repo_path, branch, sandbox_path)
+            .await
     }
 
-    fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
-        self.resolve(machine_id)?.resolve_home(machine_id)
+    async fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
+        self.resolve(machine_id)?.resolve_home(machine_id).await
     }
 
     fn spawn_interactive(

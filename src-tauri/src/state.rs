@@ -20,15 +20,17 @@
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::db::{
-    AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository, ProjectRepository,
-    ThreadRepository, WorkflowRepository,
+    AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
+    MergeAuditRepository, ProjectRepository, ThreadRepository, WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
 use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::NotificationPort;
 use crate::ports::pricing::PricingTable;
+use crate::ports::provider_http::ProviderHttpPort;
 use crate::ports::step_executor::{GatePresenter, StepExecutor};
+use crate::ports::worktree_ops::WorktreeOpsPort;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -57,6 +59,8 @@ pub struct AppContext {
     pub app_settings: Arc<dyn AppSettingsRepository>,
     /// Project memory persistence.
     pub memory: Arc<dyn crate::ports::memory::ProjectMemoryPort>,
+    /// Merge audit persistence.
+    pub merge_audit: Arc<dyn MergeAuditRepository>,
 
     /// Process + filesystem execution port (local subprocess or remote SSH).
     pub exec: Arc<dyn ExecutionPort>,
@@ -89,6 +93,15 @@ pub struct AppContext {
     /// and feature→upstream flows with structured conflict detection
     /// and an audit trail.
     pub merge_executor: Arc<dyn MergeExecutor>,
+
+    /// Worktree operations (cloning, provisioning, status, branch delete, etc.).
+    pub worktree_ops: Arc<dyn WorktreeOpsPort>,
+
+    /// Provider HTTP operations (validation, list repos).
+    pub provider_http: Arc<dyn ProviderHttpPort>,
+
+    /// Path to application local data directory.
+    pub app_data_dir: std::path::PathBuf,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

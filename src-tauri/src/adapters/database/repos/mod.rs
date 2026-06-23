@@ -1,8 +1,10 @@
 pub mod app_settings;
 pub mod feature;
+pub mod feature_steps;
 pub mod gate;
 pub mod machine;
 pub mod memory;
+pub mod merge_audit;
 pub mod project;
 pub mod thread;
 pub mod workflow;

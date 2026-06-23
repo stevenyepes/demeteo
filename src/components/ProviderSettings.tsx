@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ShieldAlert, Check, Server, Code, GitBranch, X } from 'lucide-react';
+import { formatError } from '../lib/errors';
 
 interface ProviderSettingsProps {
     onConnected: (provider: { id: string; type: string; name: string; host: string; pat: string; username: string; avatarUrl: string }) => void;
@@ -52,7 +53,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
             }, 1000);
         } catch (err: any) {
             setStatus('error');
-            setErrorMsg(String(err));
+            setErrorMsg(formatError(err));
         }
     };
 

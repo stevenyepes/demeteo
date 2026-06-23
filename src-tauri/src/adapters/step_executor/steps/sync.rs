@@ -86,11 +86,11 @@ impl ExecutionDriver {
 
         // Run the merge. A clean merge is the trivial path; conflicts
         // are routed to the resolution agent.
-        match self.merge_executor.sync_feature_with_upstream(
-            &self.f_id,
-            &feature_branch,
-            &default_branch,
-        ) {
+        match self
+            .merge_executor
+            .sync_feature_with_upstream(&self.f_id, &feature_branch, &default_branch)
+            .await
+        {
             Ok(outcome) => {
                 let wall = step_start.elapsed().as_secs();
                 let _ = self.features.step_update(
@@ -166,46 +166,57 @@ impl ExecutionDriver {
         let conflict_paths: Vec<String> = conflict_files.iter().map(|f| f.path.clone()).collect();
 
         match crate::adapters::step_executor::sync::resolve_sync_conflicts_shared(
-            &self.exec,
-            &self.registry,
-            &self.notif,
-            &self.features,
-            &self.agent_exec,
-            &self.f_id,
-            resolved_cwd,
-            machine_str,
-            feature_branch,
-            default_branch,
-            &conflict_paths,
-            &step_exec.id,
-            "sync-step-resolver",
-            &agent_kind,
-            &override_model,
+            crate::adapters::step_executor::sync::ResolveSyncContext {
+                exec: &self.exec,
+                registry: &self.registry,
+                notif: &self.notif,
+                _features: &self.features,
+                agent_exec: &self.agent_exec,
+                feature_id: &self.f_id,
+                resolved_cwd,
+                machine_str,
+                feature_branch,
+                default_branch,
+                conflict_files: &conflict_paths,
+                step_execution_id: &step_exec.id,
+                thread_id_prefix: "sync-step-resolver",
+                agent_kind: &agent_kind,
+                override_model: &override_model,
+            },
         )
         .await
         {
             Ok(_head_sha) => {
                 // Cleanup the sync worktree if one was used.
                 if resolved_cwd != repo_dir {
-                    let _ = self.exec.run_command(
-                        machine_str,
-                        &format!(
-                            "git -C {} worktree remove --force {}",
-                            paths::shell_escape_posix(repo_dir),
-                            paths::shell_escape_posix(resolved_cwd)
-                        ),
-                    );
-                    let _ = self.exec.run_command(
-                        machine_str,
-                        &format!("rm -rf {}", paths::shell_escape_posix(resolved_cwd)),
-                    );
-                    let _ = self.exec.run_command(
-                        machine_str,
-                        &format!(
-                            "git -C {} worktree prune",
-                            paths::shell_escape_posix(repo_dir)
-                        ),
-                    );
+                    let _ = self
+                        .exec
+                        .run_command(
+                            machine_str,
+                            &format!(
+                                "git -C {} worktree remove --force {}",
+                                paths::shell_escape_posix(repo_dir),
+                                paths::shell_escape_posix(resolved_cwd)
+                            ),
+                        )
+                        .await;
+                    let _ = self
+                        .exec
+                        .run_command(
+                            machine_str,
+                            &format!("rm -rf {}", paths::shell_escape_posix(resolved_cwd)),
+                        )
+                        .await;
+                    let _ = self
+                        .exec
+                        .run_command(
+                            machine_str,
+                            &format!(
+                                "git -C {} worktree prune",
+                                paths::shell_escape_posix(repo_dir)
+                            ),
+                        )
+                        .await;
                 }
 
                 let wall = step_start.elapsed().as_secs();

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { formatError } from "../lib/errors";
 import { Channel } from "@tauri-apps/api/core";
 import { TerminalSquare, RotateCw, AlertCircle, Wifi, WifiOff } from "lucide-react";
 import {
@@ -97,7 +98,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
     } catch (err: any) {
       console.error("Failed to start terminal session:", err);
       setStatus("error");
-      setErrorDetail(String(err));
+      setErrorDetail(formatError(err));
       if (terminalRef.current) {
         terminalRef.current.writeln(`\r\n\x1b[1;31mConnection error: ${err}\x1b[0m\r\n`);
       }

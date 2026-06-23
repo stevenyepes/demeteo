@@ -42,13 +42,10 @@ pub fn start_port_forward(
         return Ok(forward.local_port);
     }
 
-    // 2. Fetch machine details
-    let machines = ctx.machines.get_machines()?;
-    let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.clone());
-    let machine = machines
-        .into_iter()
-        .find(|m| m.id == machine_id_typed)
-        .ok_or_else(|| "Machine not found".to_string())?;
+    let machine = crate::infrastructure::worktree::machine_resolver::resolve_machine(
+        &*ctx.machines,
+        &machine_id,
+    )?;
 
     // Local machines don't need port forwarding
     if machine.auth_type == "local" {

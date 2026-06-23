@@ -1,5 +1,5 @@
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-
 use tokio::sync::oneshot;
 
 use crate::domain::action::AgentAction;
@@ -46,12 +46,17 @@ impl ActionError {
     }
 }
 
+/// Async execution port for agent-originated actions. Tauri v2 supports
+/// async commands natively, and making the port async removed the
+/// previous `tokio::task::spawn_blocking` wrappers that sat in every
+/// `#[tauri::command]` calling into this trait.
+#[async_trait]
 pub trait AgentExecutionPort: Send + Sync {
     /// Submit a hand-rolled action (originating from the UI). On rejection,
     /// the result is returned as a free-form error string for backward
     /// compatibility; the new typed `ActionError` lives on the
     /// `submit_agent` path.
-    fn submit(
+    async fn submit(
         &self,
         thread_id: &str,
         machine_id: &str,
@@ -63,7 +68,7 @@ pub trait AgentExecutionPort: Send + Sync {
     /// `Resolution::RejectAsToolFailure` on reject so the agent runtime can
     /// return the failure as a structured `tool_call/update` rather than a
     /// synthetic bash output.
-    fn submit_agent(
+    async fn submit_agent(
         &self,
         thread_id: &str,
         machine_id: &str,
@@ -71,10 +76,11 @@ pub trait AgentExecutionPort: Send + Sync {
         tool_call_id: Option<String>,
     ) -> Result<CommandOutcome, ActionError>;
 
-    fn approve(&self, intercept_id: &str) -> Result<(), String>;
-    fn reject(&self, intercept_id: &str, feedback: String) -> Result<(), String>;
+    async fn approve(&self, intercept_id: &str) -> Result<(), String>;
 
-    fn register_result_responder(
+    async fn reject(&self, intercept_id: &str, feedback: String) -> Result<(), String>;
+
+    async fn register_result_responder(
         &self,
         intercept_id: &str,
         tx: oneshot::Sender<Result<ExecutionResult, String>>,

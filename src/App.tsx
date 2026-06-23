@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import TopBar from "./components/TopBar";
 import ProjectRail from "./components/ProjectRail";
+import { formatError } from "./lib/errors";
+import { ErrorBusProvider, useErrorBus } from "./lib/errorBus";
+import { ErrorToast, ERROR_TOAST_CTA_EVENT } from "./components/ErrorToast";
 import EmptyStateCard from "./components/EmptyStateCard";
 import ProviderSettings from "./components/ProviderSettings";
 import NewProjectView from "./components/NewProjectView";
@@ -41,7 +44,8 @@ interface Provider {
   avatarUrl: string;
 }
 
-function App() {
+function AppInner() {
+  const { reportError } = useErrorBus();
   const [view, setView] = useState<string>('empty-state');
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<string | null>(null);
@@ -62,6 +66,38 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [docsPanelOpen, setDocsPanelOpen] = useState(false);
+
+  // Wire the global <ErrorToast> CTAs (e.g. "Open providers" on a `provider`
+  // error) into the local router. The toast dispatches CustomEvent; we map
+  // each cta to a setView() call. Keeps the toast decoupled from the
+  // navigation shape.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ cta?: string }>).detail;
+      if (!detail || !detail.cta) return;
+      switch (detail.cta) {
+        case "open-providers":
+          setView("providers");
+          break;
+        case "open-settings":
+          setView("settings");
+          break;
+        case "open-feature":
+          setView("detail");
+          break;
+        case "retry":
+        case "view-logs":
+        default:
+          // No-op: the catch site that originally fired the toast is the
+          // one that knows how to retry; "view-logs" will be wired to the
+          // log panel in U4.
+          break;
+      }
+    };
+    window.addEventListener(ERROR_TOAST_CTA_EVENT, handler);
+    return () => window.removeEventListener(ERROR_TOAST_CTA_EVENT, handler);
+  }, []);
+
   useEffect(() => {
     let unlistenGateGlobal: () => void = () => {};
     const setupGateListener = async () => {
@@ -76,7 +112,7 @@ function App() {
           }
         );
       } catch (err) {
-        console.error(err);
+        reportError(err, { kind: "internal", sticky: true });
       }
     };
     setupGateListener();
@@ -104,6 +140,7 @@ function App() {
         setProviders(mappedProviders);
 
         const backendProjects: any[] = await invoke('get_projects');
+        const repoMap: Record<string, Repository[]> = {};
         const mappedProjects: Project[] = await Promise.all(backendProjects.map(async p => {
           let reposList: any[] = [];
           try {
@@ -111,6 +148,7 @@ function App() {
           } catch (e) {
             console.error(e);
           }
+          repoMap[p.id] = reposList.map((r: any) => ({ id: r.id, repo_path: r.repo_path }));
           return {
             id: p.id,
             name: p.name,
@@ -124,17 +162,6 @@ function App() {
           };
         }));
         setProjects(mappedProjects);
-        // Populate the per-project repos map for the StartFeatureModal.
-        const repoMap: Record<string, Repository[]> = {};
-        for (const p of backendProjects) {
-          try {
-            const rs: any[] = await invoke<any[]>('get_repositories_for_project', { projectId: p.id });
-            repoMap[p.id] = rs.map((r: any) => ({ id: r.id, repo_path: r.repo_path }));
-          } catch (e) {
-            console.error(e);
-            repoMap[p.id] = [];
-          }
-        }
         setReposByProject(repoMap);
         if (mappedProjects.length > 0) {
           setCurrentProject(mappedProjects[0].id);
@@ -146,7 +173,7 @@ function App() {
         // bootstrap a workspace that points at github.com with a
         // bogus PAT. Empty state is honest: the user sees the
         // empty-state view and can re-add their real provider.
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatError(err);
         console.error("Failed to fetch initial data:", err);
         setProviders([]);
         setProjects([]);
@@ -328,8 +355,8 @@ function App() {
                   })));
                   setStartFeatureWorkflowId(wfId);
                   setStartFeatureOpen(true);
-                } catch (err: any) {
-                  alert(err.toString());
+                } catch (err) {
+                  reportError(err);
                 }
               }}
             />
@@ -415,7 +442,7 @@ function App() {
                                 await invoke('delete_provider_instance', { providerId: prov.id });
                                 setProviders(providers.filter((p) => p.id !== prov.id));
                               } catch (err) {
-                                console.error("Failed to delete provider", err);
+                                reportError(err, { kind: "provider" });
                               }
                             }}
                             className="text-slate-500 hover:text-ruby-400 p-2 rounded-lg hover:bg-white/5 transition-all"
@@ -479,8 +506,8 @@ function App() {
                   setActiveFeatureTitle(feature.title);
                   setStartFeatureOpen(false);
                   setView('detail');
-                } catch (err: any) {
-                  alert(err.toString());
+                } catch (err) {
+                  reportError(err);
                 }
               }}
             />
@@ -513,6 +540,15 @@ function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ErrorBusProvider>
+      <AppInner />
+      <ErrorToast />
+    </ErrorBusProvider>
   );
 }
 

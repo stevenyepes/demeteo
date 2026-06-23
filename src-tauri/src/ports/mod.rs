@@ -9,4 +9,6 @@ pub mod merge;
 pub mod mr_publisher;
 pub mod notification;
 pub mod pricing;
+pub mod provider_http;
 pub mod step_executor;
+pub mod worktree_ops;

@@ -62,13 +62,13 @@ pub const REPOS_SUBDIR: &str = "repos";
 /// `compute_type` is the project's `compute_type` field
 /// (`"local"` or `"remote"`); `remote_host` is `Some(<machine_id>)`
 /// for remote projects and `None` for local.
-pub fn project_root(
+pub async fn project_root(
     exec: &Arc<dyn ExecutionPort>,
     compute_type: &str,
     remote_host: Option<&str>,
     project_id: &str,
 ) -> Result<PathBuf, String> {
-    let home = resolve_home(exec, compute_type, remote_host)?;
+    let home = resolve_home(exec, compute_type, remote_host).await?;
     if compute_type.eq_ignore_ascii_case("local") {
         #[cfg(target_os = "macos")]
         {
@@ -114,7 +114,7 @@ pub fn project_root(
 /// The returned path is absolute and contains no `~`, so it's safe to
 /// pass to `git -C`, `cd`, or SFTP calls without further shell
 /// expansion.
-pub fn repo_target_dir(
+pub async fn repo_target_dir(
     exec: &Arc<dyn ExecutionPort>,
     compute_type: &str,
     remote_host: Option<&str>,
@@ -122,14 +122,15 @@ pub fn repo_target_dir(
     repo_path: &str,
 ) -> Result<PathBuf, String> {
     let repo_name = repo_name_from_path(repo_path);
-    Ok(project_root(exec, compute_type, remote_host, project_id)?
+    Ok(project_root(exec, compute_type, remote_host, project_id)
+        .await?
         .join(REPOS_SUBDIR)
         .join(repo_name))
 }
 
 /// Same as [`repo_target_dir`] but returns a `String` (the form most
 /// existing callers want when building shell commands).
-pub fn repo_target_dir_str(
+pub async fn repo_target_dir_str(
     exec: &Arc<dyn ExecutionPort>,
     compute_type: &str,
     remote_host: Option<&str>,
@@ -137,6 +138,7 @@ pub fn repo_target_dir_str(
     repo_path: &str,
 ) -> Result<String, String> {
     repo_target_dir(exec, compute_type, remote_host, project_id, repo_path)
+        .await
         .map(|p| p.to_string_lossy().to_string())
 }
 
@@ -155,7 +157,7 @@ pub fn repo_name_from_path(repo_path: &str) -> String {
 /// The implementation just delegates to
 /// [`ExecutionPort::resolve_home`]; the wrapper exists so the
 /// `local` / `remote` discrimination lives in one place.
-fn resolve_home(
+async fn resolve_home(
     exec: &Arc<dyn ExecutionPort>,
     compute_type: &str,
     remote_host: Option<&str>,
@@ -169,6 +171,7 @@ fn resolve_home(
     };
     let home_str = exec
         .resolve_home(machine_id)
+        .await
         .map_err(|e| format!("Failed to resolve HOME on '{}': {}", machine_id, e))?;
     Ok(PathBuf::from(home_str))
 }
@@ -195,6 +198,9 @@ mod tests {
 // `adapters/worktree/git_ops.rs`, and `domain/intercept.rs`. Each duplicate
 // was a near-copy of the same algorithm; a single change to the escape
 // strategy (e.g. switch to `printf %q`) used to require touching 5 files.
+// The new canonical home is `crate::shared::*`; this module keeps the
+// legacy function names verbatim so the migration is incremental. New
+// code should prefer `crate::shared::*`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Single-quote-escape `s` for safe inclusion in a POSIX shell command.
@@ -209,22 +215,7 @@ mod tests {
 /// yourself reaching for `format!("... {}", something)` to build a shell
 /// command, route the `something` through this function.
 pub fn shell_escape_posix(s: &str) -> String {
-    if s.is_empty() {
-        return "''".into();
-    }
-    if s == "~" {
-        return "~".into();
-    }
-    if let Some(rest) = s.strip_prefix("~/") {
-        return format!("~/{}", shell_escape_posix(rest));
-    }
-    if s.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '=' | ':' | ',' | '@')
-    }) {
-        return s.to_string();
-    }
-    let escaped = s.replace('\'', "'\\''");
-    format!("'{}'", escaped)
+    crate::shared::shell::escape_posix(s)
 }
 
 /// Current wall-clock time in milliseconds since the UNIX epoch.
@@ -272,29 +263,6 @@ pub fn new_id() -> String {
 #[cfg(test)]
 mod primitive_tests {
     use super::*;
-
-    #[test]
-    fn shell_escape_fast_path() {
-        assert_eq!(shell_escape_posix("/home/u/proj"), "/home/u/proj");
-        assert_eq!(shell_escape_posix("a-b_c.d"), "a-b_c.d");
-        assert_eq!(shell_escape_posix(""), "''");
-    }
-
-    #[test]
-    fn shell_escape_quotes_unsafe_chars() {
-        assert_eq!(shell_escape_posix("a b"), "'a b'");
-        assert_eq!(shell_escape_posix("a;b"), "'a;b'");
-        assert_eq!(shell_escape_posix("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn shell_escape_preserves_tilde() {
-        assert_eq!(shell_escape_posix("~"), "~");
-        assert_eq!(shell_escape_posix("~/projects/x"), "~/projects/x");
-        // Tilde is preserved as the leading segment, but the suffix is
-        // recursively escaped — a space in the path forces quoting.
-        assert_eq!(shell_escape_posix("~/a b"), "~/'a b'");
-    }
 
     #[test]
     fn now_ms_is_monotonic_and_positive() {

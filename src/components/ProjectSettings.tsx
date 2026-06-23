@@ -7,6 +7,8 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue, ProjectMemoryEntry } from '../types';
 import { getAgentModels } from '../lib/agentModels';
+import { formatError } from '../lib/errors';
+import { useErrorBus } from '../lib/errorBus';
 
 interface Project {
     id: string;
@@ -113,6 +115,7 @@ export default function ProjectSettingsView({
     const [activeTab, setActiveTab] = useState<'general' | 'strategy' | 'memory'>('general');
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
     const [errorMsg, setErrorMsg] = useState('');
+    const { reportError } = useErrorBus();
 
     // Project Memory states
     const [memories, setMemories] = useState<ProjectMemoryEntry[]>([]);
@@ -208,7 +211,8 @@ export default function ProjectSettingsView({
                 const list: Machine[] = await invoke('get_machines');
                 if (!cancelled) setMachines(list ?? []);
             } catch (err) {
-                console.warn('Failed to fetch machines:', err);
+                // The settings page can't render without the machine list.
+                reportError(err, { kind: "internal" });
             }
         })();
         return () => { cancelled = true; };
@@ -230,7 +234,7 @@ export default function ProjectSettingsView({
             // block silently replaced the error with mock data that
             // hardcoded `available: true`, which let the user start a
             // feature against an agent that was never installed.
-            const message = err instanceof Error ? err.message : String(err);
+            const message = formatError(err);
             console.warn("No agent configs found for machine:", machineId, "—", message);
             setAgentConfigs([]);
         }
@@ -257,7 +261,7 @@ export default function ProjectSettingsView({
             // HEALTHY while the remote has no .demeteo directory at all.
             // Surface the error, leave the panel closed, and let the
             // user re-trigger the bootstrap from the settings screen.
-            const message = err instanceof Error ? err.message : String(err);
+            const message = formatError(err);
             console.error('Failed to fetch workspace health:', err);
             setHealthError(message);
             setHealthData([]);
@@ -304,7 +308,7 @@ export default function ProjectSettingsView({
                 // non-existent clone was healthy. The user can see
                 // the red status badge at the top of the settings
                 // and re-trigger the bootstrap.
-                const message = err instanceof Error ? err.message : String(err);
+                const message = formatError(err);
                 console.error("Failed to load project configuration details:", err);
                 setErrorMsg(message);
                 setStatus('error');
@@ -333,7 +337,7 @@ export default function ProjectSettingsView({
             setMemories(list ?? []);
         } catch (err: any) {
             console.error("Failed to load project memory:", err);
-            setMemError(String(err));
+            setMemError(formatError(err));
         } finally {
             setIsMemoriesLoading(false);
         }
@@ -368,7 +372,7 @@ export default function ProjectSettingsView({
             fetchMemories();
         } catch (err: any) {
             console.error("Failed to save memory:", err);
-            setMemError(String(err));
+            setMemError(formatError(err));
         }
     };
 
@@ -378,7 +382,7 @@ export default function ProjectSettingsView({
             fetchMemories();
         } catch (err: any) {
             console.error("Failed to delete memory:", err);
-            setMemError(String(err));
+            setMemError(formatError(err));
         }
     };
 
@@ -405,7 +409,9 @@ export default function ProjectSettingsView({
                     });
                     return repos.map(r => ({ path: r, providerId: p.id }));
                 } catch (err) {
-                    console.error(`Failed to fetch repos for provider ${p.name}:`, err);
+                    // One provider's repos failed — others may succeed, so
+                    // keep the partial result and surface the failure.
+                    reportError(err, { kind: "provider" });
                     return [];
                 }
             }));
@@ -425,7 +431,7 @@ export default function ProjectSettingsView({
             // mock entries — that lets the user select repos that
             // don't exist on any provider and silently breaks the
             // bootstrap. Show an empty list and let the user retry.
-            const message = err instanceof Error ? err.message : String(err);
+            const message = formatError(err);
             console.error("Failed to fetch repositories from providers:", err);
             setErrorMsg(message);
             setStatus('error');
@@ -453,7 +459,7 @@ export default function ProjectSettingsView({
         } catch (err) {
             console.error("Connection check failed:", err);
             setConnectionStatus('error');
-            setErrorMsg("Connection test failed: " + String(err));
+            setErrorMsg("Connection test failed: " + formatError(err));
             setStatus('error');
         } finally {
             setIsTestingConnection(false);
@@ -469,7 +475,9 @@ export default function ProjectSettingsView({
             });
             return res.filter(r => r.has_uncommitted || r.has_unpushed);
         } catch (err) {
-            console.error("Failed to check dirty status of repositories:", err);
+            // The dirty-status check is best-effort; surface the failure
+            // so the user knows the warnings may be incomplete.
+            reportError(err, { kind: "internal" });
             return [];
         }
     };
@@ -493,7 +501,9 @@ export default function ProjectSettingsView({
                 });
             }
         } catch (err) {
-            console.error("Failed to save agent configs:", err);
+            // User-initiated save failed — surface the error so the user
+            // knows the configuration was not persisted.
+            reportError(err, { kind: "validation" });
         }
 
         if (reposChanged || computeChanged || isCurrentlyFailedOrBootstrapping) {
@@ -561,7 +571,7 @@ export default function ProjectSettingsView({
                 }, 1500);
             } catch (err: any) {
                 setStatus('error');
-                setErrorMsg(String(err));
+                setErrorMsg(formatError(err));
             }
         }
     };
@@ -598,7 +608,7 @@ export default function ProjectSettingsView({
             setBootstrapStep('strategy_proposal');
         } catch (err: any) {
             setBootstrapStep('error');
-            setBootstrapError(String(err));
+            setBootstrapError(formatError(err));
         }
     };
 
@@ -636,7 +646,7 @@ export default function ProjectSettingsView({
             setBootstrapStep('bootstrap_success');
         } catch (err: any) {
             setBootstrapStep('error');
-            setBootstrapError(String(err));
+            setBootstrapError(formatError(err));
         }
     };
 
@@ -660,7 +670,7 @@ export default function ProjectSettingsView({
             setView('empty-state');
         } catch (err) {
             console.error("Failed to delete workspace:", err);
-            setErrorMsg("Failed to delete workspace: " + String(err));
+            setErrorMsg("Failed to delete workspace: " + formatError(err));
             setStatus('error');
         } finally {
             setIsLoading(false);

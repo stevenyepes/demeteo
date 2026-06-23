@@ -1,5 +1,7 @@
 //! Tauri commands that wrap [`MrPublisher`].
+//! Tauri commands that wrap [`MrPublisher`].
 
+use crate::error::AppError;
 use tauri::State;
 
 use crate::domain::ids::FeatureId;
@@ -14,7 +16,7 @@ pub async fn publish_mr(
     draft: Option<bool>,
     title: Option<String>,
     body: Option<String>,
-) -> Result<MrInfo, String> {
+) -> Result<MrInfo, AppError> {
     let options = PublishOptions {
         draft: draft.unwrap_or(false),
         title,
@@ -23,6 +25,8 @@ pub async fn publish_mr(
     };
     ctx.mr_publisher
         .publish_mr(&project_id, &FeatureId::from(feature_id), options)
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -30,6 +34,9 @@ pub async fn fetch_mr_state(
     ctx: State<'_, AppContext>,
     project_id: String,
     mr_url: String,
-) -> Result<String, String> {
-    ctx.mr_publisher.fetch_mr_state(&project_id, &mr_url)
+) -> Result<String, AppError> {
+    ctx.mr_publisher
+        .fetch_mr_state(&project_id, &mr_url)
+        .await
+        .map_err(AppError::from)
 }

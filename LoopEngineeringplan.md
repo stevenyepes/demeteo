@@ -15,12 +15,16 @@ Before writing a line of code, verify this from the source:
 | `max_iterations` + `on_failure → goto` | ✅ **Fully implemented** in `driver.rs::evaluate_on_failure` |
 | Real parallel subtask DAG from planner | ✅ **Fully implemented** in `steps/parallel.rs` (planner → fan-out → merge) |
 | Worktree isolation per step/subtask | ✅ **Fully implemented** |
+| Named Test Harnesses Support (L0) | ✅ **Fully implemented** |
+| Maker-Checker / Verifier Kind (L1) | ✅ **Fully implemented** |
+| ProjectMemory / Context Injection (L2) | ✅ **Fully implemented** |
+| Workflow Scheduling / Cron Loop (L3) | ✅ **Fully implemented** |
 
-The three **actual gaps** are:
+The three **actual gaps** are now fully closed and implemented:
 
-1. **Maker-Checker** — no `verifier` step kind; the implementer is the only "done" signal
-2. **ProjectMemory** — no cross-run persistent context; Gate feedback is discarded
-3. **Workflow Scheduling** — no cron/cadence trigger; every feature is purely on-demand
+1. **Maker-Checker** — ✅ **Fully implemented**
+2. **ProjectMemory** — ✅ **Fully implemented**
+3. **Workflow Scheduling** — ✅ **Fully implemented**
 
 ---
 

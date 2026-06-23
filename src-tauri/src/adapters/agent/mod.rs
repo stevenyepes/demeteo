@@ -2,6 +2,7 @@ pub mod antigravity;
 pub mod claude_code;
 pub mod cli_runtime;
 pub mod direct_execution;
+pub mod event_stream;
 pub mod hermes;
 pub mod install;
 pub mod noop;

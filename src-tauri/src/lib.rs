@@ -1,12 +1,17 @@
 pub mod adapters;
+pub mod application;
 pub mod commands;
+pub mod composition;
 pub mod credential_cache;
 pub mod db;
 pub mod domain;
+pub mod error;
 pub mod forward;
+pub mod infrastructure;
 pub mod paths;
 pub mod ports;
 pub mod sftp;
+pub mod shared;
 pub mod ssh_util;
 pub mod state;
 pub mod terminal;
@@ -124,6 +129,8 @@ pub fn run() {
                 db_adapter.clone();
             let memory_repo: Arc<dyn crate::ports::memory::ProjectMemoryPort> = db_adapter.clone();
             let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter.clone();
+            let merge_audit_repo: Arc<dyn crate::ports::db::MergeAuditRepository> =
+                db_adapter.clone();
 
             commands::workflows::seed_starter_workflows(&workflows_repo);
             let ssh_adapter: Arc<dyn ExecutionPort> = Arc::new(
@@ -163,6 +170,14 @@ pub fn run() {
                     exec_inner.clone(),
                 ));
 
+            let worktree_ops = Arc::new(adapters::worktree::git_ops::GitOpsHelper::new(
+                app_settings_repo.clone(),
+                exec_inner.clone(),
+            ));
+
+            let provider_http =
+                Arc::new(adapters::provider_http::ReqwestProviderHttpAdapter::new());
+
             // Merge executor — owns the SQL audit table + the
             // structured conflict-report shape. Wired here so the
             // feature_sync command and the existing subtask→feature
@@ -173,7 +188,7 @@ pub fn run() {
                     exec_inner.clone(),
                 );
                 Arc::new(adapters::merge::SqliteMergeExecutor::new(
-                    db_adapter.conn.clone(),
+                    merge_audit_repo.clone(),
                     git_ops_for_merge,
                     exec_inner.clone(),
                 ))
@@ -221,6 +236,7 @@ pub fn run() {
                 gates: gates_repo.clone(),
                 app_settings: app_settings_repo.clone(),
                 memory: memory_repo,
+                merge_audit: merge_audit_repo,
                 exec: exec_inner,
                 agent_exec,
                 notif: notif_adapter,
@@ -230,6 +246,9 @@ pub fn run() {
                 pricing,
                 mr_publisher,
                 merge_executor,
+                worktree_ops,
+                provider_http,
+                app_data_dir: app_data_dir.clone(),
             });
             app.manage(SessionState::default());
             app.manage(ForwardState::default());

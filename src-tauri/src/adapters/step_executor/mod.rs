@@ -29,6 +29,7 @@ pub(crate) mod sync;
 pub(crate) mod updates;
 
 #[cfg(test)]
+#[path = "../../../tests/e2e/step_executor.rs"]
 mod tests;
 
 // ── Core struct ────────────────────────────────────────────────────────────────

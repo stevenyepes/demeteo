@@ -4,12 +4,14 @@ pub mod migration;
 pub mod repos;
 
 #[cfg(test)]
+#[path = "../../../tests/infrastructure/database/mod.rs"]
 pub mod tests;
 
 // Re-export the most-used DB primitives so callers don't have to
 // chase a path through `connection::`. Mirrors what the legacy
 // `DatabaseAdapter` did.
 pub use connection::SqliteConnection;
+pub use error::DbError;
 pub use migration::run as run_migrations;
 
 use rusqlite::Connection;

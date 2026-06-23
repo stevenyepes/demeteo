@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use tokio_stream::{empty, Stream};
 
 use crate::domain::agent_event::AgentEvent;
@@ -13,12 +14,13 @@ use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, Agen
 /// Retained for tests and as a fallback when the user hasn't enabled an agent.
 pub struct NoopRuntime;
 
+#[async_trait]
 impl AgentRuntime for NoopRuntime {
     fn kind(&self) -> &'static str {
         "noop"
     }
 
-    fn is_available(
+    async fn is_available(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,
         _machine_id: &str,

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { WorkflowWithSteps, StepConfig } from '../types';
 import { ArrowLeft, Plus, Trash, ChevronUp, ChevronDown, Save, Zap } from 'lucide-react';
+import { useErrorBus } from '../lib/errorBus';
 
 interface WorkflowEditorProps {
   workflowId: string | null; // null means create new
@@ -12,6 +13,7 @@ interface WorkflowEditorProps {
 const AGENT_KINDS = ['opencode', 'hermes', 'claude-code', 'antigravity'];
 
 export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBack, onSaved }) => {
+  const { reportError } = useErrorBus();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [steps, setSteps] = useState<StepConfig[]>([]);
@@ -29,7 +31,9 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
       const list = await invoke<any[]>('get_projects');
       setProjectsList(list.map(p => ({ id: p.id, name: p.name })));
     } catch (err) {
-      console.error(err);
+      // The schedule-targets dropdown stays empty; surface the error so the
+      // user knows scheduling will be unavailable.
+      reportError(err, { kind: "internal" });
     }
   };
 
@@ -71,8 +75,10 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
         setTitleTemplate('');
         setScheduleProjectId('');
       }
-    } catch (err: any) {
-      console.error(err);
+    } catch (err) {
+      // Loading an existing workflow for edit failed — surface so the user
+      // can retry or back out.
+      reportError(err, { kind: "not_found" });
     } finally {
       setLoading(false);
     }
@@ -114,36 +120,37 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
   };
 
   const handleSave = async () => {
+    const reportValidation = (msg: string) => reportError(msg, { kind: "validation" });
     if (!name.trim()) {
-      alert('Please specify a workflow name.');
+      reportValidation('Please specify a workflow name.');
       return;
     }
     if (steps.length === 0) {
-      alert('Workflow must contain at least one step.');
+      reportValidation('Workflow must contain at least one step.');
       return;
     }
     const lastStep = steps[steps.length - 1];
     if (lastStep.kind === 'gate') {
-      alert('A user gate step cannot be the last step in a workflow pipeline.');
+      reportValidation('A user gate step cannot be the last step in a workflow pipeline.');
       return;
     }
 
     // Schedule validation
     if (cron || titleTemplate || scheduleProjectId) {
       if (!scheduleProjectId) {
-        alert('Please select a target project for the schedule.');
+        reportValidation('Please select a target project for the schedule.');
         return;
       }
       if (!cron.trim()) {
-        alert('Please enter a cron expression.');
+        reportValidation('Please enter a cron expression.');
         return;
       }
       if (!titleTemplate.trim()) {
-        alert('Please enter a feature title template.');
+        reportValidation('Please enter a feature title template.');
         return;
       }
       if (cron.trim().split(/\s+/).length !== 5) {
-        alert('Cron expression must have exactly 5 fields (minute hour day-of-month month day-of-week).');
+        reportValidation('Cron expression must have exactly 5 fields (minute hour day-of-month month day-of-week).');
         return;
       }
     }
@@ -189,8 +196,8 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
       }
 
       onSaved();
-    } catch (err: any) {
-      alert(err.toString());
+    } catch (err) {
+      reportError(err);
     } finally {
       setLoading(false);
     }

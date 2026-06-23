@@ -6,6 +6,7 @@ pub mod local;
 pub mod merge;
 pub mod mr_publisher;
 pub mod pricing;
+pub mod provider_http;
 pub mod router;
 pub mod scheduler;
 pub mod ssh;

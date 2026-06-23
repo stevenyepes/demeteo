@@ -3,6 +3,8 @@ use std::io::{BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+
 use crate::ports::execution::{ExecutionPort, InteractiveHandle};
 use crate::sftp::SftpEntry;
 
@@ -100,75 +102,58 @@ fn local_run_command(cmd: &str) -> Result<String, String> {
     Ok(result)
 }
 
+#[async_trait]
 impl ExecutionPort for LocalSubprocessAdapter {
-    fn test_connection(&self, _machine_id: &str) -> Result<(), String> {
+    async fn test_connection(&self, _machine_id: &str) -> Result<(), String> {
         Ok(())
     }
 
-    fn run_command(&self, _machine_id: &str, cmd: &str) -> Result<String, String> {
-        local_run_command(cmd)
+    async fn run_command(&self, _machine_id: &str, cmd: &str) -> Result<String, String> {
+        // The underlying `std::process::Command` is sync; run it on
+        // the blocking pool so we don't stall the tokio worker
+        // thread. The error type stays `String` to match the port
+        // signature; the `?` conversions happen inside the closure.
+        let cmd = cmd.to_string();
+        tokio::task::spawn_blocking(move || local_run_command(&cmd))
+            .await
+            .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
-    fn read_file(&self, _machine_id: &str, path: &str) -> Result<String, String> {
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read file '{}': {}", path, e))
+    async fn read_file(&self, _machine_id: &str, path: &str) -> Result<String, String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || std::fs::read_to_string(&path))
+            .await
+            .map_err(|e| format!("blocking task panicked: {}", e))?
+            .map_err(|e| format!("Failed to read file: {}", e))
     }
 
-    fn write_file(&self, _machine_id: &str, path: &str, content: &str) -> Result<(), String> {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directories: {}", e))?;
-        }
-        std::fs::write(path, content).map_err(|e| format!("Failed to write file '{}': {}", path, e))
-    }
-
-    fn get_metadata(&self, _machine_id: &str, path: &str) -> Result<SftpEntry, String> {
-        let path_buf = std::path::Path::new(path);
-        let meta =
-            std::fs::metadata(path).map_err(|e| format!("Failed to stat '{}': {}", path, e))?;
-
-        let name = path_buf
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        Ok(SftpEntry {
-            name,
-            path: path.to_string(),
-            is_dir: meta.is_dir(),
-            size: meta.len(),
-            modified,
+    async fn write_file(&self, _machine_id: &str, path: &str, content: &str) -> Result<(), String> {
+        let path = path.to_string();
+        let content = content.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent directories: {}", e))?;
+            }
+            std::fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
         })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
-    fn list_dir(&self, _machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
-        let entries = std::fs::read_dir(path)
-            .map_err(|e| format!("Failed to read directory '{}': {}", path, e))?;
+    async fn get_metadata(&self, _machine_id: &str, path: &str) -> Result<SftpEntry, String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || -> Result<SftpEntry, String> {
+            let path_buf = std::path::Path::new(&path);
+            let meta = std::fs::metadata(&path)
+                .map_err(|e| format!("Failed to stat '{}': {}", path, e))?;
 
-        let mut list = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-            let path_buf = entry.path();
             let name = path_buf
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
 
-            if name == "." || name == ".." {
-                continue;
-            }
-
-            let meta = entry
-                .metadata()
-                .map_err(|e| format!("Failed to read metadata: {}", e))?;
             let modified = meta
                 .modified()
                 .ok()
@@ -176,73 +161,129 @@ impl ExecutionPort for LocalSubprocessAdapter {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
 
-            list.push(SftpEntry {
+            Ok(SftpEntry {
                 name,
-                path: path_buf.to_str().unwrap_or("").to_string(),
+                path: path.clone(),
                 is_dir: meta.is_dir(),
                 size: meta.len(),
                 modified,
-            });
-        }
-
-        list.sort_by(|a, b| {
-            if a.is_dir != b.is_dir {
-                b.is_dir.cmp(&a.is_dir)
-            } else {
-                a.name.cmp(&b.name)
-            }
-        });
-
-        Ok(list)
+            })
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
-    fn setup_worktree(
+    async fn list_dir(&self, _machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<SftpEntry>, String> {
+            let entries = std::fs::read_dir(&path)
+                .map_err(|e| format!("Failed to read directory '{}': {}", path, e))?;
+
+            let mut list = Vec::new();
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+                let path_buf = entry.path();
+                let name = path_buf
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                if name == "." || name == ".." {
+                    continue;
+                }
+
+                let meta = entry
+                    .metadata()
+                    .map_err(|e| format!("Failed to read metadata: {}", e))?;
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+
+                list.push(SftpEntry {
+                    name,
+                    path: path_buf.to_str().unwrap_or("").to_string(),
+                    is_dir: meta.is_dir(),
+                    size: meta.len(),
+                    modified,
+                });
+            }
+
+            list.sort_by(|a, b| {
+                if a.is_dir != b.is_dir {
+                    b.is_dir.cmp(&a.is_dir)
+                } else {
+                    a.name.cmp(&b.name)
+                }
+            });
+
+            Ok(list)
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
+    }
+
+    async fn setup_worktree(
         &self,
         _machine_id: &str,
         repo_path: &str,
         branch: &str,
         sandbox_path: &str,
     ) -> Result<(), String> {
-        local_run_command(&format!("mkdir -p {}/.demeteo/worktrees", repo_path))?;
+        let repo_path = repo_path.to_string();
+        let branch = branch.to_string();
+        let sandbox_path = sandbox_path.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            local_run_command(&format!("mkdir -p {}/.demeteo/worktrees", repo_path))?;
 
-        let git_exclude_cmd = format!(
-            "if [ -d \"{0}/.git\" ]; then mkdir -p \"{0}/.git/info\"; if ! grep -q \".demeteo/\" \"{0}/.git/info/exclude\" 2>/dev/null; then echo \".demeteo/\" >> \"{0}/.git/info/exclude\"; fi; fi",
-            repo_path
-        );
-        let _ = local_run_command(&git_exclude_cmd);
+            let git_exclude_cmd = format!(
+                "if [ -d \"{0}/.git\" ]; then mkdir -p \"{0}/.git/info\"; if ! grep -q \".demeteo/\" \"{0}/.git/info/exclude\" 2>/dev/null; then echo \".demeteo/\" >> \"{0}/.git/info/exclude\"; fi; fi",
+                repo_path
+            );
+            let _ = local_run_command(&git_exclude_cmd);
 
-        let worktree_add_cmd = format!(
-            "git -C \"{}\" worktree add -b \"{}\" \"{}\"",
-            repo_path, branch, sandbox_path
-        );
-        let output = local_run_command(&worktree_add_cmd)?;
-        println!(
-            "[LocalSubprocessAdapter] Git Worktree provisioning output: {}",
-            output
-        );
+            let worktree_add_cmd = format!(
+                "git -C \"{}\" worktree add -b \"{}\" \"{}\"",
+                repo_path, branch, sandbox_path
+            );
+            let output = local_run_command(&worktree_add_cmd)?;
+            println!(
+                "[LocalSubprocessAdapter] Git Worktree provisioning output: {}",
+                output
+            );
 
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
-    fn resolve_home(&self, _machine_id: &str) -> Result<String, String> {
+    async fn resolve_home(&self, _machine_id: &str) -> Result<String, String> {
         let raw = std::env::var("HOME")
             .map_err(|_| "HOME environment variable is not set on the local process".to_string())?;
-        let expanded = if raw == "~" || raw.starts_with("~/") {
-            local_run_command("printf %s \"$HOME\"")?
-        } else {
-            raw
-        };
-        let trimmed = expanded.trim().to_string();
-        if trimmed.is_empty() {
-            return Err("Resolved local HOME is empty".to_string());
-        }
-        if !trimmed.starts_with('/') {
-            return Err(format!(
-                "Resolved local HOME is not absolute: '{}'",
-                trimmed
-            ));
-        }
-        Ok(trimmed)
+        tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let expanded = if raw == "~" || raw.starts_with("~/") {
+                local_run_command("printf %s \"$HOME\"")?
+            } else {
+                raw
+            };
+            let trimmed = expanded.trim().to_string();
+            if trimmed.is_empty() {
+                return Err("Resolved local HOME is empty".to_string());
+            }
+            if !trimmed.starts_with('/') {
+                return Err(format!(
+                    "Resolved local HOME is not absolute: '{}'",
+                    trimmed
+                ));
+            }
+            Ok(trimmed)
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
     fn spawn_interactive(

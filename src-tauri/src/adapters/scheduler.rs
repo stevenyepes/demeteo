@@ -184,14 +184,10 @@ async fn check_schedules(
                     "[Scheduler] Triggering scheduled workflow: {} ({})",
                     w.name, w.id.0
                 );
-                if let Err(e) = executor.feature_start(
-                    &s.project_id.0,
-                    &w.id.0,
-                    &title,
-                    &description,
-                    None,
-                    None,
-                ) {
+                if let Err(e) = executor
+                    .feature_start(&s.project_id.0, &w.id.0, &title, &description, None, None)
+                    .await
+                {
                     eprintln!("[Scheduler] Failed to auto-start workflow: {}", e);
                 }
 
@@ -206,52 +202,5 @@ async fn check_schedules(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_date_decomposition() {
-        // 1719000000 = Friday, June 21, 2024 8:00:00 PM UTC
-        let dt = decompose_timestamp(1719000000);
-        assert_eq!(dt.year, 2024);
-        assert_eq!(dt.month, 6);
-        assert_eq!(dt.day_of_month, 21);
-        assert_eq!(dt.hour, 20);
-        assert_eq!(dt.minute, 0);
-        assert_eq!(dt.day_of_week, 5); // Friday (0 = Sunday, 1 = Monday, ..., 5 = Friday)
-    }
-
-    #[test]
-    fn test_cron_matching() {
-        let dt = DateTimeDecomposed {
-            year: 2026,
-            month: 6,
-            day_of_month: 22,
-            hour: 12,
-            minute: 30,
-            day_of_week: 1, // Monday
-        };
-
-        // Standard matches
-        assert!(match_cron("* * * * *", &dt));
-        assert!(match_cron("30 12 * * *", &dt));
-        assert!(match_cron("*/5 */6 * * 1", &dt));
-        assert!(match_cron("20,30,40 10-15 * * 1-5", &dt));
-
-        // Mismatches
-        assert!(!match_cron("0 * * * *", &dt));
-        assert!(!match_cron("30 10 * * *", &dt));
-        assert!(!match_cron("* * * * 0", &dt)); // Sunday only
-    }
-
-    #[test]
-    fn test_calculate_next_run() {
-        // Start timestamp = June 22, 2026 12:00:00 (timestamp_secs = 1782216000)
-        let start = 1782216000;
-        let next = calculate_next_run("30 12 * * *", start);
-        assert!(next.is_some());
-        let dt = decompose_timestamp(next.unwrap());
-        assert_eq!(dt.hour, 12);
-        assert_eq!(dt.minute, 30);
-    }
-}
+#[path = "../../tests/infrastructure/scheduler.rs"]
+mod tests;

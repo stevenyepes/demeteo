@@ -166,9 +166,11 @@ demeteo/
 ├── src-tauri/
 │   ├── src/
 │   │   ├── commands/           # #[tauri::command] handlers (thin)
+│   │   ├── application/        # Use cases / application services (NEW)
 │   │   ├── domain/             # Domain structs, enums, errors
 │   │   ├── ports/              # Trait definitions (hexagon ports)
 │   │   ├── adapters/           # Port implementations
+│   │   ├── infrastructure/     # Infrastructure code (e.g., SSH resolver, agent event stream)
 │   │   ├── db.rs               # DB connection + query helpers
 │   │   ├── state.rs            # AppState (Mutex-wrapped shared state)
 │   │   └── lib.rs              # Plugin registration, command registration

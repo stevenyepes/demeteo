@@ -1,4 +1,4 @@
-//! MR/PR publisher port (Phase R6).
+//! MR/PR publisher port.
 //!
 //! One trait, two impls: GitHub (`POST /repos/:owner/:repo/pulls`) and
 //! GitLab (`POST /projects/:id/merge_requests`). Both authenticate
@@ -14,7 +14,9 @@
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{MrInfo, PublishOptions};
+use async_trait::async_trait;
 
+#[async_trait]
 pub trait MrPublisher: Send + Sync {
     /// Publish the feature branch as a new MR/PR.
     ///
@@ -23,7 +25,7 @@ pub trait MrPublisher: Send + Sync {
     /// multi-instance: keyed by `(kind, host)` per decision 17).
     /// `feature_id` is the feature whose `feature/<slug>` branch is
     /// being opened against the project's `default_branch`.
-    fn publish_mr(
+    async fn publish_mr(
         &self,
         project_id: &str,
         feature_id: &FeatureId,
@@ -33,5 +35,5 @@ pub trait MrPublisher: Send + Sync {
     /// Best-effort fetch of the current MR state (draft / open /
     /// merged / closed). Used to refresh `features.mr_state` on
     /// launch so the UI can show "MR merged" without re-publishing.
-    fn fetch_mr_state(&self, project_id: &str, mr_url: &str) -> Result<String, String>;
+    async fn fetch_mr_state(&self, project_id: &str, mr_url: &str) -> Result<String, String>;
 }

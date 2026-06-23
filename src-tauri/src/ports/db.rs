@@ -35,8 +35,8 @@ use crate::domain::ids::{
 };
 use crate::domain::models::{
     AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Project, ProjectSettings,
-    ProviderInstance, Repository, StepExecution, ThreadSession, Workflow, WorkflowSchedule,
-    WorkflowVersion, WorkingMemoryEntry,
+    ProviderInstance, RepoContext, Repository, StepExecution, ThreadSession, Workflow,
+    WorkflowSchedule, WorkflowVersion, WorkingMemoryEntry, WorktreeContext,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -280,6 +280,50 @@ pub trait AppSettingsRepository: Send + Sync {
 
     fn app_setting_get(&self, key: &str) -> Result<Option<String>, String>;
     fn app_setting_set(&self, key: &str, value: &str) -> Result<(), String>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. MergeAuditRepository
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub trait MergeAuditRepository: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
+    fn record_merge_outcome(
+        &self,
+        subtask_run_id: &str,
+        feature_id: &FeatureId,
+        source_branch: &str,
+        target_branch: &str,
+        status: &str,
+        merge_sha: Option<&str>,
+        conflict_json: Option<&str>,
+        now: i64,
+    ) -> Result<(), String>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_sync_outcome(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+        default_branch: &str,
+        status: &str,
+        merge_sha: Option<&str>,
+        conflict_json: Option<&str>,
+        now: i64,
+    ) -> Result<(), String>;
+
+    fn lookup_worktree_context(
+        &self,
+        feature_id: &FeatureId,
+        subtask_run_id: &str,
+    ) -> Result<WorktreeContext, String>;
+
+    fn lookup_repo_context(&self, feature_id: &FeatureId) -> Result<RepoContext, String>;
+
+    fn get_last_sync_worktree_path(&self, feature_id: &FeatureId)
+        -> Result<Option<String>, String>;
+
+    fn skip_merge(&self, subtask_run_id: &str, reason: &str) -> Result<(), String>;
 }
 
 // Convenience unused-aliases to silence "unused" warnings for ID newtypes

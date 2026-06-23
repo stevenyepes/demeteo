@@ -152,3 +152,23 @@ export interface ProjectMemoryEntry {
   created_at: number;
   updated_at: number;
 }
+
+/**
+ * Discriminated-union mirror of the Rust `AppError` enum.
+ * Stable across releases — the `kind` field is the IPC contract;
+ * do not rename variants without coordinating with the backend.
+ */
+export type AppErrorKind =
+  | 'not_found'
+  | 'validation'
+  | 'conflict'
+  | 'provider'
+  | 'transport'
+  | 'database'
+  | 'agent'
+  | 'internal';
+
+export interface AppError {
+  kind: AppErrorKind;
+  message: string;
+}

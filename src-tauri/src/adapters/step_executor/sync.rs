@@ -21,7 +21,6 @@
 //! detection, and the `AgentRegistry` for spawning — no new ports.
 
 use std::sync::Arc;
-use tokio_stream::StreamExt;
 
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::domain::agent_event::AgentEvent;
@@ -56,28 +55,49 @@ const RESOLVER_NORMAL_TIMEOUT_S: u64 = 180;
 /// Unified sync conflict resolver helper. Drives the conflict resolution agent,
 /// streams UI status events, monitors timeouts, verifies conflict markers,
 /// commits the resolution, and pushes it to remote origin.
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct ResolveSyncContext<'a> {
+    pub exec: &'a Arc<dyn ExecutionPort>,
+    pub registry: &'a Arc<AgentRegistry>,
+    pub notif: &'a Arc<dyn NotificationPort>,
+    pub _features: &'a Arc<dyn FeatureRepository>,
+    pub agent_exec: &'a Arc<dyn AgentExecutionPort>,
+    pub feature_id: &'a FeatureId,
+    pub resolved_cwd: &'a str,
+    pub machine_str: &'a str,
+    pub feature_branch: &'a str,
+    pub default_branch: &'a str,
+    pub conflict_files: &'a [String],
+    pub step_execution_id: &'a StepExecutionId,
+    pub thread_id_prefix: &'a str,
+    pub agent_kind: &'a str,
+    pub override_model: &'a Option<String>,
+}
+
 pub(crate) async fn resolve_sync_conflicts_shared(
-    exec: &Arc<dyn ExecutionPort>,
-    registry: &Arc<AgentRegistry>,
-    notif: &Arc<dyn NotificationPort>,
-    _features: &Arc<dyn FeatureRepository>,
-    agent_exec: &Arc<dyn AgentExecutionPort>,
-    feature_id: &FeatureId,
-    resolved_cwd: &str,
-    machine_str: &str,
-    feature_branch: &str,
-    default_branch: &str,
-    conflict_files: &[String],
-    step_execution_id: &StepExecutionId,
-    thread_id_prefix: &str,
-    agent_kind: &str,
-    override_model: &Option<String>,
+    sync_ctx: ResolveSyncContext<'_>,
 ) -> Result<String, String> {
+    let ResolveSyncContext {
+        exec,
+        registry,
+        notif,
+        _features,
+        agent_exec,
+        feature_id,
+        resolved_cwd,
+        machine_str,
+        feature_branch,
+        default_branch,
+        conflict_files,
+        step_execution_id,
+        thread_id_prefix,
+        agent_kind,
+        override_model,
+    } = sync_ctx;
+
     let fid = feature_id;
 
     // Safety check: is a merge actually active?
-    let pre_unmerged = list_unmerged(&**exec, machine_str, resolved_cwd);
+    let pre_unmerged = list_unmerged(&**exec, machine_str, resolved_cwd).await;
     let merge_in_progress = exec
         .run_command(
             machine_str,
@@ -86,6 +106,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
                 paths::shell_escape_posix(resolved_cwd)
             ),
         )
+        .await
         .is_ok();
 
     if pre_unmerged.is_empty() && !merge_in_progress {
@@ -124,97 +145,63 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         .map_err(|e| format!("Failed to spawn resolver agent: {}", e))?;
 
     let prompt = build_resolver_prompt(feature_branch, default_branch, conflict_files);
-    let hb = session.stderr_heartbeat();
-    let mut stream = session.prompt(&prompt);
-    let mut first_event_seen = false;
 
-    let fast_sleep = tokio::time::sleep(std::time::Duration::from_secs(RESOLVER_FAST_TIMEOUT_S));
-    let normal_sleep =
-        tokio::time::sleep(std::time::Duration::from_secs(RESOLVER_NORMAL_TIMEOUT_S));
-    let wall_sleep = tokio::time::sleep(std::time::Duration::from_secs(RESOLVER_WALL_CAP_S));
-    tokio::pin!(fast_sleep);
-    tokio::pin!(normal_sleep);
-    tokio::pin!(wall_sleep);
+    let timeouts = crate::adapters::agent::event_stream::Timeouts {
+        fast_timeout_s: RESOLVER_FAST_TIMEOUT_S,
+        normal_timeout_s: RESOLVER_NORMAL_TIMEOUT_S,
+        wall_cap_s: RESOLVER_WALL_CAP_S,
+    };
 
-    let mut agent_failed: Option<String> = None;
-    loop {
-        tokio::select! {
-            event_opt = stream.next() => {
-                let event = match event_opt {
-                    Some(ev) => ev,
-                    None => break,
-                };
-                first_event_seen = true;
-                let now = tokio::time::Instant::now();
-                fast_sleep.as_mut().reset(now + std::time::Duration::from_secs(RESOLVER_FAST_TIMEOUT_S));
-                normal_sleep.as_mut().reset(now + std::time::Duration::from_secs(RESOLVER_NORMAL_TIMEOUT_S));
-                match event {
-                    AgentEvent::Text { delta } => {
-                        let _ = notif.emit(&DomainEvent::AgentStream {
-                            feature_id: fid.clone(),
-                            step_execution_id: step_execution_id.clone(),
-                            content: delta,
-                        });
-                    }
-                    AgentEvent::Usage { .. } => {}
-                    AgentEvent::TurnComplete { .. } => break,
-                    AgentEvent::Error { message, .. } => {
-                        agent_failed = Some(message);
-                        break;
-                    }
-                    _ => {}
-                }
+    let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
+        &*session,
+        &prompt,
+        timeouts,
+        None, // No cancel watch for resolver agent
+        machine_str,
+        &**exec,
+        |event| {
+            if let AgentEvent::Text { delta } = event {
+                let _ = notif.emit(&DomainEvent::AgentStream {
+                    feature_id: fid.clone(),
+                    step_execution_id: step_execution_id.clone(),
+                    content: delta.clone(),
+                });
             }
-            _ = &mut fast_sleep => {
-                if !first_event_seen {
-                    fast_sleep.as_mut().reset(tokio::time::Instant::now() + std::time::Duration::from_secs(RESOLVER_FAST_TIMEOUT_S));
-                    continue;
-                }
-                if hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > RESOLVER_FAST_TIMEOUT_S * 1000) {
-                    agent_failed = Some(format!("Resolver agent blocked: no output for {}s", RESOLVER_FAST_TIMEOUT_S));
-                    break;
-                }
-                fast_sleep.as_mut().reset(tokio::time::Instant::now() + std::time::Duration::from_secs(RESOLVER_FAST_TIMEOUT_S));
-            }
-            _ = &mut normal_sleep => {
-                if let Some(ref h) = hb {
-                    if h.last_activity_ago_ms() < RESOLVER_NORMAL_TIMEOUT_S * 1000 {
-                        normal_sleep.as_mut().reset(tokio::time::Instant::now() + std::time::Duration::from_secs(RESOLVER_NORMAL_TIMEOUT_S));
-                        continue;
-                    }
-                }
-                agent_failed = Some(format!("Resolver agent timed out (no output for {}s)", RESOLVER_NORMAL_TIMEOUT_S));
-                break;
-            }
-            _ = &mut wall_sleep => {
-                agent_failed = Some(format!("Resolver agent exceeded wall clock cap of {}s", RESOLVER_WALL_CAP_S));
-                break;
-            }
+        },
+    )
+    .await;
+
+    match turn_res {
+        crate::adapters::agent::event_stream::TurnResult::Interrupted => {
+            let _ = registry.kill(&resolver_thread_id).await;
+            return Err("Resolver execution interrupted".to_string());
         }
-    }
-
-    if let Some(reason) = agent_failed {
-        let _ = registry.kill(&resolver_thread_id).await;
-        return Err(reason);
+        crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+            let _ = registry.kill(&resolver_thread_id).await;
+            return Err(descriptive);
+        }
+        crate::adapters::agent::event_stream::TurnResult::Success(_) => {}
     }
 
     // Verify the agent actually removed the conflict markers.
-    let still_unmerged = list_unmerged(&**exec, machine_str, resolved_cwd);
+    let still_unmerged = list_unmerged(&**exec, machine_str, resolved_cwd).await;
     if !still_unmerged.is_empty() {
         let _ = registry.kill(&resolver_thread_id).await;
         return Err("Resolver did not remove all conflict markers.".to_string());
     }
 
     // Commit the resolution.
-    let commit_resolved = exec.run_command(
-        machine_str,
-        &format!(
-            "git -C {} add -A && git -C {} commit -m \"Resolve sync conflicts with origin/{}\"",
-            paths::shell_escape_posix(resolved_cwd),
-            paths::shell_escape_posix(resolved_cwd),
-            default_branch
-        ),
-    );
+    let commit_resolved = exec
+        .run_command(
+            machine_str,
+            &format!(
+                "git -C {} add -A && git -C {} commit -m \"Resolve sync conflicts with origin/{}\"",
+                paths::shell_escape_posix(resolved_cwd),
+                paths::shell_escape_posix(resolved_cwd),
+                default_branch
+            ),
+        )
+        .await;
     if let Err(e) = commit_resolved {
         let _ = registry.kill(&resolver_thread_id).await;
         return Err(format!("Failed to commit resolution: {}", e));
@@ -229,6 +216,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
             paths::shell_escape_posix(feature_branch),
         ),
     )
+    .await
     .map_err(|e| {
         format!(
             "Resolution committed locally but push to origin/{} failed: {}. Push the feature branch manually.",
@@ -247,6 +235,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
                 paths::shell_escape_posix(resolved_cwd)
             ),
         )
+        .await
         .ok()
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
@@ -259,7 +248,7 @@ impl DagStepExecutor {
     /// the feature branch + project state, asks the merge executor to
     /// do the actual git work, and translates the result into a
     /// `SyncOutcomeView` for the UI.
-    pub(crate) fn feature_sync_impl(
+    pub(crate) async fn feature_sync_impl(
         &self,
         feature_id: &str,
         _revalidate_step_execution_id: Option<&str>,
@@ -281,6 +270,7 @@ impl DagStepExecutor {
         match self
             .merge_executor
             .sync_feature_with_upstream(&fid, &feature_branch, &default_branch)
+            .await
         {
             Ok(outcome) => Ok(SyncOutcomeView::Ok {
                 merge_commit_sha: outcome.merge_commit_sha,
@@ -320,6 +310,7 @@ impl DagStepExecutor {
         // Resolve the project / machine / repo dir for the agent's cwd.
         let (machine_id_opt, repo_dir) = self
             .resolve_repo_dir(&fid)
+            .await
             .map_err(|e| format!("Failed to resolve repo dir: {}", e))?;
         let machine_str = machine_id_opt
             .clone()
@@ -333,32 +324,38 @@ impl DagStepExecutor {
         // If we're using the main repo, ensure it's on the correct
         // branch so the merge state is accessible.
         // Try to retrieve the worktree path from the last sync conflict report.
-        let resolved_cwd = match self.merge_executor.get_last_sync_worktree_path(&fid) {
+        let resolved_cwd = match self.merge_executor.get_last_sync_worktree_path(&fid).await {
             Ok(Some(wt_path)) => {
-                let path_exists = self.exec.get_metadata(&machine_str, &wt_path).is_ok();
+                let path_exists = self.exec.get_metadata(&machine_str, &wt_path).await.is_ok();
                 if path_exists {
                     wt_path
                 } else {
-                    let _ = self.exec.run_command(
+                    let _ = self
+                        .exec
+                        .run_command(
+                            &machine_str,
+                            &format!(
+                                "git -C {} checkout {}",
+                                paths::shell_escape_posix(&repo_dir),
+                                paths::shell_escape_posix(&feature_branch)
+                            ),
+                        )
+                        .await;
+                    repo_dir.clone()
+                }
+            }
+            _ => {
+                let _ = self
+                    .exec
+                    .run_command(
                         &machine_str,
                         &format!(
                             "git -C {} checkout {}",
                             paths::shell_escape_posix(&repo_dir),
                             paths::shell_escape_posix(&feature_branch)
                         ),
-                    );
-                    repo_dir.clone()
-                }
-            }
-            _ => {
-                let _ = self.exec.run_command(
-                    &machine_str,
-                    &format!(
-                        "git -C {} checkout {}",
-                        paths::shell_escape_posix(&repo_dir),
-                        paths::shell_escape_posix(&feature_branch)
-                    ),
-                );
+                    )
+                    .await;
                 repo_dir.clone()
             }
         };
@@ -369,52 +366,62 @@ impl DagStepExecutor {
             .unwrap_or_else(|| "opencode".to_string());
         let override_model = feature.model.clone();
 
-        match resolve_sync_conflicts_shared(
-            &self.exec,
-            &self.registry,
-            &self.notif,
-            &self.features,
-            &self.agent_exec,
-            &fid,
-            &resolved_cwd,
-            &machine_str,
-            &feature_branch,
-            &default_branch,
+        let step_exec_id = StepExecutionId::from(format!("se-sync-{}", paths::now_ms()));
+        match resolve_sync_conflicts_shared(ResolveSyncContext {
+            exec: &self.exec,
+            registry: &self.registry,
+            notif: &self.notif,
+            _features: &self.features,
+            agent_exec: &self.agent_exec,
+            feature_id: &fid,
+            resolved_cwd: &resolved_cwd,
+            machine_str: &machine_str,
+            feature_branch: &feature_branch,
+            default_branch: &default_branch,
             conflict_files,
-            &StepExecutionId::from(format!("se-sync-{}", paths::now_ms())),
-            SYNC_RESOLVER_THREAD_PREFIX,
-            &agent_kind,
-            &override_model,
-        )
+            step_execution_id: &step_exec_id,
+            thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
+            agent_kind: &agent_kind,
+            override_model: &override_model,
+        })
         .await
         {
             Ok(head_sha) => {
                 // Cleanup the sync worktree if one was used.
                 if resolved_cwd != repo_dir {
-                    let _ = self.exec.run_command(
-                        &machine_str,
-                        &format!(
-                            "git -C {} worktree remove --force {}",
-                            paths::shell_escape_posix(&repo_dir),
-                            paths::shell_escape_posix(&resolved_cwd)
-                        ),
-                    );
-                    let _ = self.exec.run_command(
-                        &machine_str,
-                        &format!("rm -rf {}", paths::shell_escape_posix(&resolved_cwd)),
-                    );
-                    let _ = self.exec.run_command(
-                        &machine_str,
-                        &format!(
-                            "git -C {} worktree prune",
-                            paths::shell_escape_posix(&repo_dir)
-                        ),
-                    );
+                    let _ = self
+                        .exec
+                        .run_command(
+                            &machine_str,
+                            &format!(
+                                "git -C {} worktree remove --force {}",
+                                paths::shell_escape_posix(&repo_dir),
+                                paths::shell_escape_posix(&resolved_cwd)
+                            ),
+                        )
+                        .await;
+                    let _ = self
+                        .exec
+                        .run_command(
+                            &machine_str,
+                            &format!("rm -rf {}", paths::shell_escape_posix(&resolved_cwd)),
+                        )
+                        .await;
+                    let _ = self
+                        .exec
+                        .run_command(
+                            &machine_str,
+                            &format!(
+                                "git -C {} worktree prune",
+                                paths::shell_escape_posix(&repo_dir)
+                            ),
+                        )
+                        .await;
                 }
 
                 // After a successful resolution, replay the validation step
                 if let Some(se_id) = revalidate_step_execution_id {
-                    if let Err(e) = self.replay_from_step(se_id, None) {
+                    if let Err(e) = self.replay_from_step(se_id, None).await {
                         return Err(format!(
                             "Resolution succeeded but re-validate failed: {}",
                             e
@@ -428,7 +435,7 @@ impl DagStepExecutor {
                 })
             }
             Err(reason) => {
-                let conflict_list = list_unmerged(&*self.exec, &machine_str, &resolved_cwd);
+                let conflict_list = list_unmerged(&*self.exec, &machine_str, &resolved_cwd).await;
                 Ok(SyncOutcomeView::ResolutionFailed {
                     reason,
                     conflict_files: conflict_list,
@@ -447,7 +454,10 @@ impl DagStepExecutor {
     /// (which is what the old version of this method did) made
     /// `git -C <path>` fail with `cannot change to ...` whenever
     /// the resolver tried to provision a worktree.
-    fn resolve_repo_dir(&self, feature_id: &FeatureId) -> Result<(Option<String>, String), String> {
+    async fn resolve_repo_dir(
+        &self,
+        feature_id: &FeatureId,
+    ) -> Result<(Option<String>, String), String> {
         let feature = self
             .features
             .get(feature_id)?
@@ -475,7 +485,8 @@ impl DagStepExecutor {
             project.remote_host.as_ref().map(|m| m.as_str()),
             project.id.0.as_str(),
             &repo.repo_path,
-        )?;
+        )
+        .await?;
         Ok((machine, target_dir))
     }
 }
@@ -513,18 +524,21 @@ fn build_resolver_prompt(
 }
 
 /// Walk `git status --porcelain` and pull out the unmerged paths.
-fn list_unmerged(
+async fn list_unmerged(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
     repo_dir: &str,
 ) -> Vec<ConflictFile> {
-    let raw = match exec.run_command(
-        machine_id,
-        &format!(
-            "git -C {} status --porcelain --untracked-files=no",
-            paths::shell_escape_posix(repo_dir)
-        ),
-    ) {
+    let raw = match exec
+        .run_command(
+            machine_id,
+            &format!(
+                "git -C {} status --porcelain --untracked-files=no",
+                paths::shell_escape_posix(repo_dir)
+            ),
+        )
+        .await
+    {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };

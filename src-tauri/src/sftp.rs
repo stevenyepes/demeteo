@@ -12,38 +12,38 @@ pub struct SftpEntry {
 }
 
 #[tauri::command]
-pub fn sftp_list_dir(
+pub async fn sftp_list_dir(
     ctx: State<'_, AppContext>,
     machine_id: String,
     path: String,
 ) -> Result<Vec<SftpEntry>, String> {
-    ctx.exec.list_dir(&machine_id, &path)
+    ctx.exec.list_dir(&machine_id, &path).await
 }
 
 #[tauri::command]
-pub fn sftp_read_file(
+pub async fn sftp_read_file(
     ctx: State<'_, AppContext>,
     machine_id: String,
     path: String,
 ) -> Result<String, String> {
-    ctx.exec.read_file(&machine_id, &path)
+    ctx.exec.read_file(&machine_id, &path).await
 }
 
 #[tauri::command]
-pub fn sftp_write_file(
+pub async fn sftp_write_file(
     ctx: State<'_, AppContext>,
     machine_id: String,
     path: String,
     content: String,
 ) -> Result<(), String> {
-    ctx.exec.write_file(&machine_id, &path, &content)
+    ctx.exec.write_file(&machine_id, &path, &content).await
 }
 
 #[tauri::command]
-pub fn sftp_get_metadata(
+pub async fn sftp_get_metadata(
     ctx: State<'_, AppContext>,
     machine_id: String,
     path: String,
 ) -> Result<SftpEntry, String> {
-    ctx.exec.get_metadata(&machine_id, &path)
+    ctx.exec.get_metadata(&machine_id, &path).await
 }

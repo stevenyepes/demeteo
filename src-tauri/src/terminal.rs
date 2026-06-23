@@ -95,12 +95,10 @@ pub fn start_terminal_session(
     tauri_channel: Channel<Vec<u8>>,
     work_dir: Option<String>,
 ) -> Result<String, String> {
-    let machines = ctx.machines.get_machines()?;
-    let machine_id_typed = crate::domain::ids::MachineId::from(machine_id.clone());
-    let machine = machines
-        .into_iter()
-        .find(|m| m.id == machine_id_typed)
-        .ok_or_else(|| "Machine not found".to_string())?;
+    let machine = crate::infrastructure::worktree::machine_resolver::resolve_machine(
+        &*ctx.machines,
+        &machine_id,
+    )?;
 
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {

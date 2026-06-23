@@ -1,5 +1,6 @@
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{Feature, GateDecision, StepExecution};
+use crate::error::AppError;
 use crate::ports::step_executor::SyncOutcomeView;
 use crate::state::AppContext;
 use tauri::State;
@@ -8,9 +9,10 @@ use tauri::State;
 pub fn fetch_active_features(
     ctx: State<'_, AppContext>,
     project_id: String,
-) -> Result<Vec<Feature>, String> {
+) -> Result<Vec<Feature>, AppError> {
     ctx.features
         .get_active(&crate::domain::ids::ProjectId::from(project_id))
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -22,52 +24,81 @@ pub async fn start_feature(
     description: String,
     agent_kind: Option<String>,
     model: Option<String>,
-) -> Result<Feature, String> {
-    ctx.executor.feature_start(
-        &project_id,
-        &workflow_id,
-        &title,
-        &description,
-        agent_kind.as_deref(),
-        model.as_deref(),
-    )
+) -> Result<Feature, AppError> {
+    ctx.executor
+        .feature_start(
+            &project_id,
+            &workflow_id,
+            &title,
+            &description,
+            agent_kind.as_deref(),
+            model.as_deref(),
+        )
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
-pub fn feature_pause(ctx: State<'_, AppContext>, feature_id: String) -> Result<(), String> {
-    ctx.executor.feature_pause(&feature_id)
+pub async fn feature_pause(ctx: State<'_, AppContext>, feature_id: String) -> Result<(), AppError> {
+    ctx.executor
+        .feature_pause(&feature_id)
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
-pub fn feature_resume(ctx: State<'_, AppContext>, feature_id: String) -> Result<(), String> {
-    ctx.executor.feature_resume(&feature_id)
-}
-
-#[tauri::command]
-pub fn feature_cancel(ctx: State<'_, AppContext>, feature_id: String) -> Result<(), String> {
-    ctx.executor.feature_cancel(&feature_id)
-}
-
-#[tauri::command]
-pub fn step_get(ctx: State<'_, AppContext>, execution_id: String) -> Result<StepExecution, String> {
-    ctx.executor.step_get(&execution_id)
-}
-
-#[tauri::command]
-pub fn step_list_for_run(
+pub async fn feature_resume(
     ctx: State<'_, AppContext>,
     feature_id: String,
-) -> Result<Vec<StepExecution>, String> {
-    ctx.executor.step_list_for_run(&feature_id)
+) -> Result<(), AppError> {
+    ctx.executor
+        .feature_resume(&feature_id)
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
-pub fn gate_pending_for_run(
+pub async fn feature_cancel(
     ctx: State<'_, AppContext>,
     feature_id: String,
-) -> Result<Option<GateDecision>, String> {
+) -> Result<(), AppError> {
+    ctx.executor
+        .feature_cancel(&feature_id)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn step_get(
+    ctx: State<'_, AppContext>,
+    execution_id: String,
+) -> Result<StepExecution, AppError> {
+    ctx.executor
+        .step_get(&execution_id)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn step_list_for_run(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Vec<StepExecution>, AppError> {
+    ctx.executor
+        .step_list_for_run(&feature_id)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn gate_pending_for_run(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<GateDecision>, AppError> {
     ctx.presenter
         .gate_pending_for_run(&FeatureId::from(feature_id))
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -76,12 +107,15 @@ pub async fn gate_decide(
     step_execution_id: String,
     decision: String,
     feedback: Option<String>,
-) -> Result<(), String> {
-    ctx.presenter.gate_decide(
-        &StepExecutionId::from(step_execution_id),
-        &decision,
-        feedback.as_deref(),
-    )
+) -> Result<(), AppError> {
+    ctx.presenter
+        .gate_decide(
+            &StepExecutionId::from(step_execution_id),
+            &decision,
+            feedback.as_deref(),
+        )
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -89,9 +123,11 @@ pub async fn step_retry(
     ctx: State<'_, AppContext>,
     step_execution_id: String,
     new_model: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     ctx.executor
         .step_retry(&step_execution_id, new_model.as_deref())
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -99,17 +135,21 @@ pub async fn replay_from_step(
     ctx: State<'_, AppContext>,
     step_execution_id: String,
     new_model: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     ctx.executor
         .replay_from_step(&step_execution_id, new_model.as_deref())
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
 pub fn feature_get(
     ctx: State<'_, AppContext>,
     feature_id: String,
-) -> Result<Option<Feature>, String> {
-    ctx.features.get(&FeatureId::from(feature_id))
+) -> Result<Option<Feature>, AppError> {
+    ctx.features
+        .get(&FeatureId::from(feature_id))
+        .map_err(AppError::from)
 }
 
 /// Sync the feature branch with `origin/<default_branch>`. Returns
@@ -120,13 +160,15 @@ pub fn feature_get(
 ///   `feature_resolve_sync_conflicts` with the same conflict list.
 /// - `Resolved` after a successful agent resolution.
 #[tauri::command]
-pub fn feature_sync(
+pub async fn feature_sync(
     ctx: State<'_, AppContext>,
     feature_id: String,
     revalidate_step_execution_id: Option<String>,
-) -> Result<SyncOutcomeView, String> {
+) -> Result<SyncOutcomeView, AppError> {
     ctx.executor
         .feature_sync(&feature_id, revalidate_step_execution_id.as_deref())
+        .await
+        .map_err(AppError::from)
 }
 
 /// Spawn a fresh agent to resolve the conflicts left by
@@ -141,11 +183,14 @@ pub async fn feature_resolve_sync_conflicts(
     feature_id: String,
     conflict_files: Option<Vec<String>>,
     revalidate_step_execution_id: Option<String>,
-) -> Result<SyncOutcomeView, String> {
+) -> Result<SyncOutcomeView, AppError> {
     let files = conflict_files.unwrap_or_default();
-    ctx.executor.feature_resolve_sync_conflicts(
-        &feature_id,
-        &files,
-        revalidate_step_execution_id.as_deref(),
-    )
+    ctx.executor
+        .feature_resolve_sync_conflicts(
+            &feature_id,
+            &files,
+            revalidate_step_execution_id.as_deref(),
+        )
+        .await
+        .map_err(AppError::from)
 }

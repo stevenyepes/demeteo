@@ -1,6 +1,14 @@
 use crate::domain::models::{Feature, GateDecision, StepExecution};
+use async_trait::async_trait;
 use serde::Serialize;
 
+/// Step executor — the DAG engine that drives a `Feature` through its
+/// workflow.
+///
+/// **All methods are async.** Tauri supports async commands natively
+/// (v2). Making the port async removes the previous `block_in_place`
+/// anti-pattern used to call async impls from sync trait methods.
+#[async_trait]
 pub trait StepExecutor: Send + Sync {
     /// Start a new feature run.
     ///
@@ -11,7 +19,7 @@ pub trait StepExecutor: Send + Sync {
     ///   rendered into `{{feature_description}}` for every step.
     ///   Required — the executor refuses to start with an empty
     ///   description.
-    fn feature_start(
+    async fn feature_start(
         &self,
         project_id: &str,
         workflow_id: &str,
@@ -21,18 +29,22 @@ pub trait StepExecutor: Send + Sync {
         model: Option<&str>,
     ) -> Result<Feature, String>;
 
-    fn feature_pause(&self, feature_id: &str) -> Result<(), String>;
-    fn feature_resume(&self, feature_id: &str) -> Result<(), String>;
-    fn feature_cancel(&self, feature_id: &str) -> Result<(), String>;
+    async fn feature_pause(&self, feature_id: &str) -> Result<(), String>;
+    async fn feature_resume(&self, feature_id: &str) -> Result<(), String>;
+    async fn feature_cancel(&self, feature_id: &str) -> Result<(), String>;
 
-    fn step_get(&self, execution_id: &str) -> Result<StepExecution, String>;
-    fn step_retry(&self, execution_id: &str, new_model: Option<&str>) -> Result<(), String>;
+    async fn step_get(&self, execution_id: &str) -> Result<StepExecution, String>;
+    async fn step_retry(&self, execution_id: &str, new_model: Option<&str>) -> Result<(), String>;
     /// Replay from the given step execution — reset the target step and
     /// all subsequent steps to `pending`, clear their artifacts and gate
     /// decisions, then restart the execution loop. Works for any step
     /// status (completed, failed, interrupted, awaiting_gate, running).
-    fn replay_from_step(&self, execution_id: &str, new_model: Option<&str>) -> Result<(), String>;
-    fn step_list_for_run(&self, feature_id: &str) -> Result<Vec<StepExecution>, String>;
+    async fn replay_from_step(
+        &self,
+        execution_id: &str,
+        new_model: Option<&str>,
+    ) -> Result<(), String>;
+    async fn step_list_for_run(&self, feature_id: &str) -> Result<Vec<StepExecution>, String>;
 
     /// Sync the feature branch with `origin/<default_branch>`. Returns
     /// the audit-shaped result so the UI can show a clean merge, no
@@ -40,7 +52,7 @@ pub trait StepExecutor: Send + Sync {
     /// `revalidate_step_execution_id` is used after conflict
     /// resolution: the executor replays that step so the validation
     /// runs again on the freshly-synced tree.
-    fn feature_sync(
+    async fn feature_sync(
         &self,
         feature_id: &str,
         revalidate_step_execution_id: Option<&str>,
@@ -54,7 +66,7 @@ pub trait StepExecutor: Send + Sync {
     /// branch on the main repo. If `revalidate_step_execution_id` is
     /// provided, the named step is replayed so the workflow's
     /// validation re-runs on the freshly-merged tree.
-    fn feature_resolve_sync_conflicts(
+    async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,
         conflict_files: &[String],
@@ -96,9 +108,10 @@ pub enum SyncOutcomeView {
     },
 }
 
+#[async_trait]
 pub trait GatePresenter: Send + Sync {
-    fn gate_pending_for_run(&self, feature_id: &str) -> Result<Option<GateDecision>, String>;
-    fn gate_decide(
+    async fn gate_pending_for_run(&self, feature_id: &str) -> Result<Option<GateDecision>, String>;
+    async fn gate_decide(
         &self,
         step_execution_id: &str,
         decision: &str,

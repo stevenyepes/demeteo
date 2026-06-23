@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { StepExecution } from '../types';
 import { Check, ArrowRight, X, ShieldAlert, Terminal, Sparkles } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
+import { useErrorBus } from '../lib/errorBus';
 
 interface GateViewProps {
   stepExecutionId: string;
@@ -15,6 +16,7 @@ export const GateView: React.FC<GateViewProps> = ({
   onDecisionSubmitted,
   onClose,
 }) => {
+  const { reportError } = useErrorBus();
   const [stepExec, setStepExec] = useState<StepExecution | null>(null);
   const [feedback, setFeedback] = useState('');
   const [isRedirecting, setIsRedirecting] = useState(false);
@@ -29,7 +31,7 @@ export const GateView: React.FC<GateViewProps> = ({
       const execDetails = await invoke<StepExecution>('step_get', { executionId: stepExecutionId });
       setStepExec(execDetails);
     } catch (err) {
-      console.error(err);
+      reportError(err);
     } finally {
       setLoading(false);
     }
@@ -44,8 +46,8 @@ export const GateView: React.FC<GateViewProps> = ({
         feedback: decision === 'redirect' ? feedback : null,
       });
       onDecisionSubmitted();
-    } catch (err: any) {
-      alert(err.toString());
+    } catch (err) {
+      reportError(err);
     } finally {
       setLoading(false);
     }

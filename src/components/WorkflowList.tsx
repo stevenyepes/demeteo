@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { WorkflowWithSteps } from '../types';
 import { Play, Pencil, Download, Trash, RefreshCw, Plus, Cpu, GitBranch, ShieldAlert, Clock } from 'lucide-react';
+import { useErrorBus } from '../lib/errorBus';
+import { formatError } from '../lib/errors';
 
 interface WorkflowListProps {
   onEdit: (id: string) => void;
@@ -10,6 +12,7 @@ interface WorkflowListProps {
 }
 
 export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onStartFeature }) => {
+  const { reportError } = useErrorBus();
   const [workflows, setWorkflows] = useState<WorkflowWithSteps[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,8 +31,8 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
         setSelectedId(list[0].id);
       }
       setError(null);
-    } catch (err: any) {
-      setError(err.toString());
+    } catch (err) {
+      setError(formatError(err));
     } finally {
       setLoading(false);
     }
@@ -41,8 +44,8 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
     try {
       await invoke('workflow_delete', { workflowId: id });
       loadWorkflows();
-    } catch (err: any) {
-      alert(err.toString());
+    } catch (err) {
+      reportError(err);
     }
   };
 
@@ -52,8 +55,8 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
     try {
       await invoke('workflow_revert_to_default', { workflowId: id });
       loadWorkflows();
-    } catch (err: any) {
-      alert(err.toString());
+    } catch (err) {
+      reportError(err);
     }
   };
 
@@ -68,8 +71,8 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
       a.download = `workflow-${id}.json`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch (err: any) {
-      alert(err.toString());
+    } catch (err) {
+      reportError(err);
     }
   };
 

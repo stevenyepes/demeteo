@@ -3,6 +3,8 @@ import { Zap, Cpu, Play, Clock, ChevronRight, Settings, AlertTriangle, RotateCw,
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue } from '../types';
 import { getAgentModels } from '../lib/agentModels';
+import { formatError } from '../lib/errors';
+import { useErrorBus } from '../lib/errorBus';
 import { TerminalWindow } from './TerminalWindow';
 
 export const MOCK_FEATURES = [
@@ -82,6 +84,7 @@ interface ProjectHomeProps {
 }
 
 const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setActiveFeatureId, setActiveFeatureTitle, setProjects }) => {
+    const { reportError } = useErrorBus();
     const [featureInput, setFeatureInput] = useState('');
     const [isExpanded, setIsExpanded] = useState(false);
     const [features, setFeatures] = useState<any[]>([]);
@@ -107,6 +110,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
     const [selectedModel, setSelectedModel] = useState<string>('');
     const [availableModels, setAvailableModels] = useState<ConfigOptionValue[]>([]);
     const [isLoadingModels, setIsLoadingModels] = useState(false);
+    const [isDelegating, setIsDelegating] = useState(false);
 
     // Defaults from settings
     const [defaultAgentKind, setDefaultAgentKind] = useState<string>('');
@@ -165,7 +169,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
             setLocalBootstrapStep('strategy_proposal');
         } catch (err: any) {
             setLocalBootstrapStep('error');
-            setBootstrapError(String(err));
+            setBootstrapError(formatError(err));
         }
     };
 
@@ -193,7 +197,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
             setLocalBootstrapStep('idle');
         } catch (err: any) {
             setLocalBootstrapStep('error');
-            setBootstrapError(String(err));
+            setBootstrapError(formatError(err));
         }
     };
 
@@ -312,9 +316,10 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
     const handleStartFeature = async () => {
         if (!featureInput) return;
         if (!selectedWorkflow) {
-            alert("Please select a workflow from the customization panel or build one first.");
+            reportError("Please select a workflow from the customization panel or build one first.", { kind: "validation" });
             return;
         }
+        setIsDelegating(true);
         try {
             const res = await invoke<Feature>('start_feature', { 
                 projectId: activeProject.id, 
@@ -341,7 +346,9 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
             setView('detail');
         } catch (err) {
             console.error("Failed to start feature pipeline:", err);
-            alert("Error: " + String(err));
+            reportError(err);
+        } finally {
+            setIsDelegating(false);
         }
     };
 
@@ -842,9 +849,10 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                             <button onClick={() => setIsExpanded(false)} className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
                                             <button
                                                 onClick={handleStartFeature}
-                                                className="px-6 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white rounded-md shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all flex items-center gap-2"
+                                                disabled={isDelegating}
+                                                className="px-6 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all flex items-center gap-2"
                                             >
-                                                <Play className="w-4 h-4" /> Delegate Workspace
+                                                {isDelegating ? <RotateCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Delegate Workspace
                                             </button>
                                         </div>
                                     </div>
