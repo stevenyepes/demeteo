@@ -23,6 +23,12 @@ pub struct Feature {
     pub mr_url: Option<String>,
     #[serde(default)]
     pub mr_state: Option<String>,
+    /// Per-feature override for the project's `commit_artifacts`
+    /// setting. `None` = inherit from `ProjectSettings::commit_artifacts`.
+    /// The StartFeatureModal exposes this as a toggle in the advanced
+    /// section. See migration V12 and `commit_worktree_changes`.
+    #[serde(default)]
+    pub commit_artifacts: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

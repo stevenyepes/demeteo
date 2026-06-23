@@ -21,7 +21,8 @@ use crate::adapters::agent::registry::AgentRegistry;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
-    MergeAuditRepository, ProjectRepository, ThreadRepository, WorkflowRepository,
+    MergeAuditRepository, NotificationRepository, ProjectRepository, ThreadRepository,
+    WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
@@ -61,6 +62,9 @@ pub struct AppContext {
     pub memory: Arc<dyn crate::ports::memory::ProjectMemoryPort>,
     /// Merge audit persistence.
     pub merge_audit: Arc<dyn MergeAuditRepository>,
+    /// In-app notification bell persistence. Written by the
+    /// background MR-state monitor and read by `commands::notifications`.
+    pub notifications: Arc<dyn NotificationRepository>,
 
     /// Process + filesystem execution port (local subprocess or remote SSH).
     pub exec: Arc<dyn ExecutionPort>,

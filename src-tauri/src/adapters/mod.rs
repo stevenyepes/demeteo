@@ -4,6 +4,7 @@ pub mod conflict;
 pub mod database;
 pub mod local;
 pub mod merge;
+pub mod mr_monitor;
 pub mod mr_publisher;
 pub mod pricing;
 pub mod provider_http;

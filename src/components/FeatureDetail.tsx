@@ -232,6 +232,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           }
           if (f.title) {
             setFeatureTitle(f.title);
+            setMrTitle(f.title);
           }
         }
       } catch (err) {
@@ -369,6 +370,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
    *  on an already-published feature returns the existing URL
    *  instead of creating a duplicate. */
   const [publishing, setPublishing] = useState(false);
+  const [mrTitle, setMrTitle] = useState<string>('');
   const [syncing, setSyncing] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [syncBanner, setSyncBanner] = useState<SyncOutcomeView | null>(null);
@@ -468,12 +470,21 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       });
       return;
     }
+    const finalTitle = mrTitle.trim() || featureTitle;
+    if (!finalTitle) {
+      await messageDialog('Please enter a title for the MR/PR.', {
+        title: 'Title required',
+        kind: 'error',
+      });
+      return;
+    }
     setPublishing(true);
     try {
       const result: any = await invoke('publish_mr', {
         projectId,
         featureId,
         draft,
+        title: finalTitle,
       });
       const url = result?.url ?? '(unknown)';
       const state = result?.state ?? 'open';
@@ -518,18 +529,18 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
       {/* Header telemetry panel */}
-      <div className="p-6 border-b border-white/5 bg-[#0d0f14]/80 flex items-center justify-between backdrop-blur-md">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
+      <div className="p-6 border-b border-white/5 bg-[#0d0f14]/80 flex items-center justify-between gap-6 backdrop-blur-md">
+        <div className="space-y-1 min-w-0 flex-1">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={onBack}
-              className="text-xs px-2.5 py-1 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition uppercase font-bold"
+              className="text-xs px-2.5 py-1 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition uppercase font-bold shrink-0"
             >
               Back
             </button>
-            <h1 className="text-xl font-bold font-display text-white tracking-wide">{featureTitle}</h1>
+            <h1 className="text-xl font-bold font-display text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1" title={featureTitle}>{featureTitle}</h1>
             <span
-              className={`text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
+              className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
                 status === 'running'
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 animate-pulse'
                   : status === 'verifying'
@@ -544,10 +555,10 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
               {status}
             </span>
           </div>
-          <p className="text-xs text-slate-400">ID: {featureId}</p>
+          <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>
         </div>
 
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-6 shrink-0">
           <div className="text-right">
             <div className="text-[10px] text-slate-500 uppercase font-bold">Elapsed Duration</div>
             <div className="text-lg font-bold font-mono text-white">{duration}</div>
@@ -575,6 +586,15 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                 {syncing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
                 Sync with main
               </button>
+              <input
+                type="text"
+                value={mrTitle}
+                onChange={(e) => setMrTitle(e.target.value)}
+                placeholder="MR title (max 255 chars)"
+                maxLength={255}
+                className="flex-1 min-w-0 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:bg-white/8 transition"
+                title="This title will be used for the MR/PR"
+              />
               <button
                 onClick={() => handlePublish(false)}
                 disabled={publishing}
@@ -658,7 +678,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
             Initial Prompt
           </div>
-          <div className="p-4 bg-white/[0.02] rounded-xl border border-white/5 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed shadow-inner">
+          <div className="p-4 bg-white/[0.02] rounded-xl border border-white/5 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed shadow-inner max-h-48 overflow-y-auto" title={title}>
             {title}
           </div>
         </div>

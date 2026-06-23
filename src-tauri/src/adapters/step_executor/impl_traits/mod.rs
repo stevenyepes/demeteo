@@ -71,6 +71,8 @@ impl DagStepExecutor {
             step_index: 0,
             start_time: Instant::now(),
             cancel_watch: cancel_rx,
+            artifact_subdir: ctx.artifact_subdir,
+            commit_artifacts: ctx.commit_artifacts,
         };
 
         tokio::spawn(driver.run());
@@ -89,6 +91,7 @@ impl StepExecutor for DagStepExecutor {
         description: &str,
         agent_kind: Option<&str>,
         model: Option<&str>,
+        commit_artifacts: Option<bool>,
     ) -> Result<Feature, String> {
         if title.trim().is_empty() {
             return Err("Feature title cannot be empty.".to_string());
@@ -141,6 +144,11 @@ impl StepExecutor for DagStepExecutor {
             });
         }
 
+        // Per-feature override of the project's commit_artifacts. None
+        // means inherit; Some(true/false) is snapshotted on the Feature
+        // row so project setting changes don't affect in-flight runs.
+        let effective_commit = commit_artifacts.or(Some(ctx.commit_artifacts));
+
         let feature = Feature {
             id: feature_id.clone(),
             project_id: ctx.project_id.clone(),
@@ -155,6 +163,7 @@ impl StepExecutor for DagStepExecutor {
             model: model.map(|s| s.to_string()),
             mr_url: None,
             mr_state: Some("none".to_string()),
+            commit_artifacts: effective_commit,
         };
         self.features.add(feature.clone())?;
 

@@ -252,6 +252,7 @@ async fn test_executor_gate_decide() {
             mr_url: None,
             mr_state: Some("none".to_string()),
             created_at: now,
+            commit_artifacts: None,
         })
         .unwrap();
 

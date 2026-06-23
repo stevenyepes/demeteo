@@ -14,7 +14,7 @@
       "artifacts": [
         {
           "name": "research-report",
-          "capture": { "kind": "last_write_to", "path": "research-report.md" },
+          "capture": { "kind": "last_write_to", "path": "artifacts/research-report.md" },
           "mode": "full"
         }
       ],
@@ -31,7 +31,7 @@
       "artifacts": [
         {
           "name": "implementation-spec",
-          "capture": { "kind": "last_write_to", "path": "implementation-spec.md" },
+          "capture": { "kind": "last_write_to", "path": "artifacts/implementation-spec.md" },
           "mode": "full"
         }
       ],
@@ -71,7 +71,7 @@
       "artifacts": [
         {
           "name": "critic-review",
-          "capture": { "kind": "last_write_to", "path": "critic-review.md" },
+          "capture": { "kind": "last_write_to", "path": "artifacts/critic-review.md" },
           "mode": "full"
         }
       ],
@@ -88,7 +88,7 @@
       "artifacts": [
         {
           "name": "validation-report",
-          "capture": { "kind": "last_write_to", "path": "validation-report.md" },
+          "capture": { "kind": "last_write_to", "path": "artifacts/validation-report.md" },
           "mode": "full"
         }
       ],

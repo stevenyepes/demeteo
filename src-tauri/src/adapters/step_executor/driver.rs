@@ -52,6 +52,23 @@ pub(crate) struct ExecutionDriver {
     pub step_index: usize,
     pub start_time: Instant,
     pub cancel_watch: watch::Receiver<bool>,
+
+    /// Repo-relative folder where agents write their reports.
+    /// Snapshotted at feature-start time from the project settings
+    /// (and the Feature row's per-feature override). The driver
+    /// passes this to every `commit_worktree_changes` call so the
+    /// orchestrator can include or exclude the folder from the
+    /// commit depending on `commit_artifacts`. See migration V12
+    /// and `commit_worktree_changes` in
+    /// `artifacts/declared.rs`.
+    pub artifact_subdir: String,
+
+    /// Whether to include `artifact_subdir` in
+    /// `commit_worktree_changes`. `true` → reports land in the PR.
+    /// `false` → reports stay in demeteo's `FsArtifactStore` only.
+    /// Resolved at feature-start time as
+    /// `features.commit_artifacts ?? settings.commit_artifacts`.
+    pub commit_artifacts: bool,
 }
 
 impl ExecutionDriver {

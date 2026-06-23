@@ -336,9 +336,36 @@ impl MrPublisher for HttpMrPublisher {
             None => &ReqwestHttp,
         };
 
-        match provider {
-            Some(p) if p.kind == "github" => fetch_github_pr_state(http, &p.host, mr_url).await,
-            Some(p) if p.kind == "gitlab" => fetch_gitlab_mr_state(http, &p.host, mr_url).await,
+        // Resolve the PAT for auth. Without it, private repos return
+        // 401/404 and the code below would silently coerce that to
+        // "open", so merged MRs on private repos are never detected.
+        // `resolve_pat` is best-effort: if the keyring entry is gone
+        // (provider removed / PAT rotated) we still proceed without
+        // auth so public-repo polling keeps working.
+        let pat = provider.as_ref().and_then(|p| match resolve_pat(&p.id.0) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!(
+                    "[MrPublisher] could not resolve PAT for provider {}: {}",
+                    p.id.0, e
+                );
+                None
+            }
+        });
+
+        match (&provider, &pat) {
+            (Some(p), Some(token)) if p.kind == "github" => {
+                fetch_github_pr_state(http, &p.host, mr_url, token).await
+            }
+            (Some(p), Some(token)) if p.kind == "gitlab" => {
+                fetch_gitlab_mr_state(http, &p.host, mr_url, token).await
+            }
+            (Some(p), None) if p.kind == "github" => {
+                fetch_github_pr_state_unauth(http, &p.host, mr_url).await
+            }
+            (Some(p), None) if p.kind == "gitlab" => {
+                fetch_gitlab_mr_state_unauth(http, &p.host, mr_url).await
+            }
             _ => Ok("open".to_string()),
         }
     }
@@ -346,12 +373,32 @@ impl MrPublisher for HttpMrPublisher {
 
 /// Pull the current state of a GitHub PR. The MR URL is the user-facing
 /// `https://github.com/<owner>/<repo>/pull/<n>` shape; we derive the API
-/// URL from it and hit the public REST endpoint (no PAT needed for
-/// public repos; for private repos the user must have configured the
-/// provider's PAT, but at this point we don't have it cached in
-/// `fetch_mr_state`'s signature — best-effort is fine because the
-/// "open" fallback matches the stub's behavior for offline cases).
+/// URL from it. `pat` is the provider's PAT and is required for private
+/// repos — without it, GitHub returns 404 and the request is silently
+/// coerced to "open", so merged PRs on private repos are never detected.
 async fn fetch_github_pr_state(
+    http: &dyn HttpClient,
+    host: &str,
+    mr_url: &str,
+    pat: &str,
+) -> Result<String, String> {
+    let (owner, repo, number) = parse_github_pr_url(mr_url)?;
+    let url = format!("https://{}/repos/{}/{}/pulls/{}", host, owner, repo, number);
+    let headers: Vec<(String, String)> = vec![
+        ("Authorization".to_string(), format!("Bearer {}", pat)),
+        (
+            "Accept".to_string(),
+            "application/vnd.github+json".to_string(),
+        ),
+        ("User-Agent".to_string(), "demeteo".to_string()),
+    ];
+    fetch_github_pr_state_with_headers(http, &url, &headers).await
+}
+
+/// Same as `fetch_github_pr_state` but without auth — used as a
+/// fallback when the provider's PAT is missing from the keyring so
+/// public-repo polling still works.
+async fn fetch_github_pr_state_unauth(
     http: &dyn HttpClient,
     host: &str,
     mr_url: &str,
@@ -365,13 +412,21 @@ async fn fetch_github_pr_state(
         ),
         ("User-Agent".to_string(), "demeteo".to_string()),
     ];
-    let resp = http.get_json(&url, &headers).await?;
+    fetch_github_pr_state_with_headers(http, &url, &headers).await
+}
+
+async fn fetch_github_pr_state_with_headers(
+    http: &dyn HttpClient,
+    url: &str,
+    headers: &[(String, String)],
+) -> Result<String, String> {
+    let resp = http.get_json(url, headers).await?;
     if resp.status >= 300 {
         return Ok("open".to_string());
     }
     let v: serde_json::Value = serde_json::from_str(&resp.body)
         .map_err(|e| format!("Failed to parse GitHub PR response: {}", e))?;
-    if v.get("merged").and_then(|m| m.as_bool()).unwrap_or(false) {
+    if v.get("merged_at").map(|m| !m.is_null()).unwrap_or(false) {
         return Ok("merged".to_string());
     }
     Ok(v.get("state")
@@ -381,8 +436,34 @@ async fn fetch_github_pr_state(
 }
 
 /// Pull the current state of a GitLab MR. Mirrors `fetch_github_pr_state`
-/// for the GitLab API shape.
+/// for the GitLab API shape. `pat` is the provider's PAT and is required
+/// for private repos — without it, GitLab returns 401/404 and the
+/// request is silently coerced to "open", so merged MRs on private
+/// repos are never detected.
 async fn fetch_gitlab_mr_state(
+    http: &dyn HttpClient,
+    host: &str,
+    mr_url: &str,
+    pat: &str,
+) -> Result<String, String> {
+    let (project_path, iid) = parse_gitlab_mr_url(mr_url)?;
+    let url = format!(
+        "https://{}/api/v4/projects/{}/merge_requests/{}",
+        host,
+        urlencoded(&project_path),
+        iid
+    );
+    let headers: Vec<(String, String)> = vec![
+        ("PRIVATE-TOKEN".to_string(), pat.to_string()),
+        ("Accept".to_string(), "application/json".to_string()),
+    ];
+    fetch_gitlab_mr_state_with_headers(http, &url, &headers).await
+}
+
+/// Same as `fetch_gitlab_mr_state` but without auth — used as a
+/// fallback when the provider's PAT is missing from the keyring so
+/// public-repo polling still works.
+async fn fetch_gitlab_mr_state_unauth(
     http: &dyn HttpClient,
     host: &str,
     mr_url: &str,
@@ -396,16 +477,34 @@ async fn fetch_gitlab_mr_state(
     );
     let headers: Vec<(String, String)> =
         vec![("Accept".to_string(), "application/json".to_string())];
-    let resp = http.get_json(&url, &headers).await?;
+    fetch_gitlab_mr_state_with_headers(http, &url, &headers).await
+}
+
+/// Normalize a raw GitLab `state` value to the canonical set
+/// (`open`, `merged`, `closed`). GitLab uses `"opened"` where we
+/// store `"open"`; `"locked"` is a short-lived transitional state
+/// that is still effectively open.
+fn normalize_gitlab_state(s: &str) -> &str {
+    match s {
+        "opened" => "open",
+        "locked" => "open",
+        other => other,
+    }
+}
+
+async fn fetch_gitlab_mr_state_with_headers(
+    http: &dyn HttpClient,
+    url: &str,
+    headers: &[(String, String)],
+) -> Result<String, String> {
+    let resp = http.get_json(url, headers).await?;
     if resp.status >= 300 {
         return Ok("open".to_string());
     }
     let v: serde_json::Value = serde_json::from_str(&resp.body)
         .map_err(|e| format!("Failed to parse GitLab MR response: {}", e))?;
-    Ok(v.get("state")
-        .and_then(|s| s.as_str())
-        .unwrap_or("opened")
-        .to_string())
+    let raw = v.get("state").and_then(|s| s.as_str()).unwrap_or("opened");
+    Ok(normalize_gitlab_state(raw).to_string())
 }
 
 /// Parse a `https://github.com/<owner>/<repo>/pull/<n>` URL.
@@ -556,7 +655,14 @@ async fn publish_gitlab(
         .map_err(|e| format!("Failed to parse GitLab response: {}", e))?;
     Ok(MrInfo {
         url: v.web_url,
-        state: if draft { "draft".into() } else { v.state },
+        state: if draft {
+            "draft".into()
+        } else {
+            match v.state.as_str() {
+                "opened" => "open".into(),
+                s => s.into(),
+            }
+        },
         number: v.iid as u64,
         provider_kind: "gitlab".into(),
         provider_host: host.into(),

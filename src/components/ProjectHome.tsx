@@ -905,8 +905,8 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                     <div className={`absolute left-0 top-0 bottom-0 w-1 ${feature.status === 'gated' ? 'bg-violet-500 shadow-[0_0_10px_rgba(139,92,246,0.8)]' : 'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]'
                                         }`}></div>
 
-                                    <div className="flex justify-between items-center">
-                                        <div>
+                                    <div className="flex justify-between items-start gap-4">
+                                        <div className="min-w-0 flex-1">
                                             <div className="flex items-center gap-3 mb-1">
                                                 {feature.status === 'gated' ? (
                                                     <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/20 text-violet-400 uppercase">GATED APPROVAL</span>
@@ -915,12 +915,12 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                                         <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span> RUNNING FLEET
                                                     </span>
                                                 )}
-                                                <span className="text-xs text-slate-500 font-mono">{feature.id}</span>
+                                                <span className="text-xs text-slate-500 font-mono truncate">{feature.id}</span>
                                             </div>
-                                            <h3 className="text-lg font-outfit text-white">{feature.title}</h3>
+                                            <h3 className="text-lg font-outfit text-white line-clamp-2 break-words" title={feature.title}>{feature.title}</h3>
                                         </div>
 
-                                        <div className="flex gap-6 text-right">
+                                        <div className="flex gap-6 text-right shrink-0 pt-1">
                                             <div>
                                                 <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><Clock className="w-3 h-3" /> Duration</div>
                                                 <div className="text-sm font-medium text-white">{feature.duration}</div>

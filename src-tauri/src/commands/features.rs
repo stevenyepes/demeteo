@@ -16,6 +16,7 @@ pub fn fetch_active_features(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_feature(
     ctx: State<'_, AppContext>,
     project_id: String,
@@ -24,6 +25,7 @@ pub async fn start_feature(
     description: String,
     agent_kind: Option<String>,
     model: Option<String>,
+    commit_artifacts: Option<bool>,
 ) -> Result<Feature, AppError> {
     ctx.executor
         .feature_start(
@@ -33,6 +35,7 @@ pub async fn start_feature(
             &description,
             agent_kind.as_deref(),
             model.as_deref(),
+            commit_artifacts,
         )
         .await
         .map_err(AppError::from)

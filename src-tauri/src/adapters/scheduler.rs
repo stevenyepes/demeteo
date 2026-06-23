@@ -185,7 +185,15 @@ async fn check_schedules(
                     w.name, w.id.0
                 );
                 if let Err(e) = executor
-                    .feature_start(&s.project_id.0, &w.id.0, &title, &description, None, None)
+                    .feature_start(
+                        &s.project_id.0,
+                        &w.id.0,
+                        &title,
+                        &description,
+                        None,
+                        None,
+                        None,
+                    )
                     .await
                 {
                     eprintln!("[Scheduler] Failed to auto-start workflow: {}", e);

@@ -27,3 +27,7 @@ dist-ssr
 graphify-out/.*
 graphify-out/cache/
 graphify-out/run_semantic.py
+
+# Local SQLite dev databases (per-machine, never share)
+src-tauri/demeteo.db
+src-tauri/demeteo.db.*

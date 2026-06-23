@@ -169,6 +169,17 @@ pub async fn compute_git_diff(
 /// fails with a clear error and the caller treats the step as
 /// failed.
 ///
+/// `artifact_subdir` and `commit_artifacts` (migration V12) let the
+/// caller keep agent reports (`research-report.md`,
+/// `critic-review.md`, …) out of the feature branch by default.
+/// When `commit_artifacts` is false the orchestrator runs
+/// `git add -A -- ':!<artifact_subdir>'` so the reports stay in
+/// the worktree as untracked files instead of being committed.
+/// Their content is still captured by `process_agent_artifacts` into
+/// the `FsArtifactStore`, so the UI keeps working and no data is
+/// lost — the PR just stays clean. When `commit_artifacts` is true
+/// the call falls back to a plain `git add -A` (legacy behaviour).
+///
 /// Returns the new commit SHA on success, or an error string on
 /// failure.
 pub async fn commit_worktree_changes(
@@ -176,8 +187,25 @@ pub async fn commit_worktree_changes(
     machine_id: &str,
     worktree_root: &str,
     message: &str,
+    artifact_subdir: &str,
+    commit_artifacts: bool,
 ) -> Result<String, String> {
-    let add_cmd = format!("git -C {} add -A", paths::shell_escape_posix(worktree_root),);
+    // Build the `git add` invocation. When the user has opted out
+    // of committing artifacts, use a pathspec exclusion to keep
+    // them out of the index. The subdir is repo-relative, so we
+    // can drop a leading `./` and trim trailing slashes for a
+    // cleaner pathspec.
+    let trimmed = artifact_subdir.trim().trim_start_matches("./");
+    let trimmed = trimmed.trim_end_matches('/');
+    let add_paths = if !commit_artifacts && !trimmed.is_empty() {
+        format!(" -- ':!{trimmed}'")
+    } else {
+        String::new()
+    };
+    let add_cmd = format!(
+        "git -C {} add -A{add_paths}",
+        paths::shell_escape_posix(worktree_root),
+    );
     exec.run_command(machine_id, &add_cmd)
         .await
         .map_err(|e| format!("git add failed: {}", e))?;

@@ -285,6 +285,8 @@ impl ExecutionDriver {
                             machine_str,
                             &wt_path,
                             &format!("feat({}): {}", self.f_id.as_str(), sub.title,),
+                            &self.artifact_subdir,
+                            self.commit_artifacts,
                         )
                         .await;
 

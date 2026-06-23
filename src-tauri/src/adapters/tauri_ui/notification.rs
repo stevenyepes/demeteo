@@ -47,6 +47,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "agent_stream",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::MrMerged { .. } => (
+                "mr_merged",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
         };
 
         self.app

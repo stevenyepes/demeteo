@@ -11,12 +11,13 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
         let iter = stmt
             .query_map(params![project_id.0], |row| {
+                let commit_artifacts: Option<i64> = row.get(13)?;
                 Ok(Feature {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -31,6 +32,7 @@ impl FeatureRepository for SqliteAdapter {
                     model: row.get(10)?,
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
+                    commit_artifacts: commit_artifacts.map(|v| v != 0),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -45,12 +47,13 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts
                  FROM features WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
             .query_map(params![id.0], |row| {
+                let commit_artifacts: Option<i64> = row.get(13)?;
                 Ok(Feature {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -65,6 +68,7 @@ impl FeatureRepository for SqliteAdapter {
                     model: row.get(10)?,
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
+                    commit_artifacts: commit_artifacts.map(|v| v != 0),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -77,13 +81,14 @@ impl FeatureRepository for SqliteAdapter {
 
     fn add(&self, f: Feature) -> Result<(), String> {
         let conn = self.conn.lock()?;
+        let commit_artifacts: Option<i64> = f.commit_artifacts.map(|v| if v { 1 } else { 0 });
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
                 f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
-                f.mr_url, f.mr_state
+                f.mr_url, f.mr_state, commit_artifacts
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -160,6 +165,42 @@ impl FeatureRepository for SqliteAdapter {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn list_with_open_mr(&self) -> Result<Vec<Feature>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts
+                 FROM features WHERE mr_state = 'open' AND mr_url IS NOT NULL ORDER BY created_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map([], |row| {
+                let commit_artifacts: Option<i64> = row.get(13)?;
+                Ok(Feature {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    workflow_id: row.get(2)?,
+                    title: row.get(3)?,
+                    status: row.get(4)?,
+                    total_cost: row.get(5)?,
+                    duration: row.get(6)?,
+                    tokens: row.get(7)?,
+                    created_at: row.get(8)?,
+                    agent_kind: row.get(9)?,
+                    model: row.get(10)?,
+                    mr_url: row.get(11)?,
+                    mr_state: row.get(12)?,
+                    commit_artifacts: commit_artifacts.map(|v| v != 0),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter {
+            list.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(list)
     }
 
     fn step_create(&self, s: StepExecution) -> Result<(), String> {

@@ -19,6 +19,12 @@ pub trait StepExecutor: Send + Sync {
     ///   rendered into `{{feature_description}}` for every step.
     ///   Required — the executor refuses to start with an empty
     ///   description.
+    /// - `agent_kind`, `model`: per-feature overrides for the project's
+    ///   defaults. `None` means "use whatever the project says".
+    /// - `commit_artifacts`: per-feature override for the project's
+    ///   `commit_artifacts` setting. `None` means inherit the project
+    ///   default. See migration V12 and `commit_worktree_changes`.
+    #[allow(clippy::too_many_arguments)]
     async fn feature_start(
         &self,
         project_id: &str,
@@ -27,6 +33,7 @@ pub trait StepExecutor: Send + Sync {
         description: &str,
         agent_kind: Option<&str>,
         model: Option<&str>,
+        commit_artifacts: Option<bool>,
     ) -> Result<Feature, String>;
 
     async fn feature_pause(&self, feature_id: &str) -> Result<(), String>;

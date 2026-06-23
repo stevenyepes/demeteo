@@ -51,6 +51,26 @@ pub struct ProjectSettings {
     pub default_agent_kind: Option<String>,
     #[serde(default)]
     pub default_model: Option<String>,
+    /// Repo-relative folder where agents write their reports
+    /// (`research-report.md`, `critic-review.md`, …). The orchestrator
+    /// injects `{{artifact_dir}}` into every step's prompt and excludes
+    /// this folder from `commit_worktree_changes` unless
+    /// `commit_artifacts` is true. Default: `"artifacts/"`.
+    /// See migration V12 and AGENTS.md §6.
+    #[serde(default = "default_artifact_subdir")]
+    pub artifact_subdir: String,
+    /// When false (default), the orchestrator's
+    /// `commit_worktree_changes` runs `git add -A -- ':!<artifact_subdir>'`
+    /// so the reports stay in the worktree as untracked files instead of
+    /// being committed into the feature branch. The reports' content is
+    /// still captured into the `FsArtifactStore` for the UI.
+    /// Per-feature override lives on `Feature::commit_artifacts`.
+    #[serde(default)]
+    pub commit_artifacts: bool,
+}
+
+fn default_artifact_subdir() -> String {
+    "artifacts/".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,10 +1,11 @@
 import React from 'react';
 import { Activity, Search, Sliders, Globe, Settings } from 'lucide-react';
+import { NotificationBell } from './NotificationBell';
 
 interface TopBarProps {
-  setView: (view: string) => void;
-  connectedProvider: any | null;
-  onOpenCommandPalette?: () => void;
+    setView: (view: string) => void;
+    connectedProvider: any | null;
+    onOpenCommandPalette?: () => void;
 }
 
 const TopBar: React.FC<TopBarProps> = ({ setView, connectedProvider, onOpenCommandPalette }) => (
@@ -42,6 +43,7 @@ const TopBar: React.FC<TopBarProps> = ({ setView, connectedProvider, onOpenComma
                 <Globe className="w-4 h-4 text-cyan-400" />
                 <span className="hidden md:inline font-mono">Providers</span>
             </button>
+            <NotificationBell />
             <button onClick={() => setView('settings')} className="text-slate-400 hover:text-white transition-colors hover:bg-white/5 p-1.5 rounded">
                 <Settings className="w-5 h-5" />
             </button>

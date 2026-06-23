@@ -30,6 +30,10 @@ interface StartFeatureModalProps {
    * Called with the resolved launch parameters when the user clicks
    * "Launch feature". The parent is responsible for invoking
    * `start_feature` (Tauri command) and surfacing errors.
+   *
+   * `commitArtifacts` is the per-feature override for
+   * `ProjectSettings.commit_artifacts`. `undefined` → inherit the
+   * project default. See migration V12.
    */
   onLaunch: (params: {
     workflowId: string;
@@ -38,6 +42,7 @@ interface StartFeatureModalProps {
     agentKind?: string;
     model?: string;
     targetRepos: string[];
+    commitArtifacts?: boolean;
   }) => void;
 }
 
@@ -50,8 +55,9 @@ interface StartFeatureModalProps {
  *   repo that's already used by an active feature gets a `Conflict`
  *   badge.
  * - "Customize…" expansion: opens the advanced section (agent kind,
- *   model override, target repos override). Collapsed by default per
- *   Q22's "slim" framing.
+ *   model override, target repos override, and a per-feature override
+ *   for whether agent reports are committed to the PR). Collapsed by
+ *   default per Q22's "slim" framing.
  *
  * No LLM is invoked from this modal — inference is local keyword
  * matching per Q25.
@@ -73,6 +79,11 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [model, setModel] = useState<string>('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [conflicts, setConflicts] = useState<Set<string>>(new Set());
+  // Per-feature override for the project's `commit_artifacts` setting.
+  // `'inherit'` is the default — pass `undefined` to `start_feature`
+  // so the project default applies. `'yes'` / `'no'` become a
+  // concrete `true` / `false` on the Feature row. See migration V12.
+  const [commitArtifacts, setCommitArtifacts] = useState<'inherit' | 'yes' | 'no'>('inherit');
   const titleRef = useRef<HTMLInputElement>(null);
 
   // Initialize workflow picker to the requested default (or the first
@@ -92,6 +103,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setAgentKind('');
       setModel('');
       setShowAdvanced(false);
+      setCommitArtifacts('inherit');
     }
   }, [isOpen, workflows, defaultWorkflowId, workflowId]);
 
@@ -147,6 +159,10 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const launch = () => {
     if (!canLaunch) return;
     const targetRepos = inferredRepos.length > 0 ? inferredRepos.map((r) => r.id) : repositories.map((r) => r.id);
+    const commitArtifactsArg =
+      commitArtifacts === 'inherit'
+        ? undefined
+        : commitArtifacts === 'yes';
     onLaunch({
       workflowId,
       title: title.trim(),
@@ -154,6 +170,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       agentKind: agentKind.trim() || undefined,
       model: model.trim() || undefined,
       targetRepos,
+      commitArtifacts: commitArtifactsArg,
     });
   };
 
@@ -317,6 +334,35 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   placeholder="claude-sonnet-4, gpt-4o, …"
                   className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
                 />
+              </div>
+              <div>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                  Commit artifacts to PR
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {([
+                    { key: 'inherit', label: 'Project default', desc: 'Inherit' },
+                    { key: 'yes', label: 'Yes', desc: 'Ship reports in the PR' },
+                    { key: 'no', label: 'No', desc: 'Keep in demeteo only' },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setCommitArtifacts(opt.key)}
+                      className={`px-2.5 py-2 rounded-lg text-[11px] font-semibold uppercase tracking-wider border transition-colors ${
+                        commitArtifacts === opt.key
+                          ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
+                          : 'bg-[#050508] border-white/10 text-slate-400 hover:border-white/20'
+                      }`}
+                      title={opt.desc}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
+                  Each step produces a report (<code>research-report.md</code>, <code>critic-review.md</code>, …). The project's default is configured in project settings.
+                </p>
               </div>
               <div className="flex items-start gap-2 text-[11px] text-slate-500">
                 <Cpu className="w-3.5 h-3.5 mt-0.5 text-slate-600" />

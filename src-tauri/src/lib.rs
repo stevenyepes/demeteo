@@ -131,6 +131,8 @@ pub fn run() {
             let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter.clone();
             let merge_audit_repo: Arc<dyn crate::ports::db::MergeAuditRepository> =
                 db_adapter.clone();
+            let notifications_repo: Arc<dyn crate::ports::db::NotificationRepository> =
+                db_adapter.clone();
 
             commands::workflows::seed_starter_workflows(&workflows_repo);
             let ssh_adapter: Arc<dyn ExecutionPort> = Arc::new(
@@ -227,6 +229,17 @@ pub fn run() {
                 step_executor_adapter.clone(),
             );
 
+            // Start the background MR-state monitor. Polls
+            // `MrPublisher::fetch_mr_state` every 2 minutes, persists
+            // a `Notification` row on transition to `merged`, and
+            // emits `DomainEvent::MrMerged` for the bell + toast.
+            adapters::mr_monitor::start_mr_monitor(
+                features_repo.clone(),
+                mr_publisher.clone(),
+                notifications_repo.clone(),
+                notif_adapter.clone(),
+            );
+
             app.manage(AppContext {
                 machines: machines_repo.clone(),
                 threads: threads_repo.clone(),
@@ -237,6 +250,7 @@ pub fn run() {
                 app_settings: app_settings_repo.clone(),
                 memory: memory_repo,
                 merge_audit: merge_audit_repo,
+                notifications: notifications_repo,
                 exec: exec_inner,
                 agent_exec,
                 notif: notif_adapter,
@@ -380,7 +394,10 @@ pub fn run() {
             commands::pricing::pricing_for,
             commands::mr_publisher::publish_mr,
             commands::mr_publisher::fetch_mr_state,
-            commands::feature_lifecycle::feature_cleanup
+            commands::feature_lifecycle::feature_cleanup,
+            commands::notifications::notifications_list,
+            commands::notifications::notification_mark_read,
+            commands::notifications::notification_unread_count
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

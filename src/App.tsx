@@ -501,6 +501,10 @@ function AppInner() {
                     description: params.description,
                     agentKind: params.agentKind ?? null,
                     model: params.model ?? null,
+                    // Per-feature override for `commit_artifacts`.
+                    // `undefined` → inherit the project default
+                    // (see migration V12 and `StartFeatureModal`).
+                    commitArtifacts: params.commitArtifacts ?? null,
                   });
                   setActiveFeatureId(feature.id);
                   setActiveFeatureTitle(feature.title);

@@ -111,6 +111,7 @@ pub(crate) fn build_base_ctx(
     coverage_cmd: &str,
     conventions_content: &str,
     project_memory: &str,
+    artifact_dir: &str,
 ) -> PromptContext {
     PromptContext::new()
         .set("feature_description", description)
@@ -122,6 +123,7 @@ pub(crate) fn build_base_ctx(
         .set("coverage_command", coverage_cmd)
         .set("project_conventions", conventions_content)
         .set("project_memory", project_memory)
+        .set("artifact_dir", artifact_dir)
 }
 
 const MAX_SLUG_LEN: usize = 50;
@@ -170,5 +172,7 @@ pub(crate) fn fetch_default_settings() -> ProjectSettings {
         feature_lifecycle: "archive".to_string(),
         default_agent_kind: None,
         default_model: None,
+        artifact_subdir: "artifacts/".to_string(),
+        commit_artifacts: false,
     }
 }

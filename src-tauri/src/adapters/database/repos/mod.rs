@@ -5,6 +5,7 @@ pub mod gate;
 pub mod machine;
 pub mod memory;
 pub mod merge_audit;
+pub mod notification;
 pub mod project;
 pub mod thread;
 pub mod workflow;

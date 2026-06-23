@@ -34,9 +34,9 @@ use crate::domain::ids::{
     StepExecutionId, StepId, ThreadId, WorkflowId, WorkflowVersionId,
 };
 use crate::domain::models::{
-    AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Project, ProjectSettings,
-    ProviderInstance, RepoContext, Repository, StepExecution, ThreadSession, Workflow,
-    WorkflowSchedule, WorkflowVersion, WorkingMemoryEntry, WorktreeContext,
+    AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Notification, Project,
+    ProjectSettings, ProviderInstance, RepoContext, Repository, StepExecution, ThreadSession,
+    Workflow, WorkflowSchedule, WorkflowVersion, WorkingMemoryEntry, WorktreeContext,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,6 +200,13 @@ pub trait FeatureRepository: Send + Sync {
     /// Backfill a legacy feature that wasn't created with a workflow id.
     fn update_workflow_id(&self, id: &FeatureId, workflow_id: &WorkflowId) -> Result<(), String>;
 
+    /// Every feature whose `mr_state = 'open'` and `mr_url IS NOT NULL`,
+    /// regardless of project. Used by the background MR-state monitor
+    /// to know which features to poll. Returned with the same
+    /// column shape as `get_active` so the caller can patch and emit
+    /// without re-fetching.
+    fn list_with_open_mr(&self) -> Result<Vec<Feature>, String>;
+
     fn step_create(&self, step: StepExecution) -> Result<(), String>;
     fn step_get(&self, id: &StepExecutionId) -> Result<Option<StepExecution>, String>;
     /// Apply a [`StepExecutionPatch`] (replaces the 6-arg `step_execution_update_status`).
@@ -324,6 +331,40 @@ pub trait MergeAuditRepository: Send + Sync {
         -> Result<Option<String>, String>;
 
     fn skip_merge(&self, subtask_run_id: &str, reason: &str) -> Result<(), String>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. NotificationRepository
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Persistence for the in-app notification bell.
+///
+/// Notifications are written by the various event-producing adapters
+/// (the MR-state monitor, gate step handler, merge executor) and
+/// read by `NotificationBell` in the React UI. The table is purely
+/// a UI-side cache; nothing in the orchestrator's correctness path
+/// depends on it.
+pub trait NotificationRepository: Send + Sync {
+    /// Append a new notification row. `n.id` and `n.created_at` are
+    /// expected to be filled by the caller (the same convention as
+    /// [`FeatureRepository::add`]).
+    fn add(&self, n: Notification) -> Result<(), String>;
+
+    /// Most-recent first, capped at `limit` rows. When
+    /// `project_id` is `Some`, only notifications tied to that
+    /// project are returned; `None` returns all projects.
+    fn list(&self, project_id: Option<&ProjectId>, limit: u32)
+        -> Result<Vec<Notification>, String>;
+
+    /// `mark_read` is idempotent — calling it on an already-read
+    /// row is a no-op. Returns the number of rows updated
+    /// (typically 1, or 0 if the id didn't exist).
+    fn mark_read(&self, id: &str) -> Result<u32, String>;
+
+    /// Aggregate unread count across all projects for the bell
+    /// badge. Cheap because of the `idx_notifications_unread`
+    /// partial index.
+    fn unread_count(&self) -> Result<u32, String>;
 }
 
 // Convenience unused-aliases to silence "unused" warnings for ID newtypes

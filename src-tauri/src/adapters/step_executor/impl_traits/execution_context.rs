@@ -2,7 +2,7 @@ use super::super::DagStepExecutor;
 use crate::adapters::step_executor::setup::{
     build_base_ctx, fetch_default_settings, slug_from_description,
 };
-use crate::domain::ids::{ProjectId, WorkflowId};
+use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::{ProjectSettings, StepConfig};
 use crate::domain::prompt_context::PromptContext;
 use crate::paths;
@@ -16,6 +16,18 @@ pub struct ExecutionContext {
     pub steps: Vec<StepConfig>,
     pub base_ctx: PromptContext,
     pub machine_id_opt: Option<String>,
+    /// Repo-relative folder under the worktree root where agents
+    /// write their reports. Resolved from `ProjectSettings` at
+    /// feature-start time and snapshotted on the `Feature` row so
+    /// later changes to project settings don't affect in-flight
+    /// features. Default: `"artifacts/"`. See migration V12.
+    pub artifact_subdir: String,
+    /// Whether to include the artifact subdir when the orchestrator
+    /// runs `commit_worktree_changes` for this feature. `true` →
+    /// reports land in the PR. `false` → reports stay in demeteo's
+    /// `FsArtifactStore` only. Resolved as:
+    /// `features.commit_artifacts ?? settings.commit_artifacts`.
+    pub commit_artifacts: bool,
 }
 
 impl DagStepExecutor {
@@ -165,7 +177,19 @@ impl DagStepExecutor {
             &coverage_cmd,
             &conventions_content,
             &memory_md,
+            &settings.artifact_subdir,
         );
+
+        // Snapshot the artifact subdir + commit flag from project
+        // settings, then honour the Feature row's per-feature override
+        // if one is already in the DB (replay / re-entry path).
+        let artifact_subdir = settings.artifact_subdir.clone();
+        let mut commit_artifacts = settings.commit_artifacts;
+        if let Ok(Some(existing)) = self.features.get(&FeatureId::from(feature_id.to_string())) {
+            if let Some(override_flag) = existing.commit_artifacts {
+                commit_artifacts = override_flag;
+            }
+        }
 
         Ok(ExecutionContext {
             project_id: project_id_typed,
@@ -176,6 +200,8 @@ impl DagStepExecutor {
             steps,
             base_ctx,
             machine_id_opt,
+            artifact_subdir,
+            commit_artifacts,
         })
     }
 }

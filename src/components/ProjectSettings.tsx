@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
     Settings, Save, Check, RotateCw, GitBranch, ShieldAlert, 
     Trash2, Box, Search, Plus, X, AlertTriangle, HardDrive, Server, Globe,
-    Activity, RefreshCw, ChevronDown, ChevronUp, Zap, CircleAlert, Brain, Edit
+    Activity, RefreshCw, ChevronDown, ChevronUp, Zap, CircleAlert, Brain, Edit,
+    FileText
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue, ProjectMemoryEntry } from '../types';
@@ -73,6 +74,19 @@ interface ProjectSettings {
     feature_lifecycle: string;
     default_agent_kind?: string | null;
     default_model?: string | null;
+    /**
+     * Repo-relative folder where agents write their reports
+     * (`research-report.md`, `critic-review.md`, …). Default `artifacts/`.
+     * Mirrors `ProjectSettings::artifact_subdir` in Rust.
+     */
+    artifact_subdir?: string;
+    /**
+     * When true, the orchestrator commits the artifact folder into the
+     * feature branch (legacy behaviour). When false (default), reports
+     * stay in demeteo's local store + UI only. Mirrors
+     * `ProjectSettings::commit_artifacts` in Rust.
+     */
+    commit_artifacts?: boolean;
 }
 
 interface RepoDirtyStatus {
@@ -174,6 +188,16 @@ export default function ProjectSettingsView({
     const [defaultModel, setDefaultModel] = useState<string>('');
     const [availableModelsForDefault, setAvailableModelsForDefault] = useState<ConfigOptionValue[]>([]);
     const [isLoadingModelsForDefault, setIsLoadingModelsForDefault] = useState(false);
+
+    // Artifact handling (migration V12). The orchestrator writes the
+    // reports each step produces into the worktree under
+    // `artifactSubdir` (default `artifacts/`). The
+    // `commitArtifacts` flag controls whether those files end up in
+    // the feature branch's commit history or stay only in demeteo's
+    // local `FsArtifactStore`. Both fields round-trip through
+    // `ProjectSettings` so the user can edit them here.
+    const [artifactSubdir, setArtifactSubdir] = useState<string>('artifacts/');
+    const [commitArtifacts, setCommitArtifacts] = useState<boolean>(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -289,6 +313,8 @@ export default function ProjectSettingsView({
                     setFeatureLifecycle(res.feature_lifecycle);
                     setDefaultAgentKind(res.default_agent_kind || '');
                     setDefaultModel(res.default_model || '');
+                    setArtifactSubdir(res.artifact_subdir || 'artifacts/');
+                    setCommitArtifacts(Boolean(res.commit_artifacts));
                 }
 
                 // Fetch configured repos
@@ -549,15 +575,17 @@ export default function ProjectSettingsView({
                             pr_template: prTemplate || null,
                             harnesses: Object.keys(harnesses).length > 0 ? harnesses : null
                         },
-                        conflict_policy: conflictPolicy,
-                        feature_lifecycle: featureLifecycle,
-                        default_agent_kind: defaultAgentKind || null,
-                        default_model: defaultModel || null
-                    }
-                });
+                    conflict_policy: conflictPolicy,
+                    feature_lifecycle: featureLifecycle,
+                    default_agent_kind: defaultAgentKind || null,
+                    default_model: defaultModel || null,
+                    artifact_subdir: artifactSubdir || 'artifacts/',
+                    commit_artifacts: commitArtifacts
+                }
+            });
 
-                // 3. Update parent projects state
-                setProjects(prev => prev.map(p => p.id === activeProject.id ? {
+            // 3. Update parent projects state
+            setProjects(prev => prev.map(p => p.id === activeProject.id ? {
                     ...p,
                     name: projectName,
                     repos: selectedRepos.length,
@@ -629,7 +657,9 @@ export default function ProjectSettingsView({
                     conflict_policy: conflictPolicy,
                     feature_lifecycle: featureLifecycle,
                     default_agent_kind: defaultAgentKind || null,
-                    default_model: defaultModel || null
+                    default_model: defaultModel || null,
+                    artifact_subdir: artifactSubdir || 'artifacts/',
+                    commit_artifacts: commitArtifacts
                 }
             });
 
@@ -1592,6 +1622,49 @@ export default function ProjectSettingsView({
                                     )}
                                 </div>
                             </div>
+                        </div>
+
+                        {/* Artifact Handling (migration V12) */}
+                        <div className="glass-panel p-6 rounded-xl space-y-4">
+                            <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                <FileText className="w-4 h-4 text-cyan-400" /> Artifact Handling
+                            </h3>
+                            <p className="text-xs text-slate-400 leading-relaxed">
+                                Each workflow step produces a report (<code className="text-slate-300">research-report.md</code>, <code className="text-slate-300">critic-review.md</code>, …). By default these land in a subfolder and stay out of the PR — view them in demeteo's artifact panel. Toggle the commit switch to ship them with the feature branch instead.
+                            </p>
+
+                            <div>
+                                <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                                    Artifact Subfolder
+                                </label>
+                                <input
+                                    type="text"
+                                    value={artifactSubdir}
+                                    onChange={e => setArtifactSubdir(e.target.value)}
+                                    placeholder="artifacts/"
+                                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600"
+                                />
+                                <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
+                                    Repo-relative path. The orchestrator injects this as <code>{'{{artifact_dir}}'}</code> into every step's prompt and excludes it from <code>git add</code> when the commit switch is off.
+                                </p>
+                            </div>
+
+                            <label className="flex items-start gap-3 p-3 rounded-lg border border-white/5 bg-black/20 cursor-pointer hover:border-cyan-500/30 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={commitArtifacts}
+                                    onChange={e => setCommitArtifacts(e.target.checked)}
+                                    className="mt-0.5 w-4 h-4 rounded border-white/20 bg-black/40 text-cyan-500 focus:ring-cyan-500/40 focus:ring-offset-0"
+                                />
+                                <div className="flex-1">
+                                    <div className="text-xs font-semibold text-slate-200">
+                                        Commit artifacts to the feature branch
+                                    </div>
+                                    <div className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                                        When off (default), the orchestrator runs <code>git add -A -- ':!&lt;artifact_subfolder&gt;'</code> so the reports stay as untracked files in the worktree. The UI viewer still shows them.
+                                    </div>
+                                </div>
+                            </label>
                         </div>
 
                         {prTemplate && (

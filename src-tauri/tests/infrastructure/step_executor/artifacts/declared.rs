@@ -165,9 +165,16 @@ async fn test_commit_worktree_changes() {
         .await
         .unwrap();
 
-    let sha = commit_worktree_changes(&exec, machine, &temp, "worker: subtask-1")
-        .await
-        .unwrap();
+    let sha = commit_worktree_changes(
+        &exec,
+        machine,
+        &temp,
+        "worker: subtask-1",
+        "artifacts/",
+        true,
+    )
+    .await
+    .unwrap();
     assert!(!sha.is_empty());
 
     let log = exec

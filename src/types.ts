@@ -90,9 +90,49 @@ export interface Feature {
    * state. The UI shows this as a badge on the feature detail.
    */
   mr_state?: string | null;
+  /**
+   * Per-feature override for `ProjectSettings.commit_artifacts`.
+   * `null`/`undefined` → inherit the project default.
+   * `true` → agent reports (`research-report.md`, `critic-review.md`, …)
+   * are committed into the feature branch.
+   * `false` → reports stay in demeteo's local store + UI only.
+   * Set from the StartFeatureModal advanced section.
+   */
+  commit_artifacts?: boolean | null;
 }
 
 export type MrState = 'none' | 'draft' | 'open' | 'merged' | 'closed';
+
+export type NotificationKind =
+  | 'mr_merged'
+  | 'gate_pending'
+  | 'step_failed'
+  | 'feature_completed'
+  | 'merge_conflict';
+
+/** Mirrors the Rust `Notification` struct on the `notifications`
+ *  table. `feature_url` is a relative deep link; the bell decides
+ *  how to route it. */
+export interface Notification {
+  id: string;
+  project_id: string;
+  feature_id: string;
+  kind: NotificationKind;
+  message: string;
+  feature_url?: string | null;
+  read: boolean;
+  created_at: number;
+}
+
+/** Wire shape of `DomainEvent::MrMerged` as emitted by the
+ *  Tauri notification adapter. The bell listens for this to
+ *  refetch + toast without a full poll. */
+export interface MrMergedEvent {
+  feature_id: string;
+  project_id: string;
+  feature_title: string;
+  mr_url: string;
+}
 
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */
 export type SyncOutcomeView =

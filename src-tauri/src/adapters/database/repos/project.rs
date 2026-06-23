@@ -168,13 +168,15 @@ impl ProjectRepository for SqliteAdapter {
             .prepare(
                 "SELECT project_id, default_branch, branch_prefix, test_command, pr_template,
                         conflict_policy, feature_lifecycle, build_command, coverage_command,
-                        conventions_file, default_agent_kind, default_model, harnesses
+                        conventions_file, default_agent_kind, default_model, harnesses,
+                        artifact_subdir, commit_artifacts
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
             .query_map(params![project_id.0], |row| {
                 let harnesses: Option<String> = row.get(12)?;
+                let commit_artifacts: i64 = row.get(14)?;
                 Ok(ProjectSettings {
                     project_id: row.get(0)?,
                     worktree_strategy: WorktreeStrategy {
@@ -191,6 +193,8 @@ impl ProjectRepository for SqliteAdapter {
                     feature_lifecycle: row.get(6)?,
                     default_agent_kind: row.get(10)?,
                     default_model: row.get(11)?,
+                    artifact_subdir: row.get(13)?,
+                    commit_artifacts: commit_artifacts != 0,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -212,8 +216,8 @@ impl ProjectRepository for SqliteAdapter {
             "INSERT OR REPLACE INTO project_settings
              (project_id, default_branch, branch_prefix, test_command, build_command,
               coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
-              default_agent_kind, default_model, harnesses)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -227,7 +231,9 @@ impl ProjectRepository for SqliteAdapter {
                 s.feature_lifecycle,
                 s.default_agent_kind,
                 s.default_model,
-                harnesses_json
+                harnesses_json,
+                s.artifact_subdir,
+                s.commit_artifacts as i64,
             ],
         )
         .map_err(|e| e.to_string())?;

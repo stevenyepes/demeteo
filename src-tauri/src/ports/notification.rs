@@ -67,6 +67,19 @@ pub enum DomainEvent {
         step_execution_id: StepExecutionId,
         content: String,
     },
+
+    /// Emitted by the background MR-state monitor when
+    /// `MrPublisher::fetch_mr_state` reports an MR has transitioned
+    /// to `merged`. Carries the project + title so the notification
+    /// bell can render without a follow-up DB lookup. The
+    /// `notification_persistence` adapter is what translates this
+    /// into a `Notification` row.
+    MrMerged {
+        feature_id: FeatureId,
+        project_id: String,
+        feature_title: String,
+        mr_url: String,
+    },
 }
 
 /// The single deep interface for orchestrator → UI event emission.
