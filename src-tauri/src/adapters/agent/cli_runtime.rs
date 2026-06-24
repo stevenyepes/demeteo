@@ -37,6 +37,10 @@ impl AgentRuntime for UnifiedCliRuntime {
         self.kind_str
     }
 
+    fn binary(&self) -> &'static str {
+        self.binary
+    }
+
     async fn is_available(
         &self,
         exec: &dyn crate::ports::execution::ExecutionPort,

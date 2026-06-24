@@ -13,7 +13,7 @@ pub async fn discover_models(
     }
 
     // 2. CLI model probing for agents that expose a `models` subcommand
-    if agent_kind == "opencode" || agent_kind == "hermes" {
+    if agent_kind == "opencode" || agent_kind == "hermes" || agent_kind == "antigravity" {
         if let Ok(models) = probe_models_via_cli(ctx.exec.as_ref(), &machine_id, &agent_kind).await
         {
             return Ok(models);
@@ -40,10 +40,15 @@ async fn probe_models_via_acp(
         .unwrap_or_default()
         .as_millis();
     let temp_thread_id = format!("probe-models-{}", now);
+    let probe_binary = ctx
+        .registry
+        .runtime_for(&agent_kind)
+        .map(|r| r.binary().to_string())
+        .unwrap_or_else(|| agent_kind.to_string());
     let agent_ctx = AgentContext {
         thread_id: temp_thread_id.clone(),
         machine_id: machine_id.to_string(),
-        binary: agent_kind.to_string(),
+        binary: probe_binary,
         args: vec![],
         env: crate::ports::agent_runtime::agent_base_env(),
         cwd,
@@ -75,8 +80,13 @@ async fn probe_models_via_acp(
 async fn probe_models_via_cli(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
-    binary: &str,
+    agent_kind: &str,
 ) -> Result<Vec<ConfigOptionValue>, String> {
+    let binary = match agent_kind {
+        "antigravity" => "agy",
+        "claude-code" => "claude",
+        other => other,
+    };
     let output = exec
         .run_command(machine_id, &format!("{} models", binary))
         .await?;

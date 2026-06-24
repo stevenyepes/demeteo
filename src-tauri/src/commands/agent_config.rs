@@ -8,6 +8,11 @@ use tauri::State;
 pub async fn get_agent_configs(
     ctx: State<'_, AppContext>,
     machine_id: String,
+    // When true, the availability probe is run fresh for each agent and
+    // the in-memory cache is updated with the new result. The settings
+    // page's "Re-check" button passes `true`; everything else uses
+    // `false` to avoid re-probing on every list.
+    refresh: Option<bool>,
 ) -> Result<Vec<AgentConfigView>, AppError> {
     let resolved_id = crate::infrastructure::worktree::machine_resolver::resolve_machine(
         &*ctx.machines,
@@ -44,9 +49,14 @@ pub async fn get_agent_configs(
     let runtime_kinds: Vec<&'static str> =
         ctx.registry.runtimes().iter().map(|r| r.kind()).collect();
     let mut views: Vec<AgentConfigView> = Vec::new();
+    let force = refresh.unwrap_or(false);
     for cfg in configured {
         let available = match runtime_kinds.iter().find(|k| **k == cfg.kind) {
-            Some(k) => ctx.registry.is_available(k, &*ctx.exec, &machine_id).await,
+            Some(k) => {
+                ctx.registry
+                    .is_available(k, &*ctx.exec, &machine_id, force)
+                    .await
+            }
             None => false,
         };
         let install_command = runtime_kinds

@@ -27,28 +27,41 @@ impl AgentRegistry {
 
     /// Check if the agent kind is available on the given machine.
     /// The result is cached per `(machine_id, kind)` for the duration of the app session.
+    ///
+    /// When `force` is true the cache is bypassed and the result of the
+    /// fresh probe is written back into the cache. The settings page's
+    /// "Re-check agent availability" button calls with `force = true` so
+    /// that installing a binary mid-session is reflected immediately,
+    /// instead of waiting for an app restart.
     pub async fn is_available(
         &self,
         kind: &str,
         exec: &dyn crate::ports::execution::ExecutionPort,
         machine_id: &str,
+        force: bool,
     ) -> bool {
         let key = (machine_id.to_string(), kind.to_string());
-        {
+        if !force {
             let cache = self.availability_cache.lock().await;
             if let Some(&avail) = cache.get(&key) {
                 return avail;
             }
         }
 
-        if let Some(runtime) = self.runtime_for(kind) {
-            let avail = runtime.is_available(exec, machine_id).await;
-            let mut cache = self.availability_cache.lock().await;
-            cache.insert(key, avail);
-            avail
-        } else {
-            false
-        }
+        let runtime = match self.runtime_for(kind) {
+            Some(r) => r,
+            None => {
+                if !force {
+                    let mut cache = self.availability_cache.lock().await;
+                    cache.insert(key, false);
+                }
+                return false;
+            }
+        };
+        let avail = runtime.is_available(exec, machine_id).await;
+        let mut cache = self.availability_cache.lock().await;
+        cache.insert(key, avail);
+        avail
     }
 
     /// Resolve which runtime owns a given `kind`. The lookup is exact; v1

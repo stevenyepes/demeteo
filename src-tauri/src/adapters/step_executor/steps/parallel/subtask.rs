@@ -106,7 +106,11 @@ impl ExecutionDriver {
             let mut worker_env = crate::ports::agent_runtime::agent_base_env();
             // CLI agents: pass model via --model flag, not OPENCODE_CONFIG_CONTENT.
             if let Some(ref m) = override_model {
-                if agent_kind == "opencode" || agent_kind == "hermes" {
+                if agent_kind == "opencode"
+                    || agent_kind == "hermes"
+                    || agent_kind == "claude-code"
+                    || agent_kind == "antigravity"
+                {
                     // CLI mode: model passed as --model flag at spawn
                 } else {
                     let config = format!(
@@ -116,10 +120,15 @@ impl ExecutionDriver {
                     worker_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
                 }
             }
+            let binary = self
+                .registry
+                .runtime_for(&agent_kind)
+                .map(|r| r.binary().to_string())
+                .unwrap_or_else(|| agent_kind.clone());
             let ctx = AgentContext {
                 thread_id: sub_thread_id.clone(),
                 machine_id: machine_str.to_string(),
-                binary: agent_kind.clone(),
+                binary,
                 args: vec![],
                 env: worker_env,
                 cwd: wt_path.clone(),
@@ -138,7 +147,10 @@ impl ExecutionDriver {
 
             match spawn_res {
                 Some(Ok(session)) => {
-                    let is_cli_agent = agent_kind == "opencode" || agent_kind == "hermes";
+                    let is_cli_agent = agent_kind == "opencode"
+                        || agent_kind == "hermes"
+                        || agent_kind == "claude-code"
+                        || agent_kind == "antigravity";
                     if !is_cli_agent {
                         if let Some(ref model) = override_model {
                             let info = session.session_info();

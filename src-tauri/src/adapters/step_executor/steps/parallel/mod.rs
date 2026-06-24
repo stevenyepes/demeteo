@@ -319,7 +319,10 @@ impl ExecutionDriver {
         };
 
         if let Some(ref model) = override_model {
-            let is_cli_agent = planner_kind == "opencode" || planner_kind == "hermes";
+            let is_cli_agent = planner_kind == "opencode"
+                || planner_kind == "hermes"
+                || planner_kind == "claude-code"
+                || planner_kind == "antigravity";
             if !is_cli_agent {
                 let _ = planner_session.set_config_option("model", model);
             }

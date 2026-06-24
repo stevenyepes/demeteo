@@ -110,7 +110,11 @@ impl ExecutionDriver {
 
         let mut agent_env = crate::ports::agent_runtime::agent_base_env();
         if let Some(ref m) = override_model {
-            if verifier_agent_kind != "opencode" && verifier_agent_kind != "hermes" {
+            if verifier_agent_kind != "opencode"
+                && verifier_agent_kind != "hermes"
+                && verifier_agent_kind != "claude-code"
+                && verifier_agent_kind != "antigravity"
+            {
                 let config = format!(
                     r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
                     m
@@ -120,10 +124,15 @@ impl ExecutionDriver {
         }
 
         let verifier_thread_id = format!("{}-verifier", self.f_id_str);
+        let verifier_binary = self
+            .registry
+            .runtime_for(&verifier_agent_kind)
+            .map(|r| r.binary().to_string())
+            .unwrap_or_else(|| verifier_agent_kind.clone());
         let verifier_ctx = AgentContext {
             thread_id: verifier_thread_id.clone(),
             machine_id: machine_str.to_string(),
-            binary: verifier_agent_kind.clone(),
+            binary: verifier_binary,
             args: vec![],
             env: agent_env,
             cwd: wt_path.to_string(),

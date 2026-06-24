@@ -195,3 +195,110 @@ async fn kill_removes_session() {
     reg.kill("t1").await;
     reg.kill("t1").await;
 }
+
+/// Runtime that lets the test flip the `is_available` answer between
+/// probes. Counts how many times `is_available` was called so the cache
+/// behavior can be asserted from the call count alone.
+struct FlippableRuntime {
+    state: tokio::sync::Mutex<bool>,
+    calls: tokio::sync::Mutex<u32>,
+}
+
+impl FlippableRuntime {
+    fn new(initial: bool) -> Arc<Self> {
+        Arc::new(Self {
+            state: tokio::sync::Mutex::new(initial),
+            calls: tokio::sync::Mutex::new(0),
+        })
+    }
+    async fn flip(&self) {
+        let mut s = self.state.lock().await;
+        *s = !*s;
+    }
+    async fn calls(&self) -> u32 {
+        *self.calls.lock().await
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentRuntime for FlippableRuntime {
+    fn kind(&self) -> &'static str {
+        "flippable"
+    }
+    async fn is_available(
+        &self,
+        _exec: &dyn crate::ports::execution::ExecutionPort,
+        _machine_id: &str,
+    ) -> bool {
+        let mut c = self.calls.lock().await;
+        *c += 1;
+        *self.state.lock().await
+    }
+    fn install_command(&self) -> &'static str {
+        "echo flippable"
+    }
+    fn start(
+        &self,
+        _ctx: AgentContext,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Arc<dyn AgentSession>, AgentStartError>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async { Err(AgentStartError::SpawnFailed("flippable".into())) })
+    }
+}
+
+/// When the user's installation toggles the binary on disk mid-session,
+/// the next click of the "Re-check availability" button must return the
+/// fresh value rather than the cached `false` from the previous probe.
+#[tokio::test]
+async fn is_available_force_bypasses_cache() {
+    let rt = FlippableRuntime::new(false);
+    let reg = AgentRegistry::new(vec![rt.clone()]);
+
+    // 1. Initial probe: binary missing. Should be cached.
+    let stub: Arc<dyn crate::ports::execution::ExecutionPort> = {
+        struct NoopExec;
+        #[async_trait::async_trait]
+        impl crate::ports::execution::ExecutionPort for NoopExec {
+            async fn test_connection(&self, _: &str) -> Result<(), String> { Ok(()) }
+            async fn run_command(&self, _: &str, _: &str) -> Result<String, String> { Ok(String::new()) }
+            async fn read_file(&self, _: &str, _: &str) -> Result<String, String> { Ok(String::new()) }
+            async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
+            async fn get_metadata(&self, _: &str, path: &str) -> Result<crate::sftp::SftpEntry, String> {
+                Ok(crate::sftp::SftpEntry { name: path.into(), path: path.into(), is_dir: false, size: 0, modified: 0 })
+            }
+            async fn list_dir(&self, _: &str, _: &str) -> Result<Vec<crate::sftp::SftpEntry>, String> { Ok(vec![]) }
+            async fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
+            async fn resolve_home(&self, _: &str) -> Result<String, String> { Ok("/tmp".into()) }
+            fn spawn_interactive(
+                &self, _: &str, _: &str, _: &[String], _: &str,
+                _: &std::collections::HashMap<String, String>,
+            ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+                Err("noop".into())
+            }
+        }
+        Arc::new(NoopExec)
+    };
+
+    assert!(!reg.is_available("flippable", stub.as_ref(), "m1", false).await);
+    assert_eq!(rt.calls().await, 1, "first call must probe");
+
+    // 2. Cached: subsequent non-forced calls must NOT re-probe.
+    assert!(!reg.is_available("flippable", stub.as_ref(), "m1", false).await);
+    assert!(!reg.is_available("flippable", stub.as_ref(), "m1", false).await);
+    assert_eq!(rt.calls().await, 1, "non-forced calls must hit the cache");
+
+    // 3. The user installs the binary. Flip the underlying runtime's
+    //    answer to `true` and force a re-probe via the refresh button.
+    rt.flip().await;
+    assert!(reg.is_available("flippable", stub.as_ref(), "m1", true).await);
+    assert_eq!(rt.calls().await, 2, "forced call must re-probe");
+
+    // 4. The cache now reflects the fresh value.
+    assert!(reg.is_available("flippable", stub.as_ref(), "m1", false).await);
+    assert_eq!(rt.calls().await, 2, "fresh value must be cached");
+}

@@ -117,7 +117,11 @@ pub(crate) async fn resolve_sync_conflicts_shared(
     let resolver_thread_id = format!("{}-{}", thread_id_prefix, paths::now_ms());
     let mut agent_env = crate::ports::agent_runtime::agent_base_env();
     if let Some(ref m) = override_model {
-        if agent_kind != "opencode" && agent_kind != "hermes" {
+        if agent_kind != "opencode"
+            && agent_kind != "hermes"
+            && agent_kind != "claude-code"
+            && agent_kind != "antigravity"
+        {
             let config = format!(
                 r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
                 m
@@ -126,10 +130,14 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         }
     }
 
+    let binary = registry
+        .runtime_for(agent_kind)
+        .map(|r| r.binary().to_string())
+        .unwrap_or_else(|| agent_kind.to_string());
     let ctx = AgentContext {
         thread_id: resolver_thread_id.clone(),
         machine_id: machine_str.to_string(),
-        binary: agent_kind.to_string(),
+        binary,
         args: vec![],
         env: agent_env,
         cwd: resolved_cwd.to_string(),

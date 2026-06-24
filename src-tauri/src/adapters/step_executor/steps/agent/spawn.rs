@@ -18,7 +18,11 @@ impl ExecutionDriver {
 
         let mut agent_env = crate::ports::agent_runtime::agent_base_env();
         if let Some(ref m) = override_model {
-            if agent_kind == "opencode" || agent_kind == "hermes" {
+            if agent_kind == "opencode"
+                || agent_kind == "hermes"
+                || agent_kind == "claude-code"
+                || agent_kind == "antigravity"
+            {
                 // CLI mode: model passed as --model flag at spawn
             } else {
                 let config = format!(
@@ -29,10 +33,19 @@ impl ExecutionDriver {
             }
         }
 
+        // Resolve the actual executable name from the registered runtime
+        // (e.g. kind "claude-code" → binary "claude"). Falls back to the
+        // kind itself if no runtime is registered for it.
+        let binary = self
+            .registry
+            .runtime_for(agent_kind)
+            .map(|r| r.binary().to_string())
+            .unwrap_or_else(|| agent_kind.to_string());
+
         let ctx = AgentContext {
             thread_id: self.f_id_str.clone(),
             machine_id: machine_str.to_string(),
-            binary: agent_kind.to_string(),
+            binary,
             args: vec![],
             env: agent_env,
             cwd: wt_path.to_string(),
@@ -53,7 +66,10 @@ impl ExecutionDriver {
 
         match spawn_res {
             Some(Ok(session)) => {
-                let is_cli_agent = agent_kind == "opencode" || agent_kind == "hermes";
+                let is_cli_agent = agent_kind == "opencode"
+                    || agent_kind == "hermes"
+                    || agent_kind == "claude-code"
+                    || agent_kind == "antigravity";
                 if !is_cli_agent {
                     if let Some(ref model) = override_model {
                         let info = session.session_info();

@@ -77,6 +77,15 @@ pub trait AgentRuntime: Send + Sync {
     /// Stable identifier; matches `AgentConfig.kind`.
     fn kind(&self) -> &'static str;
 
+    /// The actual executable name on disk. Defaults to [`Self::kind`], which
+    /// is correct when the kind matches the binary (opencode, hermes, …).
+    /// Runtimes whose kind is a hyphenated label that doesn't exist as a
+    /// binary on `$PATH` (e.g. `claude-code` kind → `claude` binary) must
+    /// override this so the executor spawns the right process.
+    fn binary(&self) -> &'static str {
+        self.kind()
+    }
+
     /// Check if the binary is reachable on the target host (which / command
     /// -v). The result is cached per `(machine_id, kind)` by the registry for
     /// the duration of the app session.

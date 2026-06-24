@@ -182,6 +182,7 @@ export default function ProjectSettingsView({
 
     // Coding Agent configs
     const [agentConfigs, setAgentConfigs] = useState<AgentConfigView[]>([]);
+    const [isRefreshingAgents, setIsRefreshingAgents] = useState(false);
 
     // Default AI Executor States
     const [defaultAgentKind, setDefaultAgentKind] = useState<string>('');
@@ -242,14 +243,18 @@ export default function ProjectSettingsView({
         return () => { cancelled = true; };
     }, []);
 
-    const fetchAgentConfigs = async () => {
+    const fetchAgentConfigs = async (refresh: boolean = false) => {
         const machineId = computeType === 'remote' ? remoteHost : 'local';
         if (computeType === 'remote' && !remoteHost) {
             setAgentConfigs([]);
             return;
         }
+        if (refresh) setIsRefreshingAgents(true);
         try {
-            const configs = await invoke<AgentConfigView[]>('get_agent_configs', { machineId });
+            const configs = await invoke<AgentConfigView[]>('get_agent_configs', {
+                machineId,
+                refresh,
+            });
             setAgentConfigs(configs);
         } catch (err) {
             // The backend has no rows for this machine — that's a
@@ -261,6 +266,8 @@ export default function ProjectSettingsView({
             const message = formatError(err);
             console.warn("No agent configs found for machine:", machineId, "—", message);
             setAgentConfigs([]);
+        } finally {
+            if (refresh) setIsRefreshingAgents(false);
         }
     };
 
@@ -523,7 +530,7 @@ export default function ProjectSettingsView({
             if (machineId) {
                 await invoke('set_agent_configs', {
                     machineId,
-                    agents: agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled }))
+                    agents: agentConfigs.filter(a => a.kind !== 'antigravity').map(a => ({ kind: a.kind, enabled: a.enabled }))
                 });
             }
         } catch (err) {
@@ -1578,7 +1585,7 @@ export default function ProjectSettingsView({
                                     className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 capitalize"
                                 >
                                     <option value="">No default (Prompt on feature creation)</option>
-                                    {agentConfigs.filter(a => a.enabled).map(a => (
+                                    {agentConfigs.filter(a => a.enabled && a.kind !== 'antigravity').map(a => (
                                         <option key={a.kind} value={a.kind}>
                                             {a.kind.replace(/-/g, ' ')}
                                         </option>
@@ -1684,11 +1691,12 @@ export default function ProjectSettingsView({
                                 </h3>
                                 <button
                                     type="button"
-                                    onClick={fetchAgentConfigs}
-                                    className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-white/5 transition-all"
+                                    onClick={() => fetchAgentConfigs(true)}
+                                    disabled={isRefreshingAgents}
+                                    className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-white/5 transition-all disabled:opacity-50"
                                     title="Re-check agent availability"
                                 >
-                                    <RotateCw className="w-3.5 h-3.5" />
+                                    <RotateCw className={`w-3.5 h-3.5 ${isRefreshingAgents ? 'animate-spin text-cyan-400' : ''}`} />
                                 </button>
                             </div>
                             <p className="text-xs text-slate-400">
@@ -1696,9 +1704,9 @@ export default function ProjectSettingsView({
                             </p>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-                                {agentConfigs.length === 0 ? (
+                                {agentConfigs.filter(a => a.kind !== 'antigravity').length === 0 ? (
                                     <div className="md:col-span-2 text-xs text-slate-500 italic p-2">No agents found on target machine.</div>
-                                ) : agentConfigs.map((agent) => (
+                                ) : agentConfigs.filter(a => a.kind !== 'antigravity').map((agent) => (
                                     <div 
                                         key={agent.kind}
                                         className={`flex items-start justify-between p-4 rounded-lg border transition-all ${

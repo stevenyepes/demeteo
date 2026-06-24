@@ -739,7 +739,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                                         >
                                                             Use Default
                                                         </button>
-                                                        {agentConfigs.filter(a => a.enabled).map(agent => (
+                                                        {agentConfigs.filter(a => a.enabled && a.kind !== 'antigravity').map(agent => (
                                                             <button
                                                                 key={agent.kind}
                                                                 type="button"
