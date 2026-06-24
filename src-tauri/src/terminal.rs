@@ -66,7 +66,7 @@ pub fn set_machine_secret(machine_id: String, secret: String) -> Result<(), Stri
     entry
         .set_password(&secret)
         .map_err(|e| format!("Failed to store secret in keyring: {}", e))?;
-    crate::credential_cache::invalidate(&format!("machine_{}", machine_id));
+    crate::credential_cache::set(&format!("machine_{}", machine_id), &secret);
     Ok(())
 }
 

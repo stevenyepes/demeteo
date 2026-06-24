@@ -106,7 +106,7 @@ pub async fn connect_instance(
 
     let entry = Entry::new("demeteo", id.as_str()).map_err(|e| e.to_string())?;
     entry.set_password(&pat).map_err(|e| e.to_string())?;
-    crate::credential_cache::invalidate(id.as_str());
+    crate::credential_cache::set(id.as_str(), &pat);
 
     let now = paths::now_ms();
     let instance = ProviderInstance {

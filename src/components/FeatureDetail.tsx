@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
@@ -12,6 +12,7 @@ import {
   GitBranch, ExternalLink, AlertTriangle,
 } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
+import PromptDialog from './PromptDialog';
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
 import type { SyncOutcomeView, MrState } from '../types';
 
@@ -108,6 +109,18 @@ const formatTokens = (tokens: number): string => {
     return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
   }
   return tokens.toString();
+};
+
+/**
+ * Suggest an MR title from a longer description: take the first 5
+ * words, capped at ~40 characters. Trailing whitespace is trimmed
+ * and an ellipsis is added when truncation occurs.
+ */
+const suggestMrTitle = (raw: string): string => {
+  const cleaned = (raw || '').trim().replace(/\s+/g, ' ');
+  if (!cleaned) return '';
+  const first5 = cleaned.split(' ').slice(0, 5).join(' ');
+  return first5.length > 40 ? first5.slice(0, 40).trimEnd() + '…' : first5;
 };
 
 export const FeatureDetail: React.FC<FeatureDetailProps> = ({
@@ -232,7 +245,6 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           }
           if (f.title) {
             setFeatureTitle(f.title);
-            setMrTitle(f.title);
           }
         }
       } catch (err) {
@@ -370,7 +382,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
    *  on an already-published feature returns the existing URL
    *  instead of creating a duplicate. */
   const [publishing, setPublishing] = useState(false);
-  const [mrTitle, setMrTitle] = useState<string>('');
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [syncBanner, setSyncBanner] = useState<SyncOutcomeView | null>(null);
@@ -462,15 +474,26 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     };
   }, [featureId, status]);
 
-  const handlePublish = async (draft: boolean) => {
+  /** Pre-filled MR title: first 5 words of the feature description,
+   *  truncated at ~40 chars. The user can edit it in the prompt. */
+  const suggestedMrTitle = useMemo(
+    () => suggestMrTitle(featureTitle),
+    [featureTitle],
+  );
+
+  const handlePublishClick = () => {
     if (!projectId) {
-      await messageDialog('No project is associated with this feature.', {
+      messageDialog('No project is associated with this feature.', {
         title: 'Cannot publish',
         kind: 'error',
       });
       return;
     }
-    const finalTitle = mrTitle.trim() || featureTitle;
+    setPublishDialogOpen(true);
+  };
+
+  const handlePublishConfirm = async (title: string) => {
+    const finalTitle = title.trim();
     if (!finalTitle) {
       await messageDialog('Please enter a title for the MR/PR.', {
         title: 'Title required',
@@ -478,12 +501,13 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       });
       return;
     }
+    setPublishDialogOpen(false);
     setPublishing(true);
     try {
       const result: any = await invoke('publish_mr', {
         projectId,
         featureId,
-        draft,
+        draft: false,
         title: finalTitle,
       });
       const url = result?.url ?? '(unknown)';
@@ -558,61 +582,56 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>
         </div>
 
-        <div className="flex items-center gap-6 shrink-0">
-          <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Elapsed Duration</div>
-            <div className="text-lg font-bold font-mono text-white">{duration}</div>
+        <div className="flex flex-col items-end gap-3 shrink-0">
+          <div className="flex items-center gap-6">
+            <div className="text-right">
+              <div className="text-[10px] text-slate-500 uppercase font-bold">Elapsed Duration</div>
+              <div className="text-lg font-bold font-mono text-white">{duration}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Tokens</div>
+              <div className="text-lg font-bold font-mono text-cyan-400">{formatTokens(tokens)}</div>
+            </div>
           </div>
-          <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Tokens</div>
-            <div className="text-lg font-bold font-mono text-cyan-400">{formatTokens(tokens)}</div>
+          <div className="flex items-center gap-2">
+            {(status === 'running' || status === 'verifying') && (
+              <button
+                onClick={handleCancelFeature}
+                className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300"
+              >
+                Cancel Feature
+              </button>
+            )}
+            {(status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'awaiting_mr') && (
+              <>
+                <button
+                  onClick={handleSync}
+                  disabled={syncing || resolving}
+                  className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
+                  title="Merge origin/main into this feature branch (resolves conflicts with a fresh agent when needed)"
+                >
+                  {syncing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
+                  Sync with main
+                </button>
+                <button
+                  onClick={handlePublishClick}
+                  disabled={publishing}
+                  className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
+                  title="Open a PR/MR for review"
+                >
+                  {publishing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitPullRequest className="w-3.5 h-3.5" />}
+                  Publish MR
+                </button>
+                <button
+                  onClick={() => handleCleanup()}
+                  className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-bold transition duration-300"
+                  title="Apply the project's feature_lifecycle (archive / keep / auto_delete)"
+                >
+                  Cleanup
+                </button>
+              </>
+            )}
           </div>
-          {(status === 'running' || status === 'verifying') && (
-            <button
-              onClick={handleCancelFeature}
-              className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300"
-            >
-              Cancel Feature
-            </button>
-          )}
-          {(status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'awaiting_mr') && (
-            <>
-              <button
-                onClick={handleSync}
-                disabled={syncing || resolving}
-                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
-                title="Merge origin/main into this feature branch (resolves conflicts with a fresh agent when needed)"
-              >
-                {syncing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
-                Sync with main
-              </button>
-              <input
-                type="text"
-                value={mrTitle}
-                onChange={(e) => setMrTitle(e.target.value)}
-                placeholder="MR title (max 255 chars)"
-                maxLength={255}
-                className="flex-1 min-w-0 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:bg-white/8 transition"
-                title="This title will be used for the MR/PR"
-              />
-              <button
-                onClick={() => handlePublish(false)}
-                disabled={publishing}
-                className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
-                title="Open a PR/MR for review"
-              >
-                {publishing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitPullRequest className="w-3.5 h-3.5" />}
-                Publish MR
-              </button>
-              <button
-                onClick={() => handleCleanup()}
-                className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-bold transition duration-300"
-                title="Apply the project's feature_lifecycle (archive / keep / auto_delete)"
-              >
-                Cleanup
-              </button>
-            </>
-          )}
         </div>
       </div>
 
@@ -976,6 +995,17 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           </div>
         </div>
       )}
+
+      <PromptDialog
+        isOpen={publishDialogOpen}
+        title="Publish MR"
+        message="Choose a title for the merge request. Defaults to the first 5 words of the feature description, truncated at 40 characters."
+        defaultValue={suggestedMrTitle}
+        placeholder="MR title"
+        okLabel="Publish"
+        onConfirm={handlePublishConfirm}
+        onCancel={() => setPublishDialogOpen(false)}
+      />
     </div>
   );
 };

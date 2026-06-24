@@ -21,6 +21,12 @@ pub fn get_or_fetch(
 }
 
 /// Invalidate a cached credential (e.g. after write or delete).
+pub fn set(key: &str, value: &str) {
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(key.to_string(), value.to_string());
+    }
+}
+
 pub fn invalidate(key: &str) {
     if let Ok(mut cache) = CACHE.lock() {
         cache.remove(key);
