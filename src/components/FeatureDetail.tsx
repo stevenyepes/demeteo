@@ -9,12 +9,21 @@ import { formatError } from '../lib/errors';
 import {
   ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X,
   GitPullRequest, RotateCcw, FileText, FileCode, FileJson, GitMerge, FileQuestion,
-  GitBranch, ExternalLink, AlertTriangle,
+  GitBranch, ExternalLink, AlertTriangle, Terminal,
 } from 'lucide-react';
+import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { ArtifactViewer } from './ArtifactViewer';
 import PromptDialog from './PromptDialog';
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
 import type { SyncOutcomeView, MrState } from '../types';
+
+interface EditorContext {
+  machineId: string;
+  worktreePath: string;
+  branch: string;
+  defaultBranch: string;
+  initialFile?: string;
+}
 
 interface FeatureDetailProps {
   featureId: string;
@@ -22,6 +31,8 @@ interface FeatureDetailProps {
   title: string;
   onDecideGate: (stepExecId: string) => void;
   onBack: () => void;
+  onOpenEditor?: (ctx: EditorContext) => void;
+  sidebarCollapsed?: boolean;
 }
 
 const humanizeStepId = (id: string) => {
@@ -129,6 +140,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   title,
   onDecideGate,
   onBack,
+  onOpenEditor,
+  sidebarCollapsed,
 }) => {
   const { reportError } = useErrorBus();
   const [steps, setSteps] = useState<StepExecution[]>([]);
@@ -381,6 +394,33 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
    *  connected provider (R6). The backend is idempotent: re-publish
    *  on an already-published feature returns the existing URL
    *  instead of creating a duplicate. */
+  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
+  const [agentDrawerCtx, setAgentDrawerCtx] = useState<{
+    machineId: string;
+    worktreePath: string;
+    computeType: string;
+    remoteHost: string | null;
+  } | null>(null);
+
+  const handleOpenAgentSession = async () => {
+    try {
+      const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
+        'feature_get_worktree',
+        { featureId }
+      );
+      const computeType = info.machine_id === 'local' ? 'local' : 'remote';
+      setAgentDrawerCtx({
+        machineId: info.machine_id,
+        worktreePath: info.worktree_path,
+        computeType,
+        remoteHost: computeType === 'remote' ? info.machine_id : null,
+      });
+      setAgentDrawerOpen(true);
+    } catch (err) {
+      reportError(err);
+    }
+  };
+
   const [publishing, setPublishing] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -594,6 +634,34 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleOpenAgentSession}
+              className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
+              title="Open an interactive agent coding session in this feature's worktree"
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              Code with Agent
+            </button>
+            {onOpenEditor && (
+              <button
+                onClick={async () => {
+                  try {
+                    const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
+                      'feature_get_worktree',
+                      { featureId }
+                    );
+                    onOpenEditor({ machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch });
+                  } catch (err) {
+                    reportError(err);
+                  }
+                }}
+                className="px-4 py-2 bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 text-violet-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
+                title="Browse the feature branch code in read-only mode"
+              >
+                <GitBranch className="w-3.5 h-3.5" />
+                Browse Code
+              </button>
+            )}
             {(status === 'running' || status === 'verifying') && (
               <button
                 onClick={handleCancelFeature}
@@ -832,31 +900,51 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                         </div>
                       )}
 
-                      {(step.artifact_paths?.length ? step.artifact_paths : step.artifact_path ? [step.artifact_path] : []).map((path) => {
-                        const cls = classifyArtifact(path);
-                        const Icon = <ArtifactIcon kind={cls.kind} />;
-                        const labelColor = ARTIFACT_KIND_COLORS[cls.kind];
+                      {(() => {
+                        const allPaths = step.artifact_paths?.length
+                          ? step.artifact_paths
+                          : step.artifact_path ? [step.artifact_path] : [];
+                        const isAgentStep = step.step_kind === 'agent';
+                        const visiblePaths = isAgentStep
+                          ? allPaths.filter(p => classifyArtifact(p).kind === 'markdown')
+                          : allPaths;
+                        const hiddenCount = allPaths.length - visiblePaths.length;
+
                         return (
-                          <button
-                            key={path}
-                            onClick={() => {
-                              setSelectedArtifactPath(path);
-                              setSelectedStepTitle(step.step_id);
-                            }}
-                            className={`mt-3 w-full text-left text-xs font-mono p-3 rounded border flex items-center gap-3 transition duration-300 ${
-                              selectedArtifactPath === path
-                                ? 'bg-violet-950/20 border-violet-500/30 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
-                                : 'bg-[#050608] border-white/[0.02] text-slate-400 hover:border-white/10 hover:bg-white/[0.02] hover:text-white cursor-pointer'
-                            }`}
-                          >
-                            <span className={labelColor}>{Icon}</span>
-                            <span className="truncate flex-1">{cls.basename}</span>
-                            <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">
-                              {ARTIFACT_KIND_LABELS[cls.kind]}
-                            </span>
-                          </button>
+                          <>
+                            {visiblePaths.map((path) => {
+                              const cls = classifyArtifact(path);
+                              const Icon = <ArtifactIcon kind={cls.kind} />;
+                              const labelColor = ARTIFACT_KIND_COLORS[cls.kind];
+                              return (
+                                <button
+                                  key={path}
+                                  onClick={() => {
+                                    setSelectedArtifactPath(path);
+                                    setSelectedStepTitle(step.step_id);
+                                  }}
+                                  className={`mt-3 w-full text-left text-xs font-mono p-3 rounded border flex items-center gap-3 transition duration-300 ${
+                                    selectedArtifactPath === path
+                                      ? 'bg-violet-950/20 border-violet-500/30 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
+                                      : 'bg-[#050608] border-white/[0.02] text-slate-400 hover:border-white/10 hover:bg-white/[0.02] hover:text-white cursor-pointer'
+                                  }`}
+                                >
+                                  <span className={labelColor}>{Icon}</span>
+                                  <span className="truncate flex-1">{cls.basename}</span>
+                                  <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">
+                                    {ARTIFACT_KIND_LABELS[cls.kind]}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                            {isAgentStep && hiddenCount > 0 && (
+                              <div className="mt-3 text-[10px] text-slate-600 font-mono px-1">
+                                {hiddenCount} file{hiddenCount !== 1 ? 's' : ''} changed · use Browse Code to review
+                              </div>
+                            )}
+                          </>
                         );
-                      })}
+                      })()}
 
                       {(step.status === 'running' || step.status === 'verifying') && (
                         <div className="mt-3 flex gap-2">
@@ -929,7 +1017,20 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
 
                 {/* Content */}
                 <div className="flex-1 flex flex-col overflow-hidden">
-                  <ArtifactViewer artifactPath={selectedArtifactPath} />
+                  <ArtifactViewer
+                    artifactPath={selectedArtifactPath}
+                    onOpenEditorForPath={onOpenEditor ? async (filePath) => {
+                      try {
+                        const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
+                          'feature_get_worktree',
+                          { featureId }
+                        );
+                        onOpenEditor({ machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch, initialFile: filePath });
+                      } catch (err) {
+                        reportError(err);
+                      }
+                    } : undefined}
+                  />
                 </div>
               </div>
             )}
@@ -1006,6 +1107,19 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         onConfirm={handlePublishConfirm}
         onCancel={() => setPublishDialogOpen(false)}
       />
+
+      {agentDrawerCtx && (
+        <AgentTerminalDrawer
+          isOpen={agentDrawerOpen}
+          onClose={() => setAgentDrawerOpen(false)}
+          machineId={agentDrawerCtx.machineId}
+          absoluteWorkDir={agentDrawerCtx.worktreePath}
+          projectId={featureId}
+          computeType={agentDrawerCtx.computeType}
+          remoteHost={agentDrawerCtx.remoteHost}
+          sidebarWidth={sidebarCollapsed ? 56 : 240}
+        />
+      )}
     </div>
   );
 };

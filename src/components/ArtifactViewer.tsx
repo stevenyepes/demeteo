@@ -13,12 +13,15 @@ interface ArtifactViewerProps {
    *  mime rather than file extension (e.g. `application/x-demeteo-worktree-ref`
    *  renders an "Open in editor" CTA instead of trying to display code). */
   mime?: string;
+  /** Called when the user clicks "Open in Editor" on a worktree-ref artifact. */
+  onOpenEditorForPath?: (filePath: string) => void;
 }
 
 export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
   artifactPath,
   maxHeight = '100%',
   mime,
+  onOpenEditorForPath,
 }) => {
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -162,11 +165,12 @@ export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
         </div>
         <button
           onClick={() => {
-            const url = `/editor?machine=${worktreeRef.machine_id}&branch=${worktreeRef.branch}&file=${worktreeRef.path}`;
-            // Navigate to the editor view using the app's router
-            window.location.hash = url;
+            if (onOpenEditorForPath) {
+              onOpenEditorForPath(worktreeRef.path);
+            }
           }}
-          className="px-5 py-2 bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-cyan-600/30 transition duration-150"
+          disabled={!onOpenEditorForPath}
+          className="px-5 py-2 bg-cyan-600/20 border border-cyan-500/30 text-cyan-300 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-cyan-600/30 transition duration-150 disabled:opacity-40"
         >
           Open in Editor
         </button>

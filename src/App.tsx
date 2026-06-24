@@ -14,6 +14,7 @@ import { WorkflowList } from "./components/WorkflowList";
 import { WorkflowEditor } from "./components/WorkflowEditor";
 import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
+import { CodeEditorView } from "./components/CodeEditorView";
 import StartFeatureModal from "./components/StartFeatureModal";
 import PreferencesScreen from "./components/PreferencesScreen";
 import CommandPalette from "./components/CommandPalette";
@@ -61,6 +62,14 @@ function AppInner() {
   const [startFeatureWorkflowId, setStartFeatureWorkflowId] = useState<string | null>(null);
   const [workflowsForModal, setWorkflowsForModal] = useState<Array<{ id: string; name: string; description: string; version: number }>>([]);
   const [reposByProject, setReposByProject] = useState<Record<string, Repository[]>>({});
+
+  const [editorContext, setEditorContext] = useState<{
+    machineId: string;
+    worktreePath: string;
+    branch: string;
+    defaultBranch: string;
+    initialFile?: string;
+  } | null>(null);
 
   // R7: UX polish state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -302,6 +311,7 @@ function AppInner() {
               setActiveFeatureId={setActiveFeatureId}
               setActiveFeatureTitle={setActiveFeatureTitle}
               setProjects={setProjects}
+              sidebarCollapsed={sidebarCollapsed}
             />
           )}
           {view === 'detail' && activeFeatureId && currentProject && (
@@ -311,6 +321,22 @@ function AppInner() {
               title={activeFeatureTitle}
               onDecideGate={(stepExecId) => setGateStepExecutionId(stepExecId)}
               onBack={() => setView('home')}
+              onOpenEditor={(ctx) => {
+                setEditorContext(ctx);
+                setView('editor');
+              }}
+              sidebarCollapsed={sidebarCollapsed}
+            />
+          )}
+          {view === 'editor' && editorContext && (
+            <CodeEditorView
+              machineId={editorContext.machineId}
+              worktreePath={editorContext.worktreePath}
+              branch={editorContext.branch}
+              defaultBranch={editorContext.defaultBranch}
+              featureTitle={activeFeatureTitle}
+              initialFile={editorContext.initialFile}
+              onBack={() => setView('detail')}
             />
           )}
           {view === 'new-project' && (

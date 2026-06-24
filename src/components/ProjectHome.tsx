@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Zap, Cpu, Play, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
+import { Zap, Cpu, Play, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal, Code } from 'lucide-react';
+import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue } from '../types';
 import { getAgentModels } from '../lib/agentModels';
@@ -82,9 +83,10 @@ interface ProjectHomeProps {
   setActiveFeatureId: (id: string) => void;
   setActiveFeatureTitle?: (title: string) => void;
   setProjects?: React.Dispatch<React.SetStateAction<Project[]>>;
+  sidebarCollapsed?: boolean;
 }
 
-const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setActiveFeatureId, setActiveFeatureTitle, setProjects }) => {
+const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setActiveFeatureId, setActiveFeatureTitle, setProjects, sidebarCollapsed }) => {
     const { reportError } = useErrorBus();
     const [featureInput, setFeatureInput] = useState('');
     const [isExpanded, setIsExpanded] = useState(false);
@@ -92,6 +94,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
     const [activeRepoPath, setActiveRepoPath] = useState<string>('');
+    const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
 
     useEffect(() => {
         setActiveTab('pipelines');
@@ -872,6 +875,24 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                     </div>
                 </div>
 
+                {/* Code with Agent card */}
+                <button
+                  onClick={() => setAgentDrawerOpen(true)}
+                  disabled={!activeRepoPath}
+                  className="glass-panel rounded-2xl p-4 flex items-center gap-4 text-left w-full group hover:border-cyan-500/20 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed border border-white/5 hover:bg-cyan-500/5"
+                >
+                  <div className="w-9 h-9 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center shrink-0 group-hover:bg-cyan-500/20 transition-colors">
+                    <Code className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-white">Start a coding session</p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Open an interactive agent (Claude, OpenCode…) directly in the repo — no pipeline required
+                    </p>
+                  </div>
+                  <Terminal className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors ml-auto shrink-0" />
+                </button>
+
                 {/* Active Features Tracking List */}
                 <div>
                     <h2 className="font-outfit text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Active Running Pipelines</h2>
@@ -975,6 +996,19 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                 )}
 
             </div>
+
+        {activeRepoPath && (
+          <AgentTerminalDrawer
+            isOpen={agentDrawerOpen}
+            onClose={() => setAgentDrawerOpen(false)}
+            machineId={activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local'}
+            repoPath={activeRepoPath}
+            projectId={activeProject.id}
+            computeType={activeProject.compute_type || 'local'}
+            remoteHost={activeProject.remote_host || null}
+            sidebarWidth={sidebarCollapsed ? 56 : 240}
+          />
+        )}
         </div>
     );
 };

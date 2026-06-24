@@ -20,6 +20,10 @@ interface TerminalWindowProps {
   computeType: string;
   remoteHost: string | null;
   repoPath: string;
+  /** Absolute path — skips resolveRepoDir when provided (e.g. feature worktrees) */
+  workDir?: string;
+  /** Called once after the PTY session connects and is ready for input */
+  onSessionStarted?: (sessionId: string) => void;
 }
 
 export const TerminalWindow: React.FC<TerminalWindowProps> = ({
@@ -27,6 +31,8 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
   computeType,
   remoteHost,
   repoPath,
+  workDir: workDirProp,
+  onSessionStarted,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -67,7 +73,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
 
     try {
       // 1. Resolve work directory path
-      const workDir = await resolveRepoDir(projectId, repoPath);
+      const workDir = workDirProp ?? await resolveRepoDir(projectId, repoPath);
 
       // 2. Instantiate Tauri Channel for streaming stdout
       const channel = new Channel<Uint8Array | number[]>();
@@ -85,6 +91,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
       const sessId = await startTerminalSession(machineId, channel, workDir);
       setSessionId(sessId);
       setStatus("connected");
+      onSessionStarted?.(sessId);
 
       if (terminalRef.current) {
         terminalRef.current.clear();

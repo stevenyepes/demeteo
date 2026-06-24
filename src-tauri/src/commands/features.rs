@@ -3,7 +3,83 @@ use crate::domain::models::{Feature, GateDecision, StepExecution};
 use crate::error::AppError;
 use crate::ports::step_executor::SyncOutcomeView;
 use crate::state::AppContext;
+use serde::Serialize;
 use tauri::State;
+
+#[derive(Serialize)]
+pub struct FeatureWorktreeInfo {
+    pub machine_id: String,
+    pub worktree_path: String,
+    pub branch: String,
+    pub default_branch: String,
+}
+
+#[tauri::command]
+pub async fn feature_get_worktree(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<FeatureWorktreeInfo, AppError> {
+    let fid = FeatureId::from(feature_id);
+    let feature = ctx
+        .features
+        .get(&fid)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::from("Feature not found"))?;
+
+    let project_id = feature.project_id;
+    let all = ctx.projects.get_projects().map_err(AppError::from)?;
+    let project = all
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| AppError::from("Project not found"))?;
+
+    let repos = ctx
+        .projects
+        .get_repositories_for(&project_id)
+        .map_err(AppError::from)?;
+    let repo = repos
+        .first()
+        .ok_or_else(|| AppError::from("No repository configured for this project"))?;
+
+    let settings = ctx
+        .projects
+        .get_settings(&project_id)
+        .map_err(AppError::from)?
+        .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+
+    let machine_id = if project.compute_type.eq_ignore_ascii_case("local") {
+        "local".to_string()
+    } else {
+        project
+            .remote_host
+            .as_ref()
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "local".to_string())
+    };
+
+    let worktree_path = crate::paths::repo_target_dir_str(
+        &ctx.exec,
+        &project.compute_type,
+        project.remote_host.as_ref().map(|m| m.as_str()),
+        &project_id.0,
+        &repo.repo_path,
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    let branch = format!(
+        "{}{}",
+        settings.worktree_strategy.branch_prefix,
+        fid.0
+    );
+
+    Ok(FeatureWorktreeInfo {
+        machine_id,
+        worktree_path,
+        branch,
+        default_branch: settings.worktree_strategy.default_branch.clone(),
+    })
+}
 
 #[tauri::command]
 pub fn fetch_active_features(

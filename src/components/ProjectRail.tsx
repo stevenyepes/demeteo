@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, LayoutGrid, Search, Box, GitBranch } from 'lucide-react';
+import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 
 interface Project {
   id: string;
@@ -64,6 +64,13 @@ const ProjectRail: React.FC<ProjectRailProps> = ({
     return (
       <aside className="w-14 border-r border-white/5 bg-[#0d0f14]/50 backdrop-blur-xl flex flex-col items-center py-3 z-10 shrink-0 gap-3">
         <button
+          onClick={onToggleCollapse}
+          className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
+          title="Expand sidebar"
+        >
+          <PanelLeftOpen className="w-4 h-4" />
+        </button>
+        <button
           onClick={() => setView('new-project')}
           className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
           title="New Project"
@@ -98,7 +105,7 @@ const ProjectRail: React.FC<ProjectRailProps> = ({
             <Plus className="w-4 h-4" />
           </button>
           <button onClick={onToggleCollapse} className="p-1 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors" title="Collapse sidebar">
-            <LayoutGrid className="w-4 h-4" />
+            <PanelLeftClose className="w-4 h-4" />
           </button>
         </div>
       </div>

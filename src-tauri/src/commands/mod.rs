@@ -1,4 +1,5 @@
 pub mod agent_config;
+pub mod git;
 pub mod agent_config_probe;
 pub mod agent_exec;
 pub mod agent_lifecycle;

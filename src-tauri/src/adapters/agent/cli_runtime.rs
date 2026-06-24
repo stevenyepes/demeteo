@@ -421,6 +421,18 @@ fn drain_lines<R, F>(
                     }
                     if is_terminal {
                         terminal = true;
+                        // Drain remaining output to EOF before breaking so the
+                        // child's write end stays open. Dropping the reader here
+                        // would close the read end and trigger EPIPE in processes
+                        // that keep writing after emitting a terminal event (e.g.
+                        // Electron-based CLIs using electron-log on stdout).
+                        loop {
+                            line.clear();
+                            match reader.read_line(&mut line) {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => {}
+                            }
+                        }
                         break;
                     }
                 }

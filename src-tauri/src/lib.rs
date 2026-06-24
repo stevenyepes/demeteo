@@ -298,6 +298,9 @@ pub fn run() {
                                         let _ = chan.close();
                                     }
                                 }
+                                terminal::WriteSink::LocalPty(_) => {
+                                    // Local PTY child is killed when keepalive drops
+                                }
                             }
                         }
                     }
@@ -386,6 +389,9 @@ pub fn run() {
             commands::features::replay_from_step,
             commands::features::feature_sync,
             commands::features::feature_resolve_sync_conflicts,
+            commands::features::feature_get_worktree,
+            commands::git::git_changed_files,
+            commands::git::git_file_at_ref,
             commands::workflows::workflow_list,
             commands::workflows::workflow_get,
             commands::workflows::workflow_create,
