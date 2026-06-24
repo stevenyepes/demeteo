@@ -76,9 +76,36 @@ fn enrich_env_path() {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn configure_linux_gpu_env() {
+    if std::env::var("DEMETEO_DISABLE_GPU").ok().as_deref() == Some("1") {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        eprintln!("[demeteo] GPU rendering disabled via DEMETEO_DISABLE_GPU");
+        return;
+    }
+
+    let is_nvidia = std::path::Path::new("/proc/driver/nvidia/version").exists();
+    if is_nvidia {
+        for (k, v) in [
+            ("GBM_BACKEND", "nvidia-drm"),
+            ("__GLX_VENDOR_LIBRARY_NAME", "nvidia"),
+            ("__NV_DISABLE_EXPLICIT_SYNC", "1"),
+        ] {
+            if std::env::var(k).is_err() {
+                std::env::set_var(k, v);
+            }
+        }
+        eprintln!("[demeteo] NVIDIA detected: GPU rendering enabled (explicit sync off)");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     enrich_env_path();
+
+    #[cfg(target_os = "linux")]
+    configure_linux_gpu_env();
 
     // Startup banner so a stale binary is obvious in the Tauri dev
     // console. Bump the suffix whenever the bootstrap/step-executor
@@ -88,23 +115,6 @@ pub fn run() {
         env!("CARGO_PKG_VERSION"),
         env!("CARGO_PKG_NAME"),
     );
-
-    // WebKitGTK on Wayland frequently dispatches a Gdk protocol error
-    // (Error 71) on the host process. Disabling the DMA-BUF renderer
-    // and accelerated compositing avoids the crash while allowing the
-    // app to run natively under Wayland with correct UI scaling.
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var("GDK_BACKEND").is_err() {
-            std::env::set_var("GDK_BACKEND", "wayland,x11");
-        }
-        if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        }
-        if std::env::var("WEBKIT_DISABLE_COMPOSITING_MODE").is_err() {
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        }
-    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
