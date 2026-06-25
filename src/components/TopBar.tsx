@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Search, Sliders, Globe, Settings } from 'lucide-react';
+import { Search, Sliders, Globe, Settings } from 'lucide-react';
 import { NotificationBell } from './NotificationBell';
 
 interface TopBarProps {
@@ -11,9 +11,7 @@ interface TopBarProps {
 const TopBar: React.FC<TopBarProps> = ({ setView, connectedProvider, onOpenCommandPalette }) => (
     <header className="h-14 border-b border-white/5 bg-[#0d0f14]/80 backdrop-blur-md flex items-center justify-between px-6 z-20 relative shrink-0">
         <div className="flex items-center gap-4">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center">
-                <Activity className="w-5 h-5 text-cyan-400 animate-pulse" />
-            </div>
+            <img src="/icon.png" alt="Demeteo" className="w-8 h-8 rounded-lg" />
             <h1 className="font-outfit font-bold tracking-wide text-lg text-white">demeteo</h1>
         </div>
 
