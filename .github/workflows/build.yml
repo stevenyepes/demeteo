@@ -1,0 +1,242 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*.*.*"]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+          - platform: macos-13
+            rust_target: x86_64-apple-darwin
+            label: macos-x86_64
+          - platform: macos-14
+            rust_target: aarch64-apple-darwin
+            label: macos-aarch64
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Linux system dependencies ──────────────────────────────────
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libdbus-1-dev \
+            pkg-config \
+            rpm
+
+      # ── Node.js ────────────────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # ── Rust ───────────────────────────────────────────────────────
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Include the target triple in the cache key so each platform
+          # gets its own cache partition.
+          key: ${{ matrix.rust_target }}
+
+      # ── Build ──────────────────────────────────────────────────────
+      - name: Build Tauri app
+        run: npx tauri build --target ${{ matrix.rust_target }}
+
+      # ── Upload artifacts ───────────────────────────────────────────
+      # Each platform uploads its bundles under a unique artifact name.
+      # The release job downloads and merges them.
+      - name: Upload artifacts (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/rpm/*.rpm
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Upload artifacts (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Upload artifacts (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 5
+
+  # ════════════════════════════════════════════════════════════════════
+  # Release — runs after all platform builds succeed
+  # ════════════════════════════════════════════════════════════════════
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binaries-*
+
+      # Flatten nested directories into a single folder for release upload
+      - name: Collect release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f \
+            \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \
+               -o -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \) \
+            -exec cp {} release-files/ \;
+          echo "── Release files ──"
+          ls -lh release-files/
+
+      # ── Nightly pre-release (master push) ──────────────────────────
+      - name: Publish nightly release
+        if: github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: "Nightly (unstable)"
+          body: |
+            > ⚠️ **Automated unstable build** — not recommended for production use.
+
+            **Commit:** [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+            **Date:** ${{ github.event.head_commit.timestamp }}
+
+            This pre-release is overwritten on every push to `master`.
+            For stable releases, see the [versioned tags](${{ github.server_url }}/${{ github.repository }}/releases).
+          prerelease: true
+          make_latest: false
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Generate Arch Linux PKGBUILD (stable releases only) ────────
+      - name: Generate PKGBUILD
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          APPIMAGE_FILE=$(ls release-files/*.AppImage | head -1)
+          APPIMAGE_NAME=$(basename "$APPIMAGE_FILE")
+          APPIMAGE_SHA256=$(sha256sum "$APPIMAGE_FILE" | cut -d' ' -f1)
+
+          cat > release-files/PKGBUILD << 'PKGBUILD_EOF'
+          # Maintainer: Steven Yepes <stevenyepes@users.noreply.github.com>
+          pkgname=demeteo-bin
+          pkgver=PLACEHOLDER_VERSION
+          pkgrel=1
+          pkgdesc="Fleet-style multi-agent orchestrator for software development"
+          arch=('x86_64')
+          url="https://github.com/stevenyepes/demeteo"
+          license=('MIT')
+          depends=('webkit2gtk-4.1' 'openssl' 'dbus' 'hicolor-icon-theme')
+          provides=('demeteo')
+          conflicts=('demeteo')
+          options=('!strip')
+          source=("https://github.com/stevenyepes/demeteo/releases/download/v${pkgver}/PLACEHOLDER_APPIMAGE")
+          sha256sums=('PLACEHOLDER_SHA256')
+
+          package() {
+              install -Dm755 "${srcdir}/PLACEHOLDER_APPIMAGE" "${pkgdir}/opt/demeteo/demeteo.AppImage"
+
+              # Create launcher script
+              install -dm755 "${pkgdir}/usr/bin"
+              cat > "${pkgdir}/usr/bin/demeteo" << 'EOF'
+          #!/bin/sh
+          exec /opt/demeteo/demeteo.AppImage "$@"
+          EOF
+              chmod +x "${pkgdir}/usr/bin/demeteo"
+
+              # Desktop entry
+              install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/demeteo.desktop" << 'EOF'
+          [Desktop Entry]
+          Name=Demeteo
+          Comment=Fleet-style multi-agent orchestrator
+          Exec=demeteo
+          Icon=demeteo
+          Type=Application
+          Categories=Development;
+          EOF
+          }
+          PKGBUILD_EOF
+
+          # Replace placeholders with actual values
+          sed -i "s/PLACEHOLDER_VERSION/$VERSION/g" release-files/PKGBUILD
+          sed -i "s/PLACEHOLDER_APPIMAGE/$APPIMAGE_NAME/g" release-files/PKGBUILD
+          sed -i "s/PLACEHOLDER_SHA256/$APPIMAGE_SHA256/g" release-files/PKGBUILD
+
+          # Remove leading whitespace from heredoc indentation
+          sed -i 's/^          //' release-files/PKGBUILD
+
+          echo "── PKGBUILD ──"
+          cat release-files/PKGBUILD
+
+      # ── Stable release (tag push) ─────────────────────────────────
+      - name: Publish stable release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Demeteo ${{ github.ref_name }}"
+          generate_release_notes: true
+          prerelease: false
+          make_latest: true
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
