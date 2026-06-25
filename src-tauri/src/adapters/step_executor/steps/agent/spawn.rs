@@ -7,15 +7,11 @@ impl ExecutionDriver {
         &self,
         _step_exec: &StepExecution,
         step_conf: &StepConfig,
-        override_agent: &Option<String>,
+        agent_kind: &str,
         override_model: &Option<String>,
         machine_str: &str,
         wt_path: &str,
     ) -> Result<std::sync::Arc<dyn AgentSession>, String> {
-        let agent_kind = override_agent
-            .as_deref()
-            .unwrap_or_else(|| step_conf.agent_kind.as_deref().unwrap_or("opencode"));
-
         let mut agent_env = crate::ports::agent_runtime::agent_base_env();
         if let Some(ref m) = override_model {
             if agent_kind == "opencode"

@@ -133,9 +133,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
 
   /** Build the Machine payload the backend expects. */
   const buildMachine = (id: string) => {
-    const parsed = form.authType === "local"
-      ? { host: "localhost", port: 0, username: "" }
-      : (parseConnection(form.connection) ?? { host: "", port: 22, username: "" });
+    const parsed = parseConnection(form.connection) ?? { host: "", port: 22, username: "" };
     const agentsJson = JSON.stringify(
       (form.agents || []).map((name) => {
         const slug = name.toLowerCase().replace(/\s+/g, "-");
@@ -166,9 +164,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
       setSaveError("Environment name is required.");
       return null;
     }
-    const parsed = form.authType === "local"
-      ? { host: "localhost", port: 0, username: "" }
-      : parseConnection(form.connection);
+    const parsed = parseConnection(form.connection);
     if (!parsed) {
       setSaveError("Invalid connection string.");
       return null;
@@ -251,81 +247,43 @@ const EnvModal: React.FC<EnvModalProps> = ({
               />
             </div>
 
-            {form.authType !== "local" && (
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Connection Details (User@Host:Port)</label>
-                <input
-                  type="text"
-                  value={form.connection}
-                  onChange={(e) => setForm({ ...form, connection: e.target.value })}
-                  placeholder="e.g., ubuntu@10.0.5.12:22"
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
-                />
-              </div>
-            )}
+            <div>
+              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Connection Details (User@Host:Port)</label>
+              <input
+                type="text"
+                value={form.connection}
+                onChange={(e) => setForm({ ...form, connection: e.target.value })}
+                placeholder="e.g., ubuntu@10.0.5.12:22"
+                className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+              />
+            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2 font-semibold">Type</label>
-                <div className="flex flex-col gap-2">
-                  <label className="flex items-center text-xs text-slate-300 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="envType"
-                      value="key"
-                      checked={form.authType !== "local"}
-                      onChange={() => setForm({ ...form, authType: "key" })}
-                      className="mr-2 accent-cyan-500"
-                    />
-                    Remote SSH Server
-                  </label>
-                  <label className="flex items-center text-xs text-slate-300 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="envType"
-                      value="local"
-                      checked={form.authType === "local"}
-                      onChange={() => setForm({ ...form, authType: "local" })}
-                      className="mr-2 accent-cyan-500"
-                    />
-                    Local Node
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold flex items-center">
-                  <Key size={10} className="mr-1" /> Auth Method
-                </label>
-                {form.authType !== "local" ? (
-                  <div className="flex flex-col gap-1">
-                    {(["key", "password", "agent"] as const).map((method) => {
-                      const labels: Record<string, string> = {
-                        key: "Private Key",
-                        password: "Password",
-                        agent: "SSH Agent",
-                      };
-                      return (
-                        <button
-                          key={method}
-                          type="button"
-                          onClick={() => setForm({ ...form, authType: method })}
-                          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all border ${
-                            form.authType === method
-                              ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400 font-medium"
-                              : "bg-[#050508] border-white/5 text-slate-400 hover:border-white/15 hover:text-slate-300"
-                          }`}
-                        >
-                          {labels[method]}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-[11px] text-slate-400 bg-[#050508] border border-white/5 rounded-lg p-2 font-mono">
-                    Native API (Local)
-                  </div>
-                )}
+            <div>
+              <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold flex items-center">
+                <Key size={10} className="mr-1" /> Auth Method
+              </label>
+              <div className="flex flex-col gap-1">
+                {(["key", "password", "agent"] as const).map((method) => {
+                  const labels: Record<string, string> = {
+                    key: "Private Key",
+                    password: "Password",
+                    agent: "SSH Agent",
+                  };
+                  return (
+                    <button
+                      key={method}
+                      type="button"
+                      onClick={() => setForm({ ...form, authType: method })}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all border ${
+                        form.authType === method
+                          ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400 font-medium"
+                          : "bg-[#050508] border-white/5 text-slate-400 hover:border-white/15 hover:text-slate-300"
+                      }`}
+                    >
+                      {labels[method]}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -389,21 +347,19 @@ const EnvModal: React.FC<EnvModalProps> = ({
               </div>
             )}
 
-            {form.authType !== "local" && (
-              <div className="border-t border-white/5 pt-4">
-                <div className="flex items-center text-amber-500 text-[11px] bg-amber-500/10 p-2.5 rounded-lg border border-amber-500/20">
-                  <AlertCircle size={14} className="mr-2 flex-shrink-0" />
-                  <span>Ensure public key authentication is configured on the target host.</span>
-                </div>
+            <div className="border-t border-white/5 pt-4">
+              <div className="flex items-center text-amber-500 text-[11px] bg-amber-500/10 p-2.5 rounded-lg border border-amber-500/20">
+                <AlertCircle size={14} className="mr-2 flex-shrink-0" />
+                <span>Ensure public key authentication is configured on the target host.</span>
               </div>
-            )}
+            </div>
 
             <div>
               <label className="block text-[10px] uppercase tracking-wider text-slate-500 mb-2 font-semibold flex items-center">
                 <Cpu size={10} className="mr-1" /> Enabled Agents
               </label>
               <div className="flex flex-wrap gap-2">
-                {["Claude Code", "OpenCode", "Hermes", "Antigravity"].map((agent) => (
+                {["Claude Code", "OpenCode", "Hermes"].map((agent) => (
                   <button
                     key={agent}
                     type="button"
@@ -494,21 +450,19 @@ const EnvModal: React.FC<EnvModalProps> = ({
                 </button>
               )}
               <div className="flex gap-2 ml-auto">
-                {form.authType !== "local" && (
-                  <button
-                    type="button"
-                    onClick={handleTestConnection}
-                    disabled={connStatus === "testing" || saving}
-                    className="px-4 py-2 rounded-lg text-xs font-medium border border-white/10 text-slate-300 hover:border-cyan-500/40 hover:text-cyan-400 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    {connStatus === "testing" ? (
-                      <Loader size={12} className="animate-spin" />
-                    ) : (
-                      <Wifi size={12} />
-                    )}
-                    Test Connection
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={connStatus === "testing" || saving}
+                  className="px-4 py-2 rounded-lg text-xs font-medium border border-white/10 text-slate-300 hover:border-cyan-500/40 hover:text-cyan-400 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {connStatus === "testing" ? (
+                    <Loader size={12} className="animate-spin" />
+                  ) : (
+                    <Wifi size={12} />
+                  )}
+                  Test Connection
+                </button>
                 <button
                   type="button"
                   onClick={onClose}

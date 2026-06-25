@@ -1,4 +1,4 @@
-use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
+use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -51,6 +51,11 @@ pub struct ProjectSettings {
     pub default_agent_kind: Option<String>,
     #[serde(default)]
     pub default_model: Option<String>,
+    /// Project-level default loop iteration budget for `on_failure` retry
+    /// loops. `None` = use the engine default (3). Overridable per run via
+    /// `Feature::loop_iterations`. See migration V13.
+    #[serde(default)]
+    pub default_loop_iterations: Option<u32>,
     /// Repo-relative folder where agents write their reports
     /// (`research-report.md`, `critic-review.md`, …). The orchestrator
     /// injects `{{artifact_dir}}` into every step's prompt and excludes
@@ -71,6 +76,33 @@ pub struct ProjectSettings {
 
 fn default_artifact_subdir() -> String {
     "artifacts/".to_string()
+}
+
+/// A project-scoped override of the coding agent ("harness") and/or model
+/// for a (global) workflow — either the whole workflow or a single step.
+/// Persisted in `project_workflow_overrides` (migrations V14 / V15).
+///
+/// Scope is set by `step_id`:
+///   - `None` → workflow-level. At feature start it overlays the project
+///     defaults (`ProjectSettings::default_agent_kind` / `default_model`) for
+///     this workflow only.
+///   - `Some(step_id)` → step-level. It is baked onto the matching
+///     `StepConfig`, so it beats the workflow author's value for that step.
+///
+/// In all cases it still loses to a run-time override (feature-wide or
+/// per-step, chosen at launch). `None` on a field = inherit for that field.
+/// See `resolve_execution_context`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectWorkflowOverride {
+    pub project_id: ProjectId,
+    pub workflow_id: WorkflowId,
+    /// `None` = workflow-level (stored as `''`); `Some` targets one step.
+    #[serde(default)]
+    pub step_id: Option<String>,
+    #[serde(default)]
+    pub agent_kind: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

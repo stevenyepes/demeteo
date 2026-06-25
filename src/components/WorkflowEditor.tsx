@@ -419,7 +419,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
 
                       {/* Step Body */}
                       <div className="p-5 space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className={`grid ${step.kind !== 'gate' ? 'grid-cols-3' : 'grid-cols-1'} gap-4`}>
                           {/* Step Kind Selector */}
                           <div>
                             <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">Step Type</label>
@@ -438,7 +438,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                           {step.kind !== 'gate' && (
                             <div>
                               <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">
-                                Dispatch Override
+                                Agent Override
                               </label>
                               <select
                                 value={step.agent_kind || ''}
@@ -452,6 +452,22 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                                   </option>
                                 ))}
                               </select>
+                            </div>
+                          )}
+
+                          {/* Model Override (free text — editor has no machine context to probe) */}
+                          {step.kind !== 'gate' && (
+                            <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">
+                                Model Override
+                              </label>
+                              <input
+                                type="text"
+                                value={step.model || ''}
+                                onChange={(e) => handleUpdateStep(idx, { model: e.target.value || null })}
+                                placeholder="Project default"
+                                className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500 font-mono placeholder-slate-600"
+                              />
                             </div>
                           )}
                         </div>

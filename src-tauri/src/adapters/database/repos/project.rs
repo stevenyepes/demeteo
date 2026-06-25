@@ -1,7 +1,9 @@
 use rusqlite::params;
 
-use crate::domain::ids::ProjectId;
-use crate::domain::models::{Project, ProjectSettings, Repository, WorktreeStrategy};
+use crate::domain::ids::{ProjectId, WorkflowId};
+use crate::domain::models::{
+    Project, ProjectSettings, ProjectWorkflowOverride, Repository, WorktreeStrategy,
+};
 use crate::ports::db::ProjectRepository;
 
 use super::super::SqliteAdapter;
@@ -169,7 +171,7 @@ impl ProjectRepository for SqliteAdapter {
                 "SELECT project_id, default_branch, branch_prefix, test_command, pr_template,
                         conflict_policy, feature_lifecycle, build_command, coverage_command,
                         conventions_file, default_agent_kind, default_model, harnesses,
-                        artifact_subdir, commit_artifacts
+                        artifact_subdir, commit_artifacts, default_loop_iterations
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -177,6 +179,7 @@ impl ProjectRepository for SqliteAdapter {
             .query_map(params![project_id.0], |row| {
                 let harnesses: Option<String> = row.get(12)?;
                 let commit_artifacts: i64 = row.get(14)?;
+                let default_loop_iterations: Option<i64> = row.get(15)?;
                 Ok(ProjectSettings {
                     project_id: row.get(0)?,
                     worktree_strategy: WorktreeStrategy {
@@ -195,6 +198,7 @@ impl ProjectRepository for SqliteAdapter {
                     default_model: row.get(11)?,
                     artifact_subdir: row.get(13)?,
                     commit_artifacts: commit_artifacts != 0,
+                    default_loop_iterations: default_loop_iterations.map(|v| v as u32),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -216,8 +220,9 @@ impl ProjectRepository for SqliteAdapter {
             "INSERT OR REPLACE INTO project_settings
              (project_id, default_branch, branch_prefix, test_command, build_command,
               coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
-              default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts,
+              default_loop_iterations)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -234,9 +239,98 @@ impl ProjectRepository for SqliteAdapter {
                 harnesses_json,
                 s.artifact_subdir,
                 s.commit_artifacts as i64,
+                s.default_loop_iterations.map(|v| v as i64),
             ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    fn list_workflow_overrides(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<Vec<ProjectWorkflowOverride>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT project_id, workflow_id, step_id, agent_kind, model
+                 FROM project_workflow_overrides WHERE project_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(params![project_id.0], row_to_override)
+            .map_err(|e| e.to_string())?;
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    fn list_overrides_for_workflow(
+        &self,
+        project_id: &ProjectId,
+        workflow_id: &WorkflowId,
+    ) -> Result<Vec<ProjectWorkflowOverride>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT project_id, workflow_id, step_id, agent_kind, model
+                 FROM project_workflow_overrides
+                 WHERE project_id = ?1 AND workflow_id = ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(params![project_id.0, workflow_id.0], row_to_override)
+            .map_err(|e| e.to_string())?;
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    fn upsert_workflow_override(&self, ov: ProjectWorkflowOverride) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        // Persisted discriminator: workflow-level rows store step_id = ''.
+        let step_key = ov.step_id.clone().unwrap_or_default();
+        // A row that overrides neither field is a no-op overlay — store it as
+        // "no override" by deleting any existing row instead of persisting an
+        // all-NULL row the resolver would have to special-case anyway.
+        if ov.agent_kind.is_none() && ov.model.is_none() {
+            conn.execute(
+                "DELETE FROM project_workflow_overrides
+                 WHERE project_id = ?1 AND workflow_id = ?2 AND step_id = ?3",
+                params![ov.project_id.0, ov.workflow_id.0, step_key],
+            )
+            .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO project_workflow_overrides
+             (project_id, workflow_id, step_id, agent_kind, model)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                ov.project_id.0,
+                ov.workflow_id.0,
+                step_key,
+                ov.agent_kind,
+                ov.model
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+/// Map a `(project_id, workflow_id, step_id, agent_kind, model)` row to a
+/// `ProjectWorkflowOverride`, normalising the empty-string step discriminator
+/// back to `None` (workflow-level).
+fn row_to_override(row: &rusqlite::Row) -> rusqlite::Result<ProjectWorkflowOverride> {
+    let step_id: String = row.get(2)?;
+    Ok(ProjectWorkflowOverride {
+        project_id: row.get(0)?,
+        workflow_id: row.get(1)?,
+        step_id: if step_id.is_empty() {
+            None
+        } else {
+            Some(step_id)
+        },
+        agent_kind: row.get(3)?,
+        model: row.get(4)?,
+    })
 }

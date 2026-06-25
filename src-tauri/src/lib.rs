@@ -375,6 +375,8 @@ pub fn run() {
             commands::project::project_memory_list,
             commands::project::project_memory_upsert,
             commands::project::project_memory_delete,
+            commands::project::get_workflow_overrides,
+            commands::project::set_workflow_override,
             commands::features::fetch_active_features,
             commands::features::start_feature,
             commands::features::feature_pause,

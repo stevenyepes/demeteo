@@ -211,3 +211,46 @@ pub fn project_memory_upsert(
 pub fn project_memory_delete(ctx: State<'_, AppContext>, id: String) -> Result<(), AppError> {
     ctx.memory.memory_delete(&id).map_err(AppError::from)
 }
+
+/// List every workflow/step harness-model override configured for a project
+/// (migrations V14/V15) — both workflow-level (`step_id = null`) and step-level
+/// rows. The Project Settings "Workflow Overrides" tab calls this to hydrate
+/// its rows; anything with no row inherits and won't appear here.
+#[tauri::command]
+pub fn get_workflow_overrides(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+) -> Result<Vec<crate::domain::models::ProjectWorkflowOverride>, AppError> {
+    ctx.projects
+        .list_workflow_overrides(&ProjectId::from(project_id))
+        .map_err(AppError::from)
+}
+
+/// Upsert a single override. Scope is set by `step_id`: omit it (or pass an
+/// empty string) for the workflow-level override; pass a step id to override
+/// just that step. Passing `null` for both `agent_kind` and `model` clears the
+/// override (the repo deletes the row), so it falls back to the inherited value.
+#[tauri::command]
+pub fn set_workflow_override(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    workflow_id: String,
+    step_id: Option<String>,
+    agent_kind: Option<String>,
+    model: Option<String>,
+) -> Result<(), AppError> {
+    // Normalise empty strings (the UI may send "") to None so they don't
+    // masquerade as a real override / a real step target.
+    let step_id = step_id.filter(|s| !s.trim().is_empty());
+    let agent_kind = agent_kind.filter(|s| !s.trim().is_empty());
+    let model = model.filter(|s| !s.trim().is_empty());
+    ctx.projects
+        .upsert_workflow_override(crate::domain::models::ProjectWorkflowOverride {
+            project_id: ProjectId::from(project_id),
+            workflow_id: crate::domain::ids::WorkflowId::from(workflow_id),
+            step_id,
+            agent_kind,
+            model,
+        })
+        .map_err(AppError::from)
+}

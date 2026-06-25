@@ -39,7 +39,7 @@ impl DagStepExecutor {
         description: &str,
     ) -> Result<ExecutionContext, String> {
         let project_id_typed = ProjectId::from(project_id.to_string());
-        let settings = self
+        let mut settings = self
             .projects
             .get_settings(&project_id_typed)?
             .unwrap_or_else(fetch_default_settings);
@@ -72,16 +72,56 @@ impl DagStepExecutor {
         .await?;
 
         let wf_id = WorkflowId::from(workflow_id.to_string());
+
+        // Project-scoped overrides for this workflow (V14/V15), split into the
+        // workflow-level row (applies to all steps) and per-step rows.
+        let project_overrides = self
+            .projects
+            .list_overrides_for_workflow(&project_id_typed, &wf_id)
+            .unwrap_or_default();
+
+        // Workflow-level override overlays the project defaults for THIS
+        // workflow only. This keeps `resolve_agent_model` untouched — it just
+        // becomes the effective `default_agent_kind` / `default_model`, so a
+        // more specific intent (step agent/model, feature-wide run override,
+        // per-step run override) still wins.
+        if let Some(wf_level) = project_overrides.iter().find(|o| o.step_id.is_none()) {
+            if wf_level.agent_kind.is_some() {
+                settings.default_agent_kind = wf_level.agent_kind.clone();
+            }
+            if wf_level.model.is_some() {
+                settings.default_model = wf_level.model.clone();
+            }
+        }
+
         let latest_version = self
             .workflows
             .latest_version(&wf_id)?
             .ok_or_else(|| format!("No versions found for workflow: {}", workflow_id))?;
 
-        let steps: Vec<StepConfig> = serde_json::from_str(&latest_version.steps_json)
+        let mut steps: Vec<StepConfig> = serde_json::from_str(&latest_version.steps_json)
             .map_err(|e| format!("Invalid workflow steps JSON: {}", e))?;
 
         if steps.is_empty() {
             return Err("Workflow has no steps.".to_string());
+        }
+
+        // Bake step-level project overrides onto the matching steps. Each field
+        // overlays independently, replacing the workflow author's value. This
+        // sits at the workflow-step tier of `resolve_agent_model`, so it beats
+        // the author's choice but still loses to a run-time launch override.
+        for ov in project_overrides.iter() {
+            let Some(step_id) = ov.step_id.as_deref() else {
+                continue;
+            };
+            if let Some(step) = steps.iter_mut().find(|s| s.id.0 == step_id) {
+                if ov.agent_kind.is_some() {
+                    step.agent_kind = ov.agent_kind.clone();
+                }
+                if ov.model.is_some() {
+                    step.model = ov.model.clone();
+                }
+            }
         }
 
         let slug = slug_from_description(description);

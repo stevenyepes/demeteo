@@ -46,6 +46,8 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
             mr_url: None,
             mr_state: Some("none".to_string()),
             commit_artifacts: None,
+            loop_iterations: None,
+            step_overrides: Vec::new(),
         },
     )
     .unwrap();

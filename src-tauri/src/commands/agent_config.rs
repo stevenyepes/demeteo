@@ -39,10 +39,6 @@ pub async fn get_agent_configs(
                 kind: "claude-code".to_string(),
                 enabled: true,
             },
-            AgentConfig {
-                kind: "antigravity".to_string(),
-                enabled: true,
-            },
         ];
     }
 

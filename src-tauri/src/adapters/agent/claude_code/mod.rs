@@ -159,10 +159,7 @@ fn parse_claude_user_message(v: &serde_json::Value) -> Option<AgentEvent> {
 /// (the `result` line is one event; the per-turn cost can be aggregated
 /// elsewhere from the JSONL transcript).
 fn parse_claude_result_event(v: &serde_json::Value) -> Option<AgentEvent> {
-    let is_error = v
-        .get("is_error")
-        .and_then(|b| b.as_bool())
-        .unwrap_or(false);
+    let is_error = v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false);
     if is_error {
         let msg = v
             .get("result")
@@ -255,7 +252,10 @@ fn claude_tool_use_to_event(tu: &serde_json::Value) -> AgentEvent {
         "TodoWrite" | "TaskCreate" | "TaskUpdate" | "TaskList" => {
             ("edit", serde_json::to_string(&input).unwrap_or_default())
         }
-        _ => ("run_bash", serde_json::to_string(&input).unwrap_or_default()),
+        _ => (
+            "run_bash",
+            serde_json::to_string(&input).unwrap_or_default(),
+        ),
     };
 
     let action = ActionKind::from_str(action_str).unwrap_or(ActionKind::RunBash);

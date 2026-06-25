@@ -47,6 +47,25 @@ impl DagStepExecutor {
             .unwrap()
             .insert(feature_id.to_string(), cancel_tx);
 
+        // Snapshot agent/model + loop-budget resolution inputs. Project
+        // defaults come from the resolved settings; the per-run overrides
+        // (feature-wide + per-step + loop budget) come off the Feature row.
+        let default_agent_kind = ctx.settings.default_agent_kind.clone();
+        let default_model = ctx.settings.default_model.clone();
+        let project_default_loop_iterations = ctx.settings.default_loop_iterations;
+        let feature_row = self
+            .features
+            .get(&FeatureId::from(feature_id.to_string()))
+            .ok()
+            .flatten();
+        let feature_agent_kind = feature_row.as_ref().and_then(|f| f.agent_kind.clone());
+        let feature_model = feature_row.as_ref().and_then(|f| f.model.clone());
+        let loop_iterations_override = feature_row.as_ref().and_then(|f| f.loop_iterations);
+        let step_overrides = feature_row
+            .as_ref()
+            .map(|f| f.step_overrides.clone())
+            .unwrap_or_default();
+
         let driver = ExecutionDriver {
             features: self.features.clone(),
             gates: self.gates.clone(),
@@ -73,6 +92,14 @@ impl DagStepExecutor {
             cancel_watch: cancel_rx,
             artifact_subdir: ctx.artifact_subdir,
             commit_artifacts: ctx.commit_artifacts,
+            feature_agent_kind,
+            feature_model,
+            step_overrides,
+            default_agent_kind,
+            default_model,
+            loop_iterations_override,
+            project_default_loop_iterations,
+            retry_ctx: None,
         };
 
         tokio::spawn(driver.run());
@@ -92,6 +119,8 @@ impl StepExecutor for DagStepExecutor {
         agent_kind: Option<&str>,
         model: Option<&str>,
         commit_artifacts: Option<bool>,
+        loop_iterations: Option<u32>,
+        step_overrides: Vec<crate::domain::models::StepOverride>,
     ) -> Result<Feature, String> {
         if title.trim().is_empty() {
             return Err("Feature title cannot be empty.".to_string());
@@ -164,6 +193,8 @@ impl StepExecutor for DagStepExecutor {
             mr_url: None,
             mr_state: Some("none".to_string()),
             commit_artifacts: effective_commit,
+            loop_iterations,
+            step_overrides,
         };
         self.features.add(feature.clone())?;
 
@@ -247,7 +278,12 @@ impl StepExecutor for DagStepExecutor {
             .ok_or_else(|| "Step execution not found".to_string())
     }
 
-    async fn step_retry(&self, execution_id: &str, new_model: Option<&str>) -> Result<(), String> {
+    async fn step_retry(
+        &self,
+        execution_id: &str,
+        new_model: Option<&str>,
+        new_agent: Option<&str>,
+    ) -> Result<(), String> {
         let se_id = StepExecutionId::from(execution_id.to_string());
         let step_exec = self
             .features
@@ -264,15 +300,18 @@ impl StepExecutor for DagStepExecutor {
             ));
         }
 
-        self.replay_steps_from(execution_id, new_model, true).await
+        self.replay_steps_from(execution_id, new_model, new_agent, true)
+            .await
     }
 
     async fn replay_from_step(
         &self,
         execution_id: &str,
         new_model: Option<&str>,
+        new_agent: Option<&str>,
     ) -> Result<(), String> {
-        self.replay_steps_from(execution_id, new_model, true).await
+        self.replay_steps_from(execution_id, new_model, new_agent, true)
+            .await
     }
 
     async fn step_list_for_run(&self, feature_id: &str) -> Result<Vec<StepExecution>, String> {

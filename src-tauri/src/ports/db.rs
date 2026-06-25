@@ -35,8 +35,9 @@ use crate::domain::ids::{
 };
 use crate::domain::models::{
     AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Notification, Project,
-    ProjectSettings, ProviderInstance, RepoContext, Repository, StepExecution, ThreadSession,
-    Workflow, WorkflowSchedule, WorkflowVersion, WorkingMemoryEntry, WorktreeContext,
+    ProjectSettings, ProjectWorkflowOverride, ProviderInstance, RepoContext, Repository,
+    StepExecution, ThreadSession, Workflow, WorkflowSchedule, WorkflowVersion, WorkingMemoryEntry,
+    WorktreeContext,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -183,6 +184,26 @@ pub trait ProjectRepository: Send + Sync {
 
     fn get_settings(&self, project_id: &ProjectId) -> Result<Option<ProjectSettings>, String>;
     fn save_settings(&self, settings: ProjectSettings) -> Result<(), String>;
+
+    /// All workflow/step agent-model overrides configured for a project
+    /// (migrations V14/V15), both workflow-level (`step_id = None`) and
+    /// step-level rows. Used by the Project Settings "Workflow Overrides" tab.
+    fn list_workflow_overrides(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<Vec<ProjectWorkflowOverride>, String>;
+    /// Every override row for one (project, workflow) — the workflow-level row
+    /// plus any step-level rows. Used by `resolve_execution_context` to overlay
+    /// the project defaults and bake step overrides onto the workflow steps.
+    fn list_overrides_for_workflow(
+        &self,
+        project_id: &ProjectId,
+        workflow_id: &WorkflowId,
+    ) -> Result<Vec<ProjectWorkflowOverride>, String>;
+    /// Insert or replace one override row (scope determined by `ov.step_id`).
+    /// A call where both `agent_kind` and `model` are `None` deletes the row
+    /// (it would be a no-op overlay).
+    fn upsert_workflow_override(&self, ov: ProjectWorkflowOverride) -> Result<(), String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

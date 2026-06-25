@@ -58,7 +58,7 @@ impl ExecutionDriver {
             _ => return None,
         };
 
-        let max = step_conf.max_iterations.unwrap_or(0);
+        let max = self.effective_loop_iterations(step_conf);
         let already = step_exec.iteration_count;
         if already + 1 > max {
             let wall = step_start.elapsed().as_secs();

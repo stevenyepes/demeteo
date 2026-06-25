@@ -43,7 +43,19 @@ interface StartFeatureModalProps {
     model?: string;
     targetRepos: string[];
     commitArtifacts?: boolean;
+    /** Per-run override of the loop iteration budget (migration V13). */
+    loopIterations?: number;
+    /** Per-step agent/model overrides chosen at launch (migration V13). */
+    stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null }[];
   }) => void;
+}
+
+const AGENT_KINDS = ['opencode', 'hermes', 'claude-code', 'antigravity'];
+
+interface StepRow {
+  id: string;
+  title: string;
+  kind: string;
 }
 
 /**
@@ -79,6 +91,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [model, setModel] = useState<string>('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [conflicts, setConflicts] = useState<Set<string>>(new Set());
+  // Steps of the selected workflow + per-step agent/model overrides.
+  // A blank entry means "inherit" the workflow/project default for that step.
+  const [steps, setSteps] = useState<StepRow[]>([]);
+  const [stepOverrides, setStepOverrides] = useState<Record<string, { agent_kind: string; model: string }>>({});
+  // Per-run loop budget. Empty string = inherit project/engine default.
+  const [loopIterations, setLoopIterations] = useState<string>('');
   // Per-feature override for the project's `commit_artifacts` setting.
   // `'inherit'` is the default — pass `undefined` to `start_feature`
   // so the project default applies. `'yes'` / `'no'` become a
@@ -104,8 +122,37 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setModel('');
       setShowAdvanced(false);
       setCommitArtifacts('inherit');
+      setSteps([]);
+      setStepOverrides({});
+      setLoopIterations('');
     }
   }, [isOpen, workflows, defaultWorkflowId, workflowId]);
+
+  // Load the selected workflow's steps so the user can override the agent /
+  // model per step. Gate steps don't run an agent, so they're filtered out.
+  useEffect(() => {
+    if (!isOpen || !workflowId) {
+      setSteps([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const w: any = await invoke('workflow_get', { workflowId });
+        if (cancelled) return;
+        const rows: StepRow[] = (w.steps || [])
+          .filter((s: any) => s.kind !== 'gate')
+          .map((s: any) => ({ id: s.id, title: s.title, kind: s.kind }));
+        setSteps(rows);
+      } catch (e) {
+        console.warn('failed to load workflow steps for per-step overrides:', e);
+        setSteps([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, workflowId]);
 
   // Q25: keyword-based repo inference. No LLM, no network.
   const inferredRepos = useMemo(() => {
@@ -163,6 +210,15 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       commitArtifacts === 'inherit'
         ? undefined
         : commitArtifacts === 'yes';
+    // Only emit rows where the user actually set an agent or model.
+    const overrides = Object.entries(stepOverrides)
+      .map(([step_id, v]) => ({
+        step_id,
+        agent_kind: v.agent_kind.trim() || null,
+        model: v.model.trim() || null,
+      }))
+      .filter((o) => o.agent_kind || o.model);
+    const loopArg = loopIterations.trim() ? parseInt(loopIterations, 10) : undefined;
     onLaunch({
       workflowId,
       title: title.trim(),
@@ -171,6 +227,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       model: model.trim() || undefined,
       targetRepos,
       commitArtifacts: commitArtifactsArg,
+      loopIterations: Number.isFinite(loopArg as number) ? loopArg : undefined,
+      stepOverrides: overrides.length > 0 ? overrides : undefined,
     });
   };
 
@@ -311,30 +369,100 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
           {showAdvanced && (
             <div className="space-y-3 pl-3 border-l border-white/5">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                    Default agent — all steps
+                  </label>
+                  <input
+                    type="text"
+                    value={agentKind}
+                    onChange={(e) => setAgentKind(e.target.value)}
+                    placeholder="blank = project default"
+                    className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                    Default model — all steps
+                  </label>
+                  <input
+                    type="text"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="claude-opus-4-8, …"
+                    className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                  />
+                </div>
+              </div>
+
+              {/* Per-step agent/model overrides. Blank row = inherit the
+                  default above → the workflow step → the project default. */}
+              {steps.length > 0 && (
+                <div>
+                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                    Per-step overrides (optional)
+                  </label>
+                  <div className="space-y-1.5">
+                    {steps.map((s, i) => {
+                      const ov = stepOverrides[s.id] || { agent_kind: '', model: '' };
+                      const setOv = (patch: Partial<{ agent_kind: string; model: string }>) =>
+                        setStepOverrides((prev) => {
+                          const cur = prev[s.id] || { agent_kind: '', model: '' };
+                          return { ...prev, [s.id]: { ...cur, ...patch } };
+                        });
+                      return (
+                        <div key={s.id} className="flex items-center gap-2">
+                          <span
+                            className="text-[11px] text-slate-400 font-mono w-40 shrink-0 truncate"
+                            title={s.title}
+                          >
+                            {i + 1}. {s.title}
+                          </span>
+                          <select
+                            value={ov.agent_kind}
+                            onChange={(e) => setOv({ agent_kind: e.target.value })}
+                            className="flex-1 min-w-0 bg-[#050508] border border-white/10 rounded-lg px-2 py-1.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                          >
+                            <option value="">inherit</option>
+                            {AGENT_KINDS.map((ak) => (
+                              <option key={ak} value={ak}>
+                                {ak}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            value={ov.model}
+                            onChange={(e) => setOv({ model: e.target.value })}
+                            placeholder="model (inherit)"
+                            className="flex-1 min-w-0 bg-[#050508] border border-white/10 rounded-lg px-2 py-1.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                  Agent (optional)
+                  Loop iterations (optional)
                 </label>
                 <input
-                  type="text"
-                  value={agentKind}
-                  onChange={(e) => setAgentKind(e.target.value)}
-                  placeholder="opencode, hermes, … (leave blank for project default)"
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={loopIterations}
+                  onChange={(e) => setLoopIterations(e.target.value)}
+                  placeholder="blank = project default (3)"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
                 />
+                <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
+                  Max times a validation step loops back to implementation before giving up.
+                </p>
               </div>
-              <div>
-                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                  Model override (optional)
-                </label>
-                <input
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="claude-sonnet-4, gpt-4o, …"
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
-                />
-              </div>
+
               <div>
                 <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
                   Commit artifacts to PR

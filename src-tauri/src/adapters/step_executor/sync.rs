@@ -429,7 +429,7 @@ impl DagStepExecutor {
 
                 // After a successful resolution, replay the validation step
                 if let Some(se_id) = revalidate_step_execution_id {
-                    if let Err(e) = self.replay_from_step(se_id, None).await {
+                    if let Err(e) = self.replay_from_step(se_id, None, None).await {
                         return Err(format!(
                             "Resolution succeeded but re-validate failed: {}",
                             e

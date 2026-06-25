@@ -264,18 +264,56 @@ async fn is_available_force_bypasses_cache() {
         struct NoopExec;
         #[async_trait::async_trait]
         impl crate::ports::execution::ExecutionPort for NoopExec {
-            async fn test_connection(&self, _: &str) -> Result<(), String> { Ok(()) }
-            async fn run_command(&self, _: &str, _: &str) -> Result<String, String> { Ok(String::new()) }
-            async fn read_file(&self, _: &str, _: &str) -> Result<String, String> { Ok(String::new()) }
-            async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
-            async fn get_metadata(&self, _: &str, path: &str) -> Result<crate::sftp::SftpEntry, String> {
-                Ok(crate::sftp::SftpEntry { name: path.into(), path: path.into(), is_dir: false, size: 0, modified: 0 })
+            async fn test_connection(&self, _: &str) -> Result<(), String> {
+                Ok(())
             }
-            async fn list_dir(&self, _: &str, _: &str) -> Result<Vec<crate::sftp::SftpEntry>, String> { Ok(vec![]) }
-            async fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
-            async fn resolve_home(&self, _: &str) -> Result<String, String> { Ok("/tmp".into()) }
+            async fn run_command(&self, _: &str, _: &str) -> Result<String, String> {
+                Ok(String::new())
+            }
+            async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
+                Ok(String::new())
+            }
+            async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            async fn get_metadata(
+                &self,
+                _: &str,
+                path: &str,
+            ) -> Result<crate::sftp::SftpEntry, String> {
+                Ok(crate::sftp::SftpEntry {
+                    name: path.into(),
+                    path: path.into(),
+                    is_dir: false,
+                    size: 0,
+                    modified: 0,
+                })
+            }
+            async fn list_dir(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<Vec<crate::sftp::SftpEntry>, String> {
+                Ok(vec![])
+            }
+            async fn setup_worktree(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+            async fn resolve_home(&self, _: &str) -> Result<String, String> {
+                Ok("/tmp".into())
+            }
             fn spawn_interactive(
-                &self, _: &str, _: &str, _: &[String], _: &str,
+                &self,
+                _: &str,
+                _: &str,
+                _: &[String],
+                _: &str,
                 _: &std::collections::HashMap<String, String>,
             ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
                 Err("noop".into())
@@ -284,21 +322,36 @@ async fn is_available_force_bypasses_cache() {
         Arc::new(NoopExec)
     };
 
-    assert!(!reg.is_available("flippable", stub.as_ref(), "m1", false).await);
+    assert!(
+        !reg.is_available("flippable", stub.as_ref(), "m1", false)
+            .await
+    );
     assert_eq!(rt.calls().await, 1, "first call must probe");
 
     // 2. Cached: subsequent non-forced calls must NOT re-probe.
-    assert!(!reg.is_available("flippable", stub.as_ref(), "m1", false).await);
-    assert!(!reg.is_available("flippable", stub.as_ref(), "m1", false).await);
+    assert!(
+        !reg.is_available("flippable", stub.as_ref(), "m1", false)
+            .await
+    );
+    assert!(
+        !reg.is_available("flippable", stub.as_ref(), "m1", false)
+            .await
+    );
     assert_eq!(rt.calls().await, 1, "non-forced calls must hit the cache");
 
     // 3. The user installs the binary. Flip the underlying runtime's
     //    answer to `true` and force a re-probe via the refresh button.
     rt.flip().await;
-    assert!(reg.is_available("flippable", stub.as_ref(), "m1", true).await);
+    assert!(
+        reg.is_available("flippable", stub.as_ref(), "m1", true)
+            .await
+    );
     assert_eq!(rt.calls().await, 2, "forced call must re-probe");
 
     // 4. The cache now reflects the fresh value.
-    assert!(reg.is_available("flippable", stub.as_ref(), "m1", false).await);
+    assert!(
+        reg.is_available("flippable", stub.as_ref(), "m1", false)
+            .await
+    );
     assert_eq!(rt.calls().await, 2, "fresh value must be cached");
 }

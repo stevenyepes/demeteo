@@ -99,7 +99,10 @@ fn assistant_tool_use_wins_over_text() {
     // When both text and tool_use are in the same assistant message,
     // the tool call wins (more actionable for the UI / policy layer).
     let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me run that"},{"type":"tool_use","id":"call_x","name":"Bash","input":{"command":"ls"}}]}}"#;
-    assert!(matches!(parse_claude_event(line), Some(AgentEvent::ToolCall { .. })));
+    assert!(matches!(
+        parse_claude_event(line),
+        Some(AgentEvent::ToolCall { .. })
+    ));
 }
 
 #[test]
@@ -124,17 +127,15 @@ fn user_tool_result_error_emits_failed_update_with_reason() {
     // The permission-denied case the user originally hit:
     let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_w1","content":"Claude requested permissions to write to /tmp/hello.txt, but you haven't granted it yet.","is_error":true}]},"tool_use_result":{"stdout":"","stderr":"Claude requested permissions to write to /tmp/hello.txt, but you haven't granted it yet.","interrupted":false,"isImage":false,"noOutputExpected":false}}"#;
     match parse_claude_event(line) {
-        Some(AgentEvent::ToolCallUpdate { status, .. }) => {
-            match status {
-                ToolCallStatus::Failed { reason } => {
-                    assert!(
-                        reason.contains("permissions"),
-                        "expected permissions in reason, got {reason:?}"
-                    );
-                }
-                _ => panic!("expected Failed status"),
+        Some(AgentEvent::ToolCallUpdate { status, .. }) => match status {
+            ToolCallStatus::Failed { reason } => {
+                assert!(
+                    reason.contains("permissions"),
+                    "expected permissions in reason, got {reason:?}"
+                );
             }
-        }
+            _ => panic!("expected Failed status"),
+        },
         other => panic!("expected ToolCallUpdate, got {other:?}"),
     }
 }

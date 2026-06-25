@@ -29,6 +29,27 @@ pub struct Feature {
     /// section. See migration V12 and `commit_worktree_changes`.
     #[serde(default)]
     pub commit_artifacts: Option<bool>,
+    /// Per-run override of the loop iteration budget. `None` = inherit the
+    /// project default (`ProjectSettings::default_loop_iterations`) or the
+    /// engine default (3). See migration V13.
+    #[serde(default)]
+    pub loop_iterations: Option<u32>,
+    /// Per-step agent/model overrides chosen at launch, snapshotted on the
+    /// feature so workflow/project edits don't affect an in-flight run.
+    /// Empty = every step inherits the workflow/project defaults.
+    #[serde(default)]
+    pub step_overrides: Vec<StepOverride>,
+}
+
+/// A per-step agent/model override selected when launching a feature.
+/// Either field may be `None`, meaning "inherit" for that dimension.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct StepOverride {
+    pub step_id: String,
+    #[serde(default)]
+    pub agent_kind: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

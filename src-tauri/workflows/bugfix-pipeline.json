@@ -29,7 +29,7 @@
       "kind": "agent",
       "title": "Apply Fix",
       "agent_kind": null,
-      "prompt_template": "You are a senior software engineer applying a surgical fix.\n\nBug report: {{feature_description}}\nDiagnosis artifact: [attached — from s-reproduce]\n\n## Rules (non-negotiable)\n1. Touch ONLY the files listed in the Fix Boundary section of the diagnosis artifact.\n2. Do NOT refactor unrelated code — one bug, one fix.\n3. Make the reproduction test case pass.\n4. Do NOT break any existing tests.\n5. Run the reproduction test immediately after your fix: {{test_command}}\n\n## Reflection\nAfter applying the fix, re-read the Root Cause section of the diagnosis artifact. Verify your change addresses the stated cause directly. If it does not, revise before declaring done.\n\n## Output artifact\n- Files changed (list)\n- The specific lines modified (diff summary)\n- Reproduction test result: PASS / FAIL\n- Confidence: HIGH / MEDIUM / LOW (with reason)\n\n## Stop condition\nYou are done when the reproduction test passes and the output artifact is written.",
+      "prompt_template": "You are a senior software engineer applying a surgical fix.\n\nBug report: {{feature_description}}\nDiagnosis artifact: [attached — from s-reproduce]\n\n## Rules (non-negotiable)\n1. Touch ONLY the files listed in the Fix Boundary section of the diagnosis artifact.\n2. Do NOT refactor unrelated code — one bug, one fix.\n3. Make the reproduction test case pass.\n4. Do NOT break any existing tests.\n5. Run the reproduction test immediately after your fix: {{test_command}}\n\n## Reflection\nAfter applying the fix, re-read the Root Cause section of the diagnosis artifact. Verify your change addresses the stated cause directly. If it does not, revise before declaring done.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — verification failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Output artifact\n- Files changed (list)\n- The specific lines modified (diff summary)\n- Reproduction test result: PASS / FAIL\n- Confidence: HIGH / MEDIUM / LOW (with reason)\n\n## Stop condition\nYou are done when the reproduction test passes and the output artifact is written.",
       "artifact_mode": "full",
       "on_failure": "s-reproduce",
       "max_iterations": 3
@@ -51,8 +51,14 @@
       "agent_kind": null,
       "prompt_template": "You are a QA engineer running the full regression suite.\n\nSmoke test artifact: [attached — from s-smoke]\n\n## Pre-condition\nCheck the smoke test artifact. If 'Proceed to full regression?' is NO, output a BLOCKED status and stop — do not run the full suite.\n\n## Task (if smoke passed)\nRun the full test suite: {{test_command}}\n\nFor any test that fails:\n1. Determine if the failure is caused by the fix (regression) or was already failing (pre-existing).\n2. If it is a regression: apply a minimal fix and re-run. Do not introduce unrelated changes.\n3. If it is pre-existing: document it in the artifact but do not fix it.\n\n## Output artifact\n- Full suite result: X passed, Y failed, Z skipped\n- Regressions introduced: list (should be empty)\n- Pre-existing failures: list\n- Changes made during regression triage: list\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the full suite has run and the artifact is written.",
       "artifact_mode": "summary_only",
-      "on_failure": null,
-      "max_iterations": 2
+      "on_failure": "s-fix",
+      "max_iterations": null,
+      "verifier": {
+        "agent_kind": null,
+        "instructions": "Decide whether the bug is fixed and no regressions were introduced. The full test-suite output is provided above. Return \"pass\" only if the suite succeeded (no new failures) AND the reproduction case now passes; otherwise return \"fail\" with a concise, actionable reason naming exactly what is still broken.",
+        "harness_name": null,
+        "verdict_key": "verdict"
+      }
     },
     {
       "id": "s-gate-ship",

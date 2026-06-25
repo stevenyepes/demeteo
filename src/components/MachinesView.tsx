@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Plus, Server, Key, Lock, Cpu, Edit2, Trash2, Wifi, WifiOff, Loader, AlertCircle, RefreshCw } from 'lucide-react';
+import { Plus, Server, Key, Lock, Cpu, Edit2, Trash2, Wifi, WifiOff, Loader, AlertCircle, RefreshCw, Monitor } from 'lucide-react';
 import EnvModal, { blankForm, type EnvFormState } from './EnvModal';
 
 interface Machine {
@@ -23,16 +23,10 @@ interface MachinesViewProps {
 }
 
 /**
- * Machines (SSH environments) settings screen.
+ * Machines settings screen.
  *
- * - Lists every machine in the SQLite `machines` table.
- * - "Add machine" / per-row "Edit" open the existing `EnvModal`
- *   (which already had the passphrase field — it was just never
- *   wired into the UI).
- * - Per-row "Test connection" runs the existing
- *   `test_machine_connection` Tauri command.
- * - Delete wipes both the row and the keyring-stored secret via
- *   `delete_machine` + `delete_machine_secret`.
+ * Always shows a pinned built-in Local Machine card at the top.
+ * Remote SSH machines are listed below it and can be added/edited/deleted.
  */
 const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -106,7 +100,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
   };
 
   const handleAdd = () => {
-    setEditing({ ...blankForm, authType: 'key' });
+    setEditing({ ...blankForm, authType: 'key', connection: '' });
   };
 
   const handleEdit = (m: Machine) => {
@@ -156,7 +150,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
           <div>
             <h2 className="text-2xl font-outfit font-bold text-white mb-1">Machines</h2>
             <p className="text-sm text-slate-400">
-              SSH environments that Demeteo can run agents on. Each row is one machine with its own credentials.
+              Environments that Demeteo can run agents on. The local machine is always available; add remote SSH hosts below.
             </p>
           </div>
           <div className="flex gap-2">
@@ -185,24 +179,43 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
           </div>
         )}
 
+        {/* Built-in local machine — always shown, non-editable */}
+        <div className="glass-panel p-4 flex items-start justify-between gap-4 border-l-2 border-l-emerald-500/60 mb-3">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center shrink-0">
+              <Monitor className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h4 className="text-base font-semibold text-white font-outfit">This Machine</h4>
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">Built-in</span>
+              </div>
+              <div className="text-xs text-slate-400 mt-1 font-mono">
+                <p>Runs agents directly on this computer via a local PTY</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Remote SSH machines */}
         {loading ? (
-          <div className="text-center py-12 text-slate-500 text-sm">
+          <div className="text-center py-8 text-slate-500 text-sm">
             <Loader className="w-5 h-5 animate-spin mx-auto mb-2 text-cyan-400" />
             Loading machines…
           </div>
         ) : machines.length === 0 ? (
-          <div className="glass-panel p-12 text-center flex flex-col items-center justify-center">
-            <Server className="w-10 h-10 text-slate-500 mb-3" />
-            <h3 className="text-lg font-outfit font-semibold text-white mb-2">No machines configured</h3>
-            <p className="text-sm text-slate-400 max-w-md mb-6">
-              Add the local node or a remote SSH host where Demeteo can clone your repos and run coding agents.
+          <div className="glass-panel p-8 text-center flex flex-col items-center justify-center">
+            <Server className="w-8 h-8 text-slate-500 mb-3" />
+            <h3 className="text-base font-outfit font-semibold text-white mb-1">No remote machines</h3>
+            <p className="text-sm text-slate-400 max-w-md mb-5">
+              Add a remote SSH host to run agents on cloud instances or other servers.
             </p>
             <button
               onClick={handleAdd}
               className="px-5 py-2.5 text-sm font-bold rounded-lg bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all flex items-center gap-1.5"
             >
               <Plus className="w-4 h-4" />
-              Add your first machine
+              Add remote machine
             </button>
           </div>
         ) : (
@@ -216,7 +229,6 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                 } catch { return []; }
               })();
               const authLabel =
-                m.auth_type === 'local' ? 'Local' :
                 m.auth_type === 'key' ? 'Private Key' :
                 m.auth_type === 'password' ? 'Password' :
                 m.auth_type === 'agent' ? 'SSH Agent' : m.auth_type;
@@ -239,7 +251,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                       <h4 className="text-base font-semibold text-white font-outfit truncate">{m.name}</h4>
                       <div className="text-xs text-slate-400 mt-1 space-y-0.5 font-mono">
                         <p>
-                          {m.username ? <><span className="text-slate-200">@{m.username}</span>@</> : null}
+                          {m.username ? <><span className="text-slate-200">{m.username}</span>@</> : null}
                           <span className="text-slate-200">{m.host}</span>
                           {m.port && m.port !== 22 ? <span className="text-slate-200">:{m.port}</span> : null}
                         </p>

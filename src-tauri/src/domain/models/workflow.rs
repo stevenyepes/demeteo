@@ -39,6 +39,11 @@ pub struct StepConfig {
     pub kind: String,
     pub title: String,
     pub agent_kind: Option<String>,
+    /// Per-step model override (e.g. "claude-opus-4-8"). Resolves below the
+    /// run-time per-step override and above the project default. Stored
+    /// inside `steps_json`, so no DB migration is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub prompt_template: Option<String>,
     pub artifact_mode: String,
     pub on_failure: Option<StepId>,

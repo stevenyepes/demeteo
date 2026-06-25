@@ -1,5 +1,4 @@
 pub mod agent_config;
-pub mod git;
 pub mod agent_config_probe;
 pub mod agent_exec;
 pub mod agent_lifecycle;
@@ -8,6 +7,7 @@ pub mod app_session;
 pub mod bootstrap;
 pub mod feature_lifecycle;
 pub mod features;
+pub mod git;
 pub mod machine;
 pub mod messages;
 pub mod mr_publisher;

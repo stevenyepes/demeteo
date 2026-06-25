@@ -42,7 +42,7 @@ async fn probe_models_via_acp(
     let temp_thread_id = format!("probe-models-{}", now);
     let probe_binary = ctx
         .registry
-        .runtime_for(&agent_kind)
+        .runtime_for(agent_kind)
         .map(|r| r.binary().to_string())
         .unwrap_or_else(|| agent_kind.to_string());
     let agent_ctx = AgentContext {
@@ -82,9 +82,13 @@ async fn probe_models_via_cli(
     machine_id: &str,
     agent_kind: &str,
 ) -> Result<Vec<ConfigOptionValue>, String> {
+    // NOTE: do NOT add a "claude-code" arm here. The `claude` CLI has no
+    // `models` subcommand — `claude models` would be parsed as a *prompt*
+    // ("models") and start a session instead of listing anything. claude-code
+    // models come from the alias fallback in `fallback_models` instead, and
+    // `discover_models` deliberately excludes claude-code from this CLI path.
     let binary = match agent_kind {
         "antigravity" => "agy",
-        "claude-code" => "claude",
         other => other,
     };
     let output = exec
@@ -110,20 +114,33 @@ async fn probe_models_via_cli(
 
 fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
     match agent_kind {
+        // The `claude` CLI has no model-listing command (unlike `opencode
+        // models`), so there is nothing to probe. What it *does* expose is
+        // `--model`, which accepts an alias for the latest model
+        // ('opus'/'sonnet'/'haiku'/'fable') or a full model id. We store the
+        // aliases here: they're passed straight through to `--model` and the
+        // CLI resolves them to the current generation at runtime, so this list
+        // never goes stale. Users wanting a pinned build can type a full id in
+        // the custom-override field of the model picker.
         "claude-code" => vec![
             ConfigOptionValue {
-                value: "claude-3-5-sonnet-latest".into(),
-                name: "Claude 3.5 Sonnet (Latest)".into(),
+                value: "opus".into(),
+                name: "Claude Opus (latest)".into(),
                 description: None,
             },
             ConfigOptionValue {
-                value: "claude-3-5-haiku-latest".into(),
-                name: "Claude 3.5 Haiku (Latest)".into(),
+                value: "sonnet".into(),
+                name: "Claude Sonnet (latest)".into(),
                 description: None,
             },
             ConfigOptionValue {
-                value: "claude-3-opus-latest".into(),
-                name: "Claude 3 Opus (Latest)".into(),
+                value: "haiku".into(),
+                name: "Claude Haiku (latest)".into(),
+                description: None,
+            },
+            ConfigOptionValue {
+                value: "fable".into(),
+                name: "Claude Fable (latest)".into(),
                 description: None,
             },
         ],

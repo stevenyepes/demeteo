@@ -32,6 +32,7 @@ export type StepConfig = {
   kind: 'agent' | 'parallel' | 'gate' | string;
   title: string;
   agent_kind?: string | null;
+  model?: string | null;
   prompt_template?: string | null;
   artifact_mode: 'full' | 'summary_only' | 'none' | string;
   on_failure?: string | null;
@@ -43,6 +44,21 @@ export interface WorkflowWithSteps extends Workflow {
   steps: StepConfig[];
   version: number;
   version_id: string;
+}
+
+/**
+ * A project-scoped harness (coding agent) + model override for a workflow or a
+ * single step. Mirrors `ProjectWorkflowOverride` in Rust (migrations V14/V15).
+ * `step_id == null` is the workflow-level override (applies to all steps); a
+ * non-null `step_id` targets one step. `null` on agent_kind/model means
+ * "inherit" for that field; a record absent from the list inherits both.
+ */
+export interface WorkflowOverride {
+  project_id: string;
+  workflow_id: string;
+  step_id?: string | null;
+  agent_kind?: string | null;
+  model?: string | null;
 }
 
 export interface StepExecution {

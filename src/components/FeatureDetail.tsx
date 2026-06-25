@@ -157,6 +157,14 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   const [availableModels, setAvailableModels] = useState<Array<{ value: string; name: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  // Harness (coding agent) selection for replay/retry. `availableAgents` is the
+  // set installed *and* enabled on the feature's machine; `selectedAgent === ''`
+  // means "keep the feature's current harness". `featureAgentKind` /
+  // `featureMachineId` are captured so a harness switch can re-probe models.
+  const [availableAgents, setAvailableAgents] = useState<string[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string>('');
+  const [featureAgentKind, setFeatureAgentKind] = useState<string>('opencode');
+  const [featureMachineId, setFeatureMachineId] = useState<string>('local');
   const [replayTarget, setReplayTarget] = useState<{ id: string; name: string; downstreamCount: number } | null>(null);
   const [featureTitle, setFeatureTitle] = useState<string>(title || 'Feature Pipeline');
 
@@ -302,13 +310,30 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       const targetProjectId = projectId || f?.project_id;
       if (f && targetProjectId && availableModels.length === 0 && !isLoadingModels) {
         setIsLoadingModels(true);
+        const agentKind = f.agent_kind || 'opencode';
+        setFeatureAgentKind(agentKind);
         (async () => {
           try {
             const project = await invoke<any>('get_project_by_id', { projectId: targetProjectId });
             const machineId = project?.remote_host || 'local';
-            const agentKind = f.agent_kind || 'opencode';
-            const models = await getAgentModels(machineId, agentKind);
+            setFeatureMachineId(machineId);
+            // Probe models for the current harness and, in parallel, fetch which
+            // harnesses are actually available on this machine so replay/retry
+            // only offer ones that will run. A missing agent-config list is
+            // non-fatal — we just won't show the harness picker.
+            const [models, configs] = await Promise.all([
+              getAgentModels(machineId, agentKind),
+              invoke<Array<{ kind: string; enabled: boolean; available: boolean }>>(
+                'get_agent_configs',
+                { machineId, refresh: false },
+              ).catch(() => [] as Array<{ kind: string; enabled: boolean; available: boolean }>),
+            ]);
             setAvailableModels(models as Array<{ value: string; name: string }>);
+            setAvailableAgents(
+              (configs || [])
+                .filter(a => a.enabled && a.available && a.kind !== 'antigravity')
+                .map(a => a.kind),
+            );
           } catch (err) {
             reportError(err, { kind: "internal" });
           } finally {
@@ -368,10 +393,30 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     }
   };
 
+  // Switching the harness invalidates the probed model list (models are
+  // harness-specific), so clear the model selection and re-probe for the
+  // chosen harness. An empty choice falls back to the feature's current harness.
+  const handleAgentChange = (agentKind: string) => {
+    setSelectedAgent(agentKind);
+    setSelectedModel('');
+    setIsLoadingModels(true);
+    (async () => {
+      try {
+        const models = await getAgentModels(featureMachineId, agentKind || featureAgentKind);
+        setAvailableModels(models as Array<{ value: string; name: string }>);
+      } catch (err) {
+        reportError(err, { kind: "internal" });
+      } finally {
+        setIsLoadingModels(false);
+      }
+    })();
+  };
+
   const handleRetryStep = async (stepExecutionId: string) => {
     try {
       const modelParam = selectedModel || null;
-      await invoke('step_retry', { stepExecutionId, newModel: modelParam });
+      const agentParam = selectedAgent || null;
+      await invoke('step_retry', { stepExecutionId, newModel: modelParam, newAgent: agentParam });
       loadFeatureData();
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Retry Failed', kind: 'error' });
@@ -382,7 +427,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     if (!replayTarget) return;
     try {
       const modelParam = selectedModel || null;
-      await invoke('replay_from_step', { stepExecutionId: replayTarget.id, newModel: modelParam });
+      const agentParam = selectedAgent || null;
+      await invoke('replay_from_step', { stepExecutionId: replayTarget.id, newModel: modelParam, newAgent: agentParam });
       setReplayTarget(null);
       loadFeatureData();
     } catch (err) {
@@ -866,7 +912,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                         <div className="mt-4 p-4 rounded bg-rose-500/5 border border-rose-500/20 flex flex-col gap-3">
                           <div className="flex justify-between items-center">
                             <div className="text-xs text-rose-400 font-semibold uppercase tracking-wide">
-                              Step failed. You can change model and retry.
+                              Step failed. You can change harness/model and retry.
                             </div>
                             <button
                               onClick={() => handleRetryStep(step.id)}
@@ -875,6 +921,22 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                               <RefreshCw className="w-3 h-3 animate-pulse" /> Retry Step
                             </button>
                           </div>
+
+                          {availableAgents.length > 0 && (
+                            <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
+                              <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Harness:</label>
+                              <select
+                                value={selectedAgent}
+                                onChange={(e) => handleAgentChange(e.target.value)}
+                                className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer capitalize"
+                              >
+                                <option value="">Default ({featureAgentKind.replace(/-/g, ' ')})</option>
+                                {availableAgents.map((a) => (
+                                  <option key={a} value={a}>{a.replace(/-/g, ' ')}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
 
                           {isLoadingModels ? (
                             <div className="text-[10px] text-slate-500 font-mono animate-pulse">
@@ -1063,7 +1125,25 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
               {status === 'running' && ' The current execution will be cancelled.'}
             </p>
 
-            {availableModels.length > 0 && (
+            {availableAgents.length > 0 && (
+              <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5 mb-2.5">
+                <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Harness:</label>
+                <select
+                  value={selectedAgent}
+                  onChange={(e) => handleAgentChange(e.target.value)}
+                  className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer capitalize"
+                >
+                  <option value="">Default ({featureAgentKind.replace(/-/g, ' ')})</option>
+                  {availableAgents.map((a) => (
+                    <option key={a} value={a}>{a.replace(/-/g, ' ')}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {isLoadingModels ? (
+              <div className="text-[10px] text-slate-500 font-mono animate-pulse mb-5 px-1">Probing available models…</div>
+            ) : availableModels.length > 0 && (
               <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5 mb-5">
                 <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Model:</label>
                 <select

@@ -10,6 +10,7 @@ impl DagStepExecutor {
         &self,
         execution_id: &str,
         new_model: Option<&str>,
+        new_agent: Option<&str>,
         include_target: bool,
     ) -> Result<(), String> {
         let se_id = StepExecutionId::from(execution_id.to_string());
@@ -35,11 +36,28 @@ impl DagStepExecutor {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
 
-        if let Some(model) = new_model {
+        // Re-pin the feature-wide harness/model overrides (resolution tier 2)
+        // before restarting the loop, so the replayed steps run with the
+        // operator's chosen agent and model.
+        //
+        // Model patch rules:
+        //   - explicit `new_model`            → set it.
+        //   - harness changed, no model given → clear any existing model
+        //     override, so the new harness resolves its own default model
+        //     rather than inheriting a stale model that may not exist for it.
+        //   - nothing given                   → leave the override untouched.
+        let agent_patch = new_agent.map(|a| Some(a.to_string()));
+        let model_patch = match (new_agent, new_model) {
+            (_, Some(m)) => Some(Some(m.to_string())),
+            (Some(_), None) => Some(None),
+            (None, None) => None,
+        };
+        if agent_patch.is_some() || model_patch.is_some() {
             self.features.update(
                 feature_id,
                 &FeaturePatch {
-                    model: Some(Some(model.to_string())),
+                    agent_kind: agent_patch,
+                    model: model_patch,
                     ..Default::default()
                 },
             )?;

@@ -29,7 +29,7 @@
       "kind": "parallel",
       "title": "Execute Refactor Subtasks",
       "agent_kind": null,
-      "prompt_template": "You are a refactor worker. You have been assigned a partition from the refactor plan.\n\nRefactor plan artifact: [attached — from s-analyse]\nYour partition ID: {{partition_id}}\nFiles you own: {{subtask_files}}\nFiles you must NOT touch: {{other_subtask_files}}\n\n## Rules (non-negotiable)\n1. Do NOT change observable behaviour — only structure.\n2. For every file you touch: verify the Behaviour Invariants in the plan still hold.\n3. Run the tests for your partition after each atomic commit: {{test_command}}\n4. Commit format: `refactor({{partition_id}}): <what changed>`.\n\n## Output artifact\n- Files changed (list)\n- Invariants verified (checklist)\n- Partition test result: PASS / FAIL\n- Commit SHA(s)\n\n## Stop condition\nYou are done when all your files are refactored, invariants are verified, and partition tests pass.",
+      "prompt_template": "You are a refactor worker. You have been assigned a partition from the refactor plan.\n\nRefactor plan artifact: [attached — from s-analyse]\nYour partition ID: {{partition_id}}\nFiles you own: {{subtask_files}}\nFiles you must NOT touch: {{other_subtask_files}}\n\n## Rules (non-negotiable)\n1. Do NOT change observable behaviour — only structure.\n2. For every file you touch: verify the Behaviour Invariants in the plan still hold.\n3. Run the tests for your partition after each atomic commit: {{test_command}}\n4. Commit format: `refactor({{partition_id}}): <what changed>`.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — the full test suite or behaviour-drift review failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes while preserving observable behaviour; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Output artifact\n- Files changed (list)\n- Invariants verified (checklist)\n- Partition test result: PASS / FAIL\n- Commit SHA(s)\n\n## Stop condition\nYou are done when all your files are refactored, invariants are verified, and partition tests pass.",
       "artifact_mode": "summary_only",
       "on_failure": "s-gate-plan",
       "max_iterations": 2
@@ -61,8 +61,14 @@
       "agent_kind": null,
       "prompt_template": "You are a QA engineer running the full test suite after a structural refactor.\n\nCoverage report: [attached — from s-coverage]\nBehaviour drift review: [attached — from s-critic]\n\n## Pre-condition\nIf the coverage report shows COVERAGE REGRESSION or the drift review shows DRIFT DETECTED, output a BLOCKED status and stop — do not run the full suite.\n\n## Task (if pre-conditions pass)\nRun the full test suite: {{test_command}}\n\nFor any failure:\n1. Classify: REGRESSION (caused by refactor) or PRE-EXISTING.\n2. For REGRESSION: apply a minimal fix — the refactor must be behaviour-preserving.\n3. For PRE-EXISTING: document but do not fix.\n\n## Output artifact\n- Full suite: X passed, Y failed, Z skipped\n- Regressions: list (must be empty for PASS)\n- Pre-existing failures: list\n- Fixes applied: list\n- **Overall: PASS / BLOCKED**\n\n## Stop condition\nYou are done when the suite has run and all sections are written.",
       "artifact_mode": "summary_only",
-      "on_failure": null,
-      "max_iterations": 2
+      "on_failure": "s-refactor",
+      "max_iterations": null,
+      "verifier": {
+        "agent_kind": null,
+        "instructions": "Decide whether the refactor is behaviour-preserving and the suite is green. The full test-suite output is provided above. Return \"pass\" only if the suite succeeded with no regressions AND no behaviour drift was detected; otherwise return \"fail\" with a concise, actionable reason naming exactly what regressed or drifted.",
+        "harness_name": null,
+        "verdict_key": "verdict"
+      }
     },
     {
       "id": "s-gate-diff",

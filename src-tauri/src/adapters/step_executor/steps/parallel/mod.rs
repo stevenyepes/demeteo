@@ -28,18 +28,11 @@ impl ExecutionDriver {
         step_index: usize,
         step_execs: &[StepExecution],
     ) -> StepOutcome {
-        let feature = self.features.get(&self.f_id).ok().flatten();
-        let override_agent = feature.as_ref().and_then(|f| f.agent_kind.clone());
-        let override_model = feature.as_ref().and_then(|f| f.model.clone());
-
         if *self.cancel_watch.borrow() {
             return StepOutcome::Cancelled;
         }
 
-        let planner_kind = override_agent
-            .clone()
-            .or_else(|| step_conf.agent_kind.clone())
-            .unwrap_or_else(|| "opencode".to_string());
+        let (planner_kind, override_model) = self.resolve_step_agent(step_conf);
 
         let machine_str = self
             .machine_id_opt
@@ -149,12 +142,7 @@ impl ExecutionDriver {
 
         // Run verifier check if configured on the parallel step
         if let Some(ref verifier_cfg) = step_conf.verifier {
-            let agent_kind = step_conf
-                .agent_kind
-                .clone()
-                .unwrap_or_else(|| "opencode".to_string());
-            let feature = self.features.get(&self.f_id).ok().flatten();
-            let override_model = feature.as_ref().and_then(|f| f.model.clone());
+            let (agent_kind, verifier_model) = self.resolve_step_agent(step_conf);
             let machine_str = self
                 .machine_id_opt
                 .clone()
@@ -170,7 +158,7 @@ impl ExecutionDriver {
                     accumulated_tokens,
                     step_start,
                     &agent_kind,
-                    &override_model,
+                    &verifier_model,
                     &machine_str,
                 )
                 .await
@@ -279,19 +267,37 @@ impl ExecutionDriver {
         let planner_prompt =
             resolve_attached_artifacts(&planner_prompt, step_execs, step_index, &*self.artifacts);
 
+        let is_cli_agent = planner_kind == "opencode"
+            || planner_kind == "hermes"
+            || planner_kind == "claude-code"
+            || planner_kind == "antigravity";
+
         let mut planner_env = crate::ports::agent_runtime::agent_base_env();
         if let Some(ref m) = override_model {
-            let config = format!(
-                r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
-                m
-            );
-            planner_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
+            // CLI agents take the model via a --model flag at spawn; only the
+            // opencode-config-driven agents read OPENCODE_CONFIG_CONTENT.
+            if !is_cli_agent {
+                let config = format!(
+                    r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
+                    m
+                );
+                planner_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
+            }
         }
+
+        // Resolve the actual executable name from the registered runtime
+        // (e.g. kind "claude-code" → binary "claude"). Falls back to the
+        // kind itself if no runtime is registered for it.
+        let planner_binary = self
+            .registry
+            .runtime_for(planner_kind)
+            .map(|r| r.binary().to_string())
+            .unwrap_or_else(|| planner_kind.to_string());
 
         let planner_ctx = AgentContext {
             thread_id: planner_thread_id.clone(),
             machine_id: machine_str.to_string(),
-            binary: planner_kind.to_string(),
+            binary: planner_binary,
             args: vec![],
             env: planner_env,
             cwd: self.target_dir.clone(),
@@ -319,10 +325,6 @@ impl ExecutionDriver {
         };
 
         if let Some(ref model) = override_model {
-            let is_cli_agent = planner_kind == "opencode"
-                || planner_kind == "hermes"
-                || planner_kind == "claude-code"
-                || planner_kind == "antigravity";
             if !is_cli_agent {
                 let _ = planner_session.set_config_option("model", model);
             }
@@ -338,42 +340,82 @@ impl ExecutionDriver {
             wall_cap_s: PLANNER_WALL_S,
         };
 
-        let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
-            &*planner_session,
-            &planner_prompt,
-            timeouts,
-            Some(self.cancel_watch.clone()),
-            machine_str,
-            &*self.exec,
-            |_event| {},
-        )
-        .await;
+        // The planner's output is machine-consumed (parsed into a SubtaskDag),
+        // but CLI agents stream free text and sometimes wrap or precede the JSON
+        // with prose. Try once, and on a parse miss re-ask the *same* session
+        // with a strict JSON-only correction prompt before giving up. The
+        // session is kept alive across both turns so the retry has full context.
+        const PLANNER_MAX_ATTEMPTS: usize = 2;
+        let mut last_text = String::new();
+        let mut parsed: Option<SubtaskDag> = None;
+
+        for attempt in 0..PLANNER_MAX_ATTEMPTS {
+            let prompt = if attempt == 0 {
+                planner_prompt.clone()
+            } else {
+                "Your previous response could not be parsed as the required \
+                 subtask DAG. Reply with ONLY a single JSON object — no prose, \
+                 no markdown outside the fence — of the form:\n\
+                 ```json\n\
+                 {\"subtasks\": [{\"id\": \"sub-1\", \"title\": \"...\", \"description\": \"...\", \"files\": [\"src/foo.rs\"], \"test_command\": \"...\"}]}\n\
+                 ```"
+                    .to_string()
+            };
+
+            let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
+                &*planner_session,
+                &prompt,
+                timeouts,
+                Some(self.cancel_watch.clone()),
+                machine_str,
+                &*self.exec,
+                |_event| {},
+            )
+            .await;
+
+            last_text = match turn_res {
+                crate::adapters::agent::event_stream::TurnResult::Interrupted => {
+                    let _ = self.registry.kill(&planner_thread_id).await;
+                    return Err("parallel step: planner cancelled".to_string());
+                }
+                crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+                    let _ = self.registry.kill(&planner_thread_id).await;
+                    return Err(format!("parallel step: planner failed: {}", descriptive));
+                }
+                crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
+                    *accumulated_cost += outcome.cost_usd;
+                    *accumulated_tokens += outcome.tokens;
+                    outcome.text
+                }
+            };
+
+            match extract_subtask_dag(&last_text) {
+                Some(d) if !d.subtasks.is_empty() => {
+                    parsed = Some(d);
+                    break;
+                }
+                _ => {
+                    eprintln!(
+                        "[parallel step] planner attempt {}/{} produced no valid subtask DAG",
+                        attempt + 1,
+                        PLANNER_MAX_ATTEMPTS
+                    );
+                }
+            }
+        }
 
         let _ = self.registry.kill(&planner_thread_id).await;
 
-        let planner_text = match turn_res {
-            crate::adapters::agent::event_stream::TurnResult::Interrupted => {
-                return Err("parallel step: planner cancelled".to_string());
-            }
-            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
-                return Err(format!("parallel step: planner failed: {}", descriptive));
-            }
-            crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
-                *accumulated_cost += outcome.cost_usd;
-                *accumulated_tokens += outcome.tokens;
-                outcome.text
-            }
-        };
-
-        match extract_subtask_dag(&planner_text) {
-            Some(d) if !d.subtasks.is_empty() => Ok(d),
-            _ => Err(format!(
-                "parallel step: planner did not return a valid subtask DAG. \
-                 The agent's response was: {}",
-                if planner_text.len() > 500 {
-                    format!("{}…(truncated)", &planner_text[..500])
+        match parsed {
+            Some(d) => Ok(d),
+            None => Err(format!(
+                "parallel step: planner did not return a valid subtask DAG after {} attempts. \
+                 The agent's last response was: {}",
+                PLANNER_MAX_ATTEMPTS,
+                if last_text.len() > 500 {
+                    format!("{}…(truncated)", &last_text[..500])
                 } else {
-                    planner_text
+                    last_text
                 }
             )),
         }

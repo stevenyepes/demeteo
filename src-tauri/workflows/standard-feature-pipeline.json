@@ -53,7 +53,7 @@
       "kind": "parallel",
       "title": "Implement Subtasks",
       "agent_kind": null,
-      "prompt_template": "You are an implementation worker. Using the approved spec artifact [attached — s-spec], the orchestrator has assigned you a specific subtask.\n\nYour subtask: {{subtask_description}}\nFiles you own: {{subtask_files}}\nFiles you must NOT touch: {{other_subtask_files}}\n\n## Rules\n1. Implement ONLY the files in your ownership list. Never modify files outside it.\n2. Follow the patterns identified in the research artifact exactly.\n3. Write or update tests for every change you make.\n4. Run the affected tests before declaring done: {{test_command}}\n5. Commit with a message format: `feat({{feature_slug}}): <what this subtask does>`.\n\n## Stop condition\nYou are done when: (a) all your assigned files are implemented, (b) their tests pass, (c) you have committed.\n\n## Output artifact\n- List of files changed\n- Test results (pass/fail counts)\n- Commit SHA",
+      "prompt_template": "You are an implementation worker. Using the approved spec artifact [attached — s-spec], the orchestrator has assigned you a specific subtask.\n\nYour subtask: {{subtask_description}}\nFiles you own: {{subtask_files}}\nFiles you must NOT touch: {{other_subtask_files}}\n\n## Rules\n1. Implement ONLY the files in your ownership list. Never modify files outside it.\n2. Follow the patterns identified in the research artifact exactly.\n3. Write or update tests for every change you make.\n4. Run the affected tests before declaring done: {{test_command}}\n5. Commit with a message format: `feat({{feature_slug}}): <what this subtask does>`.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — validation failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Stop condition\nYou are done when: (a) all your assigned files are implemented, (b) their tests pass, (c) you have committed.\n\n## Output artifact\n- List of files changed\n- Test results (pass/fail counts)\n- Commit SHA",
       "artifact_mode": "summary_only",
       "on_failure": "s-gate-review",
       "max_iterations": 2,
@@ -92,8 +92,14 @@
           "mode": "full"
         }
       ],
-      "on_failure": null,
-      "max_iterations": 3
+      "on_failure": "s-implement",
+      "max_iterations": null,
+      "verifier": {
+        "agent_kind": null,
+        "instructions": "Decide whether the implementation satisfies the feature goal and every acceptance criterion in the spec. The build/test harness output is provided above. Return \"pass\" only if the harness succeeded AND the changes are correct and complete; otherwise return \"fail\" with a concise, actionable reason naming exactly what to fix.",
+        "harness_name": null,
+        "verdict_key": "verdict"
+      }
     },
     {
       "id": "s-gate-ship",

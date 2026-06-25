@@ -35,6 +35,14 @@ impl ExecutionDriver {
     ) -> Result<(), String> {
         let mut step_failed = false;
         let mut step_err_msg = String::new();
+        let (retry_feedback, retry_iteration, retry_max) = match &self.retry_ctx {
+            Some(rc) => (
+                rc.feedback.clone(),
+                rc.iteration.to_string(),
+                rc.max.to_string(),
+            ),
+            None => (String::new(), String::new(), String::new()),
+        };
         let is_legacy = step_conf.artifacts.as_ref().is_none_or(|d| d.is_empty());
         let decls: &[crate::domain::artifact::ArtifactDecl] =
             step_conf.artifacts.as_deref().unwrap_or(&[]);
@@ -89,6 +97,9 @@ impl ExecutionDriver {
                 .set("subtask_files", &sub_files_str)
                 .set("other_subtask_files", &other_files_str)
                 .set("partition_id", &sub.id)
+                .set("retry_feedback", &retry_feedback)
+                .set("iteration", &retry_iteration)
+                .set("max_iterations", &retry_max)
                 .render(step_conf.prompt_template.as_deref().unwrap_or(""));
             let sub_prompt = if sub_prompt.trim().is_empty() {
                 format!(

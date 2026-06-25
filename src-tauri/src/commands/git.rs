@@ -42,7 +42,7 @@ pub async fn git_changed_files(
             // Rename entries look like "R100\told_path\tnew_path" after splitn(2)
             // so path may be "old\tnew" — take only the new path.
             let path = if raw_status.starts_with('R') {
-                path.split('\t').last().unwrap_or(&path).to_string()
+                path.split('\t').next_back().unwrap_or(&path).to_string()
             } else {
                 path
             };

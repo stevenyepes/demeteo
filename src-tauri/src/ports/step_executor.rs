@@ -24,6 +24,11 @@ pub trait StepExecutor: Send + Sync {
     /// - `commit_artifacts`: per-feature override for the project's
     ///   `commit_artifacts` setting. `None` means inherit the project
     ///   default. See migration V12 and `commit_worktree_changes`.
+    /// - `loop_iterations`: per-run override of the `on_failure` retry-loop
+    ///   budget. `None` means inherit the project default
+    ///   (`ProjectSettings::default_loop_iterations`) or the engine default.
+    /// - `step_overrides`: per-step agent/model overrides chosen at launch.
+    ///   See migration V13.
     #[allow(clippy::too_many_arguments)]
     async fn feature_start(
         &self,
@@ -34,6 +39,8 @@ pub trait StepExecutor: Send + Sync {
         agent_kind: Option<&str>,
         model: Option<&str>,
         commit_artifacts: Option<bool>,
+        loop_iterations: Option<u32>,
+        step_overrides: Vec<crate::domain::models::StepOverride>,
     ) -> Result<Feature, String>;
 
     async fn feature_pause(&self, feature_id: &str) -> Result<(), String>;
@@ -41,15 +48,26 @@ pub trait StepExecutor: Send + Sync {
     async fn feature_cancel(&self, feature_id: &str) -> Result<(), String>;
 
     async fn step_get(&self, execution_id: &str) -> Result<StepExecution, String>;
-    async fn step_retry(&self, execution_id: &str, new_model: Option<&str>) -> Result<(), String>;
+    /// Retry a failed/interrupted step. `new_model` / `new_agent` re-pin the
+    /// feature-wide model/harness overrides before the rerun (`None` keeps the
+    /// existing override).
+    async fn step_retry(
+        &self,
+        execution_id: &str,
+        new_model: Option<&str>,
+        new_agent: Option<&str>,
+    ) -> Result<(), String>;
     /// Replay from the given step execution — reset the target step and
     /// all subsequent steps to `pending`, clear their artifacts and gate
     /// decisions, then restart the execution loop. Works for any step
     /// status (completed, failed, interrupted, awaiting_gate, running).
+    /// `new_model` / `new_agent` re-pin the feature-wide overrides before the
+    /// rerun (`None` keeps the existing override).
     async fn replay_from_step(
         &self,
         execution_id: &str,
         new_model: Option<&str>,
+        new_agent: Option<&str>,
     ) -> Result<(), String>;
     async fn step_list_for_run(&self, feature_id: &str) -> Result<Vec<StepExecution>, String>;
 

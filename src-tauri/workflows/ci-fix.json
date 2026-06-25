@@ -29,7 +29,7 @@
       "kind": "agent",
       "title": "Apply CI Fix",
       "agent_kind": null,
-      "prompt_template": "You are a senior engineer applying a targeted fix to make CI green.\n\nDiagnosis artifact: [attached — from s-diagnose]\n\n## Rules (non-negotiable)\n1. Touch ONLY the files in the Fix Boundary from the diagnosis artifact.\n2. Do NOT fix unrelated issues — one CI failure, one fix.\n3. If the failure type is FLAKY_TEST: make the test deterministic, do not disable it.\n4. If the failure type is REGRESSION: fix the root cause in the source code, not just the test.\n\n## After applying the fix\nRun the specific failing check locally: {{test_command}}\nReport the result.\n\n## Output artifact\n- Files changed (list)\n- Specific lines modified (diff summary)\n- Local check result: PASS / FAIL\n- Confidence: HIGH / MEDIUM / LOW (with reason)\n\n## Stop condition\nYou are done when the local check passes and the output artifact is written.",
+      "prompt_template": "You are a senior engineer applying a targeted fix to make CI green.\n\nDiagnosis artifact: [attached — from s-diagnose]\n\n## Rules (non-negotiable)\n1. Touch ONLY the files in the Fix Boundary from the diagnosis artifact.\n2. Do NOT fix unrelated issues — one CI failure, one fix.\n3. If the failure type is FLAKY_TEST: make the test deterministic, do not disable it.\n4. If the failure type is REGRESSION: fix the root cause in the source code, not just the test.\n\n## After applying the fix\nRun the specific failing check locally: {{test_command}}\nReport the result.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — local verification failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Output artifact\n- Files changed (list)\n- Specific lines modified (diff summary)\n- Local check result: PASS / FAIL\n- Confidence: HIGH / MEDIUM / LOW (with reason)\n\n## Stop condition\nYou are done when the local check passes and the output artifact is written.",
       "artifact_mode": "full",
       "on_failure": "s-diagnose",
       "max_iterations": 3
@@ -41,8 +41,14 @@
       "agent_kind": null,
       "prompt_template": "You are a QA engineer verifying that the CI fix does not introduce regressions.\n\nFix artifact: [attached — from s-fix]\n\n## Verification sequence\n1. **Build** — `{{build_command}}`. If it fails, report and stop.\n2. **Full test suite** — `{{test_command}}`. Report pass/fail counts.\n3. **Lint** — run the project linter. Report any new warnings introduced by the fix.\n\nFor any test failure:\n1. Classify: REGRESSION (caused by this fix) or PRE-EXISTING.\n2. For REGRESSION: apply a minimal fix. Do not change unrelated code.\n3. For PRE-EXISTING: document but do not fix.\n\n## Output artifact\n- Build: PASS / FAIL\n- Test suite: X passed, Y failed, Z skipped\n- New regressions introduced: list (should be empty)\n- Lint warnings introduced: list (should be empty)\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when all three checks have run and an Overall verdict is written.",
       "artifact_mode": "summary_only",
-      "on_failure": null,
-      "max_iterations": 2
+      "on_failure": "s-fix",
+      "max_iterations": null,
+      "verifier": {
+        "agent_kind": null,
+        "instructions": "Decide whether CI will be green and no regressions were introduced. The build/test harness output is provided above. Return \"pass\" only if the build and full suite succeeded with no new failures; otherwise return \"fail\" with a concise, actionable reason naming exactly what is still broken.",
+        "harness_name": null,
+        "verdict_key": "verdict"
+      }
     },
     {
       "id": "s-gate-ship",

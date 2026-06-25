@@ -129,13 +129,27 @@ pub fn start_terminal_session(
         ReadSource::Ssh(ch) => {
             let ch = ch.clone();
             thread::spawn(move || {
-                drain_ssh(ch, read_app, read_session_id, read_machine_id, created_at, read_frontend_channel);
+                drain_ssh(
+                    ch,
+                    read_app,
+                    read_session_id,
+                    read_machine_id,
+                    created_at,
+                    read_frontend_channel,
+                );
             });
         }
         ReadSource::LocalPty(reader) => {
             let reader = reader.clone();
             thread::spawn(move || {
-                drain_local(reader, read_app, read_session_id, read_machine_id, created_at, read_frontend_channel);
+                drain_local(
+                    reader,
+                    read_app,
+                    read_session_id,
+                    read_machine_id,
+                    created_at,
+                    read_frontend_channel,
+                );
             });
         }
     }

@@ -24,7 +24,7 @@
       "kind": "agent",
       "title": "Implement",
       "agent_kind": "opencode",
-      "prompt_template": "You are an implementation engineer executing a predefined plan.\n\nFeature description: {{feature_description}}\nPlan artifact: [attached — s-plan]\nBuild command: {{build_command}}\nTest command: {{test_command}}\n\n## Rules\n1. Follow the plan's Implementation Approach exactly, step by step.\n2. Touch ONLY the files listed in 'Files to Change'. No scope creep.\n3. Write or update tests for every change. Match the project's existing test patterns.\n4. After implementing, run the build: {{build_command}}\n5. Run the tests for the affected files: {{test_command}}\n6. Commit with message format: `feat({{feature_slug}}): <what changed>`\n\n## Stop condition\nYou are done when: (a) all files in the plan are implemented, (b) build passes, (c) affected tests pass, (d) changes are committed.",
+      "prompt_template": "You are an implementation engineer executing a predefined plan.\n\nFeature description: {{feature_description}}\nPlan artifact: [attached — s-plan]\nBuild command: {{build_command}}\nTest command: {{test_command}}\n\n## Rules\n1. Follow the plan's Implementation Approach exactly, step by step.\n2. Touch ONLY the files listed in 'Files to Change'. No scope creep.\n3. Write or update tests for every change. Match the project's existing test patterns.\n4. After implementing, run the build: {{build_command}}\n5. Run the tests for the affected files: {{test_command}}\n6. Commit with message format: `feat({{feature_slug}}): <what changed>`\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — validation failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Stop condition\nYou are done when: (a) all files in the plan are implemented, (b) build passes, (c) affected tests pass, (d) changes are committed.",
       "artifact_mode": "full",
       "on_failure": null,
       "max_iterations": 2
@@ -37,7 +37,13 @@
       "prompt_template": "You are a QA engineer running final validation on a completed implementation.\n\nFeature description: {{feature_description}}\nImplementation artifact: [attached — s-implement]\nBuild command: {{build_command}}\nTest command: {{test_command}}\n\n## Validation sequence (run in order; stop and report on first hard failure)\n1. **Build** — {{build_command}}. Report PASS/FAIL.\n2. **Full Test Suite** — {{test_command}}. Report X passed, Y failed.\n3. For any failure: determine if it is a REGRESSION (caused by this change) or PRE-EXISTING.\n   - REGRESSION: apply a minimal fix and re-run.\n   - PRE-EXISTING: document but do not fix.\n\n## Output artifact\n- Build: PASS / FAIL\n- Test suite: X passed, Y failed, Z skipped\n- Regressions introduced: list (should be empty)\n- Pre-existing failures: list\n- Fixes applied during validation: list\n\n## Stop condition\nYou are done when build passes, the full test suite runs, and the output artifact is complete.",
       "artifact_mode": "summary_only",
       "on_failure": "s-implement",
-      "max_iterations": 2
+      "max_iterations": null,
+      "verifier": {
+        "agent_kind": null,
+        "instructions": "Decide whether the implementation satisfies the feature goal and the plan's acceptance criteria. The build/test harness output is provided above. Return \"pass\" only if the harness succeeded AND the change is correct and complete; otherwise return \"fail\" with a concise, actionable reason naming exactly what to fix.",
+        "harness_name": null,
+        "verdict_key": "verdict"
+      }
     }
   ]
 }

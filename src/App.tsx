@@ -531,6 +531,10 @@ function AppInner() {
                     // `undefined` → inherit the project default
                     // (see migration V12 and `StartFeatureModal`).
                     commitArtifacts: params.commitArtifacts ?? null,
+                    // Per-run loop budget + per-step agent/model overrides
+                    // (migration V13). `null`/empty → inherit defaults.
+                    loopIterations: params.loopIterations ?? null,
+                    stepOverrides: params.stepOverrides ?? null,
                   });
                   setActiveFeatureId(feature.id);
                   setActiveFeatureTitle(feature.title);

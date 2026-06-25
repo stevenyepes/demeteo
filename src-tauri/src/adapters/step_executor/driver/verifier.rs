@@ -39,64 +39,75 @@ impl ExecutionDriver {
             }
         }
 
-        let (harness_name, harness_cmd) = {
-            let name = verifier_cfg
-                .harness_name
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let command = verifier_cfg
-                .harness_name
-                .as_ref()
-                .and_then(|name| harnesses.as_ref().and_then(|h| h.get(name)))
-                .cloned()
-                .or_else(|| {
-                    feature.as_ref().and_then(|f| {
-                        self.projects
-                            .get_settings(&f.project_id)
-                            .ok()
-                            .flatten()
-                            .and_then(|s| s.worktree_strategy.test_command.clone())
-                    })
+        // Resolve the harness command: an explicitly named harness from project
+        // settings takes priority, otherwise fall back to the project's detected
+        // `test_command`. If neither is available we run no command and let the
+        // verifier agent decide purely from the instructions and artifacts.
+        let harness_name = verifier_cfg
+            .harness_name
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let harness_cmd = verifier_cfg
+            .harness_name
+            .as_ref()
+            .and_then(|name| harnesses.as_ref().and_then(|h| h.get(name)))
+            .cloned()
+            .or_else(|| {
+                feature.as_ref().and_then(|f| {
+                    self.projects
+                        .get_settings(&f.project_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.worktree_strategy.test_command.clone())
                 })
-                .unwrap_or_else(|| "npm test".to_string());
-            (name, command)
-        };
+            });
 
-        let harness_run_cmd = format!(
-            "cd {} && {}",
-            paths::shell_escape_posix(wt_path),
-            harness_cmd
-        );
-        let (_harness_success, harness_output) =
-            match self.exec.run_command(machine_str, &harness_run_cmd).await {
-                Ok(out) => (true, out),
-                Err(out) => (false, out),
-            };
+        let harness_output = match harness_cmd {
+            Some(ref cmd) => {
+                let harness_run_cmd =
+                    format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
+                let out = match self.exec.run_command(machine_str, &harness_run_cmd).await {
+                    Ok(out) => out,
+                    Err(out) => out,
+                };
+                Some(out)
+            }
+            None => None,
+        };
 
         let mut produced_artifacts_summary = String::new();
         for art in produced_artifacts {
             produced_artifacts_summary.push_str(&format!("- File/Artifact: {}\n", art.name));
         }
 
+        let harness_section = match (&harness_cmd, &harness_output) {
+            (Some(cmd), Some(output)) => format!(
+                "We ran the test harness '{}' with the command '{}'.\n\
+                 The output of the test command was:\n\
+                 ```\n\
+                 {}\n\
+                 ```\n",
+                harness_name, cmd, output,
+            ),
+            _ => "No test harness was configured or detected for this project, so no test \
+                  command was run. Base your verdict on the instructions and the produced \
+                  artifacts below.\n"
+                .to_string(),
+        };
+
         let verifier_prompt = format!(
             "You are a verifier agent performing a verification task.\n\n\
              Instructions:\n\
              {}\n\n\
-             We ran the test harness '{}' with the command '{}'.\n\
-             The output of the test command was:\n\
-             ```\n\
              {}\n\
-             ```\n\n\
              We also produced/modified the following files/artifacts:\n\
              {}\n\n\
-             Please analyze the test output and artifacts, then provide a JSON object containing the verification verdict.\n\
+             Please analyze the available information and artifacts, then provide a JSON object containing the verification verdict.\n\
              The JSON object must have a key '{}' with the value either \"pass\" or \"fail\".\n\
              For example: {{ \"{}\": \"pass\" }} or {{ \"{}\": \"fail\", \"reason\": \"...\" }}.\n\
              Do not output any other text or code blocks outside the JSON.",
             verifier_cfg.instructions,
-            harness_name,
-            harness_cmd,
-            harness_output,
+            harness_section,
             produced_artifacts_summary,
             verifier_cfg.verdict_key,
             verifier_cfg.verdict_key,
@@ -268,24 +279,50 @@ impl ExecutionDriver {
             return Err(err);
         }
 
-        let start = text_buffer.find('{');
-        let end = text_buffer.rfind('}');
-        let json_str = if let (Some(s), Some(e)) = (start, end) {
-            if s < e {
-                &text_buffer[s..=e]
-            } else {
-                text_buffer.trim()
-            }
-        } else {
-            text_buffer.trim()
-        };
+        let mut parsed_val: Option<serde_json::Value> = None;
 
-        let val: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
-            format!(
-                "Failed to parse verifier output JSON: {} (raw: {})",
-                e, json_str
-            )
-        })?;
+        // Find all indices of '{' and '}' in the text_buffer
+        let brace_starts: Vec<usize> = text_buffer.match_indices('{').map(|(i, _)| i).collect();
+        let brace_ends: Vec<usize> = text_buffer.match_indices('}').map(|(i, _)| i).collect();
+
+        // Search from the end to find the most recent valid JSON block containing the verdict key
+        'outer: for &s in brace_starts.iter().rev() {
+            for &e in brace_ends.iter().rev() {
+                if e > s {
+                    let candidate = &text_buffer[s..=e];
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+                        if val.is_object() && val.get(&verifier_cfg.verdict_key).is_some() {
+                            parsed_val = Some(val);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+
+        let val = match parsed_val {
+            Some(v) => v,
+            None => {
+                // Fall back to original extraction logic if robust parsing fails, to provide a clear error message.
+                let start = text_buffer.find('{');
+                let end = text_buffer.rfind('}');
+                let json_str = if let (Some(s), Some(e)) = (start, end) {
+                    if s < e {
+                        &text_buffer[s..=e]
+                    } else {
+                        text_buffer.trim()
+                    }
+                } else {
+                    text_buffer.trim()
+                };
+                serde_json::from_str(json_str).map_err(|e| {
+                    format!(
+                        "Failed to parse verifier output JSON: {} (raw: {})",
+                        e, json_str
+                    )
+                })?
+            }
+        };
 
         let verdict_str = val
             .get(&verifier_cfg.verdict_key)

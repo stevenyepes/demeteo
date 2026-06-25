@@ -67,11 +67,7 @@ pub async fn feature_get_worktree(
     .await
     .map_err(AppError::from)?;
 
-    let branch = format!(
-        "{}{}",
-        settings.worktree_strategy.branch_prefix,
-        fid.0
-    );
+    let branch = format!("{}{}", settings.worktree_strategy.branch_prefix, fid.0);
 
     Ok(FeatureWorktreeInfo {
         machine_id,
@@ -102,6 +98,8 @@ pub async fn start_feature(
     agent_kind: Option<String>,
     model: Option<String>,
     commit_artifacts: Option<bool>,
+    loop_iterations: Option<u32>,
+    step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
 ) -> Result<Feature, AppError> {
     ctx.executor
         .feature_start(
@@ -112,6 +110,8 @@ pub async fn start_feature(
             agent_kind.as_deref(),
             model.as_deref(),
             commit_artifacts,
+            loop_iterations,
+            step_overrides.unwrap_or_default(),
         )
         .await
         .map_err(AppError::from)
@@ -202,9 +202,14 @@ pub async fn step_retry(
     ctx: State<'_, AppContext>,
     step_execution_id: String,
     new_model: Option<String>,
+    new_agent: Option<String>,
 ) -> Result<(), AppError> {
     ctx.executor
-        .step_retry(&step_execution_id, new_model.as_deref())
+        .step_retry(
+            &step_execution_id,
+            new_model.as_deref(),
+            new_agent.as_deref(),
+        )
         .await
         .map_err(AppError::from)
 }
@@ -214,9 +219,14 @@ pub async fn replay_from_step(
     ctx: State<'_, AppContext>,
     step_execution_id: String,
     new_model: Option<String>,
+    new_agent: Option<String>,
 ) -> Result<(), AppError> {
     ctx.executor
-        .replay_from_step(&step_execution_id, new_model.as_deref())
+        .replay_from_step(
+            &step_execution_id,
+            new_model.as_deref(),
+            new_agent.as_deref(),
+        )
         .await
         .map_err(AppError::from)
 }

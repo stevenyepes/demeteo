@@ -31,8 +31,18 @@ impl SqliteAdapter {
         let adapter = Self {
             conn: SqliteConnection::new(conn),
         };
+        adapter.migrate_local_machines();
         adapter.migrate_machine_agents();
         Ok(adapter)
+    }
+
+    /// One-time migration: local machines are now a built-in constant and
+    /// must not live in the DB. Delete any rows that were created before this
+    /// policy was enforced.
+    fn migrate_local_machines(&self) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute("DELETE FROM machines WHERE auth_type = 'local'", []);
+        }
     }
 
     fn migrate_machine_agents(&self) {

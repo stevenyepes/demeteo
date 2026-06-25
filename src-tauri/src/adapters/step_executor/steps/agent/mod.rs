@@ -25,14 +25,7 @@ impl ExecutionDriver {
         step_index: usize,
         step_execs: &[StepExecution],
     ) -> StepOutcome {
-        let feature = self.features.get(&self.f_id).ok().flatten();
-        let override_agent = feature.as_ref().and_then(|f| f.agent_kind.clone());
-        let override_model = feature.as_ref().and_then(|f| f.model.clone());
-
-        let agent_kind = override_agent
-            .clone()
-            .or_else(|| step_conf.agent_kind.clone())
-            .unwrap_or_else(|| "opencode".to_string());
+        let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
 
         let (gate_decision, gate_feedback) =
             crate::adapters::step_executor::artifacts::get_latest_gate_decision(
@@ -40,11 +33,23 @@ impl ExecutionDriver {
                 self.f_id.as_str(),
             );
 
+        let (retry_feedback, retry_iteration, retry_max) = match &self.retry_ctx {
+            Some(rc) => (
+                rc.feedback.clone(),
+                rc.iteration.to_string(),
+                rc.max.to_string(),
+            ),
+            None => (String::new(), String::new(), String::new()),
+        };
+
         let prompt = self
             .base_ctx
             .clone()
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)
+            .set("retry_feedback", &retry_feedback)
+            .set("iteration", &retry_iteration)
+            .set("max_iterations", &retry_max)
             .render(step_conf.prompt_template.as_deref().unwrap_or(""));
         let prompt = crate::adapters::step_executor::artifacts::resolve_attached_artifacts(
             &prompt,
@@ -126,7 +131,7 @@ impl ExecutionDriver {
             .spawn_agent_session(
                 step_exec,
                 step_conf,
-                &override_agent,
+                &agent_kind,
                 &override_model,
                 &machine_str,
                 &wt_path,

@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { 
-    Settings, Save, Check, RotateCw, GitBranch, ShieldAlert, 
+import {
+    Settings, Save, Check, RotateCw, GitBranch, ShieldAlert,
     Trash2, Box, Search, Plus, X, AlertTriangle, HardDrive, Server, Globe,
     Activity, RefreshCw, ChevronDown, ChevronUp, Zap, CircleAlert, Brain, Edit,
-    FileText
+    FileText, Cpu, Workflow as WorkflowIcon, RotateCcw
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { ConfigOptionValue, ProjectMemoryEntry } from '../types';
+import { ConfigOptionValue, ProjectMemoryEntry, WorkflowOverride, StepConfig } from '../types';
 import { getAgentModels } from '../lib/agentModels';
 import { formatError } from '../lib/errors';
 import { useErrorBus } from '../lib/errorBus';
@@ -75,6 +75,12 @@ interface ProjectSettings {
     default_agent_kind?: string | null;
     default_model?: string | null;
     /**
+     * Default `on_failure` retry-loop budget for this project. `null` =
+     * use the engine default (3). Overridable per run. Mirrors
+     * `ProjectSettings::default_loop_iterations` in Rust.
+     */
+    default_loop_iterations?: number | null;
+    /**
      * Repo-relative folder where agents write their reports
      * (`research-report.md`, `critic-review.md`, …). Default `artifacts/`.
      * Mirrors `ProjectSettings::artifact_subdir` in Rust.
@@ -126,7 +132,7 @@ export default function ProjectSettingsView({
     providers 
 }: ProjectSettingsProps) {
     const [isLoading, setIsLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<'general' | 'strategy' | 'memory'>('general');
+    const [activeTab, setActiveTab] = useState<'general' | 'strategy' | 'overrides' | 'memory'>('general');
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
     const [errorMsg, setErrorMsg] = useState('');
     const { reportError } = useErrorBus();
@@ -187,8 +193,290 @@ export default function ProjectSettingsView({
     // Default AI Executor States
     const [defaultAgentKind, setDefaultAgentKind] = useState<string>('');
     const [defaultModel, setDefaultModel] = useState<string>('');
+    // Empty string = use the engine default (3). Stored as a string for the
+    // input; converted to number|null on save.
+    const [defaultLoopIterations, setDefaultLoopIterations] = useState<string>('');
     const [availableModelsForDefault, setAvailableModelsForDefault] = useState<ConfigOptionValue[]>([]);
     const [isLoadingModelsForDefault, setIsLoadingModelsForDefault] = useState(false);
+
+    // Project-scoped harness/model overrides (migrations V14/V15). Workflows
+    // are global; this tab pins a coding agent + model for a workflow — or a
+    // single step within it — *for this project*. Project Settings has the
+    // compute-machine context, so we can offer a probed model dropdown here,
+    // something the WorkflowEditor can't.
+    //
+    // Everything is keyed by `ovKey(workflowId, stepId)` where stepId === ''
+    // is the workflow-level row (applies to every step). This mirrors the Rust
+    // model where `step_id = None` is persisted as ''.
+    const WF_LEVEL = '';
+    const ovKey = (workflowId: string, stepId: string) => `${workflowId}::${stepId}`;
+
+    const [workflows, setWorkflows] = useState<{ id: string; name: string; description: string; steps: StepConfig[] }[]>([]);
+    const [overrides, setOverrides] = useState<Record<string, { agent_kind: string | null; model: string | null }>>({});
+    const [isLoadingOverrides, setIsLoadingOverrides] = useState(false);
+    const [overridesError, setOverridesError] = useState('');
+    const [expandedWf, setExpandedWf] = useState<Record<string, boolean>>({});
+    // Probed model lists keyed by ovKey (each row's effective agent may differ).
+    const [rowModels, setRowModels] = useState<Record<string, ConfigOptionValue[]>>({});
+    const [rowModelsLoading, setRowModelsLoading] = useState<Record<string, boolean>>({});
+    // Transient per-row "Saved" pulse after an immediate persist.
+    const [savedPulse, setSavedPulse] = useState<Record<string, boolean>>({});
+
+    const overridesMachineId = computeType === 'remote' ? remoteHost : 'local';
+    // The harness choices mirror the agents actually installed *and* enabled on
+    // the target machine, so a user can't pin a workflow to a harness that's
+    // missing (CLI binary not installed) or that they've disabled for this
+    // workspace. `available` is the probed install status; `enabled` is the
+    // user's per-workspace curation — a harness must satisfy both.
+    const overrideAgentKinds = agentConfigs
+        .filter(a => a.enabled && a.available && a.kind !== 'antigravity')
+        .map(a => a.kind);
+
+    // Effective agent a step inherits when it carries no step-level override:
+    // workflow-level override → workflow author's step agent → project default.
+    const inheritedAgent = (workflowId: string, step: StepConfig): string => {
+        const wfOv = overrides[ovKey(workflowId, WF_LEVEL)];
+        return wfOv?.agent_kind || step.agent_kind || defaultAgentKind || '';
+    };
+    const inheritedModel = (workflowId: string, step: StepConfig): string => {
+        const wfOv = overrides[ovKey(workflowId, WF_LEVEL)];
+        return wfOv?.model || step.model || defaultModel || '';
+    };
+    // The agent a row's model dropdown should be probed against: its own agent
+    // override if set, else whatever it inherits.
+    const effectiveAgentForRow = (workflowId: string, step: StepConfig | null): string => {
+        if (step === null) {
+            return overrides[ovKey(workflowId, WF_LEVEL)]?.agent_kind || defaultAgentKind || '';
+        }
+        return overrides[ovKey(workflowId, step.id)]?.agent_kind || inheritedAgent(workflowId, step);
+    };
+
+    const probeModels = async (key: string, agentKind: string) => {
+        if (!agentKind) {
+            setRowModels(prev => ({ ...prev, [key]: [] }));
+            return;
+        }
+        setRowModelsLoading(prev => ({ ...prev, [key]: true }));
+        try {
+            const models = await getAgentModels(overridesMachineId, agentKind);
+            setRowModels(prev => ({ ...prev, [key]: models }));
+        } catch (err) {
+            console.warn('Failed to probe models for', key, agentKind, err);
+            setRowModels(prev => ({ ...prev, [key]: [] }));
+        } finally {
+            setRowModelsLoading(prev => ({ ...prev, [key]: false }));
+        }
+    };
+
+    const loadWorkflowOverrides = async () => {
+        setIsLoadingOverrides(true);
+        setOverridesError('');
+        try {
+            const [wfList, ovList] = await Promise.all([
+                invoke<{ id: string; name: string; description: string; steps: StepConfig[] }[]>('workflow_list'),
+                invoke<WorkflowOverride[]>('get_workflow_overrides', { projectId: activeProject.id }),
+            ]);
+            setWorkflows(wfList.map(w => ({ id: w.id, name: w.name, description: w.description, steps: w.steps ?? [] })));
+            const map: Record<string, { agent_kind: string | null; model: string | null }> = {};
+            for (const ov of ovList) {
+                map[ovKey(ov.workflow_id, ov.step_id ?? WF_LEVEL)] = {
+                    agent_kind: ov.agent_kind ?? null,
+                    model: ov.model ?? null,
+                };
+            }
+            setOverrides(map);
+            // Auto-expand workflows that already carry any override so the user
+            // immediately sees what's customized.
+            const toExpand: Record<string, boolean> = {};
+            for (const ov of ovList) toExpand[ov.workflow_id] = true;
+            setExpandedWf(toExpand);
+            // Warm the model dropdowns for rows that pin an agent.
+            for (const ov of ovList) {
+                if (ov.agent_kind) probeModels(ovKey(ov.workflow_id, ov.step_id ?? WF_LEVEL), ov.agent_kind);
+            }
+        } catch (err) {
+            console.error('Failed to load workflow overrides:', err);
+            setOverridesError(formatError(err));
+        } finally {
+            setIsLoadingOverrides(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab === 'overrides') {
+            loadWorkflowOverrides();
+        }
+    }, [activeTab, activeProject.id, overridesMachineId]);
+
+    // Expanding a workflow lazily probes models for every row in it (workflow
+    // default + each non-gate step), using each row's effective agent. The
+    // getAgentModels cache dedupes repeated (machine, agent) probes.
+    const toggleWorkflowExpanded = (wf: { id: string; steps: StepConfig[] }) => {
+        const willExpand = !expandedWf[wf.id];
+        setExpandedWf(prev => ({ ...prev, [wf.id]: willExpand }));
+        if (willExpand) {
+            const wfAgent = effectiveAgentForRow(wf.id, null);
+            if (wfAgent) probeModels(ovKey(wf.id, WF_LEVEL), wfAgent);
+            for (const step of wf.steps) {
+                if (step.kind === 'gate') continue;
+                const agent = effectiveAgentForRow(wf.id, step);
+                if (agent) probeModels(ovKey(wf.id, step.id), agent);
+            }
+        }
+    };
+
+    // Persist one row immediately. stepId === '' is the workflow-level row; the
+    // backend treats null agent+model as "clear" and deletes the row.
+    const persistOverride = async (
+        workflowId: string,
+        stepId: string,
+        next: { agent_kind: string | null; model: string | null },
+    ) => {
+        const key = ovKey(workflowId, stepId);
+        try {
+            await invoke('set_workflow_override', {
+                projectId: activeProject.id,
+                workflowId,
+                stepId: stepId || null,
+                agentKind: next.agent_kind,
+                model: next.model,
+            });
+            setSavedPulse(prev => ({ ...prev, [key]: true }));
+            setTimeout(() => setSavedPulse(prev => ({ ...prev, [key]: false })), 1400);
+        } catch (err) {
+            console.error('Failed to save workflow override:', err);
+            setOverridesError(formatError(err));
+        }
+    };
+
+    const handleAgentChange = (workflowId: string, stepId: string, step: StepConfig | null, agentKind: string) => {
+        // Changing the harness invalidates the probed model list, so clear the
+        // model selection and re-probe for the new effective agent.
+        const next = { agent_kind: agentKind || null, model: null };
+        const key = ovKey(workflowId, stepId);
+        setOverrides(prev => ({ ...prev, [key]: next }));
+        // When cleared, fall back to the inherited agent for probing.
+        const probeAgent = agentKind || (step ? inheritedAgent(workflowId, step) : (defaultAgentKind || ''));
+        probeModels(key, probeAgent);
+        persistOverride(workflowId, stepId, next);
+    };
+
+    const handleModelChange = (workflowId: string, stepId: string, model: string) => {
+        const key = ovKey(workflowId, stepId);
+        const current = overrides[key] ?? { agent_kind: null, model: null };
+        const next = { agent_kind: current.agent_kind, model: model || null };
+        setOverrides(prev => ({ ...prev, [key]: next }));
+        persistOverride(workflowId, stepId, next);
+    };
+
+    const handleClearRow = (workflowId: string, stepId: string) => {
+        const key = ovKey(workflowId, stepId);
+        const next = { agent_kind: null, model: null };
+        setOverrides(prev => ({ ...prev, [key]: next }));
+        persistOverride(workflowId, stepId, next);
+    };
+
+    // Does a workflow have any active override (workflow-level or any step)?
+    const workflowOverrideCount = (wf: { id: string; steps: StepConfig[] }): number => {
+        let n = 0;
+        if (overrides[ovKey(wf.id, WF_LEVEL)]?.agent_kind || overrides[ovKey(wf.id, WF_LEVEL)]?.model) n++;
+        for (const s of wf.steps) {
+            const o = overrides[ovKey(wf.id, s.id)];
+            if (o?.agent_kind || o?.model) n++;
+        }
+        return n;
+    };
+
+    // The harness + model + reset controls for a single row. `step === null`
+    // renders the workflow-level row (whose empty option = the project
+    // default); a step row's empty option = "Inherit", and shows what the step
+    // would resolve to so the user always sees the effective harness/model.
+    const renderOverrideRow = (wf: { id: string; steps: StepConfig[] }, step: StepConfig | null) => {
+        const stepId = step ? step.id : WF_LEVEL;
+        const key = ovKey(wf.id, stepId);
+        const ov = overrides[key] ?? { agent_kind: null, model: null };
+        const models = rowModels[key] ?? [];
+        const modelsLoading = Boolean(rowModelsLoading[key]);
+        const effectiveAgent = effectiveAgentForRow(wf.id, step);
+        const rowActive = Boolean(ov.agent_kind || ov.model);
+
+        const inhA = step ? inheritedAgent(wf.id, step) : (defaultAgentKind || '');
+        const inhM = step ? inheritedModel(wf.id, step) : (defaultModel || '');
+        const agentPlaceholder = step
+            ? `Inherit${inhA ? ` · ${inhA.replace(/-/g, ' ')}` : ' · built-in'}`
+            : 'Project default';
+        const modelEnabled = Boolean(effectiveAgent);
+        const modelPlaceholder = !modelEnabled
+            ? 'Pick a harness first'
+            : inhM
+                ? `Inherit · ${inhM}`
+                : 'Agent default model';
+
+        return (
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+                <div>
+                    <label className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                        <Cpu className="w-3 h-3" /> Harness
+                    </label>
+                    <select
+                        value={ov.agent_kind ?? ''}
+                        onChange={e => handleAgentChange(wf.id, stepId, step, e.target.value)}
+                        className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 capitalize"
+                    >
+                        <option value="">{agentPlaceholder}</option>
+                        {overrideAgentKinds.map(k => (
+                            <option key={k} value={k}>{k.replace(/-/g, ' ')}</option>
+                        ))}
+                        {ov.agent_kind && !overrideAgentKinds.includes(ov.agent_kind) && (
+                            <option value={ov.agent_kind}>{ov.agent_kind.replace(/-/g, ' ')} (unavailable)</option>
+                        )}
+                    </select>
+                </div>
+                <div>
+                    <label className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                        <Zap className="w-3 h-3" /> Model
+                    </label>
+                    {modelsLoading ? (
+                        <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-400 flex items-center gap-2">
+                            <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                            <span>Probing models…</span>
+                        </div>
+                    ) : (
+                        <select
+                            value={ov.model ?? ''}
+                            onChange={e => handleModelChange(wf.id, stepId, e.target.value)}
+                            disabled={!modelEnabled}
+                            className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            <option value="">{modelPlaceholder}</option>
+                            {models.map(m => (
+                                <option key={m.value} value={m.value}>{m.name}</option>
+                            ))}
+                            {ov.model && !models.some(m => m.value === ov.model) && (
+                                <option value={ov.model}>{ov.model} (custom)</option>
+                            )}
+                        </select>
+                    )}
+                </div>
+                <div className="flex items-center gap-2 pb-0.5">
+                    {savedPulse[key] && (
+                        <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-medium shrink-0 animate-fadeIn">
+                            <Check className="w-3 h-3" /> Saved
+                        </span>
+                    )}
+                    <button
+                        type="button"
+                        onClick={() => handleClearRow(wf.id, stepId)}
+                        disabled={!rowActive}
+                        title="Reset to inherited"
+                        className="p-2 rounded-lg text-slate-500 hover:text-white bg-white/5 border border-white/10 hover:bg-white/10 transition-all disabled:opacity-25 disabled:cursor-not-allowed shrink-0"
+                    >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                </div>
+            </div>
+        );
+    };
 
     // Artifact handling (migration V12). The orchestrator writes the
     // reports each step produces into the worktree under
@@ -320,6 +608,9 @@ export default function ProjectSettingsView({
                     setFeatureLifecycle(res.feature_lifecycle);
                     setDefaultAgentKind(res.default_agent_kind || '');
                     setDefaultModel(res.default_model || '');
+                    setDefaultLoopIterations(
+                        res.default_loop_iterations != null ? String(res.default_loop_iterations) : ''
+                    );
                     setArtifactSubdir(res.artifact_subdir || 'artifacts/');
                     setCommitArtifacts(Boolean(res.commit_artifacts));
                 }
@@ -586,6 +877,7 @@ export default function ProjectSettingsView({
                     feature_lifecycle: featureLifecycle,
                     default_agent_kind: defaultAgentKind || null,
                     default_model: defaultModel || null,
+                    default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null,
                     artifact_subdir: artifactSubdir || 'artifacts/',
                     commit_artifacts: commitArtifacts
                 }
@@ -665,6 +957,7 @@ export default function ProjectSettingsView({
                     feature_lifecycle: featureLifecycle,
                     default_agent_kind: defaultAgentKind || null,
                     default_model: defaultModel || null,
+                    default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null,
                     artifact_subdir: artifactSubdir || 'artifacts/',
                     commit_artifacts: commitArtifacts
                 }
@@ -1120,6 +1413,12 @@ export default function ProjectSettingsView({
                     className={`px-4 py-2.5 text-sm font-outfit font-medium border-b-2 transition-all ${activeTab === 'strategy' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
                 >
                     Agent Strategy & Policies
+                </button>
+                <button
+                    onClick={() => setActiveTab('overrides')}
+                    className={`px-4 py-2.5 text-sm font-outfit font-medium border-b-2 transition-all ${activeTab === 'overrides' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+                >
+                    Workflow Overrides
                 </button>
                 <button
                     onClick={() => setActiveTab('memory')}
@@ -1585,7 +1884,7 @@ export default function ProjectSettingsView({
                                     className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 capitalize"
                                 >
                                     <option value="">No default (Prompt on feature creation)</option>
-                                    {agentConfigs.filter(a => a.enabled && a.kind !== 'antigravity').map(a => (
+                                    {agentConfigs.filter(a => a.enabled && a.available && a.kind !== 'antigravity').map(a => (
                                         <option key={a.kind} value={a.kind}>
                                             {a.kind.replace(/-/g, ' ')}
                                         </option>
@@ -1627,6 +1926,23 @@ export default function ProjectSettingsView({
                                             />
                                         </div>
                                     )}
+                                </div>
+                                <div className="mt-4">
+                                    <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                                        Default Loop Iterations
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={10}
+                                        value={defaultLoopIterations}
+                                        onChange={e => setDefaultLoopIterations(e.target.value)}
+                                        placeholder="3 (engine default)"
+                                        className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600"
+                                    />
+                                    <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                                        How many times a validation step may loop back to implementation before giving up. Leave blank to use the engine default (3). Overridable per run.
+                                    </p>
                                 </div>
                             </div>
                         </div>
@@ -1771,6 +2087,130 @@ export default function ProjectSettingsView({
                                 ))}
                             </div>
                         </div>
+                    </div>
+                ) : activeTab === 'overrides' ? (
+                    <div className="space-y-4 animate-fadeIn">
+                        {/* Intro / explainer */}
+                        <div className="glass-panel p-6 rounded-xl space-y-2">
+                            <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                                <WorkflowIcon className="w-4 h-4 text-violet-400" /> Workflow &amp; Step Harness &amp; Model
+                            </h3>
+                            <p className="text-xs text-slate-400 leading-relaxed">
+                                Workflows are shared across projects. Pin a coding agent (<span className="text-slate-300">harness</span>) and model for a whole workflow — or a single step — <span className="text-white font-medium">when it runs in {activeProject.name}</span>. Models are probed live from your {computeType === 'remote' ? 'remote machine' : 'local machine'}, so you only pick what's actually available.
+                            </p>
+                            <p className="text-[11px] text-slate-500 leading-relaxed">
+                                Precedence, most specific first: a choice made at launch → a step override here → the workflow author's step setting → a workflow override here → the project default. Expand a workflow to override individual steps. Changes save instantly.
+                            </p>
+                        </div>
+
+                        {overridesError && (
+                            <div className="bg-ruby-500/10 border border-ruby-500/30 p-3 rounded-lg flex items-start gap-3">
+                                <ShieldAlert className="w-5 h-5 text-ruby-400 shrink-0" />
+                                <span className="text-sm text-ruby-200">{overridesError}</span>
+                            </div>
+                        )}
+
+                        {computeType === 'remote' && !remoteHost && (
+                            <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-lg flex items-start gap-3">
+                                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                                <span className="text-sm text-amber-200">Select a remote machine in <span className="font-medium">General &amp; Repositories</span> to probe available models.</span>
+                            </div>
+                        )}
+
+                        {isLoadingOverrides ? (
+                            <div className="flex items-center justify-center py-16">
+                                <RotateCw className="w-6 h-6 text-cyan-400 animate-spin" />
+                            </div>
+                        ) : workflows.length === 0 ? (
+                            <div className="text-center py-16 border border-dashed border-white/10 rounded-xl bg-black/20">
+                                <WorkflowIcon className="w-8 h-8 text-slate-600 mx-auto mb-3" />
+                                <p className="text-sm font-medium text-slate-400">No workflows found</p>
+                                <p className="text-xs text-slate-500 mt-1">Create a workflow first, then return here to override its harness and model.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                {workflows.map(wf => {
+                                    const count = workflowOverrideCount(wf);
+                                    const isActive = count > 0;
+                                    const expanded = Boolean(expandedWf[wf.id]);
+                                    const agentSteps = wf.steps.filter(s => s.kind !== 'gate');
+                                    const wfLevel = overrides[ovKey(wf.id, WF_LEVEL)];
+                                    return (
+                                        <div
+                                            key={wf.id}
+                                            className={`glass-panel rounded-xl border transition-all ${isActive ? 'border-violet-500/30 bg-violet-500/[0.03]' : 'border-white/5'}`}
+                                        >
+                                            {/* Header — click to expand */}
+                                            <div
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={() => toggleWorkflowExpanded(wf)}
+                                                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleWorkflowExpanded(wf); } }}
+                                                className="flex items-center gap-3 p-5 cursor-pointer select-none"
+                                            >
+                                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${isActive ? 'bg-violet-500/10 border-violet-500/30 text-violet-300' : 'bg-white/5 border-white/10 text-slate-400'}`}>
+                                                    <WorkflowIcon className="w-4 h-4" />
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span className="text-sm font-semibold text-white truncate">{wf.name}</span>
+                                                        {wfLevel?.agent_kind || wfLevel?.model ? (
+                                                            <span className="px-2 py-0.5 text-[9px] font-mono rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 uppercase tracking-wider shrink-0">All steps</span>
+                                                        ) : null}
+                                                        {(() => {
+                                                            const stepCount = count - (wfLevel?.agent_kind || wfLevel?.model ? 1 : 0);
+                                                            return stepCount > 0 ? (
+                                                                <span className="px-2 py-0.5 text-[9px] font-mono rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 uppercase tracking-wider shrink-0">{stepCount} step{stepCount !== 1 ? 's' : ''}</span>
+                                                            ) : null;
+                                                        })()}
+                                                    </div>
+                                                    {wf.description && (
+                                                        <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{wf.description}</p>
+                                                    )}
+                                                </div>
+                                                <span className="text-[10px] text-slate-500 font-mono shrink-0">{agentSteps.length} step{agentSteps.length !== 1 ? 's' : ''}</span>
+                                                {expanded ? <ChevronUp className="w-4 h-4 text-slate-500 shrink-0" /> : <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />}
+                                            </div>
+
+                                            {expanded && (
+                                                <div className="px-5 pb-5 space-y-5 border-t border-white/5 pt-4">
+                                                    {/* Workflow-level (all steps) */}
+                                                    <div>
+                                                        <div className="flex items-center gap-2 mb-2">
+                                                            <span className="text-[10px] font-bold text-violet-300/80 uppercase tracking-wider">Applies to all steps</span>
+                                                            <div className="h-px flex-1 bg-white/5" />
+                                                        </div>
+                                                        {renderOverrideRow(wf, null)}
+                                                    </div>
+
+                                                    {/* Per-step */}
+                                                    {agentSteps.length > 0 && (
+                                                        <div>
+                                                            <div className="flex items-center gap-2 mb-3">
+                                                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Per-step overrides</span>
+                                                                <div className="h-px flex-1 bg-white/5" />
+                                                            </div>
+                                                            <div className="space-y-4">
+                                                                {agentSteps.map((step, idx) => (
+                                                                    <div key={step.id} className="rounded-lg border border-white/5 bg-black/20 p-3.5">
+                                                                        <div className="flex items-center gap-2 mb-3">
+                                                                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/5 text-slate-400 shrink-0">{idx + 1}</span>
+                                                                            <span className="text-xs font-semibold text-slate-200 truncate">{step.title}</span>
+                                                                            <span className={`px-1.5 py-0.5 text-[9px] font-mono rounded uppercase tracking-wider shrink-0 ${step.kind === 'parallel' ? 'bg-violet-500/10 text-violet-300' : 'bg-cyan-500/10 text-cyan-300'}`}>{step.kind}</span>
+                                                                        </div>
+                                                                        {renderOverrideRow(wf, step)}
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fadeIn">

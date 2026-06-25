@@ -11,13 +11,15 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
         let iter = stmt
             .query_map(params![project_id.0], |row| {
                 let commit_artifacts: Option<i64> = row.get(13)?;
+                let loop_iterations: Option<i64> = row.get(14)?;
+                let step_overrides_json: Option<String> = row.get(15)?;
                 Ok(Feature {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -33,6 +35,10 @@ impl FeatureRepository for SqliteAdapter {
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
+                    loop_iterations: loop_iterations.map(|v| v as u32),
+                    step_overrides: step_overrides_json
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default(),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -47,13 +53,15 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json
                  FROM features WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
             .query_map(params![id.0], |row| {
                 let commit_artifacts: Option<i64> = row.get(13)?;
+                let loop_iterations: Option<i64> = row.get(14)?;
+                let step_overrides_json: Option<String> = row.get(15)?;
                 Ok(Feature {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -69,6 +77,10 @@ impl FeatureRepository for SqliteAdapter {
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
+                    loop_iterations: loop_iterations.map(|v| v as u32),
+                    step_overrides: step_overrides_json
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default(),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -82,13 +94,19 @@ impl FeatureRepository for SqliteAdapter {
     fn add(&self, f: Feature) -> Result<(), String> {
         let conn = self.conn.lock()?;
         let commit_artifacts: Option<i64> = f.commit_artifacts.map(|v| if v { 1 } else { 0 });
+        let loop_iterations: Option<i64> = f.loop_iterations.map(|v| v as i64);
+        let step_overrides_json: Option<String> = if f.step_overrides.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&f.step_overrides).ok()
+        };
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
                 f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
-                f.mr_url, f.mr_state, commit_artifacts
+                f.mr_url, f.mr_state, commit_artifacts, loop_iterations, step_overrides_json
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -171,13 +189,15 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json
                  FROM features WHERE mr_state = 'open' AND mr_url IS NOT NULL ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
         let iter = stmt
             .query_map([], |row| {
                 let commit_artifacts: Option<i64> = row.get(13)?;
+                let loop_iterations: Option<i64> = row.get(14)?;
+                let step_overrides_json: Option<String> = row.get(15)?;
                 Ok(Feature {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -193,6 +213,10 @@ impl FeatureRepository for SqliteAdapter {
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
+                    loop_iterations: loop_iterations.map(|v| v as u32),
+                    step_overrides: step_overrides_json
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default(),
                 })
             })
             .map_err(|e| e.to_string())?;

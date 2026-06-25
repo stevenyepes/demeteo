@@ -6,11 +6,19 @@ use tauri::State;
 
 #[tauri::command]
 pub fn get_machines(ctx: State<'_, AppContext>) -> Result<Vec<Machine>, AppError> {
-    ctx.machines.get_machines().map_err(AppError::from)
+    let mut list = ctx.machines.get_machines().map_err(AppError::from)?;
+    // Strip any stale local-machine rows that survived migration.
+    list.retain(|m| m.auth_type != "local");
+    Ok(list)
 }
 
 #[tauri::command]
 pub fn add_machine(ctx: State<'_, AppContext>, machine: Machine) -> Result<(), AppError> {
+    if machine.auth_type == "local" {
+        return Err(AppError::from(
+            "The local machine is built-in and cannot be created manually.".to_string(),
+        ));
+    }
     ctx.machines.add(machine).map_err(AppError::from)
 }
 
@@ -23,6 +31,11 @@ pub fn delete_machine(ctx: State<'_, AppContext>, id: String) -> Result<(), AppE
 
 #[tauri::command]
 pub fn update_machine(ctx: State<'_, AppContext>, machine: Machine) -> Result<(), AppError> {
+    if machine.auth_type == "local" {
+        return Err(AppError::from(
+            "The local machine is built-in and cannot be modified.".to_string(),
+        ));
+    }
     ctx.machines.update(machine).map_err(AppError::from)
 }
 

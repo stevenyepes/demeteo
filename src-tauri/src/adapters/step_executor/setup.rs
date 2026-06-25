@@ -174,5 +174,6 @@ pub(crate) fn fetch_default_settings() -> ProjectSettings {
         default_model: None,
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
+        default_loop_iterations: None,
     }
 }

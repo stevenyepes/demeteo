@@ -253,6 +253,8 @@ async fn test_executor_gate_decide() {
             mr_state: Some("none".to_string()),
             created_at: now,
             commit_artifacts: None,
+            loop_iterations: None,
+            step_overrides: Vec::new(),
         })
         .unwrap();
 

@@ -20,6 +20,26 @@ use crate::ports::notification::NotificationPort;
 pub(crate) mod failure;
 pub(crate) mod verifier;
 
+/// The default `on_failure` retry-loop budget when neither the run override
+/// (`Feature::loop_iterations`), the project setting
+/// (`ProjectSettings::default_loop_iterations`), nor the step's own
+/// `max_iterations` is set.
+pub(crate) const DEFAULT_LOOP_ITERATIONS: u32 = 3;
+
+/// Feedback captured when a step fails and the loop redirects back to an
+/// earlier step. Injected into the retried step's prompt as
+/// `{{retry_feedback}}` / `{{iteration}}` / `{{max_iterations}}` so the
+/// retry isn't blind. Held in-memory for the lifetime of a single run.
+#[derive(Clone)]
+pub(crate) struct RetryContext {
+    /// Raw failure / verifier reason from the step that triggered the loop.
+    pub feedback: String,
+    /// 1-based attempt number we're now starting.
+    pub iteration: u32,
+    /// Effective max iterations for this loop.
+    pub max: u32,
+}
+
 /// Holds all shared state for a single feature execution run.
 pub(crate) struct ExecutionDriver {
     // Repository / service Arcs
@@ -69,6 +89,188 @@ pub(crate) struct ExecutionDriver {
     /// Resolved at feature-start time as
     /// `features.commit_artifacts ?? settings.commit_artifacts`.
     pub commit_artifacts: bool,
+
+    // --- Agent/model resolution inputs (snapshotted at feature start) ---
+    /// Feature-wide run override of the agent kind (the run modal's
+    /// "apply to all"). Beats the workflow step but loses to a per-step
+    /// override. `None` = not set.
+    pub feature_agent_kind: Option<String>,
+    /// Feature-wide run override of the model. Same precedence as
+    /// `feature_agent_kind`.
+    pub feature_model: Option<String>,
+    /// Per-step agent/model overrides chosen at launch (highest precedence).
+    pub step_overrides: Vec<crate::domain::models::StepOverride>,
+    /// Project default agent kind (`ProjectSettings::default_agent_kind`).
+    pub default_agent_kind: Option<String>,
+    /// Project default model (`ProjectSettings::default_model`).
+    pub default_model: Option<String>,
+
+    // --- Loop budget inputs ---
+    /// Per-run override of the loop budget (`Feature::loop_iterations`).
+    pub loop_iterations_override: Option<u32>,
+    /// Project default loop budget (`ProjectSettings::default_loop_iterations`).
+    pub project_default_loop_iterations: Option<u32>,
+
+    /// Set when a step fails and the loop redirects to an earlier step;
+    /// consumed by the next step's prompt build, then cleared.
+    pub retry_ctx: Option<RetryContext>,
+}
+
+impl ExecutionDriver {
+    /// Resolve the effective `(agent_kind, model)` for a given step.
+    ///
+    /// Precedence (first non-empty wins):
+    ///   per-step run override → feature-wide run override → workflow step
+    ///   → project default → built-in (`"opencode"` for the agent; no model).
+    pub(crate) fn resolve_step_agent(&self, step_conf: &StepConfig) -> (String, Option<String>) {
+        let ov = self
+            .step_overrides
+            .iter()
+            .find(|o| o.step_id == step_conf.id.0);
+        resolve_agent_model(
+            ov,
+            self.feature_agent_kind.as_deref(),
+            self.feature_model.as_deref(),
+            step_conf,
+            self.default_agent_kind.as_deref(),
+            self.default_model.as_deref(),
+        )
+    }
+
+    /// Effective loop-iteration budget for a step with `on_failure` set.
+    /// Precedence: run override → project default → step `max_iterations`
+    /// → engine default (3).
+    pub(crate) fn effective_loop_iterations(&self, step_conf: &StepConfig) -> u32 {
+        resolve_loop_iterations(
+            self.loop_iterations_override,
+            self.project_default_loop_iterations,
+            step_conf.max_iterations,
+        )
+    }
+}
+
+/// Pure agent/model resolution. Precedence (first non-empty wins):
+/// per-step run override → feature-wide run override → workflow step →
+/// project default → built-in (`"opencode"` agent; no model).
+pub(crate) fn resolve_agent_model(
+    step_override: Option<&crate::domain::models::StepOverride>,
+    feature_agent: Option<&str>,
+    feature_model: Option<&str>,
+    step_conf: &StepConfig,
+    default_agent: Option<&str>,
+    default_model: Option<&str>,
+) -> (String, Option<String>) {
+    let agent = step_override
+        .and_then(|o| o.agent_kind.clone())
+        .or_else(|| feature_agent.map(str::to_string))
+        .or_else(|| step_conf.agent_kind.clone())
+        .or_else(|| default_agent.map(str::to_string))
+        .unwrap_or_else(|| "opencode".to_string());
+
+    let model = step_override
+        .and_then(|o| o.model.clone())
+        .or_else(|| feature_model.map(str::to_string))
+        .or_else(|| step_conf.model.clone())
+        .or_else(|| default_model.map(str::to_string));
+
+    (agent, model)
+}
+
+/// Pure loop-budget resolution: run override → project default → step
+/// `max_iterations` → engine default (3).
+pub(crate) fn resolve_loop_iterations(
+    run_override: Option<u32>,
+    project_default: Option<u32>,
+    step_max: Option<u32>,
+) -> u32 {
+    run_override
+        .or(project_default)
+        .or(step_max)
+        .unwrap_or(DEFAULT_LOOP_ITERATIONS)
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    use super::{resolve_agent_model, resolve_loop_iterations};
+    use crate::domain::ids::StepId;
+    use crate::domain::models::{StepConfig, StepOverride};
+
+    fn step(agent: Option<&str>, model: Option<&str>) -> StepConfig {
+        StepConfig {
+            id: StepId::from("s-impl".to_string()),
+            kind: "agent".to_string(),
+            title: "Implement".to_string(),
+            agent_kind: agent.map(str::to_string),
+            model: model.map(str::to_string),
+            prompt_template: None,
+            artifact_mode: "full".to_string(),
+            on_failure: None,
+            max_iterations: None,
+            artifacts: None,
+            verifier: None,
+        }
+    }
+
+    #[test]
+    fn per_step_override_wins() {
+        let ov = StepOverride {
+            step_id: "s-impl".to_string(),
+            agent_kind: Some("claude-code".to_string()),
+            model: Some("claude-opus-4-8".to_string()),
+        };
+        let (a, m) = resolve_agent_model(
+            Some(&ov),
+            Some("hermes"),
+            Some("feat-model"),
+            &step(Some("opencode"), Some("step-model")),
+            Some("opencode"),
+            Some("proj-model"),
+        );
+        assert_eq!(a, "claude-code");
+        assert_eq!(m.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn falls_through_to_workflow_then_project_then_default() {
+        // No per-step, no feature-wide → workflow step value wins.
+        let (a, m) = resolve_agent_model(
+            None,
+            None,
+            None,
+            &step(Some("claude-code"), None),
+            Some("opencode"),
+            Some("proj-model"),
+        );
+        assert_eq!(a, "claude-code");
+        // model: step has none → project default fills it.
+        assert_eq!(m.as_deref(), Some("proj-model"));
+
+        // Nothing set anywhere → built-in opencode, no model.
+        let (a2, m2) = resolve_agent_model(None, None, None, &step(None, None), None, None);
+        assert_eq!(a2, "opencode");
+        assert_eq!(m2, None);
+    }
+
+    #[test]
+    fn feature_wide_beats_workflow_but_loses_to_per_step() {
+        let (a, _) = resolve_agent_model(
+            None,
+            Some("hermes"),
+            None,
+            &step(Some("opencode"), None),
+            None,
+            None,
+        );
+        assert_eq!(a, "hermes");
+    }
+
+    #[test]
+    fn loop_budget_precedence() {
+        assert_eq!(resolve_loop_iterations(Some(7), Some(5), Some(2)), 7);
+        assert_eq!(resolve_loop_iterations(None, Some(5), Some(2)), 5);
+        assert_eq!(resolve_loop_iterations(None, None, Some(2)), 2);
+        assert_eq!(resolve_loop_iterations(None, None, None), 3);
+    }
 }
 
 impl ExecutionDriver {
@@ -194,6 +396,10 @@ impl ExecutionDriver {
                         None,
                     );
                     self.step_index += 1;
+                    // Retry feedback is scoped to the single redirected step;
+                    // once it completes, clear it so later steps don't inherit
+                    // stale feedback.
+                    self.retry_ctx = None;
                 }
                 crate::adapters::step_executor::steps::StepOutcome::Failed(msg) => {
                     let is_cancelled = *self.cancel_watch.borrow();
@@ -221,6 +427,18 @@ impl ExecutionDriver {
                             accumulated_tokens,
                             step_start,
                         ) {
+                            // Capture the failure so the retried step's prompt
+                            // isn't blind. `iteration_count` was just bumped to
+                            // `already + 1` in evaluate_on_failure, so the
+                            // attempt now starting is that value.
+                            let max = self.effective_loop_iterations(step_conf);
+                            let iteration = step_exec.iteration_count + 1;
+                            let feedback = msg.clone();
+                            self.retry_ctx = Some(RetryContext {
+                                feedback,
+                                iteration,
+                                max,
+                            });
                             self.step_index = redirect_idx;
                             continue;
                         }
