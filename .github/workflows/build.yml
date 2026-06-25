@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ── Linux system dependencies ──────────────────────────────────
       - name: Install Linux dependencies
@@ -54,7 +54,7 @@ jobs:
 
       # ── Node.js ────────────────────────────────────────────────────
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -85,7 +85,7 @@ jobs:
       # The release job downloads and merges them.
       - name: Upload artifacts (Linux)
         if: matrix.platform == 'ubuntu-22.04'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: binaries-${{ matrix.label }}
           path: |
@@ -97,7 +97,7 @@ jobs:
 
       - name: Upload artifacts (macOS)
         if: startsWith(matrix.platform, 'macos')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: binaries-${{ matrix.label }}
           path: |
@@ -107,7 +107,7 @@ jobs:
 
       - name: Upload artifacts (Windows)
         if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: binaries-${{ matrix.label }}
           path: |
@@ -127,10 +127,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
           pattern: binaries-*
