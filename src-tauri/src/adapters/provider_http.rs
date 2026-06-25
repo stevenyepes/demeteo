@@ -43,7 +43,7 @@ impl ProviderHttpPort for ReqwestProviderHttpAdapter {
     ) -> Result<ProviderUserInfo, AppError> {
         let host = sanitize_host(host);
         let url = if kind.to_lowercase() == "github" {
-            let h = if host.is_empty() {
+            let h = if host.is_empty() || host == "github.com" {
                 "api.github.com"
             } else {
                 &host
@@ -100,7 +100,7 @@ impl ProviderHttpPort for ReqwestProviderHttpAdapter {
     ) -> Result<Vec<RepoSummary>, AppError> {
         let host = sanitize_host(host);
         let url = if kind.to_lowercase() == "github" {
-            let h = if host.is_empty() {
+            let h = if host.is_empty() || host == "github.com" {
                 "api.github.com"
             } else {
                 &host
