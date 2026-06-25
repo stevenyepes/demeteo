@@ -124,6 +124,7 @@ pub fn run() {
                 .path()
                 .app_local_data_dir()
                 .expect("Failed to get local data dir");
+            eprintln!("[demeteo] data dir: {}", app_data_dir.display());
             let conn = db::init_db(app_data_dir.clone()).expect("Failed to initialize database");
 
             let db_adapter = Arc::new(

@@ -67,7 +67,7 @@ npm install
 npm run dev:tauri
 ```
 
-On first launch the local SQLite database is created and migrated automatically (`~/.local/share/demeteo/demeteo.db` on Linux; platform equivalent elsewhere).
+On first launch the local SQLite database is created and migrated automatically (`~/.local/share/com.stvcloud.demeteo/demeteo.db` on Linux; platform equivalent elsewhere).
 
 ## Development
 
@@ -80,6 +80,8 @@ On first launch the local SQLite database is created and migrated automatically 
 | Rust check | `cd src-tauri && cargo check` |
 | Rust fmt | `cd src-tauri && cargo fmt` |
 | Rust lint | `cd src-tauri && cargo clippy -- -D warnings` |
+
+> **Important:** always use `npm run dev:tauri`, not `npm run tauri dev`. The `dev:tauri` script passes `--config src-tauri/tauri.dev.conf.json` which sets a separate app identifier (`com.stvcloud.demeteo.dev`), keeping the dev database and config isolated from the stable installed app.
 
 A change is considered done when `tsc --noEmit` and `cargo clippy` both exit 0 and the app boots without console errors.
 
