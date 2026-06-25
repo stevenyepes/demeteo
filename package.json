@@ -13,8 +13,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "dev:tauri": "tauri dev",
-    "dev:tauri:sw": "DEMETEO_DISABLE_GPU=1 tauri dev"
+    "dev:tauri": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "dev:tauri:sw": "DEMETEO_DISABLE_GPU=1 tauri dev --config src-tauri/tauri.dev.conf.json"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
