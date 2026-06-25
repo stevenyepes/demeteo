@@ -1,5 +1,7 @@
 # Demeteo
 
+![Demeteo](resources/images/demeto_1.png)
+
 Desktop control plane for orchestrating local and remote AI coding agents.
 
 Describe a feature in plain language. Demeteo decomposes it into a versioned **Workflow** of **Steps**, runs each step in an isolated Git worktree via a coding agent, and presents **Gates** — human-approval checkpoints — before merging results back.
