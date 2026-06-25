@@ -1,39 +1,48 @@
 [package]
 name = "demeteo"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Desktop control plane for orchestrating local and remote AI coding agents"
+authors = ["Steven Yepes"]
+license = "MIT"
+repository = "https://github.com/stevenyepes/demeteo"
+homepage = "https://github.com/stevenyepes/demeteo"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
+crate-type = ["cdylib", "rlib", "staticlib"]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "demeteo_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
+async-trait = "0.1"
+keyring = {
+  version = "3",
+  features = ["apple-native", "sync-secret-service", "windows-native"]
+}
+parking_lot = "0.12"
+portable-pty = "0.8"
+refinery = { version = "0.8", features = ["rusqlite"] }
+reqwest = {
+  version = "0.12",
+  default-features = false,
+  features = ["blocking", "json", "rustls-tls"]
+}
+rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ssh2 = "0.9"
-rusqlite = { version = "0.31", features = ["bundled"] }
-refinery = { version = "0.8", features = ["rusqlite"] }
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2.7.1"
+tauri-plugin-opener = "2"
+thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-thiserror = "1"
-tauri-plugin-dialog = "2.7.1"
-reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
-async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-parking_lot = "0.12"
-portable-pty = "0.8"
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

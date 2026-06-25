@@ -29,5 +29,9 @@ graphify-out/cache/
 graphify-out/run_semantic.py
 
 # Local SQLite dev databases (per-machine, never share)
+demeteo.db
+demeteo.db.*
+demeteo.db.bak.*
+demeteo.db.wiped.*
 src-tauri/demeteo.db
 src-tauri/demeteo.db.*
