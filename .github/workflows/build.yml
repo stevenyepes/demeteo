@@ -48,7 +48,7 @@ jobs:
       - name: Bump rc counter
         id: bump
         run: |
-          node -e "
+          output=$(node -e "
             const fs = require('fs');
             const path = '.release/rc-counter.json';
             const counter = JSON.parse(fs.readFileSync(path, 'utf8'));
@@ -59,8 +59,10 @@ jobs:
             console.log('base=' + counter.base);
             console.log('rc=' + nextRc);
             console.log('next_version=' + version);
-            console.log('::notice::Next nightly: ' + version);
-          " >> "$GITHUB_OUTPUT"
+          ")
+          echo "$output" >> "$GITHUB_OUTPUT"
+          next_version=$(awk -F= '/^next_version=/{print $2}' <<< "$output")
+          echo "::notice::Next nightly: $next_version"
 
       - name: Configure git
         run: |
