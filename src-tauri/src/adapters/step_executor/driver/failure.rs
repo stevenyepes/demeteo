@@ -32,6 +32,11 @@ impl ExecutionDriver {
             "failed",
             self.start_time,
         );
+        self.capture_signal(
+            Some(step_exec.id.0.clone()),
+            crate::domain::memory::SignalKind::Failure,
+            format!("Step '{}' failed: {}", step_exec.step_id.0, msg),
+        );
     }
 
     pub(crate) async fn cancel_feature(&self) {

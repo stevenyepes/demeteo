@@ -31,6 +31,86 @@ pub struct ExecutionContext {
 }
 
 impl DagStepExecutor {
+    /// Build the `project_memory` markdown injected into agent prompts.
+    ///
+    /// When the memory agent is configured, retrieves the semantically most
+    /// relevant memories for this feature — cosine similarity of the embedded
+    /// `query` (feature description) × the memory's confidence — and records
+    /// their use. Falls back to the legacy confidence/recency ordering when the
+    /// agent is disabled or embedding fails, so prompts always get memory.
+    pub(crate) async fn build_memory_md(&self, project_id: &ProjectId, query: &str) -> String {
+        use crate::domain::memory::{cosine_similarity, MemorySource, ProjectMemoryEntry};
+
+        let memories = self.memory.memory_list(project_id, 200).unwrap_or_default();
+        if memories.is_empty() {
+            return String::new();
+        }
+        let config = crate::application::memory::load_config(self.app_settings.as_ref());
+
+        let selected: Vec<&ProjectMemoryEntry> = if config.is_usable() && !query.trim().is_empty() {
+            let api_key = crate::application::memory::load_api_key();
+            match self
+                .memory_llm
+                .embed(
+                    config.embed_endpoint_or_chat(),
+                    &config.embed_model,
+                    api_key.as_deref(),
+                    vec![query.to_string()],
+                )
+                .await
+            {
+                Ok(mut vecs) if !vecs.is_empty() => {
+                    let q = vecs.remove(0);
+                    let mut scored: Vec<(&ProjectMemoryEntry, f32)> = memories
+                        .iter()
+                        .filter(|m| m.confidence >= config.min_confidence)
+                        .filter_map(|m| {
+                            m.embedding
+                                .as_ref()
+                                .map(|e| (m, cosine_similarity(&q, e) * m.confidence as f32))
+                        })
+                        .collect();
+                    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+                    scored
+                        .into_iter()
+                        .take(config.top_k)
+                        .map(|(m, _)| m)
+                        .collect()
+                }
+                _ => memories.iter().take(20).collect(),
+            }
+        } else {
+            memories.iter().take(20).collect()
+        };
+
+        let used_ids: Vec<String> = selected.iter().map(|m| m.id.clone()).collect();
+        let _ = self
+            .memory
+            .memory_mark_used(&used_ids, crate::paths::now_ms());
+
+        let mut md = String::new();
+        for m in selected {
+            let source_label = match m.source {
+                MemorySource::Agent => "Agent",
+                MemorySource::Human => "Human",
+            };
+            let body = m.statement.as_deref().unwrap_or(&m.value);
+            match m.memory_type {
+                Some(t) => md.push_str(&format!(
+                    "- [{}] {} (Source: {})\n",
+                    t.as_str(),
+                    body,
+                    source_label
+                )),
+                None => md.push_str(&format!(
+                    "- **{}**: {} (Source: {})\n",
+                    m.key, body, source_label
+                )),
+            }
+        }
+        md
+    }
+
     pub(crate) async fn resolve_execution_context(
         &self,
         feature_id: &str,
@@ -198,21 +278,7 @@ impl DagStepExecutor {
             .map(|r| r.repo_path.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        let memories = self
-            .memory
-            .memory_list(&project_id_typed, 100)
-            .unwrap_or_default();
-        let mut memory_md = String::new();
-        for m in memories {
-            let source_label = match m.source {
-                crate::domain::memory::MemorySource::Agent => "Agent",
-                crate::domain::memory::MemorySource::Human => "Human",
-            };
-            memory_md.push_str(&format!(
-                "- **{}**: {} (Source: {})\n",
-                m.key, m.value, source_label
-            ));
-        }
+        let memory_md = self.build_memory_md(&project_id_typed, description).await;
 
         let base_ctx = build_base_ctx(
             description,

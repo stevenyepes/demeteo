@@ -274,6 +274,21 @@ pub trait WorkflowRepository: Send + Sync {
 /// `gate` step execution).
 pub trait GateRepository: Send + Sync {
     fn create(&self, g: GateDecision) -> Result<(), String>;
+    /// Insert or update a decision for a step execution. Idempotent: the
+    /// row is keyed on `step_execution_id` (UNIQUE), so re-deliveries
+    /// overwrite cleanly. Use this whenever the caller can't guarantee
+    /// the row doesn't already exist (e.g. a `gate_decide` arriving after
+    /// the driver restarted).
+    fn upsert_decision(
+        &self,
+        step_execution_id: &StepExecutionId,
+        decision: &str,
+        feedback: Option<&str>,
+        created_at: i64,
+    ) -> Result<(), String>;
+    /// Legacy UPDATE-only path kept for callers that want to differentiate
+    /// "row must exist" from "create-or-update". Prefer `upsert_decision`
+    /// in new code.
     fn decide(
         &self,
         step_execution_id: &StepExecutionId,
@@ -284,6 +299,14 @@ pub trait GateRepository: Send + Sync {
     fn latest_decided_for_feature(
         &self,
         feature_id: &FeatureId,
+    ) -> Result<Option<GateDecision>, String>;
+    /// Latest decided-or-not decision row for a specific step execution.
+    /// Used by the driver to reconcile a gate decision that arrived
+    /// while the driver was down (app restart, race between event emit
+    /// and listener registration). Returns `None` if no row exists.
+    fn latest_for_step(
+        &self,
+        step_execution_id: &StepExecutionId,
     ) -> Result<Option<GateDecision>, String>;
     /// Remove the gate decision row for a given step execution.
     /// Used when replaying from a gate step to clear its pending/decided state.

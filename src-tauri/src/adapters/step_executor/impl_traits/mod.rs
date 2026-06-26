@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
 
@@ -41,6 +42,15 @@ impl DagStepExecutor {
         feature_id: &str,
         ctx: ExecutionContext,
     ) -> Result<(), String> {
+        let f_id = FeatureId::from(feature_id.to_string());
+        if self.driver_registry.is_live(&f_id) {
+            // Already driving — refuse to start a second driver for the
+            // same feature. Callers that want to retry should use
+            // `replay_steps_from`, which cancels the old run first.
+            return Ok(());
+        }
+        self.driver_registry.register(f_id.clone());
+
         let (cancel_tx, cancel_rx) = watch::channel(false);
         self.cancel_senders
             .lock()
@@ -53,11 +63,7 @@ impl DagStepExecutor {
         let default_agent_kind = ctx.settings.default_agent_kind.clone();
         let default_model = ctx.settings.default_model.clone();
         let project_default_loop_iterations = ctx.settings.default_loop_iterations;
-        let feature_row = self
-            .features
-            .get(&FeatureId::from(feature_id.to_string()))
-            .ok()
-            .flatten();
+        let feature_row = self.features.get(&f_id).ok().flatten();
         let feature_agent_kind = feature_row.as_ref().and_then(|f| f.agent_kind.clone());
         let feature_model = feature_row.as_ref().and_then(|f| f.model.clone());
         let loop_iterations_override = feature_row.as_ref().and_then(|f| f.loop_iterations);
@@ -70,18 +76,18 @@ impl DagStepExecutor {
             features: self.features.clone(),
             gates: self.gates.clone(),
             projects: self.projects.clone(),
-            memory: self.memory.clone(),
+            signals: self.signals.clone(),
             notif: self.notif.clone(),
             registry: self.registry.clone(),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             artifacts: self.artifacts.clone(),
             app_local_data_dir: self.app_local_data_dir.clone(),
-            workspace_dir: self.workspace_dir.clone(),
             git_ops: GitOpsHelper::new(self.app_settings.clone(), self.exec.clone()),
             merge_executor: self.merge_executor.clone(),
-            gate_senders: self.gate_senders.clone(),
-            f_id: FeatureId::from(feature_id.to_string()),
+            gate_waiters: self.gate_waiters.clone(),
+            driver_registry: self.driver_registry.clone(),
+            f_id: f_id.clone(),
             f_id_str: feature_id.to_string(),
             machine_id_opt: ctx.machine_id_opt,
             target_dir: ctx.target_dir,
@@ -103,9 +109,47 @@ impl DagStepExecutor {
             retry_ctx: None,
         };
 
-        tokio::spawn(driver.run());
+        let registry = self.driver_registry.clone();
+        tokio::spawn(async move {
+            driver.run().await;
+            registry.deregister(&f_id);
+        });
 
         Ok(())
+    }
+
+    /// Idempotently make sure a driver is running for `feature_id`. If
+    /// one is already live, no-op. Otherwise re-resolve the context
+    /// (replays, resumes, gate-decide-after-restart) and start one.
+    ///
+    /// This is the single recovery primitive used by `gate_decide`,
+    /// `startup_watchdog`, and any future code path that needs a feature
+    /// to make forward progress.
+    pub async fn ensure_driver_running(&self, feature_id: &str) -> Result<(), String> {
+        let f_id = FeatureId::from(feature_id.to_string());
+        if self.driver_registry.is_live(&f_id) {
+            return Ok(());
+        }
+
+        let feature = self
+            .features
+            .get(&f_id)?
+            .ok_or_else(|| format!("Feature not found: {}", feature_id))?;
+        let workflow_id = feature
+            .workflow_id
+            .clone()
+            .ok_or_else(|| format!("Feature '{}' has no workflow_id; cannot resume", feature_id))?;
+
+        let ctx = self
+            .resolve_execution_context(
+                feature_id,
+                &feature.project_id.0,
+                workflow_id.as_str(),
+                &feature.title,
+            )
+            .await?;
+
+        self.start_execution_with_ctx(feature_id, ctx).await
     }
 }
 
@@ -358,23 +402,63 @@ impl GatePresenter for DagStepExecutor {
         feedback: Option<&str>,
     ) -> Result<(), String> {
         let se_id = StepExecutionId::from(step_execution_id.to_string());
-        self.gates.decide(&se_id, decision, feedback)?;
 
-        if let Some(tx) = self.gate_senders.lock().unwrap().remove(step_execution_id) {
-            let gd = GateDecision {
-                id: GateDecisionId::from(format!("gd-{}", step_execution_id)),
-                step_execution_id: se_id,
-                decision: Some(decision.to_string()),
-                feedback: feedback.map(|s| s.to_string()),
-                created_at: paths::now_ms(),
-            };
-            let _ = tx.send(gd);
+        // 1. Durable: write the decision to the DB. UPSERT so the call
+        //    is idempotent whether or not a row already exists. This is
+        //    the source of truth — everything below is a wakeup hint.
+        self.gates
+            .upsert_decision(&se_id, decision, feedback, paths::now_ms())?;
+
+        let gd = GateDecision {
+            id: GateDecisionId::from(format!("gd-{}", step_execution_id)),
+            step_execution_id: se_id.clone(),
+            decision: Some(decision.to_string()),
+            feedback: feedback.map(|s| s.to_string()),
+            created_at: paths::now_ms(),
+        };
+
+        // 2. Fast path: if the driver is alive and waiting on this
+        //    step's waiter, deliver the decision in-memory. Missing
+        //    waiter is *not* an error — the DB row will be picked up
+        //    when the driver reconciles on its next startup.
+        if let Some(waiter) = self
+            .gate_waiters
+            .lock()
+            .unwrap()
+            .get(step_execution_id)
+            .cloned()
+        {
+            waiter.deliver(gd);
         }
+
+        // 3. Self-healing: if the driver is dead (app restart, race,
+        //    manual interruption), try to spawn one. The new driver
+        //    will reconcile the decided gate on its first loop
+        //    iteration. Best-effort: the decision is already durable
+        //    in the DB, so a spawn failure (missing project, path
+        //    probe failure, etc.) is logged but does NOT roll back
+        //    the decision — the next legitimate operation will retry.
+        if let Ok(Some(step_exec)) = self.features.step_get(&se_id) {
+            let f_id = step_exec.feature_id.0.clone();
+            if let Err(e) = self.ensure_driver_running(&f_id).await {
+                eprintln!(
+                    "gate_decide: failed to ensure driver running for {}: {} \
+                     (decision is durable; will retry on next operation)",
+                    f_id, e
+                );
+            }
+        }
+
         Ok(())
     }
 }
 
 impl DagStepExecutor {
+    /// Reconcile DB + notifications for any features that were left
+    /// mid-run by a previous process. Synchronous (no driver spawns) so
+    /// it can be called from the Tauri setup hook before the runtime
+    /// hands control to user-driven tasks. Pair with
+    /// [`resume_interrupted_features`] which spawns the actual drivers.
     pub fn startup_watchdog(&self) {
         if let Ok(projects) = self.projects.get_projects() {
             for p in projects {
@@ -436,6 +520,34 @@ impl DagStepExecutor {
                                 });
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resume every feature that [`startup_watchdog`] marked as
+    /// `awaiting_gate`. Idempotent via [`DriverRegistry`]: if the
+    /// runtime already has a driver alive for a feature, it's a no-op.
+    ///
+    /// Called once from the Tauri setup hook on a background task so
+    /// that the gate prompts the watchdog re-emitted are actually
+    /// backed by a live driver.
+    pub async fn resume_interrupted_features(self: Arc<Self>) {
+        let Ok(projects) = self.projects.get_projects() else {
+            return;
+        };
+        for p in projects {
+            let Ok(active) = self.features.get_active(&p.id) else {
+                continue;
+            };
+            for f in active {
+                if f.status == "awaiting_gate" || f.status == "gated" {
+                    if let Err(e) = self.ensure_driver_running(&f.id.0).await {
+                        eprintln!(
+                            "resume_interrupted_features: failed to resume {}: {}",
+                            f.id.0, e
+                        );
                     }
                 }
             }

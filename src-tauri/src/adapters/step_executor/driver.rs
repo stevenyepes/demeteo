@@ -3,12 +3,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use tokio::sync::{oneshot, watch};
+use tokio::sync::watch;
 
 use crate::adapters::agent::registry::AgentRegistry;
+use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{GateDecision, StepConfig};
+use crate::domain::models::StepConfig;
 use crate::domain::prompt_context::PromptContext;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
@@ -19,6 +20,7 @@ use crate::ports::notification::NotificationPort;
 
 pub(crate) mod failure;
 pub(crate) mod verifier;
+pub(crate) use super::driver_registry::DriverRegistry;
 
 /// The default `on_failure` retry-loop budget when neither the run override
 /// (`Feature::loop_iterations`), the project setting
@@ -46,17 +48,17 @@ pub(crate) struct ExecutionDriver {
     pub features: Arc<dyn FeatureRepository>,
     pub gates: Arc<dyn crate::ports::db::GateRepository>,
     pub projects: Arc<dyn crate::ports::db::ProjectRepository>,
-    pub memory: Arc<dyn crate::ports::memory::ProjectMemoryPort>,
+    pub signals: Arc<dyn crate::ports::memory_signals::MemorySignalsPort>,
     pub notif: Arc<dyn NotificationPort>,
     pub registry: Arc<AgentRegistry>,
     pub agent_exec: Arc<dyn AgentExecutionPort>,
     pub exec: Arc<dyn ExecutionPort>,
     pub artifacts: Arc<dyn ArtifactStore>,
     pub app_local_data_dir: PathBuf,
-    pub workspace_dir: PathBuf,
     pub git_ops: GitOpsHelper,
     pub merge_executor: Arc<dyn MergeExecutor>,
-    pub gate_senders: Arc<Mutex<HashMap<String, oneshot::Sender<GateDecision>>>>,
+    pub gate_waiters: Arc<Mutex<HashMap<String, Arc<GateWaiter>>>>,
+    pub driver_registry: Arc<DriverRegistry>,
 
     // Feature identity
     pub f_id: FeatureId,
@@ -118,6 +120,38 @@ pub(crate) struct ExecutionDriver {
 }
 
 impl ExecutionDriver {
+    /// Capture a raw run observation for the memory agent's queue. Best-effort:
+    /// an empty body, a missing feature row, or an enqueue failure is silently
+    /// swallowed so signal capture never perturbs the run itself.
+    pub(crate) fn capture_signal(
+        &self,
+        step_execution_id: Option<String>,
+        kind: crate::domain::memory::SignalKind,
+        content: impl Into<String>,
+    ) {
+        let content = content.into();
+        if content.trim().is_empty() {
+            return;
+        }
+        let project_id = match self.features.get(&self.f_id) {
+            Ok(Some(f)) => f.project_id,
+            _ => return,
+        };
+        let now = crate::paths::now_ms();
+        let signal = crate::domain::memory::MemorySignal {
+            id: format!("ms-{}", crate::paths::new_id()),
+            project_id,
+            feature_id: self.f_id_str.clone(),
+            step_execution_id,
+            kind,
+            content,
+            created_at: now,
+            processed_at: None,
+            attempts: 0,
+        };
+        let _ = self.signals.enqueue(signal);
+    }
+
     /// Resolve the effective `(agent_kind, model)` for a given step.
     ///
     /// Precedence (first non-empty wins):
@@ -303,8 +337,13 @@ impl ExecutionDriver {
             }
 
             let step_exec = &step_execs[self.step_index];
+            // Clone `step_conf` so it doesn't borrow `self.steps` —
+            // `handle_gate_step` now takes `&mut self` (it sets
+            // `retry_ctx` on a redirect with feedback), and the borrow
+            // checker won't let us hold an immutable borrow across
+            // that call.
             let step_conf = match self.steps.iter().find(|s| s.id == step_exec.step_id) {
-                Some(sc) => sc,
+                Some(sc) => sc.clone(),
                 None => break,
             };
 
@@ -329,7 +368,7 @@ impl ExecutionDriver {
                 "agent" => {
                     self.handle_agent_step(
                         step_exec,
-                        step_conf,
+                        &step_conf,
                         &mut accumulated_cost,
                         &mut accumulated_tokens,
                         step_start,
@@ -339,9 +378,14 @@ impl ExecutionDriver {
                     .await
                 }
                 "gate" => {
+                    // Clone `step_conf` to release the immutable borrow
+                    // on `self.steps` — `handle_gate_step` now takes
+                    // `&mut self` so it can populate `retry_ctx` when a
+                    // redirect carries feedback.
+                    let step_conf = step_conf.clone();
                     self.handle_gate_step(
                         step_exec,
-                        step_conf,
+                        &step_conf,
                         &mut accumulated_cost,
                         step_start,
                         self.step_index,
@@ -352,7 +396,7 @@ impl ExecutionDriver {
                 "parallel" => {
                     self.handle_parallel_step(
                         step_exec,
-                        step_conf,
+                        &step_conf,
                         &mut accumulated_cost,
                         &mut accumulated_tokens,
                         step_start,
@@ -362,7 +406,7 @@ impl ExecutionDriver {
                     .await
                 }
                 "sync" => {
-                    self.handle_sync_step(step_exec, step_conf, &mut accumulated_cost, step_start)
+                    self.handle_sync_step(step_exec, &step_conf, &mut accumulated_cost, step_start)
                         .await
                 }
                 other => {
@@ -422,7 +466,7 @@ impl ExecutionDriver {
                     } else {
                         if let Some(redirect_idx) = self.evaluate_on_failure(
                             step_exec,
-                            step_conf,
+                            &step_conf,
                             &msg,
                             accumulated_cost,
                             accumulated_tokens,
@@ -432,9 +476,17 @@ impl ExecutionDriver {
                             // isn't blind. `iteration_count` was just bumped to
                             // `already + 1` in evaluate_on_failure, so the
                             // attempt now starting is that value.
-                            let max = self.effective_loop_iterations(step_conf);
+                            let max = self.effective_loop_iterations(&step_conf);
                             let iteration = step_exec.iteration_count + 1;
                             let feedback = msg.clone();
+                            self.capture_signal(
+                                Some(step_exec.id.0.clone()),
+                                crate::domain::memory::SignalKind::Retry,
+                                format!(
+                                    "Step '{}' failed (attempt {} of {}), retrying: {}",
+                                    step_exec.step_id.0, iteration, max, msg
+                                ),
+                            );
                             self.retry_ctx = Some(RetryContext {
                                 feedback,
                                 iteration,
@@ -476,5 +528,15 @@ impl ExecutionDriver {
             target_status,
             self.start_time,
         );
+
+        // Drop any stale gate waiter left behind — the loop above
+        // consumes them on success, but cancellation / failure paths
+        // can leak. Idempotent; an already-absent entry is fine.
+        self.gate_waiters.lock().unwrap().clear();
+
+        // Deregister so a follow-up `ensure_driver_running` for this
+        // feature knows to start a fresh driver instead of trusting a
+        // (now-completed) registry entry.
+        self.driver_registry.deregister(&self.f_id);
     }
 }

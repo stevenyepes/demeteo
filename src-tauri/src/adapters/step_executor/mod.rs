@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{oneshot, watch};
+use tokio::sync::watch;
 
 use crate::adapters::agent::registry::AgentRegistry;
-use crate::domain::models::GateDecision;
+use crate::adapters::step_executor::driver_registry::DriverRegistry;
+use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::{
@@ -22,6 +23,8 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 
 pub(crate) mod artifacts;
 pub(crate) mod driver;
+pub(crate) mod driver_registry;
+pub(crate) mod gate_waiter;
 pub(crate) mod impl_traits;
 pub(crate) mod setup;
 pub(crate) mod steps;
@@ -43,6 +46,8 @@ pub struct DagStepExecutor {
     gates: Arc<dyn GateRepository>,
     app_settings: Arc<dyn AppSettingsRepository>,
     memory: Arc<dyn crate::ports::memory::ProjectMemoryPort>,
+    signals: Arc<dyn crate::ports::memory_signals::MemorySignalsPort>,
+    memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort>,
     registry: Arc<AgentRegistry>,
     notif: Arc<dyn NotificationPort>,
     agent_exec: Arc<dyn AgentExecutionPort>,
@@ -64,7 +69,17 @@ pub struct DagStepExecutor {
     artifacts: Arc<dyn ArtifactStore>,
     app_local_data_dir: PathBuf,
     workspace_dir: PathBuf,
-    gate_senders: Arc<Mutex<HashMap<String, oneshot::Sender<GateDecision>>>>,
+    /// Live drivers keyed by step_execution_id. The driver inserts a
+    /// `GateWaiter` while waiting for a decision; `gate_decide` looks up
+    /// the waiter (fast path) and also writes to the DB (durable path).
+    /// If the entry is absent — driver died, restart, or race — the
+    /// caller falls back to `ensure_driver_running` so the DB row is
+    /// reconciled on driver resume.
+    gate_waiters: Arc<Mutex<HashMap<String, Arc<GateWaiter>>>>,
+    /// Tracks which features currently have a live execution driver so
+    /// `gate_decide` and `startup_watchdog` can re-spawn safely without
+    /// doubling up on an in-flight run.
+    driver_registry: Arc<DriverRegistry>,
     cancel_senders: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
 }
 
@@ -78,6 +93,8 @@ impl DagStepExecutor {
         gates: Arc<dyn GateRepository>,
         app_settings: Arc<dyn AppSettingsRepository>,
         memory: Arc<dyn crate::ports::memory::ProjectMemoryPort>,
+        signals: Arc<dyn crate::ports::memory_signals::MemorySignalsPort>,
+        memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort>,
         registry: Arc<AgentRegistry>,
         notif: Arc<dyn NotificationPort>,
         agent_exec: Arc<dyn AgentExecutionPort>,
@@ -96,6 +113,8 @@ impl DagStepExecutor {
             gates,
             app_settings,
             memory,
+            signals,
+            memory_llm,
             registry,
             notif,
             agent_exec,
@@ -105,8 +124,22 @@ impl DagStepExecutor {
             artifacts,
             app_local_data_dir,
             workspace_dir,
-            gate_senders: Arc::new(Mutex::new(HashMap::new())),
+            gate_waiters: Arc::new(Mutex::new(HashMap::new())),
+            driver_registry: DriverRegistry::new(),
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Read-only view of the live-driver registry, used by `gate_decide`
+    /// to decide whether the driver is alive without taking the lock twice.
+    pub fn driver_registry(&self) -> Arc<DriverRegistry> {
+        self.driver_registry.clone()
+    }
+
+    /// Access the shared waiter map. Tests and the gate handler both
+    /// need to insert / remove waiters; the executor owns the canonical
+    /// instance and hands out clones via this accessor.
+    pub fn gate_waiters(&self) -> Arc<Mutex<HashMap<String, Arc<GateWaiter>>>> {
+        self.gate_waiters.clone()
     }
 }
