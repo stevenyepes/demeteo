@@ -26,6 +26,7 @@ pub struct SqliteMergeExecutor {
     merge_audit: Arc<dyn MergeAuditRepository>,
     git_ops: GitOpsHelper,
     exec: Arc<dyn ExecutionPort>,
+    workspace_dir: std::path::PathBuf,
 }
 
 impl SqliteMergeExecutor {
@@ -33,11 +34,13 @@ impl SqliteMergeExecutor {
         merge_audit: Arc<dyn MergeAuditRepository>,
         git_ops: GitOpsHelper,
         exec: Arc<dyn ExecutionPort>,
+        workspace_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             merge_audit,
             git_ops,
             exec,
+            workspace_dir,
         }
     }
 }
@@ -83,25 +86,32 @@ impl MergeExecutor for SqliteMergeExecutor {
         } else {
             remote_host.clone()
         };
-        let repo_dir = match paths::repo_target_dir_str(
-            &self.exec,
-            &compute_type,
-            remote_host.as_deref(),
-            &project_id,
-            &repo_path,
-        )
-        .await
-        {
-            Ok(dir) => dir,
-            Err(e) => {
-                return Err(ConflictReport {
-                    source_branch: source_branch.to_string(),
-                    target_branch: target_branch.to_string(),
-                    files: vec![],
-                    raw_error: format!("Failed to resolve repo directory: {}", e),
-                    detected_at: paths::now_ms(),
-                    worktree_path: None,
-                });
+        let repo_dir = if compute_type.eq_ignore_ascii_case("local") {
+            paths::repo_target_dir_local(&self.workspace_dir, &project_id, &repo_path)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            match paths::repo_target_dir_str(
+                &self.exec,
+                &compute_type,
+                remote_host.as_deref(),
+                &project_id,
+                &repo_path,
+                None,
+            )
+            .await
+            {
+                Ok(dir) => dir,
+                Err(e) => {
+                    return Err(ConflictReport {
+                        source_branch: source_branch.to_string(),
+                        target_branch: target_branch.to_string(),
+                        files: vec![],
+                        raw_error: format!("Failed to resolve repo directory: {}", e),
+                        detected_at: paths::now_ms(),
+                        worktree_path: None,
+                    });
+                }
             }
         };
         let subtask_id = extract_subtask_id(source_branch).unwrap_or_else(|| "sub".to_string());
@@ -272,28 +282,35 @@ impl MergeExecutor for SqliteMergeExecutor {
             remote_host.clone()
         };
 
-        let repo_dir = match paths::repo_target_dir_str(
-            &self.exec,
-            &compute_type,
-            remote_host.as_deref(),
-            &project_id,
-            &repo_path,
-        )
-        .await
-        {
-            Ok(dir) => dir,
-            Err(e) => {
-                return Err(UpstreamSyncFailure {
-                    report: ConflictReport {
-                        source_branch: format!("origin/{}", default_branch),
-                        target_branch: feature_branch.to_string(),
-                        files: Vec::new(),
-                        raw_error: format!("Failed to resolve repo directory: {}", e),
-                        detected_at: paths::now_ms(),
+        let repo_dir = if compute_type.eq_ignore_ascii_case("local") {
+            paths::repo_target_dir_local(&self.workspace_dir, &project_id, &repo_path)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            match paths::repo_target_dir_str(
+                &self.exec,
+                &compute_type,
+                remote_host.as_deref(),
+                &project_id,
+                &repo_path,
+                None,
+            )
+            .await
+            {
+                Ok(dir) => dir,
+                Err(e) => {
+                    return Err(UpstreamSyncFailure {
+                        report: ConflictReport {
+                            source_branch: format!("origin/{}", default_branch),
+                            target_branch: feature_branch.to_string(),
+                            files: Vec::new(),
+                            raw_error: format!("Failed to resolve repo directory: {}", e),
+                            detected_at: paths::now_ms(),
+                            worktree_path: None,
+                        },
                         worktree_path: None,
-                    },
-                    worktree_path: None,
-                });
+                    });
+                }
             }
         };
 

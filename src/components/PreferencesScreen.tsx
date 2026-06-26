@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
-import { Settings, Server, Globe, Cpu, Info, Activity } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import MachinesView from './MachinesView';
 
 type PrefTab = 'machines' | 'providers' | 'defaults' | 'about';
@@ -10,6 +12,44 @@ interface PreferencesScreenProps {
 
 const PreferencesScreen: React.FC<PreferencesScreenProps> = ({ onNavigate }) => {
   const [activeTab, setActiveTab] = useState<PrefTab>('machines');
+
+  // Workspace directory state
+  const [effectiveWorkspaceDir, setEffectiveWorkspaceDir] = useState('');
+  const [workspaceDirInput, setWorkspaceDirInput] = useState('');
+  const [workspaceDirSaving, setWorkspaceDirSaving] = useState(false);
+  const [workspaceDirSaved, setWorkspaceDirSaved] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== 'defaults') return;
+    (async () => {
+      const [effective, override] = await Promise.all([
+        invoke<string>('get_workspace_dir'),
+        invoke<string | null>('get_workspace_dir_setting'),
+      ]);
+      setEffectiveWorkspaceDir(effective);
+      setWorkspaceDirInput(override ?? '');
+    })();
+  }, [activeTab]);
+
+  const handleBrowseWorkspaceDir = async () => {
+    const selected = await openDialog({ directory: true, multiple: false, title: 'Choose workspace directory' });
+    if (selected && typeof selected === 'string') {
+      setWorkspaceDirInput(selected);
+    }
+  };
+
+  const handleSaveWorkspaceDir = async () => {
+    setWorkspaceDirSaving(true);
+    try {
+      await invoke('set_workspace_dir_setting', { path: workspaceDirInput || null });
+      const effective = await invoke<string>('get_workspace_dir');
+      setEffectiveWorkspaceDir(effective);
+      setWorkspaceDirSaved(true);
+      setTimeout(() => setWorkspaceDirSaved(false), 2500);
+    } finally {
+      setWorkspaceDirSaving(false);
+    }
+  };
 
   const tabs: { key: PrefTab; label: string; icon: React.ReactNode }[] = [
     { key: 'machines', label: 'Machines', icon: <Server className="w-4 h-4" /> },
@@ -76,23 +116,89 @@ const PreferencesScreen: React.FC<PreferencesScreenProps> = ({ onNavigate }) => 
           </div>
         )}
         {activeTab === 'defaults' && (
-          <div className="glass-panel p-6">
-            <h3 className="text-sm font-outfit font-semibold text-white mb-3 flex items-center gap-2">
-              <Cpu className="w-4 h-4 text-violet-400" />
-              Default Agent & Model
-            </h3>
-            <p className="text-xs text-slate-400 mb-4">
-              Default agent and model settings are configured per-project in the Workspace Settings screen.
-              Global defaults will be available in a future release.
-            </p>
-            <div className="bg-black/40 border border-white/5 rounded-lg p-3 text-xs text-slate-400">
-              <p>To configure defaults for a specific project:</p>
-              <ol className="list-decimal ml-4 mt-2 space-y-1 text-slate-500">
-                <li>Open the project from the sidebar</li>
-                <li>Click the <strong className="text-slate-300">Settings</strong> icon</li>
-                <li>Go to <strong className="text-slate-300">Agent Strategy &amp; Policies</strong></li>
-                <li>Set the default agent kind and model</li>
-              </ol>
+          <div className="space-y-4">
+            {/* Workspace Storage */}
+            <div className="glass-panel p-6">
+              <h3 className="text-sm font-outfit font-semibold text-white mb-1 flex items-center gap-2">
+                <FolderOpen className="w-4 h-4 text-cyan-400" />
+                Workspace Storage
+              </h3>
+              <p className="text-xs text-slate-400 mb-4">
+                Where Demeteo clones project repositories. Defaults to the app data directory.
+                Changes take effect after restarting the app; existing projects will need re-bootstrapping
+                if you move the directory.
+              </p>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5">
+                    Active directory
+                  </label>
+                  <p className="font-mono text-xs text-slate-300 bg-black/40 border border-white/5 rounded-lg px-3 py-2 break-all">
+                    {effectiveWorkspaceDir || '…'}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5">
+                    Custom path override <span className="normal-case text-slate-600">(leave blank to use default)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={workspaceDirInput}
+                      onChange={e => setWorkspaceDirInput(e.target.value)}
+                      placeholder={effectiveWorkspaceDir}
+                      className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                    />
+                    <button
+                      onClick={handleBrowseWorkspaceDir}
+                      className="px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 transition-all flex items-center gap-1.5 shrink-0"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      Browse
+                    </button>
+                    <button
+                      onClick={handleSaveWorkspaceDir}
+                      disabled={workspaceDirSaving}
+                      className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white transition-all flex items-center gap-1.5 shrink-0"
+                    >
+                      {workspaceDirSaving ? (
+                        <RotateCw className="w-3 h-3 animate-spin" />
+                      ) : workspaceDirSaved ? (
+                        <Check className="w-3 h-3" />
+                      ) : null}
+                      {workspaceDirSaved ? 'Saved' : 'Save'}
+                    </button>
+                  </div>
+                  {workspaceDirSaved && (
+                    <p className="mt-1.5 text-[10px] text-amber-400 font-mono">
+                      Restart the app to apply the new workspace directory.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Default Agent & Model */}
+            <div className="glass-panel p-6">
+              <h3 className="text-sm font-outfit font-semibold text-white mb-3 flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-violet-400" />
+                Default Agent & Model
+              </h3>
+              <p className="text-xs text-slate-400 mb-4">
+                Default agent and model settings are configured per-project in the Workspace Settings screen.
+                Global defaults will be available in a future release.
+              </p>
+              <div className="bg-black/40 border border-white/5 rounded-lg p-3 text-xs text-slate-400">
+                <p>To configure defaults for a specific project:</p>
+                <ol className="list-decimal ml-4 mt-2 space-y-1 text-slate-500">
+                  <li>Open the project from the sidebar</li>
+                  <li>Click the <strong className="text-slate-300">Settings</strong> icon</li>
+                  <li>Go to <strong className="text-slate-300">Agent Strategy &amp; Policies</strong></li>
+                  <li>Set the default agent kind and model</li>
+                </ol>
+              </div>
             </div>
           </div>
         )}

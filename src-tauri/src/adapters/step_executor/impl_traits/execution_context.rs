@@ -62,14 +62,21 @@ impl DagStepExecutor {
             .ok_or("No repository associated with this project.")?;
         let repo_path = repo.repo_path.clone();
 
-        let target_dir = paths::repo_target_dir_str(
-            &self.exec,
-            &project.compute_type,
-            project.remote_host.as_ref().map(|m| m.as_str()),
-            project_id,
-            &repo_path,
-        )
-        .await?;
+        let target_dir = if project.compute_type.to_lowercase() == "local" {
+            paths::repo_target_dir_local(&self.workspace_dir, project_id, &repo_path)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            paths::repo_target_dir_str(
+                &self.exec,
+                &project.compute_type,
+                project.remote_host.as_ref().map(|m| m.as_str()),
+                project_id,
+                &repo_path,
+                None,
+            )
+            .await?
+        };
 
         let wf_id = WorkflowId::from(workflow_id.to_string());
 

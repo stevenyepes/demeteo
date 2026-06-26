@@ -104,8 +104,14 @@ pub struct AppContext {
     /// Provider HTTP operations (validation, list repos).
     pub provider_http: Arc<dyn ProviderHttpPort>,
 
-    /// Path to application local data directory.
+    /// Path to application local data directory (DB, artifacts, etc.).
     pub app_data_dir: std::path::PathBuf,
+
+    /// Base directory for project workspace storage (where repos are cloned).
+    ///
+    /// Defaults to `app_data_dir`. Users can override via the
+    /// `workspace_base_dir` app-session key; takes effect after restart.
+    pub workspace_dir: std::path::PathBuf,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

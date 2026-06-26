@@ -33,13 +33,9 @@ pub async fn resolve_target_dir(
     repo_path: &str,
 ) -> Result<String, String> {
     if project.compute_type.to_lowercase() == "local" {
-        let p = ctx
-            .app_data_dir
-            .join("projects")
-            .join(project_id)
-            .join("repos")
-            .join(paths::repo_name_from_path(repo_path));
-        Ok(p.to_string_lossy().to_string())
+        Ok(paths::repo_target_dir_local(&ctx.workspace_dir, project_id, repo_path)
+            .to_string_lossy()
+            .to_string())
     } else {
         paths::repo_target_dir_str(
             &ctx.exec,
@@ -47,6 +43,7 @@ pub async fn resolve_target_dir(
             project.remote_host.as_deref(),
             project_id,
             repo_path,
+            None,
         )
         .await
     }
@@ -67,7 +64,7 @@ pub async fn update(ctx: &AppContext, id: String, config: ProjectConfig) -> Resu
         compute_type: config.compute_type.clone(),
         remote_host: config.remote_host.clone().map(MachineId::from),
         status: "bootstrapping".to_string(),
-        nodes: if config.compute_type == "local" { 4 } else { 8 },
+        nodes: existing.nodes,
         spend: existing.spend,
         tokens: existing.tokens,
         created_at: existing.created_at,
@@ -104,7 +101,7 @@ pub async fn delete_workspace(ctx: &AppContext, id: String) -> Result<(), String
     ctx.projects.delete(&project_id)?;
 
     if project.compute_type.to_lowercase() == "local" {
-        let project_dir = ctx.app_data_dir.join("projects").join(&id);
+        let project_dir = paths::project_root_local(&ctx.workspace_dir, &id);
         if project_dir.exists() {
             let _ = std::fs::remove_dir_all(&project_dir);
         }
@@ -116,6 +113,7 @@ pub async fn delete_workspace(ctx: &AppContext, id: String) -> Result<(), String
             &project.compute_type,
             Some(machine_id.as_str()),
             &id,
+            None,
         )
         .await
         {

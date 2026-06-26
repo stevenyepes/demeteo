@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { useTauriEvent } from '../hooks/useTauriEvent';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import { StepExecution } from '../types';
 import { getAgentModels } from '../lib/agentModels';
@@ -168,90 +168,31 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   const [replayTarget, setReplayTarget] = useState<{ id: string; name: string; downstreamCount: number } | null>(null);
   const [featureTitle, setFeatureTitle] = useState<string>(title || 'Feature Pipeline');
 
-  useEffect(() => {
-    loadFeatureData();
+  useEffect(() => { loadFeatureData(); }, [featureId]);
 
-    // Subscribe to Tauri events
-    let active = true;
-    const cleanups: Array<() => void> = [];
+  useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status }) => {
+    if (feature_id === featureId) {
+      setStatus(status);
+      loadFeatureData();
+    }
+  });
 
-    const setupListeners = async () => {
-      try {
-        const unlistenStatus = await listen<{ feature_id: string; status: string }>(
-          'feature_status_changed',
-          (event) => {
-            if (event.payload.feature_id === featureId) {
-              setStatus(event.payload.status);
-              loadFeatureData();
-            }
-          }
-        );
-        if (!active) {
-          unlistenStatus();
-        } else {
-          cleanups.push(unlistenStatus);
-        }
+  useTauriEvent<{ feature_id: string; step_id: string; status: string; cost_usd: number | null; tokens: number | null; wall_clock_secs: number | null }>('step_progress', ({ feature_id }) => {
+    if (feature_id === featureId) loadFeatureData();
+  });
 
-        const unlistenProgress = await listen<{
-          feature_id: string;
-          step_id: string;
-          status: string;
-          cost_usd: number | null;
-          tokens: number | null;
-          wall_clock_secs: number | null;
-        }>('step_progress', (event) => {
-          if (event.payload.feature_id === featureId) {
-            loadFeatureData();
-          }
-        });
-        if (!active) {
-          unlistenProgress();
-        } else {
-          cleanups.push(unlistenProgress);
-        }
+  useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
+    if (feature_id === featureId) onDecideGate(step_execution_id);
+  });
 
-        const unlistenGate = await listen<{ feature_id: string; step_execution_id: string }>(
-          'gate_required',
-          (event) => {
-            if (event.payload.feature_id === featureId) {
-              onDecideGate(event.payload.step_execution_id);
-            }
-          }
-        );
-        if (!active) {
-          unlistenGate();
-        } else {
-          cleanups.push(unlistenGate);
-        }
-
-        const unlistenStream = await listen<{ feature_id: string; step_execution_id: string; content: string }>(
-          'agent_stream',
-          (event) => {
-            if (event.payload.feature_id === featureId) {
-              setStreamContent((prev) => ({
-                ...prev,
-                [event.payload.step_execution_id]: (prev[event.payload.step_execution_id] || '') + event.payload.content
-              }));
-            }
-          }
-        );
-        if (!active) {
-          unlistenStream();
-        } else {
-          cleanups.push(unlistenStream);
-        }
-      } catch (err) {
-        reportError(err, { kind: "internal" });
-      }
-    };
-
-    setupListeners();
-
-    return () => {
-      active = false;
-      cleanups.forEach((unlisten) => unlisten());
-    };
-  }, [featureId]);
+  useTauriEvent<{ feature_id: string; step_execution_id: string; content: string }>('agent_stream', ({ feature_id, step_execution_id, content }) => {
+    if (feature_id === featureId) {
+      setStreamContent((prev) => ({
+        ...prev,
+        [step_execution_id]: (prev[step_execution_id] || '') + content,
+      }));
+    }
+  });
   const loadFeatureData = async () => {
     try {
       const list = await invoke<StepExecution[]>('step_list_for_run', { featureId });

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTauriEvent } from "../hooks/useTauriEvent";
 import { Bell, Check, X } from "lucide-react";
 import {
   listNotifications,
@@ -37,27 +38,13 @@ export function NotificationBell() {
   };
 
   // Initial fetch + on every `mr_merged` event.
-  useEffect(() => {
+  useEffect(() => { refresh(); }, []);
+
+  useTauriEvent<MrMergedEvent>("mr_merged", ({ feature_title }) => {
+    setToast(`MR for "${feature_title}" was merged`);
     refresh();
-    let unlisten: (() => void) | null = null;
-    const setup = async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<MrMergedEvent>("mr_merged", (event) => {
-          setToast(`MR for "${event.payload.feature_title}" was merged`);
-          refresh();
-          // Auto-dismiss toast after 4s.
-          setTimeout(() => setToast(null), 4000);
-        });
-      } catch (err) {
-        console.error("Failed to subscribe to mr_merged events", err);
-      }
-    };
-    setup();
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, []);
+    setTimeout(() => setToast(null), 4000);
+  });
 
   // Click outside closes the panel.
   useEffect(() => {

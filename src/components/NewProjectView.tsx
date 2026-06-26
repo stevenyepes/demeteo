@@ -254,7 +254,7 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
                 name: projectName,
                 status: 'idle',
                 repos: selectedRepos.length,
-                nodes: computeType === 'local' ? 4 : 8,
+                nodes: 0,
                 spend: 0.00
             };
             setProjects(prev => [...prev, newProj]);

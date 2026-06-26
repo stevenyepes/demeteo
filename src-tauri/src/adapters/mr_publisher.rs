@@ -31,6 +31,7 @@ pub struct HttpMrPublisher {
     projects: Arc<dyn ProjectRepository>,
     features: Arc<dyn FeatureRepository>,
     exec: Arc<dyn ExecutionPort>,
+    workspace_dir: std::path::PathBuf,
     /// Used by tests + dry-runs. When `Some`, skip the live HTTP
     /// call and synthesize a fake URL/state. Production wiring leaves
     /// this `None`.
@@ -43,12 +44,14 @@ impl HttpMrPublisher {
         projects: Arc<dyn ProjectRepository>,
         features: Arc<dyn FeatureRepository>,
         exec: Arc<dyn ExecutionPort>,
+        workspace_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             app_settings,
             projects,
             features,
             exec,
+            workspace_dir,
             http_override: None,
         }
     }
@@ -68,6 +71,7 @@ impl HttpMrPublisher {
             projects,
             features,
             exec,
+            workspace_dir: std::path::PathBuf::from("/tmp"),
             http_override: Some(http),
         }
     }
@@ -185,15 +189,22 @@ impl MrPublisher for HttpMrPublisher {
                     })
             });
 
-        // Resolve local target directory of the repository.
-        let target_dir = crate::paths::repo_target_dir_str(
-            &self.exec,
-            &project.compute_type,
-            project.remote_host.as_ref().map(|m| m.as_str()),
-            project_id,
-            &repo.repo_path,
-        )
-        .await?;
+        // Resolve target directory of the repository.
+        let target_dir = if project.compute_type.eq_ignore_ascii_case("local") {
+            crate::paths::repo_target_dir_local(&self.workspace_dir, project_id, &repo.repo_path)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            crate::paths::repo_target_dir_str(
+                &self.exec,
+                &project.compute_type,
+                project.remote_host.as_ref().map(|m| m.as_str()),
+                project_id,
+                &repo.repo_path,
+                None,
+            )
+            .await?
+        };
 
         let source_branch = format!(
             "{}{}",

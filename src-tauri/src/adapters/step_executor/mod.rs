@@ -63,6 +63,7 @@ pub struct DagStepExecutor {
     /// caller. See `docs/ARCHITECTURE.md` §2 (locked port catalogue).
     artifacts: Arc<dyn ArtifactStore>,
     app_local_data_dir: PathBuf,
+    workspace_dir: PathBuf,
     gate_senders: Arc<Mutex<HashMap<String, oneshot::Sender<GateDecision>>>>,
     cancel_senders: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
 }
@@ -84,6 +85,7 @@ impl DagStepExecutor {
         merge_executor: Arc<dyn MergeExecutor>,
         artifacts: Arc<dyn ArtifactStore>,
         app_local_data_dir: PathBuf,
+        workspace_dir: PathBuf,
     ) -> Self {
         let git_ops = GitOpsHelper::new(app_settings.clone(), exec.clone());
         Self {
@@ -102,6 +104,7 @@ impl DagStepExecutor {
             git_ops,
             artifacts,
             app_local_data_dir,
+            workspace_dir,
             gate_senders: Arc::new(Mutex::new(HashMap::new())),
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
         }

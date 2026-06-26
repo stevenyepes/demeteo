@@ -53,6 +53,7 @@ pub(crate) struct ExecutionDriver {
     pub exec: Arc<dyn ExecutionPort>,
     pub artifacts: Arc<dyn ArtifactStore>,
     pub app_local_data_dir: PathBuf,
+    pub workspace_dir: PathBuf,
     pub git_ops: GitOpsHelper,
     pub merge_executor: Arc<dyn MergeExecutor>,
     pub gate_senders: Arc<Mutex<HashMap<String, oneshot::Sender<GateDecision>>>>,

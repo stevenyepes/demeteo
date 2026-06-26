@@ -57,15 +57,22 @@ pub async fn feature_get_worktree(
             .unwrap_or_else(|| "local".to_string())
     };
 
-    let worktree_path = crate::paths::repo_target_dir_str(
-        &ctx.exec,
-        &project.compute_type,
-        project.remote_host.as_ref().map(|m| m.as_str()),
-        &project_id.0,
-        &repo.repo_path,
-    )
-    .await
-    .map_err(AppError::from)?;
+    let worktree_path = if project.compute_type.eq_ignore_ascii_case("local") {
+        crate::paths::repo_target_dir_local(&ctx.workspace_dir, &project_id.0, &repo.repo_path)
+            .to_string_lossy()
+            .to_string()
+    } else {
+        crate::paths::repo_target_dir_str(
+            &ctx.exec,
+            &project.compute_type,
+            project.remote_host.as_ref().map(|m| m.as_str()),
+            &project_id.0,
+            &repo.repo_path,
+            None,
+        )
+        .await
+        .map_err(AppError::from)?
+    };
 
     let branch = format!("{}{}", settings.worktree_strategy.branch_prefix, fid.0);
 

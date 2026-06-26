@@ -55,16 +55,14 @@ async fn do_bootstrap_inner(
 
     let is_local = project.compute_type.to_lowercase() == "local";
     let repos_parent_dir = if is_local {
-        ctx.app_data_dir
-            .join("projects")
-            .join(project_id)
-            .join("repos")
+        paths::project_root_local(&ctx.workspace_dir, project_id).join(paths::REPOS_SUBDIR)
     } else {
         paths::project_root(
             &ctx.exec,
             &project.compute_type,
             project.remote_host.as_ref().map(|m| m.as_str()),
             project_id,
+            None,
         )
         .await?
         .join(paths::REPOS_SUBDIR)
@@ -106,11 +104,7 @@ async fn do_bootstrap_inner(
     // 3. Loop and clone each repository
     for (i, repo) in repos.iter().enumerate() {
         let target_dir = if is_local {
-            ctx.app_data_dir
-                .join("projects")
-                .join(project_id)
-                .join("repos")
-                .join(get_repo_name(&repo.repo_path))
+            paths::repo_target_dir_local(&ctx.workspace_dir, project_id, &repo.repo_path)
                 .to_string_lossy()
                 .to_string()
         } else {
@@ -120,6 +114,7 @@ async fn do_bootstrap_inner(
                 project.remote_host.as_ref().map(|m| m.as_str()),
                 project_id,
                 &repo.repo_path,
+                None,
             )
             .await?
         };

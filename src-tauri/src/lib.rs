@@ -145,6 +145,23 @@ pub fn run() {
             let notifications_repo: Arc<dyn crate::ports::db::NotificationRepository> =
                 db_adapter.clone();
 
+            // Resolve the workspace directory: user-configurable base for repo
+            // storage, defaults to the Tauri app data dir. Takes effect on
+            // next launch after the setting is changed.
+            let workspace_dir: std::path::PathBuf = app_settings_repo
+                .get_app_session("workspace_base_dir")
+                .ok()
+                .flatten()
+                .and_then(|p| {
+                    if p.trim().is_empty() {
+                        return None;
+                    }
+                    let path = std::path::PathBuf::from(p.trim());
+                    if path.is_absolute() { Some(path) } else { None }
+                })
+                .unwrap_or_else(|| app_data_dir.clone());
+            eprintln!("[demeteo] workspace dir: {}", workspace_dir.display());
+
             commands::workflows::seed_starter_workflows(&workflows_repo);
             let ssh_adapter: Arc<dyn ExecutionPort> = Arc::new(
                 adapters::ssh::client::SshClientAdapter::new(machines_repo.clone()),
@@ -181,6 +198,7 @@ pub fn run() {
                     projects_repo.clone(),
                     features_repo.clone(),
                     exec_inner.clone(),
+                    workspace_dir.clone(),
                 ));
 
             let worktree_ops = Arc::new(adapters::worktree::git_ops::GitOpsHelper::new(
@@ -204,6 +222,7 @@ pub fn run() {
                     merge_audit_repo.clone(),
                     git_ops_for_merge,
                     exec_inner.clone(),
+                    workspace_dir.clone(),
                 ))
             };
 
@@ -229,6 +248,7 @@ pub fn run() {
                     merge_executor.clone(),
                     artifact_store,
                     app_data_dir.clone(),
+                    workspace_dir.clone(),
                 ));
                 exec.startup_watchdog();
                 exec
@@ -274,6 +294,7 @@ pub fn run() {
                 worktree_ops,
                 provider_http,
                 app_data_dir: app_data_dir.clone(),
+                workspace_dir: workspace_dir.clone(),
             });
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
@@ -340,6 +361,9 @@ pub fn run() {
             commands::app_session::get_app_session,
             commands::app_session::set_app_session,
             commands::app_session::delete_app_session,
+            commands::app_session::get_workspace_dir,
+            commands::app_session::get_workspace_dir_setting,
+            commands::app_session::set_workspace_dir_setting,
             commands::messages::get_messages,
             commands::messages::append_message,
             terminal::set_machine_secret,

@@ -487,14 +487,21 @@ impl DagStepExecutor {
         } else {
             project.remote_host.as_ref().map(|m| m.0.clone())
         };
-        let target_dir = crate::paths::repo_target_dir_str(
-            &self.exec,
-            &project.compute_type,
-            project.remote_host.as_ref().map(|m| m.as_str()),
-            project.id.0.as_str(),
-            &repo.repo_path,
-        )
-        .await?;
+        let target_dir = if project.compute_type.to_lowercase() == "local" {
+            crate::paths::repo_target_dir_local(&self.workspace_dir, project.id.0.as_str(), &repo.repo_path)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            crate::paths::repo_target_dir_str(
+                &self.exec,
+                &project.compute_type,
+                project.remote_host.as_ref().map(|m| m.as_str()),
+                project.id.0.as_str(),
+                &repo.repo_path,
+                None,
+            )
+            .await?
+        };
         Ok((machine, target_dir))
     }
 }

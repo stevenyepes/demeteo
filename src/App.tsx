@@ -21,6 +21,7 @@ import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
 import type { Repository } from "./types";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useTauriEvent } from "./hooks/useTauriEvent";
 import "./App.css";
 
 interface Project {
@@ -107,28 +108,11 @@ function AppInner() {
     return () => window.removeEventListener(ERROR_TOAST_CTA_EVENT, handler);
   }, []);
 
-  useEffect(() => {
-    let unlistenGateGlobal: () => void = () => {};
-    const setupGateListener = async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-        unlistenGateGlobal = await listen<{ feature_id: string; step_execution_id: string }>(
-          'gate_required',
-          (event) => {
-            setGateStepExecutionId(event.payload.step_execution_id);
-            setActiveFeatureId(event.payload.feature_id);
-            setView('detail');
-          }
-        );
-      } catch (err) {
-        reportError(err, { kind: "internal", sticky: true });
-      }
-    };
-    setupGateListener();
-    return () => {
-      if (unlistenGateGlobal) unlistenGateGlobal();
-    };
-  }, []);
+  useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
+    setGateStepExecutionId(step_execution_id);
+    setActiveFeatureId(feature_id);
+    setView('detail');
+  });
 
   useEffect(() => {
     // Fetch initial data

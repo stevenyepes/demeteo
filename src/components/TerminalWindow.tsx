@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useTauriEvent } from "../hooks/useTauriEvent";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { formatError } from "../lib/errors";
@@ -50,6 +51,13 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
   useEffect(() => {
     activeSessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useTauriEvent<{ session_id: string }>("terminal-session-ended", ({ session_id }) => {
+    if (session_id === activeSessionIdRef.current) {
+      setStatus("disconnected");
+      terminalRef.current?.writeln("\r\n\x1b[1;33mTerminal session closed.\x1b[0m\r\n");
+    }
+  });
 
   const initTerminalSession = async () => {
     setStatus("connecting");
@@ -185,28 +193,9 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
     // Initialize the backend session
     initTerminalSession();
 
-    // Listen for terminal session ended signals
-    let unlistenEnded: (() => void) | null = null;
-    const setupListener = async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlistenEnded = await listen<{ session_id: string }>(
-        "terminal-session-ended",
-        (event) => {
-          if (event.payload.session_id === activeSessionIdRef.current) {
-            setStatus("disconnected");
-            if (terminalRef.current) {
-              terminalRef.current.writeln("\r\n\x1b[1;33mTerminal session closed.\x1b[0m\r\n");
-            }
-          }
-        }
-      );
-    };
-    setupListener();
-
     // Clean up terminal on unmount
     return () => {
       observer.disconnect();
-      if (unlistenEnded) unlistenEnded();
       
       const sessToClose = activeSessionIdRef.current;
       if (sessToClose) {

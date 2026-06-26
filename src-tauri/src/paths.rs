@@ -62,42 +62,46 @@ pub const REPOS_SUBDIR: &str = "repos";
 /// `compute_type` is the project's `compute_type` field
 /// (`"local"` or `"remote"`); `remote_host` is `Some(<machine_id>)`
 /// for remote projects and `None` for local.
+/// Resolve the project root for a **local** project.
+///
+/// `workspace_dir` is the user-configurable base directory (defaults to
+/// Tauri's `app_local_data_dir()`). This is a pure, synchronous helper —
+/// no shell calls, no identifier hard-coding.
+pub fn project_root_local(workspace_dir: &std::path::Path, project_id: &str) -> PathBuf {
+    workspace_dir.join("projects").join(project_id)
+}
+
+/// Resolve the cloned-repository target dir for a **local** project.
+pub fn repo_target_dir_local(
+    workspace_dir: &std::path::Path,
+    project_id: &str,
+    repo_path: &str,
+) -> PathBuf {
+    project_root_local(workspace_dir, project_id)
+        .join(REPOS_SUBDIR)
+        .join(repo_name_from_path(repo_path))
+}
+
+/// Resolve the project root on the target host.
+///
+/// For local projects, pass `workspace_dir: Some(base)` — the base comes
+/// from Tauri's `app_local_data_dir()` (or a user override) so no
+/// identifier is ever hard-coded here. For remote projects, pass
+/// `workspace_dir: None`; the root is resolved via SSH `$HOME`.
 pub async fn project_root(
     exec: &Arc<dyn ExecutionPort>,
     compute_type: &str,
     remote_host: Option<&str>,
     project_id: &str,
+    workspace_dir: Option<&std::path::Path>,
 ) -> Result<PathBuf, String> {
-    let home = resolve_home(exec, compute_type, remote_host).await?;
     if compute_type.eq_ignore_ascii_case("local") {
-        #[cfg(target_os = "macos")]
-        {
-            Ok(home
-                .join("Library")
-                .join("Application Support")
-                .join("com.jsteven.demeteo")
-                .join("projects")
-                .join(project_id))
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Ok(home
-                .join("AppData")
-                .join("Local")
-                .join("com.jsteven.demeteo")
-                .join("projects")
-                .join(project_id))
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Ok(home
-                .join(".local")
-                .join("share")
-                .join("com.jsteven.demeteo")
-                .join("projects")
-                .join(project_id))
-        }
+        let base = workspace_dir.ok_or_else(|| {
+            "workspace_dir is required when resolving a local project root".to_string()
+        })?;
+        Ok(project_root_local(base, project_id))
     } else {
+        let home = resolve_home(exec, compute_type, remote_host).await?;
         Ok(home
             .join(DEMETEO_HOME_SUBDIR)
             .join(PROJECTS_SUBDIR)
@@ -120,12 +124,19 @@ pub async fn repo_target_dir(
     remote_host: Option<&str>,
     project_id: &str,
     repo_path: &str,
+    workspace_dir: Option<&std::path::Path>,
 ) -> Result<PathBuf, String> {
-    let repo_name = repo_name_from_path(repo_path);
-    Ok(project_root(exec, compute_type, remote_host, project_id)
-        .await?
-        .join(REPOS_SUBDIR)
-        .join(repo_name))
+    if compute_type.eq_ignore_ascii_case("local") {
+        let base = workspace_dir.ok_or_else(|| {
+            "workspace_dir is required when resolving a local repo target dir".to_string()
+        })?;
+        Ok(repo_target_dir_local(base, project_id, repo_path))
+    } else {
+        Ok(project_root(exec, compute_type, remote_host, project_id, None)
+            .await?
+            .join(REPOS_SUBDIR)
+            .join(repo_name_from_path(repo_path)))
+    }
 }
 
 /// Same as [`repo_target_dir`] but returns a `String` (the form most
@@ -136,8 +147,9 @@ pub async fn repo_target_dir_str(
     remote_host: Option<&str>,
     project_id: &str,
     repo_path: &str,
+    workspace_dir: Option<&std::path::Path>,
 ) -> Result<String, String> {
-    repo_target_dir(exec, compute_type, remote_host, project_id, repo_path)
+    repo_target_dir(exec, compute_type, remote_host, project_id, repo_path, workspace_dir)
         .await
         .map(|p| p.to_string_lossy().to_string())
 }
