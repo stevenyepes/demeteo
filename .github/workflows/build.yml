@@ -55,7 +55,7 @@ jobs:
             const nextRc = (counter.rc || 0) + 1;
             counter.rc = nextRc;
             fs.writeFileSync(path, JSON.stringify(counter, null, 2) + '\n');
-            const version = counter.base + '-rc.' + nextRc;
+            const version = counter.base + '-' + nextRc;
             console.log('base=' + counter.base);
             console.log('rc=' + nextRc);
             console.log('next_version=' + version);
@@ -79,7 +79,7 @@ jobs:
 
   # ════════════════════════════════════════════════════════════════════
   # Build — single matrix for both triggers.
-  #   master push  → embeds <base>-rc.N via -c override.
+  #   master push  → embeds <base>-N via -c override.
   #   tag push     → uses the manifest version (clean stable).
   # Artifact name differs so nightly & stable don't collide on retries.
   # ════════════════════════════════════════════════════════════════════
@@ -237,7 +237,7 @@ jobs:
 
   # ════════════════════════════════════════════════════════════════════
   # nightly-release — fires on master pushes after build + rc.
-  # Tag = <base>-rc.N (does NOT match v*.*.*, so it never retriggers).
+  # Tag = <base>-N (does NOT match v*.*.*, so it never retriggers).
   # ════════════════════════════════════════════════════════════════════
   nightly-release:
     needs: [build, rc]
@@ -274,7 +274,7 @@ jobs:
         run: |
           VERSION="${{ needs.rc.outputs.next_version }}"
           BASE="${{ needs.rc.outputs.base }}"
-          PREV=$(git tag --list "${BASE}-rc.*" --sort=-version:refname | sed -n '2p')
+          PREV=$(git tag --list "${BASE}-*" --sort=-version:refname | sed -n '2p')
           if [ -z "$PREV" ]; then
             PREV=$(git rev-list --max-parents=0 HEAD)
           fi
