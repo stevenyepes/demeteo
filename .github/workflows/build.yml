@@ -158,6 +158,7 @@ jobs:
 
       - name: Build Tauri app (nightly rc)
         if: github.ref == 'refs/heads/master'
+        shell: bash
         run: |
           npx tauri build --target ${{ matrix.rust_target }} \
             -c .release/tauri-version-override.json
