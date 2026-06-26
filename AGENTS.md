@@ -198,7 +198,81 @@ Things an agent must **never** do without explicit user approval:
 
 ---
 
-## 8. Gate Policy (Human Approval)
+## 8. Commit Convention (mandatory)
+
+All commits on `master` **MUST** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/).
+This rule is enforced by the [`Lint Commits`](.github/workflows/lint-commits.yml)
+GitHub Actions workflow using commitlint, and by the release automation that
+reads commit messages to infer the next version bump.
+
+### Format
+
+```
+<type>(<optional-scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+- **Subject** ≤ 72 chars, lower-case first letter, imperative mood, no trailing period.
+- **Type** is mandatory and lower-case.
+- **Scope** is optional and lower-case (e.g. `orchestrator`, `settings`, `ci`).
+- **Body** explains *why*, wraps at 100 cols, separated from subject by a blank line.
+- **Footer** carries `BREAKING CHANGE: <note>` for any non-backwards-compatible change.
+
+### Allowed types and their semver effect
+
+| Type       | Bump   | When to use                                                |
+|------------|--------|------------------------------------------------------------|
+| `feat`     | minor  | A new user-facing feature                                  |
+| `fix`      | patch  | A bug fix                                                  |
+| `perf`     | patch  | Performance improvement with no behaviour change           |
+| `revert`   | patch  | Reverts a previous commit                                  |
+| `refactor` | none   | Internal change, no behaviour shift                        |
+| `docs`     | none   | Documentation only                                         |
+| `style`    | none   | Formatting / whitespace; no logic change                   |
+| `test`     | none   | Adding or fixing tests                                     |
+| `build`    | none   | Build system, dependencies, or external tooling            |
+| `ci`       | none   | CI / GitHub Actions configuration                          |
+| `chore`    | none   | Tooling, scripts, repository maintenance, release bumps    |
+
+A commit also signals a **major** bump when:
+
+- the type is suffixed with `!` → `feat(api)!: drop legacy v0 endpoints`, **or**
+- the body / footer contains a `BREAKING CHANGE:` line.
+
+When several types appear in the range, the **highest** bump wins
+(major > minor > patch). If nothing matches a known type, the release
+defaults to **patch** (something clearly changed).
+
+### Examples
+
+- ✅ `feat(orchestrator): add parallel step fan-out`
+- ✅ `fix(settings): guard against null provider url`
+- ✅ `perf(terminal): debounce xterm output writes`
+- ✅ `docs(readme): clarify macOS quarantine workaround`
+- ✅ `feat(api)!: drop legacy v0 endpoints`
+- ✅ `feat(settings): redesign preferences screen`
+- ❌ `Fix bug` — wrong case, no scope, vague
+- ❌ `Updated stuff` — no type
+- ❌ `feat: Added a thing.` — past tense + trailing period
+
+### Release automation that depends on this
+
+| Workflow                              | What it reads from commits              |
+|---------------------------------------|------------------------------------------|
+| `Lint Commits`                        | Subject format (commitlint)              |
+| `Build & Release` (master pushes)     | Triggers an rc counter bump              |
+| `Promote Release` (manual dispatch)   | Infers the next semver from commit types  |
+
+The `Promote Release` workflow **suggests** a version (e.g.
+`0.1.0 → 0.2.0 (minor) · feat=3 · fix=7 · breaking=1`) and
+auto-applies it; an `override_bump_type` input is available as a safety valve.
+
+---
+
+## 9. Gate Policy (Human Approval)
 
 Any task that touches the items below requires a **Gate** (pause and ask the user) before executing:
 
@@ -206,10 +280,11 @@ Any task that touches the items below requires a **Gate** (pause and ask the use
 - Changes to `src-tauri/capabilities/` (Tauri permission surfaces)
 - Changes to agent spawn logic or `OPENCODE_PERMISSION` env construction
 - Merging worktrees back to a feature branch when conflicts are detected
+- **Re-running the `Promote Release` workflow** — releases are not reversible; confirm the inferred bump matches intent (use the override input only when justified)
 
 ---
 
-## 9. Documentation Index
+## 10. Documentation Index
 
 > Read the relevant doc before modifying the corresponding area.
 
@@ -226,7 +301,7 @@ Any task that touches the items below requires a **Gate** (pause and ask the use
 
 ---
 
-## 10. Verification Checklist
+## 11. Verification Checklist
 
 Run this before marking any task done:
 

@@ -3,11 +3,14 @@ name: Promote Release
 on:
   workflow_dispatch:
     inputs:
-      bump_type:
-        description: "Version bump type"
-        required: true
+      override_bump_type:
+        description: >
+          Override the inferred bump (leave empty to use inferred value)
+        required: false
         type: choice
+        default: ""
         options:
+          - ""
           - patch
           - minor
           - major
@@ -17,14 +20,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      base: ${{ steps.infer.outputs.base }}
+      bump_type: ${{ steps.infer.outputs.bump_type }}
+      next: ${{ steps.infer.outputs.next }}
+      counts: ${{ steps.infer.outputs.counts }}
 
     steps:
       - name: Checkout master
         uses: actions/checkout@v5
         with:
           ref: master
-          # Use a PAT so the pushed tag triggers the build workflow.
-          # The default GITHUB_TOKEN does NOT trigger downstream workflows.
+          # PAT so the pushed tag triggers build.yml. Default GITHUB_TOKEN
+          # does NOT trigger downstream workflows.
           token: ${{ secrets.RELEASE_PAT }}
           fetch-depth: 0
 
@@ -33,22 +41,102 @@ jobs:
         with:
           node-version: 24
 
-      # ── Compute next version ───────────────────────────────────────
-      - name: Compute version
-        id: version
+      # ── Infer next version from conventional commits ───────────────
+      - name: Infer bump from commits
+        id: infer
         run: |
-          CURRENT=$(node -p "require('./package.json').version")
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          node <<'NODE'
+          const { execSync } = require('child_process');
 
-          NEXT=$(node -e "
-            const [major, minor, patch] = '${CURRENT}'.split('.').map(Number);
-            const bump = '${{ inputs.bump_type }}';
-            if (bump === 'major') console.log(\`\${major + 1}.0.0\`);
-            else if (bump === 'minor') console.log(\`\${major}.\${minor + 1}.0\`);
-            else console.log(\`\${major}.\${minor}.\${patch + 1}\`);
-          ")
-          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "::notice::Bumping $CURRENT → $NEXT (${{ inputs.bump_type }})"
+          // 1. Determine the previous release tag (skip pre-release rc tags).
+          let prevTag = '';
+          try {
+            const tags = execSync(
+              "git tag --list 'v*.*.*' --sort=-version:refname",
+              { encoding: 'utf8' }
+            ).trim().split('\n').filter(Boolean);
+            prevTag = tags[0] || '';
+          } catch (e) { prevTag = ''; }
+
+          // 2. Range of commits to analyze.
+          const range = prevTag ? `${prevTag}..HEAD` : 'HEAD';
+          const log = execSync(
+            `git log ${range} --no-merges --pretty=format:---SUBJECT---%n%s%n---BODY---%n%b`,
+            { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }
+          );
+
+          const blocks = log.split('---SUBJECT---\n').slice(1);
+          const counts = { feat: 0, fix: 0, perf: 0, revert: 0, breaking: 0, other: 0 };
+          let inferred = 'patch'; // default per plan: "Default to patch"
+
+          for (const block of blocks) {
+            const [subject, ...rest] = block.split('---BODY---\n');
+            const body = rest.join('---BODY---\n');
+            const m = (subject || '').match(/^([a-z]+)(\([^)]+\))?(!)?:/);
+            if (!m) { counts.other++; continue; }
+            const type = m[1];
+            const bang = !!m[3];
+            const breaking =
+              bang ||
+              /\bBREAKING CHANGE\b/i.test(subject) ||
+              /\bBREAKING CHANGE\b/i.test(body);
+
+            if (counts[type] !== undefined) counts[type]++;
+            else counts.other++;
+
+            if (breaking) counts.breaking++;
+
+            // Highest bump wins.
+            if (breaking)          inferred = 'major';
+            else if (type === 'feat' && inferred !== 'major')   inferred = 'minor';
+            else if ((type === 'fix' || type === 'perf' || type === 'revert') &&
+                     inferred === 'patch')                       inferred = inferred; // stays patch
+          }
+
+          // 3. Compute base (current manifest version).
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const current = pkg.version;
+          const [maj, min, pat] = current.split('.').map(Number);
+
+          // 4. Apply override if provided.
+          const override = (process.env.OVERRIDE_BUMP || '').trim();
+          const bump = ['patch', 'minor', 'major'].includes(override)
+            ? override
+            : inferred;
+          if (override) console.log('::notice::Override applied: ' + override);
+
+          // 5. Compute next.
+          let next;
+          if (bump === 'major')      next = `${maj + 1}.0.0`;
+          else if (bump === 'minor') next = `${maj}.${min + 1}.0`;
+          else                       next = `${maj}.${min}.${pat + 1}`;
+
+          // 6. Emit outputs and a human summary.
+          const summary = [
+            `feat=${counts.feat}`,
+            `fix=${counts.fix}`,
+            `perf=${counts.perf}`,
+            `revert=${counts.revert}`,
+            `breaking=${counts.breaking}`,
+            `other=${counts.other}`,
+          ].join(' · ');
+
+          console.log(`::notice::📈 ${current} → ${next}  (${bump})  [${summary}]`);
+          console.log(`previous_tag=${prevTag || '(none)'}`);
+          console.log(`commits_analyzed=${blocks.length}`);
+
+          const out = fs.createWriteStream(process.env.GITHUB_OUTPUT, { flags: 'a' });
+          out.write(`base=${current}\n`);
+          out.write(`bump_type=${bump}\n`);
+          out.write(`inferred=${inferred}\n`);
+          out.write(`next=${next}\n`);
+          out.write(`previous_tag=${prevTag}\n`);
+          out.write(`counts=${summary}\n`);
+          out.end();
+          NODE
+        env:
+          OVERRIDE_BUMP: ${{ inputs.override_bump_type }}
 
       # ── Update version in all manifest files ───────────────────────
       - name: Update package.json
@@ -56,7 +144,7 @@ jobs:
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '${{ steps.version.outputs.next }}';
+            pkg.version = '${{ steps.infer.outputs.next }}';
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
@@ -68,40 +156,47 @@ jobs:
           node -e "
             const fs = require('fs');
             const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-            conf.version = '${{ steps.version.outputs.next }}';
+            conf.version = '${{ steps.infer.outputs.next }}';
             fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
           "
 
       - name: Update Cargo.toml
         run: |
           # Update only the first occurrence of version (the [package] section)
-          sed -i "0,/^version = \"${{ steps.version.outputs.current }}\"/s//version = \"${{ steps.version.outputs.next }}\"/" \
+          sed -i "0,/^version = \"${{ steps.infer.outputs.base }}\"/s//version = \"${{ steps.infer.outputs.next }}\"/" \
             src-tauri/Cargo.toml
 
       - name: Update Cargo.lock
         run: |
           # Update the version for the demeteo package in the lockfile.
-          # The format is:
-          #   [[package]]
-          #   name = "demeteo"
-          #   version = "X.Y.Z"
-          sed -i "/^name = \"demeteo\"/{n;s/version = \"${{ steps.version.outputs.current }}\"/version = \"${{ steps.version.outputs.next }}\"/}" \
+          sed -i "/^name = \"demeteo\"/{n;s/version = \"${{ steps.infer.outputs.base }}\"/version = \"${{ steps.infer.outputs.next }}\"/}" \
             src-tauri/Cargo.lock
+
+      # ── Reset rc counter to 0 against new base ──────────────────────
+      - name: Reset rc counter
+        run: |
+          node -e "
+            const fs = require('fs');
+            fs.writeFileSync(
+              '.release/rc-counter.json',
+              JSON.stringify({ base: '${{ steps.infer.outputs.next }}', rc: 0 }, null, 2) + '\n'
+            );
+          "
+          cat .release/rc-counter.json
 
       # ── Verify changes ─────────────────────────────────────────────
       - name: Verify version updates
         run: |
           echo "── package.json ──"
           grep '"version"' package.json
-
           echo "── tauri.conf.json ──"
           grep '"version"' src-tauri/tauri.conf.json
-
           echo "── Cargo.toml ──"
           head -5 src-tauri/Cargo.toml | grep version
-
           echo "── Cargo.lock (demeteo entry) ──"
           grep -A1 'name = "demeteo"' src-tauri/Cargo.lock | head -4
+          echo "── rc-counter.json ──"
+          cat .release/rc-counter.json
 
       # ── Commit, tag, push ──────────────────────────────────────────
       - name: Configure git
@@ -109,24 +204,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit version bump
+      - name: Commit release
         run: |
           git add \
             package.json \
             package-lock.json \
             src-tauri/Cargo.toml \
             src-tauri/Cargo.lock \
-            src-tauri/tauri.conf.json
-          git commit -m "chore(release): bump to v${{ steps.version.outputs.next }}"
+            src-tauri/tauri.conf.json \
+            .release/rc-counter.json
+          git commit -m "chore(release): bump to v${{ steps.infer.outputs.next }} (${{ steps.infer.outputs.bump_type }})"
 
       - name: Create annotated tag
         run: |
           git tag \
-            -a "v${{ steps.version.outputs.next }}" \
-            -m "Release v${{ steps.version.outputs.next }}"
+            -a "v${{ steps.infer.outputs.next }}" \
+            -m "Release v${{ steps.infer.outputs.next }} (${{ steps.infer.outputs.bump_type }})"
 
       - name: Push commit and tag
         run: |
           git push origin master
-          git push origin "v${{ steps.version.outputs.next }}"
-          echo "::notice::✅ Pushed v${{ steps.version.outputs.next }} — build workflow will start automatically."
+          git push origin "v${{ steps.infer.outputs.next }}"
+          echo "::notice::✅ Pushed v${{ steps.infer.outputs.next }} — build workflow will start automatically."

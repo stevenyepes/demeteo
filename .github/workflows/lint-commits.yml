@@ -1,0 +1,38 @@
+name: Lint Commits
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '.release/**'
+      - 'package-lock.json'
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    # Only check commits added since the last successful run on the same ref.
+    # fetch-depth: 50 grandfathers older non-conventional commits.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 50
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Run commitlint
+        uses: wagoid/commitlint-github-action@v6
+        with:
+          configFile: .commitlintrc.json
+          # Only lint commits added on this push (not the whole history).
+          firstParent: true
+          # Don't fail the action while legacy commits are still in master;
+          # emit a warning until history is clean.
+          failOnWarnings: false
