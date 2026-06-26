@@ -150,6 +150,7 @@ jobs:
       # On tag pushes this step is skipped — bundles use manifest version.
       - name: Write runtime version override
         if: github.ref == 'refs/heads/master'
+        shell: bash
         run: |
           printf '{\n  "version": "%s"\n}\n' "${{ needs.rc.outputs.next_version }}" \
             > .release/tauri-version-override.json
