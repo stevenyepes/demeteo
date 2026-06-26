@@ -153,6 +153,20 @@ impl GitOpsHelper {
 
     /// Provision a linked worktree for a subtask branched off the main feature branch.
     /// Returns the absolute path to the provisioned worktree.
+    ///
+    /// Robust against the "already exists" failure mode: handles three
+    /// leftover-state cases in order — registered worktree (interrupted run
+    /// left it in `.git/worktrees/`), orphan directory (cleanup never
+    /// happened but git metadata is clean), and stale branch metadata
+    /// (`worktree prune` cleans up). Each cleanup step's error is logged
+    /// but non-fatal so a partially-set-up state still makes forward
+    /// progress; `git worktree add --force` is the final safety net.
+    ///
+    /// IMPORTANT: the artifact-scope fence (`apply_artifact_scope`) chmods
+    /// protected paths in the worktree to `a-w`. `unlink()` (which `rm`
+    /// uses) needs write permission on the **parent directory**, so an
+    /// `a-w` `src/` blocks `rm -rf` from cleaning up the worktree. We
+    /// restore `u+w` before the `rm -rf` step.
     pub async fn provision_subtask_worktree(
         &self,
         machine_id: Option<&str>,
@@ -164,13 +178,65 @@ impl GitOpsHelper {
         let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
         let subtask_branch = format!("{}_subtask_{}", feature_branch, subtask_id);
 
+        // 1. If a previous run registered this worktree with git,
+        //    `git worktree remove --force` is the only reliable way
+        //    to detach it. `rm -rf` alone leaves stale metadata
+        //    behind, which makes the subsequent `add` fail with
+        //    "'<path>' is already used by worktree at '<other>'".
         let _ = self
             .exec
             .run_command(
                 machine_str,
-                &format!("rm -rf {}", paths::shell_escape_posix(&wt_dir)),
+                &format!(
+                    "git -C {} worktree remove --force {}",
+                    paths::shell_escape_posix(repo_dir),
+                    paths::shell_escape_posix(&wt_dir)
+                ),
             )
             .await;
+
+        // 2. Restore write permissions. The artifact-scope fence may
+        //    have chmod'd protected paths to `a-w` in a previous
+        //    run; `rm -rf` needs `+w` on each parent directory it
+        //    traverses, so a leftover a-w `src/` blocks cleanup.
+        //    Best-effort: if chmod itself fails (rare; e.g. the dir
+        //    no longer exists), the subsequent rm still works.
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "chmod -R u+w {} 2>/dev/null || true",
+                    paths::shell_escape_posix(&wt_dir)
+                ),
+            )
+            .await;
+
+        // 3. Belt-and-suspenders: if the dir exists but isn't a
+        //    registered worktree (orphan from a crashed run), remove
+        //    it. Propagate failures now — silently continuing made the
+        //    previous bug where the next `git worktree add` failed
+        //    with "'<path>' already exists" and the user had no idea
+        //    why. If rm really can't remove the dir (locked file,
+        //    permission, read-only mount), return a clear error so the
+        //    caller can surface it.
+        self.exec
+            .run_command(
+                machine_str,
+                &format!("rm -rf {}", paths::shell_escape_posix(&wt_dir)),
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "provision_subtask_worktree: rm -rf {} failed: {}. \
+                     The directory may be locked or owned by another user; \
+                     manual cleanup required before this feature can retry.",
+                    wt_dir, e
+                )
+            })?;
+
+        // 4. Prune any stale worktree metadata left over from
+        //    crashed runs.
         let _ = self
             .exec
             .run_command(
@@ -182,8 +248,11 @@ impl GitOpsHelper {
             )
             .await;
 
+        // 5. Create the worktree. `--force` lets git overwrite any
+        //    remaining state (e.g. a missing-but-registered dir) so
+        //    this last step is the safety net.
         let cmd = format!(
-            "git -C {} worktree add {} -b {} {}",
+            "git -C {} worktree add --force {} -b {} {}",
             paths::shell_escape_posix(repo_dir),
             paths::shell_escape_posix(&wt_dir),
             paths::shell_escape_posix(&subtask_branch),
@@ -192,8 +261,10 @@ impl GitOpsHelper {
         match self.exec.run_command(machine_str, &cmd).await {
             Ok(_) => {}
             Err(_) => {
+                // Fallback: branch may already exist from a prior
+                // interrupted run. Checkout without -b.
                 let fallback_cmd = format!(
-                    "git -C {} worktree add {} {}",
+                    "git -C {} worktree add --force {} {}",
                     paths::shell_escape_posix(repo_dir),
                     paths::shell_escape_posix(&wt_dir),
                     paths::shell_escape_posix(&subtask_branch)

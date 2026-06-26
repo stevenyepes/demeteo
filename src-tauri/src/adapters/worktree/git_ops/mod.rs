@@ -19,6 +19,7 @@ impl GitOpsHelper {
 pub(crate) mod clone;
 pub(crate) mod health;
 pub(crate) mod merge;
+pub(crate) mod scope;
 pub(crate) mod strategy;
 pub(crate) mod sync;
 pub(crate) mod worktree;

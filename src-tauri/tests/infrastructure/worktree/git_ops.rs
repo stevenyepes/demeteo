@@ -263,6 +263,201 @@ async fn test_provision_subtask_worktree_fallback_when_branch_exists() {
     let _ = std::fs::remove_dir_all(&wt_path);
 }
 
+/// Regression: an orphan worktree directory left behind by an
+/// interrupted run must not cause the next provision to fail with
+/// "'<path>' already exists". Before the fix the cleanup was just
+/// `rm -rf` whose error was discarded; if the dir couldn't be removed
+/// (permission, busy, mount) the subsequent `git worktree add` failed.
+#[tokio::test]
+async fn test_provision_subtask_worktree_handles_orphan_dir() {
+    let (dir, helper) = make_repo("wt_orphan").await;
+    let repo = dir.to_string_lossy().to_string();
+
+    // Pre-create the exact path provision_subtask_worktree would use,
+    // as an orphan dir NOT registered with git.
+    let wt_path = format!("{}_wt_sub-orphan", repo);
+    std::fs::create_dir_all(&wt_path).unwrap();
+    std::fs::write(format!("{wt_path}/leftover.txt"), "from crashed run").unwrap();
+    assert!(std::path::Path::new(&wt_path).exists());
+
+    // Provision should clean up the orphan and create the worktree.
+    let result = helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-orphan")
+        .await;
+    assert!(
+        result.is_ok(),
+        "provision with orphan dir should succeed; got {:?}",
+        result
+    );
+    assert!(std::path::Path::new(&wt_path).exists(), "wt should exist");
+    assert!(
+        !std::path::Path::new(&format!("{wt_path}/leftover.txt")).exists(),
+        "leftover file should be gone"
+    );
+
+    // Cleanup.
+    let exec = LocalSubprocessAdapter::new();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt_path}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
+
+/// Regression: a worktree that IS registered with git (e.g. from a
+/// previous run that didn't clean up) must not block re-provisioning.
+#[tokio::test]
+async fn test_provision_subtask_worktree_handles_registered_worktree() {
+    let (dir, helper) = make_repo("wt_registered").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // First provision: create the worktree normally.
+    helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-reg")
+        .await
+        .unwrap();
+    let wt_path = format!("{}_wt_sub-reg", repo);
+    assert!(std::path::Path::new(&wt_path).exists());
+
+    // Simulate an interrupted run: worktree is registered with git
+    // but the next provision still needs to take over. Don't clean
+    // up; just call provision again.
+    let result = helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-reg")
+        .await;
+    assert!(
+        result.is_ok(),
+        "re-provision over registered worktree should succeed; got {:?}",
+        result
+    );
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt_path}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
+
+/// Two features with the same step id on the same project must get
+/// distinct worktree directories. The call site now scopes the
+/// `subtask_id` by `feature_id` so `{repo}_wt_{subtask_id}` is unique
+/// per feature. This test calls the helper directly with two distinct
+/// `subtask_id`s (the feature-scoped ones a parallel run would
+/// produce) and asserts they produce disjoint paths.
+#[tokio::test]
+async fn test_provision_subtask_worktree_distinct_per_feature() {
+    let (dir_a, helper_a) = make_repo("wt_par_a").await;
+    let (dir_b, helper_b) = make_repo("wt_par_b").await;
+
+    // Two features, same step id. Feature-scoped subtask_ids.
+    let wt_a = helper_a
+        .provision_subtask_worktree(
+            None,
+            &dir_a.to_string_lossy(),
+            "main",
+            "f-A-step-s-research",
+        )
+        .await
+        .expect("feature A should provision");
+    let wt_b = helper_b
+        .provision_subtask_worktree(
+            None,
+            &dir_b.to_string_lossy(),
+            "main",
+            "f-B-step-s-research",
+        )
+        .await
+        .expect("feature B should provision");
+
+    // Even though the repos are different in this test (to keep the
+    // git-side bookkeeping separate), the wt_dir suffixes reflect
+    // the feature-scoped subtask_id, so two features on the *same*
+    // repo would also be distinct.
+    assert!(wt_a.contains("f-A-step-s-research"));
+    assert!(wt_b.contains("f-B-step-s-research"));
+    assert_ne!(wt_a, wt_b);
+
+    // Cleanup.
+    let exec = LocalSubprocessAdapter::new();
+    for (repo, wt) in [
+        (dir_a.to_string_lossy().to_string(), wt_a),
+        (dir_b.to_string_lossy().to_string(), wt_b),
+    ] {
+        let _ = exec
+            .run_command(
+                "local",
+                &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+            )
+            .await;
+        let _ = std::fs::remove_dir_all(repo);
+        let _ = std::fs::remove_dir_all(wt);
+    }
+}
+
+/// Regression: a previous run that applied the artifact-scope fence
+/// (`chmod -R a-w` on protected paths) leaves the worktree in a state
+/// where `rm -rf` cannot traverse it — `unlink()` needs write on the
+/// parent directory, not the file itself, so an `a-w src/` blocks
+/// cleanup. The provisioner must restore write permissions before
+/// removing the directory, otherwise the next redirect or retry hits
+/// "already exists" with no clear way to recover.
+#[tokio::test]
+async fn test_provision_subtask_worktree_handles_chmod_locked_leftover() {
+    let (dir, helper) = make_repo("wt_chmod_locked").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // Pre-create the wt path as an unregistered dir with a protected
+    // subdirectory chmod'd to a-w — mimicking what the scope fence
+    // leaves behind after a crashed run.
+    let wt_path = format!("{}_wt_sub-chmod", repo);
+    std::fs::create_dir_all(format!("{wt_path}/src")).unwrap();
+    std::fs::write(format!("{wt_path}/src/main.rs"), "fn main() {}").unwrap();
+    let _ = exec
+        .run_command("local", &format!("chmod -R a-w '{wt_path}'"))
+        .await;
+
+    // Sanity: with the chmod applied, an unwary `rm -rf` would fail
+    // to remove `src/main.rs` because `src/` itself is a-w.
+    let naive_rm = exec
+        .run_command("local", &format!("rm -rf '{wt_path}/src/main.rs'"))
+        .await;
+    assert!(
+        naive_rm.is_err(),
+        "sanity: chmod a-w on src/ should block naive rm on src/main.rs"
+    );
+
+    // Provision should chmod u+w back, then rm -rf successfully, and
+    // create the worktree fresh.
+    let result = helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-chmod")
+        .await;
+    assert!(
+        result.is_ok(),
+        "provision with chmod-locked leftover should succeed; got {:?}",
+        result
+    );
+    assert!(std::path::Path::new(&wt_path).exists());
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt_path}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
+
 /// Set up two local repos and wire them together as fake
 /// origin/main. The "remote" is a regular working tree that
 /// we push to via a bare-clone URL; the "local" is a normal
@@ -586,4 +781,243 @@ async fn test_resolver_must_run_in_main_repo_not_worktree() {
         .await;
     let _ = std::fs::remove_dir_all(&local_dir);
     let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Artifact-scope enforcement
+//
+// Covers the chmod fence and the post-step diff guard against a real git
+// repo. The chmod fence stops honest mistakes at write time; the diff guard
+// is the safety net that catches any bypass (e.g. `chmod u+w .` shell
+// escape) before the bad changes reach the merge step.
+
+#[tokio::test]
+async fn test_scope_chmod_blocks_out_of_scope_writes() {
+    let (dir, helper) = make_repo("scope_block").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // Add a source file the agent must not touch.
+    exec.write_file("local", &format!("{repo}/src/main.rs"), "fn main() {}")
+        .await
+        .unwrap();
+    exec.run_command("local", &format!("git -C \"{repo}\" add ."))
+        .await
+        .unwrap();
+    exec.run_command("local", &format!("git -C \"{repo}\" commit -m addsrc"))
+        .await
+        .unwrap();
+
+    // Open a worktree at the existing HEAD so chmod operates on a real
+    // working tree (the helper expects the dir to exist and be a worktree).
+    let wt = format!("{}_wt", repo);
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" worktree add \"{wt}\" HEAD"),
+    )
+    .await
+    .unwrap();
+
+    // Apply scope: only `artifacts/report.md` is writable.
+    let writable = vec![std::path::PathBuf::from("artifacts/report.md")];
+    helper
+        .apply_artifact_scope(None, &wt, &writable)
+        .await
+        .expect("scope setup should succeed");
+
+    // 1. A write to `src/main.rs` should now fail (chmod a-w on src/).
+    let bad_write = exec
+        .write_file("local", &format!("{wt}/src/main.rs"), "hijacked")
+        .await;
+    assert!(
+        bad_write.is_err(),
+        "write to protected path should fail under scope fence"
+    );
+
+    // 2. A write to the allowed artifacts path should succeed.
+    std::fs::create_dir_all(format!("{wt}/artifacts")).unwrap();
+    let good_write = exec
+        .write_file("local", &format!("{wt}/artifacts/report.md"), "# report")
+        .await;
+    assert!(
+        good_write.is_ok(),
+        "write to allowed artifacts path should succeed"
+    );
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_scope_diff_guard_reverts_out_of_scope_writes() {
+    let (dir, helper) = make_repo("scope_revert").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // Source file committed to HEAD.
+    exec.write_file("local", &format!("{repo}/src/lib.rs"), "pub fn ok() {}")
+        .await
+        .unwrap();
+    exec.run_command("local", &format!("git -C \"{repo}\" add ."))
+        .await
+        .unwrap();
+    exec.run_command("local", &format!("git -C \"{repo}\" commit -m addsrc"))
+        .await
+        .unwrap();
+
+    let wt = format!("{}_wt", repo);
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" worktree add \"{wt}\" HEAD"),
+    )
+    .await
+    .unwrap();
+
+    // Simulate the agent bypassing the chmod fence (e.g. via
+    // `chmod u+w .` shell escape) and writing to a protected path.
+    std::fs::create_dir_all(format!("{wt}/src")).unwrap();
+    std::fs::write(
+        format!("{wt}/src/lib.rs"),
+        "pub fn hijacked() {} // agent ran chmod u+w and modified me",
+    )
+    .unwrap();
+    // And an untracked file too.
+    std::fs::write(format!("{wt}/src/new_file.rs"), "evil").unwrap();
+
+    // Run the diff guard. Writable set: only `artifacts/`.
+    let writable = vec![std::path::PathBuf::from("artifacts")];
+    let reverted = helper
+        .verify_and_revert_out_of_scope_writes(None, &wt, &writable)
+        .await
+        .expect("diff guard should succeed");
+
+    // Both writes should be reported as reverted.
+    assert!(
+        reverted.iter().any(|p| p == "src/lib.rs"),
+        "expected src/lib.rs in reverted list, got {:?}",
+        reverted
+    );
+    assert!(
+        reverted.iter().any(|p| p == "src/new_file.rs"),
+        "expected src/new_file.rs in reverted list, got {:?}",
+        reverted
+    );
+
+    // The tracked file should be back to its committed content.
+    let restored = std::fs::read_to_string(format!("{wt}/src/lib.rs")).unwrap();
+    assert_eq!(restored, "pub fn ok() {}");
+
+    // The untracked file should be gone.
+    assert!(!std::path::Path::new(&format!("{wt}/src/new_file.rs")).exists());
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_scope_diff_guard_keeps_in_scope_writes() {
+    let (dir, helper) = make_repo("scope_keep").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    let wt = format!("{}_wt", repo);
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" worktree add \"{wt}\" HEAD"),
+    )
+    .await
+    .unwrap();
+
+    // Agent writes the report inside the allowed scope.
+    std::fs::create_dir_all(format!("{wt}/artifacts")).unwrap();
+    std::fs::write(
+        format!("{wt}/artifacts/research-report.md"),
+        "# Research Report\n",
+    )
+    .unwrap();
+
+    // Diff guard runs with the allowed scope. Should report nothing
+    // reverted and leave the file in place.
+    let writable = vec![std::path::PathBuf::from("artifacts/research-report.md")];
+    let reverted = helper
+        .verify_and_revert_out_of_scope_writes(None, &wt, &writable)
+        .await
+        .expect("diff guard should succeed");
+    assert!(
+        reverted.is_empty(),
+        "in-scope write should not be reverted; got {:?}",
+        reverted
+    );
+
+    let content = std::fs::read_to_string(format!("{wt}/artifacts/research-report.md")).unwrap();
+    assert_eq!(content, "# Research Report\n");
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_scope_all_writes_sentinel_disables_enforcement() {
+    let (dir, helper) = make_repo("scope_off").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    let wt = format!("{}_wt", repo);
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" worktree add \"{wt}\" HEAD"),
+    )
+    .await
+    .unwrap();
+
+    // `s-implement`'s parallel capture is AllWrites → sentinel returned.
+    let writable = vec![std::path::PathBuf::from("__ALL_WRITES__")];
+
+    // chmod fence is a no-op: file remains writable.
+    helper
+        .apply_artifact_scope(None, &wt, &writable)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(format!("{wt}/src")).unwrap();
+    assert!(
+        exec.write_file("local", &format!("{wt}/src/main.rs"), "ok")
+            .await
+            .is_ok(),
+        "AllWrites sentinel must leave the worktree fully writable"
+    );
+
+    // Diff guard is a no-op: writes are not reverted.
+    std::fs::write(format!("{wt}/src/whatever.rs"), "fine").unwrap();
+    let reverted = helper
+        .verify_and_revert_out_of_scope_writes(None, &wt, &writable)
+        .await
+        .unwrap();
+    assert!(reverted.is_empty());
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
 }
