@@ -6,6 +6,7 @@ import { ConfigOptionValue } from '../types';
 import { getAgentModels } from '../lib/agentModels';
 import { formatError } from '../lib/errors';
 import { useErrorBus } from '../lib/errorBus';
+import { saveProjectSettings } from '../lib/project';
 import { TerminalWindow } from './TerminalWindow';
 
 export const MOCK_FEATURES = [
@@ -163,13 +164,20 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
         setLocalBootstrapStep('bootstrapping');
         setBootstrapError('');
         try {
+            // Read existing settings so we preserve user-customized values
+            const existing = await invoke<any>('get_proposed_strategy', {
+                projectId: activeProject.id
+            });
+
             const strategy = await invoke<any>('bootstrap_project', {
                 projectId: activeProject.id
             });
-            setDefaultBranch(strategy.default_branch);
-            setBranchPrefix(strategy.branch_prefix);
-            setTestCommand(strategy.test_command || '');
-            setPrTemplate(strategy.pr_template || '');
+
+            const ext = existing?.worktree_strategy;
+            setDefaultBranch(ext?.default_branch ?? strategy.default_branch);
+            setBranchPrefix(ext?.branch_prefix ?? strategy.branch_prefix);
+            setTestCommand(ext?.test_command ?? strategy.test_command ?? '');
+            setPrTemplate(ext?.pr_template ?? strategy.pr_template ?? '');
             setLocalBootstrapStep('strategy_proposal');
         } catch (err: any) {
             setLocalBootstrapStep('error');
@@ -179,19 +187,15 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
 
     const handleApproveStrategy = async () => {
         try {
-            await invoke('save_project_settings', {
-                projectId: activeProject.id,
-                settings: {
-                    project_id: activeProject.id,
-                    worktree_strategy: {
-                        default_branch: defaultBranch,
-                        branch_prefix: branchPrefix,
-                        test_command: testCommand || null,
-                        pr_template: prTemplate || null
-                    },
-                    conflict_policy: conflictPolicy,
-                    feature_lifecycle: featureLifecycle
-                }
+            // Utility merges with existing DB values, so we only pass the
+            // fields shown in this simple form. Everything else is preserved.
+            await saveProjectSettings(activeProject.id, {
+                default_branch: defaultBranch,
+                branch_prefix: branchPrefix,
+                test_command: testCommand || null,
+                pr_template: prTemplate || null,
+                conflict_policy: conflictPolicy,
+                feature_lifecycle: featureLifecycle,
             });
 
             // Update parent projects status to 'idle'

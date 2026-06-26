@@ -10,6 +10,7 @@ import { ConfigOptionValue, ProjectMemoryEntry, WorkflowOverride, StepConfig } f
 import { getAgentModels } from '../lib/agentModels';
 import { formatError } from '../lib/errors';
 import { useErrorBus } from '../lib/errorBus';
+import { saveProjectSettings } from '../lib/project';
 
 interface Project {
     id: string;
@@ -63,6 +64,9 @@ interface WorktreeStrategy {
     default_branch: string;
     branch_prefix: string;
     test_command: string | null;
+    build_command: string | null;
+    coverage_command: string | null;
+    conventions_file: string | null;
     pr_template: string | null;
     harnesses?: { [key: string]: string } | null;
 }
@@ -176,6 +180,9 @@ export default function ProjectSettingsView({
     const [defaultBranch, setDefaultBranch] = useState('main');
     const [branchPrefix, setBranchPrefix] = useState('demeteo/features/');
     const [testCommand, setTestCommand] = useState('');
+    const [buildCommand, setBuildCommand] = useState('');
+    const [coverageCommand, setCoverageCommand] = useState('');
+    const [conventionsFile, setConventionsFile] = useState('');
     const [harnesses, setHarnesses] = useState<{ [key: string]: string }>({});
     const [prTemplate, setPrTemplate] = useState('');
     const [conflictPolicy, setConflictPolicy] = useState('always_gate');
@@ -602,6 +609,9 @@ export default function ProjectSettingsView({
                     setDefaultBranch(res.worktree_strategy.default_branch);
                     setBranchPrefix(res.worktree_strategy.branch_prefix);
                     setTestCommand(res.worktree_strategy.test_command || '');
+                    setBuildCommand(res.worktree_strategy.build_command || '');
+                    setCoverageCommand(res.worktree_strategy.coverage_command || '');
+                    setConventionsFile(res.worktree_strategy.conventions_file || '');
                     setHarnesses(res.worktree_strategy.harnesses || {});
                     setPrTemplate(res.worktree_strategy.pr_template || '');
                     setConflictPolicy(res.conflict_policy);
@@ -861,27 +871,24 @@ export default function ProjectSettingsView({
                     }
                 });
 
-                // 2. Save settings
-                await invoke('save_project_settings', {
-                    projectId: activeProject.id,
-                    settings: {
-                        project_id: activeProject.id,
-                        worktree_strategy: {
-                            default_branch: defaultBranch,
-                            branch_prefix: branchPrefix,
-                            test_command: testCommand || null,
-                            pr_template: prTemplate || null,
-                            harnesses: Object.keys(harnesses).length > 0 ? harnesses : null
-                        },
+                // 2. Save settings (utility merges with existing DB values)
+                await saveProjectSettings(activeProject.id, {
+                    default_branch: defaultBranch,
+                    branch_prefix: branchPrefix,
+                    test_command: testCommand || null,
+                    build_command: buildCommand || null,
+                    coverage_command: coverageCommand || null,
+                    conventions_file: conventionsFile || null,
+                    pr_template: prTemplate || null,
+                    harnesses: Object.keys(harnesses).length > 0 ? harnesses : null,
                     conflict_policy: conflictPolicy,
                     feature_lifecycle: featureLifecycle,
                     default_agent_kind: defaultAgentKind || null,
                     default_model: defaultModel || null,
                     default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null,
                     artifact_subdir: artifactSubdir || 'artifacts/',
-                    commit_artifacts: commitArtifacts
-                }
-            });
+                    commit_artifacts: commitArtifacts,
+                });
 
             // 3. Update parent projects state
             setProjects(prev => prev.map(p => p.id === activeProject.id ? {
@@ -907,6 +914,12 @@ export default function ProjectSettingsView({
         setBootstrapStep('bootstrapping');
         setBootstrapError('');
         try {
+            // 0. Read existing settings so we preserve user-customized values
+            // for fields shown in the strategy-proposal form.
+            const existing = await invoke<ProjectSettings | null>('get_proposed_strategy', {
+                projectId: activeProject.id
+            });
+
             // 1. Save new config structure in DB (resets status to bootstrapping)
             await invoke('update_project', {
                 id: activeProject.id,
@@ -926,12 +939,14 @@ export default function ProjectSettingsView({
                 projectId: activeProject.id
             });
 
-            // 3. Set strategy proposal state
-            setDefaultBranch(strategy.default_branch);
-            setBranchPrefix(strategy.branch_prefix);
-            setTestCommand(strategy.test_command || '');
-            setHarnesses(strategy.harnesses || {});
-            setPrTemplate(strategy.pr_template || '');
+            // 3. Set strategy proposal state, preferring existing values over detected.
+            // Fields NOT shown in the proposal form (harnesses, build_command, etc.)
+            // are handled by the saveProjectSettings utility on approval.
+            const ext = existing?.worktree_strategy;
+            setDefaultBranch(ext?.default_branch ?? strategy.default_branch);
+            setBranchPrefix(ext?.branch_prefix ?? strategy.branch_prefix);
+            setTestCommand(ext?.test_command ?? strategy.test_command ?? '');
+            setPrTemplate(ext?.pr_template ?? strategy.pr_template ?? '');
             setBootstrapStep('strategy_proposal');
         } catch (err: any) {
             setBootstrapStep('error');
@@ -941,26 +956,28 @@ export default function ProjectSettingsView({
 
     const handleApproveStrategy = async () => {
         try {
-            // Save approved settings
-            await invoke('save_project_settings', {
-                projectId: activeProject.id,
-                settings: {
-                    project_id: activeProject.id,
-                    worktree_strategy: {
-                        default_branch: defaultBranch,
-                        branch_prefix: branchPrefix,
-                        test_command: testCommand || null,
-                        pr_template: prTemplate || null,
-                        harnesses: Object.keys(harnesses).length > 0 ? harnesses : null
-                    },
-                    conflict_policy: conflictPolicy,
-                    feature_lifecycle: featureLifecycle,
-                    default_agent_kind: defaultAgentKind || null,
-                    default_model: defaultModel || null,
-                    default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null,
-                    artifact_subdir: artifactSubdir || 'artifacts/',
-                    commit_artifacts: commitArtifacts
-                }
+            // The strategy-proposal form only re-displays a few fields, but the
+            // rest of the main settings form's state (harnesses, build/coverage
+            // commands, agent/model defaults, etc.) survives through this screen
+            // and may contain unsaved user edits. Pass them all so an edit made
+            // right before a re-bootstrap isn't silently dropped. Fields left
+            // undefined are still merged from the DB by the utility.
+            await saveProjectSettings(activeProject.id, {
+                default_branch: defaultBranch,
+                branch_prefix: branchPrefix,
+                test_command: testCommand || null,
+                build_command: buildCommand || null,
+                coverage_command: coverageCommand || null,
+                conventions_file: conventionsFile || null,
+                pr_template: prTemplate || null,
+                harnesses: Object.keys(harnesses).length > 0 ? harnesses : null,
+                conflict_policy: conflictPolicy,
+                feature_lifecycle: featureLifecycle,
+                default_agent_kind: defaultAgentKind || null,
+                default_model: defaultModel || null,
+                default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null,
+                artifact_subdir: artifactSubdir || 'artifacts/',
+                commit_artifacts: commitArtifacts,
             });
 
             setProjects(prev => prev.map(p => p.id === activeProject.id ? {
@@ -1060,7 +1077,7 @@ export default function ProjectSettingsView({
                         {bootstrapError}
                     </div>
                     <div className="flex gap-3">
-                        <button onClick={() => setBootstrapStep('form')} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all">
+                        <button onClick={() => { setStatus('idle'); setBootstrapStep('form'); }} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all">
                             Back to Settings
                         </button>
                         <button onClick={proceedWithReBootstrap} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-medium">
@@ -1112,6 +1129,7 @@ export default function ProjectSettingsView({
                     <div className="flex gap-3 w-full">
                         <button
                             onClick={() => {
+                                setStatus('idle');
                                 setBootstrapStep('form');
                                 setShowHealthPanel(true);
                                 fetchWorkspaceHealth();
@@ -1211,7 +1229,7 @@ export default function ProjectSettingsView({
                     </div>
 
                     <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-4">
-                        <button onClick={() => setBootstrapStep('form')} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Back</button>
+                        <button onClick={() => { setStatus('idle'); setBootstrapStep('form'); }} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Back</button>
                         <button onClick={handleApproveStrategy} className="px-6 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all flex items-center gap-2">
                             <Check className="w-4 h-4" /> Approve & Build Workspace
                         </button>

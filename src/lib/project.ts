@@ -24,3 +24,101 @@ export async function upsertProjectMemory(
 export async function deleteProjectMemory(id: string): Promise<void> {
   return invoke<void>("project_memory_delete", { id });
 }
+
+/**
+ * Partial project-settings input. Any field left `undefined` is filled from
+ * the existing DB record (or a sensible default). This prevents the
+ * partial-save data-loss bug where a caller that omits a field would
+ * accidentally `INSERT OR REPLACE` it to NULL.
+ */
+export interface ProjectSettingsInput {
+  default_branch?: string;
+  branch_prefix?: string;
+  test_command?: string | null;
+  build_command?: string | null;
+  coverage_command?: string | null;
+  conventions_file?: string | null;
+  pr_template?: string | null;
+  harnesses?: Record<string, string> | null;
+  conflict_policy?: string;
+  feature_lifecycle?: string;
+  default_agent_kind?: string | null;
+  default_model?: string | null;
+  default_loop_iterations?: number | null;
+  artifact_subdir?: string;
+  commit_artifacts?: boolean;
+}
+
+/**
+ * Read existing DB settings, overlay the caller's partial input, and write
+ * back the complete merged record.  Any field omitted from `input` (i.e.
+ * left `undefined`) keeps whatever is already in the database, so a save
+ * call that only touches a few form fields can never NULL out the rest.
+ */
+export async function saveProjectSettings(
+  projectId: string,
+  input: ProjectSettingsInput,
+): Promise<void> {
+  const existing = await invoke<any | null>("get_proposed_strategy", {
+    projectId,
+  });
+  const baseWs = existing?.worktree_strategy;
+
+  const merged = {
+    project_id: projectId,
+    worktree_strategy: {
+      default_branch:
+        input.default_branch ?? baseWs?.default_branch ?? "main",
+      branch_prefix:
+        input.branch_prefix ?? baseWs?.branch_prefix ?? "demeteo/features/",
+      test_command:
+        input.test_command !== undefined
+          ? input.test_command
+          : (baseWs?.test_command ?? null),
+      build_command:
+        input.build_command !== undefined
+          ? input.build_command
+          : (baseWs?.build_command ?? null),
+      coverage_command:
+        input.coverage_command !== undefined
+          ? input.coverage_command
+          : (baseWs?.coverage_command ?? null),
+      conventions_file:
+        input.conventions_file !== undefined
+          ? input.conventions_file
+          : (baseWs?.conventions_file ?? null),
+      pr_template:
+        input.pr_template !== undefined
+          ? input.pr_template
+          : (baseWs?.pr_template ?? null),
+      harnesses:
+        input.harnesses !== undefined
+          ? (Object.keys(input.harnesses ?? {}).length > 0
+              ? input.harnesses
+              : null)
+          : (baseWs?.harnesses ?? null),
+    },
+    conflict_policy:
+      input.conflict_policy ?? existing?.conflict_policy ?? "always_gate",
+    feature_lifecycle:
+      input.feature_lifecycle ?? existing?.feature_lifecycle ?? "archive",
+    default_agent_kind:
+      input.default_agent_kind !== undefined
+        ? input.default_agent_kind
+        : (existing?.default_agent_kind ?? null),
+    default_model:
+      input.default_model !== undefined
+        ? input.default_model
+        : (existing?.default_model ?? null),
+    default_loop_iterations:
+      input.default_loop_iterations !== undefined
+        ? input.default_loop_iterations
+        : (existing?.default_loop_iterations ?? null),
+    artifact_subdir:
+      input.artifact_subdir ?? existing?.artifact_subdir ?? "artifacts/",
+    commit_artifacts:
+      input.commit_artifacts ?? existing?.commit_artifacts ?? false,
+  };
+
+  await invoke("save_project_settings", { projectId, settings: merged });
+}

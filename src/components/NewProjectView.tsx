@@ -3,6 +3,7 @@ import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Serv
 import { invoke } from '@tauri-apps/api/core';
 import { formatError } from '../lib/errors';
 import { useErrorBus } from '../lib/errorBus';
+import { saveProjectSettings } from '../lib/project';
 
 interface Provider {
     id: string;
@@ -235,20 +236,17 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
 
     const handleApproveStrategy = async () => {
         try {
-            // Save the approved settings
-            await invoke('save_project_settings', {
-                projectId,
-                settings: {
-                    project_id: projectId,
-                    worktree_strategy: {
-                        default_branch: defaultBranch,
-                        branch_prefix: branchPrefix,
-                        test_command: testCommand || null,
-                        pr_template: prTemplate || null
-                    },
-                    conflict_policy: conflictPolicy,
-                    feature_lifecycle: featureLifecycle
-                }
+            // Utility merges with existing DB values, so we only pass the
+            // fields shown in the strategy-proposal form. Everything else
+            // (harnesses, build_command, etc.) gets a sensible default on a
+            // first bootstrap or is preserved on a re-bootstrap.
+            await saveProjectSettings(projectId, {
+                default_branch: defaultBranch,
+                branch_prefix: branchPrefix,
+                test_command: testCommand || null,
+                pr_template: prTemplate || null,
+                conflict_policy: conflictPolicy,
+                feature_lifecycle: featureLifecycle,
             });
 
             const newProj = {

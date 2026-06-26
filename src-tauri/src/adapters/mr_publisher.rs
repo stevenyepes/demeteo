@@ -383,7 +383,13 @@ async fn fetch_github_pr_state(
     pat: &str,
 ) -> Result<String, String> {
     let (owner, repo, number) = parse_github_pr_url(mr_url)?;
-    let url = format!("https://{}/repos/{}/{}/pulls/{}", github_api_host(host), owner, repo, number);
+    let url = format!(
+        "https://{}/repos/{}/{}/pulls/{}",
+        github_api_host(host),
+        owner,
+        repo,
+        number
+    );
     let headers: Vec<(String, String)> = vec![
         ("Authorization".to_string(), format!("Bearer {}", pat)),
         (
@@ -404,7 +410,13 @@ async fn fetch_github_pr_state_unauth(
     mr_url: &str,
 ) -> Result<String, String> {
     let (owner, repo, number) = parse_github_pr_url(mr_url)?;
-    let url = format!("https://{}/repos/{}/{}/pulls/{}", github_api_host(host), owner, repo, number);
+    let url = format!(
+        "https://{}/repos/{}/{}/pulls/{}",
+        github_api_host(host),
+        owner,
+        repo,
+        number
+    );
     let headers: Vec<(String, String)> = vec![
         (
             "Accept".to_string(),
@@ -585,7 +597,11 @@ async fn publish_github(
     draft: bool,
     pat: &str,
 ) -> Result<MrInfo, String> {
-    let url = format!("https://{}/repos/{}/pulls", github_api_host(host), repo_path);
+    let url = format!(
+        "https://{}/repos/{}/pulls",
+        github_api_host(host),
+        repo_path
+    );
     let payload = serde_json::json!({
         "title": title,
         "head": head_branch,
