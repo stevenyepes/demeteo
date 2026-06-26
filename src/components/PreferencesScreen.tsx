@@ -1,17 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import MachinesView from './MachinesView';
 import MemoryAgentSettings from './MemoryAgentSettings';
+import { TabBar } from './ui/TabBar';
+import type { TabDef } from './ui/TabBar';
+import { useNavigation } from '../context';
 
 type PrefTab = 'machines' | 'providers' | 'defaults' | 'memory' | 'about';
 
-interface PreferencesScreenProps {
-  onNavigate: (view: string) => void;
-}
-
-const PreferencesScreen: React.FC<PreferencesScreenProps> = ({ onNavigate }) => {
+const PreferencesScreen = () => {
+  const { navigate } = useNavigation();
+  const onNavigate = (view: string) => navigate({ kind: view as any });
   const [activeTab, setActiveTab] = useState<PrefTab>('machines');
 
   // Workspace directory state
@@ -52,7 +53,7 @@ const PreferencesScreen: React.FC<PreferencesScreenProps> = ({ onNavigate }) => 
     }
   };
 
-  const tabs: { key: PrefTab; label: string; icon: React.ReactNode }[] = [
+  const tabs: TabDef[] = [
     { key: 'machines', label: 'Machines', icon: <Server className="w-4 h-4" /> },
     { key: 'providers', label: 'Providers', icon: <Globe className="w-4 h-4" /> },
     { key: 'defaults', label: 'Defaults', icon: <Cpu className="w-4 h-4" /> },
@@ -83,22 +84,7 @@ const PreferencesScreen: React.FC<PreferencesScreenProps> = ({ onNavigate }) => 
         </div>
 
         {/* Tab bar */}
-        <div className="flex gap-1 mb-6 border-b border-white/5 pb-px">
-          {tabs.map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all ${
-                activeTab === tab.key
-                  ? 'border-cyan-500 text-cyan-300'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {tab.icon}
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <TabBar tabs={tabs} activeTab={activeTab} onChange={(k) => setActiveTab(k as PrefTab)} className="mb-6" />
 
         {/* Tab content */}
         {activeTab === 'machines' && (

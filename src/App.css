@@ -4,6 +4,19 @@
   --font-sans: 'Inter', -apple-system, sans-serif;
   --font-mono: 'Fira Code', 'JetBrains Mono', monospace;
   --font-heading: 'Outfit', sans-serif;
+
+  /* Ruby is a red alias used throughout the UI for errors and destructive actions */
+  --color-ruby-50: #fef2f2;
+  --color-ruby-100: #fee2e2;
+  --color-ruby-200: #fecaca;
+  --color-ruby-300: #fca5a5;
+  --color-ruby-400: #f87171;
+  --color-ruby-500: #ef4444;
+  --color-ruby-600: #dc2626;
+  --color-ruby-700: #b91c1c;
+  --color-ruby-800: #991b1b;
+  --color-ruby-900: #7f1d1d;
+  --color-ruby-950: #450a0a;
 }
 
 

@@ -1,43 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Server, RotateCw, AlertTriangle, Key } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { formatError } from '../lib/errors';
+import type { Machine } from '../types';
 import { useErrorBus } from '../lib/errorBus';
 import { saveProjectSettings } from '../lib/project';
-
-interface Provider {
-    id: string;
-    type: string;
-    name: string;
-    host: string;
-    pat: string;
-    username: string;
-    avatarUrl: string;
-}
-
-interface Machine {
-    id: string;
-    name: string;
-    host: string;
-    port: number;
-    username: string;
-    auth_type: string;
-    key_path?: string | null;
-    agents?: string | null;
-}
-
-interface NewProjectViewProps {
-    setView: (view: string) => void;
-    setProjects: (updater: (prev: any[]) => any[]) => void;
-    setCurrentProjectId: (id: string) => void;
-    providers: Provider[];
-    /**
-     * Optional callback to navigate to the Machines settings page.
-     * When omitted, the "Manage machines…" link is hidden — useful
-     * for tests and for surfaces that don't want to expose it.
-     */
-    onOpenMachinesSettings?: () => void;
-}
+import { useNavigation, useProject } from '../context';
 
 interface AvailableRepo {
     path: string;
@@ -51,7 +19,12 @@ interface WorktreeStrategy {
     pr_template: string | null;
 }
 
-const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, setCurrentProjectId, providers, onOpenMachinesSettings }) => {
+const NewProjectView = () => {
+    const { navigate } = useNavigation();
+    const { state: { providers }, dispatch: projDispatch } = useProject();
+    const setProjects = (updater: (prev: any[]) => any[]) => projDispatch({ type: 'UPDATE_PROJECTS', updater });
+    const setCurrentProjectId = (id: string) => projDispatch({ type: 'SET_CURRENT', id });
+    const onOpenMachinesSettings = () => navigate({ kind: 'settings' });
     const { reportError } = useErrorBus();
     const [projectName, setProjectName] = useState('');
     const [computeType, setComputeType] = useState('local');
@@ -259,7 +232,7 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
             };
             setProjects(prev => [...prev, newProj]);
             setCurrentProjectId(projectId);
-            setView('home');
+            navigate({ kind: 'home' });
         } catch (err: any) {
             setBootstrapStep('error');
             setBootstrapError(formatError(err));
@@ -605,7 +578,7 @@ const NewProjectView: React.FC<NewProjectViewProps> = ({ setView, setProjects, s
                             </div>
 
                             <div className="mt-6 flex justify-end gap-3">
-                                <button onClick={() => setView('home')} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
+                                <button onClick={() => navigate({ kind: 'home' })} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
                                 <button onClick={handleCreate} disabled={!projectName || selectedRepos.length === 0} className="disabled:opacity-40 disabled:cursor-not-allowed px-5 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-md shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all flex items-center gap-2">
                                     <Check className="w-4 h-4" /> Initialize & Analyze
                                 </button>

@@ -1,6 +1,68 @@
 // Post-pivot types. Legacy supervisor/thread types were removed as part of
 // the R7 cleanup; see AGENT_INTEGRATION.md §1 for the surviving surface.
 
+export interface Project {
+  id: string;
+  name: string;
+  status: string;
+  repos: number;
+  nodes: number;
+  spend: number;
+  tokens: number;
+  compute_type?: string;
+  remote_host?: string | null;
+}
+
+export interface Provider {
+  id: string;
+  type: string;
+  name: string;
+  host: string;
+  pat: string;
+  username: string;
+  avatarUrl: string;
+}
+
+export interface Machine {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  auth_type: string;
+  key_path?: string | null;
+  agents?: string | null;
+  use_login_shell?: boolean | null;
+  setup_commands?: string | null;
+}
+
+export interface EditorContext {
+  machineId: string;
+  worktreePath: string;
+  branch: string;
+  defaultBranch: string;
+  initialFile?: string;
+}
+
+export interface WorkflowSummary {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+}
+
+export type AppView =
+  | { kind: 'empty-state' }
+  | { kind: 'home' }
+  | { kind: 'detail'; featureId: string; featureTitle: string; gateStepExecutionId?: string | null }
+  | { kind: 'editor'; editorContext: EditorContext; featureId: string; featureTitle: string }
+  | { kind: 'new-project' }
+  | { kind: 'project-settings' }
+  | { kind: 'workflows' }
+  | { kind: 'workflow-editor'; workflowId: string | null }
+  | { kind: 'providers' }
+  | { kind: 'settings' };
+
 export type ConfigOptionValue = {
   value: string;
   name: string;
@@ -262,4 +324,27 @@ export type AppErrorKind =
 export interface AppError {
   kind: AppErrorKind;
   message: string;
+}
+
+export interface WorktreeStrategy {
+  default_branch: string;
+  branch_prefix: string;
+  test_command: string | null;
+  build_command: string | null;
+  coverage_command: string | null;
+  conventions_file: string | null;
+  pr_template: string | null;
+  harnesses?: Record<string, string> | null;
+}
+
+export interface ProjectSettingsData {
+  project_id: string;
+  worktree_strategy: WorktreeStrategy;
+  conflict_policy: string;
+  feature_lifecycle: string;
+  default_agent_kind?: string | null;
+  default_model?: string | null;
+  default_loop_iterations?: number | null;
+  artifact_subdir?: string;
+  commit_artifacts?: boolean;
 }

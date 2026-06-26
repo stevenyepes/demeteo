@@ -1,98 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { Zap, Cpu, Play, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal, Code } from 'lucide-react';
 import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { invoke } from '@tauri-apps/api/core';
-import { ConfigOptionValue } from '../types';
+import { ConfigOptionValue, Feature, WorktreeStrategy, ProjectSettingsData } from '../types';
+import { formatTokens } from '../lib/utils';
 import { getAgentModels } from '../lib/agentModels';
 import { formatError } from '../lib/errors';
 import { useErrorBus } from '../lib/errorBus';
 import { saveProjectSettings } from '../lib/project';
 import { TerminalWindow } from './TerminalWindow';
+import { useNavigation, useProject, useUIState } from '../context';
 
-export const MOCK_FEATURES = [
-    {
-        id: 'f-8a7b9c',
-        title: 'Migrate Session Auth to JWT Tokens',
-        status: 'gated',
-        totalCost: 1.42,
-        duration: '14m 22s',
-        steps: [
-            { id: 's1', type: 'agent', title: 'Research Codebase', agent: 'claude-sys-1', status: 'done', cost: 0.15, time: '2m 10s' },
-            { id: 's2', type: 'agent', title: 'Draft Implementation Spec', agent: 'claude-sys-1', status: 'done', cost: 0.35, time: '4m 05s' },
-            {
-                id: 's3', type: 'parallel', title: 'Generate Utility Stubs', status: 'done', cost: 0.42, time: '3m 12s', subtasks: [
-                    { title: 'jwt_encoder.ts', agent: 'opencode-alpha', status: 'done' },
-                    { title: 'jwt_decoder.ts', agent: 'opencode-beta', status: 'done' },
-                ]
-            },
-            { id: 's4', type: 'gate', title: 'Review Security Middleware', status: 'waiting', cost: 0.00, time: 'Paused', requires: 'Human Approval' },
-            { id: 's5', type: 'agent', title: 'Rewrite Integration Tests', agent: 'hermes-worker', status: 'pending', cost: 0.00, time: '--' },
-        ]
-    },
-    {
-        id: 'f-2b3c4d',
-        title: 'Implement Redis Rate Limiting API',
-        status: 'running',
-        totalCost: 0.85,
-        duration: '5m 10s',
-        steps: [
-            { id: 's1', type: 'agent', title: 'Analyze Endpoint Traffic', agent: 'claude-sys-1', status: 'done', cost: 0.10, time: '1m 00s' },
-            { id: 's2', type: 'agent', title: 'Write Redis Lua Scripts', agent: 'opencode-alpha', status: 'running', cost: 0.75, time: '4m 10s' },
-        ]
-    }
-];
-
-interface Project {
-  id: string;
-  name: string;
-  status: string;
-  repos: number;
-  nodes: number;
-  spend: number;
-  tokens: number;
-  compute_type?: string;
-  remote_host?: string | null;
-}
-
-interface Feature {
-  id: string;
-  project_id: string;
-  title: string;
-  status: string;
-  total_cost: number;
-  tokens?: number | null;
-  duration: string;
-  created_at: number;
-  agent_kind?: string | null;
-  model?: string | null;
-}
-
-const formatTokens = (tokens: number | null | undefined): string => {
-  if (tokens == null) return '0';
-  if (tokens >= 1_000_000) {
-    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
-  }
-  if (tokens >= 1_000) {
-    return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
-  }
-  return tokens.toString();
-};
-
-interface ProjectHomeProps {
-  setView: (view: string) => void;
-  activeProject: Project;
-  setActiveFeatureId: (id: string) => void;
-  setActiveFeatureTitle?: (title: string) => void;
-  setProjects?: React.Dispatch<React.SetStateAction<Project[]>>;
-  sidebarCollapsed?: boolean;
-}
-
-const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setActiveFeatureId, setActiveFeatureTitle, setProjects, sidebarCollapsed }) => {
+const ProjectHome = () => {
+    const { navigate } = useNavigation();
+    const { state: { currentProjectId, projects }, dispatch: projDispatch } = useProject();
+    const { ui: { sidebarCollapsed } } = useUIState();
+    const activeProject = projects.find(p => p.id === currentProjectId)!;
     const { reportError } = useErrorBus();
     const [featureInput, setFeatureInput] = useState('');
     const [isExpanded, setIsExpanded] = useState(false);
-    const [features, setFeatures] = useState<any[]>([]);
+    const [features, setFeatures] = useState<Feature[]>([]);
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
     const [activeRepoPath, setActiveRepoPath] = useState<string>('');
@@ -170,11 +98,11 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
         setBootstrapError('');
         try {
             // Read existing settings so we preserve user-customized values
-            const existing = await invoke<any>('get_proposed_strategy', {
+            const existing = await invoke<ProjectSettingsData | null>('get_proposed_strategy', {
                 projectId: activeProject.id
             });
 
-            const strategy = await invoke<any>('bootstrap_project', {
+            const strategy = await invoke<WorktreeStrategy>('bootstrap_project', {
                 projectId: activeProject.id
             });
 
@@ -204,9 +132,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
             });
 
             // Update parent projects status to 'idle'
-            if (setProjects) {
-                setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, status: 'idle' } : p));
-            }
+            projDispatch({ type: 'UPDATE_PROJECTS', updater: prev => prev.map(p => p.id === activeProject.id ? { ...p, status: 'idle' } : p) });
             setLocalBootstrapStep('idle');
         } catch (err: any) {
             setLocalBootstrapStep('error');
@@ -223,7 +149,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                 invoke<Feature[]>('fetch_active_features', { projectId: activeProject.id }),
                 invoke<any[]>('get_repositories_for_project', { projectId: activeProject.id }),
                 invoke<any[]>('workflow_list'),
-                invoke<any>('get_proposed_strategy', { projectId: activeProject.id }),
+                invoke<ProjectSettingsData | null>('get_proposed_strategy', { projectId: activeProject.id }),
                 invoke<any[]>('get_agent_configs', { machineId })
             ]);
 
@@ -231,14 +157,17 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
             if (featuresRes.status === 'fulfilled' && featuresRes.value) {
                 const res = featuresRes.value;
                 if (res && res.length > 0) {
-                    const mapped = res.map(f => ({
+                    const mapped: Feature[] = res.map((f: any) => ({
                         id: f.id,
+                        project_id: f.project_id,
                         title: f.title,
                         status: f.status,
-                        totalCost: f.total_cost,
+                        total_cost: f.total_cost,
                         tokens: f.tokens || 0,
                         duration: f.duration,
-                        steps: []
+                        created_at: f.created_at,
+                        agent_kind: f.agent_kind,
+                        model: f.model,
                     }));
                     setFeatures(mapped);
                 } else {
@@ -342,21 +271,20 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                 agentKind: selectedAgentKind || null,
                 model: selectedModel || null
             });
-            const newFeature = {
+            const newFeature: Feature = {
                 id: res.id,
+                project_id: res.project_id,
                 title: res.title,
                 status: res.status,
-                totalCost: res.total_cost,
+                total_cost: res.total_cost,
                 tokens: res.tokens || 0,
                 duration: res.duration,
-                steps: []
+                created_at: res.created_at,
+                agent_kind: res.agent_kind,
+                model: res.model,
             };
             setFeatures(prev => [newFeature, ...prev]);
-            setActiveFeatureId(res.id);
-            if (setActiveFeatureTitle) {
-                setActiveFeatureTitle(res.title);
-            }
-            setView('detail');
+            navigate({ kind: 'detail', featureId: res.id, featureTitle: res.title });
         } catch (err) {
             console.error("Failed to start feature pipeline:", err);
             reportError(err);
@@ -416,7 +344,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                         </div>
                     )}
                     <div className="flex gap-3">
-                        <button onClick={() => setView('project-settings')} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all flex items-center gap-1.5 font-medium">
+                        <button onClick={() => navigate({ kind: 'project-settings' })} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all flex items-center gap-1.5 font-medium">
                             <Settings className="w-4 h-4" /> Configure Workspace
                         </button>
                         <button onClick={handleRetryBootstrap} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] flex items-center gap-1.5">
@@ -527,7 +455,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                         <div className="flex items-center gap-2 mb-2">
                             <h1 className="text-3xl font-outfit font-bold text-white tracking-tight">{activeProject.name}</h1>
                             <button
-                                onClick={() => setView('project-settings')}
+                                onClick={() => navigate({ kind: 'project-settings' })}
                                 className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 transition-all"
                                 title="Workspace Settings"
                             >
@@ -817,7 +745,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                                     <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-2 overflow-x-auto pb-2 w-full max-w-full">
                                                         {selectedWorkflow.steps && selectedWorkflow.steps.length > 0 ? (
                                                             selectedWorkflow.steps.map((step: any, idx: number) => (
-                                                                <React.Fragment key={step.id}>
+                                                                <Fragment key={step.id}>
                                                                     <div className="flex items-center gap-2.5 p-2.5 rounded bg-black/40 border border-white/5 min-w-[150px] max-w-[200px] shrink-0">
                                                                         <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
                                                                             step.kind === 'gate'
@@ -836,7 +764,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                                                     {idx < selectedWorkflow.steps.length - 1 && (
                                                                         <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0 hidden md:block" />
                                                                     )}
-                                                                </React.Fragment>
+                                                                </Fragment>
                                                             ))
                                                         ) : (
                                                             <span className="text-xs text-slate-500 italic">No steps defined in this workflow.</span>
@@ -927,9 +855,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                                 <div
                                     key={feature.id}
                                     onClick={() => {
-                                        setActiveFeatureId(feature.id);
-                                        if (setActiveFeatureTitle) setActiveFeatureTitle(feature.title);
-                                        setView('detail');
+                                        navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
                                     }}
                                     className="glass-panel glass-panel-hover rounded-xl p-5 cursor-pointer relative overflow-hidden group"
                                 >

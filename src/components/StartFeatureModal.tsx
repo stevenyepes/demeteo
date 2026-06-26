@@ -1,18 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-
-interface Repository {
-  id: string;
-  repo_path: string;
-}
-
-interface WorkflowSummary {
-  id: string;
-  name: string;
-  description: string;
-  version: number;
-}
+import type { Repository, WorkflowSummary } from '../types';
 
 interface StartFeatureModalProps {
   isOpen: boolean;

@@ -1,23 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
-
-interface Project {
-  id: string;
-  name: string;
-  status: string;
-  repos: number;
-  nodes?: number;
-  tokens?: number;
-}
-
-interface ProjectRailProps {
-  projects: Project[];
-  currentProject: string | null;
-  setCurrentProject: (id: string) => void;
-  setView: (view: string) => void;
-  collapsed?: boolean;
-  onToggleCollapse?: () => void;
-}
+import { StatusBadge } from './ui/StatusBadge';
+import { useNavigation, useProject, useUIState } from '../context';
 
 function fuzzyMatch(text: string, query: string): boolean {
   const lower = text.toLowerCase();
@@ -29,16 +13,6 @@ function fuzzyMatch(text: string, query: string): boolean {
   return qi === q.length;
 }
 
-const statusColor: Record<string, string> = {
-  idle: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]',
-  active: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]',
-  running: 'bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.8)]',
-  bootstrapping: 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]',
-  gated: 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]',
-  error: 'bg-ruby-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]',
-  failed: 'bg-ruby-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]',
-};
-
 const statusLabel: Record<string, string> = {
   idle: 'Ready',
   active: 'Active',
@@ -49,10 +23,16 @@ const statusLabel: Record<string, string> = {
   failed: 'Failed',
 };
 
-const ProjectRail: React.FC<ProjectRailProps> = ({
-  projects, currentProject, setCurrentProject, setView,
-  collapsed = false, onToggleCollapse,
-}) => {
+function ProjectRail() {
+  const { navigate } = useNavigation();
+  const { state: { projects, currentProjectId }, dispatch } = useProject();
+  const { ui: { sidebarCollapsed }, uiDispatch } = useUIState();
+  const collapsed = sidebarCollapsed;
+  const currentProject = currentProjectId;
+  const setCurrentProject = (id: string) => { dispatch({ type: 'SET_CURRENT', id }); navigate({ kind: 'home' }); };
+  const onToggleCollapse = () => uiDispatch({ type: 'TOGGLE_SIDEBAR' });
+  const setView = (v: string) => navigate({ kind: v as any });
+
   const [searchQuery, setSearchQuery] = useState('');
 
   const filtered = useMemo(() => {
@@ -141,7 +121,7 @@ const ProjectRail: React.FC<ProjectRailProps> = ({
               }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className={`w-2 h-2 rounded-full shrink-0 ${statusColor[p.status] || 'bg-slate-600'}`} />
+                <StatusBadge status={p.status} variant="dot" />
                 <div className="min-w-0">
                   <div className="text-xs font-medium truncate max-w-[120px]">{p.name}</div>
                   <div className="text-[9px] text-slate-500 font-mono">
@@ -181,4 +161,5 @@ const ProjectRail: React.FC<ProjectRailProps> = ({
   );
 };
 
+export { ProjectRail };
 export default ProjectRail;

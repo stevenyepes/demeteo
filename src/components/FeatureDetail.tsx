@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
@@ -16,24 +16,10 @@ import { ArtifactViewer } from './ArtifactViewer';
 import PromptDialog from './PromptDialog';
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
 import type { SyncOutcomeView, MrState } from '../types';
+import { Modal } from './ui/Modal';
+import { useNavigation, useProject, useUIState } from '../context';
 
-interface EditorContext {
-  machineId: string;
-  worktreePath: string;
-  branch: string;
-  defaultBranch: string;
-  initialFile?: string;
-}
 
-interface FeatureDetailProps {
-  featureId: string;
-  projectId?: string;
-  title: string;
-  onDecideGate: (stepExecId: string) => void;
-  onBack: () => void;
-  onOpenEditor?: (ctx: EditorContext) => void;
-  sidebarCollapsed?: boolean;
-}
 
 const humanizeStepId = (id: string) => {
   return id
@@ -134,18 +120,28 @@ const suggestMrTitle = (raw: string): string => {
   return first5.length > 40 ? first5.slice(0, 40).trimEnd() + '…' : first5;
 };
 
-export const FeatureDetail: React.FC<FeatureDetailProps> = ({
-  featureId,
-  projectId,
-  title,
-  onDecideGate,
-  onBack,
-  onOpenEditor,
-  sidebarCollapsed,
-}) => {
+export function FeatureDetail() {
+  const { view, navigate } = useNavigation();
+  const { state: { currentProjectId } } = useProject();
+  const { ui: { sidebarCollapsed } } = useUIState();
+
+  if (view.kind !== 'detail') return null;
+  const { featureId } = view;
+  const projectId = currentProjectId ?? undefined;
+
   const { reportError } = useErrorBus();
   const [steps, setSteps] = useState<StepExecution[]>([]);
-  const [status, setStatus] = useState('running');
+  const [featureStatus, setFeatureStatus] = useState('running');
+  const status = useMemo(() => {
+    if (featureStatus === 'cancelled') return 'cancelled';
+    if (steps.some(s => s.status === 'awaiting_gate')) return 'gated';
+    if (steps.some(s => s.status === 'failed')) return 'failed';
+    if (steps.some(s => s.status === 'interrupted')) return 'cancelled';
+    if (steps.some(s => s.status === 'running')) return 'running';
+    if (steps.some(s => s.status === 'verifying')) return 'verifying';
+    if (steps.length > 0 && steps.every(s => s.status === 'completed')) return 'completed';
+    return featureStatus;
+  }, [steps, featureStatus]);
   const [tokens, setTokens] = useState<number>(0);
   const [duration, setDuration] = useState('0s');
   const [loading, setLoading] = useState(true);
@@ -166,13 +162,20 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   const [featureAgentKind, setFeatureAgentKind] = useState<string>('opencode');
   const [featureMachineId, setFeatureMachineId] = useState<string>('local');
   const [replayTarget, setReplayTarget] = useState<{ id: string; name: string; downstreamCount: number } | null>(null);
-  const [featureTitle, setFeatureTitle] = useState<string>(title || 'Feature Pipeline');
+  const [featureTitle, setFeatureTitle] = useState<string>(view.featureTitle || 'Feature Pipeline');
+
+  // Stream buffering: accumulate chunks in a ref, flush to state once per animation frame
+  const streamBufferRef = useRef<Record<string, string>>({});
+  const streamRafRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
+  }, []);
 
   useEffect(() => { loadFeatureData(); }, [featureId]);
 
-  useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status }) => {
+  useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status: s }) => {
     if (feature_id === featureId) {
-      setStatus(status);
+      setFeatureStatus(s);
       loadFeatureData();
     }
   });
@@ -182,15 +185,18 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
   });
 
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
-    if (feature_id === featureId) onDecideGate(step_execution_id);
+    if (feature_id === featureId) navigate({ kind: 'detail', featureId, featureTitle, gateStepExecutionId: step_execution_id });
   });
 
   useTauriEvent<{ feature_id: string; step_execution_id: string; content: string }>('agent_stream', ({ feature_id, step_execution_id, content }) => {
-    if (feature_id === featureId) {
-      setStreamContent((prev) => ({
-        ...prev,
-        [step_execution_id]: (prev[step_execution_id] || '') + content,
-      }));
+    if (feature_id !== featureId) return;
+    const buf = streamBufferRef.current;
+    buf[step_execution_id] = (buf[step_execution_id] ?? '') + content;
+    if (streamRafRef.current === null) {
+      streamRafRef.current = requestAnimationFrame(() => {
+        streamRafRef.current = null;
+        setStreamContent({ ...streamBufferRef.current });
+      });
     }
   });
   const loadFeatureData = async () => {
@@ -214,36 +220,15 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
       }
 
       // Compute telemetry
-      let totalCost = 0.0;
       let totalTokens = 0;
       let totalSecs = 0;
-      let isGated = false;
-      let hasFailed = false;
-      let isRunning = false;
-      let hasInterrupted = false;
-      let isVerifying = false;
-
       for (const s of list) {
-        totalCost += s.cost_usd || 0.0;
         totalTokens += s.tokens || 0;
         totalSecs += s.wall_clock_secs || 0;
-        if (s.status === 'awaiting_gate') isGated = true;
-        if (s.status === 'failed') hasFailed = true;
-        if (s.status === 'running') isRunning = true;
-        if (s.status === 'interrupted') hasInterrupted = true;
-        if (s.status === 'verifying') isVerifying = true;
       }
-
       setTokens(totalTokens);
       setDuration(`${totalSecs}s`);
-
-      if (f?.status === 'cancelled') setStatus('cancelled');
-      else if (isGated) setStatus('gated');
-      else if (hasFailed) setStatus('failed');
-      else if (hasInterrupted) setStatus('cancelled');
-      else if (isRunning) setStatus('running');
-      else if (isVerifying) setStatus('verifying');
-      else if (list.every(s => s.status === 'completed')) setStatus('completed');
+      if (f?.status) setFeatureStatus(f.status);
 
       setError(null);
       setLoading(false);
@@ -255,7 +240,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         setFeatureAgentKind(agentKind);
         (async () => {
           try {
-            const project = await invoke<any>('get_project_by_id', { projectId: targetProjectId });
+            const project = await invoke<{ remote_host?: string | null }>('get_project_by_id', { projectId: targetProjectId });
             const machineId = project?.remote_host || 'local';
             setFeatureMachineId(machineId);
             // Probe models for the current harness and, in parallel, fetch which
@@ -298,15 +283,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     if (!ok) return;
     try {
       await invoke('feature_cancel', { featureId });
-      setStatus('cancelled');
-      // The backend processes cancellation asynchronously; poll until
-      // the feature status flips so the UI doesn't revert to "running".
-      for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 200));
-        const f2: any = await invoke('feature_get', { featureId }).catch(() => null);
-        if (f2?.status === 'cancelled' || f2?.status === 'failed') break;
-        await loadFeatureData();
-      }
+      setFeatureStatus('cancelled');
+      // feature_status_changed event will fire and call loadFeatureData reactively
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Cancel Failed', kind: 'error' });
     }
@@ -322,13 +300,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
     if (!ok) return;
     try {
       await invoke('feature_cancel', { featureId });
-      setStatus('cancelled');
-      for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 200));
-        const f2: any = await invoke('feature_get', { featureId }).catch(() => null);
-        if (f2?.status === 'cancelled' || f2?.status === 'failed') break;
-        await loadFeatureData();
-      }
+      setFeatureStatus('cancelled');
+      // feature_status_changed event will fire and call loadFeatureData reactively
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Stop Failed', kind: 'error' });
     }
@@ -381,7 +354,6 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
    *  connected provider (R6). The backend is idempotent: re-publish
    *  on an already-published feature returns the existing URL
    *  instead of creating a duplicate. */
-  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const [agentDrawerCtx, setAgentDrawerCtx] = useState<{
     machineId: string;
     worktreePath: string;
@@ -402,7 +374,6 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         computeType,
         remoteHost: computeType === 'remote' ? info.machine_id : null,
       });
-      setAgentDrawerOpen(true);
     } catch (err) {
       reportError(err);
     }
@@ -562,7 +533,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         msg += `\n\nWarnings:\n${result.warnings.join('\n')}`;
       }
       await messageDialog(msg, { title: 'Lifecycle applied', kind: 'info' });
-      onBack();
+      navigate({ kind: 'home' });
     } catch (err) {
       const msg = formatError(err);
       if (msg.includes('Auto-delete requires the MR to be merged')) {
@@ -584,7 +555,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
         <div className="space-y-1 min-w-0 flex-1">
           <div className="flex items-center gap-3 min-w-0">
             <button
-              onClick={onBack}
+              onClick={() => navigate({ kind: 'home' })}
               className="text-xs px-2.5 py-1 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition uppercase font-bold shrink-0"
             >
               Back
@@ -629,26 +600,24 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
               <Terminal className="w-3.5 h-3.5" />
               Code with Agent
             </button>
-            {onOpenEditor && (
-              <button
-                onClick={async () => {
-                  try {
-                    const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
-                      'feature_get_worktree',
-                      { featureId }
-                    );
-                    onOpenEditor({ machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch });
-                  } catch (err) {
-                    reportError(err);
-                  }
-                }}
-                className="px-4 py-2 bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 text-violet-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
-                title="Browse the feature branch code in read-only mode"
-              >
-                <GitBranch className="w-3.5 h-3.5" />
-                Browse Code
-              </button>
-            )}
+            <button
+              onClick={async () => {
+                try {
+                  const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
+                    'feature_get_worktree',
+                    { featureId }
+                  );
+                  navigate({ kind: 'editor', editorContext: { machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch }, featureId, featureTitle });
+                } catch (err) {
+                  reportError(err);
+                }
+              }}
+              className="px-4 py-2 bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 text-violet-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
+              title="Browse the feature branch code in read-only mode"
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+              Browse Code
+            </button>
             {(status === 'running' || status === 'verifying') && (
               <button
                 onClick={handleCancelFeature}
@@ -761,8 +730,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
           <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
             Initial Prompt
           </div>
-          <div className="p-4 bg-white/[0.02] rounded-xl border border-white/5 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed shadow-inner max-h-48 overflow-y-auto" title={title}>
-            {title}
+          <div className="p-4 bg-white/[0.02] rounded-xl border border-white/5 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed shadow-inner max-h-48 overflow-y-auto" title={featureTitle}>
+            {featureTitle}
           </div>
         </div>
       </div>
@@ -853,7 +822,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                             Pipeline paused. Awaiting manual review.
                           </div>
                           <button
-                            onClick={() => onDecideGate(step.id)}
+                            onClick={() => navigate({ kind: 'detail', featureId, featureTitle, gateStepExecutionId: step.id })}
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 rounded text-xs font-bold text-black transition shadow-[0_0_10px_rgba(245,158,11,0.4)]"
                           >
                             Decide Gate <ArrowRight className="w-3 h-3" />
@@ -1040,17 +1009,17 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                 <div className="flex-1 flex flex-col overflow-hidden">
                   <ArtifactViewer
                     artifactPath={selectedArtifactPath}
-                    onOpenEditorForPath={onOpenEditor ? async (filePath) => {
+                    onOpenEditorForPath={async (filePath) => {
                       try {
                         const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
                           'feature_get_worktree',
                           { featureId }
                         );
-                        onOpenEditor({ machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch, initialFile: filePath });
+                        navigate({ kind: 'editor', editorContext: { machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch, initialFile: filePath }, featureId, featureTitle });
                       } catch (err) {
                         reportError(err);
                       }
-                    } : undefined}
+                    }}
                   />
                 </div>
               </div>
@@ -1061,8 +1030,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
 
       {/* Replay from step confirmation modal */}
       {replayTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-[#0d0f14] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 shadow-[0_0_40px_rgba(0,0,0,0.5)]">
+        <Modal onClose={() => setReplayTarget(null)} backdropClassName="bg-black/60" className="bg-[#0d0f14] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 shadow-[0_0_40px_rgba(0,0,0,0.5)]">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-8 h-8 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
                 <RotateCcw className="w-4 h-4 text-cyan-400" />
@@ -1132,8 +1100,7 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                 <RotateCcw className="w-3 h-3" /> Replay
               </button>
             </div>
-          </div>
-        </div>
+          </Modal>
       )}
 
       <PromptDialog
@@ -1149,8 +1116,8 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
 
       {agentDrawerCtx && (
         <AgentTerminalDrawer
-          isOpen={agentDrawerOpen}
-          onClose={() => setAgentDrawerOpen(false)}
+          isOpen={true}
+          onClose={() => setAgentDrawerCtx(null)}
           machineId={agentDrawerCtx.machineId}
           absoluteWorkDir={agentDrawerCtx.worktreePath}
           projectId={featureId}

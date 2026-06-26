@@ -1,13 +1,13 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import TopBar from "./components/TopBar";
 import ProjectRail from "./components/ProjectRail";
 import { formatError } from "./lib/errors";
 import { ErrorBusProvider, useErrorBus } from "./lib/errorBus";
 import { ErrorToast, ERROR_TOAST_CTA_EVENT } from "./components/ErrorToast";
 import EmptyStateCard from "./components/EmptyStateCard";
-import ProviderSettings from "./components/ProviderSettings";
 import NewProjectView from "./components/NewProjectView";
-import { Plus, Trash2, Globe, Edit2, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen } from "lucide-react";
+import ProvidersPage from "./components/ProvidersPage";
+import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen } from "lucide-react";
 import ProjectHome from "./components/ProjectHome";
 import ProjectSettings from "./components/ProjectSettings";
 import { WorkflowList } from "./components/WorkflowList";
@@ -19,542 +19,271 @@ import StartFeatureModal from "./components/StartFeatureModal";
 import PreferencesScreen from "./components/PreferencesScreen";
 import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
-import type { Repository } from "./types";
+import type { Project, Provider } from "./types";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useTauriEvent } from "./hooks/useTauriEvent";
+import {
+  NavigationProvider, useNavigation,
+  ProjectProvider, useProject,
+  UIStateProvider, useUIState,
+} from "./context";
 import "./App.css";
-
-interface Project {
-  id: string;
-  name: string;
-  status: string;
-  repos: number;
-  nodes: number;
-  spend: number;
-  tokens: number;
-  compute_type?: string;
-  remote_host?: string | null;
-}
-
-interface Provider {
-  id: string;
-  type: string;
-  name: string;
-  host: string;
-  pat: string;
-  username: string;
-  avatarUrl: string;
-}
 
 function AppInner() {
   const { reportError } = useErrorBus();
-  const [view, setView] = useState<string>('empty-state');
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [currentProject, setCurrentProject] = useState<string | null>(null);
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
-  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
-  const [activeFeatureId, setActiveFeatureId] = useState<string | null>(null);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
-  const [gateStepExecutionId, setGateStepExecutionId] = useState<string | null>(null);
-  const [activeFeatureTitle, setActiveFeatureTitle] = useState<string>('Feature Pipeline');
-  const [initialLoadError, setInitialLoadError] = useState<string>('');
-  const [startFeatureOpen, setStartFeatureOpen] = useState(false);
-  const [startFeatureWorkflowId, setStartFeatureWorkflowId] = useState<string | null>(null);
-  const [workflowsForModal, setWorkflowsForModal] = useState<Array<{ id: string; name: string; description: string; version: number }>>([]);
-  const [reposByProject, setReposByProject] = useState<Record<string, Repository[]>>({});
+  const { view, navigate } = useNavigation();
+  const { state: proj, dispatch: projDispatch } = useProject();
+  const { ui, uiDispatch } = useUIState();
 
-  const [editorContext, setEditorContext] = useState<{
-    machineId: string;
-    worktreePath: string;
-    branch: string;
-    defaultBranch: string;
-    initialFile?: string;
-  } | null>(null);
+  const { projects, currentProjectId, providers, reposByProject, workflowsForModal, initialLoadError } = proj;
+  const { commandPaletteOpen, docsPanelOpen, startFeatureOpen, startFeatureWorkflowId } = ui;
 
-  // R7: UX polish state
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [docsPanelOpen, setDocsPanelOpen] = useState(false);
+  const currentProject = useMemo(() => projects.find(p => p.id === currentProjectId) ?? null, [projects, currentProjectId]);
 
-  // Wire the global <ErrorToast> CTAs (e.g. "Open providers" on a `provider`
-  // error) into the local router. The toast dispatches CustomEvent; we map
-  // each cta to a setView() call. Keeps the toast decoupled from the
-  // navigation shape.
+  // Map CTA events from ErrorToast into navigation
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ cta?: string }>).detail;
-      if (!detail || !detail.cta) return;
+      if (!detail?.cta) return;
       switch (detail.cta) {
-        case "open-providers":
-          setView("providers");
-          break;
-        case "open-settings":
-          setView("settings");
-          break;
-        case "open-feature":
-          setView("detail");
-          break;
-        case "retry":
-        case "view-logs":
-        default:
-          // No-op: the catch site that originally fired the toast is the
-          // one that knows how to retry; "view-logs" will be wired to the
-          // log panel in U4.
-          break;
+        case "open-providers": navigate({ kind: 'providers' }); break;
+        case "open-settings": navigate({ kind: 'settings' }); break;
+        case "open-feature": navigate({ kind: view.kind === 'detail' ? 'detail' : 'home', ...(view.kind === 'detail' ? view : {}) } as any); break;
       }
     };
     window.addEventListener(ERROR_TOAST_CTA_EVENT, handler);
     return () => window.removeEventListener(ERROR_TOAST_CTA_EVENT, handler);
-  }, []);
+  }, [navigate, view]);
 
+  // Gate overlay — fires even when user is on a different view
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
-    setGateStepExecutionId(step_execution_id);
-    setActiveFeatureId(feature_id);
-    setView('detail');
+    const featureTitle = view.kind === 'detail' && view.featureId === feature_id ? view.featureTitle : 'Feature Pipeline';
+    navigate({ kind: 'detail', featureId: feature_id, featureTitle, gateStepExecutionId: step_execution_id });
   });
 
+  // Initial data load
   useEffect(() => {
-    // Fetch initial data
     const fetchInitialData = async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        
+
         const backendProviders: any[] = await invoke('list_provider_instances');
         const mappedProviders: Provider[] = backendProviders.map(p => ({
-          id: p.id,
-          type: p.kind,
-          name: p.kind, // UI allows naming, but we don't store it in ProviderInstance schema currently, defaulting to kind.
-          host: p.host,
-          pat: 'hidden',
-          username: p.username,
-          avatarUrl: p.avatar_url
+          id: p.id, type: p.kind, name: p.kind, host: p.host,
+          pat: 'hidden', username: p.username, avatarUrl: p.avatar_url,
         }));
-        setProviders(mappedProviders);
+        projDispatch({ type: 'SET_PROVIDERS', providers: mappedProviders });
 
         const backendProjects: any[] = await invoke('get_projects');
-        const repoMap: Record<string, Repository[]> = {};
+        const repoMap: Record<string, import('./types').Repository[]> = {};
         const mappedProjects: Project[] = await Promise.all(backendProjects.map(async p => {
           let reposList: any[] = [];
-          try {
-            reposList = await invoke<any[]>('get_repositories_for_project', { projectId: p.id });
-          } catch (e) {
-            console.error(e);
-          }
+          try { reposList = await invoke<any[]>('get_repositories_for_project', { projectId: p.id }); } catch {}
           repoMap[p.id] = reposList.map((r: any) => ({ id: r.id, repo_path: r.repo_path }));
           return {
-            id: p.id,
-            name: p.name,
-            status: p.status,
-            repos: reposList.length,
-            nodes: p.nodes,
-            spend: p.spend,
-            tokens: p.tokens || 0,
-            compute_type: p.compute_type,
-            remote_host: p.remote_host
+            id: p.id, name: p.name, status: p.status,
+            repos: reposList.length, nodes: p.nodes, spend: p.spend,
+            tokens: p.tokens || 0, compute_type: p.compute_type, remote_host: p.remote_host,
           };
         }));
-        setProjects(mappedProjects);
-        setReposByProject(repoMap);
+
+        projDispatch({ type: 'LOAD_PROJECTS', projects: mappedProjects, reposByProject: repoMap });
         if (mappedProjects.length > 0) {
-          setCurrentProject(mappedProjects[0].id);
-          setView('home');
+          projDispatch({ type: 'SET_CURRENT', id: mappedProjects[0].id });
+          navigate({ kind: 'home' });
         }
       } catch (err) {
-        // Don't fabricate a "Mock Project (Local)" with a fake
-        // github provider — that's how the user ends up trying to
-        // bootstrap a workspace that points at github.com with a
-        // bogus PAT. Empty state is honest: the user sees the
-        // empty-state view and can re-add their real provider.
-        const message = formatError(err);
         console.error("Failed to fetch initial data:", err);
-        setProviders([]);
-        setProjects([]);
-        setInitialLoadError(message);
+        projDispatch({ type: 'SET_ERROR', error: formatError(err) });
+        projDispatch({ type: 'SET_PROVIDERS', providers: [] });
+        projDispatch({ type: 'LOAD_PROJECTS', projects: [], reposByProject: {} });
       }
     };
     fetchInitialData();
   }, []);
 
-  // R7: Keyboard shortcuts (hook uses a ref, no useMemo needed)
+  // Navigate to empty-state when projects list empties
+  useEffect(() => {
+    if (projects.length === 0 && view.kind === 'home') {
+      navigate({ kind: 'empty-state' });
+    }
+  }, [projects, view.kind]);
+
   useKeyboardShortcuts({
-    onOpenCommandPalette: () => setCommandPaletteOpen(true),
-    onOpenDocs: () => setDocsPanelOpen(true),
-    onOpenSettings: () => setView('settings'),
-    onNewProject: () => setView('new-project'),
-    onNewFeature: () => setStartFeatureOpen(true),
-    onToggleSidebar: () => setSidebarCollapsed(c => !c),
+    onOpenCommandPalette: () => uiDispatch({ type: 'SET_COMMAND_PALETTE', open: true }),
+    onOpenDocs: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }),
+    onOpenSettings: () => navigate({ kind: 'settings' }),
+    onNewProject: () => navigate({ kind: 'new-project' }),
+    onNewFeature: () => uiDispatch({ type: 'OPEN_START_FEATURE' }),
+    onToggleSidebar: () => uiDispatch({ type: 'TOGGLE_SIDEBAR' }),
     onEscape: () => {
-      if (commandPaletteOpen) setCommandPaletteOpen(false);
-      else if (docsPanelOpen) setDocsPanelOpen(false);
-      else if (startFeatureOpen) setStartFeatureOpen(false);
+      if (commandPaletteOpen) uiDispatch({ type: 'SET_COMMAND_PALETTE', open: false });
+      else if (docsPanelOpen) uiDispatch({ type: 'SET_DOCS_PANEL', open: false });
+      else if (startFeatureOpen) uiDispatch({ type: 'CLOSE_START_FEATURE' });
     },
     onNavigateProject: (index: number) => {
       const p = projects[index];
-      if (p) { setCurrentProject(p.id); setView('home'); }
+      if (p) { projDispatch({ type: 'SET_CURRENT', id: p.id }); navigate({ kind: 'home' }); }
     },
   });
-
-  // R7: Feature counts for sidebar status dots (reserved for future use)
-  useEffect(() => {
-    // polling placeholder
-  }, [projects]);
-
-  const connectedProvider = providers[0] || null;
-  const activeProjectObj = projects.find(p => p.id === currentProject);
-
-  useEffect(() => {
-    if (projects.length === 0 && view === 'home') {
-      setView('empty-state');
-    }
-  }, [projects, view]);
 
   const handleSeedSample = async () => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const sample: any = await invoke('seed_sample_project');
       const sampleProject: Project = {
-        id: sample.id,
-        name: sample.name,
-        status: sample.status,
-        repos: 2,
-        nodes: sample.nodes,
-        spend: sample.spend,
-        tokens: sample.tokens || 0,
-        compute_type: sample.compute_type,
-        remote_host: sample.remote_host
+        id: sample.id, name: sample.name, status: sample.status,
+        repos: 2, nodes: sample.nodes, spend: sample.spend,
+        tokens: sample.tokens || 0, compute_type: sample.compute_type, remote_host: sample.remote_host,
       };
-      setProjects([...projects, sampleProject]);
-      setCurrentProject(sampleProject.id);
-      setView('home');
-    } catch (e) {
-      console.error(e);
-    }
+      projDispatch({ type: 'ADD_PROJECT', project: sampleProject });
+      projDispatch({ type: 'SET_CURRENT', id: sampleProject.id });
+      navigate({ kind: 'home' });
+    } catch (e) { console.error(e); }
   };
 
-  const handleProviderConnected = (newProv: Provider) => {
-    setProviders(prev => {
-      const exists = prev.find(p => p.id === newProv.id);
-      if (exists) {
-        return prev.map(p => p.id === newProv.id ? newProv : p);
-      }
-      return [...prev, newProv];
-    });
-    setIsConnectModalOpen(false);
-    setEditingProvider(null);
-  };
+  const connectedProvider = providers[0] ?? null;
+
+  const commandPaletteEntries = useMemo(() => [
+    ...projects.map((p) => ({
+      id: `proj-${p.id}`,
+      label: p.name,
+      description: `${p.repos} repos · ${p.status}`,
+      category: 'project' as const,
+      icon: <Box className="w-4 h-4" />,
+      onSelect: () => { projDispatch({ type: 'SET_CURRENT', id: p.id }); navigate({ kind: 'home' }); },
+    })),
+    { id: 'nav-new-project', label: 'New Project', description: 'Bootstrap a new workspace', category: 'action' as const, icon: <Plus className="w-4 h-4" />, onSelect: () => navigate({ kind: 'new-project' }) },
+    { id: 'nav-workflows', label: 'Workflows', description: 'View and edit workflow templates', category: 'action' as const, icon: <Sliders className="w-4 h-4" />, onSelect: () => navigate({ kind: 'workflows' }) },
+    { id: 'nav-providers', label: 'Providers', description: 'Manage Git hosting connections', category: 'action' as const, icon: <Globe className="w-4 h-4" />, onSelect: () => navigate({ kind: 'providers' }) },
+    { id: 'nav-settings', label: 'Settings', description: 'Global preferences and machines', category: 'settings' as const, icon: <SettingsIcon className="w-4 h-4" />, onSelect: () => navigate({ kind: 'settings' }) },
+    { id: 'nav-docs', label: 'Documentation', description: 'User guide and reference', category: 'settings' as const, icon: <BookOpen className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
+    { id: 'nav-shortcuts', label: 'Keyboard Shortcuts', description: 'View available shortcuts', category: 'settings' as const, icon: <Zap className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
+  ], [projects, navigate, projDispatch, uiDispatch]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#08090c] text-white overflow-hidden font-sans">
-      <TopBar setView={setView} connectedProvider={connectedProvider} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
+      <TopBar connectedProvider={connectedProvider} />
       <div className="flex flex-1 overflow-hidden relative">
-        <ProjectRail
-          projects={projects.map(p => ({
-            ...p,
-            repos: p.repos,
-            nodes: p.nodes,
-          }))}
-          currentProject={currentProject}
-          setCurrentProject={setCurrentProject}
-          setView={setView}
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed(c => !c)}
-        />
+        <ProjectRail />
         <main className="flex-1 flex flex-col relative overflow-hidden bg-[#0a0c10] z-0">
-          {projects.length === 0 && view === 'empty-state' && (
+
+          {/* empty-state */}
+          {view.kind === 'empty-state' && (
             <>
               {initialLoadError && (
                 <div className="mx-8 mt-6 rounded-xl border border-ruby-500/30 bg-ruby-500/5 p-4">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="font-outfit text-sm font-semibold text-ruby-300 uppercase tracking-wider">Failed to load workspace</span>
                   </div>
-                  <pre className="font-mono text-xs text-ruby-200/80 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
-{initialLoadError}
-                  </pre>
+                  <pre className="font-mono text-xs text-ruby-200/80 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{initialLoadError}</pre>
                 </div>
               )}
               <EmptyStateCard
                 onSeedSample={handleSeedSample}
-                onConnectProviders={() => {
-                  setView('providers');
-                  setIsConnectModalOpen(true);
-                }}
-                onSyncWorktrees={() => {
-                  setView('new-project');
-                }}
-                onDeployAgents={() => {
-                  setView('workflows');
-                }}
+                onConnectProviders={() => { navigate({ kind: 'providers' }); uiDispatch({ type: 'SET_CONNECT_MODAL', open: true }); }}
+                onSyncWorktrees={() => navigate({ kind: 'new-project' })}
+                onDeployAgents={() => navigate({ kind: 'workflows' })}
               />
             </>
           )}
-          {projects.length > 0 && view === 'home' && activeProjectObj && (
-            <ProjectHome
-              setView={setView}
-              activeProject={activeProjectObj}
-              setActiveFeatureId={setActiveFeatureId}
-              setActiveFeatureTitle={setActiveFeatureTitle}
-              setProjects={setProjects}
-              sidebarCollapsed={sidebarCollapsed}
-            />
-          )}
-          {view === 'detail' && activeFeatureId && currentProject && (
-            <FeatureDetail
-              featureId={activeFeatureId}
-              projectId={currentProject}
-              title={activeFeatureTitle}
-              onDecideGate={(stepExecId) => setGateStepExecutionId(stepExecId)}
-              onBack={() => setView('home')}
-              onOpenEditor={(ctx) => {
-                setEditorContext(ctx);
-                setView('editor');
-              }}
-              sidebarCollapsed={sidebarCollapsed}
-            />
-          )}
-          {view === 'editor' && editorContext && (
+
+          {view.kind === 'home' && currentProject && <ProjectHome />}
+
+          {view.kind === 'detail' && <FeatureDetail />}
+
+          {view.kind === 'editor' && (
             <CodeEditorView
-              machineId={editorContext.machineId}
-              worktreePath={editorContext.worktreePath}
-              branch={editorContext.branch}
-              defaultBranch={editorContext.defaultBranch}
-              featureTitle={activeFeatureTitle}
-              initialFile={editorContext.initialFile}
-              onBack={() => setView('detail')}
+              machineId={view.editorContext.machineId}
+              worktreePath={view.editorContext.worktreePath}
+              branch={view.editorContext.branch}
+              defaultBranch={view.editorContext.defaultBranch}
+              featureTitle={view.featureTitle}
+              initialFile={view.editorContext.initialFile}
+              onBack={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
             />
           )}
-          {view === 'new-project' && (
-            <NewProjectView
-              setView={setView}
-              setProjects={setProjects}
-              setCurrentProjectId={setCurrentProject}
-              providers={providers}
-              onOpenMachinesSettings={() => setView('settings')}
-            />
-          )}
-          {view === 'project-settings' && activeProjectObj && (
-            <ProjectSettings
-              setView={setView}
-              activeProject={activeProjectObj}
-              setProjects={setProjects}
-              setCurrentProject={setCurrentProject}
-              providers={providers}
-            />
-          )}
-          {view === 'workflows' && (
+
+          {view.kind === 'new-project' && <NewProjectView />}
+
+          {view.kind === 'project-settings' && currentProject && <ProjectSettings />}
+
+          {view.kind === 'workflows' && (
             <WorkflowList
-              onEdit={(id) => {
-                setSelectedWorkflowId(id);
-                setView('workflow-editor');
-              }}
-              onNew={() => {
-                setSelectedWorkflowId(null);
-                setView('workflow-editor');
-              }}
+              onEdit={(id) => navigate({ kind: 'workflow-editor', workflowId: id })}
+              onNew={() => navigate({ kind: 'workflow-editor', workflowId: null })}
               onStartFeature={async (wfId) => {
-                // Open the slim StartFeatureModal (Q22). Fetch workflows
-                // for the picker once per open.
                 try {
                   const { invoke } = await import('@tauri-apps/api/core');
                   const list: any[] = await invoke('workflow_list');
-                  setWorkflowsForModal(list.map((w: any) => ({
-                    id: w.id,
-                    name: w.name,
-                    description: w.description,
-                    version: w.version,
-                  })));
-                  setStartFeatureWorkflowId(wfId);
-                  setStartFeatureOpen(true);
-                } catch (err) {
-                  reportError(err);
-                }
+                  projDispatch({
+                    type: 'SET_WORKFLOWS_FOR_MODAL',
+                    workflows: list.map((w: any) => ({ id: w.id, name: w.name, description: w.description, version: w.version })),
+                  });
+                  uiDispatch({ type: 'OPEN_START_FEATURE', workflowId: wfId });
+                } catch (err) { reportError(err); }
               }}
             />
           )}
-          {view === 'workflow-editor' && (
+
+          {view.kind === 'workflow-editor' && (
             <WorkflowEditor
-              workflowId={selectedWorkflowId}
-              onBack={() => setView('workflows')}
-              onSaved={() => setView('workflows')}
+              workflowId={view.workflowId}
+              onBack={() => navigate({ kind: 'workflows' })}
+              onSaved={() => navigate({ kind: 'workflows' })}
             />
           )}
-          {view === 'providers' && (
-            <div className="flex-1 overflow-y-auto p-8 relative flex flex-col justify-start max-w-4xl mx-auto w-full">
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-cyan-600/5 rounded-full blur-[120px] pointer-events-none"></div>
 
-              <div className="flex justify-between items-center mb-8 border-b border-white/5 pb-4 z-10">
-                <div>
-                  <h1 className="text-2xl font-outfit font-bold text-white mb-2">Source Providers</h1>
-                  <p className="text-sm text-slate-400">Manage Git hosting endpoints for cloning repositories and creating merge requests.</p>
-                </div>
-                <button
-                  onClick={() => setIsConnectModalOpen(true)}
-                  className="bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-sm px-4 py-2 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] flex items-center gap-2"
-                >
-                  <Plus className="w-4 h-4" /> Connect Provider
-                </button>
-              </div>
+          {view.kind === 'providers' && <ProvidersPage />}
 
-              <div className="space-y-4 z-10">
-                {providers.length === 0 ? (
-                  <div className="glass-panel p-12 text-center flex flex-col items-center justify-center">
-                    <Globe className="w-12 h-12 text-slate-500 mb-4 animate-pulse" />
-                    <h3 className="text-lg font-outfit font-semibold text-white mb-2">No Providers Mapped</h3>
-                    <p className="text-sm text-slate-400 max-w-md mb-6">Connect your GitHub or GitLab workspace to enable repository cloning, branch management, and automatic pull requests.</p>
-                    <button
-                      onClick={() => setIsConnectModalOpen(true)}
-                      className="bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-sm px-5 py-2.5 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]"
-                    >
-                      Connect Your First Account
-                    </button>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {providers.map((prov) => (
-                      <div key={prov.id} className="glass-panel p-5 flex items-start justify-between border-l-2 border-l-cyan-500 hover:border-l-cyan-400 transition-all">
-                        <div className="flex gap-4">
-                          {prov.avatarUrl ? (
-                            <img
-                              src={prov.avatarUrl}
-                              alt={prov.username}
-                              className="w-12 h-12 rounded-full object-cover border border-white/10"
-                            />
-                          ) : (
-                            <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-violet-600 to-cyan-600 flex items-center justify-center border border-white/10 text-white font-bold text-lg">
-                              {prov.name.charAt(0).toUpperCase()}
-                            </div>
-                          )}
-                          <div>
-                            <h4 className="text-base font-semibold text-white font-outfit">{prov.name}</h4>
-                            <div className="text-xs text-slate-400 mt-1 space-y-0.5 font-mono">
-                              <p>User: <span className="text-slate-200">@{prov.username}</span></p>
-                              <p>Host: <span className="text-slate-200">{prov.host}</span></p>
-                              <p>Type: <span className="text-slate-200 capitalize">{prov.type}</span></p>
-                            </div>
-                          </div>
-                        </div>
+          {view.kind === 'settings' && <PreferencesScreen />}
 
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => {
-                              setEditingProvider(prov);
-                              setIsConnectModalOpen(true);
-                            }}
-                            className="text-slate-500 hover:text-cyan-400 p-2 rounded-lg hover:bg-white/5 transition-all"
-                            title="Edit Provider"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              try {
-                                const { invoke } = await import('@tauri-apps/api/core');
-                                await invoke('delete_provider_instance', { providerId: prov.id });
-                                setProviders(providers.filter((p) => p.id !== prov.id));
-                              } catch (err) {
-                                reportError(err, { kind: "provider" });
-                              }
-                            }}
-                            className="text-slate-500 hover:text-ruby-400 p-2 rounded-lg hover:bg-white/5 transition-all"
-                            title="Disconnect Provider"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {isConnectModalOpen && (
-                <ProviderSettings
-                  initialProvider={editingProvider || undefined}
-                  onConnected={handleProviderConnected}
-                  onClose={() => {
-                    setIsConnectModalOpen(false);
-                    setEditingProvider(null);
-                  }}
-                />
-              )}
-            </div>
-          )}
-          {view === 'settings' && (
-            <PreferencesScreen onNavigate={setView} />
-          )}
-          {gateStepExecutionId && (
+          {/* Gate overlay — rendered on top of detail view */}
+          {view.kind === 'detail' && view.gateStepExecutionId && (
             <GateView
-              stepExecutionId={gateStepExecutionId}
-              onDecisionSubmitted={() => {
-                setGateStepExecutionId(null);
-                setView('detail');
-              }}
-              onClose={() => setGateStepExecutionId(null)}
+              stepExecutionId={view.gateStepExecutionId}
+              onDecisionSubmitted={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
+              onClose={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
             />
           )}
-          {startFeatureOpen && currentProject && activeProjectObj && (
+
+          {/* Start Feature modal */}
+          {startFeatureOpen && currentProjectId && currentProject && (
             <StartFeatureModal
               isOpen={startFeatureOpen}
-              projectId={currentProject}
-              projectName={activeProjectObj.name}
+              projectId={currentProjectId}
+              projectName={currentProject.name}
               workflows={workflowsForModal}
-              repositories={reposByProject[currentProject] || []}
+              repositories={reposByProject[currentProjectId] || []}
               defaultWorkflowId={startFeatureWorkflowId}
-              onClose={() => setStartFeatureOpen(false)}
+              onClose={() => uiDispatch({ type: 'CLOSE_START_FEATURE' })}
               onLaunch={async (params) => {
                 try {
                   const { invoke } = await import('@tauri-apps/api/core');
                   const feature: any = await invoke('start_feature', {
-                    projectId: currentProject,
+                    projectId: currentProjectId,
                     workflowId: params.workflowId,
                     title: params.title,
                     description: params.description,
                     agentKind: params.agentKind ?? null,
                     model: params.model ?? null,
-                    // Per-feature override for `commit_artifacts`.
-                    // `undefined` → inherit the project default
-                    // (see migration V12 and `StartFeatureModal`).
                     commitArtifacts: params.commitArtifacts ?? null,
-                    // Per-run loop budget + per-step agent/model overrides
-                    // (migration V13). `null`/empty → inherit defaults.
                     loopIterations: params.loopIterations ?? null,
                     stepOverrides: params.stepOverrides ?? null,
                   });
-                  setActiveFeatureId(feature.id);
-                  setActiveFeatureTitle(feature.title);
-                  setStartFeatureOpen(false);
-                  setView('detail');
-                } catch (err) {
-                  reportError(err);
-                }
+                  uiDispatch({ type: 'CLOSE_START_FEATURE' });
+                  navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
+                } catch (err) { reportError(err); }
               }}
             />
           )}
 
-          {/* R7: Command Palette + Docs Panel overlays */}
           <CommandPalette
             isOpen={commandPaletteOpen}
-            onClose={() => setCommandPaletteOpen(false)}
-            entries={[
-              // Project entries
-              ...projects.map((p) => ({
-                id: `proj-${p.id}`,
-                label: p.name,
-                description: `${p.repos} repos  ·  ${p.status}`,
-                category: 'project' as const,
-                icon: <Box className="w-4 h-4" />,
-                onSelect: () => { setCurrentProject(p.id); setView('home'); },
-              })),
-              // Navigation actions
-              { id: 'nav-new-project', label: 'New Project', description: 'Bootstrap a new workspace', category: 'action' as const, icon: <Plus className="w-4 h-4" />, onSelect: () => setView('new-project') },
-              { id: 'nav-workflows', label: 'Workflows', description: 'View and edit workflow templates', category: 'action' as const, icon: <Sliders className="w-4 h-4" />, onSelect: () => setView('workflows') },
-              { id: 'nav-providers', label: 'Providers', description: 'Manage Git hosting connections', category: 'action' as const, icon: <Globe className="w-4 h-4" />, onSelect: () => setView('providers') },
-              { id: 'nav-settings', label: 'Settings', description: 'Global preferences and machines', category: 'settings' as const, icon: <SettingsIcon className="w-4 h-4" />, onSelect: () => setView('settings') },
-              { id: 'nav-docs', label: 'Documentation', description: 'User guide and reference', category: 'settings' as const, icon: <BookOpen className="w-4 h-4" />, onSelect: () => setDocsPanelOpen(true) },
-              { id: 'nav-shortcuts', label: 'Keyboard Shortcuts', description: 'View available shortcuts', category: 'settings' as const, icon: <Zap className="w-4 h-4" />, onSelect: () => setDocsPanelOpen(true) },
-            ]}
+            onClose={() => uiDispatch({ type: 'SET_COMMAND_PALETTE', open: false })}
+            entries={commandPaletteEntries}
           />
-          <DocsPanel isOpen={docsPanelOpen} onClose={() => setDocsPanelOpen(false)} />
+          <DocsPanel isOpen={docsPanelOpen} onClose={() => uiDispatch({ type: 'SET_DOCS_PANEL', open: false })} />
         </main>
       </div>
     </div>
@@ -564,8 +293,14 @@ function AppInner() {
 function App() {
   return (
     <ErrorBusProvider>
-      <AppInner />
-      <ErrorToast />
+      <NavigationProvider>
+        <ProjectProvider>
+          <UIStateProvider>
+            <AppInner />
+            <ErrorToast />
+          </UIStateProvider>
+        </ProjectProvider>
+      </NavigationProvider>
     </ErrorBusProvider>
   );
 }
