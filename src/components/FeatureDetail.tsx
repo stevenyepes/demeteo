@@ -686,6 +686,15 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                 </button>
               </>
             )}
+            {status === 'gated' && (
+              <button
+                onClick={() => handleCleanup()}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-bold transition duration-300"
+                title="Apply the project's feature_lifecycle (archive / keep / auto_delete). Useful when a feature is stuck at a gate with a failed earlier step."
+              >
+                Cleanup
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -810,6 +819,15 @@ export const FeatureDetail: React.FC<FeatureDetailProps> = ({
                           <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono">
                             {step.step_kind}
                           </span>
+                          {(step.iteration_count ?? 0) > 0 && (
+                            <span
+                              className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono"
+                              title={`This step has been retried ${step.iteration_count} time${step.iteration_count !== 1 ? 's' : ''}`}
+                            >
+                              <RefreshCw className="w-2.5 h-2.5" />
+                              {step.iteration_count}x
+                            </span>
+                          )}
                           <button
                             onClick={() => setReplayTarget({
                               id: step.id,
