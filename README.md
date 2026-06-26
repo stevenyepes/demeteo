@@ -43,6 +43,16 @@ tar xf PKGBUILD -C demeteo-bin && cd demeteo-bin && makepkg -si
 
 Open the `.dmg`, drag Demeteo to Applications. Intel Macs are not currently supported.
 
+> **"demeteo.app is damaged and can't be opened"?** This is expected. The app isn't
+> notarized by Apple (that requires a paid Developer account), so macOS quarantines it on
+> download. The app is not actually damaged — clear the quarantine flag once after installing:
+>
+> ```bash
+> xattr -cr /Applications/demeteo.app
+> ```
+>
+> Then open it normally. (Right-click → Open does **not** work for this case; only the command above does.)
+
 **Windows (x86\_64)**
 
 Run the `.msi` for a standard installer, or the `.exe` (NSIS) for a single-file install.
