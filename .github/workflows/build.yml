@@ -158,6 +158,18 @@ jobs:
 
             This pre-release is overwritten on every push to `master`.
             For stable releases, see the [versioned tags](${{ github.server_url }}/${{ github.repository }}/releases).
+
+            ---
+
+            **macOS:** if you see *"demeteo.app is damaged and can't be opened"*, the app
+            just isn't notarized by Apple. It's not actually damaged. After dragging it to
+            Applications, clear the quarantine flag once:
+
+            ```bash
+            xattr -cr /Applications/demeteo.app
+            ```
+
+            Then open it normally. (Right-click → Open does **not** work for this case.)
           prerelease: true
           make_latest: false
           files: release-files/*
@@ -231,6 +243,16 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: "Demeteo ${{ github.ref_name }}"
+          body: |
+            **macOS:** if you see *"demeteo.app is damaged and can't be opened"*, the app
+            just isn't notarized by Apple. It's not actually damaged. After dragging it to
+            Applications, clear the quarantine flag once:
+
+            ```bash
+            xattr -cr /Applications/demeteo.app
+            ```
+
+            Then open it normally. (Right-click → Open does **not** work for this case.)
           generate_release_notes: true
           prerelease: false
           make_latest: true
