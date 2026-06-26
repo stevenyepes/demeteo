@@ -74,6 +74,7 @@ export interface StepExecution {
   artifact_path?: string | null;
   artifact_paths: string[];
   error_message?: string | null;
+  iteration_count?: number;
   created_at: number;
   updated_at: number;
 }
@@ -198,6 +199,13 @@ export interface WorkflowSchedule {
   next_run_at?: number | null;
 }
 
+export type MemoryType =
+  | 'convention'
+  | 'lesson'
+  | 'decision'
+  | 'preference'
+  | 'fact';
+
 export interface ProjectMemoryEntry {
   id: string;
   project_id: string;
@@ -205,8 +213,35 @@ export interface ProjectMemoryEntry {
   value: string;
   source: 'agent' | 'human';
   confidence: number;
+  memory_type: MemoryType | null;
+  statement: string | null;
+  embedding: number[] | null;
+  embedding_model: string | null;
+  last_used_at: number | null;
+  use_count: number;
   created_at: number;
   updated_at: number;
+}
+
+/** Global config for the background memory agent. Mirrors the Rust
+ * `MemoryAgentConfig`. The API key is never returned to the UI — only
+ * `has_api_key` indicates whether one is stored. */
+export interface MemoryAgentConfig {
+  enabled: boolean;
+  chat_endpoint: string;
+  chat_model: string;
+  embed_endpoint: string;
+  embed_model: string;
+  has_api_key: boolean;
+  top_k: number;
+  min_confidence: number;
+}
+
+export interface MemoryAgentTestResult {
+  chat_ok: boolean;
+  embed_ok: boolean;
+  embed_dims: number | null;
+  error: string | null;
 }
 
 /**

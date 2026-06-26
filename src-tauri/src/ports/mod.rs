@@ -5,6 +5,8 @@ pub mod conflict;
 pub mod db;
 pub mod execution;
 pub mod memory;
+pub mod memory_llm;
+pub mod memory_signals;
 pub mod merge;
 pub mod mr_publisher;
 pub mod notification;

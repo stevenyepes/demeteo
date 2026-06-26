@@ -2261,9 +2261,14 @@ export default function ProjectSettingsView({
                                                         {entry.key}
                                                     </span>
                                                     <div className="flex items-center gap-2">
+                                                        {entry.memory_type && (
+                                                            <span className="px-2 py-0.5 text-[9px] font-mono rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                                                                {entry.memory_type.toUpperCase()}
+                                                            </span>
+                                                        )}
                                                         <span className={`px-2 py-0.5 text-[9px] font-mono rounded-full ${
-                                                            entry.source === 'human' 
-                                                                ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400' 
+                                                            entry.source === 'human'
+                                                                ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400'
                                                                 : 'bg-violet-500/10 border border-violet-500/20 text-violet-400'
                                                         }`}>
                                                             {entry.source.toUpperCase()}
@@ -2287,10 +2292,10 @@ export default function ProjectSettingsView({
                                                     </div>
                                                 </div>
                                                 <div className="text-xs text-slate-300 font-mono bg-black/40 border border-white/5 rounded-lg p-2.5 whitespace-pre-wrap leading-relaxed">
-                                                    {entry.value}
+                                                    {entry.statement ?? entry.value}
                                                 </div>
                                                 <div className="mt-2 text-[10px] text-slate-500 flex justify-between">
-                                                    <span>Confidence: {(entry.confidence * 100).toFixed(0)}%</span>
+                                                    <span>Confidence: {(entry.confidence * 100).toFixed(0)}%{entry.use_count > 0 ? ` · used ${entry.use_count}×` : ''}</span>
                                                     <span>Updated: {new Date(entry.updated_at).toLocaleString()}</span>
                                                 </div>
                                             </div>

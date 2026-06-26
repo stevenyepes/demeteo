@@ -33,9 +33,11 @@ pub async fn resolve_target_dir(
     repo_path: &str,
 ) -> Result<String, String> {
     if project.compute_type.to_lowercase() == "local" {
-        Ok(paths::repo_target_dir_local(&ctx.workspace_dir, project_id, repo_path)
-            .to_string_lossy()
-            .to_string())
+        Ok(
+            paths::repo_target_dir_local(&ctx.workspace_dir, project_id, repo_path)
+                .to_string_lossy()
+                .to_string(),
+        )
     } else {
         paths::repo_target_dir_str(
             &ctx.exec,

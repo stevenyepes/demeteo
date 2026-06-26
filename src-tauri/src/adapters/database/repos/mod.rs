@@ -4,6 +4,7 @@ pub mod feature_steps;
 pub mod gate;
 pub mod machine;
 pub mod memory;
+pub mod memory_signals;
 pub mod merge_audit;
 pub mod notification;
 pub mod project;

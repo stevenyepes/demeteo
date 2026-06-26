@@ -132,10 +132,12 @@ pub async fn repo_target_dir(
         })?;
         Ok(repo_target_dir_local(base, project_id, repo_path))
     } else {
-        Ok(project_root(exec, compute_type, remote_host, project_id, None)
-            .await?
-            .join(REPOS_SUBDIR)
-            .join(repo_name_from_path(repo_path)))
+        Ok(
+            project_root(exec, compute_type, remote_host, project_id, None)
+                .await?
+                .join(REPOS_SUBDIR)
+                .join(repo_name_from_path(repo_path)),
+        )
     }
 }
 
@@ -149,9 +151,16 @@ pub async fn repo_target_dir_str(
     repo_path: &str,
     workspace_dir: Option<&std::path::Path>,
 ) -> Result<String, String> {
-    repo_target_dir(exec, compute_type, remote_host, project_id, repo_path, workspace_dir)
-        .await
-        .map(|p| p.to_string_lossy().to_string())
+    repo_target_dir(
+        exec,
+        compute_type,
+        remote_host,
+        project_id,
+        repo_path,
+        workspace_dir,
+    )
+    .await
+    .map(|p| p.to_string_lossy().to_string())
 }
 
 /// Extract the repository name (last `/`-separated segment) from a

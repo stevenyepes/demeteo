@@ -9,6 +9,7 @@ pub mod feature_lifecycle;
 pub mod features;
 pub mod git;
 pub mod machine;
+pub mod memory;
 pub mod messages;
 pub mod mr_publisher;
 pub mod notifications;

@@ -111,6 +111,23 @@ React Webview ──IPC──► Tauri Commands ──► FeatureOrchestrator
 
 The codebase follows a hexagonal (ports & adapters) layout. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full port catalogue and [`AGENTS.md`](AGENTS.md) for the project constitution and code conventions.
 
+## Project memory (Memory Agent)
+
+Demeteo can learn from each run. As features execute, it captures **signals** —
+human gate feedback, step failures/retries, and agent run summaries — into a
+queue. An opt-in background **Memory Agent** distills those signals into typed
+project memories (conventions, lessons, decisions, preferences, facts), embeds
+them, and injects the most relevant ones into future agent prompts via semantic
+search.
+
+The Memory Agent runs against a **local or OpenAI-compatible LLM you configure**
+(e.g. [Ollama](https://ollama.com)) — it is the one place Demeteo calls a model
+provider directly, is disabled by default, and stores its API key in the OS
+keyring. Enable and configure it under **Preferences → Memory** (set a chat model
+like `llama3.1` and an embeddings model like `nomic-embed-text`, then **Test
+connection**). Per-project memories are viewable and editable under **Project
+Settings → Project Memory**.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.

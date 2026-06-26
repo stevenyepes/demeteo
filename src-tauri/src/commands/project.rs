@@ -201,6 +201,12 @@ pub fn project_memory_upsert(
         value,
         source: source_enum,
         confidence: 1.0,
+        memory_type: None,
+        statement: None,
+        embedding: None,
+        embedding_model: None,
+        last_used_at: None,
+        use_count: 0,
         created_at: now,
         updated_at: now,
     };

@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ProjectMemoryEntry } from "../types";
+import type {
+  ProjectMemoryEntry,
+  MemoryAgentConfig,
+  MemoryAgentTestResult,
+} from "../types";
 
 export async function listProjectMemory(projectId: string): Promise<ProjectMemoryEntry[]> {
   return invoke<ProjectMemoryEntry[]>("project_memory_list", { projectId });
@@ -23,6 +27,46 @@ export async function upsertProjectMemory(
 
 export async function deleteProjectMemory(id: string): Promise<void> {
   return invoke<void>("project_memory_delete", { id });
+}
+
+// ── Memory agent (global) ──────────────────────────────────────────────
+
+export async function getMemoryAgentConfig(): Promise<MemoryAgentConfig> {
+  return invoke<MemoryAgentConfig>("memory_agent_config_get");
+}
+
+/** Persist config. `apiKey`: `undefined` keeps the stored key, `''` clears it,
+ * a non-empty string stores a new key. */
+export async function setMemoryAgentConfig(
+  config: MemoryAgentConfig,
+  apiKey?: string,
+): Promise<void> {
+  return invoke<void>("memory_agent_config_set", {
+    config,
+    apiKey: apiKey === undefined ? null : apiKey,
+  });
+}
+
+export async function testMemoryAgentConnection(
+  config: MemoryAgentConfig,
+  apiKey?: string,
+): Promise<MemoryAgentTestResult> {
+  return invoke<MemoryAgentTestResult>("memory_agent_test_connection", {
+    config,
+    apiKey: apiKey === undefined ? null : apiKey,
+  });
+}
+
+/** List models available at an endpoint (OpenAI `/models`, falling back to
+ * Ollama `/api/tags`). */
+export async function listMemoryAgentModels(
+  endpoint: string,
+  apiKey?: string,
+): Promise<string[]> {
+  return invoke<string[]>("memory_agent_list_models", {
+    endpoint,
+    apiKey: apiKey === undefined ? null : apiKey,
+  });
 }
 
 /**

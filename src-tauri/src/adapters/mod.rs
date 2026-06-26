@@ -3,6 +3,8 @@ pub mod artifact_store;
 pub mod conflict;
 pub mod database;
 pub mod local;
+pub mod memory_llm;
+pub mod memory_worker;
 pub mod merge;
 pub mod mr_monitor;
 pub mod mr_publisher;

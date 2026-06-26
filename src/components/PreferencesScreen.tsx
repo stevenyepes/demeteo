@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw } from 'lucide-react';
+import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import MachinesView from './MachinesView';
+import MemoryAgentSettings from './MemoryAgentSettings';
 
-type PrefTab = 'machines' | 'providers' | 'defaults' | 'about';
+type PrefTab = 'machines' | 'providers' | 'defaults' | 'memory' | 'about';
 
 interface PreferencesScreenProps {
   onNavigate: (view: string) => void;
@@ -55,6 +56,7 @@ const PreferencesScreen: React.FC<PreferencesScreenProps> = ({ onNavigate }) => 
     { key: 'machines', label: 'Machines', icon: <Server className="w-4 h-4" /> },
     { key: 'providers', label: 'Providers', icon: <Globe className="w-4 h-4" /> },
     { key: 'defaults', label: 'Defaults', icon: <Cpu className="w-4 h-4" /> },
+    { key: 'memory', label: 'Memory', icon: <Brain className="w-4 h-4" /> },
     { key: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
   ];
 
@@ -202,6 +204,7 @@ const PreferencesScreen: React.FC<PreferencesScreenProps> = ({ onNavigate }) => 
             </div>
           </div>
         )}
+        {activeTab === 'memory' && <MemoryAgentSettings />}
         {activeTab === 'about' && (
           <div className="glass-panel p-6 space-y-4">
             <div className="flex items-center gap-3">

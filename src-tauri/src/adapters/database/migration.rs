@@ -35,6 +35,18 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "project_settings", "conventions_file", "TEXT")?;
     add_column_if_missing(conn, "project_settings", "default_agent_kind", "TEXT")?;
     add_column_if_missing(conn, "project_settings", "default_model", "TEXT")?;
+    // Memory v2 enrichment (V17) — defensive for pre-existing databases.
+    add_column_if_missing(conn, "project_memory", "memory_type", "TEXT")?;
+    add_column_if_missing(conn, "project_memory", "statement", "TEXT")?;
+    add_column_if_missing(conn, "project_memory", "embedding", "BLOB")?;
+    add_column_if_missing(conn, "project_memory", "embedding_model", "TEXT")?;
+    add_column_if_missing(conn, "project_memory", "last_used_at", "INTEGER")?;
+    add_column_if_missing(
+        conn,
+        "project_memory",
+        "use_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
 
     Ok(())
 }

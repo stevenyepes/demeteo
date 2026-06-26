@@ -139,6 +139,8 @@ pub fn run() {
             let app_settings_repo: Arc<dyn crate::ports::db::AppSettingsRepository> =
                 db_adapter.clone();
             let memory_repo: Arc<dyn crate::ports::memory::ProjectMemoryPort> = db_adapter.clone();
+            let signals_repo: Arc<dyn crate::ports::memory_signals::MemorySignalsPort> =
+                db_adapter.clone();
             let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter.clone();
             let merge_audit_repo: Arc<dyn crate::ports::db::MergeAuditRepository> =
                 db_adapter.clone();
@@ -157,7 +159,11 @@ pub fn run() {
                         return None;
                     }
                     let path = std::path::PathBuf::from(p.trim());
-                    if path.is_absolute() { Some(path) } else { None }
+                    if path.is_absolute() {
+                        Some(path)
+                    } else {
+                        None
+                    }
                 })
                 .unwrap_or_else(|| app_data_dir.clone());
             eprintln!("[demeteo] workspace dir: {}", workspace_dir.display());
@@ -209,6 +215,9 @@ pub fn run() {
             let provider_http =
                 Arc::new(adapters::provider_http::ReqwestProviderHttpAdapter::new());
 
+            let memory_llm: Arc<dyn ports::memory_llm::MemoryLlmPort> =
+                Arc::new(adapters::memory_llm::ReqwestMemoryLlmAdapter::new());
+
             // Merge executor — owns the SQL audit table + the
             // structured conflict-report shape. Wired here so the
             // feature_sync command and the existing subtask→feature
@@ -241,6 +250,8 @@ pub fn run() {
                     gates_repo.clone(),
                     app_settings_repo.clone(),
                     memory_repo.clone(),
+                    signals_repo.clone(),
+                    memory_llm.clone(),
                     agent_registry.clone(),
                     notif_adapter.clone(),
                     agent_exec.clone(),
@@ -250,7 +261,16 @@ pub fn run() {
                     app_data_dir.clone(),
                     workspace_dir.clone(),
                 ));
+                // Reconcile DB + notifications first (synchronous, fast).
                 exec.startup_watchdog();
+                // Then spawn the actual driver resumes on the runtime.
+                // Without this, the re-emitted GateRequired events have
+                // no live driver behind them and the user's gate_decide
+                // is silently dropped — see the watchdog/registry docs.
+                let exec_for_resume = exec.clone();
+                tauri::async_runtime::spawn(async move {
+                    exec_for_resume.resume_interrupted_features().await;
+                });
                 exec
             };
 
@@ -271,6 +291,16 @@ pub fn run() {
                 notif_adapter.clone(),
             );
 
+            // Start the background memory agent. Polls the memory_signals
+            // queue, distills signals into project memories via the
+            // user-configured LLM. No-ops while the memory agent is disabled.
+            adapters::memory_worker::start_memory_worker(
+                app_settings_repo.clone(),
+                signals_repo.clone(),
+                memory_repo.clone(),
+                memory_llm.clone(),
+            );
+
             app.manage(AppContext {
                 machines: machines_repo.clone(),
                 threads: threads_repo.clone(),
@@ -280,6 +310,7 @@ pub fn run() {
                 gates: gates_repo.clone(),
                 app_settings: app_settings_repo.clone(),
                 memory: memory_repo,
+                signals: signals_repo.clone(),
                 merge_audit: merge_audit_repo,
                 notifications: notifications_repo,
                 exec: exec_inner,
@@ -293,6 +324,7 @@ pub fn run() {
                 merge_executor,
                 worktree_ops,
                 provider_http,
+                memory_llm: memory_llm.clone(),
                 app_data_dir: app_data_dir.clone(),
                 workspace_dir: workspace_dir.clone(),
             });
@@ -400,6 +432,10 @@ pub fn run() {
             commands::project::project_memory_list,
             commands::project::project_memory_upsert,
             commands::project::project_memory_delete,
+            commands::memory::memory_agent_config_get,
+            commands::memory::memory_agent_config_set,
+            commands::memory::memory_agent_test_connection,
+            commands::memory::memory_agent_list_models,
             commands::project::get_workflow_overrides,
             commands::project::set_workflow_override,
             commands::features::fetch_active_features,

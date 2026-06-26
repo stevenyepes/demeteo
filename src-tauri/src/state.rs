@@ -60,6 +60,8 @@ pub struct AppContext {
     pub app_settings: Arc<dyn AppSettingsRepository>,
     /// Project memory persistence.
     pub memory: Arc<dyn crate::ports::memory::ProjectMemoryPort>,
+    /// Memory signal queue (run observations awaiting distillation).
+    pub signals: Arc<dyn crate::ports::memory_signals::MemorySignalsPort>,
     /// Merge audit persistence.
     pub merge_audit: Arc<dyn MergeAuditRepository>,
     /// In-app notification bell persistence. Written by the
@@ -103,6 +105,11 @@ pub struct AppContext {
 
     /// Provider HTTP operations (validation, list repos).
     pub provider_http: Arc<dyn ProviderHttpPort>,
+
+    /// Memory agent LLM port (chat + embeddings against a user-configured
+    /// OpenAI-compatible endpoint). The one deliberate direct-to-provider call
+    /// path, scoped to the memory feature.
+    pub memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort>,
 
     /// Path to application local data directory (DB, artifacts, etc.).
     pub app_data_dir: std::path::PathBuf,
