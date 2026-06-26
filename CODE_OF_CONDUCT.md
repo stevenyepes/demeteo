@@ -24,7 +24,7 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the maintainer. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the maintainer at [contact@stvcloud.dev](mailto:contact@stvcloud.dev). All complaints will be reviewed and investigated promptly and fairly.
 
 ## Attribution
 

@@ -2,7 +2,7 @@
 name = "demeteo"
 version = "0.1.0"
 description = "Desktop control plane for orchestrating local and remote AI coding agents"
-authors = ["Steven Yepes"]
+authors = ["Steven Yepes <contact@stvcloud.dev>"]
 license = "MIT"
 repository = "https://github.com/stevenyepes/demeteo"
 homepage = "https://github.com/stevenyepes/demeteo"

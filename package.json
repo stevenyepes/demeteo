@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
-  "author": "Steven Yepes",
+  "author": "Steven Yepes <contact@stvcloud.dev>",
   "repository": {
     "type": "git",
     "url": "https://github.com/stevenyepes/demeteo"
