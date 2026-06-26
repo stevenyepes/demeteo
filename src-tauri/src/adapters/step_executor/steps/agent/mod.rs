@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::{StepConfig, StepExecution};
@@ -42,21 +42,40 @@ impl ExecutionDriver {
             None => (String::new(), String::new(), String::new()),
         };
 
+        let template = step_conf.prompt_template.as_deref().unwrap_or("");
+        // Promote the retry-feedback section to a first-class
+        // placeholder so workflow authors can place it exactly where
+        // they want it. Templates that don't reference
+        // `{{retry_feedback_section}}` get an auto-appended safety-net
+        // copy below.
+        let retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
+        let uses_retry_section = template_uses_retry_section(template);
+
         let prompt = self
             .base_ctx
             .clone()
+            .set("retry_feedback_section", &retry_section)
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)
             .set("retry_feedback", &retry_feedback)
             .set("iteration", &retry_iteration)
             .set("max_iterations", &retry_max)
-            .render(step_conf.prompt_template.as_deref().unwrap_or(""));
+            .render(template);
         let prompt = crate::adapters::step_executor::artifacts::resolve_attached_artifacts(
             &prompt,
             step_execs,
             step_index,
             &*self.artifacts,
         );
+        // Safety net: if the template opted in via
+        // `{{retry_feedback_section}}`, the section already appears in
+        // place; don't duplicate. If it didn't, append so the feedback
+        // reaches the agent anyway.
+        let prompt = if uses_retry_section {
+            prompt
+        } else {
+            append_retry_feedback_section(prompt, self.retry_ctx.as_ref())
+        };
 
         let is_legacy = step_conf.artifacts.as_ref().is_none_or(|d| d.is_empty());
         let decls = step_conf.artifacts.as_deref().unwrap_or(&[]);
@@ -70,7 +89,13 @@ impl ExecutionDriver {
             .clone()
             .unwrap_or_else(|| "local".to_string());
 
-        let subtask_id = format!("step-{}", step_exec.step_id.0);
+        // Subtask id must include the feature id so two features running on
+        // the same project concurrently get distinct worktree directories
+        // (`{repo}_wt_{subtask_id}`) and don't clobber each other. The
+        // subtask branch (`{feature_branch}_subtask_{subtask_id}`) was
+        // already feature-scoped via the branch name, but the wt_dir path
+        // was not — see test_provision_subtask_worktree_distinct_per_feature.
+        let subtask_id = format!("{}-step-{}", self.f_id_str, step_exec.step_id.0);
         let wt_path = match self
             .git_ops
             .provision_subtask_worktree(
@@ -111,6 +136,31 @@ impl ExecutionDriver {
                 &wt_path,
             )
             .await;
+
+        // Apply artifact-scope chmod fence before the agent spawns.
+        // The agent still has `edit: allow` + `bash: allow` in its
+        // OPENCODE_PERMISSION env, but the OS now refuses writes
+        // outside the step's declared artifact paths. The post-step
+        // diff guard below catches any chmod-escape bypass.
+        let writable_paths = crate::adapters::worktree::git_ops::scope::derive_writable_paths(
+            step_conf.artifacts.as_ref(),
+        );
+        if let Err(e) = self
+            .git_ops
+            .apply_artifact_scope(self.machine_id_opt.as_deref(), &wt_path, &writable_paths)
+            .await
+        {
+            let _ = self
+                .git_ops
+                .cleanup_subtask_worktree(
+                    self.machine_id_opt.as_deref(),
+                    &self.target_dir,
+                    &self.branch_name,
+                    &subtask_id,
+                )
+                .await;
+            return StepOutcome::Failed(format!("artifact scope setup failed: {}", e));
+        }
 
         let worktree_base_ref = self
             .exec
@@ -324,6 +374,62 @@ impl ExecutionDriver {
             }
         }
 
+        // Post-step diff guard. Catches any out-of-scope writes that
+        // slipped past the chmod fence (e.g. via `chmod u+w` shell
+        // escape). We run this *before* merge so reverted files never
+        // reach the feature branch — the agent's bad action stays
+        // quarantined to the worktree.
+        let reverted = match self
+            .git_ops
+            .verify_and_revert_out_of_scope_writes(
+                self.machine_id_opt.as_deref(),
+                &wt_path,
+                &writable_paths,
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = self
+                    .git_ops
+                    .cleanup_subtask_worktree(
+                        self.machine_id_opt.as_deref(),
+                        &self.target_dir,
+                        &self.branch_name,
+                        &subtask_id,
+                    )
+                    .await;
+                let _ = self.registry.kill(self.f_id.as_str()).await;
+                return StepOutcome::Failed(format!("out-of-scope diff check failed: {}", e));
+            }
+        };
+        if !reverted.is_empty() {
+            let _ = self
+                .git_ops
+                .cleanup_subtask_worktree(
+                    self.machine_id_opt.as_deref(),
+                    &self.target_dir,
+                    &self.branch_name,
+                    &subtask_id,
+                )
+                .await;
+            let _ = self.registry.kill(self.f_id.as_str()).await;
+            self.capture_signal(
+                Some(step_exec.id.0.clone()),
+                crate::domain::memory::SignalKind::Retry,
+                format!(
+                    "Step '{}' wrote outside declared artifacts; reverted: {}. \
+                     Stay inside the artifacts directory.",
+                    step_exec.step_id.0,
+                    reverted.join(", ")
+                ),
+            );
+            return StepOutcome::Failed(format!(
+                "step wrote outside declared artifacts; reverted: {}",
+                reverted.join(", ")
+            ));
+        }
+
         // 5. Merge subtask back
         let mut merge_result = self
             .git_ops
@@ -516,6 +622,20 @@ impl ExecutionDriver {
                         tokens: Some(*accumulated_tokens),
                         wall_clock_secs: Some(wall),
                     });
+                    // Capture the agent's final summary as a signal for the
+                    // memory worker. Cap length to keep the queue lightweight.
+                    let summary = text_buffer.trim();
+                    if !summary.is_empty() {
+                        let capped: String = summary.chars().take(4000).collect();
+                        self.capture_signal(
+                            Some(step_exec.id.0.clone()),
+                            crate::domain::memory::SignalKind::AgentSummary,
+                            format!(
+                                "Step '{}' completed. Agent summary:\n{}",
+                                step_exec.step_id.0, capped
+                            ),
+                        );
+                    }
                     StepOutcome::Completed
                 }
                 Err(err) => StepOutcome::Failed(format!("agent step merge failed: {}", err)),
@@ -540,5 +660,187 @@ impl ExecutionDriver {
             .await;
 
         outcome
+    }
+}
+
+/// Format the "Previous Attempt Feedback" section as a self-contained
+/// string. Returns `""` when there's no retry or no feedback.
+///
+/// Two-step pattern: this helper produces the formatted text, then
+/// callers either inject it via the `{{retry_feedback_section}}`
+/// placeholder (workflow authors can place it exactly where they
+/// want it in their template) or auto-append it at the end of the
+/// prompt (safety net for templates that don't reference the
+/// placeholder). The pattern scales to other transient context
+/// (`{{gate_feedback_section}}`, etc.) — see `template_uses_retry_section`
+/// for the detection helper.
+pub(crate) fn format_retry_feedback_section(retry_ctx: Option<&RetryContext>) -> String {
+    let Some(rc) = retry_ctx else {
+        return String::new();
+    };
+    if rc.feedback.trim().is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n---\n\n## Previous Attempt Feedback\n\
+         This step is being retried because the previous attempt was redirected \
+         (or otherwise failed). Apply this guidance to your work — do not \
+         ignore it or redo the same thing:\n\n\
+         {}\n",
+        rc.feedback
+    )
+}
+
+/// True when the template opts into the new placement-by-placeholder
+/// behavior. When true, the caller should NOT auto-append (the section
+/// already appears where the template asked for it). When false, the
+/// caller should auto-append as a safety net.
+pub(crate) fn template_uses_retry_section(template: &str) -> bool {
+    template.contains("{{retry_feedback_section}}")
+}
+
+/// Safety-net fallback: append the formatted section to a prompt
+/// that didn't reference `{{retry_feedback_section}}`. Idempotent —
+/// no-op when there's nothing to append.
+pub(crate) fn append_retry_feedback_section(
+    prompt: String,
+    retry_ctx: Option<&RetryContext>,
+) -> String {
+    let section = format_retry_feedback_section(retry_ctx);
+    if section.is_empty() {
+        prompt
+    } else {
+        format!("{}{}", prompt, section)
+    }
+}
+
+#[cfg(test)]
+mod retry_feedback_tests {
+    use super::*;
+
+    fn rc(feedback: &str) -> RetryContext {
+        RetryContext {
+            feedback: feedback.into(),
+            iteration: 1,
+            max: 1,
+        }
+    }
+
+    // ── format_retry_feedback_section ────────────────────────────────────
+
+    #[test]
+    fn format_returns_empty_when_no_retry_ctx() {
+        assert_eq!(format_retry_feedback_section(None), "");
+    }
+
+    #[test]
+    fn format_returns_empty_when_feedback_is_whitespace() {
+        assert_eq!(format_retry_feedback_section(Some(&rc("   \n\t"))), "");
+    }
+
+    #[test]
+    fn format_returns_section_text_when_feedback_present() {
+        let s = format_retry_feedback_section(Some(&rc("use cargo before mise")));
+        assert!(s.contains("## Previous Attempt Feedback"));
+        assert!(s.contains("use cargo before mise"));
+    }
+
+    // ── template_uses_retry_section ──────────────────────────────────────
+
+    #[test]
+    fn detects_placeholder_presence() {
+        assert!(template_uses_retry_section(
+            "hello {{retry_feedback_section}} world"
+        ));
+        assert!(!template_uses_retry_section(
+            "hello {{retry_feedback}} world"
+        ));
+        assert!(!template_uses_retry_section(""));
+    }
+
+    // ── append_retry_feedback_section (safety-net fallback) ──────────────
+
+    #[test]
+    fn first_attempt_leaves_prompt_unchanged() {
+        let prompt = "do the thing".to_string();
+        let result = append_retry_feedback_section(prompt.clone(), None);
+        assert_eq!(result, prompt);
+    }
+
+    #[test]
+    fn retry_with_empty_feedback_leaves_prompt_unchanged() {
+        let prompt = "do the thing".to_string();
+        let result = append_retry_feedback_section(prompt.clone(), Some(&rc("   ")));
+        assert_eq!(result, prompt, "whitespace-only feedback must not append");
+    }
+
+    #[test]
+    fn retry_with_feedback_appends_section() {
+        let prompt = "do the thing".to_string();
+        let result = append_retry_feedback_section(prompt, Some(&rc("use cargo before mise")));
+        assert!(result.starts_with("do the thing"));
+        assert!(result.contains("## Previous Attempt Feedback"));
+        assert!(result.contains("use cargo before mise"));
+    }
+
+    #[test]
+    fn retry_section_appears_after_template_content() {
+        let result = append_retry_feedback_section(
+            "research the codebase".into(),
+            Some(&rc("also check the docs/ folder")),
+        );
+        let template_end =
+            result.find("research the codebase").unwrap() + "research the codebase".len();
+        let section_start = result.find("## Previous Attempt Feedback").unwrap();
+        assert!(
+            section_start > template_end,
+            "feedback section must come after the rendered template"
+        );
+    }
+
+    // ── combined: placement-by-placeholder behavior ─────────────────────
+
+    #[test]
+    fn template_with_placeholder_renders_section_inline() {
+        // Template that opts into placement-by-placeholder. The
+        // caller would NOT call append_retry_feedback_section in
+        // this branch (template_uses_retry_section returns true).
+        let template = "intro {{retry_feedback_section}} outro";
+        let section = format_retry_feedback_section(Some(&rc("use cargo before mise")));
+        assert!(section.contains("use cargo before mise"));
+
+        let rendered = template.replace("{{retry_feedback_section}}", &section);
+        assert!(rendered.contains("intro "));
+        assert!(rendered.contains(" outro"));
+        assert!(rendered.contains("## Previous Attempt Feedback"));
+        // The placeholder is gone — fully substituted.
+        assert!(!rendered.contains("{{retry_feedback_section}}"));
+    }
+
+    #[test]
+    fn template_without_placeholder_gets_safety_net_append() {
+        // Template that doesn't reference the placeholder — system
+        // auto-appends so feedback still reaches the agent.
+        let rendered = "intro".to_string();
+        let after_safety_net =
+            append_retry_feedback_section(rendered, Some(&rc("use cargo before mise")));
+        assert!(after_safety_net.contains("intro"));
+        assert!(after_safety_net.contains("## Previous Attempt Feedback"));
+        assert!(after_safety_net.contains("use cargo before mise"));
+    }
+
+    #[test]
+    fn placeholder_empty_when_no_retry_no_visual_artifact() {
+        // A template that references the placeholder even on first
+        // attempts must render cleanly — no leftover "---" or empty
+        // section header.
+        let template = "intro {{retry_feedback_section}} outro";
+        let section = format_retry_feedback_section(None);
+        assert_eq!(section, "");
+        let rendered = template.replace("{{retry_feedback_section}}", &section);
+        assert_eq!(
+            rendered, "intro  outro",
+            "empty section must collapse cleanly"
+        );
     }
 }

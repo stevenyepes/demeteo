@@ -14,6 +14,10 @@ use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::notification::DomainEvent;
 
+use crate::adapters::step_executor::steps::agent::{
+    append_retry_feedback_section, format_retry_feedback_section, template_uses_retry_section,
+};
+
 impl ExecutionDriver {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_subtasks_loop(
@@ -80,6 +84,26 @@ impl ExecutionDriver {
             let subtask_snapshot =
                 WorktreeSnapshot::capture(&*self.exec, machine_str, &wt_path).await;
 
+            // Apply artifact-scope chmod fence before the worker spawns.
+            // For `AllWrites` capture (the standard `s-implement`
+            // parallel step) this is a no-op. For constrained captures
+            // it restricts the worker to the declared artifact paths.
+            let writable_paths = crate::adapters::worktree::git_ops::scope::derive_writable_paths(
+                step_conf.artifacts.as_ref(),
+            );
+            if let Err(e) = self
+                .git_ops
+                .apply_artifact_scope(self.machine_id_opt.as_deref(), &wt_path, &writable_paths)
+                .await
+            {
+                step_failed = true;
+                step_err_msg = format!(
+                    "parallel subtask {} artifact scope setup failed: {}",
+                    sub.id, e
+                );
+                break;
+            }
+
             let other_files: Vec<String> = subtasks
                 .iter()
                 .enumerate()
@@ -88,8 +112,10 @@ impl ExecutionDriver {
                 .collect();
             let other_files_str = other_files.join(", ");
             let sub_files_str = sub.files.join(", ");
-
             // Render the worker prompt template
+            let sub_template = step_conf.prompt_template.as_deref().unwrap_or("");
+            let sub_retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
+            let sub_uses_retry_section = template_uses_retry_section(sub_template);
             let sub_prompt = self
                 .base_ctx
                 .clone()
@@ -97,10 +123,11 @@ impl ExecutionDriver {
                 .set("subtask_files", &sub_files_str)
                 .set("other_subtask_files", &other_files_str)
                 .set("partition_id", &sub.id)
+                .set("retry_feedback_section", &sub_retry_section)
                 .set("retry_feedback", &retry_feedback)
                 .set("iteration", &retry_iteration)
                 .set("max_iterations", &retry_max)
-                .render(step_conf.prompt_template.as_deref().unwrap_or(""));
+                .render(sub_template);
             let sub_prompt = if sub_prompt.trim().is_empty() {
                 format!(
                     "Subtask: {}. Files: {}. Code inside: {}",
@@ -111,6 +138,15 @@ impl ExecutionDriver {
             };
             let sub_prompt =
                 inject_artifact_contract(&sub_prompt, if is_legacy { None } else { Some(decls) });
+            // Surface retry feedback to the worker regardless of whether
+            // the step's `prompt_template` references
+            // `{{retry_feedback_section}}`. Matches the agent step
+            // pattern — auto-append only as safety net.
+            let sub_prompt = if sub_uses_retry_section {
+                sub_prompt
+            } else {
+                append_retry_feedback_section(sub_prompt, self.retry_ctx.as_ref())
+            };
 
             let agent_kind = planner_kind.to_string();
             let sub_thread_id = format!("{}-{}", self.f_id_str, sub.id);
@@ -300,6 +336,41 @@ impl ExecutionDriver {
                             {
                                 produced_artifacts
                                     .push(Artifact::tool_write(name, rel_path, content));
+                            }
+                        }
+
+                        // Post-step diff guard. Reverts any writes
+                        // outside the declared artifact paths *before*
+                        // commit, so the bad changes never reach the
+                        // feature branch via the merge below.
+                        if let Ok(reverted) = self
+                            .git_ops
+                            .verify_and_revert_out_of_scope_writes(
+                                self.machine_id_opt.as_deref(),
+                                &wt_path,
+                                &writable_paths,
+                            )
+                            .await
+                        {
+                            if !reverted.is_empty() {
+                                step_failed = true;
+                                step_err_msg = format!(
+                                    "parallel subtask {} wrote outside declared artifacts; \
+                                     reverted: {}",
+                                    sub.id,
+                                    reverted.join(", ")
+                                );
+                                self.capture_signal(
+                                    Some(step_exec.id.0.clone()),
+                                    crate::domain::memory::SignalKind::Retry,
+                                    format!(
+                                        "Subtask '{}' wrote outside declared artifacts; \
+                                         reverted: {}. Stay inside the artifacts directory.",
+                                        sub.id,
+                                        reverted.join(", ")
+                                    ),
+                                );
+                                break;
                             }
                         }
 
