@@ -539,7 +539,7 @@ const ProjectHome: React.FC<ProjectHomeProps> = ({ setView, activeProject, setAc
                     <div className="glass-panel px-4 py-2 rounded-lg flex gap-4 text-xs font-mono">
                         <div className="flex flex-col"><span className="text-slate-500">Fleet Active</span><span className="text-emerald-400 font-bold">{features.filter(f => f.status === 'running').length} Nodes</span></div>
                         <div className="w-px bg-white/10"></div>
-                        <div className="flex flex-col"><span className="text-slate-500">Token Spend</span><span className="text-white">{formatTokens(activeProject.tokens)}</span></div>
+                        <div className="flex flex-col"><span className="text-slate-500">Token Spend</span><span className="text-white">{formatTokens(features.reduce((sum, f) => sum + (f.tokens || 0), 0))}</span></div>
                     </div>
                 </div>
 
