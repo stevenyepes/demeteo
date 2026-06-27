@@ -23,6 +23,11 @@ pub enum NotificationKind {
     /// `MergeExecutor` reported a conflict between two subtask
     /// branches (or a feature-upstream sync).
     MergeConflict,
+    /// A step's `on_failure` retry loop exhausted its budget.
+    /// The user must intervene — the agent can't fix whatever
+    /// is breaking on its own within the configured
+    /// `max_iterations`.
+    RetryBudgetExhausted,
 }
 
 impl NotificationKind {
@@ -35,6 +40,7 @@ impl NotificationKind {
             NotificationKind::StepFailed => "step_failed",
             NotificationKind::FeatureCompleted => "feature_completed",
             NotificationKind::MergeConflict => "merge_conflict",
+            NotificationKind::RetryBudgetExhausted => "retry_budget_exhausted",
         }
     }
 }
@@ -49,6 +55,7 @@ impl FromStr for NotificationKind {
             "step_failed" => Ok(NotificationKind::StepFailed),
             "feature_completed" => Ok(NotificationKind::FeatureCompleted),
             "merge_conflict" => Ok(NotificationKind::MergeConflict),
+            "retry_budget_exhausted" => Ok(NotificationKind::RetryBudgetExhausted),
             _ => Err(()),
         }
     }

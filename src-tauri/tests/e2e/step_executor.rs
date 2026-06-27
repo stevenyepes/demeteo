@@ -152,6 +152,7 @@ async fn test_executor_instantiation_and_cancel() {
         memory_llm,
         registry,
         notif,
+        db.clone(), // notifications
         agent_exec,
         exec,
         merge_executor,
@@ -215,6 +216,7 @@ async fn test_executor_gate_decide() {
         memory_llm,
         registry,
         notif,
+        db.clone(), // notifications
         agent_exec,
         exec,
         merge_executor,
@@ -378,6 +380,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
         memory_llm,
         registry,
         notif,
+        db.clone(), // notifications
         agent_exec,
         exec,
         merge_executor,

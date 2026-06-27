@@ -51,6 +51,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "mr_merged",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::RetryBudgetExhausted { .. } => (
+                "retry_budget_exhausted",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
         };
 
         self.app

@@ -50,6 +50,9 @@ pub struct DagStepExecutor {
     memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort>,
     registry: Arc<AgentRegistry>,
     notif: Arc<dyn NotificationPort>,
+    /// Notification persistence port. See the `new` arg
+    /// documentation for why this lives on the executor.
+    pub notifications: Arc<dyn crate::ports::db::NotificationRepository>,
     agent_exec: Arc<dyn AgentExecutionPort>,
     exec: Arc<dyn ExecutionPort>,
     /// Merge executor — wraps `git merge` for both subtask→feature
@@ -97,6 +100,17 @@ impl DagStepExecutor {
         memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort>,
         registry: Arc<AgentRegistry>,
         notif: Arc<dyn NotificationPort>,
+        // Notification persistence port. Used to write a row to
+        // the `notifications` table when the engine emits a
+        // user-visible event the user needs to act on (e.g. a
+        // `RetryBudgetExhausted`). The same `SqliteAdapter`
+        // already passed for `features` / `gates` implements
+        // this port; threading it through here keeps the
+        // orchestrator in charge of writing notification rows
+        // instead of delegating to a background monitor (which
+        // is the pattern `MrMerged` uses, but doesn't fit the
+        // synchronous step-failure hot path).
+        notifications: Arc<dyn crate::ports::db::NotificationRepository>,
         agent_exec: Arc<dyn AgentExecutionPort>,
         exec: Arc<dyn ExecutionPort>,
         merge_executor: Arc<dyn MergeExecutor>,
@@ -117,6 +131,7 @@ impl DagStepExecutor {
             memory_llm,
             registry,
             notif,
+            notifications,
             agent_exec,
             exec,
             merge_executor,

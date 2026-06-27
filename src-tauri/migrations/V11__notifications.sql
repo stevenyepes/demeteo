@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     id            TEXT PRIMARY KEY,
     project_id    TEXT NOT NULL,
     feature_id    TEXT NOT NULL,
-    kind          TEXT NOT NULL,           -- mr_merged | gate_pending | step_failed | feature_completed | merge_conflict
+    kind          TEXT NOT NULL,           -- mr_merged | gate_pending | step_failed | feature_completed | merge_conflict | retry_budget_exhausted
     message       TEXT NOT NULL,
     feature_url   TEXT,                    -- deep link to /projects/:pid/features/:fid
     read          INTEGER NOT NULL DEFAULT 0,
