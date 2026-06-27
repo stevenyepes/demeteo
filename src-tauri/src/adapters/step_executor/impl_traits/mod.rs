@@ -78,6 +78,7 @@ impl DagStepExecutor {
             projects: self.projects.clone(),
             signals: self.signals.clone(),
             notif: self.notif.clone(),
+            notifications: self.notifications.clone(),
             registry: self.registry.clone(),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),

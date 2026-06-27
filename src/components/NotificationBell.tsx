@@ -6,7 +6,11 @@ import {
   markNotificationRead,
   unreadNotificationCount,
 } from "../lib/notifications";
-import type { Notification, MrMergedEvent } from "../types";
+import type {
+  Notification,
+  MrMergedEvent,
+  RetryBudgetExhaustedEvent,
+} from "../types";
 
 /**
  * Global notification bell — lives in the header and surfaces
@@ -21,7 +25,13 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
-  const [toast, setToast] = useState<string | null>(null);
+  // A toast carries a message plus an accent color so the
+  // warning variant (`retry_budget_exhausted`) can render in
+  // amber instead of the default emerald used for the
+  // `mr_merged` success case.
+  const [toast, setToast] = useState<
+    { message: string; accent: "emerald" | "amber" | "ruby" } | null
+  >(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const refresh = async () => {
@@ -41,10 +51,33 @@ export function NotificationBell() {
   useEffect(() => { refresh(); }, []);
 
   useTauriEvent<MrMergedEvent>("mr_merged", ({ feature_title }) => {
-    setToast(`MR for "${feature_title}" was merged`);
+    setToast({
+      message: `MR for "${feature_title}" was merged`,
+      accent: "emerald",
+    });
     refresh();
     setTimeout(() => setToast(null), 4000);
   });
+
+  // Fired when the engine exhausts an `on_failure` retry budget
+  // (e.g. validate keeps failing after 3 attempts to fix
+  // implement). Distinct from the existing `step_failed` event:
+  // this one specifically means "the agent gave up — your turn",
+  // not "a transient step failure that the engine recovered
+  // from". We toast immediately and let the persisted
+  // notification row (written by the engine) surface in the
+  // bell on next refresh.
+  useTauriEvent<RetryBudgetExhaustedEvent>(
+    "retry_budget_exhausted",
+    ({ step_id, attempt, max, reason }) => {
+      setToast({
+        message: `Step '${step_id}' couldn't be fixed after ${attempt} attempt(s) (of ${max}). ${reason}`,
+        accent: "amber",
+      });
+      refresh();
+      setTimeout(() => setToast(null), 8000);
+    }
+  );
 
   // Click outside closes the panel.
   useEffect(() => {
@@ -124,10 +157,24 @@ export function NotificationBell() {
       {toast && (
         <div
           data-testid="notif-toast"
-          className="fixed bottom-6 right-6 z-50 glass-panel border-l-2 border-l-emerald-400 rounded-lg px-4 py-3 shadow-2xl flex items-start gap-3 max-w-sm animate-[fadeIn_120ms_ease-out]"
+          className={`fixed bottom-6 right-6 z-50 glass-panel border-l-2 rounded-lg px-4 py-3 shadow-2xl flex items-start gap-3 max-w-md animate-[fadeIn_120ms_ease-out] ${
+            toast.accent === "amber"
+              ? "border-l-amber-400"
+              : toast.accent === "ruby"
+                ? "border-l-ruby-400"
+                : "border-l-emerald-400"
+          }`}
         >
-          <Check className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
-          <div className="text-sm text-slate-200 flex-1">{toast}</div>
+          <Check
+            className={`w-4 h-4 mt-0.5 shrink-0 ${
+              toast.accent === "amber"
+                ? "text-amber-400"
+                : toast.accent === "ruby"
+                  ? "text-ruby-400"
+                  : "text-emerald-400"
+            }`}
+          />
+          <div className="text-sm text-slate-200 flex-1">{toast.message}</div>
           <button
             onClick={() => setToast(null)}
             className="text-slate-500 hover:text-white"
@@ -183,6 +230,8 @@ function kindLabel(kind: string): string {
       return "Completed";
     case "merge_conflict":
       return "Merge conflict";
+    case "retry_budget_exhausted":
+      return "Retry budget exhausted";
     default:
       return kind;
   }
@@ -198,6 +247,8 @@ function kindAccent(kind: string): { dot: string } {
     case "step_failed":
     case "merge_conflict":
       return { dot: "bg-ruby-400 text-ruby-400" };
+    case "retry_budget_exhausted":
+      return { dot: "bg-amber-400 text-amber-400" };
     default:
       return { dot: "bg-slate-400 text-slate-400" };
   }

@@ -1,6 +1,7 @@
 use super::ExecutionDriver;
-use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::models::{Notification, NotificationKind, StepConfig, StepExecution};
 use crate::ports::db::StepExecutionPatch;
+use crate::ports::notification::DomainEvent;
 use std::time::Instant;
 
 impl ExecutionDriver {
@@ -67,6 +68,10 @@ impl ExecutionDriver {
         let already = step_exec.iteration_count;
         if already + 1 > max {
             let wall = step_start.elapsed().as_secs();
+            let final_msg = format!(
+                "{} (retry budget exhausted: {} of {} attempts on '{}')",
+                msg, already, max, target_id.0
+            );
             super::super::updates::update_step_status(
                 &*self.features,
                 &*self.notif,
@@ -77,11 +82,42 @@ impl ExecutionDriver {
                 Some(accumulated_tokens),
                 wall,
                 None,
-                Some(format!(
-                    "{} (retry budget exhausted: {} of {} attempts on '{}')",
-                    msg, already, max, target_id.0
-                )),
+                Some(final_msg.clone()),
             );
+            // Persist a `notifications` row so the user sees the
+            // signal in the bell after a refresh, mirroring how
+            // `MrMerged` is persisted by `mr_monitor`. A failed
+            // feature lookup is non-fatal: the live event below
+            // still drives the toast.
+            if let Ok(Some(feature)) = self.features.get(&self.f_id) {
+                let notification = Notification {
+                    id: format!("notif-{}", crate::paths::now_ms()),
+                    project_id: feature.project_id.0.clone(),
+                    feature_id: self.f_id.0.clone(),
+                    kind: NotificationKind::RetryBudgetExhausted,
+                    message: format!(
+                        "Step '{}' failed after {} attempt(s) — the agent couldn't fix it. Your turn.",
+                        step_exec.step_id.0, already
+                    ),
+                    feature_url: Some(format!(
+                        "/projects/{}/features/{}",
+                        feature.project_id.0, self.f_id.0
+                    )),
+                    read: false,
+                    created_at: crate::paths::now_ms(),
+                };
+                let _ = self.notifications.add(notification);
+            }
+            // Push the live event so the toast reacts without
+            // waiting for the user to refresh.
+            let _ = self.notif.emit(&DomainEvent::RetryBudgetExhausted {
+                feature_id: self.f_id.clone(),
+                step_id: step_exec.step_id.0.clone(),
+                target_id: target_id.0.clone(),
+                attempt: already,
+                max,
+                reason: final_msg,
+            });
             return None;
         }
 

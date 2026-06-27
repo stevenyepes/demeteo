@@ -15,6 +15,11 @@ use crate::ports::notification::DomainEvent;
 struct GateDecisionContext<'a> {
     step_exec: &'a StepExecution,
     step_conf: &'a StepConfig,
+    /// All step executions for the current run, in order. The
+    /// `redirect` branch needs this to reset the target step's
+    /// status to `pending` so the driver doesn't skip it as
+    /// already-completed on the next loop iteration.
+    step_execs: &'a [StepExecution],
     prev_artifact_path: &'a Option<String>,
     prev_artifact_paths: &'a [String],
     accumulated_cost: &'a mut f64,
@@ -51,6 +56,67 @@ fn resolve_redirect_target(
                 None
             }
         })
+}
+
+/// Apply the durable state changes that a `redirect` gate decision
+/// requires. Pulled out of [`ExecutionDriver::apply_gate_decision`]
+/// so the loop-breaking fix is unit-testable without a full
+/// `ExecutionDriver` (and so the in-line `apply_gate_decision`
+/// branch stays a short redirect that delegates the work here).
+///
+/// Concretely:
+///   * the target step is reset to status `pending` (with all
+///     counters cleared and artifacts dropped) so the driver's
+///     resume-skip logic does not treat it as already-completed and
+///     skip past it; and
+///   * the gate's own `gate_decisions` row is cleared so the next
+///     visit to the gate re-prompts the user. Without this second
+///     half, the gate's reconciliation would find the prior
+///     `redirect` decision on file, return
+///     `RedirectTo(target_idx)` once more, and the same step would
+///     loop forever — the bug this fix exists to break.
+///
+/// Both writes are best-effort. Failures are intentionally
+/// swallowed: the redirect already won the user's intent, and any
+/// stale state is recoverable on the next reconciliation pass
+/// (the startup watchdog will re-surface the gate if the driver
+/// dies between the reset and the target step completing).
+fn reset_for_redirect(
+    features: &dyn crate::ports::db::FeatureRepository,
+    gates: &dyn crate::ports::db::GateRepository,
+    step_execs: &[StepExecution],
+    target_idx: usize,
+    gate_step_execution_id: &crate::domain::ids::StepExecutionId,
+) {
+    if let Some(target_exec) = step_execs.get(target_idx) {
+        // Reset every counter / artifact the previous attempt
+        // accumulated so the re-run starts from a clean slate.
+        // `cost_usd` / `tokens` / `wall_clock_secs` are wrapped in
+        // `Some(Some(0))` because the patch type uses
+        // `Option<Option<T>>` to distinguish "leave alone" (`None`)
+        // from "set to value" (`Some(Some(v))`).
+        let _ = features.step_update(
+            &target_exec.id,
+            &StepExecutionPatch {
+                iteration_count: None,
+                status: Some("pending".to_string()),
+                cost_usd: Some(Some(0.0)),
+                tokens: Some(Some(0)),
+                wall_clock_secs: Some(Some(0)),
+                artifact_path: Some(None),
+                artifact_paths: Some(Vec::new()),
+                error_message: Some(None),
+            },
+        );
+    }
+    // Clear this gate's own decision row so the next visit to the
+    // gate re-prompts the user. Idempotent against app restarts: if
+    // the driver dies after the reset and before the target step
+    // finishes, the startup watchdog will already mark the gate
+    // `interrupted` and create a fresh `gate_decisions` row with
+    // `decision = None` (see `startup_watchdog` in
+    // `impl_traits/mod.rs`).
+    let _ = gates.reset_for_step_execution(gate_step_execution_id);
 }
 
 impl ExecutionDriver {
@@ -132,6 +198,7 @@ impl ExecutionDriver {
                 let mut ctx = GateDecisionContext {
                     step_exec,
                     step_conf: _step_conf,
+                    step_execs,
                     prev_artifact_path: &prev_artifact_path,
                     prev_artifact_paths: &prev_artifact_paths,
                     accumulated_cost,
@@ -171,6 +238,7 @@ impl ExecutionDriver {
         let mut ctx = GateDecisionContext {
             step_exec,
             step_conf: _step_conf,
+            step_execs,
             prev_artifact_path: &prev_artifact_path,
             prev_artifact_paths: &prev_artifact_paths,
             accumulated_cost,
@@ -281,7 +349,25 @@ impl ExecutionDriver {
                 );
 
                 match target_idx {
-                    Some(idx) => StepOutcome::RedirectTo(idx),
+                    Some(idx) => {
+                        // The gate redirected back to a previous step;
+                        // reset that step's durable state and clear
+                        // the gate's own decision row so the driver
+                        // actually re-runs the target *and* re-prompts
+                        // the user on the next gate visit. Skipping
+                        // either half produces a loop: the spec
+                        // would be re-run, but the gate would
+                        // re-apply the prior `redirect` decision
+                        // forever (the bug this helper fixes).
+                        reset_for_redirect(
+                            &*self.features,
+                            &*self.gates,
+                            ctx.step_execs,
+                            idx,
+                            &ctx.step_exec.id,
+                        );
+                        StepOutcome::RedirectTo(idx)
+                    }
                     None => StepOutcome::Cancelled,
                 }
             }
@@ -375,5 +461,260 @@ mod redirect_target_tests {
         let steps = vec![step("research"), step("gate")];
         let target = resolve_redirect_target(&steps, None, 1, Some("   "));
         assert_eq!(target, Some(0));
+    }
+}
+
+/// The bug this regression suite exists to break: when a gate
+/// redirects back to a previous step with feedback, the orchestrator
+/// used to re-run the target step, then re-enter the gate, find the
+/// same `redirect` decision on file, redirect back again — and loop
+/// forever. `reset_for_redirect` is the fix: it resets the target
+/// step's status to `pending` and clears the gate's own decision
+/// row. These tests pin both halves of the fix in place.
+#[cfg(test)]
+mod redirect_reset_tests {
+    use super::*;
+    use crate::adapters::database::SqliteAdapter;
+    use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
+    use crate::domain::models::Feature;
+    use crate::ports::db::{FeatureRepository, GateRepository, ProjectRepository};
+    use rusqlite::Connection;
+
+    /// Construct an in-memory `SqliteAdapter` that implements every
+    /// port the helper touches (`FeatureRepository`,
+    /// `GateRepository`, and the rest of the trait surface that
+    /// `SqliteAdapter::new` requires). We pass it three times as
+    /// `&dyn` of the three relevant ports — the helper is generic
+    /// over `&dyn FeatureRepository` / `&dyn GateRepository`.
+    #[allow(clippy::type_complexity)]
+    fn make_adapter() -> (
+        std::sync::Arc<SqliteAdapter>,
+        std::sync::Arc<dyn ProjectRepository>,
+        std::sync::Arc<dyn FeatureRepository>,
+        std::sync::Arc<dyn GateRepository>,
+    ) {
+        let conn = Connection::open_in_memory().unwrap();
+        let adapter = std::sync::Arc::new(SqliteAdapter::new(conn).unwrap());
+        let projects: std::sync::Arc<dyn ProjectRepository> = adapter.clone();
+        let features: std::sync::Arc<dyn FeatureRepository> = adapter.clone();
+        let gates: std::sync::Arc<dyn GateRepository> = adapter.clone();
+        (adapter, projects, features, gates)
+    }
+
+    /// Insert the parent `Project` and `Feature` rows that the
+    /// `step_executions` foreign key requires. Returns the
+    /// `FeatureId` used so callers can reuse it in the
+    /// `StepExecution::feature_id` field.
+    fn seed_parent_rows(
+        projects: &dyn ProjectRepository,
+        features: &dyn FeatureRepository,
+    ) -> FeatureId {
+        let now = crate::paths::now_ms();
+        projects
+            .add(crate::domain::models::Project {
+                id: ProjectId::from("p-1".to_string()),
+                name: "test".to_string(),
+                compute_type: "local".to_string(),
+                remote_host: None,
+                status: "idle".to_string(),
+                nodes: 0,
+                spend: 0.0,
+                tokens: 0,
+                created_at: now,
+            })
+            .unwrap();
+        features
+            .add(Feature {
+                id: FeatureId::from("f-1".to_string()),
+                project_id: ProjectId::from("p-1".to_string()),
+                workflow_id: Some(WorkflowId::from("w-1".to_string())),
+                title: "test feature".to_string(),
+                status: "running".to_string(),
+                total_cost: 0.0,
+                tokens: 0,
+                duration: "0s".to_string(),
+                agent_kind: None,
+                model: None,
+                mr_url: None,
+                mr_state: Some("none".to_string()),
+                created_at: now,
+                commit_artifacts: None,
+                loop_iterations: None,
+                step_overrides: Vec::new(),
+            })
+            .unwrap();
+        FeatureId::from("f-1".to_string())
+    }
+
+    /// Stand-in `StepExecution` builder. The helper only reads `id`
+    /// and `step_id`, but the repo refuses garbage values for the
+    /// other fields, so we fill in plausible ones.
+    fn make_step_exec(id: &str, step_id: &str, index: u32, status: &str) -> StepExecution {
+        let now = crate::paths::now_ms();
+        StepExecution {
+            id: StepExecutionId::from(id.to_string()),
+            feature_id: FeatureId::from("f-1".to_string()),
+            step_id: crate::domain::ids::StepId::from(step_id.to_string()),
+            step_index: index,
+            step_kind: "agent".to_string(),
+            status: status.to_string(),
+            cost_usd: Some(0.42),
+            tokens: Some(1234),
+            wall_clock_secs: Some(7),
+            artifact_path: Some("artifacts/spec.md".to_string()),
+            artifact_paths: vec!["artifacts/spec.md".to_string()],
+            error_message: None,
+            iteration_count: 0,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn make_gate_exec(id: &str, index: u32) -> StepExecution {
+        let now = crate::paths::now_ms();
+        StepExecution {
+            id: StepExecutionId::from(id.to_string()),
+            feature_id: FeatureId::from("f-1".to_string()),
+            step_id: crate::domain::ids::StepId::from("s-gate".to_string()),
+            step_index: index,
+            step_kind: "gate".to_string(),
+            status: "awaiting_gate".to_string(),
+            cost_usd: Some(0.0),
+            tokens: Some(0),
+            wall_clock_secs: Some(0),
+            artifact_path: None,
+            artifact_paths: Vec::new(),
+            error_message: None,
+            iteration_count: 0,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn reset_marks_target_step_pending_and_clears_artifacts() {
+        // Mirror the real bug: spec is `completed` with artifacts
+        // attached, the gate is mid-decision. The helper must
+        // rewind spec to `pending` and drop the artifacts so the
+        // re-run starts from a clean slate.
+        let (_adapter, projects, features, gates) = make_adapter();
+        let _f_id = seed_parent_rows(&*projects, &*features);
+
+        let spec = make_step_exec("se-spec", "s-spec", 1, "completed");
+        let gate = make_gate_exec("se-gate", 2);
+        let step_execs = vec![
+            make_step_exec("se-research", "s-research", 0, "completed"),
+            spec.clone(),
+            gate.clone(),
+        ];
+
+        // Persist the spec + gate so the reset reads / writes hit
+        // real rows. The research row is included so the step index
+        // math lines up.
+        features.step_create(step_execs[0].clone()).unwrap();
+        features.step_create(spec.clone()).unwrap();
+        features.step_create(gate.clone()).unwrap();
+
+        // Pre-condition: spec carries the artifact from the
+        // previous run, gate has an open decision.
+        assert_eq!(
+            features.step_get(&spec.id).unwrap().unwrap().status,
+            "completed"
+        );
+        assert_eq!(
+            features.step_get(&spec.id).unwrap().unwrap().artifact_paths,
+            vec!["artifacts/spec.md".to_string()]
+        );
+
+        reset_for_redirect(&*features, &*gates, &step_execs, 1, &gate.id);
+
+        // Post-condition: spec is pending with cleared counters
+        // and dropped artifacts. The driver will now see the spec
+        // as "not yet done" and re-run it instead of skipping past
+        // it.
+        let spec_after = features.step_get(&spec.id).unwrap().unwrap();
+        assert_eq!(spec_after.status, "pending");
+        assert_eq!(spec_after.artifact_path, None);
+        assert!(spec_after.artifact_paths.is_empty());
+        assert_eq!(spec_after.cost_usd, Some(0.0));
+        assert_eq!(spec_after.tokens, Some(0));
+        assert_eq!(spec_after.wall_clock_secs, Some(0));
+    }
+
+    #[test]
+    fn reset_clears_gate_decision_row() {
+        // The second half of the fix: the gate's own decision row
+        // must be deleted, not just updated to `None`. After the
+        // reset, the next visit to the gate must find no recorded
+        // decision so the reconciliation falls through to the
+        // in-process waiter (or the startup watchdog on a fresh
+        // launch) and re-prompts the user.
+        let (_adapter, projects, features, gates) = make_adapter();
+        let _f_id = seed_parent_rows(&*projects, &*features);
+
+        let gate = make_gate_exec("se-gate", 2);
+        features.step_create(gate.clone()).unwrap();
+        gates
+            .create(GateDecision {
+                id: GateDecisionId::from("gd-se-gate".to_string()),
+                step_execution_id: gate.id.clone(),
+                decision: Some("redirect".to_string()),
+                feedback: Some("revise the spec to use cargo before mise".to_string()),
+                created_at: crate::paths::now_ms(),
+            })
+            .unwrap();
+
+        // Sanity check: the decision is in place.
+        assert_eq!(
+            gates
+                .latest_for_step(&gate.id)
+                .unwrap()
+                .unwrap()
+                .decision
+                .as_deref(),
+            Some("redirect")
+        );
+
+        let step_execs = vec![
+            make_step_exec("se-spec", "s-spec", 1, "completed"),
+            gate.clone(),
+        ];
+        reset_for_redirect(&*features, &*gates, &step_execs, 1, &gate.id);
+
+        // The decision row is gone; `latest_for_step` returns None
+        // and the gate's reconciliation will treat this as
+        // "no decision yet, await user".
+        assert!(gates.latest_for_step(&gate.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn reset_is_noop_when_target_index_out_of_bounds() {
+        // Defensive: a misbehaving `resolve_redirect_target` could
+        // return a stale index after the workflow shape changes
+        // (e.g. the user re-ran `replay_from_step` and the indices
+        // shifted). The helper must not panic; it just has nothing
+        // to update. The gate decision is still cleared, since
+        // that's an unconditional part of the redirect.
+        let (_adapter, projects, features, gates) = make_adapter();
+        let _f_id = seed_parent_rows(&*projects, &*features);
+
+        let gate = make_gate_exec("se-gate", 2);
+        features.step_create(gate.clone()).unwrap();
+        gates
+            .create(GateDecision {
+                id: GateDecisionId::from("gd-se-gate".to_string()),
+                step_execution_id: gate.id.clone(),
+                decision: Some("redirect".to_string()),
+                feedback: None,
+                created_at: crate::paths::now_ms(),
+            })
+            .unwrap();
+
+        let step_execs = vec![gate.clone()];
+        reset_for_redirect(&*features, &*gates, &step_execs, 99, &gate.id);
+
+        // The decision was still cleared; the out-of-bounds target
+        // is silently skipped.
+        assert!(gates.latest_for_step(&gate.id).unwrap().is_none());
     }
 }

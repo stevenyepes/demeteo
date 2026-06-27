@@ -205,7 +205,8 @@ export type NotificationKind =
   | 'gate_pending'
   | 'step_failed'
   | 'feature_completed'
-  | 'merge_conflict';
+  | 'merge_conflict'
+  | 'retry_budget_exhausted';
 
 /** Mirrors the Rust `Notification` struct on the `notifications`
  *  table. `feature_url` is a relative deep link; the bell decides
@@ -229,6 +230,19 @@ export interface MrMergedEvent {
   project_id: string;
   feature_title: string;
   mr_url: string;
+}
+
+/** Wire shape of `DomainEvent::RetryBudgetExhausted` — fired by
+ *  the orchestrator when a step's `on_failure` retry chain runs
+ *  out of attempts. The user must intervene; the agent gave up.
+ *  Drives the toast in `NotificationBell`. */
+export interface RetryBudgetExhaustedEvent {
+  feature_id: string;
+  step_id: string;
+  target_id: string;
+  attempt: number;
+  max: number;
+  reason: string;
 }
 
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */

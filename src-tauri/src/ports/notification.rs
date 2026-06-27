@@ -80,6 +80,28 @@ pub enum DomainEvent {
         feature_title: String,
         mr_url: String,
     },
+
+    /// Emitted when a step's `on_failure` redirect chain has
+    /// exhausted its retry budget. The failing step's row is
+    /// already marked `failed` with a "retry budget exhausted"
+    /// error message; this event is the user-visible signal
+    /// (notification bell entry + toast) that the engine gave
+    /// up after `max_iterations` attempts and the user needs to
+    /// intervene (e.g. by editing the spec, adjusting the
+    /// workflow's `on_failure` target, or picking a different
+    /// model). The `attempt` / `max` counts are included so the
+    /// UI can render "3 of 3 attempts" without a follow-up DB
+    /// lookup. `target_id` is the step the loop kept trying to
+    /// jump to (e.g. `"s-implement"`) so the UI can deep-link
+    /// to a useful place.
+    RetryBudgetExhausted {
+        feature_id: FeatureId,
+        step_id: String,
+        target_id: String,
+        attempt: u32,
+        max: u32,
+        reason: String,
+    },
 }
 
 /// The single deep interface for orchestrator → UI event emission.

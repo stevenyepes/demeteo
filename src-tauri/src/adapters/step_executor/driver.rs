@@ -50,6 +50,12 @@ pub(crate) struct ExecutionDriver {
     pub projects: Arc<dyn crate::ports::db::ProjectRepository>,
     pub signals: Arc<dyn crate::ports::memory_signals::MemorySignalsPort>,
     pub notif: Arc<dyn NotificationPort>,
+    /// Notification persistence port. The driver uses this to
+    /// write a row to the `notifications` table when a user-visible
+    /// event is emitted from inside a step (e.g. retry budget
+    /// exhausted). Mirrors the same `SqliteAdapter` instance as
+    /// `features` / `gates`; no separate I/O.
+    pub notifications: Arc<dyn crate::ports::db::NotificationRepository>,
     pub registry: Arc<AgentRegistry>,
     pub agent_exec: Arc<dyn AgentExecutionPort>,
     pub exec: Arc<dyn ExecutionPort>,

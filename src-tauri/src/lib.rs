@@ -254,6 +254,7 @@ pub fn run() {
                     memory_llm.clone(),
                     agent_registry.clone(),
                     notif_adapter.clone(),
+                    notifications_repo.clone(),
                     agent_exec.clone(),
                     exec_inner.clone(),
                     merge_executor.clone(),
