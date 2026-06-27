@@ -39,6 +39,18 @@ pub struct WorktreeStrategy {
     pub pr_template: Option<String>,
     #[serde(default)]
     pub harnesses: Option<HashMap<String, String>>,
+    /// Project-wide writability exceptions, applied on top of the
+    /// capability-driven chmod fence. Repo-relative paths the agent may
+    /// write to even when the step's capability (`ReadOnly`,
+    /// `Artifacts`, `Verify`) would otherwise fence them. Designed for
+    /// tool side-effects that aren't source or artifacts — e.g.
+    /// `target/` for `cargo test`, `node_modules/` for `npm test`,
+    /// `.venv/` for `pytest`. Each entry must be a relative path
+    /// inside the worktree; `..` is rejected to prevent escape.
+    /// Stays empty for `Implement` capability (which is already
+    /// fully writable). See scope adapter `derive_writable_paths_for_scope`.
+    #[serde(default)]
+    pub extra_writable_paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

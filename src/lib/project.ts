@@ -84,6 +84,7 @@ export interface ProjectSettingsInput {
   conventions_file?: string | null;
   pr_template?: string | null;
   harnesses?: Record<string, string> | null;
+  extra_writable_paths?: string[] | null;
   conflict_policy?: string;
   feature_lifecycle?: string;
   default_agent_kind?: string | null;
@@ -141,6 +142,13 @@ export async function saveProjectSettings(
               ? input.harnesses
               : null)
           : (baseWs?.harnesses ?? null),
+      extra_writable_paths:
+        input.extra_writable_paths !== undefined
+          ? (Array.isArray(input.extra_writable_paths) &&
+            input.extra_writable_paths.length > 0
+              ? input.extra_writable_paths
+              : null)
+          : (baseWs?.extra_writable_paths ?? null),
     },
     conflict_policy:
       input.conflict_policy ?? existing?.conflict_policy ?? "always_gate",

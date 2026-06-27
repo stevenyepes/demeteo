@@ -167,6 +167,7 @@ pub(crate) fn fetch_default_settings() -> ProjectSettings {
             conventions_file: None,
             pr_template: None,
             harnesses: None,
+            extra_writable_paths: Vec::new(),
         },
         conflict_policy: "always_gate".to_string(),
         feature_lifecycle: "archive".to_string(),

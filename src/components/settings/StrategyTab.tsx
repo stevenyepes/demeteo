@@ -1,4 +1,4 @@
-import { GitBranch, Zap, Settings, FileText, Activity, Check, RotateCw, Trash2, Plus } from 'lucide-react';
+import { GitBranch, Zap, Settings, FileText, Activity, Check, RotateCw, Trash2, Plus, FolderOpen } from 'lucide-react';
 import { useSettings } from './ProjectSettingsContext';
 
 export function StrategyTab() {
@@ -144,6 +144,64 @@ export function StrategyTab() {
           <div className="w-full bg-black/40 border border-white/5 rounded-lg p-4 font-mono text-xs text-slate-400 max-h-[160px] overflow-y-auto leading-relaxed">{s.prTemplate}</div>
         </div>
       )}
+
+      {/* Extra Writable Paths */}
+      <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
+        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+          <FolderOpen className="w-4 h-4 text-emerald-400" /> Extra Writable Paths
+        </h3>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Repo-relative paths the orchestrator will leave writable even inside the chmod scope fence. Use this when a verification step needs to write to a tool-specific directory that is neither <code className="text-slate-300">artifacts/</code> nor source — for example <code className="text-slate-300">target/</code> for <code>cargo test</code>, <code className="text-slate-300">node_modules/</code> for <code>npm test</code>, <code className="text-slate-300">.venv/</code> for <code>pytest</code>. Entries are normalised (trailing slashes stripped); absolute paths and <code>..</code> escapes are rejected.
+        </p>
+        <div className="space-y-3">
+          {s.extraWritablePaths.map((p) => (
+            <div key={p} className="flex gap-2 items-center">
+              <div className="flex-1 font-mono text-xs bg-black/40 border border-white/10 rounded-lg p-2 text-white truncate">
+                <span className="text-emerald-400">{p}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => s.setExtraWritablePaths(s.extraWritablePaths.filter((x) => x !== p))}
+                className="p-2 text-slate-500 hover:text-ruby-400 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 shrink-0"
+                title="Remove path"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+          <div className="border-t border-white/5 pt-3 flex gap-2">
+            <input
+              type="text"
+              value={s.newExtraPath}
+              onChange={(e) => s.setNewExtraPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const v = s.newExtraPath.trim();
+                  if (v && !s.extraWritablePaths.includes(v)) {
+                    s.setExtraWritablePaths([...s.extraWritablePaths, v]);
+                    s.setNewExtraPath('');
+                  }
+                }
+              }}
+              placeholder="e.g. target/ or node_modules"
+              className="flex-1 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500/50 font-mono"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const v = s.newExtraPath.trim();
+                if (v && !s.extraWritablePaths.includes(v)) {
+                  s.setExtraWritablePaths([...s.extraWritablePaths, v]);
+                  s.setNewExtraPath('');
+                }
+              }}
+              className="px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors flex items-center gap-1 font-semibold shrink-0"
+            >
+              <Plus className="w-3 h-3" /> Add
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Coding Agent Configurations */}
       <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">

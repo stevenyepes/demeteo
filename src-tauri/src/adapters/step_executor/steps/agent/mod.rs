@@ -153,14 +153,17 @@ impl ExecutionDriver {
         // Apply the capability-driven scope fence before the agent
         // spawns. The capability decides the write posture (ReadOnly =
         // nothing, Artifacts/Verify = `artifacts/`, Implement = whole
-        // worktree); declared `LastWriteTo` paths refine it. The agent's
-        // tool policy already denies the relevant tools, but the OS fence
+        // worktree); declared `LastWriteTo` paths refine it. Project-
+        // level `extra_writable_paths` (e.g. `target/` for `cargo test`)
+        // widen the fence past the capability default. The agent's tool
+        // policy already denies the relevant tools, but the OS fence
         // enforces the artifacts-vs-source line that tool names can't
         // express. The post-step diff guard catches any chmod-escape.
         let writable_paths =
             crate::adapters::worktree::git_ops::scope::derive_writable_paths_for_scope(
                 step_conf.effective_capability().write_scope(),
                 step_conf.artifacts.as_ref(),
+                &self.extra_writable_paths,
             );
         if let Err(e) = self
             .git_ops

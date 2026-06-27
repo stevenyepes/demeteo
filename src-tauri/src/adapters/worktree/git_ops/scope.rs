@@ -38,34 +38,100 @@ use crate::domain::permission::WriteScope;
 pub(crate) const ALL_WRITES: &str = "__ALL_WRITES__";
 
 /// Sentinel writable-path meaning "nothing in the worktree is writable".
-/// Emitted for [`WriteScope::None`] / `ReadOnly` steps. The fence chmods
-/// every entry `a-w`; the diff guard reverts *any* change.
+/// Emitted for [`WriteScope::None`] / `ReadOnly` steps *unless* the
+/// project provides extra writable paths that explicitly widen the
+/// scope. The fence chmods every entry `a-w`; the diff guard reverts
+/// *any* change.
 pub(crate) const NONE_WRITABLE: &str = "__NONE__";
 
 /// The conventional artifacts directory every artifact-scoped step may
 /// write under, even when it declares no explicit `LastWriteTo` path.
 pub(crate) const ARTIFACTS_DIR: &str = "artifacts";
 
+/// Normalise a project-declared extra writable path. Rejects absolute
+/// paths, empty entries, and any segment that would escape the worktree
+/// (e.g. `..`, leading `/`). Returns the canonical repo-relative form
+/// (`./foo` → `foo`). Used to prevent an attacker-controlled settings
+/// payload from pivoting the fence outside the worktree.
+fn normalize_extra_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with('/') || trimmed.starts_with('\\') {
+        return None;
+    }
+    if Path::new(trimmed).is_absolute() {
+        return None;
+    }
+    let mut clean = PathBuf::new();
+    for comp in Path::new(trimmed).components() {
+        match comp {
+            std::path::Component::Normal(seg) => clean.push(seg),
+            std::path::Component::CurDir => {}
+            // ParentDir or any prefix/root component is an escape — reject.
+            std::path::Component::ParentDir
+            | std::path::Component::Prefix(_)
+            | std::path::Component::RootDir => return None,
+        }
+    }
+    if clean.as_os_str().is_empty() {
+        None
+    } else {
+        Some(clean)
+    }
+}
+
+/// Build the final extra-paths list: normalise, deduplicate, preserve
+/// input order. Used by [`derive_writable_paths_for_scope`] to merge
+/// user-declared exceptions into the capability-derived writable set.
+fn normalised_extras(extras: &[String]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for raw in extras {
+        if let Some(p) = normalize_extra_path(raw) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
 /// Derive writable paths from a step's *capability* write-scope, refined
-/// by its declared artifacts. This is the capability-authoritative entry
-/// point used by the agent step handler — the capability decides the
-/// posture, declared `LastWriteTo` paths refine where (within an
-/// artifact-scoped step) the output lands.
+/// by its declared artifacts and project-level extra writable paths.
+/// This is the capability-authoritative entry point used by the agent
+/// step handler — the capability decides the posture, declared
+/// `LastWriteTo` paths refine where (within an artifact-scoped step) the
+/// output lands, and `extra_paths` widens the fence with user-declared
+/// tool side-effect directories.
 ///
-/// - [`WriteScope::All`]  → `[__ALL_WRITES__]` (no fence).
-/// - [`WriteScope::None`] → `[__NONE__]` (deny every write).
+/// - [`WriteScope::All`]  → `[__ALL_WRITES__]` (no fence). `extra_paths`
+///   is ignored because the whole worktree is already writable.
+/// - [`WriteScope::None`] → `[__NONE__]` (deny every write) **unless**
+///   `extra_paths` is non-empty, in which case the fence widens to just
+///   the extras. Even a `ReadOnly` step may opt into specific tool
+///   side-effects (e.g. a coverage analyst that needs `.cache/`).
 /// - [`WriteScope::ArtifactsOnly`] → `artifacts/` plus any explicit
-///   `LastWriteTo` paths. Unconstrained captures (`AllWrites`/`ByName`/
-///   `Diff`/`ChangedFiles`) do **not** widen the scope here: the
-///   capability is authoritative, so an artifact-scoped step stays fenced
-///   to `artifacts/` regardless of capture shape.
+///   `LastWriteTo` paths plus the extras. Unconstrained captures
+///   (`AllWrites`/`ByName`/`Diff`/`ChangedFiles`) do **not** widen the
+///   scope here: the capability is authoritative, so an artifact-scoped
+///   step stays fenced to `artifacts/` + extras regardless of capture
+///   shape.
 pub(crate) fn derive_writable_paths_for_scope(
     scope: WriteScope,
     artifacts: Option<&Vec<crate::domain::artifact::ArtifactDecl>>,
+    extra_paths: &[String],
 ) -> Vec<PathBuf> {
+    let extras = normalised_extras(extra_paths);
     match scope {
         WriteScope::All => vec![PathBuf::from(ALL_WRITES)],
-        WriteScope::None => vec![PathBuf::from(NONE_WRITABLE)],
+        WriteScope::None => {
+            if extras.is_empty() {
+                vec![PathBuf::from(NONE_WRITABLE)]
+            } else {
+                extras
+            }
+        }
         WriteScope::ArtifactsOnly => {
             let mut paths = vec![PathBuf::from(ARTIFACTS_DIR)];
             if let Some(artifacts) = artifacts {
@@ -78,19 +144,32 @@ pub(crate) fn derive_writable_paths_for_scope(
                     }
                 }
             }
+            for ex in extras {
+                if !paths.contains(&ex) {
+                    paths.push(ex);
+                }
+            }
             paths
         }
     }
 }
 
 /// Derive the set of relative paths the step is allowed to write, from
-/// its declared `artifacts` config. Returns an empty vec if the step
-/// declares no artifacts (caller decides whether to allow all or fail).
+/// its declared `artifacts` config plus project-level extras. Returns
+/// an empty vec if the step declares no artifacts and has no extras
+/// (caller decides whether to allow all or fail).
+///
+/// `extra_paths` widens the writable set with project-declared tool
+/// side-effect directories (e.g. `target/`). Normalised and deduped.
+/// Inconsequential when an unconstrained capture short-circuits to
+/// `__ALL_WRITES__` — that's an explicit "whole worktree" opt-out.
 pub(crate) fn derive_writable_paths(
     artifacts: Option<&Vec<crate::domain::artifact::ArtifactDecl>>,
+    extra_paths: &[String],
 ) -> Vec<PathBuf> {
     let Some(artifacts) = artifacts else {
-        return Vec::new();
+        // No artifacts declared — only extras remain as writable paths.
+        return normalised_extras(extra_paths);
     };
     let mut paths = Vec::new();
     for decl in artifacts {
@@ -111,6 +190,11 @@ pub(crate) fn derive_writable_paths(
                 return vec![PathBuf::from("__ALL_WRITES__")];
             }
             _ => {}
+        }
+    }
+    for ex in normalised_extras(extra_paths) {
+        if !paths.contains(&ex) {
+            paths.push(ex);
         }
     }
     paths
@@ -395,23 +479,36 @@ mod tests {
     #[test]
     fn derive_returns_explicit_paths_for_last_write_to() {
         let decls = vec![last_write_to("report", "artifacts/research-report.md")];
-        let paths = derive_writable_paths(Some(&decls));
+        let paths = derive_writable_paths(Some(&decls), &no_extras());
         assert_eq!(paths, vec![PathBuf::from("artifacts/research-report.md")]);
     }
 
     #[test]
     fn derive_returns_all_writes_sentinel_for_unconstrained_capture() {
         let decls = vec![all_writes("implemented-files")];
-        let paths = derive_writable_paths(Some(&decls));
+        let paths = derive_writable_paths(Some(&decls), &no_extras());
         assert_eq!(paths, vec![PathBuf::from("__ALL_WRITES__")]);
         assert!(step_declares_full_write(Some(&decls)));
     }
 
     #[test]
     fn derive_empty_for_no_artifacts_declared() {
-        let paths = derive_writable_paths(None);
+        let paths = derive_writable_paths(None, &no_extras());
         assert!(paths.is_empty());
         assert!(!step_declares_full_write(None));
+    }
+
+    #[test]
+    fn derive_returns_extras_when_no_artifacts_declared() {
+        // No artifacts but the project opted into extra writable paths.
+        let paths = derive_writable_paths(
+            None,
+            &["target".to_string(), "node_modules".to_string()],
+        );
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("target"), PathBuf::from("node_modules")]
+        );
     }
 
     #[test]
@@ -422,7 +519,7 @@ mod tests {
             last_write_to("report", "artifacts/spec.md"),
             all_writes("all"),
         ];
-        let paths = derive_writable_paths(Some(&decls));
+        let paths = derive_writable_paths(Some(&decls), &no_extras());
         assert_eq!(paths, vec![PathBuf::from("__ALL_WRITES__")]);
     }
 
@@ -435,34 +532,63 @@ mod tests {
             },
             mode: ArtifactMode::Full,
         }];
-        let paths = derive_writable_paths(Some(&decls));
+        let paths = derive_writable_paths(Some(&decls), &no_extras());
         assert_eq!(paths, vec![PathBuf::from("__ALL_WRITES__")]);
     }
 
     // ── derive_writable_paths_for_scope (capability-authoritative) ───────
 
+    fn no_extras() -> Vec<String> {
+        Vec::new()
+    }
+
     #[test]
     fn scope_all_returns_all_writes_sentinel() {
-        let paths = derive_writable_paths_for_scope(WriteScope::All, None);
+        let paths = derive_writable_paths_for_scope(WriteScope::All, None, &no_extras());
         assert_eq!(paths, vec![PathBuf::from(ALL_WRITES)]);
     }
 
     #[test]
-    fn scope_none_returns_none_sentinel() {
-        let paths = derive_writable_paths_for_scope(WriteScope::None, None);
+    fn scope_all_ignores_extras_because_worktree_is_already_writable() {
+        // Implement capability already opens the entire worktree; extras
+        // are redundant but should never introduce the NONE sentinel or
+        // shadow it.
+        let extras = vec!["target/".to_string()];
+        let paths = derive_writable_paths_for_scope(WriteScope::All, None, &extras);
+        assert_eq!(paths, vec![PathBuf::from(ALL_WRITES)]);
+    }
+
+    #[test]
+    fn scope_none_returns_none_sentinel_without_extras() {
+        let paths = derive_writable_paths_for_scope(WriteScope::None, None, &no_extras());
         assert_eq!(paths, vec![PathBuf::from(NONE_WRITABLE)]);
     }
 
     #[test]
+    fn scope_none_with_extras_widens_past_deny_all() {
+        // ReadOnly + extras: the user opted the step into specific tool
+        // side-effects (e.g. .cache/coverage). The NONE sentinel is
+        // suppressed and the extras become the writable set directly.
+        let extras = vec![".cache/coverage".to_string(), "scratch/".to_string()];
+        let paths = derive_writable_paths_for_scope(WriteScope::None, None, &extras);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from(".cache/coverage"), PathBuf::from("scratch"),]
+        );
+        assert!(!paths.iter().any(|p| p == &PathBuf::from(NONE_WRITABLE)));
+    }
+
+    #[test]
     fn scope_artifacts_defaults_to_artifacts_dir_when_no_decls() {
-        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None);
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None, &no_extras());
         assert_eq!(paths, vec![PathBuf::from(ARTIFACTS_DIR)]);
     }
 
     #[test]
     fn scope_artifacts_includes_explicit_last_write_to_paths() {
         let decls = vec![last_write_to("spec", "artifacts/spec.md")];
-        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, Some(&decls));
+        let paths =
+            derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, Some(&decls), &no_extras());
         assert_eq!(
             paths,
             vec![
@@ -477,8 +603,105 @@ mod tests {
         // Even if an artifact-scoped step declares AllWrites, the
         // capability is authoritative: it stays fenced to artifacts/.
         let decls = vec![all_writes("everything")];
-        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, Some(&decls));
+        let paths =
+            derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, Some(&decls), &no_extras());
         assert_eq!(paths, vec![PathBuf::from(ARTIFACTS_DIR)]);
         assert!(!paths.contains(&PathBuf::from(ALL_WRITES)));
+    }
+
+    #[test]
+    fn scope_artifacts_appends_extras_after_artifacts_dir() {
+        // The canonical use case: a Verify step running `cargo test` on
+        // a Rust project. The chmod fence must leave `target/` writable
+        // while keeping source read-only.
+        let extras = vec!["target/".to_string()];
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None, &extras);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from(ARTIFACTS_DIR), PathBuf::from("target")]
+        );
+    }
+
+    #[test]
+    fn scope_artifacts_dedups_extras_that_overlap_artifacts_dir() {
+        // If the user lists `artifacts/` again it must not be appended.
+        let extras = vec!["artifacts/".to_string(), "artifacts/extra.md".to_string()];
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None, &extras);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from(ARTIFACTS_DIR),
+                PathBuf::from("artifacts/extra.md"),
+            ]
+        );
+    }
+
+    // ── extras normalisation (security boundary) ─────────────────────────
+
+    #[test]
+    fn extras_normalisation_strips_trailing_slashes() {
+let paths = derive_writable_paths_for_scope(
+            WriteScope::ArtifactsOnly,
+            None,
+            &["target".to_string(), "node_modules".to_string()],
+        );
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from(ARTIFACTS_DIR),
+                PathBuf::from("target"),
+                PathBuf::from("node_modules"),
+            ]
+        );
+    }
+
+    #[test]
+    fn extras_normalisation_rejects_absolute_paths() {
+        // Absolute paths would escape the worktree root. The orchestrator
+        // runs on Unix hosts today, where `Path::is_absolute` only
+        // recognises paths with a leading `/`; a Windows drive prefix
+        // would be treated as a relative path by the shell anyway.
+        let extras = vec!["/etc/passwd".to_string(), "/var/log/syslog".to_string()];
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None, &extras);
+        assert_eq!(paths, vec![PathBuf::from(ARTIFACTS_DIR)]);
+    }
+
+    #[test]
+    fn extras_normalisation_rejects_parent_dir_escape() {
+        // `../foo` would land outside the worktree.
+        let extras = vec![
+            "../escape".to_string(),
+            "ok/../../escape".to_string(),
+            "safe".to_string(),
+        ];
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None, &extras);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from(ARTIFACTS_DIR), PathBuf::from("safe")]
+        );
+    }
+
+    #[test]
+    fn extras_normalisation_dedups_repeated_entries() {
+        let extras = vec![
+            "target".to_string(),
+            "target/".to_string(),
+            "./target".to_string(),
+        ];
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None, &extras);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from(ARTIFACTS_DIR), PathBuf::from("target")]
+        );
+    }
+
+    #[test]
+    fn extras_normalisation_skips_empty_entries() {
+        let extras = vec!["".to_string(), "   ".to_string(), "target".to_string()];
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None, &extras);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from(ARTIFACTS_DIR), PathBuf::from("target")]
+        );
     }
 }

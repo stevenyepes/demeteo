@@ -367,6 +367,16 @@ export interface WorktreeStrategy {
   conventions_file: string | null;
   pr_template: string | null;
   harnesses?: Record<string, string> | null;
+  /**
+   * Project-level writability exceptions for the chmod scope fence.
+   * Repo-relative paths the agent may write to even when its step
+   * capability (`read_only`, `artifacts`, `verify`) would otherwise
+   * fence them. Common uses: `target/` for `cargo test`,
+   * `node_modules/` for `npm test`, `.venv/` for `pytest`.
+   * Backend normalises entries (rejects absolute paths and `..`) and
+   * merges into the per-step writable set.
+   */
+  extra_writable_paths?: string[] | null;
 }
 
 export interface ProjectSettingsData {
