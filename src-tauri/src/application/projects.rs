@@ -1,4 +1,4 @@
-use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
+use crate::domain::ids::{FeatureId, MachineId, ProjectId, ProviderId, RepositoryId};
 use crate::domain::models::{Project, RepoHealthStatus, Repository};
 use crate::paths;
 use crate::state::AppContext;
@@ -252,4 +252,78 @@ pub async fn health_check(
     }
 
     Ok(results)
+}
+
+#[derive(Serialize)]
+pub struct WorktreeInfo {
+    pub machine_id: String,
+    pub worktree_path: String,
+    pub branch: String,
+    pub default_branch: String,
+}
+
+pub async fn worktree_info(ctx: &AppContext, feature_id: String) -> Result<WorktreeInfo, String> {
+    let fid = FeatureId::from(feature_id);
+    let feature = ctx
+        .features
+        .get(&fid)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Feature not found".to_string())?;
+
+    let project_id = feature.project_id;
+    let all = ctx.projects.get_projects().map_err(|e| e.to_string())?;
+    let project = all
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+
+    let repos = ctx
+        .projects
+        .get_repositories_for(&project_id)
+        .map_err(|e| e.to_string())?;
+    let repo = repos
+        .first()
+        .ok_or_else(|| "No repository configured for this project".to_string())?;
+
+    let settings = ctx
+        .projects
+        .get_settings(&project_id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+
+    let machine_id = if project.compute_type.eq_ignore_ascii_case("local") {
+        "local".to_string()
+    } else {
+        project
+            .remote_host
+            .as_ref()
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "local".to_string())
+    };
+
+    let worktree_path = if project.compute_type.eq_ignore_ascii_case("local") {
+        paths::repo_target_dir_local(&ctx.workspace_dir, &project_id.0, &repo.repo_path)
+            .to_string_lossy()
+            .to_string()
+    } else {
+        paths::repo_target_dir_str(
+            &ctx.exec,
+            &project.compute_type,
+            project.remote_host.as_ref().map(|m| m.as_str()),
+            &project_id.0,
+            &repo.repo_path,
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+    };
+
+    let branch = format!("{}{}", settings.worktree_strategy.branch_prefix, fid.0);
+
+    Ok(WorktreeInfo {
+        machine_id,
+        worktree_path,
+        branch,
+        default_branch: settings.worktree_strategy.default_branch.clone(),
+    })
 }
