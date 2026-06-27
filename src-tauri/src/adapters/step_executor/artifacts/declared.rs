@@ -49,18 +49,20 @@ pub(crate) fn resolve_declared_artifacts(
                 // `GitOpsHelper`. No agent event matches them. The
                 // orchestrator should synthesise them at TurnComplete
                 // when `GitOpsHelper` methods are available (next step).
-                eprintln!(
-                    "[artifacts] step={} decl={}: Diff declaration skipped — GitOpsHelper not yet wired",
-                    step_id, decl.name,
+                tracing::warn!(
+                    step = step_id,
+                    decl = decl.name.as_str(),
+                    "Diff declaration skipped — GitOpsHelper not yet wired",
                 );
                 continue;
             }
             ArtifactCapture::Worktree { .. } => {
                 // Worktree-ref artifacts are synthesised by the executor
                 // from branch/machine state. No agent event matches them.
-                eprintln!(
-                    "[artifacts] step={} decl={}: Worktree declaration skipped — GitOpsHelper not yet wired",
-                    step_id, decl.name,
+                tracing::warn!(
+                    step = step_id,
+                    decl = decl.name.as_str(),
+                    "Worktree declaration skipped — GitOpsHelper not yet wired",
                 );
                 continue;
             }
@@ -70,16 +72,19 @@ pub(crate) fn resolve_declared_artifacts(
             match store.put(feature_id, step_id, artifact) {
                 Ok(reference) => refs.push(reference),
                 Err(e) => {
-                    eprintln!(
-                        "[artifacts] step={} decl={}: Failed to store artifact: {}",
-                        step_id, decl.name, e,
+                    tracing::warn!(
+                        step = step_id,
+                        decl = decl.name.as_str(),
+                        error = %e,
+                        "Failed to store artifact",
                     );
                 }
             }
         } else {
-            eprintln!(
-                "[artifacts] step={} decl={}: No matching ArtifactProduced event",
-                step_id, decl.name,
+            tracing::warn!(
+                step = step_id,
+                decl = decl.name.as_str(),
+                "No matching ArtifactProduced event",
             );
         }
     }
@@ -96,10 +101,12 @@ pub(crate) fn resolve_declared_artifacts(
                     match store.put(feature_id, step_id, artifact) {
                         Ok(reference) => refs.push(reference),
                         Err(e) => {
-                            eprintln!(
-                            "[artifacts] step={} path={}: Failed to store AllWrites artifact: {}",
-                            step_id, path, e,
-                        );
+                            tracing::warn!(
+                                step = step_id,
+                                path = path.as_str(),
+                                error = %e,
+                                "Failed to store AllWrites artifact",
+                            );
                         }
                     }
                 }
@@ -230,7 +237,7 @@ pub async fn commit_worktree_changes(
         .map_err(|e| format!("git rev-parse after commit failed: {}", e))
         .inspect(|_sha| {
             if !out.is_empty() {
-                eprintln!("[commit_worktree_changes] {}", out.trim());
+                tracing::debug!(output = out.trim(), "commit_worktree_changes");
             }
         })
 }

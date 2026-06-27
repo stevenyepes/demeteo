@@ -129,7 +129,7 @@ fn parse_part_shape(kind: &str, v: &serde_json::Value) -> Option<AgentEvent> {
                 } else {
                     String::new()
                 };
-                eprintln!("[opencode tool] {tool} ({status}) id={call_id}{detail}");
+                tracing::debug!(tool = %tool, status = %status, call_id = %call_id, detail = %detail, "opencode tool call");
                 format!("[tool {tool} ({status}) id={call_id}]{detail}")
             };
             Some(AgentEvent::Text { delta: line })

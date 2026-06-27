@@ -75,10 +75,7 @@ impl ExecutionDriver {
         };
 
         let subtasks = dag.subtasks;
-        eprintln!(
-            "[parallel step] planner produced {} subtask(s)",
-            subtasks.len()
-        );
+        tracing::debug!(count = subtasks.len(), "parallel step: planner produced subtasks");
 
         // 2. Fan out: one worker per subtask.
         let mut subtask_artifacts = Vec::new();
@@ -396,10 +393,10 @@ impl ExecutionDriver {
                     break;
                 }
                 _ => {
-                    eprintln!(
-                        "[parallel step] planner attempt {}/{} produced no valid subtask DAG",
-                        attempt + 1,
-                        PLANNER_MAX_ATTEMPTS
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        max = PLANNER_MAX_ATTEMPTS,
+                        "parallel step: planner attempt produced no valid subtask DAG",
                     );
                 }
             }

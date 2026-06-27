@@ -200,7 +200,7 @@ impl UnifiedCliSession {
                 for line in reader.lines().map_while(Result::ok) {
                     let trimmed = line.trim();
                     if !trimmed.is_empty() {
-                        eprintln!("[{} stderr] {}", kind, trimmed);
+                        tracing::debug!(kind = %kind, line = trimmed, "agent stderr");
                         hb.beat();
                     }
                 }

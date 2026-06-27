@@ -442,10 +442,10 @@ impl GatePresenter for DagStepExecutor {
         if let Ok(Some(step_exec)) = self.features.step_get(&se_id) {
             let f_id = step_exec.feature_id.0.clone();
             if let Err(e) = self.ensure_driver_running(&f_id).await {
-                eprintln!(
-                    "gate_decide: failed to ensure driver running for {}: {} \
-                     (decision is durable; will retry on next operation)",
-                    f_id, e
+                tracing::warn!(
+                    feature_id = %f_id,
+                    error = %e,
+                    "gate_decide: failed to ensure driver running (decision is durable; will retry on next operation)",
                 );
             }
         }
@@ -545,9 +545,10 @@ impl DagStepExecutor {
             for f in active {
                 if f.status == "awaiting_gate" || f.status == "gated" {
                     if let Err(e) = self.ensure_driver_running(&f.id.0).await {
-                        eprintln!(
-                            "resume_interrupted_features: failed to resume {}: {}",
-                            f.id.0, e
+                        tracing::warn!(
+                            feature_id = %f.id.0,
+                            error = %e,
+                            "resume_interrupted_features: failed to resume",
                         );
                     }
                 }
