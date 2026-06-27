@@ -31,11 +31,11 @@ pub fn start_mr_monitor(
         interval.tick().await;
         loop {
             interval.tick().await;
-            eprintln!("[MrMonitor] tick — polling open MRs");
+            tracing::debug!("MrMonitor tick — polling open MRs");
             if let Err(e) =
                 check_mr_states(&*features, &*mr_publisher, &*notifications, &*notif).await
             {
-                eprintln!("[MrMonitor] poll error: {}", e);
+                tracing::warn!(error = %e, "MrMonitor poll error");
             }
         }
     });
@@ -48,7 +48,7 @@ async fn check_mr_states(
     notif: &dyn NotificationPort,
 ) -> Result<(), String> {
     let open = features.list_with_open_mr()?;
-    eprintln!("[MrMonitor] found {} feature(s) with open MR", open.len());
+    tracing::debug!(count = open.len(), "MrMonitor found features with open MR");
     for feature in &open {
         let url = match &feature.mr_url {
             Some(u) if !u.is_empty() => u.clone(),
@@ -61,22 +61,16 @@ async fn check_mr_states(
         {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
-                    "[MrMonitor] fetch_mr_state failed for feature {}: {}",
-                    feature.id.0, e
-                );
+                tracing::warn!(feature_id = %feature.id.0, error = %e, "MrMonitor fetch_mr_state failed");
                 continue;
             }
         };
 
         if new_state == "merged" {
-            eprintln!(
-                "[MrMonitor] feature {} transitioned to merged — recording",
-                feature.id.0
-            );
+            tracing::info!(feature_id = %feature.id.0, "MrMonitor feature transitioned to merged — recording");
             record_merged(feature, &new_state, features, notifications, notif)?;
         } else {
-            eprintln!("[MrMonitor] feature {} state = {}", feature.id.0, new_state);
+            tracing::debug!(feature_id = %feature.id.0, state = %new_state, "MrMonitor feature state");
         }
         if new_state != "open" && new_state != "merged" {
             // `closed` / `draft` aren't notifications, just keep

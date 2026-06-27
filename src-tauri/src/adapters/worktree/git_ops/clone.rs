@@ -65,7 +65,7 @@ impl GitOpsHelper {
             paths::shell_escape_posix(target_dir)
         );
         let output = self.exec.run_command(machine_str, &clone_cmd).await?;
-        println!("[GitOps] Clone output: {}", output);
+        tracing::debug!(output = %output, "GitOps clone output");
 
         Ok(())
     }

@@ -147,7 +147,7 @@ pub fn start_scheduler(workflows: Arc<dyn WorkflowRepository>, executor: Arc<dyn
         loop {
             interval.tick().await;
             if let Err(e) = check_schedules(&*workflows, &*executor).await {
-                eprintln!("[Scheduler] Error executing scheduled runs: {}", e);
+                tracing::error!(error = %e, "Scheduler error executing scheduled runs");
             }
         }
     });
@@ -180,10 +180,7 @@ async fn check_schedules(
                 let title = format_title(&s.title_template, now_ms);
                 let description = format!("Scheduled execution of workflow '{}'", w.name);
 
-                eprintln!(
-                    "[Scheduler] Triggering scheduled workflow: {} ({})",
-                    w.name, w.id.0
-                );
+                tracing::info!(workflow = %w.name, workflow_id = %w.id.0, "Scheduler triggering scheduled workflow");
                 if let Err(e) = executor
                     .feature_start(
                         &s.project_id.0,
@@ -198,7 +195,7 @@ async fn check_schedules(
                     )
                     .await
                 {
-                    eprintln!("[Scheduler] Failed to auto-start workflow: {}", e);
+                    tracing::warn!(workflow = %w.name, error = %e, "Scheduler failed to auto-start workflow");
                 }
 
                 // Recalculate next run date

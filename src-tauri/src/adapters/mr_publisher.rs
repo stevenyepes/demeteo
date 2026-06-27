@@ -356,10 +356,7 @@ impl MrPublisher for HttpMrPublisher {
         let pat = provider.as_ref().and_then(|p| match resolve_pat(&p.id.0) {
             Ok(t) => Some(t),
             Err(e) => {
-                eprintln!(
-                    "[MrPublisher] could not resolve PAT for provider {}: {}",
-                    p.id.0, e
-                );
+                tracing::warn!(provider_id = %p.id.0, error = %e, "MrPublisher could not resolve PAT");
                 None
             }
         });

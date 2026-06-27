@@ -250,10 +250,7 @@ impl ExecutionPort for LocalSubprocessAdapter {
                 repo_path, branch, sandbox_path
             );
             let output = local_run_command(&worktree_add_cmd)?;
-            println!(
-                "[LocalSubprocessAdapter] Git Worktree provisioning output: {}",
-                output
-            );
+            tracing::debug!(output = %output, "LocalSubprocessAdapter git worktree provisioning output");
 
             Ok(())
         })

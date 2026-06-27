@@ -68,7 +68,7 @@ pub fn start_memory_worker(
         loop {
             interval.tick().await;
             if let Err(e) = tick(&*app_settings, &*signals, &*memory, &*memory_llm).await {
-                eprintln!("[MemoryWorker] tick error: {}", e);
+                tracing::error!(error = %e, "MemoryWorker tick error");
             }
         }
     });
@@ -117,7 +117,7 @@ async fn tick(
                 signals.mark_processed(&ids, crate::paths::now_ms())?;
             }
             Err(e) => {
-                eprintln!("[MemoryWorker] group failed (will retry): {}", e);
+                tracing::warn!(error = %e, "MemoryWorker group failed (will retry)");
                 signals.bump_attempts(&ids)?;
             }
         }

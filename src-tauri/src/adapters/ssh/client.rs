@@ -76,10 +76,7 @@ impl SshClientAdapter {
     fn resolve_remote_home(&self, machine_id: &str) -> Result<String, String> {
         if let Ok(cache) = self.home_cache.lock() {
             if let Some(home) = cache.get(machine_id) {
-                eprintln!(
-                    "[SshClientAdapter] resolve_remote_home({}) = {} (cache hit)",
-                    machine_id, home
-                );
+                tracing::debug!(machine_id, home, "resolve_remote_home cache hit");
                 return Ok(home.clone());
             }
         }
@@ -125,10 +122,7 @@ impl SshClientAdapter {
             ));
         }
 
-        eprintln!(
-            "[SshClientAdapter] resolve_remote_home({}) = {} (fresh probe; cached)",
-            machine_id, trimmed
-        );
+        tracing::debug!(machine_id, home = %trimmed, "resolve_remote_home fresh probe; cached");
         if let Ok(mut cache) = self.home_cache.lock() {
             cache.insert(machine_id.to_string(), trimmed.clone());
         }
@@ -503,10 +497,7 @@ impl ExecutionPort for SshClientAdapter {
             repo_path, branch, sandbox_path
         );
         let output = self.run_command(machine_id, &worktree_add_cmd).await?;
-        println!(
-            "[SshClientAdapter] Git Worktree provisioning output: {}",
-            output
-        );
+        tracing::debug!(output = %output, "SshClientAdapter git worktree provisioning output");
 
         Ok(())
     }
@@ -589,7 +580,7 @@ impl ExecutionPort for SshClientAdapter {
             )
         };
 
-        eprintln!("[SshClientAdapter] spawn_interactive cmd: {}", cmd);
+        tracing::debug!(cmd = %cmd, "SshClientAdapter spawn_interactive");
         channel
             .exec(&cmd)
             .map_err(|e| format!("Failed to exec agent over SSH: {}", e))?;
