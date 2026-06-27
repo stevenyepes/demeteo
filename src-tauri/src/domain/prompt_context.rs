@@ -93,20 +93,20 @@ impl Clone for PromptContext {
 /// string only when at least one unknown token is found.
 fn collapse_unknown_placeholders(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
-    let mut chars = s.char_indices().peekable();
+    let mut chars = s.chars().peekable();
 
-    while let Some((i, c)) = chars.next() {
+    while let Some(c) = chars.next() {
         // Look for `{{`
         if c == '{' {
-            if let Some(&(_, '{')) = chars.peek() {
+            if let Some(&'{') = chars.peek() {
                 chars.next(); // consume second `{`
 
                 // Collect the token name until `}}`
                 let mut token = String::new();
                 let mut found_close = false;
-                while let Some((_, tc)) = chars.next() {
+                while let Some(tc) = chars.next() {
                     if tc == '}' {
-                        if let Some(&(_, '}')) = chars.peek() {
+                        if let Some(&'}') = chars.peek() {
                             chars.next(); // consume second `}`
                             found_close = true;
                             break;
@@ -119,11 +119,9 @@ fn collapse_unknown_placeholders(s: &str) -> String {
                 }
 
                 if found_close {
-                    // Unknown placeholder — emit warning, emit nothing
-                    eprintln!(
-                        "[prompt_context] unknown template variable \
-                         {{{{{}}}}} — substituting empty string",
-                        token
+                    tracing::warn!(
+                        token = %token,
+                        "prompt_context: unknown template variable — substituting empty string"
                     );
                     // Nothing pushed to `result` (collapse to "")
                 } else {
@@ -136,8 +134,6 @@ fn collapse_unknown_placeholders(s: &str) -> String {
             }
         }
         result.push(c);
-        // Suppress unused variable warning for `i`
-        let _ = i;
     }
 
     result
