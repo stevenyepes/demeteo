@@ -51,6 +51,7 @@ pub fn build_agent_context(
         title: None,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
+        permissions: crate::domain::permission::PermissionProfile::all_allow(),
     })
 }
 

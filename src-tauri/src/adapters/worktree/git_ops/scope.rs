@@ -31,6 +31,57 @@
 use std::path::{Path, PathBuf};
 
 use crate::domain::artifact::ArtifactCapture;
+use crate::domain::permission::WriteScope;
+
+/// Sentinel writable-path meaning "the whole worktree is writable" (no
+/// fence). Emitted for [`WriteScope::All`] / `Implement` steps.
+pub(crate) const ALL_WRITES: &str = "__ALL_WRITES__";
+
+/// Sentinel writable-path meaning "nothing in the worktree is writable".
+/// Emitted for [`WriteScope::None`] / `ReadOnly` steps. The fence chmods
+/// every entry `a-w`; the diff guard reverts *any* change.
+pub(crate) const NONE_WRITABLE: &str = "__NONE__";
+
+/// The conventional artifacts directory every artifact-scoped step may
+/// write under, even when it declares no explicit `LastWriteTo` path.
+pub(crate) const ARTIFACTS_DIR: &str = "artifacts";
+
+/// Derive writable paths from a step's *capability* write-scope, refined
+/// by its declared artifacts. This is the capability-authoritative entry
+/// point used by the agent step handler — the capability decides the
+/// posture, declared `LastWriteTo` paths refine where (within an
+/// artifact-scoped step) the output lands.
+///
+/// - [`WriteScope::All`]  → `[__ALL_WRITES__]` (no fence).
+/// - [`WriteScope::None`] → `[__NONE__]` (deny every write).
+/// - [`WriteScope::ArtifactsOnly`] → `artifacts/` plus any explicit
+///   `LastWriteTo` paths. Unconstrained captures (`AllWrites`/`ByName`/
+///   `Diff`/`ChangedFiles`) do **not** widen the scope here: the
+///   capability is authoritative, so an artifact-scoped step stays fenced
+///   to `artifacts/` regardless of capture shape.
+pub(crate) fn derive_writable_paths_for_scope(
+    scope: WriteScope,
+    artifacts: Option<&Vec<crate::domain::artifact::ArtifactDecl>>,
+) -> Vec<PathBuf> {
+    match scope {
+        WriteScope::All => vec![PathBuf::from(ALL_WRITES)],
+        WriteScope::None => vec![PathBuf::from(NONE_WRITABLE)],
+        WriteScope::ArtifactsOnly => {
+            let mut paths = vec![PathBuf::from(ARTIFACTS_DIR)];
+            if let Some(artifacts) = artifacts {
+                for decl in artifacts {
+                    if let ArtifactCapture::LastWriteTo { path } = &decl.capture {
+                        let p = PathBuf::from(path);
+                        if !paths.contains(&p) {
+                            paths.push(p);
+                        }
+                    }
+                }
+            }
+            paths
+        }
+    }
+}
 
 /// Derive the set of relative paths the step is allowed to write, from
 /// its declared `artifacts` config. Returns an empty vec if the step
@@ -104,20 +155,26 @@ impl GitOpsHelper {
         let machine = machine_id.unwrap_or("local");
         let wt = Path::new(worktree_path);
 
-        // Full-write opt-out: do nothing. Used by `s-implement` parallel
-        // workers whose artifacts capture is `AllWrites`.
+        // Full-write opt-out: do nothing. Used by `Implement` steps and
+        // `s-implement` parallel workers whose capability scope is `All`.
         if writable_paths
             .iter()
-            .any(|p| p == &PathBuf::from("__ALL_WRITES__"))
+            .any(|p| p == &PathBuf::from(ALL_WRITES))
         {
             return Ok(());
         }
 
-        if writable_paths.is_empty() {
-            // Nothing declared → don't chmod anything. The step is
-            // either a no-artifact step (gate) or a misconfiguration.
-            // Failing here would be too strict; leave as-is and let the
-            // diff guard catch any actual writes.
+        // Deny-all: a `ReadOnly` step. Fall through with an *empty*
+        // writable set so every top-level entry gets chmod'd `a-w`.
+        let deny_all = writable_paths
+            .iter()
+            .any(|p| p == &PathBuf::from(NONE_WRITABLE));
+        let writable_paths: &[PathBuf] = if deny_all { &[] } else { writable_paths };
+
+        if !deny_all && writable_paths.is_empty() {
+            // Nothing declared and not an explicit deny → don't chmod
+            // anything. Legacy back-compat for steps without a capability
+            // or artifacts; the diff guard catches any actual writes.
             return Ok(());
         }
 
@@ -209,10 +266,17 @@ impl GitOpsHelper {
         // Full-write opt-out: never revert.
         if writable_paths
             .iter()
-            .any(|p| p == &PathBuf::from("__ALL_WRITES__"))
+            .any(|p| p == &PathBuf::from(ALL_WRITES))
         {
             return Ok(Vec::new());
         }
+
+        // Deny-all (`ReadOnly`): treat the writable set as empty so every
+        // change is out of scope and reverted.
+        let deny_all = writable_paths
+            .iter()
+            .any(|p| p == &PathBuf::from(NONE_WRITABLE));
+        let writable_paths: &[PathBuf] = if deny_all { &[] } else { writable_paths };
 
         let machine = machine_id.unwrap_or("local");
         let wt = Path::new(worktree_path);
@@ -250,10 +314,17 @@ impl GitOpsHelper {
                 continue;
             }
             let rel = Path::new(&path);
-            let in_scope = writable_paths.is_empty()
-                || writable_paths
+            let in_scope = if deny_all {
+                // ReadOnly step: nothing is in scope.
+                false
+            } else if writable_paths.is_empty() {
+                // Legacy back-compat: no scope declared → allow.
+                true
+            } else {
+                writable_paths
                     .iter()
-                    .any(|w| rel.starts_with(w) || w.starts_with(rel));
+                    .any(|w| rel.starts_with(w) || w.starts_with(rel))
+            };
             if !in_scope {
                 out_of_scope.push(path.clone());
                 if xy.starts_with('?') {
@@ -366,5 +437,48 @@ mod tests {
         }];
         let paths = derive_writable_paths(Some(&decls));
         assert_eq!(paths, vec![PathBuf::from("__ALL_WRITES__")]);
+    }
+
+    // ── derive_writable_paths_for_scope (capability-authoritative) ───────
+
+    #[test]
+    fn scope_all_returns_all_writes_sentinel() {
+        let paths = derive_writable_paths_for_scope(WriteScope::All, None);
+        assert_eq!(paths, vec![PathBuf::from(ALL_WRITES)]);
+    }
+
+    #[test]
+    fn scope_none_returns_none_sentinel() {
+        let paths = derive_writable_paths_for_scope(WriteScope::None, None);
+        assert_eq!(paths, vec![PathBuf::from(NONE_WRITABLE)]);
+    }
+
+    #[test]
+    fn scope_artifacts_defaults_to_artifacts_dir_when_no_decls() {
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, None);
+        assert_eq!(paths, vec![PathBuf::from(ARTIFACTS_DIR)]);
+    }
+
+    #[test]
+    fn scope_artifacts_includes_explicit_last_write_to_paths() {
+        let decls = vec![last_write_to("spec", "artifacts/spec.md")];
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, Some(&decls));
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from(ARTIFACTS_DIR),
+                PathBuf::from("artifacts/spec.md")
+            ]
+        );
+    }
+
+    #[test]
+    fn scope_artifacts_does_not_widen_for_unconstrained_capture() {
+        // Even if an artifact-scoped step declares AllWrites, the
+        // capability is authoritative: it stays fenced to artifacts/.
+        let decls = vec![all_writes("everything")];
+        let paths = derive_writable_paths_for_scope(WriteScope::ArtifactsOnly, Some(&decls));
+        assert_eq!(paths, vec![PathBuf::from(ARTIFACTS_DIR)]);
+        assert!(!paths.contains(&PathBuf::from(ALL_WRITES)));
     }
 }

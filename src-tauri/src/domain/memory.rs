@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn embedding_blob_roundtrips() {
-        let v = vec![0.0f32, 1.0, -2.5, 3.14159, 1e-9];
+        let v = vec![0.0f32, 1.0, -2.5, 123.456, 1e-9];
         assert_eq!(blob_to_embedding(&embedding_to_blob(&v)), v);
     }
 

@@ -308,6 +308,9 @@ mod redirect_target_tests {
             max_iterations: None,
             artifacts: None,
             verifier: None,
+            capability: None,
+            allow_network: false,
+            allow_shell: false,
         }
     }
 

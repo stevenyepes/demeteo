@@ -12,6 +12,7 @@ use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::SessionInfo;
+use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
 pub type AgentStartFuture<'a> =
@@ -37,21 +38,55 @@ pub struct AgentContext {
     pub agent_exec: Arc<dyn AgentExecutionPort>,
     /// The execution port for spawning processes locally or remotely.
     pub exec: Arc<dyn crate::ports::execution::ExecutionPort>,
+    /// The agent-agnostic permission posture for this session. The
+    /// concrete runtime translates it into native enforcement at spawn
+    /// (opencode → `OPENCODE_PERMISSION` env; claude-code →
+    /// `--disallowedTools`). Defaults to `all_allow` for interactive /
+    /// probe sessions that aren't capability-scoped pipeline steps.
+    pub permissions: PermissionProfile,
 }
 
-/// Default permission policy injected into every opencode agent process as
-/// the `OPENCODE_PERMISSION` env var. The binary enforces this at spawn time;
-/// `external_directory: "deny"` scopes the agent to its worktree.
-const DEFAULT_OPENCODE_PERMISSION: &str = r#"{"edit":"allow","read":"allow","bash":"allow","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"allow"}"#;
+/// Render a [`PermissionProfile`] to the `OPENCODE_PERMISSION` JSON string.
+///
+/// The policy is *complete* (every gated tool has an explicit value) and
+/// only ever uses `allow` / `deny` — never `ask` — so opencode runs fully
+/// non-interactively with no permission prompts. `external_directory` is
+/// always `deny` (scopes the agent to its worktree); `read` is always
+/// `allow` (file reads, grep/glob/list are separate read tools, *not* the
+/// shell, so denying `bash` never blocks codebase inspection).
+pub fn opencode_permission_json(p: &PermissionProfile) -> String {
+    format!(
+        r#"{{"edit":"{edit}","read":"{read}","bash":"{bash}","webfetch":"{web}","websearch":"{web}","external_directory":"deny","doom_loop":"allow"}}"#,
+        edit = p.write_fs.opencode_str(),
+        read = p.read_fs.opencode_str(),
+        bash = p.execute.opencode_str(),
+        web = p.network.opencode_str(),
+    )
+}
 
-/// Standard environment variables injected into every agent process.
-pub fn agent_base_env() -> HashMap<String, String> {
+/// The `OPENCODE_PERMISSION` env entry for a profile. Used as the
+/// `perm_env` translator for opencode-family runtimes.
+pub fn opencode_permission_env(p: &PermissionProfile) -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert(
         "OPENCODE_PERMISSION".to_string(),
-        DEFAULT_OPENCODE_PERMISSION.to_string(),
+        opencode_permission_json(p),
     );
     env
+}
+
+/// No agent-native permission env (e.g. claude-code, which enforces via
+/// CLI flags instead). The `perm_env` translator for such runtimes.
+pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
+    HashMap::new()
+}
+
+/// Standard, permission-independent environment variables injected into
+/// every agent process. Permission policy is applied separately by the
+/// runtime from [`AgentContext::permissions`], so this no longer carries
+/// `OPENCODE_PERMISSION`.
+pub fn agent_base_env() -> HashMap<String, String> {
+    HashMap::new()
 }
 
 #[derive(Debug, Error)]

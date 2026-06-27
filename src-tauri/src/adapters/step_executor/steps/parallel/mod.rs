@@ -305,6 +305,7 @@ impl ExecutionDriver {
             title: Some("plan".to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
+            permissions: crate::domain::permission::PermissionProfile::all_allow(),
         };
 
         let mut cancel_watch = self.cancel_watch.clone();

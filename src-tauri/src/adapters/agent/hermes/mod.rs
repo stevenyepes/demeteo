@@ -137,5 +137,6 @@ pub fn runtime() -> UnifiedCliRuntime {
         install_cmd: HERMES_INSTALL,
         parse_event: parse_hermes_event as EventParser,
         build_args: build_hermes_args,
+        perm_env: crate::ports::agent_runtime::opencode_permission_env,
     }
 }

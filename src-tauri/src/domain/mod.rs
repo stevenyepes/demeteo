@@ -5,5 +5,6 @@ pub mod ids;
 pub mod intercept;
 pub mod memory;
 pub mod models;
+pub mod permission;
 pub mod prompt_context;
 pub mod verifier;

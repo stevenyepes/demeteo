@@ -84,6 +84,19 @@ impl ExecutionDriver {
             if is_legacy { None } else { Some(decls) },
         );
 
+        // Prepend the capability's prohibitive Operating Boundary block —
+        // the prompt-level mirror of the OS fence and tool policy. Keeps a
+        // redirected non-implementation step from "just fixing" code.
+        let capability = step_conf.effective_capability();
+        let profile = crate::domain::permission::resolve_profile(
+            capability,
+            step_conf.allow_network,
+            step_conf.allow_shell,
+        );
+        let prompt = crate::adapters::step_executor::artifacts::inject_operating_boundary(
+            &prompt, capability, &profile,
+        );
+
         let machine_str = self
             .machine_id_opt
             .clone()
@@ -137,14 +150,18 @@ impl ExecutionDriver {
             )
             .await;
 
-        // Apply artifact-scope chmod fence before the agent spawns.
-        // The agent still has `edit: allow` + `bash: allow` in its
-        // OPENCODE_PERMISSION env, but the OS now refuses writes
-        // outside the step's declared artifact paths. The post-step
-        // diff guard below catches any chmod-escape bypass.
-        let writable_paths = crate::adapters::worktree::git_ops::scope::derive_writable_paths(
-            step_conf.artifacts.as_ref(),
-        );
+        // Apply the capability-driven scope fence before the agent
+        // spawns. The capability decides the write posture (ReadOnly =
+        // nothing, Artifacts/Verify = `artifacts/`, Implement = whole
+        // worktree); declared `LastWriteTo` paths refine it. The agent's
+        // tool policy already denies the relevant tools, but the OS fence
+        // enforces the artifacts-vs-source line that tool names can't
+        // express. The post-step diff guard catches any chmod-escape.
+        let writable_paths =
+            crate::adapters::worktree::git_ops::scope::derive_writable_paths_for_scope(
+                step_conf.effective_capability().write_scope(),
+                step_conf.artifacts.as_ref(),
+            );
         if let Err(e) = self
             .git_ops
             .apply_artifact_scope(self.machine_id_opt.as_deref(), &wt_path, &writable_paths)
@@ -684,8 +701,12 @@ pub(crate) fn format_retry_feedback_section(retry_ctx: Option<&RetryContext>) ->
     format!(
         "\n\n---\n\n## Previous Attempt Feedback\n\
          This step is being retried because the previous attempt was redirected \
-         (or otherwise failed). Apply this guidance to your work — do not \
-         ignore it or redo the same thing:\n\n\
+         (or otherwise failed). Apply this guidance by revising *this step's own \
+         artifact* — your role and Operating Boundary are unchanged. The feedback \
+         is direction for your deliverable, not a request to take on the next \
+         step's job (e.g. a redirected spec/research step revises its document; it \
+         does not start implementing). Do not ignore the feedback or redo the same \
+         thing:\n\n\
          {}\n",
         rc.feedback
     )

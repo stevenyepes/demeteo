@@ -183,6 +183,7 @@ impl ExecutionDriver {
                 title: Some(sub.title.clone()),
                 agent_exec: self.agent_exec.clone(),
                 exec: self.exec.clone(),
+                permissions: crate::domain::permission::PermissionProfile::all_allow(),
             };
 
             let spawn_fut = self.registry.get_or_spawn(&sub_thread_id, &agent_kind, ctx);

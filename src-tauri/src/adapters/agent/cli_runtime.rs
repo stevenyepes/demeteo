@@ -22,6 +22,14 @@ pub type EventParser = fn(line: &str) -> Option<AgentEvent>;
 /// Construct command-line arguments for the CLI agent.
 pub type ArgsBuilder = fn(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String>;
 
+/// Translate the session's [`PermissionProfile`] into agent-native
+/// environment variables (e.g. opencode's `OPENCODE_PERMISSION`). Agents
+/// that enforce via CLI flags instead use [`no_permission_env`] and read
+/// `ctx.permissions` in their [`ArgsBuilder`].
+pub type PermEnvBuilder = fn(
+    p: &crate::domain::permission::PermissionProfile,
+) -> std::collections::HashMap<String, String>;
+
 /// Shared runtime for one-shot CLI-based agents (opencode, hermes, claude, agy, etc.)
 pub struct UnifiedCliRuntime {
     pub kind_str: &'static str,
@@ -29,6 +37,8 @@ pub struct UnifiedCliRuntime {
     pub install_cmd: &'static str,
     pub parse_event: EventParser,
     pub build_args: ArgsBuilder,
+    /// Maps the abstract permission profile to this agent's native env.
+    pub perm_env: PermEnvBuilder,
 }
 
 #[async_trait]
@@ -71,8 +81,17 @@ impl AgentRuntime for UnifiedCliRuntime {
         let kind = self.kind_str;
         let parse_event = self.parse_event;
         let build_args = self.build_args;
+        let perm_env = self.perm_env;
 
         Box::pin(async move {
+            // Translate the abstract permission profile into this agent's
+            // native env. Done here (once, at spawn) so every caller only
+            // has to set `ctx.permissions`; arg-based enforcement (e.g.
+            // claude-code's --disallowedTools) is layered by build_args
+            // reading the same `ctx.permissions`.
+            let mut ctx = ctx;
+            ctx.env.extend((perm_env)(&ctx.permissions));
+
             let resolved_binary = if ctx.machine_id.is_empty() || ctx.machine_id == "local" {
                 super::resolve_local_binary_path(&ctx.binary)
             } else {

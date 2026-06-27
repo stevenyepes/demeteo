@@ -38,6 +38,16 @@ impl ExecutionDriver {
             .map(|r| r.binary().to_string())
             .unwrap_or_else(|| agent_kind.to_string());
 
+        // Resolve the step's capability into the agent-agnostic permission
+        // profile. The runtime translates it into native enforcement
+        // (opencode env / claude flags); the chmod fence handles the
+        // artifacts-vs-source path scope in lockstep (see scope.rs).
+        let permissions = crate::domain::permission::resolve_profile(
+            step_conf.effective_capability(),
+            step_conf.allow_network,
+            step_conf.allow_shell,
+        );
+
         let ctx = AgentContext {
             thread_id: self.f_id_str.clone(),
             machine_id: machine_str.to_string(),
@@ -49,6 +59,7 @@ impl ExecutionDriver {
             title: Some(step_conf.title.clone()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
+            permissions,
         };
 
         let spawn_fut = self

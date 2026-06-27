@@ -81,5 +81,6 @@ pub fn runtime() -> UnifiedCliRuntime {
         install_cmd: "npm install -g @antigravity/cli",
         parse_event: parse_antigravity_event as EventParser,
         build_args: build_antigravity_args,
+        perm_env: crate::ports::agent_runtime::opencode_permission_env,
     }
 }

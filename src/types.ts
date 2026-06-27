@@ -89,6 +89,18 @@ export interface Workflow {
   schedule?: WorkflowSchedule | null;
 }
 
+/**
+ * What a step is allowed to do. Drives the agent permission profile (tool
+ * policy) and the chmod write-scope fence on the Rust side. When omitted,
+ * the backend infers a safe default (`artifacts` for ordinary agent steps,
+ * `implement` for parallel / unconstrained-write steps).
+ * - `read_only`: inspect/review only — no writes, no shell, no network.
+ * - `artifacts`: read + write only under `artifacts/` — no shell, no network.
+ * - `verify`: read + run build/test/lint + write only under `artifacts/`.
+ * - `implement`: full read/write/shell within the worktree.
+ */
+export type StepCapability = 'read_only' | 'artifacts' | 'verify' | 'implement';
+
 export type StepConfig = {
   id: string;
   kind: 'agent' | 'parallel' | 'gate' | string;
@@ -100,6 +112,12 @@ export type StepConfig = {
   on_failure?: string | null;
   max_iterations?: number | null;
   verifier?: VerifierConfig | null;
+  /** Role-based permission posture. See {@link StepCapability}. */
+  capability?: StepCapability | null;
+  /** Opt the step into web search / fetch (e.g. research consulting live docs). */
+  allow_network?: boolean;
+  /** Opt a non-shell capability into the shell (e.g. an Artifacts step that wants `git log`). */
+  allow_shell?: boolean;
 };
 
 export interface WorkflowWithSteps extends Workflow {

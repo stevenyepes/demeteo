@@ -394,6 +394,7 @@ impl OpencodeCliRuntime {
                 install_cmd: OPENCODE_INSTALL,
                 parse_event: parse_opencode_event,
                 build_args: build_opencode_args,
+                perm_env: crate::ports::agent_runtime::opencode_permission_env,
             },
         }
     }

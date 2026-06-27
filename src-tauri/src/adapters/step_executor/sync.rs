@@ -145,6 +145,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         title: Some("Sync conflict resolver".to_string()),
         agent_exec: agent_exec.clone(),
         exec: exec.clone(),
+        permissions: crate::domain::permission::PermissionProfile::all_allow(),
     };
 
     let session = registry

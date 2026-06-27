@@ -285,13 +285,42 @@ fn build_claude_args(ctx: &AgentContext, _captured_session_id: Option<&str>) -> 
         "--verbose".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        // Keep bypass mode so *allowed* tools auto-run with no prompts
+        // (the autonomous-pipeline guarantee). Per-capability enforcement
+        // is layered via --disallowedTools below: disallowed tools are
+        // hard-denied even under bypass, and a hard deny returns instantly
+        // to the model — it never blocks waiting on a human.
         "--dangerously-skip-permissions".to_string(),
     ];
+    let disallowed = disallowed_tools_for(&ctx.permissions);
+    if !disallowed.is_empty() {
+        args.push("--disallowedTools".to_string());
+        args.push(disallowed.join(","));
+    }
     if let Some(ref m) = ctx.model {
         args.push("--model".to_string());
         args.push(m.clone());
     }
     args
+}
+
+/// Map an abstract [`PermissionProfile`] to the Claude Code tools that must
+/// be denied for this step. Read tools (Read/Grep/Glob/LS) are never
+/// denied — they're how a non-shell step still inspects the codebase
+/// (`cat`→Read, `grep`→Grep). The chmod fence handles the
+/// artifacts-vs-source path distinction that tool names can't express.
+fn disallowed_tools_for(p: &crate::domain::permission::PermissionProfile) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if !p.execute.is_allow() {
+        out.push("Bash");
+    }
+    if !p.write_fs.is_allow() {
+        out.extend_from_slice(&["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+    }
+    if !p.network.is_allow() {
+        out.extend_from_slice(&["WebSearch", "WebFetch"]);
+    }
+    out
 }
 
 pub fn runtime() -> UnifiedCliRuntime {
@@ -301,6 +330,8 @@ pub fn runtime() -> UnifiedCliRuntime {
         install_cmd: "npm install -g @anthropic-ai/claude-code",
         parse_event: parse_claude_event as EventParser,
         build_args: build_claude_args,
+        // claude-code enforces via CLI flags, not env.
+        perm_env: crate::ports::agent_runtime::no_permission_env,
     }
 }
 

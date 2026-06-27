@@ -182,3 +182,69 @@ fn test_resolve_attached_artifacts_uses_artifact_paths() {
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+// ── inject_operating_boundary ────────────────────────────────────────────
+
+use crate::domain::permission::{resolve_profile, PermissionProfile, StepCapability};
+
+#[test]
+fn boundary_implement_is_a_noop() {
+    let prompt = "do the work";
+    let out = inject_operating_boundary(
+        prompt,
+        StepCapability::Implement,
+        &PermissionProfile::all_allow(),
+    );
+    assert_eq!(out, prompt, "Implement steps get no boundary block");
+}
+
+#[test]
+fn boundary_read_only_forbids_writes_shell_and_network() {
+    let p = resolve_profile(StepCapability::ReadOnly, false, false);
+    let out = inject_operating_boundary("review this", StepCapability::ReadOnly, &p);
+    assert!(out.contains("REVIEW-ONLY mode"));
+    assert!(out.contains("MUST NOT create, edit"));
+    assert!(out.contains("MUST NOT run shell commands."));
+    assert!(out.contains("MUST NOT access the network."));
+    // The original prompt is preserved after the block.
+    assert!(out.contains("review this"));
+    // Block comes first.
+    assert!(out.find("Operating Boundary").unwrap() < out.find("review this").unwrap());
+}
+
+#[test]
+fn boundary_artifacts_scopes_writes_and_blocks_implementation() {
+    let p = resolve_profile(StepCapability::Artifacts, false, false);
+    let out = inject_operating_boundary("write the spec", StepCapability::Artifacts, &p);
+    assert!(out.contains("ANALYSIS mode"));
+    assert!(out.contains("ONLY write files under the `artifacts/` directory."));
+    assert!(out.contains("do NOT make them"));
+    assert!(out.contains("MUST NOT run shell commands."));
+}
+
+#[test]
+fn boundary_verify_allows_shell_but_forbids_source_edits() {
+    let p = resolve_profile(StepCapability::Verify, false, false);
+    let out = inject_operating_boundary("validate", StepCapability::Verify, &p);
+    assert!(out.contains("VALIDATION mode"));
+    assert!(out.contains("run build/test/lint/audit commands"));
+    assert!(out.contains("MUST NOT fix or modify source code."));
+    // Verify has shell, so no "MUST NOT run shell" line.
+    assert!(!out.contains("MUST NOT run shell commands."));
+}
+
+#[test]
+fn boundary_reflects_allow_network_override() {
+    let p = resolve_profile(StepCapability::Artifacts, true, false);
+    let out = inject_operating_boundary("research", StepCapability::Artifacts, &p);
+    assert!(out.contains("MAY use web search/fetch"));
+    assert!(!out.contains("MUST NOT access the network."));
+}
+
+#[test]
+fn boundary_reflects_allow_shell_override() {
+    let p = resolve_profile(StepCapability::Artifacts, false, true);
+    let out = inject_operating_boundary("research with git log", StepCapability::Artifacts, &p);
+    // Shell widened on → no shell prohibition.
+    assert!(!out.contains("MUST NOT run shell commands."));
+}

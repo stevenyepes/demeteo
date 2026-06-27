@@ -1,6 +1,7 @@
 use crate::domain::artifact::{ArtifactCapture, ArtifactDecl};
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
+use crate::domain::permission::{PermissionProfile, StepCapability};
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::GateRepository;
 
@@ -226,6 +227,100 @@ pub(crate) fn inject_artifact_contract(
     let mut result = prompt.to_string();
     result.push_str(&lines.join("\n"));
     result
+}
+
+/// Prepend a prohibitive **Operating Boundary** block describing what the
+/// step's capability forbids — the prompt-level counterpart to the OS-level
+/// fence and the agent's tool policy. Where [`inject_artifact_contract`]
+/// tells the agent *what to produce*, this tells it *what it must not do*,
+/// in imperative MUST/MUST NOT language that survives a redirected step
+/// trying to "just fix it".
+///
+/// The block is keyed on the [`StepCapability`] (role) and refined by the
+/// resolved [`PermissionProfile`] so the shell/network lines match any
+/// per-step `allow_shell` / `allow_network` widening. `Implement` steps get
+/// no block (full access — nothing to forbid).
+///
+/// Returned at the *front* of the prompt: a boundary the model reads first
+/// outranks instructions buried in a long template that might tempt it to
+/// implement.
+pub(crate) fn inject_operating_boundary(
+    prompt: &str,
+    capability: StepCapability,
+    profile: &PermissionProfile,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    let (mode, rules): (&str, Vec<String>) = match capability {
+        StepCapability::Implement => return prompt.to_string(),
+        StepCapability::ReadOnly => (
+            "REVIEW-ONLY",
+            vec![
+                "You MUST NOT create, edit, move, or delete any file.".to_string(),
+                "You MUST NOT modify source code, configuration, or artifacts.".to_string(),
+                "Your job is to inspect and report — produce your assessment as \
+                 text in your response."
+                    .to_string(),
+            ],
+        ),
+        StepCapability::Artifacts => (
+            "ANALYSIS",
+            vec![
+                "You may ONLY write files under the `artifacts/` directory.".to_string(),
+                "You MUST NOT modify source code, tests, configuration, or any \
+                 file outside `artifacts/`."
+                    .to_string(),
+                "If the task appears to call for code changes, do NOT make them — \
+                 that is a later implementation step's job. Capture your findings, \
+                 spec, or plan in your artifact instead."
+                    .to_string(),
+            ],
+        ),
+        StepCapability::Verify => (
+            "VALIDATION",
+            vec![
+                "You may run build/test/lint/audit commands and read any file.".to_string(),
+                "You may ONLY write files under the `artifacts/` directory (your report)."
+                    .to_string(),
+                "You MUST NOT fix or modify source code. If you find problems, \
+                 document them precisely in your artifact so an implementation \
+                 step can address them."
+                    .to_string(),
+            ],
+        ),
+    };
+
+    lines.push(format!("## Operating Boundary — {} mode", mode));
+    lines.push(String::new());
+    lines.push(
+        "These constraints are enforced by the orchestrator (the filesystem is \
+         fenced and out-of-scope writes are reverted and fail the step). Staying \
+         inside them is part of completing the task:"
+            .to_string(),
+    );
+    lines.push(String::new());
+    for r in rules {
+        lines.push(format!("- {}", r));
+    }
+
+    // Shell / network lines reflect the *resolved* profile so per-step
+    // widenings (allow_shell / allow_network) don't contradict the block.
+    if !profile.execute.is_allow() {
+        lines.push("- You MUST NOT run shell commands.".to_string());
+    }
+    if profile.network.is_allow() {
+        lines.push(
+            "- You MAY use web search/fetch to consult up-to-date documentation.".to_string(),
+        );
+    } else {
+        lines.push("- You MUST NOT access the network.".to_string());
+    }
+
+    lines.push(String::new());
+    lines.push("---".to_string());
+    lines.push(String::new());
+
+    format!("{}{}", lines.join("\n"), prompt)
 }
 
 #[cfg(test)]

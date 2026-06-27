@@ -547,6 +547,65 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                           )}
                         </div>
 
+                        {/* Capability / permissions */}
+                        {step.kind !== 'gate' && (
+                          <div className="border-t border-white/5 pt-4 space-y-3">
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="col-span-1">
+                                <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">
+                                  Capability
+                                </label>
+                                <select
+                                  value={step.capability ?? ''}
+                                  onChange={(e) =>
+                                    handleUpdateStep(idx, {
+                                      capability: (e.target.value || null) as StepConfig['capability'],
+                                    })
+                                  }
+                                  disabled={step.kind === 'parallel'}
+                                  className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500 disabled:opacity-50"
+                                >
+                                  <option value="">Auto (safe default)</option>
+                                  <option value="read_only">Read-only — review, no writes</option>
+                                  <option value="artifacts">Artifacts — write only artifacts/</option>
+                                  <option value="verify">Verify — run cmds, write artifacts/</option>
+                                  <option value="implement">Implement — full read/write/shell</option>
+                                </select>
+                              </div>
+                              <div className="col-span-2 flex items-end gap-4 pb-0.5">
+                                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!step.allow_network}
+                                    onChange={(e) =>
+                                      handleUpdateStep(idx, { allow_network: e.target.checked })
+                                    }
+                                    className="accent-violet-500"
+                                  />
+                                  Allow web search / fetch
+                                </label>
+                                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!step.allow_shell}
+                                    onChange={(e) =>
+                                      handleUpdateStep(idx, { allow_shell: e.target.checked })
+                                    }
+                                    className="accent-violet-500"
+                                  />
+                                  Allow shell
+                                </label>
+                              </div>
+                            </div>
+                            <p className="text-[10px] text-slate-500 leading-relaxed">
+                              Controls what the agent may do: tool policy plus an OS-level write
+                              fence. Non-implementation steps stay scoped to <code>artifacts/</code>;
+                              out-of-scope writes are reverted. Toggles only widen the base
+                              capability. Parallel steps always run as Implement.
+                            </p>
+                          </div>
+                        )}
+
                         {/* Maker-Checker Verifier Section */}
                         {step.kind !== 'gate' && (
                           <div className="border-t border-white/5 pt-4 space-y-3">
