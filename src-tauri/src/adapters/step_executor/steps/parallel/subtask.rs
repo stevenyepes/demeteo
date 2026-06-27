@@ -87,9 +87,12 @@ impl ExecutionDriver {
             // Apply artifact-scope chmod fence before the worker spawns.
             // For `AllWrites` capture (the standard `s-implement`
             // parallel step) this is a no-op. For constrained captures
-            // it restricts the worker to the declared artifact paths.
+            // it restricts the worker to the declared artifact paths
+            // plus project-level extra writable paths (e.g. `target/`
+            // for a partition that runs `cargo test`).
             let writable_paths = crate::adapters::worktree::git_ops::scope::derive_writable_paths(
                 step_conf.artifacts.as_ref(),
+                &self.extra_writable_paths,
             );
             if let Err(e) = self
                 .git_ops

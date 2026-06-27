@@ -99,6 +99,14 @@ pub(crate) struct ExecutionDriver {
     /// `features.commit_artifacts ?? settings.commit_artifacts`.
     pub commit_artifacts: bool,
 
+    /// Project-level writability exceptions for the chmod scope fence.
+    /// Snapshotted from `ProjectSettings.worktree_strategy.extra_writable_paths`
+    /// at feature start so changes to project settings mid-run don't
+    /// silently widen the fence. Passed to every step's
+    /// `derive_writable_paths_for_scope` call alongside the
+    /// capability-derived scope.
+    pub extra_writable_paths: Vec<String>,
+
     // --- Agent/model resolution inputs (snapshotted at feature start) ---
     /// Feature-wide run override of the agent kind (the run modal's
     /// "apply to all"). Beats the workflow step but loses to a per-step

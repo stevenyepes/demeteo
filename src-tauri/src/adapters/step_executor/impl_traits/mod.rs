@@ -100,6 +100,7 @@ impl DagStepExecutor {
             cancel_watch: cancel_rx,
             artifact_subdir: ctx.artifact_subdir,
             commit_artifacts: ctx.commit_artifacts,
+            extra_writable_paths: ctx.settings.worktree_strategy.extra_writable_paths.clone(),
             feature_agent_kind,
             feature_model,
             step_overrides,

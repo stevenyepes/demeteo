@@ -65,6 +65,8 @@ interface SettingsCtx {
   defaultAgentKind: string; setDefaultAgentKind: (v: string) => void;
   defaultModel: string; setDefaultModel: (v: string) => void;
   defaultLoopIterations: string; setDefaultLoopIterations: (v: string) => void;
+  extraWritablePaths: string[]; setExtraWritablePaths: (v: string[]) => void;
+  newExtraPath: string; setNewExtraPath: (v: string) => void;
   availableModelsForDefault: ConfigOptionValue[]; isLoadingModelsForDefault: boolean;
   agentConfigs: AgentConfigView[]; setAgentConfigs: (v: AgentConfigView[]) => void;
   isRefreshingAgents: boolean;
@@ -192,6 +194,8 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [isLoadingModelsForDefault, setIsLoadingModelsForDefault] = useState(false);
   const [artifactSubdir, setArtifactSubdir] = useState('artifacts/');
   const [commitArtifacts, setCommitArtifacts] = useState(false);
+  const [extraWritablePaths, setExtraWritablePaths] = useState<string[]>([]);
+  const [newExtraPath, setNewExtraPath] = useState('');
 
   const [workflows, setWorkflows] = useState<{ id: string; name: string; description: string; steps: StepConfig[] }[]>([]);
   const [overrides, setOverrides] = useState<Record<string, { agent_kind: string | null; model: string | null }>>({});
@@ -384,6 +388,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setDefaultLoopIterations(res.default_loop_iterations != null ? String(res.default_loop_iterations) : '');
           setArtifactSubdir(res.artifact_subdir || 'artifacts/');
           setCommitArtifacts(Boolean(res.commit_artifacts));
+          setExtraWritablePaths(res.worktree_strategy.extra_writable_paths || []);
         }
         const reposRes = await invoke<any[]>('get_repositories_for_project', { projectId: activeProject.id });
         const mappedRepos = reposRes.map(r => ({ path: r.repo_path, providerId: r.provider_id }));
@@ -471,7 +476,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-    await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
   };
 
   const handleSave = async () => {
@@ -494,7 +499,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     } else {
       try {
         await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
         setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, nodes: computeType === 'local' ? 4 : 8 } : p));
         setStatus('success'); setOriginalRepos(selectedRepos);
         setTimeout(() => setStatus('idle'), 1500);
@@ -557,6 +562,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     featureLifecycle, setFeatureLifecycle, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,
     agentConfigs, setAgentConfigs, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,
+    extraWritablePaths, setExtraWritablePaths, newExtraPath, setNewExtraPath,
     dirtyWarningRepos, setDirtyWarningRepos, pendingActionAfterConfirm, setPendingActionAfterConfirm, showDeleteConfirm, setShowDeleteConfirm,
     workflows, overrides, setOverrides, isLoadingOverrides, overridesError, expandedWf, setExpandedWf,
     rowModels, rowModelsLoading, savedPulse, overrideAgentKinds, overridesMachineId,

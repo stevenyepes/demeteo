@@ -171,7 +171,8 @@ impl ProjectRepository for SqliteAdapter {
                 "SELECT project_id, default_branch, branch_prefix, test_command, pr_template,
                         conflict_policy, feature_lifecycle, build_command, coverage_command,
                         conventions_file, default_agent_kind, default_model, harnesses,
-                        artifact_subdir, commit_artifacts, default_loop_iterations
+                        artifact_subdir, commit_artifacts, default_loop_iterations,
+                        extra_writable_paths
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -180,6 +181,7 @@ impl ProjectRepository for SqliteAdapter {
                 let harnesses: Option<String> = row.get(12)?;
                 let commit_artifacts: i64 = row.get(14)?;
                 let default_loop_iterations: Option<i64> = row.get(15)?;
+                let extra_writable_paths_json: Option<String> = row.get(16)?;
                 Ok(ProjectSettings {
                     project_id: row.get(0)?,
                     worktree_strategy: WorktreeStrategy {
@@ -191,6 +193,9 @@ impl ProjectRepository for SqliteAdapter {
                         conventions_file: row.get(9)?,
                         pr_template: row.get(4)?,
                         harnesses: harnesses.and_then(|s| serde_json::from_str(&s).ok()),
+                        extra_writable_paths: extra_writable_paths_json
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                            .unwrap_or_default(),
                     },
                     conflict_policy: row.get(5)?,
                     feature_lifecycle: row.get(6)?,
@@ -216,13 +221,21 @@ impl ProjectRepository for SqliteAdapter {
             .harnesses
             .as_ref()
             .and_then(|h| serde_json::to_string(h).ok());
+        let extra_writable_paths_json = if s.worktree_strategy.extra_writable_paths.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&s.worktree_strategy.extra_writable_paths)
+                    .map_err(|e| e.to_string())?,
+            )
+        };
         conn.execute(
             "INSERT OR REPLACE INTO project_settings
              (project_id, default_branch, branch_prefix, test_command, build_command,
               coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
               default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts,
-              default_loop_iterations)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+              default_loop_iterations, extra_writable_paths)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -240,6 +253,7 @@ impl ProjectRepository for SqliteAdapter {
                 s.artifact_subdir,
                 s.commit_artifacts as i64,
                 s.default_loop_iterations.map(|v| v as i64),
+                extra_writable_paths_json,
             ],
         )
         .map_err(|e| e.to_string())?;
