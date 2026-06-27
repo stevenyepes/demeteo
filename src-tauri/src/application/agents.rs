@@ -66,14 +66,8 @@ pub async fn apply_thread_model(
         if let Some(thread) = threads.into_iter().next() {
             if let Some(ref model) = thread.model {
                 match session.set_config_option("model", model) {
-                    Ok(_) => println!(
-                        "[apply_thread_model] set_config_option model to '{}' succeeded",
-                        model
-                    ),
-                    Err(e) => eprintln!(
-                        "[apply_thread_model] set_config_option model to '{}' failed: {}",
-                        model, e
-                    ),
+                    Ok(_) => tracing::debug!(model, "apply_thread_model: set_config_option succeeded"),
+                    Err(e) => tracing::warn!(model, error = %e, "apply_thread_model: set_config_option failed"),
                 }
             }
         }
@@ -225,7 +219,7 @@ where
                 ..Default::default()
             },
         ) {
-            eprintln!("[agent_prompt] failed to update thread status in DB: {}", e);
+            tracing::warn!(error = %e, "agent_prompt: failed to update thread status in DB");
         }
 
         let status_payload = ThreadStatusChanged {
@@ -235,7 +229,7 @@ where
         };
         match serde_json::to_value(status_payload) {
             Ok(value) => emit_fn(EVENT_THREAD_STATUS_CHANGED, value),
-            Err(err) => eprintln!("[agent_prompt] failed to serialize status payload: {}", err),
+            Err(err) => tracing::warn!(error = %err, "agent_prompt: failed to serialize status payload"),
         }
     });
     Ok(())

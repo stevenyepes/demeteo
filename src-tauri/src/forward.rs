@@ -94,7 +94,7 @@ pub fn start_port_forward(
                 let stop_inner = stop_clone.clone();
 
                 if let Err(e) = local_stream.set_nonblocking(true) {
-                    println!("[Forward] Failed to set local stream to nonblocking: {}", e);
+                    tracing::warn!(error = %e, "port forward: failed to set local stream to nonblocking");
                     continue;
                 }
 
@@ -112,7 +112,7 @@ pub fn start_port_forward(
                                 thread::sleep(Duration::from_millis(15));
                             }
                             Err(e) => {
-                                println!("[Forward] direct-tcpip failed: {}", e);
+                                tracing::warn!(error = %e, "port forward: direct-tcpip failed");
                                 return;
                             }
                         }

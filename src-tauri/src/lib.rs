@@ -81,7 +81,7 @@ fn configure_linux_gpu_env() {
     if std::env::var("DEMETEO_DISABLE_GPU").ok().as_deref() == Some("1") {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        eprintln!("[demeteo] GPU rendering disabled via DEMETEO_DISABLE_GPU");
+        tracing::info!("GPU rendering disabled via DEMETEO_DISABLE_GPU");
         return;
     }
 
@@ -96,7 +96,7 @@ fn configure_linux_gpu_env() {
                 std::env::set_var(k, v);
             }
         }
-        eprintln!("[demeteo] NVIDIA detected: GPU rendering enabled (explicit sync off)");
+        tracing::info!("NVIDIA detected: GPU rendering enabled (explicit sync off)");
     }
 }
 
@@ -107,13 +107,10 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     configure_linux_gpu_env();
 
-    // Startup banner so a stale binary is obvious in the Tauri dev
-    // console. Bump the suffix whenever the bootstrap/step-executor
-    // path resolution changes.
-    eprintln!(
-        "[demeteo] startup v{} ({}) — paths/agent-target-dir fix active",
-        env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_NAME"),
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        name = env!("CARGO_PKG_NAME"),
+        "startup — paths/agent-target-dir fix active"
     );
 
     tauri::Builder::default()
@@ -124,7 +121,7 @@ pub fn run() {
                 .path()
                 .app_local_data_dir()
                 .expect("Failed to get local data dir");
-            eprintln!("[demeteo] data dir: {}", app_data_dir.display());
+            tracing::info!(path = %app_data_dir.display(), "data dir");
             let conn = db::init_db(app_data_dir.clone()).expect("Failed to initialize database");
 
             let db_adapter = Arc::new(
@@ -166,7 +163,7 @@ pub fn run() {
                     }
                 })
                 .unwrap_or_else(|| app_data_dir.clone());
-            eprintln!("[demeteo] workspace dir: {}", workspace_dir.display());
+            tracing::info!(path = %workspace_dir.display(), "workspace dir");
 
             commands::workflows::seed_starter_workflows(&workflows_repo);
             let ssh_adapter: Arc<dyn ExecutionPort> = Arc::new(

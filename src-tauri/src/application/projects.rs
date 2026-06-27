@@ -130,10 +130,7 @@ pub async fn delete_workspace(ctx: &AppContext, id: String) -> Result<(), String
                     .await;
             }
             Err(e) => {
-                eprintln!(
-                    "[delete_project] could not resolve remote project root for {}: {}",
-                    id, e
-                );
+                tracing::warn!(project_id = %id, error = %e, "could not resolve remote project root");
             }
         }
     }
@@ -209,15 +206,13 @@ pub async fn health_check(
         );
         let probe_result = ctx.exec.run_command(machine_str, &probe_cmd).await;
         let is_cloned = probe_result.is_ok();
-        eprintln!(
-            "[get_workspace_health v2] project={} repo={} target_dir={} machine={} cmd={} ok={} stdout_or_err={:?}",
+        tracing::debug!(
             project_id,
-            repo.repo_path,
+            repo = %repo.repo_path,
             target_dir,
-            machine_str,
-            probe_cmd,
-            is_cloned,
-            probe_result.as_ref().map(|s| s.as_str()).unwrap_or("<none>")
+            machine = machine_str,
+            ok = is_cloned,
+            "get_workspace_health probe"
         );
 
         let head_branch = if is_cloned {

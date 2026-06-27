@@ -118,14 +118,8 @@ async fn resolve_session(
 
     if let Some(ref model) = thread.model {
         match session.set_config_option("model", model) {
-            Ok(_) => println!(
-                "[resolve_session] set_config_option model to '{}' succeeded",
-                model
-            ),
-            Err(e) => eprintln!(
-                "[resolve_session] set_config_option model to '{}' failed: {}",
-                model, e
-            ),
+            Ok(_) => tracing::debug!(model, "set_config_option model succeeded"),
+            Err(e) => tracing::warn!(model, error = %e, "set_config_option model failed"),
         }
     }
 
