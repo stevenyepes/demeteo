@@ -185,8 +185,7 @@ impl ExecutionDriver {
 
         let mut run_failed = None;
         let mut run_cancelled = false;
-        let mut latest_cost = 0.0;
-        let mut latest_tokens = 0;
+        let mut usage_acc = crate::domain::usage::UsageAccumulator::new(override_model.clone());
 
         loop {
             tokio::select! {
@@ -203,20 +202,14 @@ impl ExecutionDriver {
                     fast_sleep.as_mut().reset(next_fast);
                     normal_sleep.as_mut().reset(next_normal);
 
-                    match event {
+                    match &event {
                         AgentEvent::Text { delta } => {
                             let _ = self.notif.emit(&DomainEvent::AgentStream {
                                 feature_id: self.f_id.clone(),
                                 step_execution_id: step_exec.id.clone(),
                                 content: delta.clone(),
                             });
-                            text_buffer.push_str(&delta);
-                        }
-                        AgentEvent::Usage { input_tokens, output_tokens, cost_usd } => {
-                            if let Some(c) = cost_usd {
-                                latest_cost = c;
-                            }
-                            latest_tokens = (input_tokens + output_tokens) as i64;
+                            text_buffer.push_str(delta);
                         }
                         AgentEvent::TurnComplete { .. } => break,
                         AgentEvent::Error { message, .. } => {
@@ -225,6 +218,8 @@ impl ExecutionDriver {
                         }
                         _ => {}
                     }
+
+                    usage_acc.ingest_event(&event);
                 }
                 _ = &mut fast_sleep => {
                     if !first_event_seen {
@@ -269,8 +264,9 @@ impl ExecutionDriver {
 
         let _ = self.registry.kill(&verifier_thread_id).await;
 
-        *accumulated_cost += latest_cost;
-        *accumulated_tokens += latest_tokens;
+        usage_acc.finalize_arc(&self.pricing);
+        *accumulated_cost += usage_acc.cost_usd();
+        *accumulated_tokens += usage_acc.tokens();
 
         if run_cancelled || *self.cancel_watch.borrow() {
             return Err("Verifier cancelled by user".to_string());

@@ -88,6 +88,7 @@ impl DagStepExecutor {
             merge_executor: self.merge_executor.clone(),
             gate_waiters: self.gate_waiters.clone(),
             driver_registry: self.driver_registry.clone(),
+            pricing: self.pricing.clone(),
             f_id: f_id.clone(),
             f_id_str: feature_id.to_string(),
             machine_id_opt: ctx.machine_id_opt,

@@ -33,6 +33,7 @@ use crate::ports::db::FeatureRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::notification::DomainEvent;
 use crate::ports::notification::NotificationPort;
+use crate::ports::pricing::PricingTable;
 use crate::ports::step_executor::{StepExecutor, SyncOutcomeView};
 
 use super::DagStepExecutor;
@@ -71,6 +72,7 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub thread_id_prefix: &'a str,
     pub agent_kind: &'a str,
     pub override_model: &'a Option<String>,
+    pub pricing: &'a Arc<dyn PricingTable>,
 }
 
 pub(crate) async fn resolve_sync_conflicts_shared(
@@ -92,6 +94,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         thread_id_prefix,
         agent_kind,
         override_model,
+        pricing,
     } = sync_ctx;
 
     let fid = feature_id;
@@ -168,6 +171,8 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         None, // No cancel watch for resolver agent
         machine_str,
         &**exec,
+        override_model.clone(),
+        pricing.clone(),
         |event| {
             if let AgentEvent::Text { delta } = event {
                 let _ = notif.emit(&DomainEvent::AgentStream {
@@ -392,6 +397,7 @@ impl DagStepExecutor {
             thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
             agent_kind: &agent_kind,
             override_model: &override_model,
+            pricing: &self.pricing,
         })
         .await
         {

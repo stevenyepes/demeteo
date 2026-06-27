@@ -370,6 +370,8 @@ impl ExecutionDriver {
                 Some(self.cancel_watch.clone()),
                 machine_str,
                 &*self.exec,
+                override_model.clone(),
+                self.pricing.clone(),
                 |_event| {},
             )
             .await;

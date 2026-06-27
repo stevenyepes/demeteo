@@ -31,6 +31,7 @@ fn parse_antigravity_event(line: &str) -> Option<AgentEvent> {
             }
             "done" | "end_turn" | "finish" => Some(AgentEvent::TurnComplete {
                 stop_reason: StopReason::EndOfTurn,
+                usage: None,
             }),
             "error" => {
                 let msg = v["data"]["message"]

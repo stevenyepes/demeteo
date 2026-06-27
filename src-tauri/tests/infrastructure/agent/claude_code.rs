@@ -5,7 +5,7 @@
 
 use crate::adapters::agent::claude_code::parse_claude_event;
 use crate::domain::action::ActionKind;
-use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus};
+use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
 
 #[test]
 fn system_init_is_dropped() {
@@ -141,22 +141,70 @@ fn user_tool_result_error_emits_failed_update_with_reason() {
 }
 
 #[test]
-fn result_success_end_turn_emits_turn_complete() {
+fn result_success_end_turn_emits_turn_complete_with_cost() {
+    // After the fix: the `result` event carries total_cost_usd which the
+    // parser surfaces on the TurnComplete so the UsageAccumulator can
+    // fold it into the turn outcome.
     let line = r#"{"type":"result","subtype":"success","is_error":false,"duration_ms":6116,"duration_api_ms":6781,"num_turns":2,"result":"Here are the files in /tmp","stop_reason":"end_turn","session_id":"bf13ad12","total_cost_usd":0.187}"#;
     match parse_claude_event(line) {
-        Some(AgentEvent::TurnComplete { stop_reason }) => {
+        Some(AgentEvent::TurnComplete { stop_reason, usage }) => {
             assert_eq!(stop_reason, StopReason::EndOfTurn);
+            // No usage block in this fixture → cost_usd is the only data.
+            let u = usage.expect("expected usage snapshot on result event");
+            assert_eq!(u.input_tokens, 0);
+            assert_eq!(u.output_tokens, 0);
+            assert!((u.cost_usd.expect("cost present") - 0.187).abs() < 1e-9);
         }
         other => panic!("expected TurnComplete, got {other:?}"),
     }
 }
 
 #[test]
-fn result_max_tokens_maps_to_max_tokens() {
+fn result_max_tokens_maps_to_max_tokens_and_carries_cost() {
     let line = r#"{"type":"result","subtype":"success","is_error":false,"stop_reason":"max_tokens","total_cost_usd":0.5}"#;
     match parse_claude_event(line) {
-        Some(AgentEvent::TurnComplete { stop_reason }) => {
+        Some(AgentEvent::TurnComplete { stop_reason, usage }) => {
             assert_eq!(stop_reason, StopReason::MaxTokens);
+            let u = usage.expect("expected usage snapshot on result event");
+            assert!((u.cost_usd.expect("cost present") - 0.5).abs() < 1e-9);
+        }
+        other => panic!("expected TurnComplete, got {other:?}"),
+    }
+}
+
+#[test]
+fn result_with_full_usage_block_emits_usage_snapshot() {
+    // Anthropic SDK cost-tracking confirms the `result` event carries
+    // the full usage block: input/output tokens plus cache creation /
+    // read tokens. All four numeric fields must surface.
+    let line = r#"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","total_cost_usd":0.187,"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":500,"cache_read_input_tokens":1000}}"#;
+    match parse_claude_event(line) {
+        Some(AgentEvent::TurnComplete { stop_reason, usage }) => {
+            assert_eq!(stop_reason, StopReason::EndOfTurn);
+            assert_eq!(
+                usage,
+                Some(Usage {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    cost_usd: Some(0.187),
+                    cache_read_input_tokens: 1000,
+                    cache_creation_input_tokens: 500,
+                })
+            );
+        }
+        other => panic!("expected TurnComplete, got {other:?}"),
+    }
+}
+
+#[test]
+fn result_missing_usage_block_emits_turn_complete_with_none_usage() {
+    // Tool-only turns (no API call) can have a result event with neither
+    // total_cost_usd nor usage block — usage must be None, not panic.
+    let line = r#"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","session_id":"abc"}"#;
+    match parse_claude_event(line) {
+        Some(AgentEvent::TurnComplete { stop_reason, usage }) => {
+            assert_eq!(stop_reason, StopReason::EndOfTurn);
+            assert!(usage.is_none());
         }
         other => panic!("expected TurnComplete, got {other:?}"),
     }

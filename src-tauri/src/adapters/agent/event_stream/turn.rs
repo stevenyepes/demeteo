@@ -1,6 +1,10 @@
+use std::sync::Arc;
+
 use crate::domain::agent_event::AgentEvent;
+use crate::domain::usage::UsageAccumulator;
 use crate::ports::agent_runtime::AgentSession;
 use crate::ports::execution::ExecutionPort;
+use crate::ports::pricing::PricingTable;
 use tokio::sync::watch;
 use tokio_stream::StreamExt;
 
@@ -17,6 +21,12 @@ pub struct TurnOutcome {
     pub produced_artifacts: Vec<crate::domain::artifact::Artifact>,
     pub cost_usd: f64,
     pub tokens: i64,
+    /// Tokens served from prompt cache (priced at ~10% of base). Surfaced
+    /// to the UI as a separate field; not aggregated into `tokens`.
+    pub cache_read_input_tokens: u64,
+    /// Tokens written to prompt cache (priced above base). Surfaced
+    /// separately; not aggregated into `tokens`.
+    pub cache_creation_input_tokens: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +36,13 @@ pub enum TurnResult {
     Failed(String),
 }
 
+/// Drive a single agent turn: stream events, accumulate usage, time out.
+///
+/// `model` and `pricing` are used by the [`UsageAccumulator`] to compute
+/// a fallback USD cost when the agent's wire format omits `cost_usd`.
+/// Both are `None`/default when the call site doesn't have them — the
+/// accumulator then leaves `cost_usd` at `0.0`.
+#[allow(clippy::too_many_arguments)]
 pub async fn stream_agent_turn<F>(
     session: &dyn AgentSession,
     prompt: &str,
@@ -33,6 +50,8 @@ pub async fn stream_agent_turn<F>(
     mut cancel_watch: Option<watch::Receiver<bool>>,
     machine_str: &str,
     exec: &dyn ExecutionPort,
+    model: Option<String>,
+    pricing: Arc<dyn PricingTable>,
     mut on_event: F,
 ) -> TurnResult
 where
@@ -43,8 +62,7 @@ where
     let mut first_event_seen = false;
     let mut text_buffer = String::new();
     let mut produced_artifacts = Vec::new();
-    let mut latest_cost = 0.0;
-    let mut latest_tokens = 0;
+    let mut acc = UsageAccumulator::new(model);
     let mut run_failed = None;
     let mut run_cancelled = false;
 
@@ -75,30 +93,26 @@ where
 
                 on_event(&event);
 
-                match event {
+                match &event {
                     AgentEvent::Text { delta } => {
                         let is_tool_breadcrumb = delta.starts_with("[tool ") || delta.starts_with("[tool:");
                         if !is_tool_breadcrumb {
-                            text_buffer.push_str(&delta);
+                            text_buffer.push_str(delta);
                         }
                     }
                     AgentEvent::ArtifactProduced { artifact } => {
-                        produced_artifacts.push(artifact);
-                    }
-                    AgentEvent::Usage { input_tokens, output_tokens, cost_usd } => {
-                        if let Some(c) = cost_usd {
-                            latest_cost = c;
-                        }
-                        latest_tokens = (input_tokens + output_tokens) as i64;
+                        produced_artifacts.push(artifact.clone());
                     }
                     AgentEvent::TurnComplete { .. } => break,
                     AgentEvent::Error { message, .. } => {
-                        let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(&message, machine_str, exec).await;
+                        let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(message, machine_str, exec).await;
                         run_failed = Some(descriptive);
                         break;
                     }
                     _ => {}
                 }
+
+                acc.ingest_event(&event);
             }
             _ = &mut fast_sleep => {
                 if !first_event_seen {
@@ -158,15 +172,22 @@ where
     }
 
     if run_cancelled {
-        TurnResult::Interrupted
-    } else if let Some(err) = run_failed {
-        TurnResult::Failed(err)
-    } else {
-        TurnResult::Success(TurnOutcome {
-            text: text_buffer,
-            produced_artifacts,
-            cost_usd: latest_cost,
-            tokens: latest_tokens,
-        })
+        return TurnResult::Interrupted;
     }
+    if let Some(err) = run_failed {
+        return TurnResult::Failed(err);
+    }
+
+    // Resolve cost: prefer agent-supplied cost_usd; fall back to pricing
+    // table when the model is known. Idempotent.
+    acc.finalize_arc(&pricing);
+
+    TurnResult::Success(TurnOutcome {
+        text: text_buffer,
+        produced_artifacts,
+        cost_usd: acc.cost_usd(),
+        tokens: acc.tokens(),
+        cache_read_input_tokens: acc.cache_read_input_tokens(),
+        cache_creation_input_tokens: acc.cache_creation_input_tokens(),
+    })
 }

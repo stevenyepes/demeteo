@@ -24,7 +24,8 @@ fn parse_event_step_finish_stop_emits_turn_complete() {
         matches!(
             evt,
             AgentEvent::TurnComplete {
-                stop_reason: StopReason::EndOfTurn
+                stop_reason: StopReason::EndOfTurn,
+                ..
             }
         ),
         "got: {:?}",
@@ -37,14 +38,12 @@ fn parse_event_step_finish_tool_calls_emits_usage() {
     let line = r#"{"type":"step_finish","part":{"reason":"tool-calls","tokens":{"input":1000,"output":50,"reasoning":0,"cache":{"write":0,"read":0},"total":1050},"cost":0.002}}"#;
     let evt = parse_opencode_event(line).expect("should parse");
     match evt {
-        AgentEvent::Usage {
-            input_tokens,
-            output_tokens,
-            cost_usd,
-        } => {
-            assert_eq!(input_tokens, 1000);
-            assert_eq!(output_tokens, 50);
-            assert_eq!(cost_usd, Some(0.002));
+        AgentEvent::Usage(u) => {
+            assert_eq!(u.input_tokens, 1000);
+            assert_eq!(u.output_tokens, 50);
+            assert_eq!(u.cost_usd, Some(0.002));
+            assert_eq!(u.cache_read_input_tokens, 0);
+            assert_eq!(u.cache_creation_input_tokens, 0);
         }
         e => panic!("expected Usage, got {:?}", e),
     }
@@ -135,4 +134,51 @@ fn parse_event_legacy_nested_session_update_still_works() {
 fn parse_event_invalid_json_is_dropped() {
     assert!(parse_opencode_event("not json").is_none());
     assert!(parse_opencode_event("").is_none());
+}
+
+#[test]
+fn parse_event_step_finish_extracts_cache_tokens() {
+    // opencode nests cache reads/writes inside tokens.cache.{read,write}.
+    let line = r#"{"type":"step_finish","part":{"reason":"tool-calls","tokens":{"input":500,"output":50,"cache":{"read":1000,"write":250},"total":1550},"cost":0.01}}"#;
+    let evt = parse_opencode_event(line).expect("should parse");
+    match evt {
+        AgentEvent::Usage(u) => {
+            assert_eq!(u.cache_read_input_tokens, 1000);
+            assert_eq!(u.cache_creation_input_tokens, 250);
+        }
+        e => panic!("expected Usage, got {:?}", e),
+    }
+}
+
+#[test]
+fn parse_event_top_level_usage_update_extracts_cache_tokens() {
+    // opencode also emits `usage_update` at the top level.
+    let line = r#"{"type":"usage_update","inputTokens":100,"outputTokens":20,"cacheReadInputTokens":500,"cacheCreationInputTokens":100,"costUsd":0.001}"#;
+    let evt = parse_opencode_event(line).expect("should parse");
+    match evt {
+        AgentEvent::Usage(u) => {
+            assert_eq!(u.input_tokens, 100);
+            assert_eq!(u.output_tokens, 20);
+            assert_eq!(u.cache_read_input_tokens, 500);
+            assert_eq!(u.cache_creation_input_tokens, 100);
+            assert_eq!(u.cost_usd, Some(0.001));
+        }
+        e => panic!("expected Usage, got {:?}", e),
+    }
+}
+
+#[test]
+fn parse_event_nested_usage_update_extracts_cache_tokens() {
+    // And `usage_update` nested under `update.sessionUpdate`.
+    let line = r#"{"update":{"sessionUpdate":"usage_update","inputTokens":80,"outputTokens":15,"cacheReadInputTokens":200,"cacheCreationInputTokens":50,"costUsd":0.0005}}"#;
+    let evt = parse_opencode_event(line).expect("should parse");
+    match evt {
+        AgentEvent::Usage(u) => {
+            assert_eq!(u.input_tokens, 80);
+            assert_eq!(u.output_tokens, 15);
+            assert_eq!(u.cache_read_input_tokens, 200);
+            assert_eq!(u.cache_creation_input_tokens, 50);
+        }
+        e => panic!("expected Usage, got {:?}", e),
+    }
 }

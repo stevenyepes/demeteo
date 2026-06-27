@@ -501,10 +501,8 @@ mod tests {
     #[test]
     fn derive_returns_extras_when_no_artifacts_declared() {
         // No artifacts but the project opted into extra writable paths.
-        let paths = derive_writable_paths(
-            None,
-            &["target".to_string(), "node_modules".to_string()],
-        );
+        let paths =
+            derive_writable_paths(None, &["target".to_string(), "node_modules".to_string()]);
         assert_eq!(
             paths,
             vec![PathBuf::from("target"), PathBuf::from("node_modules")]
@@ -640,7 +638,7 @@ mod tests {
 
     #[test]
     fn extras_normalisation_strips_trailing_slashes() {
-let paths = derive_writable_paths_for_scope(
+        let paths = derive_writable_paths_for_scope(
             WriteScope::ArtifactsOnly,
             None,
             &["target".to_string(), "node_modules".to_string()],

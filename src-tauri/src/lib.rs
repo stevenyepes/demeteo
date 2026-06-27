@@ -261,6 +261,7 @@ pub fn run() {
                     artifact_store,
                     app_data_dir.clone(),
                     workspace_dir.clone(),
+                    pricing.clone(),
                 ));
                 // Reconcile DB + notifications first (synchronous, fast).
                 exec.startup_watchdog();

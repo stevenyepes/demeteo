@@ -140,6 +140,8 @@ async fn test_executor_instantiation_and_cancel() {
 
     let memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort> =
         Arc::new(crate::adapters::memory_llm::ReqwestMemoryLlmAdapter::new());
+    let pricing: Arc<dyn crate::ports::pricing::PricingTable> =
+        Arc::new(crate::adapters::pricing::HardcodedPricingTable::new());
     let executor = DagStepExecutor::new(
         db.clone(),
         db.clone(),
@@ -159,6 +161,7 @@ async fn test_executor_instantiation_and_cancel() {
         artifacts,
         temp_dir.clone(),
         temp_dir.clone(),
+        pricing,
     );
 
     let cancel_res = executor.feature_cancel("f-nonexistent").await;
@@ -204,6 +207,8 @@ async fn test_executor_gate_decide() {
 
     let memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort> =
         Arc::new(crate::adapters::memory_llm::ReqwestMemoryLlmAdapter::new());
+    let pricing: Arc<dyn crate::ports::pricing::PricingTable> =
+        Arc::new(crate::adapters::pricing::HardcodedPricingTable::new());
     let executor = DagStepExecutor::new(
         db.clone(),
         db.clone(),
@@ -223,6 +228,7 @@ async fn test_executor_gate_decide() {
         artifacts,
         temp_dir.clone(),
         temp_dir.clone(),
+        pricing,
     );
 
     let waiter = crate::adapters::step_executor::gate_waiter::GateWaiter::new();
@@ -368,6 +374,8 @@ async fn test_gate_decide_recovers_after_driver_death() {
 
     let memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort> =
         Arc::new(crate::adapters::memory_llm::ReqwestMemoryLlmAdapter::new());
+    let pricing: Arc<dyn crate::ports::pricing::PricingTable> =
+        Arc::new(crate::adapters::pricing::HardcodedPricingTable::new());
     let executor = DagStepExecutor::new(
         db.clone(),
         db.clone(),
@@ -387,6 +395,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
         artifacts,
         temp_dir.clone(),
         temp_dir.clone(),
+        pricing,
     );
 
     let now = paths::now_ms();

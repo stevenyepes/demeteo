@@ -241,6 +241,8 @@ impl ExecutionDriver {
             Some(self.cancel_watch.clone()),
             &machine_str,
             &*self.exec,
+            override_model.clone(),
+            self.pricing.clone(),
             |event| {
                 if let AgentEvent::Text { delta } = event {
                     let _ = self.notif.emit(&DomainEvent::AgentStream {
@@ -494,6 +496,8 @@ impl ExecutionDriver {
                     Some(self.cancel_watch.clone()),
                     &machine_str,
                     &*self.exec,
+                    override_model.clone(),
+                    self.pricing.clone(),
                     |event| {
                         if let AgentEvent::Text { delta } = event {
                             let _ = self.notif.emit(&DomainEvent::AgentStream {

@@ -17,6 +17,7 @@ use crate::ports::db::FeatureRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
 use crate::ports::notification::NotificationPort;
+use crate::ports::pricing::PricingTable;
 
 pub(crate) mod failure;
 pub(crate) mod verifier;
@@ -65,6 +66,11 @@ pub(crate) struct ExecutionDriver {
     pub merge_executor: Arc<dyn MergeExecutor>,
     pub gate_waiters: Arc<Mutex<HashMap<String, Arc<GateWaiter>>>>,
     pub driver_registry: Arc<DriverRegistry>,
+
+    /// Model → USD pricing. Threaded through every `stream_agent_turn`
+    /// call so the [`UsageAccumulator`](crate::domain::usage::UsageAccumulator)
+    /// can compute a fallback cost when the agent's wire format omits it.
+    pub pricing: Arc<dyn PricingTable>,
 
     // Feature identity
     pub f_id: FeatureId,

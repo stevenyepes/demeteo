@@ -236,6 +236,8 @@ impl ExecutionDriver {
                         Some(self.cancel_watch.clone()),
                         machine_str,
                         &*self.exec,
+                        override_model.clone(),
+                        self.pricing.clone(),
                         |event| {
                             if let AgentEvent::Text { delta } = event {
                                 if is_legacy {
@@ -418,6 +420,7 @@ impl ExecutionDriver {
                                 machine_str,
                                 &wt_path,
                                 &sub.id,
+                                override_model,
                                 accumulated_cost,
                                 accumulated_tokens,
                                 step_start,
@@ -540,6 +543,7 @@ impl ExecutionDriver {
         machine_str: &str,
         wt_path: &str,
         sub_id: &str,
+        override_model: &Option<String>,
         accumulated_cost: &mut f64,
         accumulated_tokens: &mut i64,
         step_start: Instant,
@@ -587,6 +591,8 @@ impl ExecutionDriver {
             Some(self.cancel_watch.clone()),
             machine_str,
             &*self.exec,
+            override_model.clone(),
+            self.pricing.clone(),
             |event| {
                 if let AgentEvent::Text { delta } = event {
                     let _ = self.notif.emit(&DomainEvent::AgentStream {

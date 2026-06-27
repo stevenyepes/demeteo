@@ -16,6 +16,7 @@ use crate::ports::db::{
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
 use crate::ports::notification::NotificationPort;
+use crate::ports::pricing::PricingTable;
 
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 
@@ -84,6 +85,10 @@ pub struct DagStepExecutor {
     /// doubling up on an in-flight run.
     driver_registry: Arc<DriverRegistry>,
     cancel_senders: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
+    /// Model → USD pricing. Plumbed through to every driver + agent turn
+    /// so [`UsageAccumulator`](crate::domain::usage::UsageAccumulator) can
+    /// backfill `cost_usd` when the agent's wire format omits it.
+    pricing: Arc<dyn PricingTable>,
 }
 
 impl DagStepExecutor {
@@ -117,6 +122,7 @@ impl DagStepExecutor {
         artifacts: Arc<dyn ArtifactStore>,
         app_local_data_dir: PathBuf,
         workspace_dir: PathBuf,
+        pricing: Arc<dyn PricingTable>,
     ) -> Self {
         let git_ops = GitOpsHelper::new(app_settings.clone(), exec.clone());
         Self {
@@ -142,6 +148,7 @@ impl DagStepExecutor {
             gate_waiters: Arc::new(Mutex::new(HashMap::new())),
             driver_registry: DriverRegistry::new(),
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
+            pricing,
         }
     }
 

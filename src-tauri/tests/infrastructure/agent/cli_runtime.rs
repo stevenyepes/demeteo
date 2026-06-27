@@ -19,6 +19,7 @@ fn mock_parse_event(line: &str) -> Option<AgentEvent> {
         }
         Some("end_turn") => Some(AgentEvent::TurnComplete {
             stop_reason: StopReason::EndOfTurn,
+            usage: None,
         }),
         Some("error") => {
             let message = v

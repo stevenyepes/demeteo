@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::domain::agent_event::{AgentEvent, StopReason};
+use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 pub const OPENCODE_INSTALL: &str = "curl -fsSL https://opencode.ai/install | bash";
@@ -68,16 +68,32 @@ fn parse_part_shape(kind: &str, v: &serde_json::Value) -> Option<AgentEvent> {
             if reason == "stop" {
                 Some(AgentEvent::TurnComplete {
                     stop_reason: StopReason::EndOfTurn,
+                    usage: None,
                 })
             } else if let Some(tokens) = part.get("tokens") {
                 let input_tokens = tokens.get("input").and_then(|t| t.as_u64()).unwrap_or(0);
                 let output_tokens = tokens.get("output").and_then(|t| t.as_u64()).unwrap_or(0);
                 let cost_usd = part.get("cost").and_then(|t| t.as_f64());
-                Some(AgentEvent::Usage {
+                // opencode nests cache inside tokens.cache.{read,write}.
+                // Emit 0 if absent — the accumulator treats them as monotonic
+                // and the pricing-table fallback handles missing cost.
+                let cache_read_input_tokens = tokens
+                    .get("cache")
+                    .and_then(|c| c.get("read"))
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0);
+                let cache_creation_input_tokens = tokens
+                    .get("cache")
+                    .and_then(|c| c.get("write"))
+                    .and_then(|t| t.as_u64())
+                    .unwrap_or(0);
+                Some(AgentEvent::Usage(Usage {
                     input_tokens,
                     output_tokens,
                     cost_usd,
-                })
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                }))
             } else {
                 None
             }
@@ -185,11 +201,23 @@ fn parse_top_level_kind(kind: &str, v: &serde_json::Value) -> Option<AgentEvent>
                 .get("costUsd")
                 .or_else(|| v.get("cost_usd"))
                 .and_then(|v| v.as_f64());
-            Some(AgentEvent::Usage {
+            let cache_read_input_tokens = v
+                .get("cacheReadInputTokens")
+                .or_else(|| v.get("cache_read_input_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cache_creation_input_tokens = v
+                .get("cacheCreationInputTokens")
+                .or_else(|| v.get("cache_creation_input_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            Some(AgentEvent::Usage(Usage {
                 input_tokens,
                 output_tokens,
                 cost_usd,
-            })
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            }))
         }
         "plan" => {
             let entries = serde_json::from_value(
@@ -204,6 +232,7 @@ fn parse_top_level_kind(kind: &str, v: &serde_json::Value) -> Option<AgentEvent>
         }
         "end_turn" | "message_stop" | "done" => Some(AgentEvent::TurnComplete {
             stop_reason: StopReason::EndOfTurn,
+            usage: None,
         }),
         "error" => {
             let message = v
@@ -320,11 +349,21 @@ fn parse_nested_session_update(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
             let cost_usd = update.get("costUsd").and_then(|v| v.as_f64());
-            Some(AgentEvent::Usage {
+            let cache_read_input_tokens = update
+                .get("cacheReadInputTokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cache_creation_input_tokens = update
+                .get("cacheCreationInputTokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            Some(AgentEvent::Usage(Usage {
                 input_tokens,
                 output_tokens,
                 cost_usd,
-            })
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            }))
         }
         "plan" => {
             let entries =

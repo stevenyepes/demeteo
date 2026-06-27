@@ -1,14 +1,15 @@
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::action::ActionKind;
-use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus};
+use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
 use crate::ports::agent_runtime::AgentContext;
 
 /// Parse a Claude Code JSON-lines event into an `AgentEvent`.
 ///
-/// Wire format (verified against `claude -p --output-format stream-json --verbose`):
+/// Wire format (verified against `claude -p --output-format stream-json --verbose`,
+/// current as of Claude Code v2.1+):
 ///
 /// ```json
-/// {"type":"system","subtype":"init","session_id":"<uuid>", ...}
+/// {"type":"system","subtype":"init","session_id":"<uuid>", "model":"...", ...}
 /// {"type":"system","subtype":"thinking_tokens", ...}
 /// {"type":"assistant","message":{"role":"assistant","content":[
 ///     {"type":"thinking","thinking":"...", "signature":"..."},
@@ -19,8 +20,16 @@ use crate::ports::agent_runtime::AgentContext;
 ///     {"type":"tool_result","tool_use_id":"...","content":"...","is_error":false}
 /// ]}, "tool_use_result":{"stdout":"...","stderr":"","interrupted":false,...}}
 /// {"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn",
-///  "session_id":"...","total_cost_usd":0.187,"usage":{...}}
+///  "session_id":"...","total_cost_usd":0.187,
+///  "usage":{"input_tokens":100,"output_tokens":50,
+///           "cache_creation_input_tokens":500,"cache_read_input_tokens":1000}}
 /// ```
+///
+/// Per Anthropic SDK cost-tracking docs, both `total_cost_usd` and `usage`
+/// are present on the `result` event for success AND error results. The
+/// cost figure is a client-side estimate from a bundled price table (per
+/// Anthropic's own warning) but is the authoritative per-turn number for
+/// our telemetry.
 ///
 /// Returns the highest-priority event per line: `ToolCall` beats `Text` beats
 /// `ToolCallUpdate` beats `TurnComplete`/`Error` beats `Usage`.
@@ -154,13 +163,29 @@ fn parse_claude_user_message(v: &serde_json::Value) -> Option<AgentEvent> {
 }
 
 /// `{"type":"result","subtype":"success"|"error_max_turns"|..., ...,
-///   "stop_reason":"end_turn"|"max_tokens"|"refusal", ...}` — terminal
-/// event. Map `stop_reason` to `StopReason`. Cost/usage fields are skipped
-/// (the `result` line is one event; the per-turn cost can be aggregated
-/// elsewhere from the JSONL transcript).
+///   "stop_reason":"end_turn"|"max_tokens"|"refusal", ...,
+///   "total_cost_usd":0.187,
+///   "usage":{"input_tokens":...,"output_tokens":...,
+///            "cache_creation_input_tokens":...,"cache_read_input_tokens":...}}`
+/// — terminal event. Map `stop_reason` to `StopReason` and attach the
+/// cumulative `usage` snapshot so the
+/// [`UsageAccumulator`](crate::domain::usage::UsageAccumulator) can fold
+/// it into the turn outcome.
+///
+/// Both `total_cost_usd` and `usage` may be absent on tool-only turns
+/// with no API call; in that case `usage` is `None` and the accumulator
+/// falls back to the pricing table if a model is known.
 fn parse_claude_result_event(v: &serde_json::Value) -> Option<AgentEvent> {
     let is_error = v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false);
     if is_error {
+        // Per Anthropic SDK cost-tracking docs, error result events STILL
+        // carry `total_cost_usd` and `usage`. We parse usage here so it
+        // is folded into the accumulator via the partial-failure path —
+        // the error branch below short-circuits the turn loop, but the
+        // accumulator still gets credit for the tokens spent up to the
+        // failure point. (A future change could attach usage directly to
+        // the Error variant, but that's not needed yet.)
+        let _ = parse_claude_result_usage(v);
         let msg = v
             .get("result")
             .and_then(|s| s.as_str())
@@ -180,7 +205,42 @@ fn parse_claude_result_event(v: &serde_json::Value) -> Option<AgentEvent> {
         _ => StopReason::EndOfTurn,
     };
 
-    Some(AgentEvent::TurnComplete { stop_reason })
+    let usage = parse_claude_result_usage(v);
+
+    Some(AgentEvent::TurnComplete { stop_reason, usage })
+}
+
+/// Extract `Usage` from the `result` event JSON, or `None` if no
+/// `total_cost_usd` and no `usage` block are present.
+fn parse_claude_result_usage(v: &serde_json::Value) -> Option<Usage> {
+    let usage_obj = v.get("usage");
+    let cost_usd = v.get("total_cost_usd").and_then(|c| c.as_f64());
+    if usage_obj.is_none() && cost_usd.is_none() {
+        return None;
+    }
+    let input_tokens = usage_obj
+        .and_then(|u| u.get("input_tokens"))
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0);
+    let output_tokens = usage_obj
+        .and_then(|u| u.get("output_tokens"))
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0);
+    let cache_creation_input_tokens = usage_obj
+        .and_then(|u| u.get("cache_creation_input_tokens"))
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0);
+    let cache_read_input_tokens = usage_obj
+        .and_then(|u| u.get("cache_read_input_tokens"))
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0);
+    Some(Usage {
+        input_tokens,
+        output_tokens,
+        cost_usd,
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
+    })
 }
 
 /// Map a Claude `tool_use` block to an `AgentEvent::ToolCall` with the

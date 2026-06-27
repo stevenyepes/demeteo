@@ -1,7 +1,7 @@
 //! Hermes agent from Nous Research. Speaks CLI mode with `--format json`.
 
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
-use crate::domain::agent_event::{AgentEvent, StopReason};
+use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
 use crate::ports::agent_runtime::AgentContext;
 
 pub const HERMES_INSTALL: &str =
@@ -50,14 +50,25 @@ fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
                 let input_tokens = v.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 let output_tokens = v.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 let cost_usd = v.get("costUsd").and_then(|v| v.as_f64());
-                Some(AgentEvent::Usage {
+                let cache_read_input_tokens = v
+                    .get("cacheReadInputTokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let cache_creation_input_tokens = v
+                    .get("cacheCreationInputTokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                Some(AgentEvent::Usage(Usage {
                     input_tokens,
                     output_tokens,
                     cost_usd,
-                })
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                }))
             }
             "end_turn" | "message_stop" | "done" => Some(AgentEvent::TurnComplete {
                 stop_reason: StopReason::EndOfTurn,
+                usage: None,
             }),
             "error" => {
                 let message = v
@@ -100,11 +111,21 @@ fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
                     let cost_usd = update.get("costUsd").and_then(|v| v.as_f64());
-                    Some(AgentEvent::Usage {
+                    let cache_read_input_tokens = update
+                        .get("cacheReadInputTokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let cache_creation_input_tokens = update
+                        .get("cacheCreationInputTokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    Some(AgentEvent::Usage(Usage {
                         input_tokens,
                         output_tokens,
                         cost_usd,
-                    })
+                        cache_read_input_tokens,
+                        cache_creation_input_tokens,
+                    }))
                 }
                 _ => None,
             }

@@ -37,12 +37,16 @@ pub enum AgentEvent {
     /// Agent publishes an execution plan (opencode plan mode, etc.)
     Plan { entries: Vec<PlanEntry> },
 
-    /// Token / cost telemetry
-    Usage {
-        input_tokens: u64,
-        output_tokens: u64,
-        cost_usd: Option<f64>,
-    },
+    /// Token / cost telemetry. Emitted standalone by opencode and hermes
+    /// (multiple times per turn); attached to `TurnComplete.usage` by
+    /// Claude Code (one final snapshot per turn).
+    ///
+    /// `cache_read_input_tokens` and `cache_creation_input_tokens` are
+    /// emitted by Claude Code today; opencode and hermes emit `0` until
+    /// their wire formats expose them. The shared
+    /// [`crate::domain::usage::UsageAccumulator`] treats all four
+    /// numeric fields as monotonically cumulative per turn.
+    Usage(Usage),
 
     /// Soft error from the agent
     Error {
@@ -52,13 +56,45 @@ pub enum AgentEvent {
     },
 
     /// Agent finished the turn. The channel closes after this.
-    TurnComplete { stop_reason: StopReason },
+    ///
+    /// `usage` carries the terminal cumulative token/cost snapshot for
+    /// the turn when the agent's wire format bundles them onto the
+    /// result line (Claude Code). Parsers that emit usage as separate
+    /// `Usage` events leave this `None`; the shared
+    /// [`crate::domain::usage::UsageAccumulator`] handles both shapes.
+    TurnComplete {
+        stop_reason: StopReason,
+        usage: Option<Usage>,
+    },
 
     /// Agent switched modes (e.g., plan -> build). Carries the new mode id.
     ModeChanged { mode_id: String },
 
     /// Agent updated a config option (model, mode, reasoning level, etc.)
     ConfigChanged { config_id: String, value: String },
+}
+
+/// Token / cost snapshot.
+///
+/// A standalone struct (rather than an inline enum variant) so that the
+/// `TurnComplete { usage: Option<Usage> }` carrier can hold the same
+/// shape as the standalone `Usage` event without a self-referential
+/// enum.
+///
+/// `cost_usd` is a client-side estimate from the agent's own bundled
+/// price table (per Anthropic SDK cost-tracking docs). When `None`, the
+/// [`UsageAccumulator`](crate::domain::usage::UsageAccumulator) will
+/// compute a fallback from `PricingTable` if the model is known.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

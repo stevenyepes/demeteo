@@ -182,6 +182,7 @@ impl ExecutionDriver {
                 thread_id_prefix: "sync-step-resolver",
                 agent_kind: &agent_kind,
                 override_model: &override_model,
+                pricing: &self.pricing,
             },
         )
         .await

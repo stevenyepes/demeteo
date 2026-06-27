@@ -463,6 +463,7 @@ fn drain_lines<R, F>(
             Some(0) | None => {
                 let _ = tx.blocking_send(AgentEvent::TurnComplete {
                     stop_reason: StopReason::EndOfTurn,
+                    usage: None,
                 });
             }
             Some(code) => {

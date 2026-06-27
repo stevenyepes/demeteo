@@ -27,6 +27,7 @@ fn artifact_produced_event_round_trips() {
 fn turn_complete_serializes_with_snake_case_stop_reason() {
     let e = AgentEvent::TurnComplete {
         stop_reason: StopReason::EndOfTurn,
+        usage: None,
     };
     let s = serde_json::to_string(&e).unwrap();
     assert!(s.contains("\"stop_reason\":\"end_of_turn\""));
