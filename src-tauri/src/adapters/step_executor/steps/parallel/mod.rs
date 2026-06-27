@@ -133,6 +133,8 @@ impl ExecutionDriver {
                 cost_usd: Some(*accumulated_cost),
                 tokens: Some(*accumulated_tokens),
                 wall_clock_secs: Some(wall),
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             });
             if is_cancelled {
                 return StepOutcome::Cancelled;
@@ -232,6 +234,8 @@ impl ExecutionDriver {
             cost_usd: Some(*accumulated_cost),
             tokens: Some(*accumulated_tokens),
             wall_clock_secs: Some(wall),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         });
         StepOutcome::Completed
     }
@@ -264,8 +268,13 @@ impl ExecutionDriver {
              - Each subtask's `files` list must be disjoint from the others — no shared ownership.\n\
              - If no decomposition makes sense (the work is small), return a single subtask with id `sub-1` that does the whole thing.\n",
         );
-        let planner_prompt =
-            resolve_attached_artifacts(&planner_prompt, step_execs, step_index, &*self.artifacts);
+        let planner_prompt = resolve_attached_artifacts(
+            &planner_prompt,
+            step_execs,
+            step_index,
+            &*self.artifacts,
+            &self.steps,
+        );
 
         let is_cli_agent = planner_kind == "opencode"
             || planner_kind == "hermes"
@@ -306,6 +315,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
+            bare_mode: planner_kind == "claude-code",
         };
 
         let mut cancel_watch = self.cancel_watch.clone();

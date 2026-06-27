@@ -38,6 +38,13 @@ pub trait PricingTable: Send + Sync {
     /// the per-feature telemetry under-reports.
     fn price_for(&self, model: &str) -> Option<ModelPrice>;
 
+    /// Look up a model's context-window size (input + output token
+    /// budget). Returns `None` for unknown models; the driver's
+    /// context-window watchdog treats `None` as "no budget data, skip
+    /// check." Models that are billed per-million but not context-bounded
+    /// (e.g. local Ollama) can also return `None`.
+    fn context_window(&self, model: &str) -> Option<u64>;
+
     /// List all known model names. Useful for the Preferences UI.
     fn known_models(&self) -> Vec<String>;
 }

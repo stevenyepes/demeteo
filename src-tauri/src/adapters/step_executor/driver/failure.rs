@@ -25,6 +25,8 @@ impl ExecutionDriver {
             wall,
             None,
             Some(msg.to_string()),
+            self.last_cache_read,
+            self.last_cache_creation,
         );
         super::super::updates::finish_feature(
             &*self.features,
@@ -83,6 +85,8 @@ impl ExecutionDriver {
                 wall,
                 None,
                 Some(final_msg.clone()),
+                self.last_cache_read,
+                self.last_cache_creation,
             );
             // Persist a `notifications` row so the user sees the
             // signal in the bell after a refresh, mirroring how
@@ -139,6 +143,8 @@ impl ExecutionDriver {
                 already + 1,
                 max
             )),
+            self.last_cache_read,
+            self.last_cache_creation,
         );
 
         let _ = self.features.step_update(

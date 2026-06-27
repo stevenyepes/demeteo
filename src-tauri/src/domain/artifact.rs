@@ -275,7 +275,21 @@ pub struct ArtifactDecl {
     /// How to capture. See [`ArtifactCapture`].
     pub capture: ArtifactCapture,
     /// How much to persist. See [`ArtifactMode`].
+    #[serde(default)]
     pub mode: ArtifactMode,
+    /// Whether the next step's prompt should inline this artifact's
+    /// body verbatim (`true`) or just emit a path manifest telling the
+    /// agent to `Read` it on demand (`false`, the default).
+    ///
+    /// The path-manifest default is the cost-optimized choice: it keeps
+    /// the static system-prefix stable for vendor prompt caching and
+    /// only loads the artifact body when the agent actually needs it.
+    /// Workflow authors should set this to `true` for *small* artifacts
+    /// (a 1-2 KB JSON manifest, a 200-byte verdict) where the
+    /// round-trip cost of the agent `Read`ing the file outweighs the
+    /// token savings of not inlining.
+    #[serde(default)]
+    pub inline: bool,
 }
 
 impl ArtifactDecl {
@@ -286,6 +300,7 @@ impl ArtifactDecl {
             name: name.into(),
             capture: ArtifactCapture::LastWriteTo { path: path.into() },
             mode: ArtifactMode::Full,
+            inline: false,
         }
     }
 }

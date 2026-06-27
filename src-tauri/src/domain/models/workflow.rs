@@ -168,6 +168,7 @@ mod capability_tests {
             name: "all".into(),
             capture: ArtifactCapture::AllWrites,
             mode: ArtifactMode::Full,
+            inline: false,
         }]);
         assert_eq!(s.effective_capability(), StepCapability::Implement);
     }

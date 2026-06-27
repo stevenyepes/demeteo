@@ -2,6 +2,7 @@ use std::future::Future;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::pin::Pin;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -107,6 +108,7 @@ impl AgentRuntime for UnifiedCliRuntime {
                 live_remote: Mutex::new(None),
                 captured_session_id: Arc::new(Mutex::new(None)),
                 stderr_hb: StderrHeartbeat::new(),
+                cumulative_tokens: Arc::new(AtomicU64::new(0)),
             };
             Ok(Arc::new(session) as Arc<dyn AgentSession>)
         })
@@ -124,6 +126,13 @@ pub struct UnifiedCliSession {
     live_remote: Mutex<Option<Arc<Mutex<Box<dyn InteractiveHandle>>>>>,
     captured_session_id: Arc<Mutex<Option<String>>>,
     stderr_hb: StderrHeartbeat,
+    /// Monotonic high-water mark of input + output tokens billed
+    /// against this session's underlying agent process. Updated as
+    /// `Usage` / `TurnComplete { usage }` events are parsed by
+    /// `drain_lines`. Read by the driver's context-window watchdog
+    /// via [`AgentSession::cumulative_tokens`]. Zero for a fresh
+    /// session before the first event arrives.
+    cumulative_tokens: Arc<AtomicU64>,
 }
 
 impl UnifiedCliSession {
@@ -217,6 +226,7 @@ impl UnifiedCliSession {
         };
 
         let session_capture = self.captured_session_id.clone();
+        let cumulative = self.cumulative_tokens.clone();
 
         std::thread::spawn(move || {
             drain_lines(
@@ -225,6 +235,7 @@ impl UnifiedCliSession {
                 exit_code_fn,
                 tx,
                 Some(session_capture),
+                Some(cumulative),
             );
         });
     }
@@ -280,8 +291,16 @@ impl UnifiedCliSession {
             handle: handle.clone(),
         };
         let session_capture = self.captured_session_id.clone();
+        let cumulative = self.cumulative_tokens.clone();
         std::thread::spawn(move || {
-            drain_lines(reader, parse_event, exit_code_fn, tx, Some(session_capture));
+            drain_lines(
+                reader,
+                parse_event,
+                exit_code_fn,
+                tx,
+                Some(session_capture),
+                Some(cumulative),
+            );
         });
     }
 
@@ -364,6 +383,38 @@ impl AgentSession for UnifiedCliSession {
     fn stderr_heartbeat(&self) -> Option<StderrHeartbeat> {
         Some(self.stderr_hb.clone())
     }
+
+    fn is_alive(&self) -> bool {
+        // Local child: try_wait returns Some(_) when the process has exited.
+        if let Ok(guard) = self.live_local.lock() {
+            if let Some(child_arc) = guard.as_ref() {
+                if let Ok(mut child) = child_arc.lock() {
+                    if child.try_wait().ok().flatten().is_some() {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        // Remote channel: probe the InteractiveHandle. `try_wait` returns
+        // Some when the channel has closed (EOF or process exit).
+        if let Ok(guard) = self.live_remote.lock() {
+            if let Some(handle_arc) = guard.as_ref() {
+                if let Ok(h) = handle_arc.lock() {
+                    if h.try_wait().ok().flatten().is_some() {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        // Mutex poisoned → conservative dead.
+        false
+    }
+
+    fn cumulative_tokens(&self) -> u64 {
+        self.cumulative_tokens.load(Ordering::Relaxed)
+    }
 }
 
 impl Drop for UnifiedCliSession {
@@ -390,6 +441,7 @@ fn drain_lines<R, F>(
     exit_code_fn: F,
     tx: tokio::sync::mpsc::Sender<AgentEvent>,
     session_capture: Option<Arc<Mutex<Option<String>>>>,
+    cumulative_tokens: Option<Arc<AtomicU64>>,
 ) where
     R: Read,
     F: FnOnce() -> Option<i32>,
@@ -431,6 +483,36 @@ fn drain_lines<R, F>(
                     }
                 }
                 if let Some(evt) = parse_event(trimmed) {
+                    // Track cumulative token cost for the watchdog. Mirrors
+                    // `UsageAccumulator` (monotonic-max per-field). Cache
+                    // reads are included in `input_tokens` from the agent's
+                    // own accounting on most providers; we treat the
+                    // running input+output sum as the context-budget
+                    // approximation — exact cache separation isn't needed
+                    // for the 80% threshold.
+                    if let Some(ref cumulative) = cumulative_tokens {
+                        let delta = match &evt {
+                            AgentEvent::Usage(u) => u.input_tokens + u.output_tokens,
+                            AgentEvent::TurnComplete { usage: Some(u), .. } => {
+                                u.input_tokens + u.output_tokens
+                            }
+                            _ => 0,
+                        };
+                        if delta > 0 {
+                            let mut current = cumulative.load(Ordering::Relaxed);
+                            while delta > current {
+                                match cumulative.compare_exchange(
+                                    current,
+                                    delta,
+                                    Ordering::Relaxed,
+                                    Ordering::Relaxed,
+                                ) {
+                                    Ok(_) => break,
+                                    Err(observed) => current = observed,
+                                }
+                            }
+                        }
+                    }
                     let is_terminal = matches!(
                         evt,
                         AgentEvent::TurnComplete { .. } | AgentEvent::Error { .. }

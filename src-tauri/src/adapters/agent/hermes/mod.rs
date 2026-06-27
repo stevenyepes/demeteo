@@ -138,12 +138,23 @@ fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
 }
 
 /// Construct command-line arguments for Hermes CLI.
-fn build_hermes_args(ctx: &AgentContext, _captured_session_id: Option<&str>) -> Vec<String> {
+fn build_hermes_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String> {
     let mut args = vec![
         "run".to_string(),
         "--format".to_string(),
         "json".to_string(),
     ];
+    // Cross-step continuation. Hermes's `--resume <sid>` (alias `-r`) is
+    // the explicit form of `--continue`; we use the explicit id so the
+    // orchestrator can thread the captured session id through and Hermes
+    // replays the full conversation (system prompt + tools + prior turns)
+    // from its local SQLite at `~/.hermes/state.db`. This unlocks the
+    // vendor-side 1-hour `cache_control` TTL on the static prefix across
+    // steps in the same feature.
+    if let Some(sid) = captured_session_id {
+        args.push("--resume".to_string());
+        args.push(sid.to_string());
+    }
     if let Some(ref m) = ctx.model {
         args.push("--model".to_string());
         args.push(m.clone());
@@ -161,3 +172,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         perm_env: crate::ports::agent_runtime::opencode_permission_env,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/agent/hermes.rs"]
+mod tests;

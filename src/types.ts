@@ -157,6 +157,19 @@ export interface StepExecution {
   iteration_count?: number;
   created_at: number;
   updated_at: number;
+  /**
+   * Prompt-cache read tokens billed at the discounted rate for
+   * the active step. Populated from the agent's `Usage` /
+   * `TurnComplete` events (opencode / hermes / claude-code). Not
+   * persisted to SQLite in the Tier-1 cut — surfaced via the live
+   * `step_progress` event only.
+   */
+  cache_read_input_tokens?: number | null;
+  /**
+   * Prompt-cache creation tokens (priced ABOVE base input — a
+   * one-time write cost). Populated alongside `cache_read_input_tokens`.
+   */
+  cache_creation_input_tokens?: number | null;
 }
 
 export interface GateDecision {

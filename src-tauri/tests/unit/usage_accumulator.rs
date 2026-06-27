@@ -41,6 +41,11 @@ impl PricingTable for TestPricing {
     fn price_for(&self, model: &str) -> Option<ModelPrice> {
         self.rows.get(model).copied()
     }
+    fn context_window(&self, _model: &str) -> Option<u64> {
+        // Tests don't exercise the watchdog path; return None to
+        // match the legacy "no budget data, skip check" behavior.
+        None
+    }
     fn known_models(&self) -> Vec<String> {
         self.rows.keys().cloned().collect()
     }

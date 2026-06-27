@@ -465,6 +465,7 @@ mod tests {
             name: name.into(),
             capture: ArtifactCapture::LastWriteTo { path: path.into() },
             mode: ArtifactMode::Full,
+            inline: false,
         }
     }
 
@@ -473,6 +474,7 @@ mod tests {
             name: name.into(),
             capture: ArtifactCapture::AllWrites,
             mode: ArtifactMode::Full,
+            inline: false,
         }
     }
 
@@ -529,6 +531,7 @@ mod tests {
                 name: "report".into(),
             },
             mode: ArtifactMode::Full,
+            inline: false,
         }];
         let paths = derive_writable_paths(Some(&decls), &no_extras());
         assert_eq!(paths, vec![PathBuf::from("__ALL_WRITES__")]);

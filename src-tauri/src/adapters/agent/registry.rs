@@ -136,6 +136,30 @@ impl AgentRegistry {
         let sessions = self.sessions.lock().await;
         sessions.get(thread_id).cloned()
     }
+
+    /// Read the cumulative input+output token count from the live
+    /// session for `thread_id` (if any). Used by the driver's
+    /// context-window watchdog — returns `0` when no session is
+    /// registered (the watchdog treats that as "no data, skip
+    /// check").
+    pub async fn cumulative_tokens(&self, thread_id: &str) -> Result<u64, String> {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(thread_id) {
+            Some(s) => Ok(s.cumulative_tokens()),
+            None => Ok(0),
+        }
+    }
+
+    /// Whether the live session for `thread_id` is still alive (its
+    /// underlying agent process / SSH channel hasn't exited). Used
+    /// by the driver's dead-session fallback before re-spawning.
+    pub async fn is_session_alive(&self, thread_id: &str) -> bool {
+        let sessions = self.sessions.lock().await;
+        match sessions.get(thread_id) {
+            Some(s) => s.is_alive(),
+            None => false,
+        }
+    }
 }
 
 #[cfg(test)]

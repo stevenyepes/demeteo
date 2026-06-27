@@ -44,6 +44,14 @@ pub struct AgentContext {
     /// `--disallowedTools`). Defaults to `all_allow` for interactive /
     /// probe sessions that aren't capability-scoped pipeline steps.
     pub permissions: PermissionProfile,
+    /// Opt the claude-code session into `--bare` and
+    /// `--exclude-dynamic-system-prompt-sections` so the vendor
+    /// system prompt is byte-identical across worktrees (better prompt
+    /// cache reuse). Default `false`; the orchestrator passes `true`
+    /// for capability-scoped pipeline steps and leaves it off for the
+    /// interactive AgentTerminalDrawer so CLAUDE.md / hooks /
+    /// skills still auto-load.
+    pub bare_mode: bool,
 }
 
 /// Render a [`PermissionProfile`] to the `OPENCODE_PERMISSION` JSON string.
@@ -184,6 +192,27 @@ pub trait AgentSession: Send + Sync {
     /// `None` — the executor falls back to the standard timeout.
     fn stderr_heartbeat(&self) -> Option<StderrHeartbeat> {
         None
+    }
+
+    /// Whether the underlying agent process / SSH channel is still
+    /// alive. Used by the driver's context-window watchdog: when a
+    /// session dies between steps (network blip, crash), the next
+    /// `spawn_agent_session` should fall back to `registry.kill` +
+    /// fresh spawn instead of trying to `--continue` against a dead
+    /// id. Default `true` so no-op runtimes (NoopRuntime, future
+    /// in-process adapters) participate without ceremony.
+    fn is_alive(&self) -> bool {
+        true
+    }
+
+    /// Cumulative input+output tokens billed against this session's
+    /// underlying agent process. Used by the watchdog to compare
+    /// against the model's context-window budget (see
+    /// `PricingTable::context_window`). Default `0` for runtimes that
+    /// can't track this in process (NoopRuntime); the watchdog treats
+    /// that as "no data, skip check."
+    fn cumulative_tokens(&self) -> u64 {
+        0
     }
 }
 

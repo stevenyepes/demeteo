@@ -66,6 +66,7 @@ impl DagStepExecutor {
         let feature_row = self.features.get(&f_id).ok().flatten();
         let feature_agent_kind = feature_row.as_ref().and_then(|f| f.agent_kind.clone());
         let feature_model = feature_row.as_ref().and_then(|f| f.model.clone());
+        let feature_model_for_budget = feature_model.clone();
         let loop_iterations_override = feature_row.as_ref().and_then(|f| f.loop_iterations);
         let step_overrides = feature_row
             .as_ref()
@@ -110,6 +111,15 @@ impl DagStepExecutor {
             loop_iterations_override,
             project_default_loop_iterations,
             retry_ctx: None,
+            current_model: feature_model_for_budget.clone(),
+            context_budget_tokens: feature_model_for_budget
+                .as_deref()
+                .and_then(|m| self.pricing.context_window(m)),
+            session_dirty: false,
+            session_resume_summary: String::new(),
+            session_cumulative_tokens: 0,
+            last_cache_read: None,
+            last_cache_creation: None,
         };
 
         let registry = self.driver_registry.clone();

@@ -36,8 +36,14 @@ pub enum DomainEvent {
     },
 
     /// Emitted on every step state transition inside a feature, with
-    /// accumulated cost, tokens and elapsed time so the UI can render progress
-    /// without a poll.
+    /// accumulated cost, tokens, cache-savings telemetry, and elapsed
+    /// time so the UI can render progress without a poll.
+    ///
+    /// `cache_read_input_tokens` and `cache_creation_input_tokens`
+    /// are populated from the agent's `Usage` / `TurnComplete` events
+    /// (opencode / hermes / claude-code all report these). The UI
+    /// surfaces the implied $ savings based on the active model's
+    /// pricing table.
     StepProgress {
         feature_id: FeatureId,
         step_id: String,
@@ -45,6 +51,8 @@ pub enum DomainEvent {
         cost_usd: Option<f64>,
         tokens: Option<i64>,
         wall_clock_secs: Option<u64>,
+        cache_read_input_tokens: Option<u64>,
+        cache_creation_input_tokens: Option<u64>,
     },
 
     /// Emitted when a step of kind `gate` finishes and is waiting on

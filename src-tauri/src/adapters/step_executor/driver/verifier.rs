@@ -29,6 +29,8 @@ impl ExecutionDriver {
             cost_usd: Some(*accumulated_cost),
             tokens: Some(*accumulated_tokens),
             wall_clock_secs: Some(step_start.elapsed().as_secs()),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         });
 
         let feature = self.features.get(&self.f_id).ok().flatten();
@@ -152,6 +154,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
+            bare_mode: verifier_agent_kind == "claude-code",
         };
 
         let spawn_fut =

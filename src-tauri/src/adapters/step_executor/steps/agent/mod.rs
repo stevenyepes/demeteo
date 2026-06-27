@@ -24,6 +24,8 @@ impl ExecutionDriver {
         step_start: Instant,
         step_index: usize,
         step_execs: &[StepExecution],
+        out_cache_read: &mut Option<u64>,
+        out_cache_creation: &mut Option<u64>,
     ) -> StepOutcome {
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
 
@@ -60,12 +62,14 @@ impl ExecutionDriver {
             .set("retry_feedback", &retry_feedback)
             .set("iteration", &retry_iteration)
             .set("max_iterations", &retry_max)
+            .set("session_resume_summary", &self.session_resume_summary)
             .render(template);
         let prompt = crate::adapters::step_executor::artifacts::resolve_attached_artifacts(
             &prompt,
             step_execs,
             step_index,
             &*self.artifacts,
+            &self.steps,
         );
         // Safety net: if the template opted in via
         // `{{retry_feedback_section}}`, the section already appears in
@@ -225,6 +229,18 @@ impl ExecutionDriver {
             }
         };
 
+        // 1a. Reset the session-dirty latch so subsequent steps in this
+        // feature (under the same `f_id`) reuse the live session via
+        // `--session <captured_sid> --continue` (opencode) or
+        // `--resume <captured_sid>` (claude-code / hermes). The driver
+        // also calls `session_dirty = true` from
+        // `maybe_watchdog_reset` when the context-window budget is
+        // breached; we don't act on that here — `spawn_agent_session`
+        // above already saw a live session and returned its Arc.
+        // The re-spawn path lives inside `spawn_agent_session` itself
+        // (it calls `registry.kill` when the registered session is
+        // dead before `get_or_spawn` returns).
+
         // 2. Stream turn
         let mut run_failed = None;
         let mut run_cancelled = false;
@@ -257,6 +273,8 @@ impl ExecutionDriver {
                         cost_usd: Some(*accumulated_cost),
                         tokens: Some(*accumulated_tokens),
                         wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     });
                 }
             },
@@ -278,6 +296,13 @@ impl ExecutionDriver {
                 *accumulated_tokens += outcome.tokens;
                 produced_artifacts = outcome.produced_artifacts;
                 text_buffer = outcome.text;
+                // Surface cache telemetry from the just-completed
+                // turn on the out-params. The driver loop reads
+                // these for the final `StepProgress` notification
+                // + DB row update so the UI's "Saved $X by cache"
+                // chip has fresh numbers.
+                *out_cache_read = Some(outcome.cache_read_input_tokens);
+                *out_cache_creation = Some(outcome.cache_creation_input_tokens);
             }
         }
 
@@ -303,6 +328,8 @@ impl ExecutionDriver {
                 cost_usd: Some(*accumulated_cost),
                 tokens: Some(*accumulated_tokens),
                 wall_clock_secs: Some(wall),
+                cache_read_input_tokens: *out_cache_read,
+                cache_creation_input_tokens: *out_cache_creation,
             });
             let _ = self
                 .git_ops
@@ -512,6 +539,8 @@ impl ExecutionDriver {
                                 cost_usd: Some(*accumulated_cost),
                                 tokens: Some(*accumulated_tokens),
                                 wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                                cache_read_input_tokens: None,
+                                cache_creation_input_tokens: None,
                             });
                         }
                     },
@@ -531,6 +560,15 @@ impl ExecutionDriver {
                     crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
                         *accumulated_cost += outcome.cost_usd;
                         *accumulated_tokens += outcome.tokens;
+                        // Conflict-resolution turn also bills cache
+                        // tokens; accumulate them into the out-params
+                        // (additive — these params record the LAST
+                        // turn's cache counts, but since conflict
+                        // resolution is always the last turn of an
+                        // agent step, that matches user-visible
+                        // expectations).
+                        *out_cache_read = Some(outcome.cache_read_input_tokens);
+                        *out_cache_creation = Some(outcome.cache_creation_input_tokens);
                     }
                 }
 
@@ -602,6 +640,8 @@ impl ExecutionDriver {
                 cost_usd: Some(*accumulated_cost),
                 tokens: Some(*accumulated_tokens),
                 wall_clock_secs: Some(wall),
+                cache_read_input_tokens: *out_cache_read,
+                cache_creation_input_tokens: *out_cache_creation,
             });
             StepOutcome::Cancelled
         } else if let Some(failed_outcome) = run_failed {
@@ -645,6 +685,8 @@ impl ExecutionDriver {
                         cost_usd: Some(*accumulated_cost),
                         tokens: Some(*accumulated_tokens),
                         wall_clock_secs: Some(wall),
+                        cache_read_input_tokens: *out_cache_read,
+                        cache_creation_input_tokens: *out_cache_creation,
                     });
                     // Capture the agent's final summary as a signal for the
                     // memory worker. Cap length to keep the queue lightweight.
@@ -677,11 +719,21 @@ impl ExecutionDriver {
             )
             .await;
 
-        let _ = self.registry.kill(self.f_id.as_str()).await;
+        // The verifier is always its own session (keyed by
+        // `{f_id}-verifier`) — kill it regardless of outcome so
+        // the registry entry doesn't leak. The MAIN agent session
+        // (keyed by `f_id`) is preserved on success so the next
+        // step can `--continue` against the same captured session
+        // id; only kill on failure / cancellation paths (handled
+        // inline above in each early-return branch).
         let _ = self
             .registry
             .kill(&format!("{}-verifier", self.f_id.as_str()))
             .await;
+
+        if !matches!(outcome, StepOutcome::Completed) {
+            let _ = self.registry.kill(self.f_id.as_str()).await;
+        }
 
         outcome
     }

@@ -291,6 +291,10 @@ impl DagStepExecutor {
             &conventions_content,
             &memory_md,
             &settings.artifact_subdir,
+            // First turn of the feature → no recap needed. The
+            // watchdog populates this on subsequent turns when
+            // it resets the session.
+            "",
         );
 
         // Snapshot the artifact subdir + commit flag from project

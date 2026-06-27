@@ -339,7 +339,25 @@ fn claude_tool_use_to_event(tu: &serde_json::Value) -> AgentEvent {
 ///   --dangerously-skip-permissions  bypass tool permission prompts; in
 ///                                   headless mode every Write/Edit/Bash
 ///                                   call would otherwise be denied
-fn build_claude_args(ctx: &AgentContext, _captured_session_id: Option<&str>) -> Vec<String> {
+///   --resume <sid>            continue a previously-captured session by
+///                             id (only emitted once `captured_session_id`
+///                             has been observed in the stream; the
+///                             orchestrator relies on this for
+///                             cross-step `--continue` semantics).
+///   --bare                    shrink system prompt (no CLAUDE.md /
+///                             hooks / skills / plugins auto-load) —
+///                             makes the static prefix byte-identical
+///                             across worktrees for better prompt-cache
+///                             reuse. Only emitted when the caller sets
+///                             `ctx.bare_mode = true` (orchestrator
+///                             pipeline steps do; interactive
+///                             AgentTerminalDrawer does not).
+///   --exclude-dynamic-system-prompt-sections
+///                             same goal as `--bare`: move per-machine
+///                             sections (working dir, env info) into the
+///                             first user message so cross-worktree
+///                             cache hits improve.
+fn build_claude_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
         "--verbose".to_string(),
@@ -352,6 +370,19 @@ fn build_claude_args(ctx: &AgentContext, _captured_session_id: Option<&str>) -> 
         // to the model — it never blocks waiting on a human.
         "--dangerously-skip-permissions".to_string(),
     ];
+    if let Some(sid) = captured_session_id {
+        // Cross-step / cross-turn continuation. The orchestrator captures
+        // `session_id` from the `system` init event on the first turn
+        // and threads it back here so the conversation is replayed
+        // instead of starting fresh — unlocking prompt-cache hits on
+        // the static prefix (system prompt + tool definitions).
+        args.push("--resume".to_string());
+        args.push(sid.to_string());
+    }
+    if ctx.bare_mode {
+        args.push("--bare".to_string());
+        args.push("--exclude-dynamic-system-prompt-sections".to_string());
+    }
     let disallowed = disallowed_tools_for(&ctx.permissions);
     if !disallowed.is_empty() {
         args.push("--disallowedTools".to_string());

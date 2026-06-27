@@ -44,7 +44,7 @@ where
 {
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
     std::thread::spawn(move || {
-        drain_lines(reader, mock_parse_event, exit_code_fn, tx, None);
+        drain_lines(reader, mock_parse_event, exit_code_fn, tx, None, None);
     });
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -161,7 +161,7 @@ fn drain_lines_returns_early_when_consumer_drops() {
 "#
         .to_vec(),
     );
-    drain_lines(reader, mock_parse_event, || Some(0), tx, None);
+    drain_lines(reader, mock_parse_event, || Some(0), tx, None, None);
 }
 
 struct ChunkyHandle {

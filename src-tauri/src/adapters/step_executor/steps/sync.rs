@@ -63,6 +63,8 @@ impl ExecutionDriver {
             cost_usd: Some(*accumulated_cost),
             tokens: None,
             wall_clock_secs: Some(0),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         });
 
         // Resolve the project settings so we know which branch is the
@@ -113,6 +115,8 @@ impl ExecutionDriver {
                     cost_usd: Some(*accumulated_cost),
                     tokens: None,
                     wall_clock_secs: Some(wall),
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 });
                 let _ = outcome.merge_commit_sha;
                 StepOutcome::Completed
@@ -241,6 +245,8 @@ impl ExecutionDriver {
                     cost_usd: None,
                     tokens: None,
                     wall_clock_secs: Some(wall),
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 });
 
                 let target = step_conf
@@ -276,6 +282,8 @@ impl ExecutionDriver {
                     cost_usd: None,
                     tokens: None,
                     wall_clock_secs: Some(wall),
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 });
                 StepOutcome::Failed(reason)
             }

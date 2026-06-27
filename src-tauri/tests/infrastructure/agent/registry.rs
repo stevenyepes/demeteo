@@ -176,6 +176,7 @@ async fn get_or_spawn_returns_structured_error_for_unknown_kind() {
                 agent_exec: stub.clone(),
                 exec: stub,
                 permissions: crate::domain::permission::PermissionProfile::all_allow(),
+                bare_mode: false,
             },
         )
         .await

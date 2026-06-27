@@ -368,6 +368,42 @@ opencode run --format json --session <uuid-1> --continue "<prompt>"
 
 Parallel subtasks each get their own session id so subtask sessions don't pollute each other's context. Planner and workers have separate session ids.
 
+**Tier 1 implementation (token optimization):**
+
+The orchestrator's `AgentRegistry` keys sessions by `f_id` for the
+main feature agent. The `StepExecutor` reuses the live `AgentSession`
+across all `agent` steps in a feature — `get_or_spawn` returns the
+existing session when one is registered, and only spawns a fresh
+process on the very first turn (or after a watchdog reset, see
+below). The captured session id from the first `system` init event
+is threaded into `--session <id> --continue` (opencode) /
+`--resume <id>` (claude-code, hermes) / `--conversation <id> -c`
+(antigravity) on every subsequent prompt. This unlocks vendor
+prompt-cache hits on the static prefix (system prompt + tool
+definitions) across steps, materially reducing token usage on
+multi-step features.
+
+**Context-window watchdog:**
+
+`AgentSession::cumulative_tokens` is implemented by the CLI runtime
+and tracked per-session (input + output monotonic max from
+`Usage` / `TurnComplete.usage` events). The driver's
+`maybe_watchdog_reset` runs after each completed step and compares
+the session's cumulative tokens against the model's context-window
+budget (resolved via `PricingTable::context_window`). When usage
+exceeds 80% of the budget, the driver kills the session, sets
+`session_dirty = true`, builds a one-shot recap from the last
+completed step's artifact (`session_resume_summary`), and the next
+step's `spawn_agent_session` spawns a fresh session that injects
+the recap at the top of its prompt.
+
+**Dead-session fallback:**
+
+If the underlying agent process dies between steps (network blip,
+crash), `spawn_agent_session` detects via `AgentSession::is_alive()`
+and falls back to `registry.kill(f_id) + get_or_spawn` rather than
+attempting `--continue` against a dead session id.
+
 ### 5.4 Install flow
 
 When the `StepExecutor` needs to spawn a step, it calls `runtime.is_available(exec, machine_id)`:

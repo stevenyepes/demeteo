@@ -233,3 +233,78 @@ fn malformed_json_is_dropped() {
     assert!(parse_claude_event("not json").is_none());
     assert!(parse_claude_event("").is_none());
 }
+
+// ── build_claude_args (token-optimization Tier 1) ─────────────────────────
+
+use crate::adapters::agent::claude_code::build_claude_args;
+use crate::domain::permission::PermissionProfile;
+use crate::ports::agent_runtime::AgentContext;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+#[path = "_arg_test_stubs.rs"]
+mod stubs;
+use stubs::{StubAgentExec, StubExec};
+
+fn ctx_for_test(bare_mode: bool) -> AgentContext {
+    AgentContext {
+        thread_id: "t1".into(),
+        machine_id: "local".into(),
+        binary: "claude".into(),
+        args: vec![],
+        env: HashMap::new(),
+        cwd: ".".into(),
+        model: Some("claude-sonnet-4".into()),
+        title: None,
+        agent_exec: Arc::new(StubAgentExec),
+        exec: Arc::new(StubExec),
+        permissions: PermissionProfile::all_allow(),
+        bare_mode,
+    }
+}
+
+#[test]
+fn args_no_resume_when_session_id_missing() {
+    let args = build_claude_args(&ctx_for_test(false), None);
+    assert!(!args.contains(&"--resume".to_string()), "got {args:?}");
+}
+
+#[test]
+fn args_resume_emitted_when_captured_session_id_set() {
+    let args = build_claude_args(&ctx_for_test(false), Some("sess-abc-123"));
+    let resume_idx = args
+        .iter()
+        .position(|a| a == "--resume")
+        .expect("--resume should be present");
+    assert_eq!(args[resume_idx + 1], "sess-abc-123");
+}
+
+#[test]
+fn args_bare_flags_only_when_bare_mode_true() {
+    let with_bare = build_claude_args(&ctx_for_test(true), None);
+    assert!(with_bare.contains(&"--bare".to_string()));
+    assert!(with_bare.contains(&"--exclude-dynamic-system-prompt-sections".to_string()));
+
+    let without_bare = build_claude_args(&ctx_for_test(false), None);
+    assert!(!without_bare.contains(&"--bare".to_string()));
+    assert!(!without_bare.contains(&"--exclude-dynamic-system-prompt-sections".to_string()));
+}
+
+#[test]
+fn args_model_passed_through() {
+    let args = build_claude_args(&ctx_for_test(false), None);
+    let model_idx = args
+        .iter()
+        .position(|a| a == "--model")
+        .expect("--model should be present");
+    assert_eq!(args[model_idx + 1], "claude-sonnet-4");
+}
+
+#[test]
+fn args_print_and_dangerously_skip_always_present() {
+    let args = build_claude_args(&ctx_for_test(true), Some("sess-1"));
+    assert!(args.contains(&"--print".to_string()));
+    assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
+    assert!(args.contains(&"--output-format".to_string()));
+    assert!(args.contains(&"stream-json".to_string()));
+}

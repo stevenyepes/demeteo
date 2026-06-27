@@ -112,6 +112,7 @@ pub(crate) fn build_base_ctx(
     conventions_content: &str,
     project_memory: &str,
     artifact_dir: &str,
+    session_resume_summary: &str,
 ) -> PromptContext {
     PromptContext::new()
         .set("feature_description", description)
@@ -124,6 +125,7 @@ pub(crate) fn build_base_ctx(
         .set("project_conventions", conventions_content)
         .set("project_memory", project_memory)
         .set("artifact_dir", artifact_dir)
+        .set("session_resume_summary", session_resume_summary)
 }
 
 const MAX_SLUG_LEN: usize = 50;

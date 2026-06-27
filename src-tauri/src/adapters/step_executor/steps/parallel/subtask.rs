@@ -137,7 +137,13 @@ impl ExecutionDriver {
                     sub.title, sub_files_str, wt_path
                 )
             } else {
-                resolve_attached_artifacts(&sub_prompt, step_execs, step_index, &*self.artifacts)
+                resolve_attached_artifacts(
+                    &sub_prompt,
+                    step_execs,
+                    step_index,
+                    &*self.artifacts,
+                    &self.steps,
+                )
             };
             let sub_prompt =
                 inject_artifact_contract(&sub_prompt, if is_legacy { None } else { Some(decls) });
@@ -187,6 +193,7 @@ impl ExecutionDriver {
                 agent_exec: self.agent_exec.clone(),
                 exec: self.exec.clone(),
                 permissions: crate::domain::permission::PermissionProfile::all_allow(),
+                bare_mode: agent_kind == "claude-code",
             };
 
             let spawn_fut = self.registry.get_or_spawn(&sub_thread_id, &agent_kind, ctx);
@@ -255,6 +262,8 @@ impl ExecutionDriver {
                                     cost_usd: Some(*accumulated_cost),
                                     tokens: Some(*accumulated_tokens),
                                     wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                                    cache_read_input_tokens: None,
+                                    cache_creation_input_tokens: None,
                                 });
                             }
                         },
@@ -607,6 +616,8 @@ impl ExecutionDriver {
                         cost_usd: Some(*accumulated_cost),
                         tokens: Some(*accumulated_tokens),
                         wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     });
                 }
             },

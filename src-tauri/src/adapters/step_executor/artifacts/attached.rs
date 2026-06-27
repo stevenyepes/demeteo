@@ -1,6 +1,6 @@
 use crate::domain::artifact::{ArtifactCapture, ArtifactDecl};
 use crate::domain::ids::FeatureId;
-use crate::domain::models::StepExecution;
+use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::permission::{PermissionProfile, StepCapability};
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::GateRepository;
@@ -25,14 +25,68 @@ pub(crate) fn get_latest_gate_decision(
     }
 }
 
+/// How a referenced artifact step's body should be injected into the
+/// next step's prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AttachmentMode {
+    /// Emit a path manifest pointing at the on-disk file. The agent
+    /// uses its `Read` tool on demand. Cheaper for vendor prompt
+    /// caching; default for new workflow artifacts.
+    PathManifest,
+    /// Inline the file body verbatim (legacy behavior, opt-in per
+    /// [`ArtifactDecl::inline`]).
+    InlineBody,
+}
+
+fn mode_for_step(step_id: &str, step_confs: &[StepConfig]) -> AttachmentMode {
+    if let Some(conf) = step_confs.iter().find(|c| c.id.0 == step_id) {
+        if let Some(decls) = conf.artifacts.as_ref() {
+            // If *any* declaration opts in to inline, inline everything
+            // from that step — partial mixing within one step's
+            // attachments would surprise workflow authors. Authors who
+            // want fine-grained control can split into separate steps.
+            if decls.iter().any(|d| d.inline) {
+                return AttachmentMode::InlineBody;
+            }
+        }
+    }
+    AttachmentMode::PathManifest
+}
+
+fn render_path_manifest(step_id: &str, paths: &[String]) -> String {
+    let mut lines = vec![
+        format!(
+            "The following artifacts from step `{}` are on disk:",
+            step_id
+        ),
+        String::new(),
+    ];
+    for p in paths {
+        lines.push(format!("- `{}`", p));
+    }
+    lines.push(String::new());
+    lines.push(
+        "Use your Read tool to load them on demand — the bodies are not inlined here so the \
+         vendor prompt-cache prefix stays stable across steps."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
 /// Resolve `[attached — <step_id>]` and `[attached — previous step artifact]`
-/// placeholders inside a prompt template by reading the corresponding artifact
-/// files via the ArtifactStore port.
+/// placeholders inside a prompt template. For each referenced step the
+/// function looks up the step's [`StepConfig::artifacts`]: if any
+/// declaration has `inline: true`, the bodies are inlined verbatim; if
+/// all declarations leave `inline: false` (the default), a path
+/// manifest is emitted instead so the agent `Read`s on demand. This is
+/// the cost-optimized default — see [`ArtifactDecl::inline`] for the
+/// tradeoff.
 pub(crate) fn resolve_attached_artifacts(
     prompt: &str,
     step_execs: &[StepExecution],
     step_index: usize,
     store: &dyn ArtifactStore,
+    step_confs: &[StepConfig],
 ) -> String {
     let mut resolved_prompt = prompt.to_string();
     let mut search_start = 0;
@@ -61,28 +115,27 @@ pub(crate) fn resolve_attached_artifacts(
                 if content == "previous step artifact" {
                     if step_index > 0 {
                         if let Some(prev_step) = step_execs.get(step_index - 1) {
-                            let paths: Vec<&String> = if !prev_step.artifact_paths.is_empty() {
-                                prev_step.artifact_paths.iter().collect()
+                            let paths: Vec<String> = if !prev_step.artifact_paths.is_empty() {
+                                prev_step.artifact_paths.clone()
                             } else {
-                                prev_step.artifact_path.as_ref().into_iter().collect()
+                                prev_step
+                                    .artifact_path
+                                    .as_ref()
+                                    .map(|p| vec![p.clone()])
+                                    .unwrap_or_default()
                             };
-                            let mut parts_content = Vec::new();
-                            for p in &paths {
-                                match store.get(p) {
-                                    Ok(c) => parts_content.push(c),
-                                    Err(_) => parts_content
-                                        .push(format!("(Error reading artifact at {})", p)),
-                                }
-                            }
-                            let art_content = if parts_content.len() == 1 {
-                                parts_content.into_iter().next().unwrap_or_default()
-                            } else {
-                                parts_content.join("\n\n---\n\n")
-                            };
+                            let mode = mode_for_step(&prev_step.step_id.0, step_confs);
+                            let body = render_attachment_body(
+                                &prev_step.step_id.0,
+                                &paths,
+                                mode.clone(),
+                                store,
+                            );
                             attachments.push((
                                 prev_step.step_index as usize,
                                 prev_step.step_id.0.clone(),
-                                art_content,
+                                mode,
+                                body,
                             ));
                             replacement = format!(
                                 "[See attached {} at the beginning of the prompt]",
@@ -93,43 +146,34 @@ pub(crate) fn resolve_attached_artifacts(
                         replacement = "(No previous step exists)".to_string();
                     }
                 } else {
-                    let mut found = false;
-                    let mut matched_contents = Vec::new();
-                    let mut matched_step_index = 0;
-                    let mut matched_step_id = String::new();
+                    let mut matched: Option<(usize, String, Vec<String>)> = None;
 
                     for s in step_execs {
                         let sid = s.step_id.0.to_lowercase();
                         let content_lower = content.to_lowercase();
 
                         if content_lower.contains(&sid) || sid.contains(&content_lower) {
-                            let paths: Vec<&String> = if !s.artifact_paths.is_empty() {
-                                s.artifact_paths.iter().collect()
+                            let paths: Vec<String> = if !s.artifact_paths.is_empty() {
+                                s.artifact_paths.clone()
                             } else {
-                                s.artifact_path.as_ref().into_iter().collect()
+                                s.artifact_path
+                                    .as_ref()
+                                    .map(|p| vec![p.clone()])
+                                    .unwrap_or_default()
                             };
-                            for p in &paths {
-                                if let Ok(art_content) = store.get(p) {
-                                    matched_contents.push(art_content);
-                                    matched_step_index = s.step_index as usize;
-                                    matched_step_id = s.step_id.0.clone();
-                                    found = true;
-                                }
+                            if !paths.is_empty() {
+                                matched = Some((s.step_index as usize, s.step_id.0.clone(), paths));
+                                break;
                             }
                         }
                     }
 
-                    if found {
-                        let art_content = matched_contents.join("\n\n");
-                        attachments.push((
-                            matched_step_index,
-                            matched_step_id.clone(),
-                            art_content,
-                        ));
-                        replacement = format!(
-                            "[See attached {} at the beginning of the prompt]",
-                            matched_step_id
-                        );
+                    if let Some((step_idx, step_id, paths)) = matched {
+                        let mode = mode_for_step(&step_id, step_confs);
+                        let body = render_attachment_body(&step_id, &paths, mode.clone(), store);
+                        attachments.push((step_idx, step_id.clone(), mode, body));
+                        replacement =
+                            format!("[See attached {} at the beginning of the prompt]", step_id);
                     } else {
                         replacement =
                             format!("(Artifact '{}' not found or not yet generated)", content);
@@ -148,16 +192,48 @@ pub(crate) fn resolve_attached_artifacts(
         attachments.sort_by_key(|a| a.0);
 
         let mut prepended = String::new();
-        for (_, step_id, content) in attachments {
+        for (_, step_id, mode, content) in attachments {
             prepended.push_str(&format!(
-                "=== ATTACHED CONTEXT: {} ===\n{}\n================================\n\n",
-                step_id, content
+                "=== ATTACHED CONTEXT: {} ({}) ===\n{}\n================================\n\n",
+                step_id,
+                match mode {
+                    AttachmentMode::PathManifest => "path manifest",
+                    AttachmentMode::InlineBody => "inlined body",
+                },
+                content
             ));
         }
         resolved_prompt = format!("{}{}", prepended, resolved_prompt);
     }
 
     resolved_prompt
+}
+
+fn render_attachment_body(
+    step_id: &str,
+    paths: &[String],
+    mode: AttachmentMode,
+    store: &dyn ArtifactStore,
+) -> String {
+    match mode {
+        AttachmentMode::PathManifest => render_path_manifest(step_id, paths),
+        AttachmentMode::InlineBody => {
+            let mut parts_content = Vec::new();
+            for p in paths {
+                match store.get(p) {
+                    Ok(c) => parts_content.push(c),
+                    Err(_) => parts_content.push(format!("(Error reading artifact at {})", p)),
+                }
+            }
+            if parts_content.is_empty() {
+                "(No artifacts produced by this step yet)".to_string()
+            } else if parts_content.len() == 1 {
+                parts_content.into_iter().next().unwrap_or_default()
+            } else {
+                parts_content.join("\n\n---\n\n")
+            }
+        }
+    }
 }
 
 /// Append a synthetic `## Expected Artifacts (orchestrator contract)` block

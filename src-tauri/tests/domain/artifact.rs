@@ -62,6 +62,7 @@ fn artifact_decl_serializes_with_tag() {
             path: "docs/spec.md".into(),
         },
         mode: ArtifactMode::Full,
+        inline: false,
     };
     let s = serde_json::to_string(&d).unwrap();
     let back: ArtifactDecl = serde_json::from_str(&s).unwrap();

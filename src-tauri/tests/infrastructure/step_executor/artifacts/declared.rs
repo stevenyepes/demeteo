@@ -49,6 +49,7 @@ fn test_resolve_declared_artifacts_last_write() {
             path: "docs/spec.md".into(),
         },
         mode: crate::domain::artifact::ArtifactMode::Full,
+        inline: false,
     }];
 
     let produced = vec![
@@ -84,6 +85,7 @@ fn test_resolve_declared_artifacts_all_writes() {
         name: "all-files".into(),
         capture: ArtifactCapture::AllWrites,
         mode: crate::domain::artifact::ArtifactMode::Full,
+        inline: false,
     }];
 
     let produced = vec![
@@ -123,11 +125,13 @@ fn test_resolve_declared_artifacts_skips_diff_and_worktree() {
                 path_filter: None,
             },
             mode: crate::domain::artifact::ArtifactMode::Full,
+            inline: false,
         },
         ArtifactDecl {
             name: "wt-ref".into(),
             capture: ArtifactCapture::Worktree { path: None },
             mode: crate::domain::artifact::ArtifactMode::None,
+            inline: false,
         },
     ];
 

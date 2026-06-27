@@ -149,6 +149,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         agent_exec: agent_exec.clone(),
         exec: exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),
+        bare_mode: agent_kind == "claude-code",
     };
 
     let session = registry

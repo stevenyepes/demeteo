@@ -51,15 +51,16 @@ impl ExecutionDriver {
         let ctx = AgentContext {
             thread_id: self.f_id_str.clone(),
             machine_id: machine_str.to_string(),
-            binary,
+            binary: binary.clone(),
             args: vec![],
-            env: agent_env,
+            env: agent_env.clone(),
             cwd: wt_path.to_string(),
             model: override_model.clone(),
             title: Some(step_conf.title.clone()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions,
+            bare_mode: agent_kind == "claude-code",
         };
 
         let spawn_fut = self
@@ -70,6 +71,44 @@ impl ExecutionDriver {
             res = spawn_fut => Some(res),
             _ = cancel_watch_spawn.changed() => None,
         };
+
+        // Dead-session fallback: if `get_or_spawn` returned the
+        // cached Arc but the underlying agent process has already
+        // exited (network blip, crash between steps), the next
+        // `--continue` / `--resume` would fail because the captured
+        // session id is dead. Kill the registry entry and re-spawn
+        // fresh. Only triggered when the step is past the first
+        // turn (the watchdog will have set `session_dirty` in that
+        // case anyway; this is the on-demand recovery path).
+        let needs_respawn = matches!(&spawn_res, Some(Ok(s)) if !s.is_alive());
+        if needs_respawn {
+            self.registry.kill(self.f_id.as_str()).await;
+            let respawn_ctx = AgentContext {
+                thread_id: self.f_id_str.clone(),
+                machine_id: machine_str.to_string(),
+                binary,
+                args: vec![],
+                env: agent_env,
+                cwd: wt_path.to_string(),
+                model: override_model.clone(),
+                title: Some(step_conf.title.clone()),
+                agent_exec: self.agent_exec.clone(),
+                exec: self.exec.clone(),
+                permissions,
+                bare_mode: agent_kind == "claude-code",
+            };
+            let respawn_fut =
+                self.registry
+                    .get_or_spawn(self.f_id.as_str(), agent_kind, respawn_ctx);
+            let mut cancel_watch_respawn = self.cancel_watch.clone();
+            return tokio::select! {
+                res = respawn_fut => match res {
+                    Ok(session) => Ok(session),
+                    Err(e) => Err(e.to_string()),
+                },
+                _ = cancel_watch_respawn.changed() => Err("spawn cancelled".to_string()),
+            };
+        }
 
         match spawn_res {
             Some(Ok(session)) => {

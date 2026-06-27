@@ -137,9 +137,186 @@ pub(crate) struct ExecutionDriver {
     /// Set when a step fails and the loop redirects to an earlier step;
     /// consumed by the next step's prompt build, then cleared.
     pub retry_ctx: Option<RetryContext>,
+
+    // --- Context-window watchdog state (token optimization, Tier 1) ---
+    /// Resolved model name for the *current* step's primary agent.
+    /// Used by the watchdog to look up the model's context-window
+    /// budget via [`PricingTable::context_window`]. Updated as the
+    /// driver walks steps so model changes mid-run take effect.
+    pub current_model: Option<String>,
+
+    /// Model's known context-window size in tokens (input + output).
+    /// `None` when the model is unknown to the pricing table or for
+    /// local / free models — watchdog skips the threshold check in
+    /// that case (legacy behavior).
+    pub context_budget_tokens: Option<u64>,
+
+    /// Set by `compact_or_reset` after the watchdog kills the
+    /// session for exceeding budget. The next step's
+    /// `spawn_agent_session` will spawn a fresh session and inject
+    /// the `session_resume_summary` so the agent has a one-shot
+    /// recap of what the prior session concluded.
+    pub session_dirty: bool,
+
+    /// Injected at the top of the next prompt when the watchdog
+    /// resets the session. Built from the prior session's last
+    /// completed step's artifact + key feature context. Empty
+    /// string on the first step (no recap needed).
+    pub session_resume_summary: String,
+
+    /// Cumulative input+output tokens billed against the
+    /// feature-wide agent session. Updated by the agent step's
+    /// post-turn path; mirrored from the registry session's
+    /// `cumulative_tokens()` so the watchdog can compare against
+    /// `context_budget_tokens` after each step.
+    pub session_cumulative_tokens: u64,
+
+    /// Last-seen cache-read and cache-creation token counts from the
+    /// current step's `TurnOutcome`. Surfaced on the `StepProgress`
+    /// notification so the UI can render a live "saved $X.XX by
+    /// cache" chip while the step is running.
+    pub last_cache_read: Option<u64>,
+    pub last_cache_creation: Option<u64>,
 }
 
 impl ExecutionDriver {
+    /// The fraction of the model's context window at which the
+    /// watchdog resets the feature-wide agent session. Per the
+    /// Tier-1 plan: 80% leaves 20% headroom for the new turn's
+    /// growth and the in-flight prompt + tools.
+    pub(crate) const WATCHDOG_THRESHOLD: f64 = 0.80;
+
+    /// Pure-function watchdog threshold check — returns `true` when
+    /// `cumulative >= WATCHDOG_THRESHOLD × budget`. Returns `false`
+    /// when the budget is unknown (`None` — legacy behavior) or
+    /// cumulative is zero (first turn). Extracted so the logic is
+    /// unit-testable without constructing an `ExecutionDriver`.
+    pub(crate) fn watchdog_breached_pure(cumulative: u64, budget: Option<u64>) -> bool {
+        let Some(budget) = budget else {
+            return false;
+        };
+        if cumulative == 0 {
+            return false;
+        }
+        let threshold = ((budget as f64) * Self::WATCHDOG_THRESHOLD) as u64;
+        cumulative >= threshold
+    }
+
+    /// Check the watchdog against the current session's cumulative
+    /// token usage. Returns `true` when the session has exceeded
+    /// `WATCHDOG_THRESHOLD × context_budget_tokens` and should be
+    /// reset by the next step's `spawn_agent_session`.
+    ///
+    /// Returns `false` when:
+    /// * the model's context window is unknown (`None` — legacy behavior),
+    /// * the session has no recorded token usage yet, or
+    /// * the budget has not been breached.
+    pub(crate) fn watchdog_breached(&self) -> bool {
+        Self::watchdog_breached_pure(self.session_cumulative_tokens, self.context_budget_tokens)
+    }
+
+    /// Build a compact summary of the feature's progress so far, to
+    /// be injected at the top of the next step's prompt when the
+    /// watchdog has killed and re-spawned the session. The summary
+    /// pulls from the last completed step's artifact body and the
+    /// feature description. Best-effort: missing rows / unreadable
+    /// files fall back to a short textual recap.
+    pub(crate) fn build_session_resume_summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        // 1. Feature description (so the new session has the goal).
+        if let Ok(Some(feature)) = self.features.get(&self.f_id) {
+            if !feature.title.trim().is_empty() {
+                parts.push(format!("Feature: {}", feature.title.trim()));
+            }
+        }
+
+        // 2. Last completed step's artifact body (truncated).
+        let steps_res = self.features.steps_for_feature(&self.f_id);
+        if let Ok(steps) = steps_res {
+            if let Some(last) = steps.iter().rev().find(|s| s.status == "completed") {
+                let paths: Vec<&String> = if !last.artifact_paths.is_empty() {
+                    last.artifact_paths.iter().collect()
+                } else {
+                    last.artifact_path.as_ref().into_iter().collect()
+                };
+                for p in paths.iter().take(2) {
+                    if let Ok(body) = self.artifacts.get(p) {
+                        let trimmed = body.trim();
+                        if !trimmed.is_empty() {
+                            let capped: String = trimmed.chars().take(2000).collect();
+                            parts.push(format!(
+                                "Last completed step '{}' produced:\n---\n{}\n---",
+                                last.step_id.0, capped
+                            ));
+                            break;
+                        }
+                    }
+                }
+                if parts.len() == 1 {
+                    parts.push(format!(
+                        "Last completed step: '{}' (no artifact body available).",
+                        last.step_id.0
+                    ));
+                }
+            }
+        }
+
+        parts.push(
+            "The previous agent session was reset because it approached the model's context \
+             window limit. Continue from here; the steps above are your durable state."
+                .to_string(),
+        );
+
+        parts.join("\n\n")
+    }
+
+    /// Called after a step completes successfully. Reads the live
+    /// agent session's cumulative token count, decides whether the
+    /// watchdog threshold is breached, and on breach kills the
+    /// session + sets `session_dirty` so the next step spawns fresh.
+    /// The next step's `spawn_agent_session` will inject
+    /// `session_resume_summary` at the top of its prompt.
+    pub(crate) async fn maybe_watchdog_reset(&mut self) {
+        // Pull the live cumulative tokens from the registry session
+        // (if any). The driver doesn't hold the Arc<AgentSession>
+        // directly, so we go through the registry — same instance
+        // the next step will reuse.
+        if let Ok(cumulative) = self.registry.cumulative_tokens(self.f_id.as_str()).await {
+            self.session_cumulative_tokens = cumulative;
+        }
+
+        if !self.watchdog_breached() {
+            return;
+        }
+
+        // Build the summary *before* killing so the artifact reads
+        // still succeed (the session death doesn't touch disk).
+        self.session_resume_summary = self.build_session_resume_summary();
+        self.registry.kill(self.f_id.as_str()).await;
+        self.session_dirty = true;
+        self.capture_signal(
+            None,
+            crate::domain::memory::SignalKind::Retry,
+            format!(
+                "Context-window watchdog reset agent session for feature '{}': \
+                 cumulative {} tokens ≥ 80% of {} budget. Next step will spawn fresh.",
+                self.f_id_str,
+                self.session_cumulative_tokens,
+                self.context_budget_tokens.unwrap_or(0)
+            ),
+        );
+    }
+
+    /// Refresh the watchdog's model / budget from the next step's
+    /// `(agent_kind, model)` resolution. Called once per step in
+    /// `ExecutionDriver::run` so model overrides mid-run take
+    /// effect immediately.
+    pub(crate) fn refresh_watchdog_budget(&mut self, model: Option<&str>) {
+        self.current_model = model.map(str::to_string);
+        self.context_budget_tokens = model.and_then(|m| self.pricing.context_window(m));
+    }
+
     /// Capture a raw run observation for the memory agent's queue. Best-effort:
     /// an empty body, a missing feature row, or an enqueue failure is silently
     /// swallowed so signal capture never perturbs the run itself.
@@ -283,6 +460,16 @@ impl ExecutionDriver {
                 None => break,
             };
 
+            // Refresh the watchdog's model + context-window budget for
+            // this step. Resolved before dispatch so a per-step model
+            // override takes effect immediately and the next post-step
+            // `maybe_watchdog_reset` compares against the correct
+            // ceiling.
+            {
+                let (_agent, model) = self.resolve_step_agent(&step_conf);
+                self.refresh_watchdog_budget(model.as_deref());
+            }
+
             super::updates::update_step_status(
                 &*self.features,
                 &*self.notif,
@@ -294,11 +481,15 @@ impl ExecutionDriver {
                 step_exec.wall_clock_secs.unwrap_or(0),
                 None,
                 None,
+                None,
+                None,
             );
 
             let step_start = Instant::now();
             let mut accumulated_cost = step_exec.cost_usd.unwrap_or(0.0);
             let mut accumulated_tokens = step_exec.tokens.unwrap_or(0);
+            let mut step_cache_read: Option<u64> = None;
+            let mut step_cache_creation: Option<u64> = None;
 
             let outcome = match step_conf.kind.as_str() {
                 "agent" => {
@@ -310,6 +501,8 @@ impl ExecutionDriver {
                         step_start,
                         self.step_index,
                         &step_execs,
+                        &mut step_cache_read,
+                        &mut step_cache_creation,
                     )
                     .await
                 }
@@ -359,6 +552,12 @@ impl ExecutionDriver {
                 }
             };
 
+            // Stash the step's cache telemetry on the driver so the
+            // final `update_step_status` (and the watchdog's session
+            // lifetime tracking) can read it.
+            self.last_cache_read = step_cache_read;
+            self.last_cache_creation = step_cache_creation;
+
             match outcome {
                 crate::adapters::step_executor::steps::StepOutcome::Completed => {
                     let wall = step_start.elapsed().as_secs();
@@ -375,7 +574,16 @@ impl ExecutionDriver {
                         wall,
                         art_path,
                         None,
+                        self.last_cache_read,
+                        self.last_cache_creation,
                     );
+                    // Context-window watchdog: pull the live session's
+                    // cumulative tokens and decide whether to reset
+                    // the agent session before the next step starts.
+                    // On reset, `session_dirty = true` so the next
+                    // `spawn_agent_session` falls back to fresh spawn
+                    // + `session_resume_summary` injection.
+                    self.maybe_watchdog_reset().await;
                     self.step_index += 1;
                     // Retry feedback is scoped to the single redirected step;
                     // once it completes, clear it so later steps don't inherit
@@ -397,6 +605,8 @@ impl ExecutionDriver {
                             wall,
                             None,
                             Some(format!("Cancelled while step was failing: {}", msg)),
+                            self.last_cache_read,
+                            self.last_cache_creation,
                         );
                         self.cancel_feature().await;
                     } else {

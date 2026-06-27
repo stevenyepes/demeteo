@@ -57,6 +57,7 @@ async fn probe_models_via_acp(
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),
+        bare_mode: false,
     };
 
     let session = ctx

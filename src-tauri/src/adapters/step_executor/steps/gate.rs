@@ -172,6 +172,8 @@ impl ExecutionDriver {
             cost_usd: Some(*accumulated_cost),
             tokens: None,
             wall_clock_secs: Some(wall),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         });
 
         // Ensure the gate_decisions row exists. `create` is idempotent
@@ -293,6 +295,8 @@ impl ExecutionDriver {
                     cost_usd: Some(*ctx.accumulated_cost),
                     tokens: None,
                     wall_clock_secs: Some(wall),
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 });
                 StepOutcome::Completed
             }

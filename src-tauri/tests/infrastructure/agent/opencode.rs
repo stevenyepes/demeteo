@@ -182,3 +182,61 @@ fn parse_event_nested_usage_update_extracts_cache_tokens() {
         e => panic!("expected Usage, got {:?}", e),
     }
 }
+
+// ── build_opencode_args (token-optimization Tier 1) ──────────────────────
+
+use crate::adapters::agent::opencode::build_opencode_args;
+use crate::domain::permission::PermissionProfile;
+use crate::ports::agent_runtime::AgentContext;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+#[path = "_arg_test_stubs.rs"]
+mod stubs;
+use stubs::{StubAgentExec, StubExec};
+
+fn ctx_for_test() -> AgentContext {
+    AgentContext {
+        thread_id: "t1".into(),
+        machine_id: "local".into(),
+        binary: "opencode".into(),
+        args: vec![],
+        env: HashMap::new(),
+        cwd: "/tmp/wt".into(),
+        model: Some("claude-sonnet-4".into()),
+        title: Some("research".into()),
+        agent_exec: Arc::new(StubAgentExec),
+        exec: Arc::new(StubExec),
+        permissions: PermissionProfile::all_allow(),
+        bare_mode: false,
+    }
+}
+
+#[test]
+fn args_no_session_when_captured_id_missing() {
+    let args = build_opencode_args(&ctx_for_test(), None);
+    assert!(!args.contains(&"--session".to_string()), "got {args:?}");
+    assert!(!args.contains(&"--continue".to_string()), "got {args:?}");
+}
+
+#[test]
+fn args_session_and_continue_emitted_when_captured_id_set() {
+    let args = build_opencode_args(&ctx_for_test(), Some("oc-sess-77"));
+    let session_idx = args
+        .iter()
+        .position(|a| a == "--session")
+        .expect("--session should be present");
+    assert_eq!(args[session_idx + 1], "oc-sess-77");
+    let continue_idx = session_idx + 2;
+    assert_eq!(args[continue_idx], "--continue");
+}
+
+#[test]
+fn args_title_passed_through() {
+    let args = build_opencode_args(&ctx_for_test(), None);
+    let title_idx = args
+        .iter()
+        .position(|a| a == "--title")
+        .expect("--title should be present");
+    assert_eq!(args[title_idx + 1], "research");
+}

@@ -18,6 +18,7 @@ import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureS
 import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
 import { useNavigation, useProject, useUIState } from '../context';
+import { formatCost } from '../lib/utils';
 
 
 
@@ -131,8 +132,7 @@ export function FeatureDetail() {
 
   const { reportError } = useErrorBus();
   const [steps, setSteps] = useState<StepExecution[]>([]);
-  const [featureStatus, setFeatureStatus] = useState('running');
-  const status = useMemo(() => {
+  const [featureStatus, setFeatureStatus] = useState('running');  const status = useMemo(() => {
     if (featureStatus === 'cancelled') return 'cancelled';
     if (steps.some(s => s.status === 'awaiting_gate')) return 'gated';
     if (steps.some(s => s.status === 'failed')) return 'failed';
@@ -143,6 +143,7 @@ export function FeatureDetail() {
     return featureStatus;
   }, [steps, featureStatus]);
   const [tokens, setTokens] = useState<number>(0);
+  const [totalCost, setTotalCost] = useState<number>(0);
   const [duration, setDuration] = useState('0s');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -180,8 +181,15 @@ export function FeatureDetail() {
     }
   });
 
-  useTauriEvent<{ feature_id: string; step_id: string; status: string; cost_usd: number | null; tokens: number | null; wall_clock_secs: number | null }>('step_progress', ({ feature_id }) => {
-    if (feature_id === featureId) loadFeatureData();
+  useTauriEvent<{ feature_id: string; step_id: string; status: string; cost_usd: number | null; tokens: number | null; wall_clock_secs: number | null; cache_read_input_tokens: number | null; cache_creation_input_tokens: number | null }>('step_progress', (payload) => {
+    if (payload.feature_id !== featureId) return;
+    // Live-update the total cost so the header chip reflects the
+    // current step's running spend without waiting for a full
+    // feature reload.
+    if (typeof payload.cost_usd === 'number') {
+      setTotalCost(payload.cost_usd);
+    }
+    loadFeatureData();
   });
 
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
@@ -221,12 +229,15 @@ export function FeatureDetail() {
 
       // Compute telemetry
       let totalTokens = 0;
+      let totalCost = 0;
       let totalSecs = 0;
       for (const s of list) {
         totalTokens += s.tokens || 0;
+        totalCost += s.cost_usd || 0;
         totalSecs += s.wall_clock_secs || 0;
       }
       setTokens(totalTokens);
+      setTotalCost(totalCost);
       setDuration(`${totalSecs}s`);
       if (f?.status) setFeatureStatus(f.status);
 
@@ -587,6 +598,12 @@ export function FeatureDetail() {
               <div className="text-lg font-bold font-mono text-white">{duration}</div>
             </div>
             <div className="text-right">
+              <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Cost</div>
+              <div className="text-lg font-bold font-mono text-emerald-400" title={`${totalCost.toFixed(4)} USD across ${steps.length} steps`}>
+                {formatCost(totalCost)}
+              </div>
+            </div>
+            <div className="text-right">
               <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Tokens</div>
               <div className="text-lg font-bold font-mono text-cyan-400">{formatTokens(tokens)}</div>
             </div>
@@ -811,6 +828,22 @@ export function FeatureDetail() {
                         </div>
 
                         <div className="flex items-center gap-4 text-xs font-mono">
+                          {typeof step.cost_usd === 'number' && step.cost_usd > 0 && (
+                            <span
+                              className="text-emerald-400"
+                              title={`${step.cost_usd.toFixed(4)} USD`}
+                            >
+                              {formatCost(step.cost_usd)}
+                            </span>
+                          )}
+                          {typeof step.cache_read_input_tokens === 'number' && step.cache_read_input_tokens > 0 && (
+                            <span
+                              className="text-violet-400"
+                              title={`${step.cache_read_input_tokens.toLocaleString()} cache-read tokens (live from last turn)`}
+                            >
+                              {formatTokens(step.cache_read_input_tokens)}p cache
+                            </span>
+                          )}
                           {typeof step.tokens === 'number' && <span className="text-cyan-400">{formatTokens(step.tokens)}</span>}
                           {step.wall_clock_secs !== null && <span className="text-slate-400">{step.wall_clock_secs}s</span>}
                         </div>
