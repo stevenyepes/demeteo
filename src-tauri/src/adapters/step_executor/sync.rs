@@ -29,7 +29,7 @@ use crate::domain::models::ConflictFile;
 use crate::paths;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::agent_runtime::AgentContext;
-use crate::ports::db::FeatureRepository;
+use crate::ports::db::{AppSettingsRepository, FeatureRepository};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::notification::DomainEvent;
 use crate::ports::notification::NotificationPort;
@@ -45,14 +45,6 @@ use super::DagStepExecutor;
 /// `OPENCODE_PERMISSION` scope.
 const SYNC_RESOLVER_THREAD_PREFIX: &str = "sync-resolver";
 
-/// Hard cap on the resolution agent's wall-clock time. Conflict
-/// resolution is mechanical (remove markers, build, test) and rarely
-/// needs more than a few minutes; the cap is generous to keep the
-/// UI from hanging on truly stuck agents.
-const RESOLVER_WALL_CAP_S: u64 = 600;
-const RESOLVER_FAST_TIMEOUT_S: u64 = 180;
-const RESOLVER_NORMAL_TIMEOUT_S: u64 = 180;
-
 /// Unified sync conflict resolver helper. Drives the conflict resolution agent,
 /// streams UI status events, monitors timeouts, verifies conflict markers,
 /// commits the resolution, and pushes it to remote origin.
@@ -62,6 +54,7 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub notif: &'a Arc<dyn NotificationPort>,
     pub _features: &'a Arc<dyn FeatureRepository>,
     pub agent_exec: &'a Arc<dyn AgentExecutionPort>,
+    pub app_settings: &'a Arc<dyn AppSettingsRepository>,
     pub feature_id: &'a FeatureId,
     pub resolved_cwd: &'a str,
     pub machine_str: &'a str,
@@ -84,6 +77,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         notif,
         _features,
         agent_exec,
+        app_settings,
         feature_id,
         resolved_cwd,
         machine_str,
@@ -159,11 +153,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
 
     let prompt = build_resolver_prompt(feature_branch, default_branch, conflict_files);
 
-    let timeouts = crate::adapters::agent::event_stream::Timeouts {
-        fast_timeout_s: RESOLVER_FAST_TIMEOUT_S,
-        normal_timeout_s: RESOLVER_NORMAL_TIMEOUT_S,
-        wall_cap_s: RESOLVER_WALL_CAP_S,
-    };
+    let timeouts = crate::application::timeouts::resolve_effective(app_settings.as_ref());
 
     let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
         &*session,
@@ -388,6 +378,7 @@ impl DagStepExecutor {
             notif: &self.notif,
             _features: &self.features,
             agent_exec: &self.agent_exec,
+            app_settings: &self.app_settings,
             feature_id: &fid,
             resolved_cwd: &resolved_cwd,
             machine_str: &machine_str,

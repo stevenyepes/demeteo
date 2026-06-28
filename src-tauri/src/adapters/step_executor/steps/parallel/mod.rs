@@ -341,15 +341,7 @@ impl ExecutionDriver {
             }
         }
 
-        const PLANNER_FAST_S: u64 = 180;
-        const PLANNER_NORMAL_S: u64 = 300;
-        const PLANNER_WALL_S: u64 = 900;
-
-        let timeouts = crate::adapters::agent::event_stream::Timeouts {
-            fast_timeout_s: PLANNER_FAST_S,
-            normal_timeout_s: PLANNER_NORMAL_S,
-            wall_cap_s: PLANNER_WALL_S,
-        };
+        let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
 
         // The planner's output is machine-consumed (parsed into a SubtaskDag),
         // but CLI agents stream free text and sometimes wrap or precede the JSON

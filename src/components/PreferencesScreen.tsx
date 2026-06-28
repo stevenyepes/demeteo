@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain } from 'lucide-react';
+import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain, Timer } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import MachinesView from './MachinesView';
@@ -7,6 +7,16 @@ import MemoryAgentSettings from './MemoryAgentSettings';
 import { TabBar } from './ui/TabBar';
 import type { TabDef } from './ui/TabBar';
 import { useNavigation } from '../context';
+import { getAgentTimeouts, setAgentTimeouts } from '../lib/timeouts';
+import type { AgentTimeouts as AgentTimeoutsType } from '../types';
+import { useErrorBus } from '../lib/errorBus';
+import { TimeoutField } from './ui/TimeoutField';
+
+const DEFAULT_AGENT_TIMEOUTS: AgentTimeoutsType = {
+  fast_timeout_s: 300,
+  normal_timeout_s: 600,
+  wall_cap_s: 1800,
+};
 
 type PrefTab = 'machines' | 'providers' | 'defaults' | 'memory' | 'about';
 
@@ -21,15 +31,23 @@ const PreferencesScreen = () => {
   const [workspaceDirSaving, setWorkspaceDirSaving] = useState(false);
   const [workspaceDirSaved, setWorkspaceDirSaved] = useState(false);
 
+  // Agent timeouts state
+  const [timeoutsInput, setTimeoutsInput] = useState<AgentTimeoutsType>(DEFAULT_AGENT_TIMEOUTS);
+  const [timeoutsSaving, setTimeoutsSaving] = useState(false);
+  const [timeoutsSaved, setTimeoutsSaved] = useState(false);
+  const { reportError } = useErrorBus();
+
   useEffect(() => {
     if (activeTab !== 'defaults') return;
     (async () => {
-      const [effective, override] = await Promise.all([
+      const [effective, override, timeouts] = await Promise.all([
         invoke<string>('get_workspace_dir'),
         invoke<string | null>('get_workspace_dir_setting'),
+        getAgentTimeouts().catch(() => DEFAULT_AGENT_TIMEOUTS),
       ]);
       setEffectiveWorkspaceDir(effective);
       setWorkspaceDirInput(override ?? '');
+      setTimeoutsInput(timeouts);
     })();
   }, [activeTab]);
 
@@ -51,6 +69,25 @@ const PreferencesScreen = () => {
     } finally {
       setWorkspaceDirSaving(false);
     }
+  };
+
+  const handleSaveTimeouts = async () => {
+    setTimeoutsSaving(true);
+    try {
+      await setAgentTimeouts(timeoutsInput);
+      const refreshed = await getAgentTimeouts();
+      setTimeoutsInput(refreshed);
+      setTimeoutsSaved(true);
+      setTimeout(() => setTimeoutsSaved(false), 2500);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setTimeoutsSaving(false);
+    }
+  };
+
+  const handleResetTimeouts = () => {
+    setTimeoutsInput(DEFAULT_AGENT_TIMEOUTS);
   };
 
   const tabs: TabDef[] = [
@@ -187,6 +224,69 @@ const PreferencesScreen = () => {
                   <li>Set the default agent kind and model</li>
                 </ol>
               </div>
+            </div>
+
+            {/* Agent Timeouts */}
+            <div className="glass-panel p-6">
+              <h3 className="text-sm font-outfit font-semibold text-white mb-1 flex items-center gap-2">
+                <Timer className="w-4 h-4 text-cyan-400" />
+                Agent Timeouts
+              </h3>
+              <p className="text-xs text-slate-400 mb-4">
+                Global defaults applied to every agent turn (planner, worker, resolver,
+                verifier, and agent step). All values are in seconds. The
+                <span className="text-slate-300"> Fast</span> threshold is the
+                "Agent blocked" timer that fires when stdout and stderr are both
+                silent — raise it if long-running tasks are being killed too
+                eagerly.
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <TimeoutField
+                  label="Fast (blocked)"
+                  hint="Stdout AND stderr silent"
+                  value={timeoutsInput.fast_timeout_s}
+                  onChange={(v: number) => setTimeoutsInput({ ...timeoutsInput, fast_timeout_s: v })}
+                />
+                <TimeoutField
+                  label="Normal (no event)"
+                  hint="No event ever received"
+                  value={timeoutsInput.normal_timeout_s}
+                  onChange={(v: number) => setTimeoutsInput({ ...timeoutsInput, normal_timeout_s: v })}
+                />
+                <TimeoutField
+                  label="Wall cap"
+                  hint="Absolute upper bound"
+                  value={timeoutsInput.wall_cap_s}
+                  onChange={(v: number) => setTimeoutsInput({ ...timeoutsInput, wall_cap_s: v })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between mt-4">
+                <button
+                  onClick={handleResetTimeouts}
+                  className="px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 transition-all"
+                >
+                  Reset to defaults
+                </button>
+                <button
+                  onClick={handleSaveTimeouts}
+                  disabled={timeoutsSaving}
+                  className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white transition-all flex items-center gap-1.5"
+                >
+                  {timeoutsSaving ? (
+                    <RotateCw className="w-3 h-3 animate-spin" />
+                  ) : timeoutsSaved ? (
+                    <Check className="w-3 h-3" />
+                  ) : null}
+                  {timeoutsSaved ? 'Saved' : 'Save'}
+                </button>
+              </div>
+              {timeoutsSaved && (
+                <p className="mt-2 text-[10px] text-amber-400 font-mono">
+                  New timeouts apply to the next agent turn.
+                </p>
+              )}
             </div>
           </div>
         )}

@@ -109,6 +109,17 @@ const formatTokens = (tokens: number): string => {
   return tokens.toString();
 };
 
+const formatDuration = (secs: number): string => {
+  const s = Math.round(secs);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM > 0 ? `${h}h ${remM}m` : `${h}h`;
+};
+
 /**
  * Suggest an MR title from a longer description: take the first 5
  * words, capped at ~40 characters. Trailing whitespace is trimmed
@@ -238,7 +249,7 @@ export function FeatureDetail() {
       }
       setTokens(totalTokens);
       setTotalCost(totalCost);
-      setDuration(`${totalSecs}s`);
+      setDuration(formatDuration(totalSecs));
       if (f?.status) setFeatureStatus(f.status);
 
       setError(null);
@@ -845,7 +856,7 @@ export function FeatureDetail() {
                             </span>
                           )}
                           {typeof step.tokens === 'number' && <span className="text-cyan-400">{formatTokens(step.tokens)}</span>}
-                          {step.wall_clock_secs !== null && <span className="text-slate-400">{step.wall_clock_secs}s</span>}
+                          {step.wall_clock_secs !== null && <span className="text-slate-400">{formatDuration(step.wall_clock_secs)}</span>}
                         </div>
                       </div>
 

@@ -176,6 +176,7 @@ impl ExecutionDriver {
                 notif: &self.notif,
                 _features: &self.features,
                 agent_exec: &self.agent_exec,
+                app_settings: &self.app_settings,
                 feature_id: &self.f_id,
                 resolved_cwd,
                 machine_str,

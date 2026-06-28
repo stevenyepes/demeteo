@@ -200,6 +200,14 @@ impl ExecutionDriver {
             .map(|s| s.trim().to_string())
             .ok();
 
+        // Copy any external artifact paths referenced in path manifests into
+        // the worktree so opencode's `external_directory: deny` doesn't block
+        // the agent from reading them.
+        let prompt = crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
+            &prompt,
+            &wt_path,
+        );
+
         // 1. Spawn session
         let session = match self
             .spawn_agent_session(
@@ -244,11 +252,7 @@ impl ExecutionDriver {
         // 2. Stream turn
         let mut run_failed = None;
         let mut run_cancelled = false;
-        let timeouts = crate::adapters::agent::event_stream::Timeouts {
-            fast_timeout_s: 180,
-            normal_timeout_s: 180,
-            wall_cap_s: 600,
-        };
+        let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
 
         let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
             &*session,

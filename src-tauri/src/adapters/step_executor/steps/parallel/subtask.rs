@@ -157,6 +157,15 @@ impl ExecutionDriver {
                 append_retry_feedback_section(sub_prompt, self.retry_ctx.as_ref())
             };
 
+            // Copy any external artifact paths referenced in path manifests into
+            // the worktree so opencode's `external_directory: deny` doesn't block
+            // the agent from reading them.
+            let sub_prompt =
+                crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
+                    &sub_prompt,
+                    &wt_path,
+                );
+
             let agent_kind = planner_kind.to_string();
             let sub_thread_id = format!("{}-{}", self.f_id_str, sub.id);
             let mut worker_env = crate::ports::agent_runtime::agent_base_env();
@@ -226,15 +235,8 @@ impl ExecutionDriver {
                     let mut produced_artifacts: Vec<Artifact> = Vec::new();
                     let mut legacy_sub_content = String::new();
 
-                    const WORKER_FAST_S: u64 = 180;
-                    const WORKER_NORMAL_S: u64 = 300;
-                    const WORKER_WALL_S: u64 = 600;
-
-                    let timeouts = crate::adapters::agent::event_stream::Timeouts {
-                        fast_timeout_s: WORKER_FAST_S,
-                        normal_timeout_s: WORKER_NORMAL_S,
-                        wall_cap_s: WORKER_WALL_S,
-                    };
+                    let timeouts =
+                        crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
 
                     let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
                         &*session,
@@ -583,15 +585,7 @@ impl ExecutionDriver {
             self.branch_name, files_list
         );
 
-        const WORKER_FAST_S: u64 = 180;
-        const WORKER_NORMAL_S: u64 = 300;
-        const WORKER_WALL_S: u64 = 600;
-
-        let timeouts = crate::adapters::agent::event_stream::Timeouts {
-            fast_timeout_s: WORKER_FAST_S,
-            normal_timeout_s: WORKER_NORMAL_S,
-            wall_cap_s: WORKER_WALL_S,
-        };
+        let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
 
         let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
             session,

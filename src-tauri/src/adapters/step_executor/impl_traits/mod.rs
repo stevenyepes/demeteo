@@ -85,6 +85,7 @@ impl DagStepExecutor {
             exec: self.exec.clone(),
             artifacts: self.artifacts.clone(),
             app_local_data_dir: self.app_local_data_dir.clone(),
+            app_settings: self.app_settings.clone(),
             git_ops: GitOpsHelper::new(self.app_settings.clone(), self.exec.clone()),
             merge_executor: self.merge_executor.clone(),
             gate_waiters: self.gate_waiters.clone(),

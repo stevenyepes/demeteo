@@ -6,6 +6,7 @@ pub mod notification;
 pub mod project;
 pub mod provider;
 pub mod thread;
+pub mod timeouts;
 pub mod workflow;
 
 pub use agent_config::*;
@@ -16,4 +17,5 @@ pub use notification::*;
 pub use project::*;
 pub use provider::*;
 pub use thread::*;
+pub use timeouts::*;
 pub use workflow::*;

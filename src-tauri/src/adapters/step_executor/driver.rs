@@ -13,7 +13,7 @@ use crate::domain::models::StepConfig;
 use crate::domain::prompt_context::PromptContext;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
-use crate::ports::db::FeatureRepository;
+use crate::ports::db::{AppSettingsRepository, FeatureRepository};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
 use crate::ports::notification::NotificationPort;
@@ -62,6 +62,12 @@ pub(crate) struct ExecutionDriver {
     pub exec: Arc<dyn ExecutionPort>,
     pub artifacts: Arc<dyn ArtifactStore>,
     pub app_local_data_dir: PathBuf,
+    /// Shared `app_settings` KV repository. Used by every agent-turn call
+    /// site to resolve the effective timeouts via
+    /// [`crate::application::timeouts::resolve_effective`]. Owned by the
+    /// executor; cloned from `DagStepExecutor.app_settings` at driver
+    /// construction so changes mid-run are visible to subsequent turns.
+    pub app_settings: Arc<dyn AppSettingsRepository>,
     pub git_ops: GitOpsHelper,
     pub merge_executor: Arc<dyn MergeExecutor>,
     pub gate_waiters: Arc<Mutex<HashMap<String, Arc<GateWaiter>>>>,

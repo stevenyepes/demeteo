@@ -399,6 +399,64 @@ pub(crate) fn inject_operating_boundary(
     format!("{}{}", lines.join("\n"), prompt)
 }
 
+/// Copy any external artifact paths referenced in a path-manifest prompt
+/// into `{wt_path}/artifacts/_context/` so the agent can read them
+/// without needing `external_directory: allow`.
+///
+/// Opencode's `external_directory: deny` restricts all tool access to
+/// the worktree `--dir`. Artifact paths in path manifests are absolute
+/// paths under the app data directory (e.g. `~/Library/Application
+/// Support/…/artifacts/…`) — outside the worktree. This function
+/// copies those files into the worktree before the agent runs so the
+/// Read tool succeeds.
+///
+/// Path manifests use the format `- \`/absolute/path\`` (one path per
+/// bullet). Any absolute path NOT already under `wt_path` is copied to
+/// `{wt_path}/artifacts/_context/<filename>` and the path is rewritten
+/// in the returned prompt.
+pub(crate) fn materialize_external_artifact_paths(prompt: &str, wt_path: &str) -> String {
+    let wt = std::path::Path::new(wt_path);
+    let mut result = prompt.to_string();
+    let mut rewrites: Vec<(String, String)> = Vec::new();
+
+    // Scan for backtick-quoted absolute paths: `- `/some/path`
+    let mut search = prompt;
+    while let Some(tick_pos) = search.find("- `") {
+        let after_tick = &search[tick_pos + 3..];
+        if !after_tick.starts_with('/') {
+            search = &search[tick_pos + 1..];
+            continue;
+        }
+        let close = match after_tick.find('`') {
+            Some(p) => p,
+            None => break,
+        };
+        let abs_path = &after_tick[..close];
+        let path = std::path::Path::new(abs_path);
+
+        if !path.starts_with(wt)
+            && !rewrites.iter().any(|(old, _)| old == abs_path)
+            && path.is_file()
+        {
+            if let Some(file_name) = path.file_name() {
+                let dest_dir = wt.join("artifacts").join("_context");
+                if std::fs::create_dir_all(&dest_dir).is_ok() {
+                    let dest = dest_dir.join(file_name);
+                    if std::fs::copy(path, &dest).is_ok() {
+                        rewrites.push((abs_path.to_string(), dest.to_string_lossy().to_string()));
+                    }
+                }
+            }
+        }
+        search = &search[tick_pos + 1..];
+    }
+
+    for (old, new) in &rewrites {
+        result = result.replace(old.as_str(), new.as_str());
+    }
+    result
+}
+
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/artifacts/attached.rs"]
 mod tests;

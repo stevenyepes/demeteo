@@ -351,6 +351,21 @@ export interface MemoryAgentTestResult {
   error: string | null;
 }
 
+/** Global agent-turn timeout configuration. Mirrors the Rust `AgentTimeouts`
+ * struct. All values are in seconds.
+ *
+ * - `fast_timeout_s` (300): when no event arrives for this many seconds
+ *   after at least one event has been seen, the turn is aborted with
+ *   "Agent blocked: no output for Ns".
+ * - `normal_timeout_s` (600): when no event has ever arrived for this many
+ *   seconds, the turn is aborted with "Agent response timed out".
+ * - `wall_cap_s` (1800): absolute wall-clock cap per turn. */
+export interface AgentTimeouts {
+  fast_timeout_s: number;
+  normal_timeout_s: number;
+  wall_cap_s: number;
+}
+
 /**
  * Discriminated-union mirror of the Rust `AppError` enum.
  * Stable across releases — the `kind` field is the IPC contract;

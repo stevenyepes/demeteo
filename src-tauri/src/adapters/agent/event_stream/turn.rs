@@ -1,19 +1,13 @@
 use std::sync::Arc;
 
 use crate::domain::agent_event::AgentEvent;
+use crate::domain::models::AgentTimeouts;
 use crate::domain::usage::UsageAccumulator;
 use crate::ports::agent_runtime::AgentSession;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::pricing::PricingTable;
 use tokio::sync::watch;
 use tokio_stream::StreamExt;
-
-#[derive(Debug, Clone, Copy)]
-pub struct Timeouts {
-    pub fast_timeout_s: u64,
-    pub normal_timeout_s: u64,
-    pub wall_cap_s: u64,
-}
 
 #[derive(Debug, Clone)]
 pub struct TurnOutcome {
@@ -46,7 +40,7 @@ pub enum TurnResult {
 pub async fn stream_agent_turn<F>(
     session: &dyn AgentSession,
     prompt: &str,
-    timeouts: Timeouts,
+    timeouts: AgentTimeouts,
     mut cancel_watch: Option<watch::Receiver<bool>>,
     machine_str: &str,
     exec: &dyn ExecutionPort,

@@ -438,6 +438,8 @@ pub fn run() {
             commands::memory::memory_agent_config_set,
             commands::memory::memory_agent_test_connection,
             commands::memory::memory_agent_list_models,
+            commands::timeouts::get_agent_timeouts,
+            commands::timeouts::set_agent_timeouts,
             commands::project::get_workflow_overrides,
             commands::project::set_workflow_override,
             commands::features::fetch_active_features,

@@ -178,10 +178,14 @@ impl ExecutionDriver {
         let mut cancel_watch = self.cancel_watch.clone();
         let mut first_event_seen = false;
 
-        const VERIFIER_TIMEOUT_S: u64 = 180;
-        let fast_sleep = tokio::time::sleep(std::time::Duration::from_secs(VERIFIER_TIMEOUT_S));
-        let normal_sleep = tokio::time::sleep(std::time::Duration::from_secs(VERIFIER_TIMEOUT_S));
-        let wall_sleep = tokio::time::sleep(std::time::Duration::from_secs(VERIFIER_TIMEOUT_S * 2));
+        let verifier_timeouts =
+            crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
+        let fast_s = verifier_timeouts.fast_timeout_s;
+        let normal_s = verifier_timeouts.normal_timeout_s;
+        let wall_s = verifier_timeouts.wall_cap_s;
+        let fast_sleep = tokio::time::sleep(std::time::Duration::from_secs(fast_s));
+        let normal_sleep = tokio::time::sleep(std::time::Duration::from_secs(normal_s));
+        let wall_sleep = tokio::time::sleep(std::time::Duration::from_secs(wall_s));
         tokio::pin!(fast_sleep);
         tokio::pin!(normal_sleep);
         tokio::pin!(wall_sleep);
@@ -200,8 +204,8 @@ impl ExecutionDriver {
                     first_event_seen = true;
 
                     let now = tokio::time::Instant::now();
-                    let next_fast = now + std::time::Duration::from_secs(VERIFIER_TIMEOUT_S);
-                    let next_normal = now + std::time::Duration::from_secs(VERIFIER_TIMEOUT_S);
+                    let next_fast = now + std::time::Duration::from_secs(fast_s);
+                    let next_normal = now + std::time::Duration::from_secs(normal_s);
                     fast_sleep.as_mut().reset(next_fast);
                     normal_sleep.as_mut().reset(next_normal);
 
@@ -227,23 +231,23 @@ impl ExecutionDriver {
                 _ = &mut fast_sleep => {
                     if !first_event_seen {
                         fast_sleep.as_mut().reset(
-                            tokio::time::Instant::now() + std::time::Duration::from_secs(VERIFIER_TIMEOUT_S),
+                            tokio::time::Instant::now() + std::time::Duration::from_secs(fast_s),
                         );
                         continue;
                     }
-                    if hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > VERIFIER_TIMEOUT_S * 1000) {
+                    if hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > fast_s * 1000) {
                         run_failed = Some("Verifier blocked: no output (stdout and stderr silent)".to_string());
                         break;
                     }
                     fast_sleep.as_mut().reset(
-                        tokio::time::Instant::now() + std::time::Duration::from_secs(VERIFIER_TIMEOUT_S),
+                        tokio::time::Instant::now() + std::time::Duration::from_secs(fast_s),
                     );
                 }
                 _ = &mut normal_sleep => {
                     if let Some(ref h) = hb {
-                        if h.last_activity_ago_ms() < VERIFIER_TIMEOUT_S * 1000 {
+                        if h.last_activity_ago_ms() < normal_s * 1000 {
                             normal_sleep.as_mut().reset(
-                                tokio::time::Instant::now() + std::time::Duration::from_secs(VERIFIER_TIMEOUT_S),
+                                tokio::time::Instant::now() + std::time::Duration::from_secs(normal_s),
                             );
                             continue;
                         }
@@ -252,7 +256,10 @@ impl ExecutionDriver {
                     break;
                 }
                 _ = &mut wall_sleep => {
-                    run_failed = Some("Verifier exceeded wall clock cap".to_string());
+                    run_failed = Some(format!(
+                        "Verifier exceeded wall clock cap ({}s)",
+                        wall_s
+                    ));
                     break;
                 }
                 _ = cancel_watch.changed() => {
