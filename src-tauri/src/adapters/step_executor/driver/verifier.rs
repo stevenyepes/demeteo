@@ -286,25 +286,37 @@ impl ExecutionDriver {
             return Err(err);
         }
 
-        // Linear O(n) scan: walk forward through all top-level {…} objects,
-        // parse each, keep the LAST one that contains the verdict key.
-        // This avoids the O(n²) all-pairs brace search and correctly handles
-        // nested braces (code blocks, log output) in verifier responses.
+        // Walk forward through every {…} span. For each balanced span:
+        //   - Valid JSON with the verdict key → record it, skip past the span.
+        //   - Valid JSON without the verdict key → step forward by 1 so inner
+        //     nested objects are independently evaluated (handles models that
+        //     wrap the verdict in an outer object like {"result": {"verdict":"pass"}}).
+        //   - Malformed JSON → skip past the span to avoid O(n²) re-parsing.
         let mut parsed_val: Option<serde_json::Value> = None;
         let bytes = text_buffer.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
             if bytes[i] == b'{' {
                 if let Some(close) = find_matching_close_brace(bytes, i) {
-                    if let Ok(val) =
-                        serde_json::from_str::<serde_json::Value>(&text_buffer[i..=close])
-                    {
-                        if val.is_object() && val.get(&verifier_cfg.verdict_key).is_some() {
+                    match serde_json::from_str::<serde_json::Value>(&text_buffer[i..=close]) {
+                        Ok(val)
+                            if val.is_object()
+                                && val.get(&verifier_cfg.verdict_key).is_some() =>
+                        {
                             parsed_val = Some(val);
+                            i = close + 1;
+                            continue;
+                        }
+                        Ok(_) => {
+                            // Valid JSON but no verdict key at top level; step
+                            // forward by 1 so inner objects get evaluated.
+                        }
+                        Err(_) => {
+                            // Balanced braces but not valid JSON; skip the span.
+                            i = close + 1;
+                            continue;
                         }
                     }
-                    i = close + 1;
-                    continue;
                 }
             }
             i += 1;

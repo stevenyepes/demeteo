@@ -52,7 +52,12 @@ impl ExecutionDriver {
             .await
         {
             Ok(s) => s.trim().to_string(),
-            Err(_) => "HEAD".to_string(),
+            Err(e) => {
+                return StepOutcome::Failed(format!(
+                    "parallel step: could not capture base SHA for rollback anchor: {}",
+                    e
+                ))
+            }
         };
 
         // 1. Planner pass: ask the planner agent for a subtask DAG.
@@ -139,7 +144,14 @@ impl ExecutionDriver {
                     wall_clock_secs: Some(Some(wall)),
                     artifact_path: None,
                     artifact_paths: None,
-                    error_message: Some(Some(step_err_msg.clone())),
+                    error_message: Some(Some(if is_cancelled {
+                    format!(
+                        "{} (previously-merged subtask work has been rolled back for a clean retry)",
+                        step_err_msg
+                    )
+                } else {
+                    step_err_msg.clone()
+                })),
                 },
             );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -184,6 +196,19 @@ impl ExecutionDriver {
                 let _ = self
                     .registry
                     .kill(&format!("{}-verifier", self.f_id.as_str()))
+                    .await;
+                // Roll back subtask merges so the next retry starts from a
+                // clean base — same guarantee as the subtask-loop failure path.
+                let _ = self
+                    .exec
+                    .run_command(
+                        &machine_str,
+                        &format!(
+                            "git -C {} reset --hard {}",
+                            paths::shell_escape_posix(&self.target_dir),
+                            &base_sha,
+                        ),
+                    )
                     .await;
                 return StepOutcome::Failed(verdict_err);
             }
@@ -373,9 +398,15 @@ impl ExecutionDriver {
             title: Some("plan".to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
-            // Read-only: the planner only needs to read the codebase and
-            // emit JSON — it must not write any files to the worktree.
-            permissions: crate::domain::permission::StepCapability::ReadOnly.base_profile(),
+            // The planner needs to read the codebase and emit JSON. Shell
+            // access (grep, find, git log) is permitted for exploration;
+            // writes are denied. The worktree provides the real write
+            // isolation — the permission profile enforces the tool policy.
+            permissions: crate::domain::permission::resolve_profile(
+                crate::domain::permission::StepCapability::ReadOnly,
+                false, // no network
+                true,  // allow shell for codebase exploration
+            ),
             bare_mode: planner_kind == "claude-code",
         };
 
@@ -525,7 +556,8 @@ impl ExecutionDriver {
                  The agent's last response was: {}",
                 PLANNER_MAX_ATTEMPTS,
                 if last_text.len() > 500 {
-                    format!("{}…(truncated)", &last_text[..500])
+                    let head: String = last_text.chars().take(500).collect();
+                    format!("{}…(truncated)", head)
                 } else {
                     last_text
                 }

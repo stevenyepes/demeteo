@@ -104,6 +104,16 @@ impl ExecutionDriver {
                     "parallel subtask {} artifact scope setup failed: {}",
                     sub.id, e
                 );
+                // No agent session has been spawned yet; clean up only the worktree.
+                let _ = self
+                    .git_ops
+                    .cleanup_subtask_worktree(
+                        self.machine_id_opt.as_deref(),
+                        &self.target_dir,
+                        &self.branch_name,
+                        &sub.id,
+                    )
+                    .await;
                 break;
             }
 
@@ -126,18 +136,17 @@ impl ExecutionDriver {
                 .unwrap_or(&retry_feedback);
             // Build the retry ctx used for `{{retry_feedback_section}}` so
             // the formatted block also reflects the subtask-specific note.
+            // When retry_note is set but there is no global retry_ctx (e.g. a
+            // cached DAG with pre-populated notes), synthesize a minimal ctx so
+            // retry_feedback_section is not silently empty.
             let effective_retry_ctx =
                 sub.retry_note
                     .as_ref()
                     .filter(|s| !s.trim().is_empty())
-                    .and_then(|note| {
-                        self.retry_ctx.as_ref().map(|rc| {
-                            crate::adapters::step_executor::driver::RetryContext {
-                                feedback: note.clone(),
-                                iteration: rc.iteration,
-                                max: rc.max,
-                            }
-                        })
+                    .map(|note| crate::adapters::step_executor::driver::RetryContext {
+                        feedback: note.clone(),
+                        iteration: self.retry_ctx.as_ref().map_or(1, |rc| rc.iteration),
+                        max: self.retry_ctx.as_ref().map_or(1, |rc| rc.max),
                     })
                     .or_else(|| self.retry_ctx.clone());
             let sub_template = step_conf.prompt_template.as_deref().unwrap_or("");
@@ -412,6 +421,16 @@ impl ExecutionDriver {
                                         reverted.join(", ")
                                     ),
                                 );
+                                crate::adapters::agent::event_stream::cleanup_subtask(
+                                    &self.registry,
+                                    &self.git_ops,
+                                    self.machine_id_opt.as_deref(),
+                                    &self.target_dir,
+                                    &self.branch_name,
+                                    &sub.id,
+                                    &sub_thread_id,
+                                )
+                                .await;
                                 break;
                             }
                         }
