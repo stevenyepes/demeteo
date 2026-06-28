@@ -11,6 +11,11 @@ pub struct PlannedSubtask {
     pub files: Vec<String>,
     #[serde(default)]
     pub test_command: Option<String>,
+    /// Subtask-specific retry guidance produced by the planner on a retry
+    /// pass. Overrides the global `retry_ctx.feedback` for this subtask so
+    /// workers only see feedback relevant to their file ownership.
+    #[serde(default)]
+    pub retry_note: Option<String>,
 }
 
 /// Top-level shape the planner agent must emit.

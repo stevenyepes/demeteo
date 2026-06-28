@@ -115,9 +115,34 @@ impl ExecutionDriver {
                 .collect();
             let other_files_str = other_files.join(", ");
             let sub_files_str = sub.files.join(", ");
-            // Render the worker prompt template
+            // Render the worker prompt template.
+            // `retry_note` (per-subtask, from the planner's retry pass) takes
+            // priority over the global `retry_feedback` so each worker only
+            // sees guidance relevant to its own file ownership.
+            let effective_retry_feedback = sub
+                .retry_note
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(&retry_feedback);
+            // Build the retry ctx used for `{{retry_feedback_section}}` so
+            // the formatted block also reflects the subtask-specific note.
+            let effective_retry_ctx =
+                sub.retry_note
+                    .as_ref()
+                    .filter(|s| !s.trim().is_empty())
+                    .and_then(|note| {
+                        self.retry_ctx.as_ref().map(|rc| {
+                            crate::adapters::step_executor::driver::RetryContext {
+                                feedback: note.clone(),
+                                iteration: rc.iteration,
+                                max: rc.max,
+                            }
+                        })
+                    })
+                    .or_else(|| self.retry_ctx.clone());
             let sub_template = step_conf.prompt_template.as_deref().unwrap_or("");
-            let sub_retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
+            let sub_retry_section =
+                format_retry_feedback_section(effective_retry_ctx.as_ref());
             let sub_uses_retry_section = template_uses_retry_section(sub_template);
             let sub_prompt = self
                 .base_ctx
@@ -127,7 +152,7 @@ impl ExecutionDriver {
                 .set("other_subtask_files", &other_files_str)
                 .set("partition_id", &sub.id)
                 .set("retry_feedback_section", &sub_retry_section)
-                .set("retry_feedback", &retry_feedback)
+                .set("retry_feedback", effective_retry_feedback)
                 .set("iteration", &retry_iteration)
                 .set("max_iterations", &retry_max)
                 .render(sub_template);
@@ -154,7 +179,7 @@ impl ExecutionDriver {
             let sub_prompt = if sub_uses_retry_section {
                 sub_prompt
             } else {
-                append_retry_feedback_section(sub_prompt, self.retry_ctx.as_ref())
+                append_retry_feedback_section(sub_prompt, effective_retry_ctx.as_ref())
             };
 
             // Copy any external artifact paths referenced in path manifests into
@@ -292,7 +317,7 @@ impl ExecutionDriver {
                     }
 
                     if step_failed {
-                        crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                        crate::adapters::agent::event_stream::cleanup_subtask(
                             &self.registry,
                             &self.git_ops,
                             self.machine_id_opt.as_deref(),
@@ -480,7 +505,7 @@ impl ExecutionDriver {
                         step_failed = true;
                         step_err_msg =
                             format!("parallel subtask merge failed ({}): {}", sub.id, err);
-                        crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                        crate::adapters::agent::event_stream::cleanup_subtask(
                             &self.registry,
                             &self.git_ops,
                             self.machine_id_opt.as_deref(),
@@ -497,7 +522,7 @@ impl ExecutionDriver {
                     step_failed = true;
                     step_err_msg =
                         format!("parallel subtask agent spawn failed ({}): {:?}", sub.id, e);
-                    crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                    crate::adapters::agent::event_stream::cleanup_subtask(
                         &self.registry,
                         &self.git_ops,
                         self.machine_id_opt.as_deref(),
@@ -512,7 +537,7 @@ impl ExecutionDriver {
                 None => {
                     step_failed = true;
                     step_err_msg = "Execution cancelled by user".to_string();
-                    crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+                    crate::adapters::agent::event_stream::cleanup_subtask(
                         &self.registry,
                         &self.git_ops,
                         self.machine_id_opt.as_deref(),
@@ -527,7 +552,7 @@ impl ExecutionDriver {
             }
 
             // Cleanup worktree (success path)
-            crate::adapters::agent::event_stream::cleanup_subtask_after_failure(
+            crate::adapters::agent::event_stream::cleanup_subtask(
                 &self.registry,
                 &self.git_ops,
                 self.machine_id_opt.as_deref(),

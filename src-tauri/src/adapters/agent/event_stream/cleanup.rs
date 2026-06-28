@@ -1,7 +1,7 @@
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::ports::worktree_ops::WorktreeOpsPort;
 
-pub async fn cleanup_subtask_after_failure(
+pub async fn cleanup_subtask(
     registry: &AgentRegistry,
     git_ops: &dyn WorktreeOpsPort,
     machine_id: Option<&str>,

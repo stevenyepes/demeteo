@@ -286,31 +286,33 @@ impl ExecutionDriver {
             return Err(err);
         }
 
+        // Linear O(n) scan: walk forward through all top-level {…} objects,
+        // parse each, keep the LAST one that contains the verdict key.
+        // This avoids the O(n²) all-pairs brace search and correctly handles
+        // nested braces (code blocks, log output) in verifier responses.
         let mut parsed_val: Option<serde_json::Value> = None;
-
-        // Find all indices of '{' and '}' in the text_buffer
-        let brace_starts: Vec<usize> = text_buffer.match_indices('{').map(|(i, _)| i).collect();
-        let brace_ends: Vec<usize> = text_buffer.match_indices('}').map(|(i, _)| i).collect();
-
-        // Search from the end to find the most recent valid JSON block containing the verdict key
-        'outer: for &s in brace_starts.iter().rev() {
-            for &e in brace_ends.iter().rev() {
-                if e > s {
-                    let candidate = &text_buffer[s..=e];
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+        let bytes = text_buffer.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'{' {
+                if let Some(close) = find_matching_close_brace(bytes, i) {
+                    if let Ok(val) =
+                        serde_json::from_str::<serde_json::Value>(&text_buffer[i..=close])
+                    {
                         if val.is_object() && val.get(&verifier_cfg.verdict_key).is_some() {
                             parsed_val = Some(val);
-                            break 'outer;
                         }
                     }
+                    i = close + 1;
+                    continue;
                 }
             }
+            i += 1;
         }
 
         let val = match parsed_val {
             Some(v) => v,
             None => {
-                // Fall back to original extraction logic if robust parsing fails, to provide a clear error message.
                 let start = text_buffer.find('{');
                 let end = text_buffer.rfind('}');
                 let json_str = if let (Some(s), Some(e)) = (start, end) {
@@ -353,4 +355,39 @@ impl ExecutionDriver {
             other => Err(format!("Invalid verifier verdict: '{}'", other)),
         }
     }
+}
+
+/// Find the index of the `}` that closes the `{` at `start` in `bytes`,
+/// correctly skipping over string literals (including escaped characters).
+/// Returns `None` if the braces are unbalanced.
+fn find_matching_close_brace(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut in_str = false;
+    let mut escaped = false;
+    for (offset, &b) in bytes[start..].iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if in_str {
+            match b {
+                b'\\' => escaped = true,
+                b'"' => in_str = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(start + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }

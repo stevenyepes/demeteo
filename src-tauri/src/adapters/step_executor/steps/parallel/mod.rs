@@ -107,6 +107,22 @@ impl ExecutionDriver {
 
         if let Err(step_err_msg) = subtasks_res {
             let is_cancelled = *self.cancel_watch.borrow();
+
+            // Roll back any partial subtask merges so the next retry starts
+            // from a clean state. Without this, subtasks that already merged
+            // would be re-implemented on top of their own prior work.
+            let _ = self
+                .exec
+                .run_command(
+                    &machine_str,
+                    &format!(
+                        "git -C {} reset --hard {}",
+                        paths::shell_escape_posix(&self.target_dir),
+                        &base_sha,
+                    ),
+                )
+                .await;
+
             let status_str = if is_cancelled {
                 "interrupted"
             } else {
@@ -256,17 +272,60 @@ impl ExecutionDriver {
         let planner_thread_id = format!("{}-planner", self.f_id_str);
         let feature_desc = self.base_ctx.get("feature_description").to_string();
         let repo_list = self.base_ctx.get("repo_list").to_string();
+
+        // Provision an isolated worktree for the planner so any accidental
+        // writes never contaminate the live feature branch. The planner only
+        // needs read access to produce a JSON DAG.
+        let planner_wt_id = format!("{}-planner-pass", self.f_id_str);
+        let planner_wt_path = match self
+            .git_ops
+            .provision_subtask_worktree(
+                self.machine_id_opt.as_deref(),
+                &self.target_dir,
+                &self.branch_name,
+                &planner_wt_id,
+            )
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(format!(
+                    "parallel step: planner worktree provision failed: {}",
+                    e
+                ))
+            }
+        };
+
+        // On retry, surface the previous failure so the planner can revise
+        // the decomposition and inject targeted per-subtask retry_note values.
+        let retry_section =
+            crate::adapters::step_executor::steps::agent::format_retry_feedback_section(
+                self.retry_ctx.as_ref(),
+            );
+        let retry_note_constraint = if retry_section.is_empty() {
+            String::new()
+        } else {
+            "\n- `retry_note`: Add targeted, subtask-specific guidance based on the \
+             previous failure. Set to `null` if the feedback doesn't apply to this subtask.\n"
+                .to_string()
+        };
         let planner_prompt = format!(
-            "You are a planning agent. Decompose the following feature into a small DAG of independent, parallelizable subtasks.\n\n\
+            "You are a planning agent. Decompose the following feature into a small DAG of \
+             independent, parallelizable subtasks.\n\n\
              Feature: {feature_desc}\n\
              Repositories in scope: {repo_list}\n\n\
-             Read any attached artifacts (e.g. the spec) for context. Then emit a single JSON object, in a ```json ... ``` fence, of the form:\n\
-             {{\"subtasks\": [{{\"id\": \"sub-1\", \"title\": \"...\", \"description\": \"...\", \"files\": [\"src/foo.rs\"], \"test_command\": \"...\"}}]}}\n\n\
+             Read any attached artifacts (e.g. the spec) for context. Then emit a single JSON \
+             object, in a ```json ... ``` fence, of the form:\n\
+             {{\"subtasks\": [{{\"id\": \"sub-1\", \"title\": \"...\", \"description\": \"...\", \
+             \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"retry_note\": null}}]}}\n\n\
              Constraints:\n\
              - 2 to 5 subtasks. Aim for the smallest set that covers the work end-to-end.\n\
              - Subtask IDs must be kebab-case, unique, and stable.\n\
              - Each subtask's `files` list must be disjoint from the others — no shared ownership.\n\
-             - If no decomposition makes sense (the work is small), return a single subtask with id `sub-1` that does the whole thing.\n",
+             - If no decomposition makes sense (the work is small), return a single subtask with \
+             id `sub-1` that does the whole thing.\
+             {retry_note_constraint}\
+             {retry_section}",
         );
         let planner_prompt = resolve_attached_artifacts(
             &planner_prompt,
@@ -309,12 +368,14 @@ impl ExecutionDriver {
             binary: planner_binary,
             args: vec![],
             env: planner_env,
-            cwd: self.target_dir.clone(),
+            cwd: planner_wt_path.clone(),
             model: override_model.clone(),
             title: Some("plan".to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
-            permissions: crate::domain::permission::PermissionProfile::all_allow(),
+            // Read-only: the planner only needs to read the codebase and
+            // emit JSON — it must not write any files to the worktree.
+            permissions: crate::domain::permission::StepCapability::ReadOnly.base_profile(),
             bare_mode: planner_kind == "claude-code",
         };
 
@@ -327,10 +388,28 @@ impl ExecutionDriver {
         let planner_session = match spawn_res {
             Some(Ok(s)) => s,
             Some(Err(e)) => {
+                let _ = self
+                    .git_ops
+                    .cleanup_subtask_worktree(
+                        self.machine_id_opt.as_deref(),
+                        &self.target_dir,
+                        &self.branch_name,
+                        &planner_wt_id,
+                    )
+                    .await;
                 return Err(format!("parallel step: planner spawn failed: {:?}", e));
             }
             None => {
                 let _ = self.registry.kill(&planner_thread_id).await;
+                let _ = self
+                    .git_ops
+                    .cleanup_subtask_worktree(
+                        self.machine_id_opt.as_deref(),
+                        &self.target_dir,
+                        &self.branch_name,
+                        &planner_wt_id,
+                    )
+                    .await;
                 return Err("parallel step: planner spawn cancelled".to_string());
             }
         };
@@ -360,7 +439,8 @@ impl ExecutionDriver {
                  subtask DAG. Reply with ONLY a single JSON object — no prose, \
                  no markdown outside the fence — of the form:\n\
                  ```json\n\
-                 {\"subtasks\": [{\"id\": \"sub-1\", \"title\": \"...\", \"description\": \"...\", \"files\": [\"src/foo.rs\"], \"test_command\": \"...\"}]}\n\
+                 {\"subtasks\": [{\"id\": \"sub-1\", \"title\": \"...\", \"description\": \"...\", \
+                 \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"retry_note\": null}]}\n\
                  ```"
                     .to_string()
             };
@@ -381,10 +461,28 @@ impl ExecutionDriver {
             last_text = match turn_res {
                 crate::adapters::agent::event_stream::TurnResult::Interrupted => {
                     let _ = self.registry.kill(&planner_thread_id).await;
+                    let _ = self
+                        .git_ops
+                        .cleanup_subtask_worktree(
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &planner_wt_id,
+                        )
+                        .await;
                     return Err("parallel step: planner cancelled".to_string());
                 }
                 crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
                     let _ = self.registry.kill(&planner_thread_id).await;
+                    let _ = self
+                        .git_ops
+                        .cleanup_subtask_worktree(
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &planner_wt_id,
+                        )
+                        .await;
                     return Err(format!("parallel step: planner failed: {}", descriptive));
                 }
                 crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
@@ -410,6 +508,15 @@ impl ExecutionDriver {
         }
 
         let _ = self.registry.kill(&planner_thread_id).await;
+        let _ = self
+            .git_ops
+            .cleanup_subtask_worktree(
+                self.machine_id_opt.as_deref(),
+                &self.target_dir,
+                &self.branch_name,
+                &planner_wt_id,
+            )
+            .await;
 
         match parsed {
             Some(d) => Ok(d),
