@@ -856,7 +856,7 @@ export function FeatureDetail() {
                             </span>
                           )}
                           {typeof step.tokens === 'number' && <span className="text-cyan-400">{formatTokens(step.tokens)}</span>}
-                          {step.wall_clock_secs !== null && <span className="text-slate-400">{formatDuration(step.wall_clock_secs)}</span>}
+                          {typeof step.wall_clock_secs === 'number' && <span className="text-slate-400">{formatDuration(step.wall_clock_secs)}</span>}
                         </div>
                       </div>
 
