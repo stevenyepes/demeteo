@@ -79,7 +79,7 @@ function AppInner() {
         const mappedProjects: Project[] = await Promise.all(backendProjects.map(async p => {
           let reposList: any[] = [];
           try { reposList = await invoke<any[]>('get_repositories_for_project', { projectId: p.id }); } catch {}
-          repoMap[p.id] = reposList.map((r: any) => ({ id: r.id, repo_path: r.repo_path }));
+          repoMap[p.id] = reposList.map((r: any) => ({ id: r.id, repo_path: r.repo_path, provider_id: r.provider_id ?? '' }));
           return {
             id: p.id, name: p.name, status: p.status,
             repos: reposList.length, nodes: p.nodes, spend: p.spend,

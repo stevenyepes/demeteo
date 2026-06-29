@@ -290,6 +290,7 @@ export interface ConflictFile {
 export interface Repository {
   id: string;
   repo_path: string;
+  provider_id: string;
 }
 
 export interface VerifierConfig {

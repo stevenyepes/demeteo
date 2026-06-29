@@ -105,6 +105,9 @@ pub async fn connect_instance(
     let id = ProviderId::from(format!("{}_{}", kind, h.replace('.', "_")));
 
     let entry = Entry::new("demeteo", id.as_str()).map_err(|e| e.to_string())?;
+    // Delete before set: macOS SecItemAdd fails if the item already exists.
+    // A stale entry (e.g. from a failed prior delete) would block re-connection.
+    let _ = entry.delete_credential();
     entry.set_password(&pat).map_err(|e| e.to_string())?;
     crate::credential_cache::set(id.as_str(), &pat);
 

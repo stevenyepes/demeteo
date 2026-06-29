@@ -1,4 +1,5 @@
-import { Globe, Plus, Edit2, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { Globe, Plus, Edit2, Trash2, AlertTriangle, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import type { Provider } from '../types';
 import { useProject, useUIState } from '../context';
@@ -6,10 +7,11 @@ import { useErrorBus } from '../lib/errorBus';
 import ProviderSettings from './ProviderSettings';
 
 export default function ProvidersPage() {
-  const { state: { providers }, dispatch: projDispatch } = useProject();
+  const { state: { providers, projects, reposByProject }, dispatch: projDispatch } = useProject();
   const { ui, uiDispatch } = useUIState();
   const { isConnectModalOpen, editingProvider } = ui;
   const { reportError } = useErrorBus();
+  const [pendingDelete, setPendingDelete] = useState<{ provId: string; affectedProjects: string[] } | null>(null);
 
   const handleProviderConnected = (newProv: Provider) => {
     projDispatch({
@@ -21,7 +23,19 @@ export default function ProvidersPage() {
     uiDispatch({ type: 'SET_CONNECT_MODAL', open: false, editing: null });
   };
 
-  const handleDelete = async (provId: string) => {
+  const handleDeleteClick = (provId: string) => {
+    const affected = projects.filter(proj =>
+      (reposByProject[proj.id] ?? []).some(r => r.provider_id === provId)
+    ).map(proj => proj.name);
+    if (affected.length > 0) {
+      setPendingDelete({ provId, affectedProjects: affected });
+    } else {
+      confirmDelete(provId);
+    }
+  };
+
+  const confirmDelete = async (provId: string) => {
+    setPendingDelete(null);
     try {
       await invoke('delete_provider_instance', { providerId: provId });
       projDispatch({ type: 'SET_PROVIDERS', providers: providers.filter(p => p.id !== provId) });
@@ -77,7 +91,7 @@ export default function ProvidersPage() {
                   <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true, editing: prov })} className="text-slate-500 hover:text-cyan-400 p-2 rounded-lg hover:bg-white/5 transition-all" title="Edit Provider">
                     <Edit2 className="w-4 h-4" />
                   </button>
-                  <button onClick={() => handleDelete(prov.id)} className="text-slate-500 hover:text-ruby-400 p-2 rounded-lg hover:bg-white/5 transition-all" title="Disconnect Provider">
+                  <button onClick={() => handleDeleteClick(prov.id)} className="text-slate-500 hover:text-ruby-400 p-2 rounded-lg hover:bg-white/5 transition-all" title="Disconnect Provider">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -93,6 +107,39 @@ export default function ProvidersPage() {
           onConnected={handleProviderConnected}
           onClose={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: false, editing: null })}
         />
+      )}
+
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="glass-panel p-6 max-w-md w-full mx-4 border border-amber-500/30">
+            <div className="flex items-start gap-3 mb-4">
+              <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
+              <div>
+                <h3 className="text-base font-semibold text-white font-outfit mb-1">Provider in use</h3>
+                <p className="text-sm text-slate-400">
+                  The following {pendingDelete.affectedProjects.length === 1 ? 'project uses' : 'projects use'} this provider.
+                  Removing it will break cloning and MR publishing until you reconnect.
+                </p>
+              </div>
+              <button onClick={() => setPendingDelete(null)} className="ml-auto text-slate-500 hover:text-slate-300">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <ul className="mb-5 space-y-1">
+              {pendingDelete.affectedProjects.map(name => (
+                <li key={name} className="text-sm text-slate-200 font-mono bg-white/5 rounded px-3 py-1">{name}</li>
+              ))}
+            </ul>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setPendingDelete(null)} className="px-4 py-2 text-sm text-slate-300 hover:text-white rounded-lg hover:bg-white/5 transition-all">
+                Cancel
+              </button>
+              <button onClick={() => confirmDelete(pendingDelete.provId)} className="px-4 py-2 text-sm bg-red-600/80 hover:bg-red-500 text-white rounded-lg transition-all">
+                Disconnect anyway
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
