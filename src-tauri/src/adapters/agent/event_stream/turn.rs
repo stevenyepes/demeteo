@@ -176,8 +176,13 @@ where
     // table when the model is known. Idempotent.
     acc.finalize_arc(&pricing);
 
+    // Strip extended-thinking tags before the text reaches artifact storage
+    // or the memory agent. Models that use thinking mode emit <think>…</think>
+    // as raw text deltas; they are internal reasoning, not user-facing output.
+    let text = crate::domain::text::strip_think_tags(&text_buffer);
+
     TurnResult::Success(TurnOutcome {
-        text: text_buffer,
+        text,
         produced_artifacts,
         cost_usd: acc.cost_usd(),
         tokens: acc.tokens(),

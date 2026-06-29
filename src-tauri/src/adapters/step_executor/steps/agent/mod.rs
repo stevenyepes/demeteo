@@ -28,6 +28,9 @@ impl ExecutionDriver {
         out_cache_creation: &mut Option<u64>,
     ) -> StepOutcome {
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
+        // Extend the model override to the runtime default when no explicit override
+        // is set, so UsageAccumulator can use the pricing table and compute cost_usd.
+        let override_model = override_model.or_else(|| self.registry.default_model_for(&agent_kind));
 
         let (gate_decision, gate_feedback) =
             crate::adapters::step_executor::artifacts::get_latest_gate_decision(
@@ -392,9 +395,48 @@ impl ExecutionDriver {
             }
         };
 
+        // 3.5 No-op guard: if this implement step has a retry loop (on_failure set) but
+        // the agent committed no changes since we captured the pre-step baseline, short-circuit
+        // before spending tokens on the verifier. The verifier would just return "fail" anyway,
+        // but the reason would be "nothing changed" — actionable, so we surface it here so
+        // the retry loop feeds the message back to the implement step directly.
+        if step_conf.on_failure.is_some()
+            && step_conf.effective_capability() == crate::domain::permission::StepCapability::Implement
+            && !self
+                .git_ops
+                .has_new_commits(
+                    self.machine_id_opt.as_deref(),
+                    &wt_path,
+                    worktree_base_ref.as_deref(),
+                )
+                .await
+        {
+            let _ = self
+                .git_ops
+                .cleanup_subtask_worktree(
+                    self.machine_id_opt.as_deref(),
+                    &self.target_dir,
+                    &self.branch_name,
+                    &subtask_id,
+                )
+                .await;
+            let _ = self.registry.kill(self.f_id.as_str()).await;
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                "no-op detected: implement step made no commits; skipping validate"
+            );
+            return StepOutcome::Failed(
+                "implementation produced no code changes — the branch has no new commits \
+                 since this step started. The agent must write and commit actual code before \
+                 the validate step runs."
+                    .to_string(),
+            );
+        }
+
         // 4. Run verifier
         if let Some(ref verifier_cfg) = step_conf.verifier {
-            if let Err(verdict_err) = self
+            let verifier_result = self
                 .run_verifier_logic(
                     step_exec,
                     verifier_cfg,
@@ -407,8 +449,9 @@ impl ExecutionDriver {
                     &override_model,
                     &machine_str,
                 )
-                .await
-            {
+                .await;
+
+            if let Err(verifier_err) = verifier_result {
                 let _ = self
                     .registry
                     .kill(&format!("{}-verifier", self.f_id.as_str()))
@@ -423,7 +466,21 @@ impl ExecutionDriver {
                     )
                     .await;
                 let _ = self.registry.kill(self.f_id.as_str()).await;
-                return StepOutcome::Failed(verdict_err);
+                // Verdict failures feed into the on_failure retry loop.
+                // Infrastructure failures (timeout, spawn error, parse failure)
+                // skip the retry loop entirely — retrying the implementation
+                // step cannot fix a broken verifier config.
+                return match verifier_err {
+                    crate::domain::verifier::VerifierError::Verdict(reason) => {
+                        StepOutcome::Failed(reason)
+                    }
+                    crate::domain::verifier::VerifierError::Infrastructure(msg) => {
+                        StepOutcome::NonRetryable(format!(
+                            "[verifier infrastructure error — check verifier config] {}",
+                            msg
+                        ))
+                    }
+                };
             }
         }
 

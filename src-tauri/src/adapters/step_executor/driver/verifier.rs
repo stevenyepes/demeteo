@@ -21,7 +21,7 @@ impl ExecutionDriver {
         default_agent_kind: &str,
         override_model: &Option<String>,
         machine_str: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::domain::verifier::VerifierError> {
         let _ = self.notif.emit(&DomainEvent::StepProgress {
             feature_id: self.f_id.clone(),
             step_id: step_exec.step_id.0.clone(),
@@ -64,26 +64,41 @@ impl ExecutionDriver {
                 })
             });
 
-        let harness_output = match harness_cmd {
+        // Run the harness and capture both the output and whether it succeeded.
+        // A non-zero exit code is an objective signal — we fail immediately
+        // without invoking the verifier agent, so the agent can't "pass" a
+        // broken build. The exit status from `run_command`: Ok → exit 0,
+        // Err → non-zero exit or I/O error (both are failures).
+        let harness_result: Option<(String, bool)> = match harness_cmd {
             Some(ref cmd) => {
                 let harness_run_cmd =
                     format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
-                let out = match self.exec.run_command(machine_str, &harness_run_cmd).await {
-                    Ok(out) => out,
-                    Err(out) => out,
-                };
-                Some(out)
+                match self.exec.run_command(machine_str, &harness_run_cmd).await {
+                    Ok(out) => Some((out, true)),
+                    Err(out) => Some((out, false)),
+                }
             }
             None => None,
         };
+
+        // Hard gate: if the harness exited non-zero, fail as a Verdict so the
+        // reason feeds back into the retry loop. The verifier agent is skipped —
+        // its job is interpretation, not override of an objective exit code.
+        if let Some((ref out, false)) = harness_result {
+            let truncated: String = out.chars().take(2000).collect();
+            return Err(crate::domain::verifier::VerifierError::Verdict(format!(
+                "test harness exited with failure:\n{}",
+                truncated
+            )));
+        }
 
         let mut produced_artifacts_summary = String::new();
         for art in produced_artifacts {
             produced_artifacts_summary.push_str(&format!("- File/Artifact: {}\n", art.name));
         }
 
-        let harness_section = match (&harness_cmd, &harness_output) {
-            (Some(cmd), Some(output)) => format!(
+        let harness_section = match (&harness_cmd, &harness_result) {
+            (Some(cmd), Some((output, _))) => format!(
                 "We ran the test harness '{}' with the command '{}'.\n\
                  The output of the test command was:\n\
                  ```\n\
@@ -168,8 +183,12 @@ impl ExecutionDriver {
 
         let session = match spawn_res {
             Some(Ok(session)) => session,
-            Some(Err(e)) => return Err(format!("Verifier spawn failed: {}", e)),
-            None => return Err("Verifier spawn cancelled".to_string()),
+            Some(Err(e)) => return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                format!("Verifier spawn failed: {}", e),
+            )),
+            None => return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                "Verifier spawn cancelled".to_string(),
+            )),
         };
 
         let mut text_buffer = String::new();
@@ -279,12 +298,19 @@ impl ExecutionDriver {
         *accumulated_tokens += usage_acc.tokens();
 
         if run_cancelled || *self.cancel_watch.borrow() {
-            return Err("Verifier cancelled by user".to_string());
+            return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                "Verifier cancelled by user".to_string(),
+            ));
         }
 
         if let Some(err) = run_failed {
-            return Err(err);
+            return Err(crate::domain::verifier::VerifierError::Infrastructure(err));
         }
+
+        // Strip extended-thinking tags before JSON parsing — verifier agents
+        // using thinking mode emit <think>…</think> as raw text and the parser
+        // would otherwise trip over them or include them in the JSON search.
+        let text_buffer = crate::domain::text::strip_think_tags(&text_buffer);
 
         // Walk forward through every {…} span. For each balanced span:
         //   - Valid JSON with the verdict key → record it, skip past the span.
@@ -337,10 +363,10 @@ impl ExecutionDriver {
                     text_buffer.trim()
                 };
                 serde_json::from_str(json_str).map_err(|e| {
-                    format!(
+                    crate::domain::verifier::VerifierError::Infrastructure(format!(
                         "Failed to parse verifier output JSON: {} (raw: {})",
                         e, json_str
-                    )
+                    ))
                 })?
             }
         };
@@ -349,22 +375,47 @@ impl ExecutionDriver {
             .get(&verifier_cfg.verdict_key)
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                format!(
+                crate::domain::verifier::VerifierError::Infrastructure(format!(
                     "Verifier output missing verdict key '{}'",
                     verifier_cfg.verdict_key
-                )
+                ))
             })?;
 
         match verdict_str.to_lowercase().as_str() {
-            "pass" => Ok(()),
+            "pass" => {
+                tracing::info!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    "verifier verdict: pass"
+                );
+                Ok(())
+            }
             "fail" => {
                 let reason = val
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Verifier check failed (no reason provided)");
-                Err(reason.to_string())
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    reason = %reason,
+                    "verifier verdict: fail"
+                );
+                Err(crate::domain::verifier::VerifierError::Verdict(
+                    reason.to_string(),
+                ))
             }
-            other => Err(format!("Invalid verifier verdict: '{}'", other)),
+            other => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    verdict = %other,
+                    "verifier infrastructure error: unrecognised verdict"
+                );
+                Err(crate::domain::verifier::VerifierError::Infrastructure(
+                    format!("Invalid verifier verdict: '{}'", other),
+                ))
+            }
         }
     }
 }

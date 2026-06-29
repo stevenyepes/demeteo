@@ -7,5 +7,6 @@ pub mod memory;
 pub mod models;
 pub mod permission;
 pub mod prompt_context;
+pub mod text;
 pub mod usage;
 pub mod verifier;

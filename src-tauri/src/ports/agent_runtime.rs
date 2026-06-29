@@ -141,6 +141,17 @@ pub trait AgentRuntime: Send + Sync {
     /// The official install command, shown verbatim in the consent prompt.
     fn install_command(&self) -> &'static str;
 
+    /// The model this runtime selects when no explicit override is configured.
+    /// Used to seed `UsageAccumulator` so the pricing-table fallback can
+    /// compute `cost_usd` even when the agent's wire format omits it.
+    ///
+    /// Returns `None` when the runtime selects the model dynamically (e.g.
+    /// from an environment variable or project config) and the default is not
+    /// statically knowable.
+    fn default_model(&self) -> Option<String> {
+        None
+    }
+
     /// Spawn the agent and return a session handle. The session is fully
     /// initialized (capability negotiation, session/new, etc.) before this
     /// returns. Specific protocol-level work lives in concrete adapters.

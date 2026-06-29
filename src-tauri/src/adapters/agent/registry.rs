@@ -71,6 +71,13 @@ impl AgentRegistry {
         self.runtimes.iter().find(|r| r.kind() == kind).cloned()
     }
 
+    /// Returns the default model name for `kind`, or `None` when the runtime
+    /// doesn't have a statically knowable default. Used to seed
+    /// `UsageAccumulator` for pricing-table fallback cost calculation.
+    pub fn default_model_for(&self, kind: &str) -> Option<String> {
+        self.runtime_for(kind)?.default_model()
+    }
+
     pub fn runtimes(&self) -> &[Arc<dyn AgentRuntime>] {
         &self.runtimes
     }

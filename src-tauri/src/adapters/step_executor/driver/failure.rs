@@ -69,6 +69,14 @@ impl ExecutionDriver {
         let max = self.effective_loop_iterations(step_conf);
         let already = step_exec.iteration_count;
         if already + 1 > max {
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                target_step = %target_id.0,
+                attempt = already,
+                max,
+                "retry budget exhausted"
+            );
             let wall = step_start.elapsed().as_secs();
             let final_msg = format!(
                 "{} (retry budget exhausted: {} of {} attempts on '{}')",
@@ -126,6 +134,14 @@ impl ExecutionDriver {
         }
 
         let target_idx = self.steps.iter().position(|s| s.id == *target_id)?;
+        tracing::info!(
+            feature_id = %self.f_id,
+            step_id = %step_exec.step_id.0,
+            target_step = %target_id.0,
+            attempt = already + 1,
+            max,
+            "step retry → redirecting"
+        );
         super::super::updates::update_step_status(
             &*self.features,
             &*self.notif,

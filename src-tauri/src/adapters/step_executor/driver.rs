@@ -476,6 +476,13 @@ impl ExecutionDriver {
                 self.refresh_watchdog_budget(model.as_deref());
             }
 
+            tracing::info!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                step_kind = %step_conf.kind,
+                "step start"
+            );
+
             super::updates::update_step_status(
                 &*self.features,
                 &*self.notif,
@@ -567,6 +574,13 @@ impl ExecutionDriver {
             match outcome {
                 crate::adapters::step_executor::steps::StepOutcome::Completed => {
                     let wall = step_start.elapsed().as_secs();
+                    tracing::info!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        wall_secs = wall,
+                        cost_usd = accumulated_cost,
+                        "step completed"
+                    );
                     let latest_step = self.features.step_get(&step_exec.id).ok().flatten();
                     let art_path = latest_step.as_ref().and_then(|s| s.artifact_path.clone());
                     super::updates::update_step_status(
@@ -597,6 +611,12 @@ impl ExecutionDriver {
                     self.retry_ctx = None;
                 }
                 crate::adapters::step_executor::steps::StepOutcome::Failed(msg) => {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        reason = %msg,
+                        "step failed"
+                    );
                     let is_cancelled = *self.cancel_watch.borrow();
                     if is_cancelled {
                         let wall = step_start.elapsed().as_secs();
@@ -656,6 +676,23 @@ impl ExecutionDriver {
                         )
                         .await;
                     }
+                    return;
+                }
+                crate::adapters::step_executor::steps::StepOutcome::NonRetryable(msg) => {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        reason = %msg,
+                        "step failed (non-retryable)"
+                    );
+                    self.fail_step_and_feature(
+                        step_exec,
+                        &msg,
+                        accumulated_cost,
+                        accumulated_tokens,
+                        step_start,
+                    )
+                    .await;
                     return;
                 }
                 crate::adapters::step_executor::steps::StepOutcome::Cancelled => {

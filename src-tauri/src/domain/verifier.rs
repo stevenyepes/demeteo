@@ -23,3 +23,19 @@ pub enum VerifierVerdict {
     Pass,
     Fail(String), // reason
 }
+
+/// Distinguishes a deliberate verdict failure from a verifier infrastructure
+/// problem. Only `Verdict` failures feed back into the `on_failure` retry
+/// loop — `Infrastructure` errors indicate a broken verifier setup (bad
+/// agent config, timeout, unparseable output) that retrying the implementation
+/// step will not fix.
+#[derive(Debug)]
+pub enum VerifierError {
+    /// The verifier agent ran to completion and explicitly returned "fail".
+    /// The inner string is the actionable reason to inject as retry feedback.
+    Verdict(String),
+    /// The verifier could not complete: spawn failure, timeout, parse error,
+    /// cancelled, or an unrecognised verdict value. The inner string describes
+    /// the infrastructure problem for the user.
+    Infrastructure(String),
+}

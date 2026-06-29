@@ -178,7 +178,7 @@ impl ExecutionDriver {
                 .clone()
                 .unwrap_or_else(|| "local".to_string());
 
-            if let Err(verdict_err) = self
+            let verifier_result = self
                 .run_verifier_logic(
                     step_exec,
                     verifier_cfg,
@@ -191,8 +191,9 @@ impl ExecutionDriver {
                     &verifier_model,
                     &machine_str,
                 )
-                .await
-            {
+                .await;
+
+            if let Err(verifier_err) = verifier_result {
                 let _ = self
                     .registry
                     .kill(&format!("{}-verifier", self.f_id.as_str()))
@@ -210,7 +211,17 @@ impl ExecutionDriver {
                         ),
                     )
                     .await;
-                return StepOutcome::Failed(verdict_err);
+                return match verifier_err {
+                    crate::domain::verifier::VerifierError::Verdict(reason) => {
+                        StepOutcome::Failed(reason)
+                    }
+                    crate::domain::verifier::VerifierError::Infrastructure(msg) => {
+                        StepOutcome::NonRetryable(format!(
+                            "[verifier infrastructure error — check verifier config] {}",
+                            msg
+                        ))
+                    }
+                };
             }
         }
 

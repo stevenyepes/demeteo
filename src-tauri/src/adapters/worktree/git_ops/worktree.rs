@@ -400,4 +400,38 @@ impl GitOpsHelper {
 
         Ok(())
     }
+
+    /// Returns `true` when the branch HEAD has advanced past `base_ref` —
+    /// i.e. the agent committed at least one new change since we captured
+    /// the pre-step baseline. Returns `true` when `base_ref` is `None`
+    /// (unknown baseline → don't block the validate step).
+    ///
+    /// Used for no-op detection: if false, the implement step ran but
+    /// made no commits, so advancing to validate would just waste tokens.
+    pub async fn has_new_commits(
+        &self,
+        machine_id: Option<&str>,
+        target_dir: &str,
+        base_ref: Option<&str>,
+    ) -> bool {
+        let Some(base) = base_ref else {
+            // No baseline captured — we can't tell, so allow validate.
+            return true;
+        };
+        let machine_str = machine_id.unwrap_or("local");
+        let safe_dir = paths::shell_escape_posix(target_dir);
+        // git rev-parse HEAD gives the current tip; compare it to the stored baseline SHA.
+        let Ok(current_sha) = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!("git -C {} rev-parse HEAD", safe_dir),
+            )
+            .await
+        else {
+            // git failure → assume something happened, allow validate.
+            return true;
+        };
+        current_sha.trim() != base.trim()
+    }
 }

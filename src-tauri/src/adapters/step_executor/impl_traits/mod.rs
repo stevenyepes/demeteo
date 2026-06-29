@@ -474,65 +474,96 @@ impl DagStepExecutor {
     /// hands control to user-driven tasks. Pair with
     /// [`resume_interrupted_features`] which spawns the actual drivers.
     pub fn startup_watchdog(&self) {
-        if let Ok(projects) = self.projects.get_projects() {
-            for p in projects {
-                if let Ok(active) = self.features.get_active(&p.id) {
-                    for f in active {
-                        if f.status == "running" || f.status == "gated" {
-                            let _ = self.projects.update_status(&p.id, "idle");
-                            if let Ok(steps) = self.features.steps_for_feature(&f.id) {
-                                for s in steps {
-                                    if s.status == "running" || s.status == "awaiting_gate" {
-                                        let was_awaiting = s.status == "awaiting_gate";
-                                        let _ = self.features.step_update(
-                                            &s.id,
-                                            &StepExecutionPatch {
-                                                status: Some("interrupted".to_string()),
-                                                cost_usd: s.cost_usd.map(Some),
-                                                wall_clock_secs: s.wall_clock_secs.map(Some),
-                                                artifact_path: s
-                                                    .artifact_path
-                                                    .as_deref()
-                                                    .map(|v| Some(v.to_string())),
-                                                artifact_paths: Some(s.artifact_paths.clone()),
-                                                error_message: Some(Some(if was_awaiting {
-                                                    "Gate interrupted by system restart".to_string()
-                                                } else {
-                                                    "Step interrupted by system restart".to_string()
-                                                })),
-                                                ..Default::default()
-                                            },
-                                        );
-                                        if !was_awaiting {
-                                            let gate_dec_id =
-                                                GateDecisionId::from(format!("gd-syn-{}", s.id.0));
-                                            let gate_dec = GateDecision {
-                                                id: gate_dec_id,
-                                                step_execution_id: s.id.clone(),
-                                                decision: None,
-                                                feedback: None,
-                                                created_at: paths::now_ms(),
-                                            };
-                                            let _ = self.gates.create(gate_dec);
-                                        }
-                                        let _ = self.notif.emit(&DomainEvent::GateRequired {
-                                            feature_id: f.id.clone(),
+        let Ok(projects) = self.projects.get_projects() else {
+            return;
+        };
+        for p in &projects {
+            if let Ok(active) = self.features.get_active(&p.id) {
+                for f in active {
+                    if f.status == "running" || f.status == "gated" {
+                        let _ = self.projects.update_status(&p.id, "idle");
+                        if let Ok(steps) = self.features.steps_for_feature(&f.id) {
+                            for s in steps {
+                                if s.status == "running" || s.status == "awaiting_gate" {
+                                    let was_awaiting = s.status == "awaiting_gate";
+                                    let _ = self.features.step_update(
+                                        &s.id,
+                                        &StepExecutionPatch {
+                                            status: Some("interrupted".to_string()),
+                                            cost_usd: s.cost_usd.map(Some),
+                                            wall_clock_secs: s.wall_clock_secs.map(Some),
+                                            artifact_path: s
+                                                .artifact_path
+                                                .as_deref()
+                                                .map(|v| Some(v.to_string())),
+                                            artifact_paths: Some(s.artifact_paths.clone()),
+                                            error_message: Some(Some(if was_awaiting {
+                                                "Gate interrupted by system restart".to_string()
+                                            } else {
+                                                "Step interrupted by system restart".to_string()
+                                            })),
+                                            ..Default::default()
+                                        },
+                                    );
+                                    if !was_awaiting {
+                                        let gate_dec_id =
+                                            GateDecisionId::from(format!("gd-syn-{}", s.id.0));
+                                        let gate_dec = GateDecision {
+                                            id: gate_dec_id,
                                             step_execution_id: s.id.clone(),
-                                        });
+                                            decision: None,
+                                            feedback: None,
+                                            created_at: paths::now_ms(),
+                                        };
+                                        let _ = self.gates.create(gate_dec);
                                     }
+                                    let _ = self.notif.emit(&DomainEvent::GateRequired {
+                                        feature_id: f.id.clone(),
+                                        step_execution_id: s.id.clone(),
+                                    });
                                 }
-                                let _ = self.features.update(
-                                    &f.id,
-                                    &FeaturePatch {
-                                        status: Some("awaiting_gate".to_string()),
-                                        ..Default::default()
-                                    },
-                                );
-                                let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
-                                    feature_id: f.id.clone(),
-                                    status: "awaiting_gate".into(),
-                                });
                             }
+                            let _ = self.features.update(
+                                &f.id,
+                                &FeaturePatch {
+                                    status: Some("awaiting_gate".to_string()),
+                                    ..Default::default()
+                                },
+                            );
+                            let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
+                                feature_id: f.id.clone(),
+                                status: "awaiting_gate".into(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Second pass: orphaned-pending reconciliation.
+        // Hard-kills (OOM, crash, force-quit) leave step_executions with
+        // status='pending' when the feature was already cancelled or failed.
+        // These steps can never advance — mark them interrupted so the UI
+        // shows a clean terminal state instead of a perpetual spinner.
+        for p in &projects {
+            if let Ok(all_features) = self.features.get_active(&p.id) {
+                for f in all_features {
+                    if !matches!(f.status.as_str(), "cancelled" | "failed") {
+                        continue;
+                    }
+                    if let Ok(steps) = self.features.steps_for_feature(&f.id) {
+                        for s in steps.iter().filter(|s| s.status == "pending") {
+                            let _ = self.features.step_update(
+                                &s.id,
+                                &StepExecutionPatch {
+                                    status: Some("interrupted".to_string()),
+                                    error_message: Some(Some(
+                                        "Step orphaned: feature ended before step ran"
+                                            .to_string(),
+                                    )),
+                                    ..Default::default()
+                                },
+                            );
                         }
                     }
                 }

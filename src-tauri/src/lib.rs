@@ -107,6 +107,40 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     configure_linux_gpu_env();
 
+    // Initialize structured logging. The log file lives next to demeteo.db
+    // so `open ~/Library/…` finds both at once. RUST_LOG controls the filter;
+    // if not set we default to INFO for this crate, WARN for everything else.
+    //
+    // The `_guard` ensures the non-blocking writer flushes before process exit.
+    // Box::leak is the standard pattern for a guard that must live forever
+    // in a Tauri app where there is no obvious drop point before process exit.
+    let log_dir = {
+        #[cfg(target_os = "macos")]
+        {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join("Library/Application Support/com.stvcloud.demeteo.dev"))
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            std::path::PathBuf::from(".")
+        }
+    };
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "demeteo.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "demeteo_lib=info,warn".parse().expect("static filter")),
+        )
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .try_init()
+        .ok();
+    // Keep the guard alive for the entire process lifetime.
+    Box::leak(Box::new(guard));
+
     // Startup banner so a stale binary is obvious in the Tauri dev
     // console. Bump the suffix whenever the bootstrap/step-executor
     // path resolution changes.
