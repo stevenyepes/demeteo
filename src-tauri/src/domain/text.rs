@@ -22,10 +22,7 @@ pub fn strip_think_tags(s: &str) -> String {
 
     let mut result = s.to_string();
     // Strip all balanced <think>...</think> spans.
-    loop {
-        let Some(start) = result.find(OPEN) else {
-            break;
-        };
+    while let Some(start) = result.find(OPEN) {
         let search_from = start + OPEN.len();
         let Some(rel_end) = result[search_from..].find(CLOSE) else {
             // Unclosed open tag — remove from <think> to end of string so
