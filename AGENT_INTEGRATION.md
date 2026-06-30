@@ -448,6 +448,32 @@ The policy object is resolved from `AppContext.permission_policy` and written to
 
 When the `OPENCODE_PERMISSION` env var is absent (e.g., direct CLI invocation outside demeteo), the agent applies its own default policy.
 
+### 5.5.1 Claude Code auth: let Claude own it
+
+**Demeteo handles no Anthropic credentials.** Claude Code resolves and refreshes its own credential (OAuth from the macOS keychain, or `~/.claude/.credentials.json` on any OS) exactly as it does for a normal `claude` invocation. There is no token extraction, no `settings.json` write, no keychain shell-out, and no per-spawn env injection on our side.
+
+This works because pipeline steps **do not** pass `--bare`. Per `claude --help`, `--bare` sets `CLAUDE_CODE_SIMPLE=1`, which "skips … keychain reads" and makes "Anthropic auth … strictly `ANTHROPIC_API_KEY` or `apiKeyHelper` via `--settings` (OAuth and keychain are never read)." That single flag is what previously forced OAuth users into `Not logged in · Please run /login` and pushed us toward extracting and injecting the token ourselves.
+
+We adopted `--bare` only for its prompt-cache benefit (a byte-identical static system-prompt prefix across worktrees). We get that benefit from narrower flags that leave native auth intact (`build_claude_args`, emitted only when `ctx.bare_mode = true`):
+
+- `--exclude-dynamic-system-prompt-sections` — moves per-machine sections (cwd, env info, git status, memory paths) out of the cached prefix into the first user message.
+- `--setting-sources user,project` — loads user- and project-level config (the skills, `CLAUDE.md`, and settings the user committed to the repo) but **not** machine-local `settings.local.json`. Project config is identical across a feature's worktrees (same repo at the same commit), so including it is cache-neutral; only `local` varies per checkout, which is what we drop.
+- `--strict-mcp-config` — ignores project MCP servers (we pass none), keeping the tool set identical across worktrees.
+
+**Cross-OS coverage** is whatever the `claude` CLI itself supports — macOS keychain, Linux/Windows credential file — because we defer entirely to it. A user who exports `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) in their shell is inherited by the spawned child and still honored.
+
+**Token refresh is correct by construction.** Short-lived OAuth access tokens are renewed by Claude's own refresh-token exchange; because we never copy the access token out of the keychain, there is no stale-credential-on-disk to go bad and no global `~/.claude/settings.json` mutation to contaminate the user's own interactive `claude`.
+
+## Why not extract the token (`--settings`, `apiKeyHelper`, or `settings.json` env)?
+
+Earlier iterations wired `--settings <path>` + `apiKeyHelper`, then `settings.json`-env injection. Both are kept here as rejected alternatives:
+
+1. **`apiKeyHelper` can't carry OAuth.** Claude sends `apiKeyHelper` output as the `x-api-key` header; Anthropic rejects OAuth tokens (`sk-ant-oat01-*`) there with HTTP 401. Only `Authorization: Bearer` (via `ANTHROPIC_AUTH_TOKEN`) works for OAuth.
+2. **`/bin/sh` splits the helper path on whitespace.** Claude invokes the helper via `/bin/sh -c '<path>'`, so the macOS app data dir under `~/Library/Application Support/<bundle>/` fails with `exited 127`.
+3. **Extracting the token at all is the deeper mistake.** OAuth access tokens expire and only Claude's refresh exchange renews them. Any copy we make (into `settings.json` env or a child env var) eventually goes stale, and writing the user's *global* `settings.json` also changes the behavior of their own `claude` sessions. Not extracting the token sidesteps every one of these failure modes.
+
+The trade-off: without `--bare`, user- and project-level hooks/skills/memory load during autonomous steps. That's intentional for skills/`CLAUDE.md` — the user committed those to the repo to shape how agents work on it — but it also means project hooks fire. Only machine-local `settings.local.json` is excluded (via `--setting-sources user,project`). Verify prompt-cache reuse across worktrees holds by comparing `cache_read_input_tokens` in the stream-json `usage` across two worktree runs.
+
 ### 5.6 Adapters
 
 Four agents, all via `CliRuntime`:

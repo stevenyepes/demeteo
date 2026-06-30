@@ -100,6 +100,14 @@ pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
 /// Finder/Dock on macOS), USER may be absent from the inherited env;
 /// deriving it here from the parent process ensures child agents always
 /// have it.
+///
+/// `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are intentionally **not**
+/// injected here. Because we no longer pass `--bare` (which would set
+/// `CLAUDE_CODE_SIMPLE=1` and disable keychain/OAuth reads), Claude Code
+/// resolves and refreshes its own credential natively from the keychain
+/// (macOS) or `~/.claude/.credentials.json` (all OSes). Demeteo handles
+/// no Anthropic credentials at all. A user who exports
+/// `ANTHROPIC_API_KEY=...` in their shell is still inherited and honored.
 pub fn agent_base_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
     for key in ["USER", "LOGNAME", "HOME", "SHELL", "TMPDIR"] {

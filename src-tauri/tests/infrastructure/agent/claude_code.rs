@@ -280,14 +280,30 @@ fn args_resume_emitted_when_captured_session_id_set() {
 }
 
 #[test]
-fn args_bare_flags_only_when_bare_mode_true() {
+fn isolation_flags_only_when_bare_mode_true() {
+    // Isolated pipeline mode emits the cache-stability flags but NOT
+    // `--bare` — `--bare` sets CLAUDE_CODE_SIMPLE=1 and disables
+    // keychain/OAuth reads, which we rely on so Claude authenticates
+    // (and refreshes) its own credential. See `build_claude_args`.
     let with_bare = build_claude_args(&ctx_for_test(true), None);
-    assert!(with_bare.contains(&"--bare".to_string()));
+    assert!(
+        !with_bare.contains(&"--bare".to_string()),
+        "--bare must NOT be emitted (it disables keychain auth): got {with_bare:?}"
+    );
     assert!(with_bare.contains(&"--exclude-dynamic-system-prompt-sections".to_string()));
+    assert!(with_bare.contains(&"--strict-mcp-config".to_string()));
+    let src_idx = with_bare
+        .iter()
+        .position(|a| a == "--setting-sources")
+        .expect("--setting-sources should be present in bare mode");
+    // user + project (so the user's committed project skills/CLAUDE.md
+    // load) but not machine-local `settings.local.json`.
+    assert_eq!(with_bare[src_idx + 1], "user,project");
 
     let without_bare = build_claude_args(&ctx_for_test(false), None);
-    assert!(!without_bare.contains(&"--bare".to_string()));
     assert!(!without_bare.contains(&"--exclude-dynamic-system-prompt-sections".to_string()));
+    assert!(!without_bare.contains(&"--setting-sources".to_string()));
+    assert!(!without_bare.contains(&"--strict-mcp-config".to_string()));
 }
 
 #[test]
@@ -307,4 +323,27 @@ fn args_print_and_dangerously_skip_always_present() {
     assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
     assert!(args.contains(&"--output-format".to_string()));
     assert!(args.contains(&"stream-json".to_string()));
+}
+
+#[test]
+fn args_never_emit_settings() {
+    // We used to pass `--settings <path>` to wire up an `apiKeyHelper`.
+    // That path is broken: Claude invokes the helper via `/bin/sh -c`
+    // which splits on whitespace, so any path containing a space (the
+    // macOS app data dir under `~/Library/Application Support/`) fails
+    // with exit 127. We dropped `--settings` (and `--bare`) entirely:
+    // Claude reads and refreshes its own keychain/OAuth credential
+    // natively, so Demeteo injects no auth at all. (Note: `--settings`
+    // is distinct from the `--setting-sources` flag emitted in bare
+    // mode; this asserts the former is absent.)
+    let with_bare = build_claude_args(&ctx_for_test(true), Some("sess-1"));
+    assert!(
+        !with_bare.contains(&"--settings".to_string()),
+        "--settings must NOT be emitted: got {with_bare:?}"
+    );
+    let without_bare = build_claude_args(&ctx_for_test(false), None);
+    assert!(
+        !without_bare.contains(&"--settings".to_string()),
+        "--settings must NOT be emitted: got {without_bare:?}"
+    );
 }
