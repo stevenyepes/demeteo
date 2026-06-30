@@ -344,19 +344,34 @@ fn claude_tool_use_to_event(tu: &serde_json::Value) -> AgentEvent {
 ///                             has been observed in the stream; the
 ///                             orchestrator relies on this for
 ///                             cross-step `--continue` semantics).
-///   --bare                    shrink system prompt (no CLAUDE.md /
-///                             hooks / skills / plugins auto-load) —
-///                             makes the static prefix byte-identical
-///                             across worktrees for better prompt-cache
-///                             reuse. Only emitted when the caller sets
-///                             `ctx.bare_mode = true` (orchestrator
-///                             pipeline steps do; interactive
-///                             AgentTerminalDrawer does not).
+///   Isolated-pipeline flags (only when `ctx.bare_mode = true` —
+///   orchestrator pipeline steps set it; the interactive
+///   AgentTerminalDrawer does not). The goal is a byte-identical static
+///   system-prompt prefix across worktrees for prompt-cache reuse.
+///
+///   We deliberately do **not** pass `--bare`. `--bare` would also set
+///   `CLAUDE_CODE_SIMPLE=1`, which disables keychain/OAuth reads and
+///   forces auth through `ANTHROPIC_API_KEY`/`apiKeyHelper`. That made
+///   us extract the user's OAuth token and inject it ourselves (a
+///   stale-token-on-disk and global-`settings.json`-contamination
+///   hazard). These narrower flags get the same cache/determinism win
+///   while letting Claude read **and refresh** its own credential
+///   natively, on every OS, with zero credential handling on our side:
 ///   --exclude-dynamic-system-prompt-sections
-///                             same goal as `--bare`: move per-machine
-///                             sections (working dir, env info) into the
-///                             first user message so cross-worktree
-///                             cache hits improve.
+///                             move per-machine sections (cwd, env info,
+///                             git status, memory paths) out of the
+///                             cached prefix into the first user message.
+///   --setting-sources user,project
+///                             load user- and project-level config (the
+///                             skills, CLAUDE.md, and settings the user
+///                             committed to the repo) but NOT machine-local
+///                             `settings.local.json`. Project config is
+///                             identical across a feature's worktrees
+///                             (same repo, same commit), so it's
+///                             cache-neutral; only `local` varies per
+///                             checkout, which is what we drop.
+///   --strict-mcp-config       ignore project MCP servers (we pass none),
+///                             keeping the tool set identical everywhere.
 fn build_claude_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
@@ -380,8 +395,10 @@ fn build_claude_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> V
         args.push(sid.to_string());
     }
     if ctx.bare_mode {
-        args.push("--bare".to_string());
         args.push("--exclude-dynamic-system-prompt-sections".to_string());
+        args.push("--setting-sources".to_string());
+        args.push("user,project".to_string());
+        args.push("--strict-mcp-config".to_string());
     }
     let disallowed = disallowed_tools_for(&ctx.permissions);
     if !disallowed.is_empty() {
