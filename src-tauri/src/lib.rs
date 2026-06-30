@@ -100,12 +100,34 @@ fn configure_linux_gpu_env() {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn sanitize_appimage_env() {
+    const APPIMAGE_MOUNT_PREFIX: &str = "/tmp/.mount_";
+    for var in ["LD_LIBRARY_PATH", "LD_PRELOAD"] {
+        let Ok(raw) = std::env::var(var) else {
+            continue;
+        };
+        let kept: Vec<&str> = raw
+            .split(':')
+            .filter(|e| !e.starts_with(APPIMAGE_MOUNT_PREFIX))
+            .collect();
+        if kept.is_empty() {
+            std::env::remove_var(var);
+        } else {
+            std::env::set_var(var, kept.join(":"));
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     enrich_env_path();
 
     #[cfg(target_os = "linux")]
-    configure_linux_gpu_env();
+    {
+        configure_linux_gpu_env();
+        sanitize_appimage_env();
+    }
 
     // Initialize structured logging. The log file lives next to demeteo.db
     // so `open ~/Library/…` finds both at once. RUST_LOG controls the filter;
