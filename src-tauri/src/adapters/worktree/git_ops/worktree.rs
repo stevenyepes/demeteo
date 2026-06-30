@@ -436,10 +436,7 @@ impl GitOpsHelper {
         // git rev-parse HEAD gives the current tip; compare it to the stored baseline SHA.
         let Ok(current_sha) = self
             .exec
-            .run_command(
-                machine_str,
-                &format!("git -C {} rev-parse HEAD", safe_dir),
-            )
+            .run_command(machine_str, &format!("git -C {} rev-parse HEAD", safe_dir))
             .await
         else {
             // git failure → assume something happened, allow validate.

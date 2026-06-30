@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -61,7 +60,6 @@ pub(crate) struct ExecutionDriver {
     pub agent_exec: Arc<dyn AgentExecutionPort>,
     pub exec: Arc<dyn ExecutionPort>,
     pub artifacts: Arc<dyn ArtifactStore>,
-    pub app_local_data_dir: PathBuf,
     /// Shared `app_settings` KV repository. Used by every agent-turn call
     /// site to resolve the effective timeouts via
     /// [`crate::application::timeouts::resolve_effective`]. Owned by the

@@ -84,7 +84,6 @@ impl DagStepExecutor {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             artifacts: self.artifacts.clone(),
-            app_local_data_dir: self.app_local_data_dir.clone(),
             app_settings: self.app_settings.clone(),
             git_ops: GitOpsHelper::new(self.app_settings.clone(), self.exec.clone()),
             merge_executor: self.merge_executor.clone(),
@@ -558,8 +557,7 @@ impl DagStepExecutor {
                                 &StepExecutionPatch {
                                     status: Some("interrupted".to_string()),
                                     error_message: Some(Some(
-                                        "Step orphaned: feature ended before step ran"
-                                            .to_string(),
+                                        "Step orphaned: feature ended before step ran".to_string(),
                                     )),
                                     ..Default::default()
                                 },

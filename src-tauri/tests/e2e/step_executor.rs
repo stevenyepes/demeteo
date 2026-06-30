@@ -160,7 +160,6 @@ async fn test_executor_instantiation_and_cancel() {
         merge_executor,
         artifacts,
         temp_dir.clone(),
-        temp_dir.clone(),
         pricing,
     );
 
@@ -226,7 +225,6 @@ async fn test_executor_gate_decide() {
         exec,
         merge_executor,
         artifacts,
-        temp_dir.clone(),
         temp_dir.clone(),
         pricing,
     );
@@ -393,7 +391,6 @@ async fn test_gate_decide_recovers_after_driver_death() {
         exec,
         merge_executor,
         artifacts,
-        temp_dir.clone(),
         temp_dir.clone(),
         pricing,
     );

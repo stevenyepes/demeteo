@@ -1,4 +1,4 @@
-use crate::domain::artifact::{ArtifactCapture, ArtifactDecl, ArtifactMode};
+use crate::domain::artifact::{ArtifactCapture, ArtifactDecl};
 use crate::domain::ids::{ProjectId, StepId, WorkflowId, WorkflowVersionId};
 use crate::domain::permission::StepCapability;
 use crate::domain::verifier::VerifierConfig;
@@ -118,6 +118,7 @@ fn declares_unconstrained_write(artifacts: Option<&[ArtifactDecl]>) -> bool {
 #[cfg(test)]
 mod capability_tests {
     use super::*;
+    use crate::domain::artifact::ArtifactMode;
 
     fn step(kind: &str, capability: Option<StepCapability>) -> StepConfig {
         StepConfig {

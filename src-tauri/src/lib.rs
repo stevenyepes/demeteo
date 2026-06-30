@@ -119,7 +119,10 @@ pub fn run() {
         {
             std::env::var("HOME")
                 .ok()
-                .map(|h| std::path::PathBuf::from(h).join("Library/Application Support/com.stvcloud.demeteo.dev"))
+                .map(|h| {
+                    std::path::PathBuf::from(h)
+                        .join("Library/Application Support/com.stvcloud.demeteo.dev")
+                })
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
         }
         #[cfg(not(target_os = "macos"))]
@@ -293,7 +296,6 @@ pub fn run() {
                     exec_inner.clone(),
                     merge_executor.clone(),
                     artifact_store,
-                    app_data_dir.clone(),
                     workspace_dir.clone(),
                     pricing.clone(),
                 ));

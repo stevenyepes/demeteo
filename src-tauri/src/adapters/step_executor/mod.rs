@@ -71,7 +71,6 @@ pub struct DagStepExecutor {
     /// or SFTP-on-remote adapter can swap in without touching either
     /// caller. See `docs/ARCHITECTURE.md` §2 (locked port catalogue).
     artifacts: Arc<dyn ArtifactStore>,
-    app_local_data_dir: PathBuf,
     workspace_dir: PathBuf,
     /// Live drivers keyed by step_execution_id. The driver inserts a
     /// `GateWaiter` while waiting for a decision; `gate_decide` looks up
@@ -120,7 +119,6 @@ impl DagStepExecutor {
         exec: Arc<dyn ExecutionPort>,
         merge_executor: Arc<dyn MergeExecutor>,
         artifacts: Arc<dyn ArtifactStore>,
-        app_local_data_dir: PathBuf,
         workspace_dir: PathBuf,
         pricing: Arc<dyn PricingTable>,
     ) -> Self {
@@ -143,7 +141,6 @@ impl DagStepExecutor {
             merge_executor,
             git_ops,
             artifacts,
-            app_local_data_dir,
             workspace_dir,
             gate_waiters: Arc::new(Mutex::new(HashMap::new())),
             driver_registry: DriverRegistry::new(),

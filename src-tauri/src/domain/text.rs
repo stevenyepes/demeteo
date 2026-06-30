@@ -70,10 +70,7 @@ mod tests {
 
     #[test]
     fn strips_orphaned_closing_tag() {
-        assert_eq!(
-            strip_think_tags("</think>answer"),
-            "answer"
-        );
+        assert_eq!(strip_think_tags("</think>answer"), "answer");
     }
 
     #[test]
@@ -87,10 +84,7 @@ mod tests {
     #[test]
     fn unclosed_open_tag_truncates_from_open() {
         // An unclosed <think> means the rest is internal reasoning.
-        assert_eq!(
-            strip_think_tags("visible<think>never shown"),
-            "visible"
-        );
+        assert_eq!(strip_think_tags("visible<think>never shown"), "visible");
     }
 
     #[test]

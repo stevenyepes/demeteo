@@ -199,12 +199,16 @@ impl ExecutionDriver {
 
         let session = match spawn_res {
             Some(Ok(session)) => session,
-            Some(Err(e)) => return Err(crate::domain::verifier::VerifierError::Infrastructure(
-                format!("Verifier spawn failed: {}", e),
-            )),
-            None => return Err(crate::domain::verifier::VerifierError::Infrastructure(
-                "Verifier spawn cancelled".to_string(),
-            )),
+            Some(Err(e)) => {
+                return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                    format!("Verifier spawn failed: {}", e),
+                ))
+            }
+            None => {
+                return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                    "Verifier spawn cancelled".to_string(),
+                ))
+            }
         };
 
         let mut text_buffer = String::new();
@@ -342,8 +346,7 @@ impl ExecutionDriver {
                 if let Some(close) = find_matching_close_brace(bytes, i) {
                     match serde_json::from_str::<serde_json::Value>(&text_buffer[i..=close]) {
                         Ok(val)
-                            if val.is_object()
-                                && val.get(&verifier_cfg.verdict_key).is_some() =>
+                            if val.is_object() && val.get(&verifier_cfg.verdict_key).is_some() =>
                         {
                             parsed_val = Some(val);
                             i = close + 1;
