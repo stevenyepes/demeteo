@@ -1,6 +1,9 @@
 # Logs
 logs
 *.log
+# Rotated daily archives from tracing_appender::rolling::daily
+# (e.g. demeteo.log.2026-06-30) — *.log above doesn't match these.
+demeteo.log.*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
