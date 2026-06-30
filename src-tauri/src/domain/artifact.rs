@@ -12,9 +12,8 @@
 use serde::{Deserialize, Serialize};
 
 /// How much of the artifact the executor should persist and how the
-/// next step should consume it. Mirrors the per-step `artifact_mode`
-/// in the workflow JSON (locked decision 28 in
-/// `docs/DECISIONS.md`).
+/// next step should consume it. Set per artifact via `ArtifactDecl.mode`
+/// in the workflow JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactMode {
