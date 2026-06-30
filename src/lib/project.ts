@@ -144,11 +144,10 @@ export async function saveProjectSettings(
           : (baseWs?.harnesses ?? null),
       extra_writable_paths:
         input.extra_writable_paths !== undefined
-          ? (Array.isArray(input.extra_writable_paths) &&
-            input.extra_writable_paths.length > 0
+          ? (Array.isArray(input.extra_writable_paths)
               ? input.extra_writable_paths
-              : null)
-          : (baseWs?.extra_writable_paths ?? null),
+              : [])
+          : (baseWs?.extra_writable_paths ?? []),
     },
     conflict_policy:
       input.conflict_policy ?? existing?.conflict_policy ?? "always_gate",
