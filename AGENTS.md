@@ -175,6 +175,11 @@ demeteo/
 │   │   ├── state.rs            # AppState (Mutex-wrapped shared state)
 │   │   └── lib.rs              # Plugin registration, command registration
 │   └── migrations/             # SQL migration files (refinery)
+├── scripts/                    # Local build/packaging tooling (host-side)
+│   ├── test-aur-install.sh     # Local AUR package build + installer (Arch host)
+│   └── aur/
+│       └── demeteo/
+│           └── PKGBUILD        # Canonical AUR PKGBUILD template (single source of truth)
 └── docs/                       # Architecture & design docs (read-only for agents)
 ```
 

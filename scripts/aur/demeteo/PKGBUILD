@@ -1,0 +1,82 @@
+# Maintainer: Steven Yepes <stevenyepes@aur.archlinux.org>
+pkgname=demeteo
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Fleet-style multi-agent orchestrator for software development"
+arch=('x86_64')
+url="https://github.com/stevenyepes/demeteo"
+license=('MIT')
+depends=(
+  'cairo'
+  'desktop-file-utils'
+  'gdk-pixbuf2'
+  'glib2'
+  'gtk3'
+  'hicolor-icon-theme'
+  'libsoup3'
+  'pango'
+  'webkit2gtk-4.1'
+  'gcc-libs'
+  'sqlite'
+)
+makedepends=(
+  'cargo'
+  'nodejs>=20'
+  'npm'
+  'cmake'
+  'pkgconf'
+  'base-devel'
+)
+optdepends=(
+  'opencode: opencode agent CLI'
+  'claude-code: claude-code agent CLI'
+  'hermes: hermes agent CLI'
+)
+provides=('demeteo')
+conflicts=('demeteo')
+# !lto: mixed Rust/C project (rusqlite + ssh2 + ring) — Arch Wiki:
+# "The package itself is a mixed Rust/C/C++ project: disable the lto option."
+options=('!strip' '!lto')
+source=("https://github.com/stevenyepes/demeteo/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+
+prepare() {
+  cd "${pkgname}-${pkgver}"
+  npm ci
+}
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  # Use system sqlite via pkg-config instead of bundling — Arch convention.
+  export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
+  npm run tauri -- build -b deb
+}
+
+package() {
+  cd "${pkgname}-${pkgver}"
+  install -dm755 "${pkgdir}"
+  local deb
+  deb="$(find "src-tauri/target/release/bundle/deb" -maxdepth 1 -name "${pkgname}_*_amd64.deb" -print -quit)"
+  [[ -n "$deb" ]] || { echo "package(): no .deb produced under src-tauri/target/release/bundle/deb"; return 1; }
+  # Tauri v2 picks the compression for the inner data archive (xz or zst)
+  # depending on the dpkg-buildflags available at build time; probe instead
+  # of guessing so the same PKGBUILD works across toolchain variants.
+  local work data_archive
+  work=$(mktemp -d)
+  pushd "$work" >/dev/null
+  ar x "$OLDPWD/$deb"
+  for ext in zst xz gz; do
+    if [[ -f "data.tar.$ext" ]]; then
+      data_archive="data.tar.$ext"
+      break
+    fi
+  done
+  popd >/dev/null
+  if [[ -z "${data_archive:-}" ]]; then
+    echo "package(): no data.tar.* member found in $deb"
+    rm -rf "$work"
+    return 1
+  fi
+  bsdtar -x -C "${pkgdir}" -f "$work/$data_archive"
+  rm -rf "$work"
+}
