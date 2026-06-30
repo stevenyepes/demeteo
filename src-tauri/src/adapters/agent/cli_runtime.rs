@@ -155,6 +155,7 @@ impl UnifiedCliSession {
         for (k, v) in &self.ctx.env {
             cmd.env(k, v);
         }
+        crate::shared::proc::sanitize_child_env(&mut cmd);
         cmd
     }
 

@@ -15,12 +15,15 @@ pub async fn run_official_install(
 }
 
 fn run_local(install_command: &str) -> Result<(), String> {
-    let mut child = std::process::Command::new("sh")
+    let mut command = std::process::Command::new("sh");
+    command
         .arg("-c")
         .arg(install_command)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    crate::shared::proc::sanitize_child_env(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|e| format!("Failed to spawn install command: {}", e))?;
     let mut stdout = child.stdout.take().unwrap();

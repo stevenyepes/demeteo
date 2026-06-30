@@ -70,10 +70,10 @@ pub fn resolve_local_binary_path(binary: &str) -> Option<String> {
         ];
         for shell in shells {
             if std::path::Path::new(shell).exists() {
-                if let Ok(output) = std::process::Command::new(shell)
-                    .args(["-l", "-c", &format!("which {}", binary)])
-                    .output()
-                {
+                let mut command = std::process::Command::new(shell);
+                command.args(["-l", "-c", &format!("which {}", binary)]);
+                crate::shared::proc::sanitize_child_env(&mut command);
+                if let Ok(output) = command.output() {
                     if output.status.success() {
                         let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
                         if !path_str.is_empty() {

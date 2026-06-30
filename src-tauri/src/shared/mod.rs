@@ -14,6 +14,7 @@
 //! be removed in Phase F.
 
 pub mod ids;
+pub mod proc;
 pub mod shell;
 pub mod time;
 

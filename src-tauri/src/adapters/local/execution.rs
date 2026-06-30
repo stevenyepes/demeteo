@@ -7,6 +7,7 @@ use async_trait::async_trait;
 
 use crate::ports::execution::{ExecutionPort, InteractiveHandle};
 use crate::sftp::SftpEntry;
+use crate::shared::proc::sanitize_child_env;
 
 pub struct LocalSubprocessAdapter;
 
@@ -79,9 +80,10 @@ impl InteractiveHandle for LocalChildProcess {
 }
 
 fn local_run_command(cmd: &str) -> Result<String, String> {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(cmd);
+    sanitize_child_env(&mut command);
+    let output = command
         .output()
         .map_err(|e| format!("Failed to execute command: {}", e))?;
 
@@ -303,6 +305,7 @@ impl ExecutionPort for LocalSubprocessAdapter {
         for (k, v) in env {
             cmd.env(k, v);
         }
+        sanitize_child_env(&mut cmd);
         let child = cmd
             .spawn()
             .map_err(|e| format!("failed to spawn '{}': {}", binary, e))?;
