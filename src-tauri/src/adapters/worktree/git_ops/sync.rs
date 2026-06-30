@@ -57,20 +57,19 @@ impl GitOpsHelper {
                 )
             })?;
 
-        // 3. Switch the working tree to the default branch and reset it
-        //    to match origin/<default>. We use `--hard` because we
-        //    explicitly want the local branch to be a byte-for-byte
-        //    copy of upstream before any feature branch is cut from it.
-        //    Combined into one command to avoid an extra subprocess spawn.
+        // 3. Update the local default-branch ref to match origin without
+        //    touching HEAD or the working tree. `git fetch origin +src:dst`
+        //    is a ref-only operation — it never runs `git checkout`, so the
+        //    main repo stays on whatever branch the user (or create_feature_branch)
+        //    left it on. This eliminates the race where the background refresh
+        //    ran `git checkout master` immediately after `create_feature_branch`
+        //    set HEAD to the feature branch.
         self.exec
             .run_command(
                 machine_str,
                 &format!(
-                    "git -C {} checkout {} && git -C {} reset --hard {}",
-                    safe_dir,
-                    safe_branch,
-                    safe_dir,
-                    paths::shell_escape_posix(&tracking)
+                    "git -C {} fetch origin +{}:{}",
+                    safe_dir, safe_branch, safe_branch
                 ),
             )
             .await?;

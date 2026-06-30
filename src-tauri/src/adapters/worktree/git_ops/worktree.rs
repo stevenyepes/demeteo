@@ -132,21 +132,34 @@ impl GitOpsHelper {
         let safe_default = paths::shell_escape_posix(default_branch);
         let safe_branch = paths::shell_escape_posix(branch_name);
 
-        // Create the feature branch from <default> in one shot —
-        // `git checkout -b <feature> <default>` works from any HEAD.
-        // If the branch already exists, fall back to just checking it out.
+        // Create/update the feature branch ref without checking it out.
+        // `git branch -f <branch> <start>` is a ref-only operation — it never
+        // moves HEAD, so the main repo stays on the default branch throughout
+        // the entire pipeline run. All agent work happens in linked worktrees;
+        // the main checkout must not be disturbed.
+        //
+        // Replaces `git checkout -b` which moved HEAD to the feature branch and
+        // then raced with the background `ensure_default_branch_updated` call
+        // that immediately ran `git checkout <default>`, leaving the repo on
+        // the default branch after every feature start.
         let cmd = format!(
-            "git -C {} checkout -b {} {}",
+            "git -C {} branch -f {} {}",
             safe_dir, safe_branch, safe_default,
         );
         match self.exec.run_command(machine_str, &cmd).await {
             Ok(_) => Ok(()),
             Err(_) => {
-                let fallback = format!("git -C {} checkout {}", safe_dir, safe_branch);
+                // Branch may already exist from a prior interrupted run.
+                // Verify the ref is reachable; if so, we can proceed.
+                let check = format!(
+                    "git -C {} rev-parse --verify refs/heads/{}",
+                    safe_dir, safe_branch,
+                );
                 self.exec
-                    .run_command(machine_str, &fallback)
+                    .run_command(machine_str, &check)
                     .await
                     .map(|_| ())
+                    .map_err(|_| format!("Failed to create feature branch '{}'", branch_name))
             }
         }
     }
