@@ -50,7 +50,6 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
           title: 'Research and Plan',
           agent_kind: null,
           prompt_template: 'Research {{feature_description}}',
-          artifact_mode: 'full',
           on_failure: null,
           max_iterations: null,
         },
@@ -92,7 +91,6 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
       title: type === 'agent' ? 'Run Coding Agent' : type === 'parallel' ? 'Decompose & Implement' : 'User Approval Gate',
       agent_kind: type === 'gate' ? null : 'opencode',
       prompt_template: type === 'gate' ? null : 'Implement task based on requirements',
-      artifact_mode: type === 'gate' ? 'none' : 'full',
       on_failure: null,
       max_iterations: null,
     };
@@ -489,24 +487,6 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                         )}
 
                         <div className="grid grid-cols-3 gap-4">
-                          {/* Artifact Mode */}
-                          {step.kind !== 'gate' && (
-                            <div>
-                              <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">
-                                Artifact Mode
-                              </label>
-                              <select
-                                value={step.artifact_mode}
-                                onChange={(e) => handleUpdateStep(idx, { artifact_mode: e.target.value })}
-                                className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500"
-                              >
-                                <option value="full">Full Artifact</option>
-                                <option value="summary_only">Summary Only</option>
-                                <option value="none">No Artifact</option>
-                              </select>
-                            </div>
-                          )}
-
                           {/* Loop failure target */}
                           <div>
                             <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">

@@ -46,7 +46,6 @@ pub struct StepConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub prompt_template: Option<String>,
-    pub artifact_mode: String,
     pub on_failure: Option<StepId>,
     pub max_iterations: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,10 +70,6 @@ pub struct StepConfig {
 }
 
 impl StepConfig {
-    pub fn artifact_mode_typed(&self) -> ArtifactMode {
-        ArtifactMode::from_str_loose(&self.artifact_mode)
-    }
-
     /// Resolve the step's capability, inferring a safe default when the
     /// workflow JSON doesn't set one. This is the back-compat path for
     /// workflows authored before capabilities existed (steps are stored
@@ -132,7 +127,6 @@ mod capability_tests {
             agent_kind: None,
             model: None,
             prompt_template: None,
-            artifact_mode: "full".into(),
             on_failure: None,
             max_iterations: None,
             artifacts: None,

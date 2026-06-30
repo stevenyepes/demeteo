@@ -11,9 +11,17 @@
       "agent_kind": null,
       "prompt_template": "You are a senior software engineer performing root cause analysis.\n\nBug report: {{feature_description}}\nRepositories in scope: {{repo_list}}\n\n## Your task\n1. Locate the code path that produces this bug. Trace the full execution path from the entry point to the failure.\n2. Write a **minimal reproduction case** — a test, script, or command that reliably triggers the bug and currently fails. Commit it to the feature branch as a failing test (do not apply any fix yet).\n3. State the root cause precisely: which line(s), which logic error, which assumption is violated.\n4. State the boundary of the fix: what files are in scope, what must not be touched.\n\n## Output artifact (required sections)\n- `## Reproduction Case` — the test/script, with instructions to run it\n- `## Execution Trace` — the call stack or execution path that leads to the failure\n- `## Root Cause` — precise, one-paragraph diagnosis\n- `## Fix Boundary` — files in scope + files that must not change\n- `## Risk` — could this fix regress anything else?\n\n## Stop condition\nYou are done when the reproduction case is committed and fails as expected, and all sections are written.",
       "capability": "implement",
-      "artifact_mode": "full",
       "on_failure": null,
-      "max_iterations": 2
+      "max_iterations": 2,
+      "artifacts": [
+        {
+          "name": "changed-files",
+          "capture": {
+            "kind": "all_writes"
+          },
+          "mode": "summary_only"
+        }
+      ]
     },
     {
       "id": "s-gate-confirm",
@@ -21,7 +29,6 @@
       "title": "Confirm Root Cause Before Fix",
       "agent_kind": null,
       "prompt_template": "Review the Diagnosis artifact from 's-reproduce'. The agent has written a reproduction case and identified a root cause. Approve if the diagnosis is correct and the fix boundary is sensible. Redirect if the diagnosis is wrong or the scope is too wide. Cancel to abort.",
-      "artifact_mode": "none",
       "on_failure": null,
       "max_iterations": null
     },
@@ -32,29 +39,45 @@
       "agent_kind": null,
       "prompt_template": "You are a senior software engineer applying a surgical fix.\n\nBug report: {{feature_description}}\nDiagnosis artifact: [attached — from s-reproduce]\n\n## Rules (non-negotiable)\n1. Touch ONLY the files listed in the Fix Boundary section of the diagnosis artifact.\n2. Do NOT refactor unrelated code — one bug, one fix.\n3. Make the reproduction test case pass.\n4. Do NOT break any existing tests.\n5. Run the reproduction test immediately after your fix: {{test_command}}\n\n## Reflection\nAfter applying the fix, re-read the Root Cause section of the diagnosis artifact. Verify your change addresses the stated cause directly. If it does not, revise before declaring done.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — verification failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Output artifact\n- Files changed (list)\n- The specific lines modified (diff summary)\n- Reproduction test result: PASS / FAIL\n- Confidence: HIGH / MEDIUM / LOW (with reason)\n\n## Stop condition\nYou are done when the reproduction test passes and the output artifact is written.",
       "capability": "implement",
-      "artifact_mode": "full",
       "on_failure": "s-reproduce",
-      "max_iterations": 3
+      "max_iterations": 3,
+      "artifacts": [
+        {
+          "name": "changed-files",
+          "capture": {
+            "kind": "all_writes"
+          },
+          "mode": "summary_only"
+        }
+      ]
     },
     {
       "id": "s-smoke",
       "kind": "agent",
       "title": "Smoke Test",
       "agent_kind": null,
-      "prompt_template": "You are a QA engineer running a targeted smoke test before the full regression suite.\n\nFix artifact: [attached — from s-fix]\n\n## Your task\n1. Run the reproduction test case: {{test_command}}. Confirm it passes.\n2. Run the tests for the files touched by the fix.\n3. Run a basic build/compile check: {{build_command}}\n\n## Output artifact\n- Reproduction test: PASS / FAIL\n- Touched-file tests: X passed, Y failed\n- Build: PASS / FAIL\n- **Proceed to full regression?** YES / NO (with reason)\n\n## Stop condition\nOutput the artifact and stop. Do NOT apply any fixes in this step.",
+      "prompt_template": "You are a QA engineer running a targeted smoke test before the full regression suite.\n\nFix artifact: [attached — from s-fix]\n\n## Your task\n1. Run the reproduction test case: {{test_command}}. Confirm it passes.\n2. Run the tests for the files touched by the fix.\n3. Run a basic build/compile check: {{build_command}}\n\n## Output artifact\n- Reproduction test: PASS / FAIL\n- Touched-file tests: X passed, Y failed\n- Build: PASS / FAIL\n- **Proceed to full regression?** YES / NO (with reason)\n\n## Stop condition\nOutput the artifact and stop. Do NOT apply any fixes in this step.\n\nWrite your complete output to `artifacts/s-smoke.md`.",
       "capability": "verify",
-      "artifact_mode": "summary_only",
       "on_failure": "s-fix",
-      "max_iterations": 1
+      "max_iterations": 1,
+      "artifacts": [
+        {
+          "name": "smoke",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/s-smoke.md"
+          },
+          "mode": "full"
+        }
+      ]
     },
     {
       "id": "s-verify",
       "kind": "agent",
       "title": "Full Regression Check",
       "agent_kind": null,
-      "prompt_template": "You are a QA engineer running the full regression suite. You VERIFY only — you do not modify source code. If the fix introduced a regression, you report it precisely; the fix step addresses it on retry.\n\nSmoke test artifact: [attached — from s-smoke]\n\n## Pre-condition\nCheck the smoke test artifact. If 'Proceed to full regression?' is NO, output a BLOCKED status and stop — do not run the full suite.\n\n## Task (if smoke passed)\nRun the full test suite: {{test_command}}\n\nFor any test that fails:\n1. Determine if the failure is caused by the fix (regression) or was already failing (pre-existing).\n2. If it is a regression: do NOT fix it yourself. Describe precisely which test fails and why, so the fix step can resolve it on retry; mark the overall verdict BLOCKED.\n3. If it is pre-existing: document it in the artifact but do not fix it.\n\n## Output artifact\n- Full suite result: X passed, Y failed, Z skipped\n- Regressions introduced: list (should be empty; describe each precisely if present)\n- Pre-existing failures: list\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the full suite has run and the artifact is written.",
+      "prompt_template": "You are a QA engineer running the full regression suite. You VERIFY only — you do not modify source code. If the fix introduced a regression, you report it precisely; the fix step addresses it on retry.\n\nSmoke test artifact: [attached — from s-smoke]\n\n## Pre-condition\nCheck the smoke test artifact. If 'Proceed to full regression?' is NO, output a BLOCKED status and stop — do not run the full suite.\n\n## Task (if smoke passed)\nRun the full test suite: {{test_command}}\n\nFor any test that fails:\n1. Determine if the failure is caused by the fix (regression) or was already failing (pre-existing).\n2. If it is a regression: do NOT fix it yourself. Describe precisely which test fails and why, so the fix step can resolve it on retry; mark the overall verdict BLOCKED.\n3. If it is pre-existing: document it in the artifact but do not fix it.\n\n## Output artifact\n- Full suite result: X passed, Y failed, Z skipped\n- Regressions introduced: list (should be empty; describe each precisely if present)\n- Pre-existing failures: list\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the full suite has run and the artifact is written.\n\nWrite your complete output to `artifacts/s-verify.md`.",
       "capability": "verify",
-      "artifact_mode": "summary_only",
       "on_failure": "s-fix",
       "max_iterations": null,
       "verifier": {
@@ -62,7 +85,17 @@
         "instructions": "Decide whether the bug is fixed and no regressions were introduced. The full test-suite output is provided above. Return \"pass\" only if the suite succeeded (no new failures) AND the reproduction case now passes; otherwise return \"fail\" with a concise, actionable reason naming exactly what is still broken.",
         "harness_name": null,
         "verdict_key": "verdict"
-      }
+      },
+      "artifacts": [
+        {
+          "name": "verify",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/s-verify.md"
+          },
+          "mode": "full"
+        }
+      ]
     },
     {
       "id": "s-gate-ship",
@@ -70,7 +103,6 @@
       "title": "Review Fix Before Merging",
       "agent_kind": null,
       "prompt_template": "Review the Fix artifact (s-fix) and the Regression Check artifact (s-verify). Approve to merge the fix into the feature branch and optionally open an MR. Redirect to re-run a prior step with specific feedback. Cancel to abort.",
-      "artifact_mode": "none",
       "on_failure": null,
       "max_iterations": null
     }

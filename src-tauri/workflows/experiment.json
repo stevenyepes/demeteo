@@ -9,11 +9,20 @@
       "kind": "agent",
       "title": "Define Hypothesis",
       "agent_kind": null,
-      "prompt_template": "You are a technical product manager defining a testable engineering hypothesis.\n\nExperiment goal: {{feature_description}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\n\n## Your task\nDefine a single, testable hypothesis document. A good hypothesis has a clear observable outcome, not a vague goal.\n\n## Required sections\n1. **Research Question** — one sentence: 'Does X work well enough for Y use case?'\n2. **Hypothesis Statement** — 'We believe that <approach> will achieve <outcome> as measured by <metric>.'\n3. **Success Criteria** — 2–4 measurable, binary-pass/fail statements. Each must reference a specific metric.\n4. **Failure Criteria** — what outcome proves the hypothesis wrong?\n5. **Minimum Viable Proof** — the simplest possible code path to generate observable evidence. Name the specific files or modules to touch.\n6. **Scope Exclusions** — what is explicitly out of scope for this experiment.\n7. **Time/Cost Box** — max prototype complexity or number of agent turns before we declare inconclusive.\n\n## Stop condition\nYou are done when all 7 sections are present and Success Criteria are measurable (not qualitative).",
+      "prompt_template": "You are a technical product manager defining a testable engineering hypothesis.\n\nExperiment goal: {{feature_description}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\n\n## Your task\nDefine a single, testable hypothesis document. A good hypothesis has a clear observable outcome, not a vague goal.\n\n## Required sections\n1. **Research Question** — one sentence: 'Does X work well enough for Y use case?'\n2. **Hypothesis Statement** — 'We believe that <approach> will achieve <outcome> as measured by <metric>.'\n3. **Success Criteria** — 2–4 measurable, binary-pass/fail statements. Each must reference a specific metric.\n4. **Failure Criteria** — what outcome proves the hypothesis wrong?\n5. **Minimum Viable Proof** — the simplest possible code path to generate observable evidence. Name the specific files or modules to touch.\n6. **Scope Exclusions** — what is explicitly out of scope for this experiment.\n7. **Time/Cost Box** — max prototype complexity or number of agent turns before we declare inconclusive.\n\n## Stop condition\nYou are done when all 7 sections are present and Success Criteria are measurable (not qualitative).\n\nWrite your complete output to `artifacts/s-hypothesis.md`.",
       "capability": "artifacts",
-      "artifact_mode": "full",
       "on_failure": null,
-      "max_iterations": 1
+      "max_iterations": 1,
+      "artifacts": [
+        {
+          "name": "hypothesis",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/s-hypothesis.md"
+          },
+          "mode": "full"
+        }
+      ]
     },
     {
       "id": "s-gate-hypothesis",
@@ -21,7 +30,6 @@
       "title": "Approve Hypothesis Before Building",
       "agent_kind": null,
       "prompt_template": "Review the Hypothesis artifact from 's-hypothesis'. Approve if the research question is worth answering and the success criteria are measurable. Redirect with a revised research question if the hypothesis is unclear or out of scope. Cancel to abandon the experiment.",
-      "artifact_mode": "none",
       "on_failure": null,
       "max_iterations": null
     },
@@ -32,20 +40,37 @@
       "agent_kind": null,
       "prompt_template": "You are an engineer building a minimum-viable prototype to prove or disprove a hypothesis.\n\nHypothesis artifact: [attached — from s-hypothesis]\n\n## Rules\n1. Build ONLY what is specified in the 'Minimum Viable Proof' section. Do not expand scope.\n2. Optimise for speed of learning, not production quality.\n3. Mark every shortcut with a `// PROTOTYPE:` comment explaining what would be different in production.\n4. Write a smoke test that directly exercises the Success Criteria and produces an observable measurement.\n5. Run the smoke test. Record the outcome against each criterion.\n\n## Output artifact\n- Code changes (list of files + brief description)\n- Smoke test results: for each Success Criterion — PASS / FAIL / INCONCLUSIVE with the measured value\n- Shortcuts taken (list of `// PROTOTYPE:` comments)\n- Unexpected findings (anything that surprised you)\n\n## Stop condition\nYou are done when the smoke test has run and every Success Criterion has a recorded outcome.",
       "capability": "implement",
-      "artifact_mode": "full",
       "on_failure": null,
-      "max_iterations": 2
+      "max_iterations": 2,
+      "artifacts": [
+        {
+          "name": "changed-files",
+          "capture": {
+            "kind": "all_writes"
+          },
+          "mode": "summary_only"
+        }
+      ]
     },
     {
       "id": "s-evaluate",
       "kind": "agent",
       "title": "Evaluate Findings",
       "agent_kind": null,
-      "prompt_template": "You are a technical lead analysing an experiment's results against its hypothesis.\n\nHypothesis artifact: [attached — from s-hypothesis]\nPrototype artifact: [attached — from s-prototype]\n\n## Your task\nProduce an objective evaluation document. Do NOT include any code changes — analysis only.\n\n## Required sections\n1. **Hypothesis Verdict** — CONFIRMED / REFUTED / INCONCLUSIVE (with one-paragraph rationale).\n2. **Criterion-by-Criterion Analysis** — table: criterion | expected | measured | verdict.\n3. **Key Learnings** — 2–5 bullet points of what was discovered, regardless of verdict.\n4. **Recommendation** — one of:\n   - `HARDEN`: proceed to production-quality implementation (state which parts of the prototype are reusable).\n   - `PIVOT`: modify the hypothesis and re-prototype (state what to change).\n   - `DISCARD`: the hypothesis is wrong; document why and stop.\n5. **Next Steps** — concrete actions for the chosen recommendation.\n\n## Stop condition\nYou are done when all 5 sections are complete and Recommendation is one of the three stated options.",
-      "capability": "read_only",
-      "artifact_mode": "full",
+      "prompt_template": "You are a technical lead analysing an experiment's results against its hypothesis.\n\nHypothesis artifact: [attached — from s-hypothesis]\nPrototype artifact: [attached — from s-prototype]\n\n## Your task\nProduce an objective evaluation document. Do NOT include any code changes — analysis only.\n\n## Required sections\n1. **Hypothesis Verdict** — CONFIRMED / REFUTED / INCONCLUSIVE (with one-paragraph rationale).\n2. **Criterion-by-Criterion Analysis** — table: criterion | expected | measured | verdict.\n3. **Key Learnings** — 2–5 bullet points of what was discovered, regardless of verdict.\n4. **Recommendation** — one of:\n   - `HARDEN`: proceed to production-quality implementation (state which parts of the prototype are reusable).\n   - `PIVOT`: modify the hypothesis and re-prototype (state what to change).\n   - `DISCARD`: the hypothesis is wrong; document why and stop.\n5. **Next Steps** — concrete actions for the chosen recommendation.\n\n## Stop condition\nYou are done when all 5 sections are complete and Recommendation is one of the three stated options.\n\nWrite your complete output to `artifacts/s-evaluate.md`.",
+      "capability": "artifacts",
       "on_failure": null,
-      "max_iterations": 1
+      "max_iterations": 1,
+      "artifacts": [
+        {
+          "name": "evaluate",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/s-evaluate.md"
+          },
+          "mode": "full"
+        }
+      ]
     },
     {
       "id": "s-gate-evaluate",
@@ -53,7 +78,6 @@
       "title": "Evaluate Findings — Commit or Discard?",
       "agent_kind": null,
       "prompt_template": "Review the Evaluation artifact from 's-evaluate'. The agent recommends: see the Recommendation field. Approve to harden the prototype into production code. Redirect with 'PIVOT: <new direction>' to modify the hypothesis and re-prototype. Cancel to discard the experiment.",
-      "artifact_mode": "none",
       "on_failure": null,
       "max_iterations": null
     },
@@ -64,9 +88,17 @@
       "agent_kind": null,
       "prompt_template": "You are a senior engineer acting on the gate decision for this experiment.\n\nEvaluation artifact: [attached — from s-evaluate]\nGate decision: {{gate_decision}}\nGate feedback: {{gate_feedback}}\n\n## If APPROVED (harden)\n1. Remove all `// PROTOTYPE:` shortcuts or replace them with production-quality implementations.\n2. Add proper tests covering the success criteria scenarios.\n3. Add inline documentation explaining the approach and why it was chosen.\n4. Remove experimental scaffolding (debug prints, hardcoded test values).\n\n## If REDIRECTED (pivot)\nThe gate provided a new direction: {{gate_feedback}}\n1. Archive the current prototype as `experiments/{{feature_slug}}/prototype-v1/`.\n2. Write a `FINDINGS.md` in that directory summarising what was learned.\n3. Output a revised hypothesis document for the next prototype iteration.\n\n## Regardless of outcome — REQUIRED\nWrite `experiments/{{feature_slug}}/FINDINGS.md` with:\n- What was tried\n- What was learned\n- What the recommendation was\n\n## Stop condition\nYou are done when FINDINGS.md is written and (if APPROVED) all `// PROTOTYPE:` shortcuts are resolved.",
       "capability": "implement",
-      "artifact_mode": "full",
       "on_failure": null,
-      "max_iterations": 2
+      "max_iterations": 2,
+      "artifacts": [
+        {
+          "name": "changed-files",
+          "capture": {
+            "kind": "all_writes"
+          },
+          "mode": "summary_only"
+        }
+      ]
     }
   ]
 }

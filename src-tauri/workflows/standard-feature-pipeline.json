@@ -11,11 +11,13 @@
       "agent_kind": null,
       "prompt_template": "You are a senior software architect performing a pre-implementation codebase audit.\n\nThe user wants to build: {{feature_description}}\n\nProject conventions: {{project_conventions}}\nRepositories in scope: {{repo_list}}\n\n## Your task\n1. Identify every file likely to change. For each file: filename, reason, change type (create / modify / delete).\n2. Identify every existing pattern the implementation must follow (naming, error handling, module boundaries, test conventions).\n3. Flag potential risks: circular dependencies, shared state, performance-sensitive paths, security-sensitive areas.\n4. List any external dependencies or APIs the feature will touch.\n\n## Output artifact (required sections, in order)\n- `## Affected Files` — table: filename | change type | reason\n- `## Patterns to Follow` — bullet list with code references\n- `## Risk Register` — table: risk | likelihood (H/M/L) | mitigation\n- `## External Dependencies` — list\n\n## Stop condition\nYou are done when the artifact contains all four sections and every affected file has a stated reason.",
       "capability": "artifacts",
-      "artifact_mode": "full",
       "artifacts": [
         {
           "name": "research-report",
-          "capture": { "kind": "last_write_to", "path": "artifacts/research-report.md" },
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/research-report.md"
+          },
           "mode": "full"
         }
       ],
@@ -29,11 +31,13 @@
       "agent_kind": null,
       "prompt_template": "You are a technical lead turning a research report into a binding implementation specification.\n\nFeature goal: {{feature_description}}\nResearch artifact: [attached — previous step artifact]\n\n## Your task\nWrite a detailed, actionable spec that any developer (or agent) can implement without ambiguity. If this is a retry from a previous attempt, revise the existing `artifacts/implementation-spec.md` in light of the user's feedback rather than rewriting from scratch.\n\n## Required spec sections\n1. **Acceptance Criteria** — 3–7 testable, binary-pass/fail statements.\n2. **Data Model Changes** — new fields, tables, types, or enum variants with their schema.\n3. **Files to Create or Modify** — from the research artifact, with a one-line change description per file.\n4. **Public API Changes** — new commands, events, or ports; breaking vs additive.\n5. **Testing Strategy** — unit tests required, integration tests, happy path + edge cases.\n6. **Constraints** — things the implementation must NOT do.\n7. **Open Questions** — issues that need user decision before implementation.\n\n## Stop condition\nYou are done when all 7 sections are present and Acceptance Criteria are phrased as testable assertions (not goals).\n\n{{retry_feedback_section}}",
       "capability": "artifacts",
-      "artifact_mode": "full",
       "artifacts": [
         {
           "name": "implementation-spec",
-          "capture": { "kind": "last_write_to", "path": "artifacts/implementation-spec.md" },
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/implementation-spec.md"
+          },
           "mode": "full"
         }
       ],
@@ -46,7 +50,6 @@
       "title": "Review Spec Before Implementation",
       "agent_kind": null,
       "prompt_template": "Review the Implementation Spec artifact from step 's-spec'. Approve to start parallel implementation. Redirect with feedback if the spec needs revision — your feedback will be injected into the spec step's retry. Cancel to abort the feature.",
-      "artifact_mode": "none",
       "on_failure": null,
       "max_iterations": null
     },
@@ -57,11 +60,16 @@
       "agent_kind": null,
       "prompt_template": "You are an implementation worker. Using the approved spec artifact [attached — s-spec], the orchestrator has assigned you a specific subtask.\n\nYour subtask: {{subtask_description}}\nFiles you own: {{subtask_files}}\nFiles you must NOT touch: {{other_subtask_files}}\n\n## Rules\n1. Implement ONLY the files in your ownership list. Never modify files outside it.\n2. Follow the patterns identified in the research artifact exactly.\n3. Write or update tests for every change you make.\n4. Run the affected tests before declaring done: {{test_command}}\n5. Commit with a message format: `feat({{feature_slug}}): <what this subtask does>`.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — validation failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n{{retry_feedback_section}}\n\n## Stop condition\nYou are done when: (a) all your assigned files are implemented, (b) their tests pass, (c) you have committed.\n\n## Output artifact\n- List of files changed\n- Test results (pass/fail counts)\n- Commit SHA",
       "capability": "implement",
-      "artifact_mode": "summary_only",
       "on_failure": "s-gate-review",
       "max_iterations": 2,
       "artifacts": [
-        {"name": "implemented-files", "capture": {"kind": "all_writes"}, "mode": "summary_only"}
+        {
+          "name": "implemented-files",
+          "capture": {
+            "kind": "all_writes"
+          },
+          "mode": "summary_only"
+        }
       ]
     },
     {
@@ -71,11 +79,13 @@
       "agent_kind": null,
       "prompt_template": "You are a senior code reviewer with an adversarial mindset. Your role is to find problems — not to be kind.\n\nFeature goal: {{feature_description}}\nSpec artifact: [attached — s-spec]\nImplementation subtask artifacts: [attached — all s-implement summaries]\n\n## Review dimensions (check each explicitly)\n1. **Correctness** — does the implementation satisfy every acceptance criterion?\n2. **Spec compliance** — are there deviations from the spec's constraints?\n3. **Security** — hardcoded secrets, injection risks, path traversal, TOCTOU vulnerabilities.\n4. **Performance** — N+1 queries, unbounded loops, unnecessary allocations on hot paths.\n5. **Test coverage** — are edge cases and error paths tested?\n6. **Code quality** — naming, duplication, dead code, overly complex logic.\n\n## Output artifact (required)\n- `## Critical Issues` — MUST be fixed before ship (blocking)\n- `## Major Issues` — should be fixed (non-blocking but important)\n- `## Minor Issues` — nice-to-fix\n- `## Verdict` — one of: `PASS`, `PASS_WITH_NOTES`, `FAIL`\n\n## Stop condition\nYou are done when all 6 dimensions are assessed and a Verdict is written.",
       "capability": "artifacts",
-      "artifact_mode": "full",
       "artifacts": [
         {
           "name": "critic-review",
-          "capture": { "kind": "last_write_to", "path": "artifacts/critic-review.md" },
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/critic-review.md"
+          },
           "mode": "full"
         }
       ],
@@ -89,11 +99,13 @@
       "agent_kind": null,
       "prompt_template": "You are a QA engineer running the final validation gate before this feature merges. You VERIFY only — you do not modify source code. If something is broken, you report it precisely so an implementation step fixes it.\n\nFeature branch: {{feature_branch}}\nTest command: {{test_command}}\nCritic review artifact: [attached — s-critic]\n\n## Validation sequence (run in order, stop and report on first hard failure)\n1. **Build** — `{{build_command}}`. If it fails, report and stop.\n2. **Lint & Type Check** — run the project linter with warnings-as-errors.\n3. **Unit & Integration Tests** — `{{test_command}}`. Report pass/fail counts.\n4. **Security Scan** — run `cargo audit` or `npm audit`. Flag any `critical` or `high` advisories.\n5. **Critic Issue Resolution** — verify whether every `Critical Issue` from the critic artifact is resolved. Do NOT fix anything yourself; for each unresolved item, write a precise, actionable description of what remains so the implementation step can address it on retry.\n\n## Output artifact\n- Build: PASS / FAIL\n- Lint: PASS / FAIL + warning count\n- Tests: X passed, Y failed (list failing tests)\n- Security: N advisories (list critical/high)\n- Critic critical items resolved: list (and, for unresolved, what must be fixed)\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the artifact contains all five sections and an Overall verdict.",
       "capability": "verify",
-      "artifact_mode": "full",
       "artifacts": [
         {
           "name": "validation-report",
-          "capture": { "kind": "last_write_to", "path": "artifacts/validation-report.md" },
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/validation-report.md"
+          },
           "mode": "full"
         }
       ],
@@ -112,7 +124,6 @@
       "title": "Approve Merge / Publish",
       "agent_kind": null,
       "prompt_template": "Review the Validation artifact (s-validate) and the Critic Review (s-critic). Approve to merge the feature branch and optionally open an MR. Redirect to reopen a prior step with specific feedback. Cancel to abort.",
-      "artifact_mode": "none",
       "on_failure": null,
       "max_iterations": null
     }
