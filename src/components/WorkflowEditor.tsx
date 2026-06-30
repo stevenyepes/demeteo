@@ -127,11 +127,6 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
       reportValidation('Workflow must contain at least one step.');
       return;
     }
-    const lastStep = steps[steps.length - 1];
-    if (lastStep.kind === 'gate') {
-      reportValidation('A user gate step cannot be the last step in a workflow pipeline.');
-      return;
-    }
 
     // Schedule validation
     if (cron || titleTemplate || scheduleProjectId) {
