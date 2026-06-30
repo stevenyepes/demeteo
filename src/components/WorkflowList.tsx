@@ -301,7 +301,6 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                         )}
 
                         <div className="mt-3 flex items-center gap-4 text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
-                          <span>Artifact: {step.artifact_mode}</span>
                           {step.on_failure && <span>On Failure: {step.on_failure}</span>}
                           {step.max_iterations && <span>Max Loops: {step.max_iterations}</span>}
                         </div>

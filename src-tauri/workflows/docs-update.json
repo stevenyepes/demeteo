@@ -9,11 +9,20 @@
       "kind": "agent",
       "title": "Survey Existing Docs",
       "agent_kind": null,
-      "prompt_template": "You are a technical writer performing a documentation audit.\n\nDocumentation update target: {{feature_description}}\nRepositories in scope: {{repo_list}}\n\n## Your task\nSurvey all documentation related to the update target.\n\n## Required sections\n1. **Files to Update** — table: file path | current state | what's wrong or missing | priority (High/Medium/Low)\n2. **Style & Voice Reference** — identify the existing tone, tense, and formatting conventions from the best-written existing doc in the repo.\n3. **Link Inventory** — all internal and external links in the docs that will change. Flag any already-broken links.\n4. **Code Examples** — list all code examples in scope. Flag examples that are likely outdated.\n5. **Proposed Scope** — a conservative list of exactly which files will be touched and what will change. Do not include nice-to-haves.\n\n## Stop condition\nYou are done when all 5 sections are present and every file in 'Files to Update' has a stated priority.",
+      "prompt_template": "You are a technical writer performing a documentation audit.\n\nDocumentation update target: {{feature_description}}\nRepositories in scope: {{repo_list}}\n\n## Your task\nSurvey all documentation related to the update target.\n\n## Required sections\n1. **Files to Update** — table: file path | current state | what's wrong or missing | priority (High/Medium/Low)\n2. **Style & Voice Reference** — identify the existing tone, tense, and formatting conventions from the best-written existing doc in the repo.\n3. **Link Inventory** — all internal and external links in the docs that will change. Flag any already-broken links.\n4. **Code Examples** — list all code examples in scope. Flag examples that are likely outdated.\n5. **Proposed Scope** — a conservative list of exactly which files will be touched and what will change. Do not include nice-to-haves.\n\n## Stop condition\nYou are done when all 5 sections are present and every file in 'Files to Update' has a stated priority.\n\nWrite your complete output to `artifacts/s-survey.md`.",
       "capability": "artifacts",
-      "artifact_mode": "full",
       "on_failure": null,
-      "max_iterations": 1
+      "max_iterations": 1,
+      "artifacts": [
+        {
+          "name": "survey",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/s-survey.md"
+          },
+          "mode": "full"
+        }
+      ]
     },
     {
       "id": "s-gate-scope",
@@ -21,7 +30,6 @@
       "title": "Approve Documentation Scope",
       "agent_kind": null,
       "prompt_template": "Review the Survey artifact from 's-survey'. Approve the proposed scope to begin drafting. Redirect to narrow or expand the scope — your feedback will adjust the draft's focus. Cancel to abort.",
-      "artifact_mode": "none",
       "on_failure": null,
       "max_iterations": null
     },
@@ -32,18 +40,25 @@
       "agent_kind": null,
       "prompt_template": "You are a technical writer updating documentation.\n\nUpdate target: {{feature_description}}\nSurvey artifact: [attached — from s-survey]\nGate scope feedback: {{gate_feedback}}\n\n## Rules\n1. Write in the style and voice documented in the survey's 'Style & Voice Reference' section. Match tense, heading style, and tone exactly.\n2. Update ONLY the files in the approved 'Proposed Scope'.\n3. Add or update code examples where they improve clarity — mark new examples with an `<!-- EXAMPLE: new -->` comment.\n4. Do NOT break existing markdown anchors (e.g., `#section-name`) without updating all references to them.\n5. Do NOT update links that are not in the survey's Link Inventory unless they are obviously broken.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — validation failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes (e.g. broken links, failing examples); do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Output artifact\n- List of files written\n- New or updated sections (summary)\n- Code examples added/updated (list)\n- Links updated (list)\n\n## Stop condition\nYou are done when all files in the approved scope have been written.",
       "capability": "implement",
-      "artifact_mode": "full",
       "on_failure": null,
-      "max_iterations": 2
+      "max_iterations": 2,
+      "artifacts": [
+        {
+          "name": "changed-files",
+          "capture": {
+            "kind": "all_writes"
+          },
+          "mode": "summary_only"
+        }
+      ]
     },
     {
       "id": "s-validate",
       "kind": "agent",
       "title": "Validate Links & Code Examples",
       "agent_kind": null,
-      "prompt_template": "You are a documentation QA engineer performing a technical validation pass.\n\nDraft artifact: [attached — from s-draft]\nSurvey link inventory: [attached — from s-survey]\n\n## Validation checklist\n1. **Internal links** — verify every internal markdown link resolves to an existing heading or file. List broken links.\n2. **External links** — check the links from the survey's Link Inventory that were updated. Verify they resolve correctly.\n3. **Code examples** — for every `<!-- EXAMPLE: new -->` example added: attempt to compile or run it. Report pass/fail per example.\n4. **Anchor integrity** — list any heading that was renamed or removed; flag if there are stale references elsewhere in the docs.\n\n## Output artifact\n- Broken internal links: list (should be empty)\n- Broken external links: list\n- Code example results: example | PASS / FAIL / NOT TESTED\n- Stale anchors: list\n- **Verdict: VALID / INVALID**\n\n## Stop condition\nYou are done when all 4 checklist items are assessed and a Verdict is stated.",
+      "prompt_template": "You are a documentation QA engineer performing a technical validation pass.\n\nDraft artifact: [attached — from s-draft]\nSurvey link inventory: [attached — from s-survey]\n\n## Validation checklist\n1. **Internal links** — verify every internal markdown link resolves to an existing heading or file. List broken links.\n2. **External links** — check the links from the survey's Link Inventory that were updated. Verify they resolve correctly.\n3. **Code examples** — for every `<!-- EXAMPLE: new -->` example added: attempt to compile or run it. Report pass/fail per example.\n4. **Anchor integrity** — list any heading that was renamed or removed; flag if there are stale references elsewhere in the docs.\n\n## Output artifact\n- Broken internal links: list (should be empty)\n- Broken external links: list\n- Code example results: example | PASS / FAIL / NOT TESTED\n- Stale anchors: list\n- **Verdict: VALID / INVALID**\n\n## Stop condition\nYou are done when all 4 checklist items are assessed and a Verdict is stated.\n\nWrite your complete output to `artifacts/s-validate.md`.",
       "capability": "verify",
-      "artifact_mode": "summary_only",
       "on_failure": "s-draft",
       "max_iterations": null,
       "verifier": {
@@ -51,7 +66,17 @@
         "instructions": "Decide whether the documentation update is correct and complete. Base your verdict primarily on the validation results (broken links, failing code examples, stale anchors, and the VALID/INVALID verdict); treat any harness output above as secondary. Return \"pass\" only if there are no broken internal links and no failing code examples; otherwise return \"fail\" with a concise, actionable reason naming exactly what to fix.",
         "harness_name": null,
         "verdict_key": "verdict"
-      }
+      },
+      "artifacts": [
+        {
+          "name": "validate",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/s-validate.md"
+          },
+          "mode": "full"
+        }
+      ]
     },
     {
       "id": "s-gate-review",
@@ -59,7 +84,6 @@
       "title": "Review Draft Documentation",
       "agent_kind": null,
       "prompt_template": "Review the Draft artifact (s-draft) and the Validation report (s-validate). If Validation shows INVALID, redirect to fix the broken items first. If VALID: approve to begin the final polish pass. Cancel to abort.",
-      "artifact_mode": "none",
       "on_failure": null,
       "max_iterations": null
     },
@@ -70,9 +94,17 @@
       "agent_kind": null,
       "prompt_template": "You are a technical writer doing a final polish pass.\n\nGate feedback: {{gate_feedback}}\nDraft artifact: [attached — from s-draft]\nValidation artifact: [attached — from s-validate]\n\n## Tasks\n1. Apply all reviewer feedback from the gate decision.\n2. Fix all INVALID items from the validation report (broken links, failing examples).\n3. Final style pass: consistent heading capitalisation, no trailing whitespace, no double blank lines.\n4. Write a CHANGELOG entry summarising the documentation changes for this feature.\n\n## Output artifact\n- Gate feedback items resolved: list\n- Validation issues resolved: list\n- CHANGELOG entry (copy-paste ready)\n\n## Stop condition\nYou are done when all gate feedback and validation issues are resolved and the CHANGELOG entry is written.",
       "capability": "implement",
-      "artifact_mode": "summary_only",
       "on_failure": null,
-      "max_iterations": 2
+      "max_iterations": 2,
+      "artifacts": [
+        {
+          "name": "changed-files",
+          "capture": {
+            "kind": "all_writes"
+          },
+          "mode": "summary_only"
+        }
+      ]
     }
   ]
 }

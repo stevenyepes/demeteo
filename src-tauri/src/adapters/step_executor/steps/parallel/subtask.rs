@@ -35,7 +35,6 @@ impl ExecutionDriver {
         planner_kind: &str,
         override_model: &Option<String>,
         all_artifact_refs: &mut Vec<String>,
-        subtask_artifacts: &mut Vec<String>,
     ) -> Result<(), String> {
         let mut step_failed = false;
         let mut step_err_msg = String::new();
@@ -47,7 +46,6 @@ impl ExecutionDriver {
             ),
             None => (String::new(), String::new(), String::new()),
         };
-        let is_legacy = step_conf.artifacts.as_ref().is_none_or(|d| d.is_empty());
         let decls: &[crate::domain::artifact::ArtifactDecl] =
             step_conf.artifacts.as_deref().unwrap_or(&[]);
 
@@ -180,7 +178,7 @@ impl ExecutionDriver {
                 )
             };
             let sub_prompt =
-                inject_artifact_contract(&sub_prompt, if is_legacy { None } else { Some(decls) });
+                inject_artifact_contract(&sub_prompt, step_conf.artifacts.as_deref());
             // Surface retry feedback to the worker regardless of whether
             // the step's `prompt_template` references
             // `{{retry_feedback_section}}`. Matches the agent step
@@ -267,7 +265,6 @@ impl ExecutionDriver {
                         }
                     }
                     let mut produced_artifacts: Vec<Artifact> = Vec::new();
-                    let mut legacy_sub_content = String::new();
 
                     let timeouts =
                         crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
@@ -283,9 +280,6 @@ impl ExecutionDriver {
                         self.pricing.clone(),
                         |event| {
                             if let AgentEvent::Text { delta } = event {
-                                if is_legacy {
-                                    legacy_sub_content.push_str(delta);
-                                }
                                 let _ = self.notif.emit(&DomainEvent::AgentStream {
                                     feature_id: self.f_id.clone(),
                                     step_execution_id: step_exec.id.clone(),
@@ -339,10 +333,7 @@ impl ExecutionDriver {
                         break;
                     }
 
-                    if is_legacy {
-                        subtask_artifacts
-                            .push(format!("### {}\n\n{}", sub.title, legacy_sub_content));
-                    } else {
+                    {
                         let always: Vec<&str> = decls
                             .iter()
                             .filter_map(|d| match &d.capture {
@@ -456,6 +447,7 @@ impl ExecutionDriver {
                     }
 
                     // Merge back
+
                     let mut merge_result = self
                         .git_ops
                         .merge_subtask(

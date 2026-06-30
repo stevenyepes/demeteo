@@ -11,12 +11,16 @@
       "agent_kind": "claude-code",
       "prompt_template": "You are a senior engineer producing a concise, actionable implementation plan for a simple task.\n\nFeature description: {{feature_description}}\nProject conventions: {{project_conventions}}\nRepositories in scope: {{repo_list}}\n\n## Your task\nExplore the codebase to understand the relevant area, then produce a plan with these sections:\n\n1. **Files to Change** — table: file path | change type (create/modify) | what to change\n2. **Implementation Approach** — step-by-step sequence. Each step must be a single atomic change (one file or one logical change).\n3. **Acceptance Criteria** — 2-5 testable, binary-pass/fail statements that define done.\n4. **Open Questions** — anything ambiguous that the implementer will need to decide.\n\n## Rules\n- Do NOT write any code. Produce the plan document only.\n- Keep it short — this is a simple task, not a full spec.\n\n## Stop condition\nYou are done when all 4 sections are present and Acceptance Criteria are testable assertions.",
       "capability": "artifacts",
-      "artifact_mode": "full",
-      "artifacts": [{
-        "name": "implementation-plan",
-        "capture": { "kind": "last_write_to", "path": "artifacts/implementation-plan.md" },
-        "mode": "full"
-      }],
+      "artifacts": [
+        {
+          "name": "implementation-plan",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/implementation-plan.md"
+          },
+          "mode": "full"
+        }
+      ],
       "on_failure": null,
       "max_iterations": 1
     },
@@ -27,18 +31,25 @@
       "agent_kind": "opencode",
       "prompt_template": "You are an implementation engineer executing a predefined plan.\n\nFeature description: {{feature_description}}\nPlan artifact: [attached — s-plan]\nBuild command: {{build_command}}\nTest command: {{test_command}}\n\n## Rules\n1. Follow the plan's Implementation Approach exactly, step by step.\n2. Touch ONLY the files listed in 'Files to Change'. No scope creep.\n3. Write or update tests for every change. Match the project's existing test patterns.\n4. After implementing, run the build: {{build_command}}\n5. Run the tests for the affected files: {{test_command}}\n6. Commit with message format: `feat({{feature_slug}}): <what changed>`\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — validation failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Stop condition\nYou are done when: (a) all files in the plan are implemented, (b) build passes, (c) affected tests pass, (d) changes are committed.",
       "capability": "implement",
-      "artifact_mode": "full",
       "on_failure": null,
-      "max_iterations": 2
+      "max_iterations": 2,
+      "artifacts": [
+        {
+          "name": "changed-files",
+          "capture": {
+            "kind": "all_writes"
+          },
+          "mode": "summary_only"
+        }
+      ]
     },
     {
       "id": "s-validate",
       "kind": "agent",
       "title": "Validate with Test Harness",
       "agent_kind": "claude-code",
-      "prompt_template": "You are a QA engineer running final validation on a completed implementation. You VERIFY only — you do not modify source code. If the change introduced a regression, you report it precisely; the implement step addresses it on retry.\n\nFeature description: {{feature_description}}\nImplementation artifact: [attached — s-implement]\nBuild command: {{build_command}}\nTest command: {{test_command}}\n\n## Validation sequence (run in order; stop and report on first hard failure)\n1. **Build** — {{build_command}}. Report PASS/FAIL.\n2. **Full Test Suite** — {{test_command}}. Report X passed, Y failed.\n3. For any failure: determine if it is a REGRESSION (caused by this change) or PRE-EXISTING.\n   - REGRESSION: do NOT fix it yourself. Describe precisely which check fails and why so the implement step can resolve it on retry; mark the verdict BLOCKED.\n   - PRE-EXISTING: document but do not fix.\n\n## Output artifact\n- Build: PASS / FAIL\n- Test suite: X passed, Y failed, Z skipped\n- Regressions introduced: list (should be empty; describe each precisely if present)\n- Pre-existing failures: list\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when build passes, the full test suite runs, and the output artifact is complete.",
+      "prompt_template": "You are a QA engineer running final validation on a completed implementation. You VERIFY only — you do not modify source code. If the change introduced a regression, you report it precisely; the implement step addresses it on retry.\n\nFeature description: {{feature_description}}\nImplementation artifact: [attached — s-implement]\nBuild command: {{build_command}}\nTest command: {{test_command}}\n\n## Validation sequence (run in order; stop and report on first hard failure)\n1. **Build** — {{build_command}}. Report PASS/FAIL.\n2. **Full Test Suite** — {{test_command}}. Report X passed, Y failed.\n3. For any failure: determine if it is a REGRESSION (caused by this change) or PRE-EXISTING.\n   - REGRESSION: do NOT fix it yourself. Describe precisely which check fails and why so the implement step can resolve it on retry; mark the verdict BLOCKED.\n   - PRE-EXISTING: document but do not fix.\n\n## Output artifact\n- Build: PASS / FAIL\n- Test suite: X passed, Y failed, Z skipped\n- Regressions introduced: list (should be empty; describe each precisely if present)\n- Pre-existing failures: list\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when build passes, the full test suite runs, and the output artifact is complete.\n\nWrite your complete output to `artifacts/s-validate.md`.",
       "capability": "verify",
-      "artifact_mode": "summary_only",
       "on_failure": "s-implement",
       "max_iterations": null,
       "verifier": {
@@ -46,7 +57,17 @@
         "instructions": "Decide whether the implementation satisfies the feature goal and the plan's acceptance criteria. The build/test harness output is provided above. Return \"pass\" only if the harness succeeded AND the change is correct and complete; otherwise return \"fail\" with a concise, actionable reason naming exactly what to fix.",
         "harness_name": null,
         "verdict_key": "verdict"
-      }
+      },
+      "artifacts": [
+        {
+          "name": "validate",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/s-validate.md"
+          },
+          "mode": "full"
+        }
+      ]
     }
   ]
 }

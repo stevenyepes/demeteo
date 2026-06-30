@@ -108,7 +108,6 @@ export type StepConfig = {
   agent_kind?: string | null;
   model?: string | null;
   prompt_template?: string | null;
-  artifact_mode: 'full' | 'summary_only' | 'none' | string;
   on_failure?: string | null;
   max_iterations?: number | null;
   verifier?: VerifierConfig | null;

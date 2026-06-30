@@ -744,7 +744,6 @@ mod resolution_tests {
             agent_kind: agent.map(str::to_string),
             model: model.map(str::to_string),
             prompt_template: None,
-            artifact_mode: "full".to_string(),
             on_failure: None,
             max_iterations: None,
             artifacts: None,

@@ -86,10 +86,7 @@ impl ExecutionDriver {
         );
 
         // 2. Fan out: one worker per subtask.
-        let mut subtask_artifacts = Vec::new();
         let mut all_artifact_refs = Vec::new();
-
-        let is_legacy = step_conf.artifacts.as_ref().is_none_or(|d| d.is_empty());
 
         let subtasks_res = self
             .run_subtasks_loop(
@@ -106,7 +103,6 @@ impl ExecutionDriver {
                 &planner_kind,
                 &override_model,
                 &mut all_artifact_refs,
-                &mut subtask_artifacts,
             )
             .await;
 
@@ -226,44 +222,31 @@ impl ExecutionDriver {
         }
 
         // Write parallel step artifact summary
-        let (artifact_path, artifact_paths) = if !is_legacy {
-            let diff_ref = base_sha;
-            let diff_body =
-                compute_git_diff(&*self.exec, &machine_str, &self.target_dir, &diff_ref).await;
-            let mut refs = Vec::new();
-            if !diff_body.trim().is_empty() {
-                let diff_artifact = Artifact {
-                    name: "code-diff".into(),
-                    mime: "text/x-diff".into(),
-                    content: diff_body,
-                    source: crate::domain::artifact::ArtifactSource::Diff {
-                        base: diff_ref,
-                        head: "WORKTREE".into(),
-                        path_filter: None,
-                    },
-                };
-                if let Ok(reference) =
-                    self.artifacts
-                        .put(&self.f_id_str, &step_exec.step_id.0, &diff_artifact)
-                {
-                    refs.push(reference);
-                }
+        let diff_ref = base_sha;
+        let diff_body =
+            compute_git_diff(&*self.exec, &machine_str, &self.target_dir, &diff_ref).await;
+        let mut refs = Vec::new();
+        if !diff_body.trim().is_empty() {
+            let diff_artifact = Artifact {
+                name: "code-diff".into(),
+                mime: "text/x-diff".into(),
+                content: diff_body,
+                source: crate::domain::artifact::ArtifactSource::Diff {
+                    base: diff_ref,
+                    head: "WORKTREE".into(),
+                    path_filter: None,
+                },
+            };
+            if let Ok(reference) =
+                self.artifacts
+                    .put(&self.f_id_str, &step_exec.step_id.0, &diff_artifact)
+            {
+                refs.push(reference);
             }
-            refs.extend(all_artifact_refs);
-            let primary = refs.first().cloned();
-            (primary, refs)
-        } else {
-            let mut art_path = self
-                .app_local_data_dir
-                .join("artifacts")
-                .join(&self.f_id_str);
-            let _ = std::fs::create_dir_all(&art_path);
-            let file_name = format!("{}.md", step_exec.step_id.0);
-            art_path.push(&file_name);
-            let _ = std::fs::write(&art_path, subtask_artifacts.join("\n\n"));
-            let art_path_str = art_path.to_string_lossy().to_string();
-            (Some(art_path_str.clone()), vec![art_path_str])
-        };
+        }
+        refs.extend(all_artifact_refs);
+        let primary = refs.first().cloned();
+        let (artifact_path, artifact_paths) = (primary, refs);
 
         let wall = step_start.elapsed().as_secs();
         let _ = self.features.step_update(

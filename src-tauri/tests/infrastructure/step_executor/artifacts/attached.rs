@@ -12,7 +12,6 @@ fn step_conf_inline(step_id: &str) -> crate::domain::models::StepConfig {
         agent_kind: None,
         model: None,
         prompt_template: None,
-        artifact_mode: "full".into(),
         on_failure: None,
         max_iterations: None,
         artifacts: Some(vec![ArtifactDecl {

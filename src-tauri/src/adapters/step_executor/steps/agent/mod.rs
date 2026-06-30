@@ -84,11 +84,9 @@ impl ExecutionDriver {
             append_retry_feedback_section(prompt, self.retry_ctx.as_ref())
         };
 
-        let is_legacy = step_conf.artifacts.as_ref().is_none_or(|d| d.is_empty());
-        let decls = step_conf.artifacts.as_deref().unwrap_or(&[]);
         let prompt = crate::adapters::step_executor::artifacts::inject_artifact_contract(
             &prompt,
-            if is_legacy { None } else { Some(decls) },
+            step_conf.artifacts.as_deref(),
         );
 
         // Prepend the capability's prohibitive Operating Boundary block —
@@ -710,21 +708,6 @@ impl ExecutionDriver {
         } else {
             match merge_result {
                 Ok(()) => {
-                    // Resolve artifacts: either declared (new) or text-dump (legacy)
-                    if is_legacy {
-                        let mut art_path = self
-                            .app_local_data_dir
-                            .join("artifacts")
-                            .join(&self.f_id_str);
-                        let _ = std::fs::create_dir_all(&art_path);
-                        let file_name = format!("{}.md", step_exec.step_id.0);
-                        art_path.push(&file_name);
-                        let _ = std::fs::write(&art_path, &text_buffer);
-                        let art_path_str = art_path.to_string_lossy().to_string();
-                        artifact_path = Some(art_path_str.clone());
-                        artifact_paths = vec![art_path_str];
-                    }
-
                     let wall = step_start.elapsed().as_secs();
                     let _ = self.features.step_update(
                         &step_exec.id,
