@@ -93,8 +93,21 @@ pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
 /// every agent process. Permission policy is applied separately by the
 /// runtime from [`AgentContext::permissions`], so this no longer carries
 /// `OPENCODE_PERMISSION`.
+///
+/// USER is explicitly forwarded because some CLIs (notably the native
+/// Claude Code install) use it to locate credentials. When the Tauri GUI
+/// app launches without a full login-session environment (e.g. from
+/// Finder/Dock on macOS), USER may be absent from the inherited env;
+/// deriving it here from the parent process ensures child agents always
+/// have it.
 pub fn agent_base_env() -> HashMap<String, String> {
-    HashMap::new()
+    let mut env = HashMap::new();
+    for key in ["USER", "LOGNAME", "HOME", "SHELL", "TMPDIR"] {
+        if let Ok(val) = std::env::var(key) {
+            env.insert(key.to_string(), val);
+        }
+    }
+    env
 }
 
 #[derive(Debug, Error)]
