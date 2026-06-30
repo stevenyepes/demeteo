@@ -123,26 +123,64 @@ pub fn run() {
                     std::path::PathBuf::from(h)
                         .join("Library/Application Support/com.stvcloud.demeteo.dev")
                 })
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .unwrap_or_else(|| std::env::temp_dir().join("demeteo"))
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         {
-            std::path::PathBuf::from(".")
+            let base = std::env::var("XDG_DATA_HOME")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    std::env::var("HOME")
+                        .ok()
+                        .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
+                })
+                .unwrap_or_else(std::env::temp_dir);
+            base.join("com.stvcloud.demeteo")
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("LOCALAPPDATA")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join("com.stvcloud.demeteo")
         }
     };
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "demeteo.log");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "demeteo_lib=info,warn".parse().expect("static filter")),
-        )
-        .with_writer(non_blocking)
-        .with_ansi(false)
-        .try_init()
-        .ok();
-    // Keep the guard alive for the entire process lifetime.
-    Box::leak(Box::new(guard));
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "[demeteo] warning: could not create log dir {}: {}",
+            log_dir.display(),
+            e
+        );
+    }
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "demeteo_lib=info,warn".parse().expect("static filter"));
+    let file_appender =
+        std::panic::catch_unwind(|| tracing_appender::rolling::daily(&log_dir, "demeteo.log"));
+    match file_appender {
+        Ok(appender) => {
+            let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .try_init()
+                .ok();
+            Box::leak(Box::new(guard));
+        }
+        Err(_) => {
+            eprintln!(
+                "[demeteo] warning: file logging disabled (could not open {}); logs go to stderr only",
+                log_dir.join("demeteo.log").display()
+            );
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .with_writer(std::io::stderr)
+                .with_ansi(false)
+                .try_init()
+                .ok();
+        }
+    }
 
     // Startup banner so a stale binary is obvious in the Tauri dev
     // console. Bump the suffix whenever the bootstrap/step-executor
