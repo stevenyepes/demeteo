@@ -195,6 +195,8 @@ Things an agent must **never** do without explicit user approval:
 - ❌ Break the hexagon: commands must not contain business logic; adapters must not be called from the frontend directly
 - ❌ Skip `cargo fmt` + `cargo clippy` before finalizing Rust changes
 - ❌ Bypass the `PermissionPolicyPort` when spawning agent processes
+- ❌ Create a git commit whose message does not conform to the Conventional Commits format
+  in **Section 8** — no free-form messages, no past tense, no trailing period, no missing type
 
 ---
 
@@ -317,6 +319,25 @@ npm run tauri dev   # open the app, confirm no console errors
 ```
 
 If any step fails, fix it before handing back to the user.
+
+### Commit message (run before every `git commit`)
+
+Every commit **must** pass commitlint locally:
+
+```bash
+echo "<your commit message>" | npx commitlint
+```
+
+Use this exact shell form to commit — never free-form text:
+
+```bash
+git commit -m "<type>(<scope>): <subject>"
+# e.g.
+git commit -m "fix(orchestrator): handle null provider url on startup"
+```
+
+If `npx commitlint` exits non-zero, rewrite the message before committing.
+Valid types: `feat fix perf revert refactor docs style test build ci chore`
 
 ---
 
