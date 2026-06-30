@@ -71,6 +71,22 @@ impl ExecutionDriver {
         // Err → non-zero exit or I/O error (both are failures).
         let harness_result: Option<(String, bool)> = match harness_cmd {
             Some(ref cmd) => {
+                // Restore write permissions before running the harness. The
+                // capability scope fence (`apply_artifact_scope`) ran before the
+                // agent spawned and left most of the worktree `a-w`. The agent is
+                // done at this point, so the fence has served its purpose. Build
+                // tools (cargo, npm, tsc) need to write to target/, node_modules/,
+                // etc. — without this they fail with EPERM, not a real test failure.
+                let _ = self
+                    .exec
+                    .run_command(
+                        machine_str,
+                        &format!(
+                            "chmod -R u+w {} 2>/dev/null || true",
+                            paths::shell_escape_posix(wt_path)
+                        ),
+                    )
+                    .await;
                 let harness_run_cmd =
                     format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
                 match self.exec.run_command(machine_str, &harness_run_cmd).await {
