@@ -186,14 +186,11 @@ fn parse_event_nested_usage_update_extracts_cache_tokens() {
 // ── build_opencode_args (token-optimization Tier 1) ──────────────────────
 
 use crate::adapters::agent::opencode::build_opencode_args;
+use crate::adapters::agent::test_stubs::{StubAgentExec, StubExec};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_runtime::AgentContext;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-#[path = "_arg_test_stubs.rs"]
-mod stubs;
-use stubs::{StubAgentExec, StubExec};
 
 fn ctx_for_test() -> AgentContext {
     AgentContext {

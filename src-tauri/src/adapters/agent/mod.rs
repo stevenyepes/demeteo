@@ -9,6 +9,16 @@ pub mod noop;
 pub mod opencode;
 pub mod registry;
 
+// Shared test stubs for `hermes::tests`, `claude_code::tests`, and
+// `opencode::tests`. Each of those test files imports the stubs via
+// `use crate::adapters::agent::test_stubs::{StubAgentExec, StubExec}`
+// instead of redeclaring the same `#[path = "_arg_test_stubs.rs"]`
+// `mod stubs` three times — which would trip the
+// `clippy::duplicate-mod` lint because the same source file gets
+// loaded into the crate graph more than once.
+#[cfg(test)]
+pub(crate) mod test_stubs;
+
 pub fn resolve_local_binary_path(binary: &str) -> Option<String> {
     if let Ok(path_var) = std::env::var("PATH") {
         for path in std::env::split_paths(&path_var) {

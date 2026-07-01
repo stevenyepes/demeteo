@@ -237,14 +237,11 @@ fn malformed_json_is_dropped() {
 // ── build_claude_args (token-optimization Tier 1) ─────────────────────────
 
 use crate::adapters::agent::claude_code::build_claude_args;
+use crate::adapters::agent::test_stubs::{StubAgentExec, StubExec};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_runtime::AgentContext;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-#[path = "_arg_test_stubs.rs"]
-mod stubs;
-use stubs::{StubAgentExec, StubExec};
 
 fn ctx_for_test(bare_mode: bool) -> AgentContext {
     AgentContext {

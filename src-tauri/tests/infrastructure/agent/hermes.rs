@@ -7,14 +7,11 @@
 //! vendor docs; we parse both for the cost accounting path.
 
 use crate::adapters::agent::hermes::build_hermes_args;
+use crate::adapters::agent::test_stubs::{StubAgentExec, StubExec};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_runtime::AgentContext;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-#[path = "_arg_test_stubs.rs"]
-mod stubs;
-use stubs::{StubAgentExec, StubExec};
 
 // ── Arg builder (token-optimization Tier 1) ────────────────────────────
 

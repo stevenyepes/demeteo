@@ -7,6 +7,11 @@
 //! minimum the trait demands (no-ops) so tests can construct a
 //! context purely to call `build_*_args(ctx, sid)`.
 //!
+//! Loaded exactly once from `src/adapters/agent/mod.rs` so the
+//! `clippy::duplicate-mod` lint stays clean (each test file in
+//! `tests/infrastructure/agent/*.rs` reuses these via the
+//! crate-path `use crate::adapters::agent::test_stubs::...`).
+//!
 //! NOTE: keep this in sync with `FakeAgentExec` / `FakeExec` in
 //! `tests/e2e/step_executor.rs`. We duplicate rather than share
 //! because the e2e stubs are heavier (they wire up actual
