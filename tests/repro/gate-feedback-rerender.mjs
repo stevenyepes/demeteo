@@ -75,12 +75,17 @@ const { create, act } = ReactTestRenderer;
  * props to) every embedded Monaco editor — see `src/components/ArtifactViewer.tsx:186-355`.
  *
  * `renderCount` is the only thing this test inspects.
+ *
+ * The fix wraps the real `ArtifactViewer` export in `React.memo` (see
+ * `src/components/ArtifactViewer.tsx`). We mirror that here so the test
+ * asserts the post-fix behaviour: keystrokes on the textarea must not
+ * invalidate the heavy viewer subtree.
  */
 let renderCount = 0;
-function HeavyArtifactViewer(_props) {
+const HeavyArtifactViewer = memo(function HeavyArtifactViewer(_props) {
   renderCount += 1;
   return React.createElement('div', { 'data-testid': 'heavy-viewer' }, 'markdown body');
-}
+});
 
 /**
  * Faithful shape of `src/components/GateView.tsx`:
