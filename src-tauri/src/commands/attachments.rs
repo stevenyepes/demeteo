@@ -41,68 +41,109 @@ use crate::domain::attachment::{
 };
 use crate::domain::ids::FeatureId;
 use crate::error::AppError;
+use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
+use crate::ports::db::FeatureRepository;
 use crate::state::AppContext;
 use std::path::Path;
+use std::sync::Arc;
 use tauri::State;
 use tracing::{info, warn};
 
 const MAX_ATTACHMENT_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_FEATURE: usize = 10;
 
-#[tauri::command]
-pub async fn feature_add_attachment(
-    ctx: State<'_, AppContext>,
-    feature_id: String,
-    source_path: String,
-    mime: Option<String>,
-    source_filename: Option<String>,
+/// Staged attachment supplied at feature-start time.
+///
+/// Mirrors the wire shape of [`feature_add_attachment`] but bundled
+/// into one batch so the IPC `start_feature` command can persist all
+/// of them BEFORE the executor spawns the agent driver. Without this
+/// batching the agent's first turn races the post-launch
+/// `feature_add_attachment` calls and the user sees "no image
+/// attached" responses from a freshly-attached screenshot.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StagedAttachmentInput {
+    /// Absolute path on disk (drag-and-drop). Empty when bytes were
+    /// ferried through IPC instead.
+    pub source_path: String,
+    pub mime: Option<String>,
+    pub source_filename: Option<String>,
+    /// In-memory bytes for a browser `File` selection that did not
+    /// yield an absolute path on disk. Mutually exclusive with the
+    /// path branch — when `Some`, `source_path` is ignored.
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Commit a single attachment to the manifest. Shared by
+/// [`feature_add_attachment`] (post-launch path) and
+/// [`commit_staged_attachments`] (pre-execution path) so both flows
+/// apply identical validation, dedup, and storage rules.
+///
+/// `feature_id` is assumed to exist (caller verifies — the post-launch
+/// IPC reads via `ctx.features.get`, the pre-execution path inserts
+/// the row before calling).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_attachment_inner(
+    features: &Arc<dyn FeatureRepository>,
+    attachment_json: &Arc<dyn AttachmentJsonPort>,
+    attachments: &Arc<dyn AttachmentStore>,
+    feature_id: &str,
+    source_path: &str,
+    mime: Option<&str>,
+    source_filename: Option<&str>,
+    bytes: Option<Vec<u8>>,
 ) -> Result<AttachedFile, AppError> {
-    let fid = FeatureId::from(feature_id.clone());
-    let _ = ctx
-        .features
+    let fid = FeatureId::from(feature_id.to_string());
+    let _ = features
         .get(&fid)?
         .ok_or_else(|| AppError::not_found(format!("feature not found: {}", feature_id)))?;
 
-    let src = std::path::PathBuf::from(&source_path);
-    let meta = std::fs::metadata(&src).map_err(|e| {
-        AppError::validation(format!("could not stat source file {}: {}", source_path, e))
-    })?;
-    if !meta.is_file() {
-        return Err(AppError::validation(format!(
-            "source path is not a regular file: {}",
-            source_path
-        )));
-    }
-    if meta.len() > MAX_ATTACHMENT_BYTES {
-        return Err(AppError::validation(format!(
-            "attachment too large: {} bytes (max {})",
-            meta.len(),
-            MAX_ATTACHMENT_BYTES
-        )));
-    }
+    let bytes = if let Some(b) = bytes {
+        if b.is_empty() {
+            return Err(AppError::validation("attachment bytes are empty"));
+        }
+        if b.len() as u64 > MAX_ATTACHMENT_BYTES {
+            return Err(AppError::validation(format!(
+                "attachment too large: {} bytes (max {})",
+                b.len(),
+                MAX_ATTACHMENT_BYTES
+            )));
+        }
+        b
+    } else {
+        let src = std::path::PathBuf::from(source_path);
+        let meta = std::fs::metadata(&src).map_err(|e| {
+            AppError::validation(format!("could not stat source file {}: {}", source_path, e))
+        })?;
+        if !meta.is_file() {
+            return Err(AppError::validation(format!(
+                "source path is not a regular file: {}",
+                source_path
+            )));
+        }
+        if meta.len() > MAX_ATTACHMENT_BYTES {
+            return Err(AppError::validation(format!(
+                "attachment too large: {} bytes (max {})",
+                meta.len(),
+                MAX_ATTACHMENT_BYTES
+            )));
+        }
+        std::fs::read(&src).map_err(|e| {
+            AppError::validation(format!("could not read source file {}: {}", source_path, e))
+        })?
+    };
 
-    let bytes = std::fs::read(&src).map_err(|e| {
-        AppError::validation(format!("could not read source file {}: {}", source_path, e))
-    })?;
-
+    let src_path = std::path::PathBuf::from(source_path);
     let sha256 = compute_sha256_hex(&bytes);
-
-    let resolved_mime = resolve_mime(mime.as_deref(), source_filename.as_deref(), &src);
+    let resolved_mime = resolve_mime(mime, source_filename, &src_path);
     let ext = match ext_for_mime(&resolved_mime) {
         Some(e) => e.to_string(),
-        None => Path::new(source_filename.as_deref().unwrap_or(&source_path))
+        None => Path::new(source_filename.unwrap_or(source_path))
             .extension()
             .and_then(|s| s.to_str())
             .map(|s| s.to_ascii_lowercase())
             .unwrap_or_else(|| "bin".to_string()),
     };
 
-    // Reject unsupported file types. The frontend's `accept` attribute
-    // is a hint only — users can switch the picker to "All Files" and
-    // select anything (and Tauri drag-and-drop hands us arbitrary paths
-    // with no mime hint at all). Keep this list in sync with
-    // `domain::attachment::mime_for_ext` and the `ACCEPTED_EXTS` set in
-    // `src/components/AttachmentDropzone.tsx`.
     if !is_supported_attachment(&resolved_mime, &ext) {
         return Err(AppError::validation(format!(
             "unsupported attachment type: mime={} ext={} (allowed: png, jpg, gif, webp, pdf, txt, md, json)",
@@ -110,13 +151,10 @@ pub async fn feature_add_attachment(
         )));
     }
 
-    // Re-upload idempotency: if a manifest entry with the same sha256
-    // already exists, return it as-is — the on-disk file is shared.
-    let current = ctx.attachment_json.get_attachments(&fid)?;
+    let current = attachment_json.get_attachments(&fid)?;
     if let Some(existing) = current.iter().find(|a| a.sha256 == sha256).cloned() {
         return Ok(existing);
     }
-
     if current.len() >= MAX_ATTACHMENTS_PER_FEATURE {
         return Err(AppError::validation(format!(
             "feature already has {} attachments (max {})",
@@ -125,9 +163,9 @@ pub async fn feature_add_attachment(
         )));
     }
 
-    ctx.attachments.write(&feature_id, &sha256, &ext, &bytes)?;
+    attachments.write(feature_id, &sha256, &ext, &bytes)?;
 
-    let display_name = sanitize_attachment_filename(source_filename.as_deref().unwrap_or(&sha256));
+    let display_name = sanitize_attachment_filename(source_filename.unwrap_or(&sha256));
     let id = format!("at-{}", crate::paths::new_id());
     let file = AttachedFile {
         id: id.clone(),
@@ -135,12 +173,12 @@ pub async fn feature_add_attachment(
         mime: resolved_mime,
         sha256: sha256.clone(),
         size: bytes.len() as u64,
-        source_filename: source_filename.unwrap_or_else(|| id.clone()),
+        source_filename: source_filename.unwrap_or(&id).to_string(),
     };
 
     let mut next = current;
     next.push(file.clone());
-    ctx.attachment_json.set_attachments(&fid, &next)?;
+    attachment_json.set_attachments(&fid, &next)?;
 
     info!(
         feature_id = %feature_id,
@@ -148,10 +186,71 @@ pub async fn feature_add_attachment(
         sha256 = %sha256,
         bytes = file.size,
         mime = %file.mime,
-        "feature attachment added"
+        "feature attachment committed"
     );
 
     Ok(file)
+}
+
+/// Persist every staged attachment to `feature_id` before the agent
+/// driver is spawned. Returns the full list of `AttachedFile`s in
+/// insertion order on success; on the first validation failure the
+/// call short-circuits and surfaces the error to the caller — the
+/// feature row still exists but no agent has been started yet, so the
+/// frontend can prompt the user to retry.
+pub(crate) fn commit_staged_attachments(
+    features: &Arc<dyn FeatureRepository>,
+    attachment_json: &Arc<dyn AttachmentJsonPort>,
+    attachments: &Arc<dyn AttachmentStore>,
+    feature_id: &str,
+    staged: Vec<StagedAttachmentInput>,
+) -> Result<Vec<AttachedFile>, AppError> {
+    let mut out = Vec::with_capacity(staged.len());
+    for s in staged {
+        let attached = commit_attachment_inner(
+            features,
+            attachment_json,
+            attachments,
+            feature_id,
+            &s.source_path,
+            s.mime.as_deref(),
+            s.source_filename.as_deref(),
+            s.bytes,
+        )?;
+        out.push(attached);
+    }
+    Ok(out)
+}
+
+/// Add an attachment to a feature.
+///
+/// `bytes` carries the in-memory attachment bytes when the caller
+/// has a browser `File` handle but no absolute path on disk — modern
+/// Chromium / Tauri 2 webviews strip the legacy `File.path`
+/// extension on `<input type="file">` selections for security, so
+/// the only way to ferry the bytes is through IPC. Serialized as
+/// `number[]` (JSON array of 0–255 ints) for cross-platform
+/// compatibility — mirrors the return shape of `attachment_read`.
+/// When `Some`, `source_path` is ignored.
+#[tauri::command]
+pub async fn feature_add_attachment(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+    source_path: String,
+    mime: Option<String>,
+    source_filename: Option<String>,
+    bytes: Option<Vec<u8>>,
+) -> Result<AttachedFile, AppError> {
+    commit_attachment_inner(
+        &ctx.features,
+        &ctx.attachment_json,
+        &ctx.attachments,
+        &feature_id,
+        &source_path,
+        mime.as_deref(),
+        source_filename.as_deref(),
+        bytes,
+    )
 }
 
 #[tauri::command]

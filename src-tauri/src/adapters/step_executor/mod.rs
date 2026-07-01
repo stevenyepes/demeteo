@@ -9,7 +9,7 @@ use crate::adapters::step_executor::driver_registry::DriverRegistry;
 use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
-use crate::ports::attachment_store::AttachmentStore;
+use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository, ProjectRepository,
     WorkflowRepository,
@@ -78,6 +78,13 @@ pub struct DagStepExecutor {
     /// agent's first turn (so the `external_directory: deny` fence
     /// accepts the `Read` tool call).
     pub attachments: Arc<dyn AttachmentStore>,
+    /// JSON-manifest persistence for the same attachment list. Lives
+    /// on the executor so [`feature_start`] can persist staged
+    /// attachments to the freshly-created feature row BEFORE the
+    /// driver is spawned — without this, the agent's first turn would
+    /// race against the frontend's post-launch `feature_add_attachment`
+    /// calls and sometimes miss the user's files.
+    pub attachment_json: Arc<dyn AttachmentJsonPort>,
     workspace_dir: PathBuf,
     /// Live drivers keyed by step_execution_id. The driver inserts a
     /// `GateWaiter` while waiting for a decision; `gate_decide` looks up
@@ -132,6 +139,7 @@ impl DagStepExecutor {
         merge_executor: Arc<dyn MergeExecutor>,
         artifacts: Arc<dyn ArtifactStore>,
         attachments: Arc<dyn AttachmentStore>,
+        attachment_json: Arc<dyn AttachmentJsonPort>,
         workspace_dir: PathBuf,
         pricing: Arc<dyn PricingTable>,
     ) -> Self {
@@ -155,6 +163,7 @@ impl DagStepExecutor {
             git_ops,
             artifacts,
             attachments,
+            attachment_json,
             workspace_dir,
             gate_waiters: Arc::new(Mutex::new(HashMap::new())),
             driver_registry: DriverRegistry::new(),

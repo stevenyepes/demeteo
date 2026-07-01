@@ -316,6 +316,8 @@ pub fn run() {
             let attachment_store: Arc<dyn ports::attachment_store::AttachmentStore> = Arc::new(
                 adapters::attachment_store::fs::FsAttachmentStore::new(app_data_dir.clone()),
             );
+            let attachment_json: Arc<dyn ports::attachment_store::AttachmentJsonPort> =
+                db_adapter.clone();
             let step_executor_adapter = {
                 let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> = Arc::new(
                     adapters::artifact_store::fs::FsArtifactStore::new(app_data_dir.clone()),
@@ -338,6 +340,7 @@ pub fn run() {
                     merge_executor.clone(),
                     artifact_store,
                     attachment_store.clone(),
+                    attachment_json.clone(),
                     workspace_dir.clone(),
                     pricing.clone(),
                 ));

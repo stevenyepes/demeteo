@@ -271,13 +271,29 @@ const ProjectHome = () => {
         }
         setIsDelegating(true);
         try {
-            const res = await invoke<Feature>('start_feature', { 
-                projectId: activeProject.id, 
+            // Convert staged attachments into the Rust wire shape
+            // BEFORE calling start_feature — the orchestrator persists
+            // them to the freshly-created feature row before the
+            // driver is spawned, so the agent's first turn sees them.
+            // Drag-and-drop entries carry an absolute `sourcePath`,
+            // click-picked entries ferry bytes through IPC (modern
+            // Chromium strips `File.path` for security).
+            const stagedAttachments = await Promise.all(attachments.map(async (a) => ({
+                sourcePath: a.sourcePath ?? '',
+                mime: a.mime ?? null,
+                sourceFilename: a.source_filename ?? null,
+                bytes: a.file
+                    ? Array.from(new Uint8Array(await a.file.arrayBuffer()))
+                    : null,
+            })));
+            const res = await invoke<Feature>('start_feature', {
+                projectId: activeProject.id,
                 workflowId: selectedWorkflow.id,
                 title: featureInput,
                 description: featureInput,
                 agentKind: selectedAgentKind || null,
-                model: selectedModel || null
+                model: selectedModel || null,
+                stagedAttachments,
             });
             const newFeature: Feature = {
                 id: res.id,
@@ -292,35 +308,7 @@ const ProjectHome = () => {
                 model: res.model,
             };
             setFeatures(prev => [newFeature, ...prev]);
-
-            // Persist any staged attachments now that the feature id
-            // exists. Each entry maps cleanly to the
-            // `feature_add_attachment` Tauri command's source-path +
-            // filename + mime signature. Failures here are soft —
-            // surfacing them inline as a soft warning since the
-            // feature is already created.
-            if (attachments.length > 0) {
-                try {
-                    const { addAttachment } = await import('../lib/attachments');
-                    for (const a of attachments) {
-                        if (!a.sourcePath) continue;
-                        try {
-                            await addAttachment(newFeature.id, {
-                                kind: 'path',
-                                sourcePath: a.sourcePath,
-                                sourceFilename: a.source_filename,
-                                mime: a.mime,
-                            });
-                        } catch (attachErr) {
-                            console.warn('failed to commit attachment', attachErr);
-                        }
-                    }
-                    setAttachments([]);
-                } catch (modErr) {
-                    console.warn('attachment module unavailable:', modErr);
-                }
-            }
-
+            setAttachments([]);
             navigate({ kind: 'detail', featureId: res.id, featureTitle: res.title });
         } catch (err) {
             console.error("Failed to start feature pipeline:", err);

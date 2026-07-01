@@ -162,6 +162,7 @@ async fn test_executor_instantiation_and_cancel() {
         merge_executor,
         artifacts,
         attachments,
+        db.clone(), // attachment_json — SqliteAdapter implements both ports
         temp_dir.clone(),
         pricing,
     );
@@ -231,6 +232,7 @@ async fn test_executor_gate_decide() {
         merge_executor,
         artifacts,
         attachments,
+        db.clone(), // attachment_json — SqliteAdapter implements both ports
         temp_dir.clone(),
         pricing,
     );
@@ -401,6 +403,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
         merge_executor,
         artifacts,
         attachments,
+        db.clone(), // attachment_json — SqliteAdapter implements both ports
         temp_dir.clone(),
         pricing,
     );

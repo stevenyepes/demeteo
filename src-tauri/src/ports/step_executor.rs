@@ -1,3 +1,4 @@
+use crate::commands::attachments::StagedAttachmentInput;
 use crate::domain::models::{Feature, GateDecision, StepExecution};
 use async_trait::async_trait;
 use serde::Serialize;
@@ -29,6 +30,11 @@ pub trait StepExecutor: Send + Sync {
     ///   (`ProjectSettings::default_loop_iterations`) or the engine default.
     /// - `step_overrides`: per-step agent/model overrides chosen at launch.
     ///   See migration V13.
+    /// - `staged_attachments`: attachments the user dropped/picked before
+    ///   clicking "Launch feature". Persisted to the freshly-created
+    ///   feature row BEFORE the driver is spawned, so the agent's
+    ///   first turn sees them on its first `features.get(&self.f_id)`
+    ///   read. Empty when the user did not attach anything.
     #[allow(clippy::too_many_arguments)]
     async fn feature_start(
         &self,
@@ -41,6 +47,7 @@ pub trait StepExecutor: Send + Sync {
         commit_artifacts: Option<bool>,
         loop_iterations: Option<u32>,
         step_overrides: Vec<crate::domain::models::StepOverride>,
+        staged_attachments: Vec<StagedAttachmentInput>,
     ) -> Result<Feature, String>;
 
     async fn feature_pause(&self, feature_id: &str) -> Result<(), String>;

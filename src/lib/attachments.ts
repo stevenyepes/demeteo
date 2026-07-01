@@ -69,9 +69,14 @@ export type AttachmentInput =
  * validates size (max 100 MiB), dedupes by content hash, and writes
  * the bytes under `<attachments_root>/<feature_id>/<sha256>.<ext>`.
  *
- * On a browser `File` input, the caller is responsible for keeping a
- * copy of the File handle — see {@link getAttachmentDataUrl} — since
- * the Tauri command consumes the path, not the in-memory blob.
+ * **Bytes vs path.** Modern Chromium / Tauri 2 webviews strip the
+ * legacy `File.path` extension on `<input type="file">` selections
+ * for security, so a click-picked browser `File` typically arrives
+ * without an absolute disk path. When the input is a `file` kind
+ * (drag-and-drop's "path" kind still has an absolute path), we read
+ * the bytes into memory and ferry them through IPC as a JSON number
+ * array — the Rust command accepts either a path or bytes. Drag-and-
+ * drop paths continue to take the path branch unchanged.
  *
  * @param featureId target feature id (already-launched features only).
  * @param input     file handle (with preview-friendly FileReader) or
@@ -81,21 +86,33 @@ export async function addAttachment(
   featureId: string,
   input: AttachmentInput,
 ): Promise<AttachedFile> {
-  const sourcePath = input.kind === "file" ? resolvePathFromFile(input.file) : input.sourcePath;
-  if (!sourcePath) {
-    throw new Error(
-      "Cannot determine an absolute file path for this attachment — only browser File handles and drag-and-dropped paths are supported.",
-    );
-  }
   const sourceFilename =
-    input.kind === "file" ? input.file.name : input.sourceFilename ?? pathBasename(input.sourcePath);
+    input.kind === "file"
+      ? input.file.name
+      : (input.sourceFilename ?? pathBasename(input.sourcePath));
   const mime = input.kind === "file" ? (input.file.type || undefined) : input.mime;
+
+  if (input.kind === "file") {
+    // The browser gave us a File but no usable absolute path (the
+    // common case in Tauri 2 — `file.path` is stripped). Read the
+    // bytes and ferry them through IPC. Drag-and-drop still goes via
+    // `input.kind === "path"` and keeps the path branch.
+    const bytes = new Uint8Array(await input.file.arrayBuffer());
+    return invoke<AttachedFile>("feature_add_attachment", {
+      featureId,
+      sourcePath: "",
+      mime: mime ?? null,
+      sourceFilename: sourceFilename ?? null,
+      bytes: Array.from(bytes),
+    });
+  }
 
   return invoke<AttachedFile>("feature_add_attachment", {
     featureId,
-    sourcePath,
+    sourcePath: input.sourcePath,
     mime: mime ?? null,
     sourceFilename: sourceFilename ?? null,
+    bytes: null,
   });
 }
 
@@ -241,21 +258,10 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 /**
- * The browser `File` type strips the absolute path (by spec, for
- * security). The only way to recover one is via the legacy
- * `webkitRelativePath` / `path` extension that Chromium exposes only
- * when the file was picked via `<input type="file">` — and even there
- * it's deprecated. Returns the relative filename as the safest
- * fallback so the backend command always has *some* source to read.
+ * Split a path on either separator and return the trailing segment.
+ * Used by the drag-and-drop "path" branch where we already have an
+ * absolute disk path and only need the filename for the manifest row.
  */
-function resolvePathFromFile(file: File): string {
-  const legacy = file as File & { path?: string };
-  if (typeof legacy.path === "string" && legacy.path.length > 0) {
-    return legacy.path;
-  }
-  return file.name;
-}
-
 function pathBasename(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts.length === 0 ? p : parts[parts.length - 1];

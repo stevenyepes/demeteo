@@ -195,6 +195,7 @@ async fn check_schedules(
                         None,
                         None,
                         Vec::new(),
+                        Vec::new(),
                     )
                     .await
                 {
