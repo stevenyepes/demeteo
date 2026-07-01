@@ -7,6 +7,7 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::commands::attachments::{commit_staged_attachments, StagedAttachmentInput};
 use crate::domain::ids::{FeatureId, GateDecisionId, StepExecutionId};
 use crate::domain::models::{Feature, GateDecision, StepExecution};
+use crate::error::AppError;
 use crate::paths;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
@@ -375,25 +376,31 @@ impl StepExecutor for DagStepExecutor {
         execution_id: &str,
         new_model: Option<&str>,
         new_agent: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AppError> {
         let se_id = StepExecutionId::from(execution_id.to_string());
         let step_exec = self
             .features
-            .step_get(&se_id)?
-            .ok_or_else(|| format!("Step execution not found: {}", execution_id))?;
+            .step_get(&se_id)
+            .map_err(AppError::from)?
+            .ok_or_else(|| {
+                AppError::not_found(format!("Step execution not found: {}", execution_id))
+            })?;
 
         if step_exec.status != "failed"
             && step_exec.status != "interrupted"
             && step_exec.status != "pending"
         {
-            return Err(format!(
+            return Err(AppError::validation(format!(
                 "Cannot retry a step in '{}' status. Only failed or interrupted steps can be retried.",
                 step_exec.status
-            ));
+            )));
         }
+
+        self.assert_no_active_predecessors(&step_exec, "retrying this step")?;
 
         self.replay_steps_from(execution_id, new_model, new_agent, true)
             .await
+            .map_err(AppError::from)
     }
 
     async fn replay_from_step(
@@ -447,14 +454,30 @@ impl GatePresenter for DagStepExecutor {
         step_execution_id: &str,
         decision: &str,
         feedback: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AppError> {
         let se_id = StepExecutionId::from(step_execution_id.to_string());
+
+        // Pre-flight guard: refuse to apply a gate decision while an
+        // earlier step is still running. The UI also disables the
+        // Approve / Redirect buttons in this case, but the backend
+        // must enforce the rule because a stale `gate_required` event
+        // can race the agent's final artifact write and surface a
+        // decidable gate while a predecessor is still in flight.
+        let step_exec = self
+            .features
+            .step_get(&se_id)
+            .map_err(AppError::from)?
+            .ok_or_else(|| {
+                AppError::not_found(format!("Step execution not found: {}", step_execution_id))
+            })?;
+        self.assert_no_active_predecessors(&step_exec, "deciding this gate")?;
 
         // 1. Durable: write the decision to the DB. UPSERT so the call
         //    is idempotent whether or not a row already exists. This is
         //    the source of truth — everything below is a wakeup hint.
         self.gates
-            .upsert_decision(&se_id, decision, feedback, paths::now_ms())?;
+            .upsert_decision(&se_id, decision, feedback, paths::now_ms())
+            .map_err(AppError::from)?;
 
         let gd = GateDecision {
             id: GateDecisionId::from(format!("gd-{}", step_execution_id)),
@@ -485,15 +508,12 @@ impl GatePresenter for DagStepExecutor {
         //    in the DB, so a spawn failure (missing project, path
         //    probe failure, etc.) is logged but does NOT roll back
         //    the decision — the next legitimate operation will retry.
-        if let Ok(Some(step_exec)) = self.features.step_get(&se_id) {
-            let f_id = step_exec.feature_id.0.clone();
-            if let Err(e) = self.ensure_driver_running(&f_id).await {
-                eprintln!(
-                    "gate_decide: failed to ensure driver running for {}: {} \
-                     (decision is durable; will retry on next operation)",
-                    f_id, e
-                );
-            }
+        if let Err(e) = self.ensure_driver_running(&step_exec.feature_id.0).await {
+            eprintln!(
+                "gate_decide: failed to ensure driver running for {}: {} \
+                 (decision is durable; will retry on next operation)",
+                step_exec.feature_id.0, e
+            );
         }
 
         Ok(())
@@ -501,6 +521,48 @@ impl GatePresenter for DagStepExecutor {
 }
 
 impl DagStepExecutor {
+    /// Refuse to act on `target` when an earlier step in the same feature
+    /// is still non-terminal (`pending`, `running`, `verifying`, or
+    /// `awaiting_gate`). Used by `step_retry` and `gate_decide` so a stale
+    /// retry / approve click does not race a still-running predecessor.
+    ///
+    /// `intent` is the user-facing phrase that follows "before" in the
+    /// returned message (e.g. "retrying this step", "deciding this gate").
+    /// It is purely cosmetic so the two call sites can give the user a
+    /// tailored sentence.
+    ///
+    /// Only `step_index < target.step_index` is considered — out-of-order
+    /// races with later steps are out of scope (see Open Question #2 in
+    /// `docs/RELIABILITY_PLAN.md`).
+    pub(crate) fn assert_no_active_predecessors(
+        &self,
+        target: &StepExecution,
+        intent: &str,
+    ) -> Result<(), AppError> {
+        let siblings = self
+            .features
+            .steps_for_feature(&target.feature_id)
+            .map_err(AppError::from)?;
+        for s in &siblings {
+            if s.id == target.id {
+                continue;
+            }
+            if s.step_index >= target.step_index {
+                continue;
+            }
+            if matches!(
+                s.status.as_str(),
+                "pending" | "running" | "verifying" | "awaiting_gate"
+            ) {
+                return Err(AppError::validation(format!(
+                    "Step '{}' is still {}; wait for it to finish before {}.",
+                    s.step_id.0, s.status, intent
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Reconcile DB + notifications for any features that were left
     /// mid-run by a previous process. Synchronous (no driver spawns) so
     /// it can be called from the Tauri setup hook before the runtime
