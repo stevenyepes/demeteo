@@ -50,6 +50,18 @@ build() {
   # Use system sqlite via pkg-config instead of bundling — Arch convention.
   export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
   npm run tauri -- build -b deb
+
+  # Guard against Tailwind emitting a utility-less stylesheet. Tailwind v4
+  # auto-detects sources by walking up to the nearest git root and skipping
+  # .gitignore'd paths; inside an AUR build tree (this source lives under the
+  # package repo's ignored src/ dir) that makes it scan nothing and produce an
+  # unstyled app. src/App.css pins the scan with @source to prevent this — fail
+  # loudly here if a future change regresses it, rather than shipping a broken
+  # package.
+  if ! grep -qE '\.flex\{|\.grid\{|\.items-center\{' dist/assets/*.css 2>/dev/null; then
+    echo "build(): produced CSS contains no Tailwind utilities — refusing to package an unstyled app" >&2
+    return 1
+  fi
 }
 
 package() {

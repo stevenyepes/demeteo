@@ -1,5 +1,19 @@
 @import "tailwindcss";
 
+/*
+ * Explicitly register the source tree for Tailwind's class scanning.
+ *
+ * Tailwind v4 auto-detects sources by walking up to the nearest git root and
+ * skipping anything matched by that repo's .gitignore. That breaks packaged
+ * builds (AUR/makepkg) where the project is extracted into a build dir like
+ * `<aur-repo>/src/demeteo-<ver>/`: Tailwind finds the *outer* AUR git repo,
+ * whose .gitignore excludes `src/`, treats the whole extracted tree as ignored,
+ * scans nothing, and emits a utility-less stylesheet — the app renders unstyled.
+ * An explicit @source is scanned regardless of the enclosing repo's .gitignore,
+ * so this keeps prod/packaged builds deterministic. See scripts/test-aur-install.sh.
+ */
+@source "./**/*.{ts,tsx,js,jsx,html}";
+
 @theme {
   --font-sans: 'Inter', -apple-system, sans-serif;
   --font-mono: 'Fira Code', 'JetBrains Mono', monospace;
