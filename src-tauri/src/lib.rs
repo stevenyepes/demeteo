@@ -561,6 +561,7 @@ pub fn run() {
             commands::notifications::notifications_list,
             commands::attachments::feature_add_attachment,
             commands::attachments::feature_list_attachments,
+            commands::attachments::attachment_read,
             commands::attachments::feature_remove_attachment,
             commands::notifications::notification_mark_read,
             commands::notifications::notification_unread_count

@@ -1,6 +1,6 @@
 //! Tauri commands for the per-feature attachment subsystem.
 //!
-//! Three additive commands wired through `commands::mod`:
+//! Four additive commands wired through `commands::mod`:
 //!
 //! * `feature_add_attachment` — validate (size, ext, sha256), copy
 //!   bytes from a user-supplied absolute path into the
@@ -14,6 +14,11 @@
 //!   `[]` if the feature has no attachments column populated.
 //! * `feature_remove_attachment` — drop the manifest entry and the
 //!   on-disk bytes. Idempotent.
+//! * `attachment_read` — return the bytes of a previously-uploaded
+//!   attachment for the React preview Modal. Resolves the row by
+//!   `(feature_id, attachment_id)` and goes through the same
+//!   path-within-root check as every other on-disk read. Never used
+//!   on the prompt-injection path.
 //!
 //! Validation rules (mirrored in the Start-Feature modal and Gate
 //! view):
@@ -151,6 +156,59 @@ pub async fn feature_list_attachments(
         .map_err(AppError::from)
 }
 
+/// Read the bytes of a previously-uploaded attachment.
+///
+/// Resolves the manifest row by `attachment_id` (scoped to the feature
+/// so an attacker can't probe other features' attachments by guessing
+/// ids), derives the on-disk extension the same way
+/// [`feature_remove_attachment`] does, and returns the bytes via the
+/// existing [`AttachmentStore::read`] port — which enforces the
+/// "path within attachments root" safety check before touching the
+/// filesystem.
+///
+/// Use case: the React preview Modal for out-of-session files (files
+/// that arrived through Tauri drag-and-drop with no browser `File`
+/// handle). Never used on the prompt-injection path — the orchestrator
+/// already mirrors bytes into the per-step worktree via
+/// `resolve_and_materialize_attachments`.
+#[tauri::command]
+pub async fn attachment_read(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+    attachment_id: String,
+) -> Result<Vec<u8>, AppError> {
+    let fid = FeatureId::from(feature_id.clone());
+    let _ = ctx
+        .features
+        .get(&fid)?
+        .ok_or_else(|| AppError::not_found(format!("feature not found: {}", feature_id)))?;
+
+    let current = ctx
+        .attachment_json
+        .get_attachments(&fid)
+        .map_err(AppError::from)?;
+
+    let attached = current
+        .iter()
+        .find(|a| a.id == attachment_id)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "attachment {} not found on feature {}",
+                attachment_id, feature_id
+            ))
+        })?;
+
+    let ext = derive_ext(&attached.mime, &attached.source_filename);
+    let path = ctx
+        .attachments
+        .lookup_path(&feature_id, &attached.sha256, &ext);
+    let path_str = path.to_string_lossy().to_string();
+
+    let bytes = ctx.attachments.read(&path_str).map_err(AppError::from)?;
+    Ok(bytes)
+}
+
 #[tauri::command]
 pub async fn feature_remove_attachment(
     ctx: State<'_, AppContext>,
@@ -188,15 +246,7 @@ pub async fn feature_remove_attachment(
     // references this sha256, drop the file.
     let still_used = remaining.iter().any(|a| a.sha256 == removed.sha256);
     if !still_used {
-        let ext = ext_for_mime(&removed.mime)
-            .map(str::to_string)
-            .unwrap_or_else(|| {
-                Path::new(&removed.source_filename)
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_ascii_lowercase())
-                    .unwrap_or_else(|| "bin".to_string())
-            });
+        let ext = derive_ext(&removed.mime, &removed.source_filename);
         let path = ctx
             .attachments
             .lookup_path(&feature_id, &removed.sha256, &ext);
@@ -244,3 +294,21 @@ fn resolve_mime(
     }
     "application/octet-stream".to_string()
 }
+
+/// Lowercase extension for a stored attachment: prefer the mime
+/// reverse-lookup, fall back to `source_filename`'s tail, then
+/// `bin`. Mirrors the `feature_add_attachment` extension choice so
+/// read/lookup/remove all hit the same `<sha256>.<ext>` path.
+fn derive_ext(mime: &str, source_filename: &str) -> String {
+    ext_for_mime(mime).map(str::to_string).unwrap_or_else(|| {
+        Path::new(source_filename)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_else(|| "bin".to_string())
+    })
+}
+
+#[cfg(test)]
+#[path = "../../tests/infrastructure/attachments_command.rs"]
+mod tests;
