@@ -9,10 +9,12 @@ import { formatError } from '../lib/errors';
 import {
   ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X,
   GitPullRequest, RotateCcw, FileText, FileCode, FileJson, GitMerge, FileQuestion,
-  GitBranch, ExternalLink, AlertTriangle, Terminal,
+  GitBranch, ExternalLink, AlertTriangle, Terminal, Paperclip,
 } from 'lucide-react';
 import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { ArtifactViewer } from './ArtifactViewer';
+import { AttachmentChip } from './AttachmentChip';
+import { listAttachments, getAttachmentDataUrl, type AttachedFile } from '../lib/attachments';
 import PromptDialog from './PromptDialog';
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
 import type { SyncOutcomeView, MrState } from '../types';
@@ -162,6 +164,13 @@ export function FeatureDetail() {
   const [selectedStepTitle, setSelectedStepTitle] = useState<string | null>(null);
   const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
   const [streamContent, setStreamContent] = useState<Record<string, string>>({});
+  // Per-feature attachments (sub-3 brief). Fetched on mount via
+  // `feature_list_attachments`; rendered as read-only chips below the
+  // Initial Prompt panel. Click opens a Modal preview; hover surfaces
+  // a soft tooltip with mime + size + sha256.
+  const [attachments, setAttachments] = useState<AttachedFile[]>([]);
+  const [viewingAttachmentId, setViewingAttachmentId] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<Array<{ value: string; name: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -184,6 +193,59 @@ export function FeatureDetail() {
   }, []);
 
   useEffect(() => { loadFeatureData(); }, [featureId]);
+
+  // Fetch the per-feature attachments manifest once per feature id.
+  // The orchestrator already wires `feature_list_attachments` in
+  // `src-tauri/src/lib.rs`; this component only consumes the result.
+  // Click-to-view generates a data URL for the preview Modal via
+  // `getAttachmentDataUrl`; a null result is fine — it just means the
+  // viewer renders a metadata card instead of an inline image (the
+  // underlying bytes live in
+  // `<attachments_root>/<feature_id>/<sha256>.<ext>` and would need a
+  // future `attachment_read` IPC to round-trip back to the webview).
+  useEffect(() => {
+    if (!viewingAttachmentId) {
+      setPreviewUrl(null);
+      return;
+    }
+    const attachment = attachments.find((a) => a.id === viewingAttachmentId);
+    if (!attachment) {
+      setPreviewUrl(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const url = await getAttachmentDataUrl(attachment, null);
+        if (!cancelled) setPreviewUrl(url);
+      } catch {
+        if (!cancelled) setPreviewUrl(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingAttachmentId, attachments]);
+  // The orchestrator already wires `feature_list_attachments` in
+  // `src-tauri/src/lib.rs`; this component only consumes the result.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await listAttachments(featureId);
+        if (!cancelled) setAttachments(list);
+      } catch (err) {
+        // Soft failure — the section will just render empty. Errors
+        // here are non-actionable for the user (no Rust panics, only
+        // IPC validation issues).
+        if (!cancelled) setAttachments([]);
+        console.warn('listAttachments failed:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [featureId]);
 
   useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status: s }) => {
     if (feature_id === featureId) {
@@ -764,6 +826,30 @@ export function FeatureDetail() {
         </div>
       </div>
 
+      {/* Attachments section (sub-3). Read-only chips with hover
+          metadata + click-to-view via the Modal below. */}
+      {attachments.length > 0 && (
+        <div className="px-6 py-4 bg-[#08090c] border-b border-white/5">
+          <div className="max-w-4xl mx-auto flex flex-col gap-2">
+            <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
+              Attachments
+              <span className="text-[10px] text-slate-500 font-mono normal-case tracking-tight">
+                {attachments.length} file{attachments.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((a) => (
+                <AttachmentChip
+                  key={a.id}
+                  attachment={a}
+                  onClick={(id) => setViewingAttachmentId(id)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex-1 flex items-center justify-center">
           <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
@@ -1071,6 +1157,71 @@ export function FeatureDetail() {
           </div>
         </div>
       )}
+
+      {/* Attachment preview modal (sub-3). Reads `getAttachmentDataUrl`
+          which is a thin wrapper today — preview bytes are only
+          available in-session because the Rust side has no
+          `attachment_read` IPC yet. Out-of-session attachments show a
+          metadata card with the file's stored sha256 + mime + size. */}
+      {viewingAttachmentId && (() => {
+        const attachment = attachments.find((a) => a.id === viewingAttachmentId);
+        if (!attachment) return null;
+        const isImage = attachment.mime.startsWith('image/');
+        return (
+          <Modal
+            onClose={() => {
+              setViewingAttachmentId(null);
+              setPreviewUrl(null);
+            }}
+            backdropClassName="bg-black/70"
+            className="bg-[#0d0f14] border border-white/10 rounded-2xl p-0 max-w-3xl w-full mx-4 shadow-[0_0_40px_rgba(0,0,0,0.5)] overflow-hidden"
+          >
+            <div className="px-5 py-3 border-b border-white/5 flex items-center justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="font-mono text-xs text-cyan-300 truncate" title={attachment.source_filename}>
+                  {attachment.source_filename}
+                </span>
+                <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-300">
+                  {attachment.mime}
+                </span>
+                <span className="text-[10px] font-mono text-slate-500">
+                  {(attachment.size / 1024).toFixed(1)} KB
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setViewingAttachmentId(null);
+                  setPreviewUrl(null);
+                }}
+                className="p-1.5 text-slate-400 hover:text-white transition"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 max-h-[70vh] overflow-auto bg-[#08090c]">
+              {previewUrl && isImage ? (
+                <img
+                  src={previewUrl}
+                  alt={attachment.source_filename}
+                  className="w-full h-auto rounded-lg border border-white/5"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center gap-3 p-10 text-slate-400 text-center">
+                  <Paperclip className="w-8 h-8 text-violet-300/70" />
+                  <div className="text-sm">
+                    Inline preview unavailable for cross-session attachments.
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-500">
+                    sha256 {attachment.sha256.slice(0, 12)}… · stored on disk at
+                    {' '}<code className="text-slate-400">attachments/{featureId}/{attachment.sha256}</code>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Modal>
+        );
+      })()}
 
       {/* Replay from step confirmation modal */}
       {replayTarget && (
