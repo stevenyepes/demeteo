@@ -279,9 +279,9 @@ const ProjectHome = () => {
             // click-picked entries ferry bytes through IPC (modern
             // Chromium strips `File.path` for security).
             const stagedAttachments = await Promise.all(attachments.map(async (a) => ({
-                sourcePath: a.sourcePath ?? '',
+                source_path: a.sourcePath ?? '',
                 mime: a.mime ?? null,
-                sourceFilename: a.source_filename ?? null,
+                source_filename: a.source_filename ?? null,
                 bytes: a.file
                     ? Array.from(new Uint8Array(await a.file.arrayBuffer()))
                     : null,

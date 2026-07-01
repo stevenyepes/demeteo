@@ -272,9 +272,9 @@ function AppInner() {
                   // "no image attached" responses from a freshly-
                   // attached screenshot.
                   const stagedAttachments = await Promise.all((params.attachments ?? []).map(async (a) => ({
-                    sourcePath: a.sourcePath ?? '',
+                    source_path: a.sourcePath ?? '',
                     mime: a.mime ?? null,
-                    sourceFilename: a.source_filename ?? null,
+                    source_filename: a.source_filename ?? null,
                     bytes: a.file
                       ? Array.from(new Uint8Array(await a.file.arrayBuffer()))
                       : null,
