@@ -14,7 +14,7 @@ import {
 import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { ArtifactViewer } from './ArtifactViewer';
 import { AttachmentChip } from './AttachmentChip';
-import { listAttachments, getAttachmentDataUrl, type AttachedFile } from '../lib/attachments';
+import { listAttachments, readAttachment, type AttachedFile } from '../lib/attachments';
 import PromptDialog from './PromptDialog';
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
 import type { SyncOutcomeView, MrState } from '../types';
@@ -134,6 +134,24 @@ const suggestMrTitle = (raw: string): string => {
   return first5.length > 40 ? first5.slice(0, 40).trimEnd() + '…' : first5;
 };
 
+/**
+ * Encode `bytes` as a `data:<mime>;base64,…` URL for use as the `src`
+ * of an inline `<img>` in the attachment preview Modal.
+ *
+ * Exported (named) so the conversion is unit-testable in isolation.
+ * The chunked `fromCharCode` walk avoids blowing the JS argument limit
+ * on the larger image cap (10 MiB).
+ */
+export function bytesToDataUrl(mime: string, bytes: Uint8Array): string {
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+    binary += String.fromCharCode.apply(null, Array.from(slice));
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
 export function FeatureDetail() {
   const { view, navigate } = useNavigation();
   const { state: { currentProjectId } } = useProject();
@@ -197,12 +215,11 @@ export function FeatureDetail() {
   // Fetch the per-feature attachments manifest once per feature id.
   // The orchestrator already wires `feature_list_attachments` in
   // `src-tauri/src/lib.rs`; this component only consumes the result.
-  // Click-to-view generates a data URL for the preview Modal via
-  // `getAttachmentDataUrl`; a null result is fine — it just means the
-  // viewer renders a metadata card instead of an inline image (the
-  // underlying bytes live in
-  // `<attachments_root>/<feature_id>/<sha256>.<ext>` and would need a
-  // future `attachment_read` IPC to round-trip back to the webview).
+  // Click-to-view fires the `attachment_read` IPC for image/* attachments
+  // so the preview Modal can render an out-of-session file (one that
+  // arrived through Tauri drag-and-drop with no browser `File` handle).
+  // Non-image mimes (pdf / txt / md / json) skip the round-trip entirely
+  // and render a metadata panel instead.
   useEffect(() => {
     if (!viewingAttachmentId) {
       setPreviewUrl(null);
@@ -213,11 +230,15 @@ export function FeatureDetail() {
       setPreviewUrl(null);
       return;
     }
+    if (!attachment.mime.startsWith('image/')) {
+      setPreviewUrl(null);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
-        const url = await getAttachmentDataUrl(attachment, null);
-        if (!cancelled) setPreviewUrl(url);
+        const { mime, bytes } = await readAttachment(featureId, attachment.id);
+        if (!cancelled) setPreviewUrl(bytesToDataUrl(mime, bytes));
       } catch {
         if (!cancelled) setPreviewUrl(null);
       }
@@ -225,7 +246,7 @@ export function FeatureDetail() {
     return () => {
       cancelled = true;
     };
-  }, [viewingAttachmentId, attachments]);
+  }, [viewingAttachmentId, attachments, featureId]);
   // The orchestrator already wires `feature_list_attachments` in
   // `src-tauri/src/lib.rs`; this component only consumes the result.
   useEffect(() => {
@@ -1158,11 +1179,12 @@ export function FeatureDetail() {
         </div>
       )}
 
-      {/* Attachment preview modal (sub-3). Reads `getAttachmentDataUrl`
-          which is a thin wrapper today — preview bytes are only
-          available in-session because the Rust side has no
-          `attachment_read` IPC yet. Out-of-session attachments show a
-          metadata card with the file's stored sha256 + mime + size. */}
+      {/* Attachment preview modal (sub-3). For image/* attachments the
+          bytes are fetched via the `attachment_read` IPC and rendered
+          inline as a `data:<mime>;base64,…` URL. Non-image mimes
+          (pdf / txt / md / json) skip the IPC and show a generic
+          glass metadata panel instead — no inline renderer for those
+          kinds in v1. */}
       {viewingAttachmentId && (() => {
         const attachment = attachments.find((a) => a.id === viewingAttachmentId);
         if (!attachment) return null;
@@ -1200,21 +1222,38 @@ export function FeatureDetail() {
               </button>
             </div>
             <div className="p-5 max-h-[70vh] overflow-auto bg-[#08090c]">
-              {previewUrl && isImage ? (
+              {isImage && previewUrl ? (
                 <img
                   src={previewUrl}
                   alt={attachment.source_filename}
                   className="w-full h-auto rounded-lg border border-white/5"
                 />
               ) : (
-                <div className="flex flex-col items-center justify-center gap-3 p-10 text-slate-400 text-center">
-                  <Paperclip className="w-8 h-8 text-violet-300/70" />
-                  <div className="text-sm">
-                    Inline preview unavailable for cross-session attachments.
+                <div
+                  data-testid="attachment-metadata-panel"
+                  className="rounded-xl border border-violet-500/10 bg-[rgba(18,22,30,0.75)] backdrop-blur-xl p-6 flex flex-col gap-4"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Paperclip className="w-5 h-5 text-violet-300 shrink-0" />
+                    <span
+                      className="font-display text-sm font-bold text-white tracking-wide truncate"
+                      title={attachment.source_filename}
+                    >
+                      {attachment.source_filename}
+                    </span>
+                    <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-300 shrink-0">
+                      {attachment.mime}
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-500 shrink-0">
+                      {(attachment.size / 1024).toFixed(1)} KB
+                    </span>
                   </div>
-                  <div className="text-[10px] font-mono text-slate-500">
-                    sha256 {attachment.sha256.slice(0, 12)}… · stored on disk at
-                    {' '}<code className="text-slate-400">attachments/{featureId}/{attachment.sha256}</code>
+                  <div className="text-[10px] font-mono text-slate-500 break-all">
+                    <span className="uppercase tracking-wider text-slate-600">sha256 </span>
+                    <span className="text-slate-400">{attachment.sha256}</span>
+                  </div>
+                  <div className="text-xs text-slate-400 italic border-t border-white/5 pt-3">
+                    No inline preview available for this file type.
                   </div>
                 </div>
               )}
