@@ -221,8 +221,25 @@ impl ExecutionDriver {
             }
         }
 
-        // Write parallel step artifact summary
-        let diff_ref = base_sha;
+        // Write parallel step artifact summary.
+        //
+        // The diff is computed as a two-dot range
+        // (`<pre_step_tip>..<feature_branch>`) against `target_dir`,
+        // NOT as `git diff <pre_step_tip>` against `target_dir`'s
+        // working tree. `target_dir` is left on the project's default
+        // branch for the entire run — `create_feature_branch` only
+        // moves the ref, it never checks the branch out — so a
+        // single-ref `git diff` would compare the default branch's
+        // working tree against the pre-step feature-branch tip and
+        // show the implementation as `+` lines that exist in commits
+        // but are missing from the working tree. A reviewer reading
+        // that artifact reasonably concludes "the code was committed
+        // then removed from the working tree", i.e. reverted.
+        //
+        // The two-dot range instead shows what was committed to the
+        // feature branch during this step, which is what the critic
+        // and other downstream reviewers actually want to see.
+        let diff_ref = format!("{}..{}", base_sha, self.branch_name);
         let diff_body =
             compute_git_diff(&*self.exec, &machine_str, &self.target_dir, &diff_ref).await;
         let mut refs = Vec::new();
@@ -232,8 +249,8 @@ impl ExecutionDriver {
                 mime: "text/x-diff".into(),
                 content: diff_body,
                 source: crate::domain::artifact::ArtifactSource::Diff {
-                    base: diff_ref,
-                    head: "WORKTREE".into(),
+                    base: base_sha,
+                    head: self.branch_name.clone(),
                     path_filter: None,
                 },
             };
@@ -245,6 +262,20 @@ impl ExecutionDriver {
             }
         }
         refs.extend(all_artifact_refs);
+
+        // On a no-op retry (the agent did nothing because the
+        // implementation is already merged into the feature branch),
+        // `refs` ends up empty: the worktree snapshot is clean, no
+        // `git diff --name-only` paths come back, and the code-diff
+        // range above produces no output either. Without a fallback,
+        // the DB row for this step gets `artifact_paths = []` and
+        // downstream steps (most importantly the critic) substitute
+        // "Artifact 'all s-implement summaries' not found" in their
+        // prompt. Preserve the previous attempt's artifacts so the
+        // implementation summary stays in scope across retries.
+        if refs.is_empty() && !step_exec.artifact_paths.is_empty() {
+            refs = step_exec.artifact_paths.clone();
+        }
         let primary = refs.first().cloned();
         let (artifact_path, artifact_paths) = (primary, refs);
 
