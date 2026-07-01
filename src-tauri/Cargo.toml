@@ -19,10 +19,7 @@ name = "demeteo_lib"
 
 [dependencies]
 async-trait = "0.1"
-keyring = {
-  version = "3",
-  features = ["apple-native", "sync-secret-service", "windows-native"]
-}
+keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"] }
 parking_lot = "0.12"
 portable-pty = "0.8"
 refinery = { version = "0.8", features = ["rusqlite"] }
