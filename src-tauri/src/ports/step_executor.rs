@@ -1,5 +1,6 @@
 use crate::commands::attachments::StagedAttachmentInput;
 use crate::domain::models::{Feature, GateDecision, StepExecution};
+use crate::error::AppError;
 use async_trait::async_trait;
 use serde::Serialize;
 
@@ -58,12 +59,18 @@ pub trait StepExecutor: Send + Sync {
     /// Retry a failed/interrupted step. `new_model` / `new_agent` re-pin the
     /// feature-wide model/harness overrides before the rerun (`None` keeps the
     /// existing override).
+    ///
+    /// **Precondition:** the executor refuses to retry when an earlier step
+    /// (any step with `step_index < target.step_index`) is still non-terminal
+    /// (`pending`, `running`, `verifying`, or `awaiting_gate`). The check
+    /// surfaces as `AppError::validation` so the UI can both disable the
+    /// Retry Step button and surface the blocking predecessor by name.
     async fn step_retry(
         &self,
         execution_id: &str,
         new_model: Option<&str>,
         new_agent: Option<&str>,
-    ) -> Result<(), String>;
+    ) -> Result<(), AppError>;
     /// Replay from the given step execution — reset the target step and
     /// all subsequent steps to `pending`, clear their artifacts and gate
     /// decisions, then restart the execution loop. Works for any step
@@ -143,10 +150,17 @@ pub enum SyncOutcomeView {
 #[async_trait]
 pub trait GatePresenter: Send + Sync {
     async fn gate_pending_for_run(&self, feature_id: &str) -> Result<Option<GateDecision>, String>;
+    /// Apply a gate decision for the given step execution.
+    ///
+    /// **Precondition:** the executor refuses to apply the decision when an
+    /// earlier step (`step_index < target.step_index`) is still non-terminal
+    /// (`pending`, `running`, `verifying`, or `awaiting_gate`). The check
+    /// surfaces as `AppError::validation` so the UI can render a blocking
+    /// banner above the Approve / Redirect buttons and disable them.
     async fn gate_decide(
         &self,
         step_execution_id: &str,
         decision: &str,
         feedback: Option<&str>,
-    ) -> Result<(), String>;
+    ) -> Result<(), AppError>;
 }
