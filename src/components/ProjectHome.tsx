@@ -1,15 +1,17 @@
 import { useState, useEffect, Fragment } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, Cpu, Play, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal, Code } from 'lucide-react';
+import { Zap, Cpu, Play, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal, Code, EyeOff, X } from 'lucide-react';
 import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { invoke } from '@tauri-apps/api/core';
 import { ConfigOptionValue, Feature, WorktreeStrategy, ProjectSettingsData } from '../types';
 import { formatTokens } from '../lib/utils';
 import { getAgentModels } from '../lib/agentModels';
+import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 import { formatError } from '../lib/errors';
 import { useErrorBus } from '../lib/errorBus';
 import { saveProjectSettings } from '../lib/project';
 import { TerminalWindow } from './TerminalWindow';
+import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { useNavigation, useProject, useUIState } from '../context';
 
 const ProjectHome = () => {
@@ -53,6 +55,12 @@ const ProjectHome = () => {
     // Defaults from settings
     const [defaultAgentKind, setDefaultAgentKind] = useState<string>('');
     const [defaultModel, setDefaultModel] = useState<string>('');
+
+    // Staged attachments for the inline composer. Persisted by the
+    // start_feature caller; see AttachmentDropzone.tsx for the
+    // launch-stage contract.
+    const [attachments, setAttachments] = useState<LaunchStageEntry[]>([]);
+    const [visionWarningDismissed, setVisionWarningDismissed] = useState(false);
 
     // Fetch models on selected agent change
     useEffect(() => {
@@ -263,13 +271,29 @@ const ProjectHome = () => {
         }
         setIsDelegating(true);
         try {
-            const res = await invoke<Feature>('start_feature', { 
-                projectId: activeProject.id, 
+            // Convert staged attachments into the Rust wire shape
+            // BEFORE calling start_feature — the orchestrator persists
+            // them to the freshly-created feature row before the
+            // driver is spawned, so the agent's first turn sees them.
+            // Drag-and-drop entries carry an absolute `sourcePath`,
+            // click-picked entries ferry bytes through IPC (modern
+            // Chromium strips `File.path` for security).
+            const stagedAttachments = await Promise.all(attachments.map(async (a) => ({
+                source_path: a.sourcePath ?? '',
+                mime: a.mime ?? null,
+                source_filename: a.source_filename ?? null,
+                bytes: a.file
+                    ? Array.from(new Uint8Array(await a.file.arrayBuffer()))
+                    : null,
+            })));
+            const res = await invoke<Feature>('start_feature', {
+                projectId: activeProject.id,
                 workflowId: selectedWorkflow.id,
                 title: featureInput,
                 description: featureInput,
                 agentKind: selectedAgentKind || null,
-                model: selectedModel || null
+                model: selectedModel || null,
+                stagedAttachments,
             });
             const newFeature: Feature = {
                 id: res.id,
@@ -284,6 +308,7 @@ const ProjectHome = () => {
                 model: res.model,
             };
             setFeatures(prev => [newFeature, ...prev]);
+            setAttachments([]);
             navigate({ kind: 'detail', featureId: res.id, featureTitle: res.title });
         } catch (err) {
             console.error("Failed to start feature pipeline:", err);
@@ -508,6 +533,24 @@ const ProjectHome = () => {
                                 <>
                                     <h3 className="font-outfit text-white font-medium mb-4">Start a new Feature Pipeline</h3>
                                     <div className="w-full mb-4">
+                                        {/* Attachments dropzone — sits above the
+                                            description mirroring the
+                                            StartFeatureModal layout. */}
+                                        <div className="mb-3">
+                                            <div className="flex items-center gap-2 mb-1.5">
+                                                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Attachments</span>
+                                                <span className="text-[10px] font-mono text-slate-600">
+                                                    optional · referenced as [attachment -- &lt;name&gt;] in prompts
+                                                </span>
+                                            </div>
+                                            <AttachmentDropzone
+                                                mode="launch"
+                                                label="Add files"
+                                                stageEntries={attachments}
+                                                onChangeStage={setAttachments}
+                                                maxChips={6}
+                                            />
+                                        </div>
                                         <textarea
                                             autoFocus
                                             value={featureInput}
@@ -775,38 +818,88 @@ const ProjectHome = () => {
                                         </div>
                                     )}
 
-                                    <div className="mt-4 flex justify-between items-center">
-                                        <div className="flex gap-4 items-center">
-                                            <button
-                                                type="button"
-                                                onClick={() => setIsCustomizeOpen(!isCustomizeOpen)}
-                                                className="text-xs font-semibold text-slate-400 hover:text-white flex items-center gap-1.5 transition-colors"
-                                            >
-                                                <Settings className="w-3.5 h-3.5" />
-                                                {isCustomizeOpen ? 'Hide Customization' : 'Customize...'}
-                                            </button>
-                                        </div>
-                                        <div className="flex gap-3">
-                                            <button onClick={() => setIsExpanded(false)} className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
-                                            <button
-                                                onClick={handleStartFeature}
-                                                disabled={isDelegating}
-                                                className="px-6 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all flex items-center gap-2"
-                                            >
-                                                {isDelegating ? <RotateCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Delegate Workspace
-                                            </button>
+                                    <div className="mt-4 flex flex-col gap-3">
+                                        {(() => {
+                                            const hasImg = attachments.some((a) => a.mime.startsWith('image/'));
+                                            const supports = modelSupportsImagesByName(
+                                                selectedAgentKind || defaultAgentKind,
+                                                selectedModel || defaultModel,
+                                            );
+                                            return hasImg && !supports && !visionWarningDismissed ? (
+                                                <div
+                                                    role="alert"
+                                                    className="flex items-start gap-2 px-3 py-2 rounded-lg border border-violet-500/40 bg-ruby-500/10 text-ruby-200"
+                                                >
+                                                    <EyeOff className="w-4 h-4 mt-0.5 shrink-0 text-ruby-300" />
+                                                    <div className="flex-1 min-w-0 text-[11px] font-mono leading-snug">
+                                                        <span className="font-semibold">
+                                                            Model {(selectedModel || defaultModel || '(unset)').trim()} does not read images
+                                                        </span>
+                                                        <span className="text-ruby-200/80">
+                                                            {' '}— attachments will be referenced as paths only and not inlined.
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setVisionWarningDismissed(true)}
+                                                        aria-label="Dismiss vision warning"
+                                                        className="shrink-0 text-ruby-200 hover:text-white transition-colors"
+                                                    >
+                                                        <X className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+                                            ) : null;
+                                        })()}
+                                        <div className="flex justify-between items-center">
+                                            <div className="flex gap-4 items-center">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsCustomizeOpen(!isCustomizeOpen)}
+                                                    className="text-xs font-semibold text-slate-400 hover:text-white flex items-center gap-1.5 transition-colors"
+                                                >
+                                                    <Settings className="w-3.5 h-3.5" />
+                                                    {isCustomizeOpen ? 'Hide Customization' : 'Customize...'}
+                                                </button>
+                                            </div>
+                                            <div className="flex gap-3">
+                                                <button onClick={() => setIsExpanded(false)} className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
+                                                <button
+                                                    onClick={handleStartFeature}
+                                                    disabled={isDelegating}
+                                                    className="px-6 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all flex items-center gap-2"
+                                                >
+                                                    {isDelegating ? <RotateCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Delegate Workspace
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
 
                                 </>
                             ) : (
-                                <input
-                                    type="text"
-                                    onClick={() => setIsExpanded(true)}
-                                    placeholder="Draft and delegate a new feature pipeline..."
-                                    className="w-full bg-transparent border-none p-2 text-sm text-white placeholder-slate-500 focus:outline-none cursor-pointer"
-                                    readOnly
-                                />
+                                <div className="w-full">
+                                    <input
+                                        type="text"
+                                        onClick={() => setIsExpanded(true)}
+                                        placeholder="Draft and delegate a new feature pipeline..."
+                                        className="w-full bg-transparent border-none p-2 text-sm text-white placeholder-slate-500 focus:outline-none cursor-pointer"
+                                        readOnly
+                                    />
+                                    {/* Collapsed chip row: shows already-staged
+                                        attachments so they survive the
+                                        expand/collapse round-trip. Bypasses
+                                        the dropzone — use the expanded form
+                                        to add more. */}
+                                    <div className="px-2 pb-2 flex flex-wrap items-center gap-2">
+                                        <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Attachments</span>
+                                        <AttachmentDropzone
+                                            mode="launch"
+                                            compact
+                                            stageEntries={attachments}
+                                            onChangeStage={setAttachments}
+                                            maxChips={6}
+                                        />
+                                    </div>
+                                </div>
                             )}
                         </div>
                     </div>

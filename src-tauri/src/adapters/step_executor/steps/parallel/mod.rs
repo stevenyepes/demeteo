@@ -1,6 +1,8 @@
 use std::time::Instant;
 
-use crate::adapters::step_executor::artifacts::{compute_git_diff, resolve_attached_artifacts};
+use crate::adapters::step_executor::artifacts::{
+    compute_git_diff, resolve_attached_artifacts, resolve_attached_user_attachments,
+};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::artifact::Artifact;
@@ -383,6 +385,27 @@ impl ExecutionDriver {
             step_index,
             &*self.artifacts,
             &self.steps,
+        );
+
+        // Surface any user attachments the planner might need to
+        // decompose against. Mirrors the agent-step call so a workflow
+        // that begins with a `parallel` step (e.g. refactor.json) sees
+        // the user's attached files in the same way a `kind: agent`
+        // plan step does. The function appends a "User Attached Files"
+        // footer when nothing in the template referenced them by name.
+        let planner_feature_attachments: Vec<crate::domain::attachment::AttachedFile> = self
+            .features
+            .get(&self.f_id)
+            .ok()
+            .flatten()
+            .map(|f| f.attachments.clone())
+            .unwrap_or_default();
+        let planner_prompt = resolve_attached_user_attachments(
+            &planner_prompt,
+            self.f_id.as_str(),
+            &planner_feature_attachments,
+            &*self.attachments,
+            None,
         );
 
         let is_cli_agent = planner_kind == "opencode"

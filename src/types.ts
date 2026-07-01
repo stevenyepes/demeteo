@@ -67,6 +67,15 @@ export type ConfigOptionValue = {
   value: string;
   name: string;
   description?: string;
+  /**
+   * Best-effort signal that the chosen model can accept attached images.
+   * Mirrors the Rust `ConfigOptionValue.supports_images` field on the
+   * model probe response. When the backend cannot confirm vision support
+   * (fallback list miss or unknown dynamically-probed model) this is
+   * `false` so the UI can show a soft warning rather than silently drop
+   * an attached image.
+   */
+  supports_images?: boolean;
 };
 
 export interface ConfigOption {

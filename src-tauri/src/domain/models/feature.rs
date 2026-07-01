@@ -1,3 +1,4 @@
+use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{
     FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId,
 };
@@ -39,6 +40,18 @@ pub struct Feature {
     /// Empty = every step inherits the workflow/project defaults.
     #[serde(default)]
     pub step_overrides: Vec<StepOverride>,
+
+    /// Per-feature user attachments (images, files) — owned by the
+    /// feature run. Stored as a JSON column on the feature row
+    /// (`features.attachments_json`, migration V19) rather than a
+    /// separate table so feature cleanup (auto-delete branch)
+    /// releases the attachment lifetime implicitly. The on-disk
+    /// file content lives in `FsAttachmentStore` at
+    /// `<app_local_data_dir>/attachments/<feature_id>/<sha256>.<ext>`
+    /// and is dropped by `FsAttachmentStore::clear_feature` when the
+    /// feature is purged.
+    #[serde(default)]
+    pub attachments: Vec<AttachedFile>,
 }
 
 /// A per-step agent/model override selected when launching a feature.

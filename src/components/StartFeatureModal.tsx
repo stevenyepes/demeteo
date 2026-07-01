@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
+import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import type { Repository, WorkflowSummary } from '../types';
+import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
+import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 
 interface StartFeatureModalProps {
   isOpen: boolean;
@@ -36,6 +38,14 @@ interface StartFeatureModalProps {
     loopIterations?: number;
     /** Per-step agent/model overrides chosen at launch (migration V13). */
     stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null }[];
+    /**
+     * Staged file attachments, keyed by sha256 (see
+     * `AttachmentDropzone.tsx`). The modal cannot persist these
+     * itself — it has no `feature_id` until `start_feature` returns —
+     * so the parent is responsible for committing them via
+     * `feature_add_attachment(featureId, …)` after launch.
+     */
+    attachments?: LaunchStageEntry[];
   }) => void;
 }
 
@@ -91,6 +101,14 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // so the project default applies. `'yes'` / `'no'` become a
   // concrete `true` / `false` on the Feature row. See migration V12.
   const [commitArtifacts, setCommitArtifacts] = useState<'inherit' | 'yes' | 'no'>('inherit');
+  // Staged attachments — collected by the dropzone above the
+  // description. Persisted by the parent via `feature_add_attachment`
+  // after `start_feature` returns the new feature id; see the
+  // `attachments` field on `onLaunch`.
+  const [attachments, setAttachments] = useState<LaunchStageEntry[]>([]);
+  // Soft vision-support warning. Dismissable per-modal so the user
+  // doesn't see it on every keystroke; resets on close.
+  const [visionWarningDismissed, setVisionWarningDismissed] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
 
   // Initialize workflow picker to the requested default (or the first
@@ -114,6 +132,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setSteps([]);
       setStepOverrides({});
       setLoopIterations('');
+      setAttachments([]);
+      setVisionWarningDismissed(false);
     }
   }, [isOpen, workflows, defaultWorkflowId, workflowId]);
 
@@ -154,6 +174,23 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       return segments.some((seg) => seg.length >= 2 && haystack.includes(seg));
     });
   }, [description, repositories]);
+
+  // Vision-capability check: shown as a soft warning when the user
+  // attaches at least one image and the resolved model does NOT
+  // advertise image support. The signal is the same one the agent
+  // probe uses on the Rust side — see
+  // `application::agent_probe::model_supports_images_by_name` and the
+  // wrapper in `src/lib/agentModels.ts`. The banner is dismissable;
+  // it never blocks launch (spec §0 decision #4).
+  const hasImageAttachment = useMemo(
+    () => attachments.some((a) => a.mime.startsWith('image/')),
+    [attachments],
+  );
+  const modelSupportsImagesNow = useMemo(
+    () => modelSupportsImagesByName(agentKind, model),
+    [agentKind, model],
+  );
+  const showVisionWarning = hasImageAttachment && !modelSupportsImagesNow;
 
   // Q26 / Q11 — detect repos already used by another active feature
   // (so we can warn the user before they kick off a parallel run).
@@ -218,6 +255,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       commitArtifacts: commitArtifactsArg,
       loopIterations: Number.isFinite(loopArg as number) ? loopArg : undefined,
       stepOverrides: overrides.length > 0 ? overrides : undefined,
+      attachments: attachments.length > 0 ? attachments : undefined,
     });
   };
 
@@ -253,6 +291,28 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
         </div>
 
         <div className="p-6 space-y-4">
+          {/* Attachments (above the description per sub-3 brief).
+              Drop/drop/pick up to 10 files (100 MB each). The dropzone
+              stages locally in `LaunchStageEntry[]` — see the
+              `attachments` field on `onLaunch` for the commit step. */}
+          <div>
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
+                Attachments
+              </span>
+              <span className="text-[10px] font-mono text-slate-500">
+                optional · referenced as [attachment -- &lt;name&gt;] in prompts
+              </span>
+            </div>
+            <AttachmentDropzone
+              mode="launch"
+              label="Add files"
+              stageEntries={attachments}
+              onChangeStage={setAttachments}
+              maxChips={6}
+            />
+          </div>
+
           {/* Title */}
           <div>
             <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
@@ -492,11 +552,34 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-white/5 bg-[#050508] flex justify-between items-center">
-          <span className="text-[10px] text-slate-500 font-mono">
-            {canLaunch ? '⌘/Ctrl + Enter to launch' : 'Fill in title, description, and workflow to launch'}
-          </span>
-          <div className="flex gap-3">
+        <div className="px-6 py-4 border-t border-white/5 bg-[#050508] flex flex-col gap-3">
+          {showVisionWarning && !visionWarningDismissed && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 px-3 py-2 rounded-lg border border-violet-500/40 bg-ruby-500/10 text-ruby-200"
+            >
+              <EyeOff className="w-4 h-4 mt-0.5 shrink-0 text-ruby-300" />
+              <div className="flex-1 min-w-0 text-[11px] font-mono leading-snug">
+                <span className="font-semibold">Model {model.trim() || '(unset)'} does not read images</span>
+                <span className="text-ruby-200/80">
+                  {' '}— attachments will be referenced as paths only and not inlined.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVisionWarningDismissed(true)}
+                aria-label="Dismiss vision warning"
+                className="shrink-0 text-ruby-200 hover:text-white transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          <div className="flex justify-between items-center">
+            <span className="text-[10px] text-slate-500 font-mono">
+              {canLaunch ? '⌘/Ctrl + Enter to launch' : 'Fill in title, description, and workflow to launch'}
+            </span>
+            <div className="flex gap-3">
             <button
               type="button"
               onClick={onClose}
@@ -516,6 +599,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             >
               Launch feature
             </button>
+            </div>
           </div>
         </div>
       </div>

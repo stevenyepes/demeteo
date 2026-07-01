@@ -65,6 +65,15 @@ pub struct ConfigOptionValue {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Best-effort signal that the chosen model can accept attached images.
+    ///
+    /// Driven by `application::agent_probe::fallback_models` for bundled
+    /// model lists and by a substring heuristic for dynamically probed
+    /// models. Defaults to `false` on deserialize (unknown models never
+    /// silently claim vision support) and is *always* serialized so the
+    /// UI can render a soft warning without an extra lookup.
+    #[serde(default)]
+    pub supports_images: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

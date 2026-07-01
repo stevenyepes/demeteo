@@ -94,6 +94,9 @@ pub fn fetch_active_features(
         .map_err(AppError::from)
 }
 
+/// Pre-launch user attachments. Persisted to the feature row BEFORE
+/// the driver is spawned so the agent's first turn sees them. Pass
+/// `None` (or an empty array) when the user did not attach anything.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn start_feature(
@@ -107,6 +110,7 @@ pub async fn start_feature(
     commit_artifacts: Option<bool>,
     loop_iterations: Option<u32>,
     step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
+    staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
 ) -> Result<Feature, AppError> {
     ctx.executor
         .feature_start(
@@ -119,6 +123,7 @@ pub async fn start_feature(
             commit_artifacts,
             loop_iterations,
             step_overrides.unwrap_or_default(),
+            staged_attachments.unwrap_or_default(),
         )
         .await
         .map_err(AppError::from)

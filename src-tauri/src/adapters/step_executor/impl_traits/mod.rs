@@ -4,6 +4,7 @@ use std::time::Instant;
 use tokio::sync::watch;
 
 use crate::adapters::worktree::git_ops::GitOpsHelper;
+use crate::commands::attachments::{commit_staged_attachments, StagedAttachmentInput};
 use crate::domain::ids::{FeatureId, GateDecisionId, StepExecutionId};
 use crate::domain::models::{Feature, GateDecision, StepExecution};
 use crate::paths;
@@ -84,6 +85,7 @@ impl DagStepExecutor {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             artifacts: self.artifacts.clone(),
+            attachments: self.attachments.clone(),
             app_settings: self.app_settings.clone(),
             git_ops: GitOpsHelper::new(self.app_settings.clone(), self.exec.clone()),
             merge_executor: self.merge_executor.clone(),
@@ -179,6 +181,7 @@ impl StepExecutor for DagStepExecutor {
         commit_artifacts: Option<bool>,
         loop_iterations: Option<u32>,
         step_overrides: Vec<crate::domain::models::StepOverride>,
+        staged_attachments: Vec<StagedAttachmentInput>,
     ) -> Result<Feature, String> {
         if title.trim().is_empty() {
             return Err("Feature title cannot be empty.".to_string());
@@ -253,6 +256,7 @@ impl StepExecutor for DagStepExecutor {
             commit_artifacts: effective_commit,
             loop_iterations,
             step_overrides,
+            attachments: Vec::new(),
         };
         self.features.add(feature.clone())?;
 
@@ -275,6 +279,36 @@ impl StepExecutor for DagStepExecutor {
                 updated_at: now,
             };
             self.features.step_create(step_exec)?;
+        }
+
+        // Persist any pre-launch attachments to the freshly-created
+        // feature row BEFORE the driver is spawned. Without this the
+        // agent's first turn races the frontend's post-launch
+        // `feature_add_attachment` calls — the user clicks Launch,
+        // the IPC returns, the agent starts running, and the
+        // attachments arrive after the prompt was already rendered.
+        // Saving here guarantees the manifest is populated by the
+        // time the driver reads `self.features.get(&self.f_id)`.
+        if !staged_attachments.is_empty() {
+            if let Err(e) = commit_staged_attachments(
+                &self.features,
+                &self.attachment_json,
+                &self.attachments,
+                feature_id.as_str(),
+                staged_attachments,
+            ) {
+                // Mark the feature as failed so the UI surfaces the
+                // error rather than seeing a "running" feature with
+                // no prompt attachments.
+                let _ = self.features.update(
+                    &feature_id,
+                    &FeaturePatch {
+                        status: Some("failed".to_string()),
+                        ..Default::default()
+                    },
+                );
+                return Err(e.to_string());
+            }
         }
 
         if let Err(e) = self

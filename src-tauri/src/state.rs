@@ -19,6 +19,7 @@
 
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::ports::agent_execution::AgentExecutionPort;
+use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
     MergeAuditRepository, NotificationRepository, ProjectRepository, ThreadRepository,
@@ -110,6 +111,20 @@ pub struct AppContext {
     /// OpenAI-compatible endpoint). The one deliberate direct-to-provider call
     /// path, scoped to the memory feature.
     pub memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort>,
+
+    /// Per-feature user attachment store (images, files). Files live
+    /// under `<app_local_data_dir>/attachments/<feature_id>/<sha256>.<ext>`;
+    /// the on-disk store is the source of truth for the bytes, while
+    /// the JSON manifest on the `Feature` row (see migration V19 and
+    /// `Feature::attachments`) is the source of truth for which
+    /// attachments belong to which feature.
+    pub attachments: Arc<dyn AttachmentStore>,
+
+    /// JSON-manifest persistence for the per-feature attachment
+    /// list (the column `features.attachments_json`, migration V19).
+    /// Split from [`AttachmentStore`] so the FS adapter doesn't have
+    /// to know about SQLite and vice versa.
+    pub attachment_json: Arc<dyn AttachmentJsonPort>,
 
     /// Path to application local data directory (DB, artifacts, etc.).
     pub app_data_dir: std::path::PathBuf,

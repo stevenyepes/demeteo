@@ -12,6 +12,7 @@ use crate::domain::models::StepConfig;
 use crate::domain::prompt_context::PromptContext;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
+use crate::ports::attachment_store::AttachmentStore;
 use crate::ports::db::{AppSettingsRepository, FeatureRepository};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
@@ -60,6 +61,11 @@ pub(crate) struct ExecutionDriver {
     pub agent_exec: Arc<dyn AgentExecutionPort>,
     pub exec: Arc<dyn ExecutionPort>,
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// Per-feature user attachment store. Read by `spawn.rs` to copy
+    /// attachments into the per-step worktree before each agent turn
+    /// so they sit inside the `external_directory: deny` fence. See
+    /// `step_executor::artifacts::materialize_user_attachments_to_worktree`.
+    pub attachments: Arc<dyn AttachmentStore>,
     /// Shared `app_settings` KV repository. Used by every agent-turn call
     /// site to resolve the effective timeouts via
     /// [`crate::application::timeouts::resolve_effective`]. Owned by the

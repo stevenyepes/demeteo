@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ConfigOptionValue } from "../types";
+import { modelSupportsImagesByName } from "./modelImageSupport";
 
 type ModelList = ConfigOptionValue[];
 
@@ -61,6 +62,39 @@ export async function getAgentModels(
 
   cache.set(k, promise);
   return promise;
+}
+
+/**
+ * Look up whether the given model name supports image attachments,
+ * using a list returned from {@link getAgentModels}.
+ *
+ * The backend populates `ConfigOptionValue.supports_images` for bundled
+ * fallback models and applies a substring heuristic for dynamically
+ * probed model strings — see
+ * `application::agent_probe::model_supports_images_by_name`. This
+ * accessor surfaces that field here so the Start-Feature modal can
+ * decide whether to show the soft "this model may not read images"
+ * warning without having to know the wire shape.
+ *
+ * Unknown model strings (e.g. a custom override typed into the
+ * picker) fall through to {@link modelSupportsImagesByName}, which
+ * is pessimistic — returns `false` for anything the heuristic
+ * doesn't recognise, so the UI never silently drops an image.
+ */
+export function modelSupportsImages(
+  models: ModelList,
+  agentKind: string,
+  model: string,
+): boolean {
+  const trimmed = (model ?? "").trim();
+  if (trimmed.length === 0) return false;
+  const hit = models.find(
+    (m) => m.value === trimmed || m.name === trimmed,
+  );
+  if (hit && typeof hit.supports_images === "boolean") {
+    return hit.supports_images;
+  }
+  return modelSupportsImagesByName(agentKind, trimmed);
 }
 
 /** Test-only escape hatch. */
