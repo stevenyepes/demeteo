@@ -136,6 +136,14 @@ fn heuristic_positive_substrings() {
         "opus-2025-01-01",
         "sonnet-4-5",
         "haiku-3",
+        // minimax vendor models — image-aware per the bundled
+        // capabilities table. The substring is present in both the
+        // bare model id ("MiniMax-M3") and the routing prefix
+        // ("minimax-coding-plan/MiniMax-M3"), so the optimistic
+        // branch flags both.
+        "minimax-coding-plan/MiniMax-M3",
+        "MiniMax-M3",
+        "minimax-m2",
     ];
     for m in positives {
         assert!(

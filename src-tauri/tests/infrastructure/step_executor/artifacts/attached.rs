@@ -1,4 +1,6 @@
 use super::*;
+use crate::adapters::step_executor::artifacts::resolve_attached_user_attachments;
+use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::FeatureId;
 use crate::domain::ids::StepExecutionId;
 use crate::ports::artifact_store::ArtifactStore;
@@ -343,4 +345,141 @@ fn boundary_reflects_allow_shell_override() {
     let out = inject_operating_boundary("research with git log", StepCapability::Artifacts, &p);
     // Shell widened on → no shell prohibition.
     assert!(!out.contains("MUST NOT run shell commands."));
+}
+
+// ── resolve_attached_user_attachments fallback footer ───────────────────
+//
+// The orchestrator stores user-uploaded files on the feature row and
+// references them from a prompt via `[attachment — <name>]` placeholders.
+// Workflows whose plan/implement templates don't include such a placeholder
+// would otherwise leave the agent blind to the attached files — the agent
+// has no signal that anything was uploaded. `resolve_attached_user_attachments`
+// mitigates this by appending a "User Attached Files" footer when the
+// template referenced zero attachments by name.
+
+fn temp_attachment_store() -> (
+    crate::adapters::attachment_store::fs::FsAttachmentStore,
+    std::path::PathBuf,
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "demeteo_attach_fallback_test_{}_{}_{}",
+        nanos,
+        std::process::id(),
+        count
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = crate::adapters::attachment_store::fs::FsAttachmentStore::new(dir.clone());
+    (store, dir)
+}
+
+fn sample_attachment(name: &str, mime: &str, sha: &str) -> AttachedFile {
+    AttachedFile {
+        id: format!("at-{}", name),
+        name: name.into(),
+        mime: mime.into(),
+        sha256: sha.into(),
+        size: 1024,
+        source_filename: name.into(),
+    }
+}
+
+#[test]
+fn user_attachment_footer_added_when_no_placeholder_present() {
+    let (store, _dir) = temp_attachment_store();
+    let atts = vec![sample_attachment("screenshot.png", "image/png", "abc123")];
+    let template = "Plan the change for the new feature."; // no [attachment — …]
+    let resolved = resolve_attached_user_attachments(
+        template,
+        "f-1",
+        &atts,
+        &store,
+        Some("artifacts/_context"),
+    );
+    assert!(
+        resolved.contains("User Attached Files"),
+        "expected fallback footer when no placeholder references the attachment, got: {}",
+        resolved
+    );
+    assert!(
+        resolved.contains("screenshot.png"),
+        "footer should list the attached filename, got: {}",
+        resolved
+    );
+    assert!(
+        resolved.contains("abc123.png"),
+        "footer should point at the worktree-local file path, got: {}",
+        resolved
+    );
+    // Original prompt preserved verbatim.
+    assert!(resolved.contains(template));
+}
+
+#[test]
+fn user_attachment_footer_omitted_when_placeholder_present() {
+    let (store, _dir) = temp_attachment_store();
+    let atts = vec![sample_attachment("screenshot.png", "image/png", "abc123")];
+    let template = "Describe this image: [attachment — screenshot.png]";
+    let resolved = resolve_attached_user_attachments(
+        template,
+        "f-1",
+        &atts,
+        &store,
+        Some("artifacts/_context"),
+    );
+    // The placeholder hit produced the standard prepended path-manifest
+    // block, not the "not referenced" footer.
+    assert!(!resolved.contains("User Attached Files"));
+    assert!(resolved.contains("ATTACHED CONTEXT: attachment:screenshot.png"));
+    assert!(resolved.contains("abc123.png"));
+}
+
+#[test]
+fn user_attachment_footer_lists_only_unreferenced() {
+    let (store, _dir) = temp_attachment_store();
+    let atts = vec![
+        sample_attachment("a.png", "image/png", "aaaa"),
+        sample_attachment("b.png", "image/png", "bbbb"),
+    ];
+    let template = "Reference a only: [attachment — a.png]"; // b is not referenced
+    let resolved = resolve_attached_user_attachments(
+        template,
+        "f-1",
+        &atts,
+        &store,
+        Some("artifacts/_context"),
+    );
+    // a.png is surfaced through the standard prepended block.
+    assert!(resolved.contains("ATTACHED CONTEXT: attachment:a.png"));
+    // b.png should NOT be in the standard block (no placeholder), but
+    // SHOULD appear in the footer.
+    assert!(!resolved.contains("ATTACHED CONTEXT: attachment:b.png"));
+    assert!(
+        resolved.contains("User Attached Files"),
+        "footer should fire for the unreferenced attachment, got: {}",
+        resolved
+    );
+    assert!(resolved.contains("b.png"));
+    assert!(resolved.contains("bbbb.png"));
+}
+
+#[test]
+fn user_attachment_noop_when_empty() {
+    let (store, _dir) = temp_attachment_store();
+    let resolved = resolve_attached_user_attachments(
+        "Do the thing.",
+        "f-1",
+        &[],
+        &store,
+        Some("artifacts/_context"),
+    );
+    assert_eq!(resolved, "Do the thing.");
 }

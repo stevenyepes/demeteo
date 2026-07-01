@@ -97,6 +97,19 @@ pub async fn feature_add_attachment(
             .unwrap_or_else(|| "bin".to_string()),
     };
 
+    // Reject unsupported file types. The frontend's `accept` attribute
+    // is a hint only — users can switch the picker to "All Files" and
+    // select anything (and Tauri drag-and-drop hands us arbitrary paths
+    // with no mime hint at all). Keep this list in sync with
+    // `domain::attachment::mime_for_ext` and the `ACCEPTED_EXTS` set in
+    // `src/components/AttachmentDropzone.tsx`.
+    if !is_supported_attachment(&resolved_mime, &ext) {
+        return Err(AppError::validation(format!(
+            "unsupported attachment type: mime={} ext={} (allowed: png, jpg, gif, webp, pdf, txt, md, json)",
+            resolved_mime, ext
+        )));
+    }
+
     // Re-upload idempotency: if a manifest entry with the same sha256
     // already exists, return it as-is — the on-disk file is shared.
     let current = ctx.attachment_json.get_attachments(&fid)?;
@@ -293,6 +306,27 @@ fn resolve_mime(
         }
     }
     "application/octet-stream".to_string()
+}
+
+/// Returns true when the resolved mime + extension pair corresponds to
+/// a supported attachment type. The mime is the authoritative signal;
+/// the extension is a fallback for callers that supply a non-IANA
+/// mime (e.g. `text/x-patch`) but a clean extension.
+fn is_supported_attachment(mime: &str, ext: &str) -> bool {
+    let lower_mime = mime.to_ascii_lowercase();
+    if lower_mime.starts_with("image/") {
+        return matches!(
+            lower_mime.as_str(),
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+        );
+    }
+    matches!(
+        lower_mime.as_str(),
+        "text/plain" | "text/markdown" | "application/json" | "application/pdf"
+    ) || matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf" | "txt" | "md" | "markdown" | "json"
+    )
 }
 
 /// Lowercase extension for a stored attachment: prefer the mime

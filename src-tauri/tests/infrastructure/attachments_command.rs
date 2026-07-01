@@ -124,3 +124,79 @@ fn read_rejects_paths_outside_root_via_store() {
     let (store, _dir) = temp_store();
     assert!(store.read("/etc/passwd").is_err());
 }
+
+// ── is_supported_attachment ───────────────────────────────────────────
+//
+// The Rust-side file-type allow-list mirrors `ACCEPTED_EXTS` in
+// `src/components/AttachmentDropzone.tsx` and `mime_for_ext` in
+// `domain::attachment`. The frontend picker uses `accept` as a hint
+// only — users can switch the picker to "All Files" and select any
+// extension — and Tauri drag-and-drop hands us arbitrary paths with
+// no mime. This gate is the second line of defence against uploading
+// a non-allowed file type.
+
+#[test]
+fn supported_attachment_accepts_known_image_mimes() {
+    for mime in ["image/png", "image/jpeg", "image/gif", "image/webp"] {
+        assert!(
+            super::is_supported_attachment(mime, "png"),
+            "{} should be accepted",
+            mime
+        );
+    }
+}
+
+#[test]
+fn supported_attachment_accepts_known_doc_mimes() {
+    for mime in [
+        "text/plain",
+        "text/markdown",
+        "application/json",
+        "application/pdf",
+    ] {
+        assert!(
+            super::is_supported_attachment(mime, "bin"),
+            "{} should be accepted",
+            mime
+        );
+    }
+}
+
+#[test]
+fn supported_attachment_rejects_unknown_mimes_and_exts() {
+    // Unknown mime + unknown ext → reject.
+    assert!(!super::is_supported_attachment(
+        "application/octet-stream",
+        "exe"
+    ));
+    assert!(!super::is_supported_attachment("text/x-cargo-lock", "lock"));
+    assert!(!super::is_supported_attachment("application/zip", "zip"));
+    assert!(!super::is_supported_attachment(
+        "application/x-shockwave-flash",
+        "swf"
+    ));
+    // The negative case from the bug report: an `.exe` masquerading as
+    // octet-stream must not slip through.
+    assert!(!super::is_supported_attachment(
+        "application/octet-stream",
+        "exe"
+    ));
+}
+
+#[test]
+fn supported_attachment_rejects_unknown_image_mime() {
+    // image/svg+xml is not on the allow-list — kept off deliberately
+    // to avoid SVG-based prompt-injection vectors. Even though the
+    // extension `.svg` could slip through the `image/*` substring
+    // check, the explicit allow-list of image/* mimes blocks it.
+    assert!(!super::is_supported_attachment("image/svg+xml", "svg"));
+}
+
+#[test]
+fn supported_extension_fallback_for_known_exts() {
+    // Caller supplies a non-IANA mime but a clean extension — still
+    // accepted, because the extension is the canonical signal here.
+    assert!(super::is_supported_attachment("text/x-patch", "txt"));
+    assert!(super::is_supported_attachment("text/x-markdown", "md"));
+    assert!(super::is_supported_attachment("application/x-json", "json"));
+}

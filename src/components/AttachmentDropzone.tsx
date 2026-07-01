@@ -140,10 +140,37 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
   }, [mode, featureId, stageEntries]);
 
   // -- click-to-pick via <input type="file" /> ----------------------------
+  // When the user dismisses the native file dialog with Cancel,
+  // browsers do NOT fire `change`, so the `isPicking` latch would stay
+  // closed forever and the "Add files" button would silently no-op on
+  // the next click. Listen to the window `focus` event while a picker
+  // is open: when the OS dialog steals focus and then gives it back,
+  // a `change` fires (with files) for a selection or doesn't fire for a
+  // cancel. We can't observe the cancel directly — but if focus has
+  // returned and the input still has no files, the user cancelled, so
+  // release the latch.
   const openPicker = useCallback(() => {
     if (isPicking) return;
     setIsPicking(true);
     inputRef.current?.click();
+  }, [isPicking]);
+
+  useEffect(() => {
+    if (!isPicking) return;
+    const onFocus = () => {
+      // Defer one tick so `onChange` (which is queued first by the
+      // browser when files were selected) can populate `inputRef.current.files`
+      // before we check it.
+      window.setTimeout(() => {
+        const hasFiles =
+          inputRef.current?.files && inputRef.current.files.length > 0;
+        if (!hasFiles) {
+          setIsPicking(false);
+        }
+      }, 0);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [isPicking]);
 
   const onPickerChange = useCallback(
@@ -151,12 +178,28 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
       setIsPicking(false);
       const files = e.target.files;
       if (!files || files.length === 0) return;
-      await ingestFiles(Array.from(files));
+      // Validate client-side before ingesting — the OS picker lets users
+      // switch to "All Files" and select anything, even though the
+      // `accept` attribute is a hint only. Surface a soft error per
+      // rejected file so the user knows what was dropped.
+      const allowed: File[] = [];
+      for (const f of Array.from(files)) {
+        if (isAllowedFile(f)) {
+          allowed.push(f);
+        } else {
+          onError?.(
+            `File not allowed: ${f.name} — supported types are png, jpg, gif, webp, pdf, txt, md, json.`,
+          );
+        }
+      }
+      if (allowed.length > 0) {
+        await ingestFiles(allowed);
+      }
       // Reset so the same file can be re-picked after a remove.
       e.target.value = "";
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode, featureId, stageEntries],
+    [mode, featureId, stageEntries, onError],
   );
 
   // -- shared ingest ------------------------------------------------------
@@ -183,8 +226,14 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
     async (paths: string[]) => {
       for (const sourcePath of paths) {
         const lower = sourcePath.toLowerCase();
-        const mime = guessMime(lower);
         const sourceFilename = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
+        if (!isAllowedPath(sourcePath)) {
+          onError?.(
+            `File not allowed: ${sourceFilename} — supported types are png, jpg, gif, webp, pdf, txt, md, json.`,
+          );
+          continue;
+        }
+        const mime = guessMime(lower);
         try {
           if (mode === "direct") {
             await ingestOneDirect({ kind: "path", sourcePath, sourceFilename, mime });
@@ -198,7 +247,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode, featureId, stageEntries],
+    [mode, featureId, stageEntries, onError],
   );
 
   const ingestOneDirect = useCallback(
@@ -417,6 +466,60 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
 };
 
 const ACCEPTED_TYPES = ".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.json";
+
+/**
+ * Lowercase extension set mirroring the Rust-side allow-list in
+ * `domain::attachment::mime_for_ext`. The `accept` attribute on the
+ * file input is a hint only — the user can switch the picker to "All
+ * Files" and select anything — so we re-check here and surface a soft
+ * error per rejected file. Keep this list in sync with the Rust
+ * validation in `commands::attachments::feature_add_attachment`.
+ */
+const ACCEPTED_EXTS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "pdf",
+  "txt",
+  "md",
+  "markdown",
+  "json",
+]);
+
+function isAllowedFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  const ext = name.slice(dot + 1);
+  if (ACCEPTED_EXTS.has(ext)) return true;
+  // Fall back to the browser-provided mime when the extension is
+  // ambiguous (e.g. ".bash_history" has no extension at all but
+  // reports text/plain). The Rust side mirrors this check against
+  // `mime_for_ext`.
+  const mime = (file.type || "").toLowerCase();
+  if (mime.startsWith("image/")) return true;
+  if (mime === "application/pdf") return true;
+  if (mime === "text/plain" || mime === "text/markdown" || mime === "application/json") {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Drag-and-drop variant of {@link isAllowedFile}. The Tauri webview
+ * hands us absolute paths only (no mime), so the check is purely
+ * extension-based and mirrors `isAllowedFile`'s positive list.
+ */
+function isAllowedPath(sourcePath: string): boolean {
+  const lower = sourcePath.toLowerCase();
+  const slash = Math.max(lower.lastIndexOf("/"), lower.lastIndexOf("\\"));
+  const tail = slash >= 0 ? lower.slice(slash + 1) : lower;
+  const dot = tail.lastIndexOf(".");
+  if (dot < 0) return false;
+  return ACCEPTED_EXTS.has(tail.slice(dot + 1));
+}
 
 function guessMime(lower: string): string {
   if (lower.endsWith(".png")) return "image/png";

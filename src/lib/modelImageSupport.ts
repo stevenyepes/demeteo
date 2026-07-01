@@ -15,8 +15,15 @@
  * Rules (substring match, case-insensitive):
  *
  *   positive — `gpt-4`, `gemini`, `claude`, `vision`, `opus`,
- *              `sonnet`, `haiku`
+ *              `sonnet`, `haiku`, `minimax`
  *   negative — `embedding`, `whisper` (overrides positives)
+ *
+ * The `minimax` token covers the vendor family of vision-capable
+ * models such as `minimax-coding-plan/MiniMax-M3` — its substring is
+ * present in the model id (case-insensitive) so the optimistic path
+ * flags it as image-aware. New vendor releases that ship with vision
+ * support should be added to both this list and the Rust mirror in
+ * `application::agent_probe::model_supports_images_by_name`.
  */
 export function modelSupportsImagesByName(
   _agentKind: string,
@@ -33,6 +40,7 @@ export function modelSupportsImagesByName(
     "opus",
     "sonnet",
     "haiku",
+    "minimax",
   ];
   return positives.some((needle) => m.includes(needle));
 }

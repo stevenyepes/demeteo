@@ -227,6 +227,16 @@ pub(crate) fn resolve_attached_artifacts(
 /// vs `[attachment`) so they live in independent scans. Unmatched
 /// attachment names get the same "(Artifact '…' not found or not
 /// yet generated)" message that step-artifact misses do.
+///
+/// **Fallback notice.** When a feature has one or more attachments but
+/// the template does not reference any of them by name (a common case
+/// for workflows whose plan/implement templates don't include
+/// `[attachment — <name>]` placeholders), the agent has no way to know
+/// the files exist. Append a short "user attached files" footer at
+/// the end of the rendered prompt so the agent at least sees the
+/// attachment manifest and can decide whether to `Read` the file on
+/// demand. This is a non-blocking safety net — the placeholder path is
+/// still preferred for templates that want to inline the file body.
 pub(crate) fn resolve_attached_user_attachments(
     prompt: &str,
     feature_id: &str,
@@ -240,6 +250,7 @@ pub(crate) fn resolve_attached_user_attachments(
     let mut resolved = prompt.to_string();
     let mut search = 0usize;
     let mut rendered: Vec<(usize, String, String)> = Vec::new(); // (sort_key, step_id, body)
+    let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     while let Some(start_idx) = resolved[search..].find("[attachment") {
         let absolute_start = search + start_idx;
@@ -305,6 +316,7 @@ pub(crate) fn resolve_attached_user_attachments(
                     size = att.size,
                     path = display_path,
                 );
+                referenced.insert(att.sha256.clone());
                 rendered.push((
                     // Use a high sort key so user attachments always
                     // trail real step artifacts.
@@ -343,6 +355,57 @@ pub(crate) fn resolve_attached_user_attachments(
             ));
         }
         resolved = format!("{}{}", prepended, resolved);
+    }
+
+    // Fallback: surface any attachments that the template didn't
+    // reference via a `[attachment — <name>]` placeholder. Without
+    // this, a workflow whose plan/implement prompt doesn't mention
+    // attachments leaves the agent blind to the user's files — the
+    // file is on disk but the agent has no signal it exists. We
+    // append a short footer naming every un-referenced attachment
+    // and pointing at its on-disk path; the agent can then `Read`
+    // the file on demand if the task appears to call for it.
+    let unreferenced: Vec<&AttachedFile> = attachments
+        .iter()
+        .filter(|a| !referenced.contains(&a.sha256))
+        .collect();
+    if !unreferenced.is_empty() {
+        let mut footer = String::from(
+            "\n\n---\n\n## User Attached Files (not referenced by template)\n\n\
+             The user attached the following file(s) to this feature but the workflow \
+             template did not reference them by name. They are available on disk at the \
+             paths below — use your Read tool to inspect them if the task appears to \
+             call for it (e.g. a screenshot referenced in the description, a spec \
+             document, etc.):\n",
+        );
+        for att in &unreferenced {
+            let ext = crate::domain::attachment::ext_for_mime(&att.mime)
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    std::path::Path::new(&att.source_filename)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_ascii_lowercase())
+                        .unwrap_or_else(|| "bin".to_string())
+                });
+            let display_path = if let Some(wt_dir) = worktree_artifacts_dir {
+                let rel = std::path::Path::new(wt_dir)
+                    .join("attachments")
+                    .join(format!("{}.{}", att.sha256, ext));
+                rel.to_string_lossy().to_string()
+            } else {
+                let stored = attachment_store.lookup_path(feature_id, &att.sha256, &ext);
+                stored.to_string_lossy().to_string()
+            };
+            footer.push_str(&format!(
+                "\n- `{name}` ({mime}, {size} bytes) — `{path}`",
+                name = att.source_filename,
+                mime = att.mime,
+                size = att.size,
+                path = display_path,
+            ));
+        }
+        resolved.push_str(&footer);
     }
 
     resolved

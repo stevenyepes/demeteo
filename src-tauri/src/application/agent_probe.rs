@@ -123,13 +123,17 @@ async fn probe_models_via_cli(
 ///
 /// Substring rules (case-insensitive):
 ///   * positive — `gpt-4`, `gemini`, `claude`, `vision`, `opus`,
-///     `sonnet`, `haiku`
+///     `sonnet`, `haiku`, `minimax`
 ///   * negative — `embedding`, `whisper` (overrides positives)
 ///
 /// Unknown strings return `false` so the UI shows a soft warning
 /// instead of silently dropping the image. This is the
 /// pessimistic path: only models whose name pattern is *known*
-/// to imply vision support are flagged true.
+/// to imply vision support are flagged true. The `minimax` token
+/// covers vendor vision-capable models such as
+/// `minimax-coding-plan/MiniMax-M3` — keep this list in sync with
+/// `src/lib/modelImageSupport.ts` so the frontend warning banner
+/// and the orchestrator's runtime probe agree.
 pub fn model_supports_images_by_name(_agent_kind: &str, model: &str) -> bool {
     let m = model.trim().to_lowercase();
     if m.is_empty() {
@@ -143,7 +147,7 @@ pub fn model_supports_images_by_name(_agent_kind: &str, model: &str) -> bool {
         return false;
     }
     const POSITIVES: &[&str] = &[
-        "gpt-4", "gemini", "claude", "vision", "opus", "sonnet", "haiku",
+        "gpt-4", "gemini", "claude", "vision", "opus", "sonnet", "haiku", "minimax",
     ];
     POSITIVES.iter().any(|needle| m.contains(needle))
 }
