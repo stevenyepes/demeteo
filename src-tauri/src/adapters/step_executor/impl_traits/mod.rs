@@ -84,6 +84,7 @@ impl DagStepExecutor {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             artifacts: self.artifacts.clone(),
+            attachments: self.attachments.clone(),
             app_settings: self.app_settings.clone(),
             git_ops: GitOpsHelper::new(self.app_settings.clone(), self.exec.clone()),
             merge_executor: self.merge_executor.clone(),
@@ -253,6 +254,7 @@ impl StepExecutor for DagStepExecutor {
             commit_artifacts: effective_commit,
             loop_iterations,
             step_overrides,
+            attachments: Vec::new(),
         };
         self.features.add(feature.clone())?;
 

@@ -63,6 +63,24 @@ impl ExecutionDriver {
             bare_mode: agent_kind == "claude-code",
         };
 
+        // Copy any user attachments into the per-step worktree so the
+        // agent's `external_directory: deny` fence accepts the file
+        // when its `Read` tool is invoked. Pulled fresh from the
+        // feature row on every agent turn — a file added at the Gate
+        // view becomes visible to the redirected step without any
+        // extra wiring (the orchestrator stores attachments on the
+        // feature, not in any static run context).
+        if let Ok(Some(feature)) = self.features.get(&self.f_id) {
+            if !feature.attachments.is_empty() {
+                crate::adapters::step_executor::artifacts::materialize_user_attachments_to_worktree(
+                    self.f_id.as_str(),
+                    &feature.attachments,
+                    &*self.attachments,
+                    wt_path,
+                );
+            }
+        }
+
         let spawn_fut = self
             .registry
             .get_or_spawn(self.f_id.as_str(), agent_kind, ctx);

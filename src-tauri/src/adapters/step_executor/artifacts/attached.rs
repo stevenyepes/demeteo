@@ -1,8 +1,10 @@
 use crate::domain::artifact::{ArtifactCapture, ArtifactDecl};
+use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::permission::{PermissionProfile, StepCapability};
 use crate::ports::artifact_store::ArtifactStore;
+use crate::ports::attachment_store::AttachmentStore;
 use crate::ports::db::GateRepository;
 
 /// Returns `(decision, feedback)` from the most recently *decided* gate step
@@ -207,6 +209,230 @@ pub(crate) fn resolve_attached_artifacts(
     }
 
     resolved_prompt
+}
+
+/// Resolve `[attachment — <name>]` placeholders in a prompt template
+/// against a feature's per-run attachment manifest. Each match is
+/// prepended to the prompt as a path-manifest block pointing at the
+/// on-disk file under `<attachments_root>/<feature_id>/<sha256>.<ext>`.
+/// The companion `spawn` step copies each matched file into the
+/// per-step worktree's `artifacts/_context/attachments/` directory
+/// so the agent's `external_directory: deny` fence accepts the file
+/// when it calls `Read`.
+///
+/// This is split out from [`resolve_attached_artifacts`] so the
+/// existing step-artifact substitution (and its existing tests)
+/// remain stable — `[attached — <step_id>]` and `[attachment — <name>]`
+/// placeholders are matched by *different* opening tokens (`[attached`
+/// vs `[attachment`) so they live in independent scans. Unmatched
+/// attachment names get the same "(Artifact '…' not found or not
+/// yet generated)" message that step-artifact misses do.
+pub(crate) fn resolve_attached_user_attachments(
+    prompt: &str,
+    feature_id: &str,
+    attachments: &[AttachedFile],
+    attachment_store: &dyn AttachmentStore,
+    worktree_artifacts_dir: Option<&str>,
+) -> String {
+    if attachments.is_empty() {
+        return prompt.to_string();
+    }
+    let mut resolved = prompt.to_string();
+    let mut search = 0usize;
+    let mut rendered: Vec<(usize, String, String)> = Vec::new(); // (sort_key, step_id, body)
+
+    while let Some(start_idx) = resolved[search..].find("[attachment") {
+        let absolute_start = search + start_idx;
+        // The closing `]` belongs to the placeholder; anything that
+        // looks like `[attachment - X]` or `[attachment — X]` counts.
+        let end_offset = match resolved[absolute_start..].find(']') {
+            Some(o) => o,
+            None => break,
+        };
+        let absolute_end = absolute_start + end_offset;
+        let full = resolved[absolute_start..=absolute_end].to_string();
+        let inside = &full[1..full.len() - 1];
+
+        let parts: Vec<&str> = if inside.contains('\u{2014}') {
+            inside.split('\u{2014}').collect()
+        } else if inside.contains('\u{2013}') {
+            inside.split('\u{2013}').collect()
+        } else {
+            inside.split('-').collect()
+        };
+        let matched = parts.len() >= 2;
+        let content = if matched { parts[1].trim() } else { "" };
+
+        let lc = content.to_lowercase();
+        let found = attachments.iter().find(|a| {
+            let a_name = a.name.to_lowercase();
+            let a_id = a.id.to_lowercase();
+            let a_src = a.source_filename.to_lowercase();
+            lc == a_name || lc == a_id || lc == a_src
+        });
+
+        match found {
+            Some(att) => {
+                let ext = crate::domain::attachment::ext_for_mime(&att.mime)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        std::path::Path::new(&att.source_filename)
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.to_ascii_lowercase())
+                            .unwrap_or_else(|| "bin".to_string())
+                    });
+                let stored = attachment_store.lookup_path(feature_id, &att.sha256, &ext);
+                let stored_str = stored.to_string_lossy().to_string();
+                // If a worktree context dir is provided, the
+                // `materialize_user_attachments_to_worktree` step has
+                // already copied the file into
+                // `{wt}/artifacts/_context/attachments/<sha>.<ext>`;
+                // prefer that relative destination so the
+                // `external_directory: deny` fence accepts the read.
+                let display_path = if let Some(wt_dir) = worktree_artifacts_dir {
+                    let rel = std::path::Path::new(wt_dir)
+                        .join("attachments")
+                        .join(format!("{}.{}", att.sha256, ext));
+                    rel.to_string_lossy().to_string()
+                } else {
+                    stored_str.clone()
+                };
+                let body = format!(
+                    "The following attachment `{name}` ({mime}, {size} bytes) is on disk:\n\n- `{path}`\n\nUse your Read tool to load it on demand.",
+                    name = att.name,
+                    mime = att.mime,
+                    size = att.size,
+                    path = display_path,
+                );
+                rendered.push((
+                    // Use a high sort key so user attachments always
+                    // trail real step artifacts.
+                    usize::MAX - 1,
+                    format!("attachment:{}", att.name),
+                    body.clone(),
+                ));
+                let replacement =
+                    format!("[See attached {} at the beginning of the prompt]", att.name);
+                resolved = resolved.replace(&full, &replacement);
+                search = 0;
+            }
+            None if matched => {
+                let replacement = format!(
+                    "(Artifact 'attachment {}' not found or not yet generated)",
+                    content
+                );
+                resolved = resolved.replace(&full, &replacement);
+                search = 0;
+            }
+            _ => {
+                // `[attachment` substring that's not the placeholder
+                // shape — leave it untouched and advance.
+                search = absolute_start + 1;
+            }
+        }
+    }
+
+    if !rendered.is_empty() {
+        rendered.sort_by_key(|r| r.0);
+        let mut prepended = String::new();
+        for (_, step_id, body) in rendered {
+            prepended.push_str(&format!(
+                "=== ATTACHED CONTEXT: {} (path manifest) ===\n{}\n================================\n\n",
+                step_id, body
+            ));
+        }
+        resolved = format!("{}{}", prepended, resolved);
+    }
+
+    resolved
+}
+
+/// Copy each user attachment into `{wt_path}/artifacts/_context/attachments/`
+/// so the agent's `external_directory: deny` accepts the file when its
+/// `Read` tool is called on it. Idempotent: re-running with the same
+/// `(sha256, ext)` is a no-op when the destination already exists.
+/// Logs a warning when the on-disk size differs from the recorded
+/// `size` (sha256 hash mismatch is the most likely cause).
+pub(crate) fn materialize_user_attachments_to_worktree(
+    feature_id: &str,
+    attachments: &[AttachedFile],
+    attachment_store: &dyn AttachmentStore,
+    wt_path: &str,
+) -> Vec<String> {
+    if attachments.is_empty() {
+        return Vec::new();
+    }
+    let dest_root = std::path::Path::new(wt_path)
+        .join("artifacts")
+        .join("_context")
+        .join("attachments");
+    if std::fs::create_dir_all(&dest_root).is_err() {
+        return Vec::new();
+    }
+
+    let mut copied = Vec::with_capacity(attachments.len());
+    for att in attachments {
+        let ext = crate::domain::attachment::ext_for_mime(&att.mime)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                std::path::Path::new(&att.source_filename)
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_ascii_lowercase())
+                    .unwrap_or_else(|| "bin".to_string())
+            });
+        let src_path = attachment_store.lookup_path(feature_id, &att.sha256, &ext);
+        if !src_path.exists() {
+            tracing::warn!(
+                feature_id = feature_id,
+                sha256 = %att.sha256,
+                "user attachment source file is missing on disk; skipping pre-spawn copy"
+            );
+            continue;
+        }
+        let dest = dest_root.join(format!("{}.{}", att.sha256, ext));
+        if dest.exists() {
+            // Idempotent re-run: if the destination already exists,
+            // sanity-check the size. A mismatch is the sha256-collision
+            // (in practice impossible) or a stale-file bug — log
+            // loudly and keep the on-disk bytes (the user's content
+            // is safe).
+            let src_meta = std::fs::metadata(&src_path).ok();
+            let dst_meta = std::fs::metadata(&dest).ok();
+            match (src_meta, dst_meta) {
+                (Some(s), Some(d)) if s.len() != d.len() => {
+                    tracing::warn!(
+                        feature_id = feature_id,
+                        src = %src_path.display(),
+                        dst = %dest.display(),
+                        src_bytes = s.len(),
+                        dst_bytes = d.len(),
+                        sha256 = %att.sha256,
+                        "user-attach re-copy found existing worktree file with different size; \
+                         possible stale copy or sha256 collision"
+                    );
+                }
+                _ => {}
+            }
+            copied.push(dest.to_string_lossy().to_string());
+            continue;
+        }
+        match std::fs::copy(&src_path, &dest) {
+            Ok(_) => {
+                copied.push(dest.to_string_lossy().to_string());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    feature_id = feature_id,
+                    src = %src_path.display(),
+                    "failed to copy user attachment into worktree _context/"
+                );
+            }
+        }
+    }
+    copied
 }
 
 fn render_attachment_body(

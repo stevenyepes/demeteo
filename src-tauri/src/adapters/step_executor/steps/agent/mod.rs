@@ -57,6 +57,18 @@ impl ExecutionDriver {
         let retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
         let uses_retry_section = template_uses_retry_section(template);
 
+        // Pull the per-feature user attachment manifest fresh on every
+        // agent turn (the same live-query pattern used for the gate
+        // decision in the line below) so a file added at the Gate
+        // view becomes visible to the redirected step without any
+        // extra wiring through `RetryContext`. The empty path is the
+        // no-feature-attachments case — substitution is a no-op.
+        let feature_for_attachments = self.features.get(&self.f_id).ok().flatten();
+        let feature_attachments_str = feature_for_attachments
+            .as_ref()
+            .map(|f| f.attachments.as_slice())
+            .unwrap_or(&[]);
+
         let prompt = self
             .base_ctx
             .clone()
@@ -74,6 +86,28 @@ impl ExecutionDriver {
             step_index,
             &*self.artifacts,
             &self.steps,
+        );
+        // `[attachment — <name>]` placeholders resolved against the
+        // feature's manifest, emitting a path-manifest block pointing
+        // at the worktree-local copy (created by `spawn.rs`
+        // pre-agent-turn) or the canonical FS store when no worktree
+        // is in scope.
+        let wt_ctx_dir = std::path::Path::new(&self.target_dir)
+            .join("_context")
+            .join("attachments")
+            .to_string_lossy()
+            .to_string();
+        let wt_ctx_opt: Option<&str> = if feature_attachments_str.is_empty() {
+            None
+        } else {
+            Some(wt_ctx_dir.as_str())
+        };
+        let prompt = crate::adapters::step_executor::artifacts::resolve_attached_user_attachments(
+            &prompt,
+            self.f_id.as_str(),
+            feature_attachments_str,
+            &*self.attachments,
+            wt_ctx_opt,
         );
         // Safety net: if the template opted in via
         // `{{retry_feedback_section}}`, the section already appears in

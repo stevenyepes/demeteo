@@ -544,6 +544,7 @@ mod redirect_reset_tests {
                 commit_artifacts: None,
                 loop_iterations: None,
                 step_overrides: Vec::new(),
+                attachments: Vec::new(),
             })
             .unwrap();
         FeatureId::from("f-1".to_string())

@@ -9,6 +9,7 @@ use crate::adapters::step_executor::driver_registry::DriverRegistry;
 use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
+use crate::ports::attachment_store::AttachmentStore;
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository, ProjectRepository,
     WorkflowRepository,
@@ -71,6 +72,12 @@ pub struct DagStepExecutor {
     /// or SFTP-on-remote adapter can swap in without touching either
     /// caller. See `docs/ARCHITECTURE.md` §2 (locked port catalogue).
     artifacts: Arc<dyn ArtifactStore>,
+    /// Per-feature user attachment store. Threaded through to every
+    /// `ExecutionDriver` so `spawn_agent_session` can copy the
+    /// feature's attachments into the per-step worktree before the
+    /// agent's first turn (so the `external_directory: deny` fence
+    /// accepts the `Read` tool call).
+    pub attachments: Arc<dyn AttachmentStore>,
     workspace_dir: PathBuf,
     /// Live drivers keyed by step_execution_id. The driver inserts a
     /// `GateWaiter` while waiting for a decision; `gate_decide` looks up
@@ -92,6 +99,11 @@ pub struct DagStepExecutor {
 
 impl DagStepExecutor {
     #[allow(clippy::too_many_arguments)]
+    /// Per-feature user attachment store. Threaded through to every
+    /// `ExecutionDriver` so `spawn_agent_session` can copy the
+    /// feature's attachments into the per-step worktree before the
+    /// agent's first turn (so the `external_directory: deny` fence
+    /// accepts the `Read` tool call).
     pub fn new(
         machines: Arc<dyn MachineRepository>,
         projects: Arc<dyn ProjectRepository>,
@@ -119,6 +131,7 @@ impl DagStepExecutor {
         exec: Arc<dyn ExecutionPort>,
         merge_executor: Arc<dyn MergeExecutor>,
         artifacts: Arc<dyn ArtifactStore>,
+        attachments: Arc<dyn AttachmentStore>,
         workspace_dir: PathBuf,
         pricing: Arc<dyn PricingTable>,
     ) -> Self {
@@ -141,6 +154,7 @@ impl DagStepExecutor {
             merge_executor,
             git_ops,
             artifacts,
+            attachments,
             workspace_dir,
             gate_waiters: Arc::new(Mutex::new(HashMap::new())),
             driver_registry: DriverRegistry::new(),

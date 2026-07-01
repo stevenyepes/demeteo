@@ -1,17 +1,59 @@
 use rusqlite::params;
 
+use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{Feature, StepExecution};
+use crate::ports::attachment_store::AttachmentJsonPort;
 use crate::ports::db::{FeaturePatch, FeatureRepository, StepExecutionPatch};
 
 use super::super::SqliteAdapter;
+
+impl AttachmentJsonPort for SqliteAdapter {
+    fn get_attachments(&self, feature_id: &FeatureId) -> Result<Vec<AttachedFile>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare("SELECT attachments_json FROM features WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![feature_id.0])
+            .map_err(|e| e.to_string())?;
+        match rows.next().map_err(|e| e.to_string())? {
+            Some(row) => {
+                let json: Option<String> = row.get(0).map_err(|e| e.to_string())?;
+                Ok(json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default())
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn set_attachments(
+        &self,
+        feature_id: &FeatureId,
+        attachments: &[AttachedFile],
+    ) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        let json: Option<String> = if attachments.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(attachments).map_err(|e| e.to_string())?)
+        };
+        conn.execute(
+            "UPDATE features SET attachments_json = ?2 WHERE id = ?1",
+            params![feature_id.0, json],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
 
 impl FeatureRepository for SqliteAdapter {
     fn get_active(&self, project_id: &ProjectId) -> Result<Vec<Feature>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -20,6 +62,10 @@ impl FeatureRepository for SqliteAdapter {
                 let commit_artifacts: Option<i64> = row.get(13)?;
                 let loop_iterations: Option<i64> = row.get(14)?;
                 let step_overrides_json: Option<String> = row.get(15)?;
+                let attachments_json: Option<String> = row.get(16)?;
+                let attachments: Vec<AttachedFile> = attachments_json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
                 Ok(Feature {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -39,6 +85,7 @@ impl FeatureRepository for SqliteAdapter {
                     step_overrides: step_overrides_json
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
+                    attachments,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -53,7 +100,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json
                  FROM features WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -62,6 +109,10 @@ impl FeatureRepository for SqliteAdapter {
                 let commit_artifacts: Option<i64> = row.get(13)?;
                 let loop_iterations: Option<i64> = row.get(14)?;
                 let step_overrides_json: Option<String> = row.get(15)?;
+                let attachments_json: Option<String> = row.get(16)?;
+                let attachments: Vec<AttachedFile> = attachments_json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
                 Ok(Feature {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -81,6 +132,7 @@ impl FeatureRepository for SqliteAdapter {
                     step_overrides: step_overrides_json
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
+                    attachments,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -100,13 +152,19 @@ impl FeatureRepository for SqliteAdapter {
         } else {
             serde_json::to_string(&f.step_overrides).ok()
         };
+        let attachments_json: Option<String> = if f.attachments.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&f.attachments).map_err(|e| e.to_string())?)
+        };
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
                 f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
-                f.mr_url, f.mr_state, commit_artifacts, loop_iterations, step_overrides_json
+                f.mr_url, f.mr_state, commit_artifacts, loop_iterations, step_overrides_json,
+                attachments_json
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -189,7 +247,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json
                  FROM features WHERE mr_state = 'open' AND mr_url IS NOT NULL ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -198,6 +256,10 @@ impl FeatureRepository for SqliteAdapter {
                 let commit_artifacts: Option<i64> = row.get(13)?;
                 let loop_iterations: Option<i64> = row.get(14)?;
                 let step_overrides_json: Option<String> = row.get(15)?;
+                let attachments_json: Option<String> = row.get(16)?;
+                let attachments: Vec<AttachedFile> = attachments_json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
                 Ok(Feature {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -217,6 +279,7 @@ impl FeatureRepository for SqliteAdapter {
                     step_overrides: step_overrides_json
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
+                    attachments,
                 })
             })
             .map_err(|e| e.to_string())?;

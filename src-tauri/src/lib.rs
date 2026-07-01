@@ -313,6 +313,9 @@ pub fn run() {
             // Build the DagStepExecutor before AppContext to avoid a
             // circular dependency (the executor contains sub-port Arcs;
             // AppContext contains the executor's Arc).
+            let attachment_store: Arc<dyn ports::attachment_store::AttachmentStore> = Arc::new(
+                adapters::attachment_store::fs::FsAttachmentStore::new(app_data_dir.clone()),
+            );
             let step_executor_adapter = {
                 let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> = Arc::new(
                     adapters::artifact_store::fs::FsArtifactStore::new(app_data_dir.clone()),
@@ -334,6 +337,7 @@ pub fn run() {
                     exec_inner.clone(),
                     merge_executor.clone(),
                     artifact_store,
+                    attachment_store.clone(),
                     workspace_dir.clone(),
                     pricing.clone(),
                 ));
@@ -401,6 +405,8 @@ pub fn run() {
                 worktree_ops,
                 provider_http,
                 memory_llm: memory_llm.clone(),
+                attachments: attachment_store,
+                attachment_json: db_adapter.clone(),
                 app_data_dir: app_data_dir.clone(),
                 workspace_dir: workspace_dir.clone(),
             });
@@ -553,6 +559,9 @@ pub fn run() {
             commands::mr_publisher::fetch_mr_state,
             commands::feature_lifecycle::feature_cleanup,
             commands::notifications::notifications_list,
+            commands::attachments::feature_add_attachment,
+            commands::attachments::feature_list_attachments,
+            commands::attachments::feature_remove_attachment,
             commands::notifications::notification_mark_read,
             commands::notifications::notification_unread_count
         ])

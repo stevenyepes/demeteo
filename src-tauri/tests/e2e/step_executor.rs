@@ -122,6 +122,8 @@ async fn test_executor_instantiation_and_cancel() {
     let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
     );
+    let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
+        Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
 
     let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
         // The git_ops helper needs an `AppSettingsRepository`; the
@@ -159,6 +161,7 @@ async fn test_executor_instantiation_and_cancel() {
         exec,
         merge_executor,
         artifacts,
+        attachments,
         temp_dir.clone(),
         pricing,
     );
@@ -188,6 +191,8 @@ async fn test_executor_gate_decide() {
     let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
     );
+    let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
+        Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
 
     let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
         // The git_ops helper needs an `AppSettingsRepository`; the
@@ -225,6 +230,7 @@ async fn test_executor_gate_decide() {
         exec,
         merge_executor,
         artifacts,
+        attachments,
         temp_dir.clone(),
         pricing,
     );
@@ -273,6 +279,7 @@ async fn test_executor_gate_decide() {
             commit_artifacts: None,
             loop_iterations: None,
             step_overrides: Vec::new(),
+            attachments: Vec::new(),
         })
         .unwrap();
 
@@ -358,6 +365,8 @@ async fn test_gate_decide_recovers_after_driver_death() {
     let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
     );
+    let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
+        Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
 
     let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
         let git_ops =
@@ -391,6 +400,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
         exec,
         merge_executor,
         artifacts,
+        attachments,
         temp_dir.clone(),
         pricing,
     );
@@ -432,6 +442,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
             commit_artifacts: None,
             loop_iterations: None,
             step_overrides: Vec::new(),
+            attachments: Vec::new(),
         })
         .unwrap();
 

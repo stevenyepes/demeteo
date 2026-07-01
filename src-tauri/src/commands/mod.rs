@@ -4,6 +4,7 @@ pub mod agent_exec;
 pub mod agent_lifecycle;
 pub mod agent_profile;
 pub mod app_session;
+pub mod attachments;
 pub mod bootstrap;
 pub mod feature_lifecycle;
 pub mod features;
