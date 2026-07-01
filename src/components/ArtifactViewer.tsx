@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, memo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { formatError } from '../lib/errors';
 import Editor from '@monaco-editor/react';
@@ -17,7 +17,7 @@ interface ArtifactViewerProps {
   onOpenEditorForPath?: (filePath: string) => void;
 }
 
-export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
+const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   artifactPath,
   maxHeight = '100%',
   mime,
@@ -404,3 +404,5 @@ export const ArtifactViewer: React.FC<ArtifactViewerProps> = ({
     </div>
   );
 };
+
+export const ArtifactViewer = memo(ArtifactViewerInner);
