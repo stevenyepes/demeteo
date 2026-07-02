@@ -7,6 +7,7 @@ pub mod app_session;
 pub mod app_version;
 pub mod attachments;
 pub mod bootstrap;
+pub mod create_project;
 pub mod feature_lifecycle;
 pub mod features;
 pub mod git;
