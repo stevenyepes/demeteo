@@ -16,6 +16,7 @@ import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
 import { CodeEditorView } from "./components/CodeEditorView";
 import StartFeatureModal from "./components/StartFeatureModal";
+import CreateFromZeroWizard from "./components/CreateFromZeroWizard";
 import PreferencesScreen from "./components/PreferencesScreen";
 import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
@@ -205,6 +206,8 @@ function AppInner() {
           )}
 
           {view.kind === 'new-project' && <NewProjectView />}
+
+          {view.kind === 'create-from-zero' && <CreateFromZeroWizard />}
 
           {view.kind === 'project-settings' && currentProject && <ProjectSettings />}
 
