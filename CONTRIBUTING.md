@@ -71,6 +71,7 @@ npm run dev:tauri
 - Keep the title short (under 70 characters) and use the description for context
 - Reference any related issue with `Closes #N`
 - If your change touches a Gate-policy area (migrations, Tauri capabilities, agent spawn logic, worktree merge), say so explicitly in the PR description
+- Every PR automatically runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml), which executes the same `npx tsc --noEmit`, `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, and `tests/repro/gate-feedback-rerender.mjs` commands listed above. Running these locally before pushing will reproduce any failure you see inline on the PR.
 
 ## What we won't merge
 
