@@ -117,6 +117,26 @@ impl DagStepExecutor {
                         error_message: Some(None),
                     },
                 )?;
+                // Mirror the DB reset with a `StepProgress` event so
+                // the frontend's local `steps` array reflects the
+                // rewind without waiting for a full
+                // `step_list_for_run` poll. Without this, the
+                // timeline keeps rendering the "Retry Step" /
+                // "Decide Gate" affordance for rows whose DB state
+                // has already moved on (the UI staleness bug this
+                // event exists to break). For gate rows, the
+                // pending re-prompt will re-emit `awaiting_gate`
+                // when the gate is re-entered by the driver.
+                let _ = self.notif.emit(&DomainEvent::StepProgress {
+                    feature_id: feature_id.clone(),
+                    step_id: s.step_id.0.clone(),
+                    status: "pending".into(),
+                    cost_usd: s.cost_usd,
+                    tokens: s.tokens,
+                    wall_clock_secs: s.wall_clock_secs,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
+                });
                 if s.step_kind == "gate" {
                     let _ = self.gates.reset_for_step_execution(&s.id);
                 }
