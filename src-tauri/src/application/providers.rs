@@ -1,6 +1,7 @@
 use crate::domain::ids::ProviderId;
 use crate::domain::models::ProviderInstance;
 use crate::paths;
+use crate::ports::provider_http::{CreateRepoRequest, CreatedRepo, NamespaceSummary};
 use crate::state::AppContext;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,81 @@ pub async fn fetch_repos(ctx: &AppContext, provider_id: String) -> Result<Vec<St
         .collect();
 
     Ok(repos)
+}
+
+/// Looks up a connected provider instance and resolves its PAT via the
+/// keyring-backed credential cache (never crosses the IPC boundary).
+fn resolve_provider_and_pat(
+    ctx: &AppContext,
+    provider_id: &str,
+) -> Result<(ProviderInstance, String), String> {
+    let providers = ctx.app_settings.get_provider_instances()?;
+    let provider_id_typed = ProviderId::from(provider_id.to_string());
+    let provider = providers
+        .into_iter()
+        .find(|p| p.id == provider_id_typed)
+        .ok_or_else(|| "Provider not found".to_string())?;
+
+    let pat = crate::credential_cache::get_or_fetch(provider.id.as_str(), || {
+        let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
+        entry.get_password().map_err(|e| {
+            tracing::warn!("Keyring error for id '{}': {}", provider.id, e);
+            e.to_string()
+        })
+    })?;
+
+    Ok((provider, pat))
+}
+
+/// Lists the namespaces (personal account + orgs/groups) a repo can be
+/// created under for the given provider.
+pub async fn list_groups(
+    ctx: &AppContext,
+    provider_id: String,
+) -> Result<Vec<NamespaceSummary>, String> {
+    let (provider, pat) = resolve_provider_and_pat(ctx, &provider_id)?;
+
+    ctx.provider_http
+        .list_namespaces(&provider.host, &provider.kind, &pat)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Creates a new repository on the given provider under `namespace_id`.
+/// `auto_init` is forced on so the repo has a default branch + initial commit
+/// before the wizard clones it.
+pub async fn create_repo(
+    ctx: &AppContext,
+    provider_id: String,
+    namespace_id: String,
+    name: String,
+    private: bool,
+) -> Result<CreatedRepo, String> {
+    let (provider, pat) = resolve_provider_and_pat(ctx, &provider_id)?;
+
+    // Resolve the requested namespace id back to a full NamespaceSummary so
+    // the adapter knows whether to route to a personal / org / group endpoint.
+    let namespaces = ctx
+        .provider_http
+        .list_namespaces(&provider.host, &provider.kind, &pat)
+        .await
+        .map_err(|e| e.to_string())?;
+    let namespace = namespaces
+        .into_iter()
+        .find(|n| n.id == namespace_id)
+        .ok_or_else(|| "Namespace not found".to_string())?;
+
+    let req = CreateRepoRequest {
+        namespace,
+        name,
+        private,
+        auto_init: true,
+    };
+
+    ctx.provider_http
+        .create_repo(&provider.host, &provider.kind, &pat, &req)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn connect_instance(

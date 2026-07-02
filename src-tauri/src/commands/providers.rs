@@ -2,6 +2,7 @@ use crate::application::providers::ProviderValidationResult;
 use crate::domain::ids::ProviderId;
 use crate::domain::models::ProviderInstance;
 use crate::error::AppError;
+use crate::ports::provider_http::{CreatedRepo, NamespaceSummary};
 use crate::state::AppContext;
 use keyring::Entry;
 use tauri::State;
@@ -24,6 +25,29 @@ pub async fn fetch_provider_repos(
     provider_id: String,
 ) -> Result<Vec<String>, AppError> {
     crate::application::providers::fetch_repos(&ctx, provider_id)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn fetch_provider_groups(
+    ctx: State<'_, AppContext>,
+    provider_id: String,
+) -> Result<Vec<NamespaceSummary>, AppError> {
+    crate::application::providers::list_groups(&ctx, provider_id)
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn provider_create_repo(
+    ctx: State<'_, AppContext>,
+    provider_id: String,
+    namespace_id: String,
+    name: String,
+    private: bool,
+) -> Result<CreatedRepo, AppError> {
+    crate::application::providers::create_repo(&ctx, provider_id, namespace_id, name, private)
         .await
         .map_err(AppError::from)
 }

@@ -514,6 +514,8 @@ pub fn run() {
             sftp::sftp_get_metadata,
             commands::providers::validate_provider_pat,
             commands::providers::fetch_provider_repos,
+            commands::providers::fetch_provider_groups,
+            commands::providers::provider_create_repo,
             commands::providers::connect_provider_instance,
             commands::providers::list_provider_instances,
             commands::providers::delete_provider_instance,
