@@ -8,6 +8,8 @@ import { TabBar } from './ui/TabBar';
 import type { TabDef } from './ui/TabBar';
 import { useNavigation } from '../context';
 import { getAgentTimeouts, setAgentTimeouts } from '../lib/timeouts';
+import { getAppInfo } from '../lib/appInfo';
+import type { AppInfo } from '../lib/appInfo';
 import type { AgentTimeouts as AgentTimeoutsType } from '../types';
 import { useErrorBus } from '../lib/errorBus';
 import { TimeoutField } from './ui/TimeoutField';
@@ -37,6 +39,11 @@ const PreferencesScreen = () => {
   const [timeoutsSaved, setTimeoutsSaved] = useState(false);
   const { reportError } = useErrorBus();
 
+  // App identity (version + release channel) for the About tab.
+  // Falls back to a safe "0.0.0 / stable" so the badge still renders if
+  // the command errors out before reaching the UI.
+  const [appInfo, setAppInfo] = useState<AppInfo>({ version: '0.0.0', channel: 'stable' });
+
   useEffect(() => {
     if (activeTab !== 'defaults') return;
     (async () => {
@@ -50,6 +57,17 @@ const PreferencesScreen = () => {
       setTimeoutsInput(timeouts);
     })();
   }, [activeTab]);
+
+  // Fetch the binary's identity once on mount. Errors are swallowed so a
+  // failing backend cannot blank the About screen — the state defaults
+  // to `0.0.0 / stable`.
+  useEffect(() => {
+    getAppInfo()
+      .then(setAppInfo)
+      .catch(() => {
+        // intentional: fall back to the placeholder values set in useState
+      });
+  }, []);
 
   const handleBrowseWorkspaceDir = async () => {
     const selected = await openDialog({ directory: true, multiple: false, title: 'Choose workspace directory' });
@@ -297,9 +315,21 @@ const PreferencesScreen = () => {
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center">
                 <Activity className="w-5 h-5 text-cyan-400" />
               </div>
-              <div>
-                <h3 className="text-base font-outfit font-bold text-white">Demeteo</h3>
-                <p className="text-xs text-slate-400">Multi-Agent Orchestrator v0.1.0</p>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-base font-outfit font-bold text-white">Demeteo</h3>
+                  <span
+                    data-testid="channel-badge"
+                    className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold uppercase tracking-wider ${
+                      appInfo.channel === 'nightly'
+                        ? 'bg-violet-500/10 text-violet-400 border-violet-500/20 shadow-[0_0_10px_rgba(139,92,246,0.15)]'
+                        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    }`}
+                  >
+                    {appInfo.channel}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">Multi-Agent Orchestrator v{appInfo.version}</p>
               </div>
             </div>
             <div className="border-t border-white/5 pt-4 text-xs text-slate-400 space-y-2">

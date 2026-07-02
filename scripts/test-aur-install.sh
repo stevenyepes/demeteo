@@ -158,7 +158,8 @@ stable = [r for r in data if not r.get('prerelease') and not r.get('draft')]
 print(stable[0]['tag_name'] if stable else '')
 ")
     [[ -n "$TAG" ]] || die "no stable release found"
-    log "mode=stable  tag=$TAG"
+    export DEMETEO_RELEASE_CHANNEL=stable
+    log "mode=stable  tag=$TAG  channel=stable"
     ;;
   nightly)
     TAG=$(python3 -c "
@@ -168,12 +169,16 @@ pre = [r for r in data if r.get('prerelease')]
 print(pre[0]['tag_name'] if pre else '')
 ")
     [[ -n "$TAG" ]] || die "no nightly (RC) release found"
-    log "mode=nightly tag=$TAG"
+    export DEMETEO_RELEASE_CHANNEL=nightly
+    log "mode=nightly tag=$TAG  channel=nightly"
     warn "nightly builds cannot be published to AUR — this is a local install test"
     ;;
   *)
     TAG="$MODE"
-    log "mode=specific tag=$TAG"
+    # Leave $DEMETEO_RELEASE_CHANNEL alone for a literal tag so the user
+    # can pick whichever channel the tag was cut from. PKGBUILD defaults
+    # to "stable" when the env var is unset.
+    log "mode=specific tag=$TAG  channel=${DEMETEO_RELEASE_CHANNEL:-stable (default)}"
     ;;
 esac
 

@@ -16,6 +16,17 @@ pub mod ssh_util;
 pub mod state;
 pub mod terminal;
 
+/// Compile-time release channel ("stable" or "nightly").
+///
+/// Defaults to `"stable"` when the `DEMETEO_RELEASE_CHANNEL` env var is not
+/// set at build time. The AUR `PKGBUILD` `build()` honours this var so a
+/// `nightly` build surfaces as `NIGHTLY` in the About screen without a
+/// separate binary.
+pub const RELEASE_CHANNEL: &str = match option_env!("DEMETEO_RELEASE_CHANNEL") {
+    Some(c) => c,
+    None => "stable",
+};
+
 use forward::ForwardState;
 use ports::agent_execution::AgentExecutionPort;
 use ports::agent_runtime::AgentRuntime;
@@ -186,9 +197,10 @@ pub fn run() {
     // console. Bump the suffix whenever the bootstrap/step-executor
     // path resolution changes.
     eprintln!(
-        "[demeteo] startup v{} ({}) — paths/agent-target-dir fix active",
+        "[demeteo] startup v{} ({}) — channel={} — paths/agent-target-dir fix active",
         env!("CARGO_PKG_VERSION"),
         env!("CARGO_PKG_NAME"),
+        crate::RELEASE_CHANNEL,
     );
 
     tauri::Builder::default()
@@ -478,6 +490,7 @@ pub fn run() {
             commands::app_session::get_app_session,
             commands::app_session::set_app_session,
             commands::app_session::delete_app_session,
+            commands::app_session::get_app_info,
             commands::app_session::get_workspace_dir,
             commands::app_session::get_workspace_dir_setting,
             commands::app_session::set_workspace_dir_setting,
