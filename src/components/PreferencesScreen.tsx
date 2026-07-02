@@ -9,7 +9,7 @@ import type { TabDef } from './ui/TabBar';
 import { useNavigation } from '../context';
 import { getAgentTimeouts, setAgentTimeouts } from '../lib/timeouts';
 import { getAppVersion } from '../lib/appVersion';
-import type { AgentTimeouts as AgentTimeoutsType, ReleaseChannel } from '../types';
+import type { AgentTimeouts as AgentTimeoutsType, AppVersion } from '../types';
 import { useErrorBus } from '../lib/errorBus';
 import { TimeoutField } from './ui/TimeoutField';
 
@@ -37,7 +37,11 @@ const PreferencesScreen = () => {
   const [timeoutsSaving, setTimeoutsSaving] = useState(false);
   const [timeoutsSaved, setTimeoutsSaved] = useState(false);
   const { reportError } = useErrorBus();
-  const [appVersion, setAppVersion] = useState<{ version: string; channel: ReleaseChannel } | null>(null);
+
+  // App identity (version + release channel) for the About tab.
+  // Pre-populated with a safe "0.0.0 / stable" so the badge still renders
+  // if the backend command errors out before reaching the UI.
+  const [appVersion, setAppVersion] = useState<AppVersion>({ version: '0.0.0', channel: 'stable' });
 
   useEffect(() => {
     if (activeTab !== 'defaults') return;
@@ -53,11 +57,16 @@ const PreferencesScreen = () => {
     })();
   }, [activeTab]);
 
+  // Fetch the binary's identity when the About tab is opened. Errors
+  // are swallowed so a failing backend cannot blank the About screen —
+  // the state defaults to `0.0.0 / stable` from `useState` above.
   useEffect(() => {
     if (activeTab !== 'about') return;
     getAppVersion()
       .then((info) => setAppVersion(info))
-      .catch(() => setAppVersion(null));
+      .catch(() => {
+        // intentional: leave the safe placeholder values in place.
+      });
   }, [activeTab]);
 
   const handleBrowseWorkspaceDir = async () => {
@@ -306,27 +315,26 @@ const PreferencesScreen = () => {
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center">
                 <Activity className="w-5 h-5 text-cyan-400" />
               </div>
-              <div>
-                <h3 className="text-base font-outfit font-bold text-white">Demeteo</h3>
-                <p className="text-xs text-slate-400 flex items-center gap-2">
-                  <span>Multi-Agent Orchestrator v{appVersion?.version ?? '…'}</span>
-                  {appVersion && (
-                    <span
-                      className={
-                        appVersion.channel === 'stable'
-                          ? 'px-1.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wide bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                          : 'px-1.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wide bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                      }
-                      title={
-                        appVersion.channel === 'stable'
-                          ? 'Stable release build'
-                          : 'Nightly / development build'
-                      }
-                    >
-                      {appVersion.channel}
-                    </span>
-                  )}
-                </p>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-base font-outfit font-bold text-white">Demeteo</h3>
+                  <span
+                    data-testid="channel-badge"
+                    className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold uppercase tracking-wider ${
+                      appVersion.channel === 'nightly'
+                        ? 'bg-violet-500/10 text-violet-400 border-violet-500/20 shadow-[0_0_10px_rgba(139,92,246,0.15)]'
+                        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    }`}
+                    title={
+                      appVersion.channel === 'stable'
+                        ? 'Stable release build'
+                        : 'Nightly / development build'
+                    }
+                  >
+                    {appVersion.channel}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">Multi-Agent Orchestrator v{appVersion.version}</p>
               </div>
             </div>
             <div className="border-t border-white/5 pt-4 text-xs text-slate-400 space-y-2">

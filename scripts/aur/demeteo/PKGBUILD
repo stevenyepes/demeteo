@@ -47,6 +47,11 @@ prepare() {
 
 build() {
   cd "${pkgname}-${pkgver}"
+  # Forward the release channel into the Rust compile. Defaults to "stable"
+  # so a plain `makepkg` produces an officially-shipped binary; `test-aur-install.sh
+  # nightly` exports `DEMETEO_RELEASE_CHANNEL=nightly` so the About screen
+  # surfaces a `NIGHTLY` badge without a separate build script.
+  export DEMETEO_RELEASE_CHANNEL="${DEMETEO_RELEASE_CHANNEL:-stable}"
   # Use system sqlite via pkg-config instead of bundling — Arch convention.
   export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
   npm run tauri -- build -b deb
