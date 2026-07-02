@@ -206,7 +206,6 @@ pub async fn gate_decide(
             feedback.as_deref(),
         )
         .await
-        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -223,7 +222,6 @@ pub async fn step_retry(
             new_agent.as_deref(),
         )
         .await
-        .map_err(AppError::from)
 }
 
 #[tauri::command]

@@ -3,11 +3,11 @@ use std::time::Instant;
 use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
 use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::ids::{GateDecisionId, StepId};
+use crate::domain::ids::{FeatureId, GateDecisionId, StepId};
 use crate::domain::models::{GateDecision, StepConfig, StepExecution};
 use crate::paths;
 use crate::ports::db::StepExecutionPatch;
-use crate::ports::notification::DomainEvent;
+use crate::ports::notification::{DomainEvent, NotificationPort};
 
 /// Inputs needed to apply a gate decision that the predecessor step
 /// already produced. Bundled to keep [`ExecutionDriver::apply_gate_decision`]
@@ -90,22 +90,37 @@ fn resolve_redirect_target(
 ///   * the target step is reset to status `pending` (with all
 ///     counters cleared and artifacts dropped) so the driver's
 ///     resume-skip logic does not treat it as already-completed and
-///     skip past it; and
+///     skip past it;
+///   * the gate's own status row is flipped from `awaiting_gate`
+///     back to `pending` so the timeline stops displaying the
+///     "Decide Gate" affordance while the redirected step is
+///     re-running (the gate will re-emit `awaiting_gate` on its
+///     next visit); and
 ///   * the gate's own `gate_decisions` row is cleared so the next
-///     visit to the gate re-prompts the user. Without this second
+///     visit to the gate re-prompts the user. Without this third
 ///     half, the gate's reconciliation would find the prior
 ///     `redirect` decision on file, return
 ///     `RedirectTo(target_idx)` once more, and the same step would
 ///     loop forever — the bug this fix exists to break.
 ///
-/// Both writes are best-effort. Failures are intentionally
+/// Each DB mutation is paired with a `StepProgress` event so the
+/// frontend's local `steps` array picks up the new status without
+/// waiting for a full `step_list_for_run` poll. Missing the event
+/// leaves the timeline showing "Decide Gate" / "Retry Step" for
+/// rows whose DB state has already moved on (the bug this fix
+/// exists to break in the UI layer).
+///
+/// All writes are best-effort. Failures are intentionally
 /// swallowed: the redirect already won the user's intent, and any
 /// stale state is recoverable on the next reconciliation pass
 /// (the startup watchdog will re-surface the gate if the driver
 /// dies between the reset and the target step completing).
+#[allow(clippy::too_many_arguments)]
 fn reset_for_redirect(
     features: &dyn crate::ports::db::FeatureRepository,
     gates: &dyn crate::ports::db::GateRepository,
+    notif: &dyn NotificationPort,
+    f_id: &FeatureId,
     step_execs: &[StepExecution],
     target_idx: usize,
     gate_step_execution_id: &crate::domain::ids::StepExecutionId,
@@ -130,6 +145,16 @@ fn reset_for_redirect(
                 error_message: Some(None),
             },
         );
+        let _ = notif.emit(&DomainEvent::StepProgress {
+            feature_id: f_id.clone(),
+            step_id: target_exec.step_id.0.clone(),
+            status: "pending".into(),
+            cost_usd: Some(0.0),
+            tokens: Some(0),
+            wall_clock_secs: Some(0),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+        });
     }
     // Clear this gate's own decision row so the next visit to the
     // gate re-prompts the user. Idempotent against app restarts: if
@@ -139,6 +164,39 @@ fn reset_for_redirect(
     // `decision = None` (see `startup_watchdog` in
     // `impl_traits/mod.rs`).
     let _ = gates.reset_for_step_execution(gate_step_execution_id);
+    // Flip the gate's own status from `awaiting_gate` to `pending`
+    // so the timeline stops showing the "Decide Gate" button while
+    // the redirected step re-runs. Without this update the gate
+    // remains `awaiting_gate` in the DB and the frontend's stale
+    // local cache keeps rendering the decision affordance — even
+    // though the user already submitted a decision and the gate
+    // won't re-prompt until the target finishes. Fetch the row
+    // first so we have the gate's `step_id` to put in the event.
+    if let Ok(Some(gate_exec)) = features.step_get(gate_step_execution_id) {
+        let _ = features.step_update(
+            gate_step_execution_id,
+            &StepExecutionPatch {
+                iteration_count: None,
+                status: Some("pending".to_string()),
+                cost_usd: None,
+                tokens: None,
+                wall_clock_secs: None,
+                artifact_path: None,
+                artifact_paths: None,
+                error_message: None,
+            },
+        );
+        let _ = notif.emit(&DomainEvent::StepProgress {
+            feature_id: f_id.clone(),
+            step_id: gate_exec.step_id.0.clone(),
+            status: "pending".into(),
+            cost_usd: None,
+            tokens: None,
+            wall_clock_secs: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+        });
+    }
 }
 
 impl ExecutionDriver {
@@ -388,6 +446,8 @@ impl ExecutionDriver {
                         reset_for_redirect(
                             &*self.features,
                             &*self.gates,
+                            &*self.notif,
+                            &self.f_id,
                             ctx.step_execs,
                             idx,
                             &ctx.step_exec.id,
@@ -816,6 +876,31 @@ mod redirect_reset_tests {
         }
     }
 
+    /// Captures the events the helper emits so the assertions can
+    /// check the UI-facing contract: each DB mutation must be paired
+    /// with a `StepProgress` event whose status matches the new DB
+    /// value. `FakeNotif` in the e2e suite silently drops events;
+    /// this variant records them for inspection.
+    struct CapturingNotif {
+        events: std::sync::Mutex<Vec<DomainEvent>>,
+    }
+    impl CapturingNotif {
+        fn new() -> Self {
+            Self {
+                events: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+        fn snapshot(&self) -> Vec<DomainEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+    impl NotificationPort for CapturingNotif {
+        fn emit(&self, event: &DomainEvent) -> Result<(), String> {
+            self.events.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+    }
+
     #[test]
     fn reset_marks_target_step_pending_and_clears_artifacts() {
         // Mirror the real bug: spec is `completed` with artifacts
@@ -823,7 +908,8 @@ mod redirect_reset_tests {
         // rewind spec to `pending` and drop the artifacts so the
         // re-run starts from a clean slate.
         let (_adapter, projects, features, gates) = make_adapter();
-        let _f_id = seed_parent_rows(&*projects, &*features);
+        let f_id = seed_parent_rows(&*projects, &*features);
+        let notif = CapturingNotif::new();
 
         let spec = make_step_exec("se-spec", "s-spec", 1, "completed");
         let gate = make_gate_exec("se-gate", 2);
@@ -851,7 +937,7 @@ mod redirect_reset_tests {
             vec!["artifacts/spec.md".to_string()]
         );
 
-        reset_for_redirect(&*features, &*gates, &step_execs, 1, &gate.id);
+        reset_for_redirect(&*features, &*gates, &notif, &f_id, &step_execs, 1, &gate.id);
 
         // Post-condition: spec is pending with cleared counters
         // and dropped artifacts. The driver will now see the spec
@@ -875,7 +961,8 @@ mod redirect_reset_tests {
         // in-process waiter (or the startup watchdog on a fresh
         // launch) and re-prompts the user.
         let (_adapter, projects, features, gates) = make_adapter();
-        let _f_id = seed_parent_rows(&*projects, &*features);
+        let f_id = seed_parent_rows(&*projects, &*features);
+        let notif = CapturingNotif::new();
 
         let gate = make_gate_exec("se-gate", 2);
         features.step_create(gate.clone()).unwrap();
@@ -904,12 +991,83 @@ mod redirect_reset_tests {
             make_step_exec("se-spec", "s-spec", 1, "completed"),
             gate.clone(),
         ];
-        reset_for_redirect(&*features, &*gates, &step_execs, 1, &gate.id);
+        reset_for_redirect(&*features, &*gates, &notif, &f_id, &step_execs, 1, &gate.id);
 
         // The decision row is gone; `latest_for_step` returns None
         // and the gate's reconciliation will treat this as
         // "no decision yet, await user".
         assert!(gates.latest_for_step(&gate.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn reset_flips_gate_status_to_pending() {
+        // New half of the fix (UI staleness): after a redirect the
+        // gate's own status row must move from `awaiting_gate` to
+        // `pending` so the timeline stops rendering the "Decide
+        // Gate" button. The driver will re-emit `awaiting_gate`
+        // when the gate is re-entered after the target completes.
+        let (_adapter, projects, features, gates) = make_adapter();
+        let f_id = seed_parent_rows(&*projects, &*features);
+        let notif = CapturingNotif::new();
+
+        let gate = make_gate_exec("se-gate", 2);
+        features.step_create(gate.clone()).unwrap();
+        let step_execs = vec![
+            make_step_exec("se-research", "s-research", 0, "completed"),
+            make_step_exec("se-spec", "s-spec", 1, "completed"),
+            gate.clone(),
+        ];
+
+        reset_for_redirect(&*features, &*gates, &notif, &f_id, &step_execs, 1, &gate.id);
+
+        // Gate status is no longer `awaiting_gate`.
+        let gate_after = features.step_get(&gate.id).unwrap().unwrap();
+        assert_eq!(gate_after.status, "pending");
+    }
+
+    #[test]
+    fn reset_emits_step_progress_for_both_affected_steps() {
+        // UI contract: every DB mutation the helper performs must be
+        // mirrored by a `StepProgress` event so the frontend's
+        // local `steps` array reflects the redirect without waiting
+        // for a manual refresh. Two events for two rows: the target
+        // spec and the gate itself.
+        let (_adapter, projects, features, gates) = make_adapter();
+        let f_id = seed_parent_rows(&*projects, &*features);
+        let notif = CapturingNotif::new();
+
+        let spec = make_step_exec("se-spec", "s-spec", 1, "completed");
+        let gate = make_gate_exec("se-gate", 2);
+        let step_execs = vec![
+            make_step_exec("se-research", "s-research", 0, "completed"),
+            spec.clone(),
+            gate.clone(),
+        ];
+        features.step_create(step_execs[0].clone()).unwrap();
+        features.step_create(spec.clone()).unwrap();
+        features.step_create(gate.clone()).unwrap();
+
+        reset_for_redirect(&*features, &*gates, &notif, &f_id, &step_execs, 1, &gate.id);
+
+        let events = notif.snapshot();
+        let step_progress: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                DomainEvent::StepProgress {
+                    step_id, status, ..
+                } => Some((step_id.clone(), status.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            step_progress,
+            vec![
+                ("s-spec".to_string(), "pending".to_string()),
+                ("s-gate".to_string(), "pending".to_string()),
+            ],
+            "expected one StepProgress per DB mutation, got {:?}",
+            step_progress
+        );
     }
 
     #[test]
@@ -921,7 +1079,8 @@ mod redirect_reset_tests {
         // to update. The gate decision is still cleared, since
         // that's an unconditional part of the redirect.
         let (_adapter, projects, features, gates) = make_adapter();
-        let _f_id = seed_parent_rows(&*projects, &*features);
+        let f_id = seed_parent_rows(&*projects, &*features);
+        let notif = CapturingNotif::new();
 
         let gate = make_gate_exec("se-gate", 2);
         features.step_create(gate.clone()).unwrap();
@@ -936,7 +1095,15 @@ mod redirect_reset_tests {
             .unwrap();
 
         let step_execs = vec![gate.clone()];
-        reset_for_redirect(&*features, &*gates, &step_execs, 99, &gate.id);
+        reset_for_redirect(
+            &*features,
+            &*gates,
+            &notif,
+            &f_id,
+            &step_execs,
+            99,
+            &gate.id,
+        );
 
         // The decision was still cleared; the out-of-bounds target
         // is silently skipped.

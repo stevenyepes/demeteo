@@ -1,6 +1,15 @@
 // Post-pivot types. Legacy supervisor/thread types were removed as part of
 // the R7 cleanup; see AGENT_INTEGRATION.md §1 for the surviving surface.
 
+/** Release channel baked into the binary at build time. */
+export type ReleaseChannel = 'stable' | 'nightly';
+
+/** Application version + channel, surfaced by the `get_app_version` IPC. */
+export interface AppVersion {
+  version: string;
+  channel: ReleaseChannel;
+}
+
 export interface Project {
   id: string;
   name: string;

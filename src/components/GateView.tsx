@@ -1,9 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { StepExecution } from '../types';
-import { Check, ArrowRight, X, ShieldAlert, Terminal, Sparkles } from 'lucide-react';
+import { Check, ArrowRight, X, ShieldAlert, Terminal, Sparkles, AlertTriangle } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
 import { useErrorBus } from '../lib/errorBus';
+import {
+  decideGate,
+  isBlockingError,
+  findActivePredecessor,
+  type GateBlocker,
+} from '../lib/features';
 
 interface GateViewProps {
   stepExecutionId: string;
@@ -21,33 +27,65 @@ export const GateView: React.FC<GateViewProps> = ({
   const [feedback, setFeedback] = useState('');
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [, setLoading] = useState(true);
+  // First non-terminal predecessor of the gate step (if any). When
+  // non-null, both the Approve and Redirect buttons are disabled and
+  // a rose-bordered banner is rendered above them so the user is not
+  // lured into approving a gate whose predecessor agent step is still
+  // running.
+  const [blockedBy, setBlockedBy] = useState<GateBlocker | null>(null);
 
-  useEffect(() => {
-    loadGateData();
-  }, [stepExecutionId]);
-
-  const loadGateData = async () => {
+  const loadGateData = useCallback(async () => {
     try {
       const execDetails = await invoke<StepExecution>('step_get', { executionId: stepExecutionId });
       setStepExec(execDetails);
+      // Re-probe the predecessor set on every load. The parent's
+      // `feature_status_changed` event triggers a remount via the
+      // navigation effect, so the banner clears within one tick of
+      // the blocking predecessor transitioning to `completed`.
+      const all = await invoke<StepExecution[]>('step_list_for_run', {
+        featureId: execDetails.feature_id,
+      });
+      const blocker = findActivePredecessor(all, execDetails);
+      setBlockedBy(
+        blocker
+          ? {
+              id: blocker.id,
+              step_id: blocker.step_id,
+              status: blocker.status,
+              step_index: blocker.step_index,
+            }
+          : null,
+      );
     } catch (err) {
       reportError(err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [stepExecutionId, reportError]);
+
+  useEffect(() => {
+    loadGateData();
+  }, [loadGateData]);
 
   const submitDecision = async (decision: 'approve' | 'redirect' | 'cancel') => {
+    // Defence-in-depth: also short-circuit in the modal so a double-click
+    // doesn't fire a redundant IPC after the parent re-renders.
+    if (blockedBy && decision !== 'cancel') return;
     setLoading(true);
     try {
-      await invoke('gate_decide', {
+      await decideGate({
         stepExecutionId,
         decision,
         feedback: decision === 'redirect' ? feedback : null,
       });
       onDecisionSubmitted();
     } catch (err) {
-      reportError(err);
+      // Blocking-predecessor errors are already surfaced by the
+      // modal banner above, so skip the toast (would be redundant).
+      // All other errors propagate through the error bus.
+      if (!isBlockingError(err)) {
+        reportError(err);
+      }
     } finally {
       setLoading(false);
     }
@@ -126,6 +164,26 @@ export const GateView: React.FC<GateViewProps> = ({
           )}
         </div>
 
+        {/* Blocking banner: surfaced when an earlier step is still
+            running. The banner sits above the action buttons so the
+            user cannot miss the precondition violation. "Abort
+            feature" intentionally remains enabled — aborting is a
+            separate intent from approving. */}
+        {blockedBy && (
+          <div
+            data-testid="gate-blocked-banner"
+            className="mx-6 mb-3 p-3 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-300 flex items-start gap-2"
+            title={`Cannot decide this gate while '${blockedBy.step_id}' is ${blockedBy.status}`}
+          >
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span className="leading-relaxed">
+              <span className="font-bold uppercase tracking-wider">Decision blocked.</span>{' '}
+              Step <span className="font-mono font-semibold text-rose-200">{blockedBy.step_id}</span> is still{' '}
+              <span className="font-mono">{blockedBy.status}</span>. Wait for it to finish before deciding this gate.
+            </span>
+          </div>
+        )}
+
         {/* Modal Footer Actions */}
         <div className="p-6 border-t border-white/5 bg-white/[0.01] flex items-center justify-between">
           <button
@@ -146,7 +204,13 @@ export const GateView: React.FC<GateViewProps> = ({
                 </button>
                 <button
                   onClick={() => submitDecision('redirect')}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-500 hover:shadow-[0_0_15px_rgba(139,92,246,0.4)] rounded-lg text-xs font-bold text-white transition duration-300"
+                  disabled={blockedBy !== null}
+                  title={
+                    blockedBy
+                      ? `Cannot redirect while '${blockedBy.step_id}' is ${blockedBy.status}`
+                      : 'Send the redirect feedback to the agent'
+                  }
+                  className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-500 hover:shadow-[0_0_15px_rgba(139,92,246,0.4)] disabled:bg-violet-900/40 disabled:hover:bg-violet-900/40 disabled:cursor-not-allowed disabled:shadow-none rounded-lg text-xs font-bold text-white transition duration-300"
                 >
                   Send Redirect <ArrowRight className="w-3.5 h-3.5" />
                 </button>
@@ -155,13 +219,25 @@ export const GateView: React.FC<GateViewProps> = ({
               <>
                 <button
                   onClick={() => setIsRedirecting(true)}
-                  className="px-4 py-2 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 hover:text-white rounded-lg text-xs font-bold transition duration-300"
+                  disabled={blockedBy !== null}
+                  title={
+                    blockedBy
+                      ? `Cannot redirect while '${blockedBy.step_id}' is ${blockedBy.status}`
+                      : 'Switch into redirect / loop mode'
+                  }
+                  className="px-4 py-2 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 hover:text-white disabled:border-violet-900/30 disabled:bg-violet-900/20 disabled:text-violet-700 disabled:cursor-not-allowed rounded-lg text-xs font-bold transition duration-300"
                 >
                   Redirect / Loop
                 </button>
                 <button
                   onClick={() => submitDecision('approve')}
-                  className="flex items-center gap-1.5 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] rounded-lg text-xs font-bold text-white transition duration-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+                  disabled={blockedBy !== null}
+                  title={
+                    blockedBy
+                      ? `Cannot approve while '${blockedBy.step_id}' is ${blockedBy.status}`
+                      : 'Approve this gate and let the pipeline continue'
+                  }
+                  className="flex items-center gap-1.5 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] disabled:bg-emerald-900/40 disabled:hover:bg-emerald-900/40 disabled:cursor-not-allowed disabled:shadow-none rounded-lg text-xs font-bold text-white transition duration-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
                 >
                   Approve step <Check className="w-3.5 h-3.5" />
                 </button>
