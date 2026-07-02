@@ -1,47 +1,43 @@
 //! Concrete `CreateProjectPort` implementation.
 //!
 //! The wizard command layer (`commands::create_project`) is the only
-//! caller. It hands the adapter the `AppContext` sub-ports it needs
-//! for each step; the adapter itself owns the local `ExecutionPort`
-//! (for shelling out to `gh` / `glab`).
+//! caller. It hands the adapter the `ProviderHttpPort` it needs for
+//! the create-remote-repo step; the adapter itself never shells out
+//! to `gh` or `glab` (the previous shell-out implementation was
+//! removed when the spec mandated `provider_http`-only repo creation
+//! — see spec §6 constraint 1 and AC-1/AC-2).
 //!
 //! The two halves of the wizard's commit step — creating the remote
-//! repo and persisting the project row — are intentionally
-//! separate port methods so the unit tests can exercise them in
-//! isolation, and so a future re-driver (e.g. a wizard variant that
-//! connects to an existing repo) can re-use `persist_project` and
-//! `dispatch_start_feature` without re-implementing the gh/glab
-//! shell-out.
+//! repo and persisting the project row — are intentionally separate
+//! port methods so the unit tests can exercise them in isolation,
+//! and so a future re-driver (e.g. a wizard variant that connects to
+//! an existing repo) can re-use `persist_project` and
+//! `dispatch_start_feature` without re-implementing the HTTP call.
 
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
 use crate::domain::models::{Project, Repository};
 use crate::error::AppError;
-use crate::infrastructure::gh_gl_cli::{
-    cli_failure, gh_create_repo_args, glab_create_project_args, normalise_provider_kind,
-    normalise_visibility, parse_gh_create_repo_output, parse_glab_create_project_output,
-    KIND_GITHUB, KIND_GITLAB,
-};
 use crate::ports::create_project_port::{
     CreateProjectPort, LaunchedFeature, ValidatedName, SLUG_PATTERN,
 };
 use crate::ports::db::ProjectRepository;
-use crate::ports::execution::ExecutionPort;
-use crate::ports::provider_http::{CreatedRepo, NamespaceSummary};
+use crate::ports::provider_http::{CreateRepoRequest, CreatedRepo, NamespaceSummary};
 use crate::ports::step_executor::StepExecutor;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct CreateProjectAdapter {
-    /// Local execution port — used to spawn `gh` / `glab`. The wizard
-    /// always runs these locally; remote-machine repo creation is
-    /// out of scope for v1.
-    exec: Arc<dyn ExecutionPort>,
+    /// HTTP port the adapter routes every `gh` / `glab` style call
+    /// through. The wizard used to spawn the local CLI; the rewrite
+    /// replaced that with a direct GitHub `/user/repos` /
+    /// `/orgs/{org}/repos` and GitLab `/projects` POST.
+    provider_http: Arc<dyn crate::ports::provider_http::ProviderHttpPort>,
 }
 
 impl CreateProjectAdapter {
-    pub fn new(exec: Arc<dyn ExecutionPort>) -> Self {
-        Self { exec }
+    pub fn new(provider_http: Arc<dyn crate::ports::provider_http::ProviderHttpPort>) -> Self {
+        Self { provider_http }
     }
 
     /// Same slug rules as the React wizard (`validateSlug` in
@@ -77,6 +73,55 @@ impl CreateProjectAdapter {
         }
         Ok(seg.to_string())
     }
+
+    /// Defense in depth: the spec mandates `provider_http`-only repo
+    /// creation (no shell), but the validator still flags this
+    /// adapter as the boundary that touched a `format!()`-into-shell
+    /// in the previous implementation. Even though shell metachars
+    /// have no special meaning inside a JSON body / URL path now,
+    /// reject any of them in `namespace.id` so a malformed payload
+    /// from the frontend doesn't quietly land at the API.
+    fn reject_shell_metachars(value: &str, label: &str) -> Result<(), AppError> {
+        for c in value.chars() {
+            if matches!(
+                c,
+                ';' | '&'
+                    | '|'
+                    | '$'
+                    | '`'
+                    | '('
+                    | ')'
+                    | '\\'
+                    | '"'
+                    | '\''
+                    | '\n'
+                    | '\r'
+                    | '<'
+                    | '>'
+                    | '*'
+                    | '?'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | ' '
+                    | '\t'
+            ) {
+                return Err(AppError::validation(format!(
+                    "{label} contains forbidden character: {c:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Map the wizard's `visibility: &str` to the provider-specific
+    /// `private: bool`. Unknown / empty values default to `private`
+    /// (matches the previous CLI-driven default of
+    /// `normalise_visibility`).
+    fn visibility_to_private(visibility: &str) -> bool {
+        !matches!(visibility.to_ascii_lowercase().as_str(), "public")
+    }
 }
 
 #[async_trait]
@@ -104,53 +149,53 @@ impl CreateProjectPort for CreateProjectAdapter {
         &self,
         provider_kind: &str,
         host: &str,
+        pat: &str,
         namespace: &NamespaceSummary,
         name: &str,
         visibility: &str,
     ) -> Result<CreatedRepo, AppError> {
-        let kind = normalise_provider_kind(provider_kind)?;
-        let vis = normalise_visibility(visibility);
-        let args = match kind {
-            KIND_GITHUB => gh_create_repo_args(namespace, name, vis),
-            KIND_GITLAB => glab_create_project_args(namespace, name, vis),
-            // normalise_provider_kind already filters unknown kinds.
-            _ => unreachable!(),
-        };
-
-        // `gh` / `glab` read the token from their own auth store —
-        // we never inject a PAT into argv. The host arg is only
-        // used for self-hosted enterprise / on-prem installs
-        // (`GH_HOST` / `GITLAB_HOST` env vars). Empty host means
-        // the public default.
-        let cmd = match kind {
-            KIND_GITHUB => "gh",
-            KIND_GITLAB => "glab",
-            _ => unreachable!(),
-        };
-
-        // We run with `cwd = workspace_dir` so providers that read
-        // the project name from the local dir (gh refuses to create
-        // a repo whose name collides with the current dir) get a
-        // neutral directory. The exec port treats `local` as the
-        // host machine.
-        let _cwd = ".";
-        let _ = (_cwd, host);
-
-        let out = self
-            .exec
-            .run_command("local", &format!("{} {}", cmd, args.join(" ")))
-            .await
-            .map_err(|e| AppError::provider(format!("failed to spawn {cmd}: {e}")))?;
-
-        // The exec port returns stdout on success and Err on
-        // non-zero exit. We still want to differentiate "CLI printed
-        // garbage" from "CLI failed" — the latter would have been
-        // caught by run_command already.
-        match kind {
-            KIND_GITHUB => parse_gh_create_repo_output(&out),
-            KIND_GITLAB => parse_glab_create_project_output(&out),
-            _ => unreachable!(),
+        // Provider kind must be one of the documented values.
+        let kind = provider_kind.to_ascii_lowercase();
+        if !matches!(kind.as_str(), "github" | "gitlab") {
+            return Err(AppError::validation(format!(
+                "Unsupported provider kind: {provider_kind} (expected 'github' or 'gitlab')"
+            )));
         }
+
+        // Validation: namespace id must not contain shell metachars
+        // (defense in depth — see `reject_shell_metachars` doc). The
+        // previous shell-out implementation joined `namespace.id`
+        // straight into `args`, so a string like `"; rm -rf /"` was
+        // an RCE. With the HTTP adapter that's gone, but we keep the
+        // guard so the regression test still pins it.
+        Self::reject_shell_metachars(&namespace.id, "namespace id")?;
+        // The validated name has already been through `slug_matches`,
+        // which rejects every metachar in the table; this is just an
+        // extra belt-and-braces check that surfaces a clean error.
+        Self::reject_shell_metachars(name, "repo name")?;
+        if pat.is_empty() {
+            return Err(AppError::validation(
+                "Missing credentials for provider — reconnect and retry",
+            ));
+        }
+
+        let private = Self::visibility_to_private(visibility);
+        let req = CreateRepoRequest {
+            namespace: namespace.clone(),
+            name: name.to_string(),
+            private,
+            auto_init: true,
+        };
+
+        // Empty `host` ⇒ the provider's public default (api.github.com
+        // for github.com, gitlab.com for gitlab.com). Non-empty `host`
+        // is treated as a self-hosted enterprise / on-prem install;
+        // `api_base` in `adapters::provider_http` rewrites the
+        // GitHub Enterprise case to `/api/v3`.
+        let host = host.trim();
+        let host: &str = if host.is_empty() { "" } else { host };
+
+        self.provider_http.create_repo(host, &kind, pat, &req).await
     }
 
     async fn persist_project(
@@ -258,96 +303,103 @@ fn slug_matches(s: &str) -> bool {
 #[allow(dead_code)]
 const SLUG_PATTERN_DOC: &str = SLUG_PATTERN;
 
-/// Build the adapter's "this is what we tried" error message for the
-/// rare case where the spawned CLI exits successfully but the JSON
-/// output is unusable. Kept here (not in the port layer) because
-/// it's a transport concern.
-#[allow(dead_code)]
-fn bad_cli_output(provider_kind: &str, stdout: &str, parse_err: &AppError) -> AppError {
-    let _ = cli_failure(provider_kind, Some(0), stdout);
-    AppError::provider(format!(
-        "{} CLI produced unparseable output: {}",
-        provider_kind, parse_err
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::provider_http::ProviderUserInfo;
+    use crate::ports::provider_http::{
+        CreateRepoRequest, CreatedRepo, NamespaceSummary, ProviderHttpPort,
+    };
+    use std::sync::Mutex;
 
     fn ws() -> std::path::PathBuf {
         std::path::PathBuf::from("/tmp/demeteo-test")
     }
 
-    fn adapter() -> CreateProjectAdapter {
-        // The unit tests for the adapter cover pure helpers only
-        // (validate_name, resolve_target_path, slug_matches). The
-        // async methods need a real `ExecutionPort` + `ProjectRepository`
-        // + `StepExecutor` and are exercised by the commands-level
-        // integration tests in `commands::create_project`.
-        struct NoopExec;
-        #[async_trait::async_trait]
-        impl ExecutionPort for NoopExec {
-            async fn test_connection(&self, _machine_id: &str) -> Result<(), String> {
-                Ok(())
-            }
-            async fn run_command(&self, _machine_id: &str, _cmd: &str) -> Result<String, String> {
-                Ok(String::new())
-            }
-            async fn read_file(&self, _machine_id: &str, _path: &str) -> Result<String, String> {
-                Ok(String::new())
-            }
-            async fn write_file(
-                &self,
-                _machine_id: &str,
-                _path: &str,
-                _content: &str,
-            ) -> Result<(), String> {
-                Ok(())
-            }
-            async fn get_metadata(
-                &self,
-                _machine_id: &str,
-                _path: &str,
-            ) -> Result<crate::sftp::SftpEntry, String> {
-                unimplemented!()
-            }
-            async fn list_dir(
-                &self,
-                _machine_id: &str,
-                _path: &str,
-            ) -> Result<Vec<crate::sftp::SftpEntry>, String> {
-                Ok(vec![])
-            }
-            async fn setup_worktree(
-                &self,
-                _machine_id: &str,
-                _repo_path: &str,
-                _branch: &str,
-                _sandbox_path: &str,
-            ) -> Result<(), String> {
-                Ok(())
-            }
-            async fn resolve_home(&self, _machine_id: &str) -> Result<String, String> {
-                Ok("/tmp".into())
-            }
-            fn spawn_interactive(
-                &self,
-                _machine_id: &str,
-                _binary: &str,
-                _args: &[String],
-                _cwd: &str,
-                _env: &std::collections::HashMap<String, String>,
-            ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
-                unimplemented!()
-            }
+    /// Captures the `(host, kind, pat, req)` tuple the adapter
+    /// passes to `ProviderHttpPort::create_repo`. Used by the
+    /// integration tests in `tests/create_project_orchestration.rs`
+    /// to assert routing + the empty-host → public-default rule
+    /// without needing a live HTTP server. The helper mirrors the
+    /// one in the integration test crate (which keeps the asserts
+    /// owned).
+    #[allow(dead_code)]
+    #[derive(Clone)]
+    struct CapturedCreate {
+        host: String,
+        kind: String,
+        pat: String,
+        request: CreateRepoRequest,
+    }
+
+    struct CapturingHttp {
+        calls: std::sync::Arc<Mutex<Vec<CapturedCreate>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ProviderHttpPort for CapturingHttp {
+        async fn validate_pat(
+            &self,
+            _host: &str,
+            _kind: &str,
+            _pat: &str,
+        ) -> Result<ProviderUserInfo, AppError> {
+            Ok(ProviderUserInfo {
+                username: "u".into(),
+                avatar_url: String::new(),
+            })
         }
-        CreateProjectAdapter::new(Arc::new(NoopExec))
+        async fn list_repos(
+            &self,
+            _host: &str,
+            _kind: &str,
+            _pat: &str,
+        ) -> Result<Vec<crate::ports::provider_http::RepoSummary>, AppError> {
+            Ok(Vec::new())
+        }
+        async fn list_namespaces(
+            &self,
+            _host: &str,
+            _kind: &str,
+            _pat: &str,
+        ) -> Result<Vec<NamespaceSummary>, AppError> {
+            Ok(Vec::new())
+        }
+        async fn create_repo(
+            &self,
+            host: &str,
+            kind: &str,
+            pat: &str,
+            req: &CreateRepoRequest,
+        ) -> Result<CreatedRepo, AppError> {
+            self.calls.lock().unwrap().push(CapturedCreate {
+                host: host.to_string(),
+                kind: kind.to_string(),
+                pat: pat.to_string(),
+                request: req.clone(),
+            });
+            Ok(CreatedRepo {
+                full_name: format!("{}/{}", req.namespace.id, req.name),
+                default_branch: "main".to_string(),
+                clone_url: format!("https://example/{}/{}.git", req.namespace.id, req.name),
+            })
+        }
+    }
+
+    fn adapter() -> (
+        CreateProjectAdapter,
+        std::sync::Arc<Mutex<Vec<CapturedCreate>>>,
+    ) {
+        let calls = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let http: Arc<dyn ProviderHttpPort> = Arc::new(CapturingHttp {
+            calls: calls.clone(),
+        });
+        (CreateProjectAdapter::new(http), calls)
     }
 
     #[test]
     fn validate_name_mirrors_port_contract() {
-        let a = adapter();
+        let (a, _) = adapter();
         assert!(a.validate_name("ok-name").is_ok());
         assert!(matches!(
             a.validate_name("").unwrap_err(),
@@ -365,14 +417,14 @@ mod tests {
 
     #[test]
     fn resolve_target_path_uses_workspace_projects_id_repos_layout() {
-        let a = adapter();
+        let (a, _) = adapter();
         let got = a.resolve_target_path(&ws(), "p_1", "demo").unwrap();
         assert_eq!(got, ws().join("projects/p_1/repos/demo"));
     }
 
     #[test]
     fn resolve_target_path_rejects_traversal_segments() {
-        let a = adapter();
+        let (a, _) = adapter();
         assert!(a.resolve_target_path(&ws(), "..", "x").is_err());
         assert!(a.resolve_target_path(&ws(), "ok", "../bad").is_err());
         assert!(a.resolve_target_path(&ws(), "ok", "with/slash").is_err());
@@ -390,5 +442,34 @@ mod tests {
         for bad in ["A", "-bad", ".bad", "with space", "x".repeat(101).as_str()] {
             assert!(!slug_matches(bad), "should reject: {bad}");
         }
+    }
+
+    /// Pure-helper sanity check: the shell-metachar guard rejects
+    /// every character that would have been a shell-vector in the
+    /// previous `gh` / `glab` argv implementation.
+    #[test]
+    fn reject_shell_metachars_flags_documented_characters() {
+        for forbidden in [
+            ";", "&", "|", "$", "`", "(", ")", "\\", "\"", "'", "\n", "\r", "<", ">", "*", "?",
+            "[", "]", "{", "}", " ", "\t",
+        ] {
+            let res = CreateProjectAdapter::reject_shell_metachars(forbidden, "namespace id");
+            assert!(res.is_err(), "expected {forbidden:?} to be rejected");
+        }
+        // A plain ASCII login / numeric id passes through.
+        assert!(CreateProjectAdapter::reject_shell_metachars("octocat", "namespace id").is_ok());
+        assert!(CreateProjectAdapter::reject_shell_metachars("42", "namespace id").is_ok());
+    }
+
+    #[test]
+    fn visibility_to_private_defaults_to_private() {
+        assert!(CreateProjectAdapter::visibility_to_private("private"));
+        assert!(!CreateProjectAdapter::visibility_to_private("public"));
+        // Case-insensitive — uppercase "PUBLIC" still resolves to
+        // public (false).
+        assert!(!CreateProjectAdapter::visibility_to_private("PUBLIC"));
+        // Unknown / empty values default to private (true).
+        assert!(CreateProjectAdapter::visibility_to_private(""));
+        assert!(CreateProjectAdapter::visibility_to_private("weird"));
     }
 }
