@@ -9,7 +9,7 @@
       "kind": "agent",
       "title": "Reproduce & Diagnose",
       "agent_kind": null,
-      "prompt_template": "You are a senior software engineer performing root cause analysis.\n\nBug report: {{feature_description}}\nRepositories in scope: {{repo_list}}\n\n## Your task\n1. Locate the code path that produces this bug. Trace the full execution path from the entry point to the failure.\n2. Write a **minimal reproduction case** — a test, script, or command that reliably triggers the bug and currently fails. Commit it to the feature branch as a failing test (do not apply any fix yet).\n3. State the root cause precisely: which line(s), which logic error, which assumption is violated.\n4. State the boundary of the fix: what files are in scope, what must not be touched.\n\n## Output artifact (required sections)\n- `## Reproduction Case` — the test/script, with instructions to run it\n- `## Execution Trace` — the call stack or execution path that leads to the failure\n- `## Root Cause` — precise, one-paragraph diagnosis\n- `## Fix Boundary` — files in scope + files that must not change\n- `## Risk` — could this fix regress anything else?\n\n## Stop condition\nYou are done when the reproduction case is committed and fails as expected, and all sections are written.",
+      "prompt_template": "You are a senior software engineer performing root cause analysis.\n\nBug report: {{feature_description}}\nRepositories in scope: {{repo_list}}\n\n## Your task\n1. Locate the code path that produces this bug. Trace the full execution path from the entry point to the failure.\n2. Write a **minimal reproduction case** — a test, script, or command that reliably triggers the bug and currently fails. Commit it to the feature branch as a failing test (do not apply any fix yet).\n3. State the root cause precisely: which line(s), which logic error, which assumption is violated.\n4. State the boundary of the fix: what files are in scope, what must not be touched.\n\n## Output artifact (required sections)\n- `## Reproduction Case` — the test/script, with instructions to run it\n- `## Execution Trace` — the call stack or execution path that leads to the failure\n- `## Root Cause` — precise, one-paragraph diagnosis\n- `## Fix Boundary` — files in scope + files that must not change\n- `## Risk` — could this fix regress anything else?\n\n## Stop condition\nYou are done when the reproduction case is committed and fails as expected, and all sections are written.\n\nWrite your complete output to `artifacts/s-reproduce.md`.",
       "capability": "implement",
       "on_failure": null,
       "max_iterations": 2,
@@ -20,6 +20,14 @@
             "kind": "all_writes"
           },
           "mode": "summary_only"
+        },
+        {
+          "name": "diagnosis",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/s-reproduce.md"
+          },
+          "mode": "full"
         }
       ]
     },
@@ -56,7 +64,7 @@
       "kind": "agent",
       "title": "Smoke Test",
       "agent_kind": null,
-      "prompt_template": "You are a QA engineer running a targeted smoke test before the full regression suite.\n\nFix artifact: [attached — from s-fix]\n\n## Your task\n1. Run the reproduction test case: {{test_command}}. Confirm it passes.\n2. Run the tests for the files touched by the fix.\n3. Run a basic build/compile check: {{build_command}}\n\n## Output artifact\n- Reproduction test: PASS / FAIL\n- Touched-file tests: X passed, Y failed\n- Build: PASS / FAIL\n- **Proceed to full regression?** YES / NO (with reason)\n\n## Stop condition\nOutput the artifact and stop. Do NOT apply any fixes in this step.\n\nWrite your complete output to `artifacts/s-smoke.md`.",
+      "prompt_template": "You are a QA engineer running a targeted smoke test before the full regression suite.\n\nFix artifact: [attached — from s-fix]\n\n## Your task\n0. **Environment setup** — before running any test or build, ensure the project's dependencies are installed.\n   - Detect the package manager / toolchain from repository markers (`package.json` + lockfile, `pyproject.toml` / `requirements*.txt`, `Cargo.toml`, `go.mod`, etc.).\n   - Skip the install only if a marker directory (`node_modules/`, `target/`, `.venv/`, …) already exists for the project.\n   - Run the appropriate install command, preferring locked installs:\n     - Node + `package-lock.json` → `npm ci`\n     - Node + `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`\n     - Node + `yarn.lock` → `yarn install --frozen-lockfile`\n     - Python + `requirements.txt` → `pip install -r requirements.txt`\n     - Python + `pyproject.toml` → `pip install -e .` (or project-defined extras)\n     - Rust → no-op (note in the artifact: `Environment setup: SKIPPED (cargo fetches deps on first test run)`)\n     - Go → `go mod download`\n   - If no package manager is detected, record `Environment setup: NONE (no package manager detected)` and continue.\n   - Record the outcome as a new bullet in the output artifact: `Environment setup: <command> — PASS / FAIL`.\n1. Run the reproduction test case: {{test_command}}. Confirm it passes.\n2. Run the tests for the files touched by the fix.\n3. Run a basic build/compile check: {{build_command}}\n\n## Output artifact\n- Environment setup: <command> — PASS / FAIL (or `SKIPPED` / `NONE` per the rules above)\n- Reproduction test: PASS / FAIL\n- Touched-file tests: X passed, Y failed\n- Build: PASS / FAIL\n- **Proceed to full regression?** YES / NO (with reason)\n\n## Stop condition\nOutput the artifact and stop. Do NOT apply any fixes in this step.\n\nWrite your complete output to `artifacts/s-smoke.md`.",
       "capability": "verify",
       "on_failure": "s-fix",
       "max_iterations": 1,
