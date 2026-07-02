@@ -100,6 +100,7 @@ pub fn start_terminal_session(
     machine_id: String,
     tauri_channel: Channel<Vec<u8>>,
     work_dir: Option<String>,
+    work_branch: Option<String>,
 ) -> Result<String, String> {
     let machine = crate::infrastructure::worktree::machine_resolver::resolve_machine(
         &*ctx.machines,
@@ -115,9 +116,9 @@ pub fn start_terminal_session(
         Arc::new(Mutex::new(Some(tauri_channel)));
 
     let (read_source, write_sink, keepalive) = if machine.auth_type == "local" {
-        start_local_pty(&machine_id, &work_dir)?
+        start_local_pty(&machine_id, &work_dir, &work_branch)?
     } else {
-        start_ssh_session(&machine, &work_dir)?
+        start_ssh_session(&machine, &work_dir, &work_branch)?
     };
 
     let read_app = app.clone();
@@ -185,6 +186,7 @@ pub fn start_terminal_session(
 fn start_local_pty(
     machine_id: &str,
     work_dir: &Option<String>,
+    work_branch: &Option<String>,
 ) -> Result<(ReadSource, WriteSink, Arc<Mutex<SessionKeepalive>>), String> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -216,10 +218,19 @@ fn start_local_pty(
         .try_clone_reader()
         .map_err(|e| format!("Failed to clone PTY reader: {}", e))?;
     // take_writer can only be called once — do it before moving master into keepalive.
-    let writer = pair
+    let mut writer = pair
         .master
         .take_writer()
         .map_err(|e| format!("Failed to take PTY writer: {}", e))?;
+
+    // Bootstrap the branch if requested. The shell may not be ready to
+    // accept input instantly, but stdin pipes buffer the bytes; bash will
+    // process them on startup. A non-existent branch is swallowed: the
+    // PTY remains usable on whatever branch the repo is currently on.
+    if let Some(bootstrap) = branch_bootstrap_line(work_branch) {
+        let _ = writer.write_all(bootstrap.as_bytes());
+        let _ = writer.flush();
+    }
 
     let read_source = ReadSource::LocalPty(Arc::new(Mutex::new(reader)));
     let write_sink = WriteSink::LocalPty(Arc::new(Mutex::new(writer)));
@@ -232,9 +243,32 @@ fn start_local_pty(
     Ok((read_source, write_sink, keepalive))
 }
 
+/// Build the bootstrap line that performs a `git checkout` of the supplied
+/// feature branch on PTY/SSH startup. Returns `None` when no branch was
+/// supplied, so callers can skip the write entirely for `ProjectHome`-style
+/// flows (no pipeline context).
+///
+/// The line is shell-escaped defensively — the feature id is generated, but
+/// a branch containing a stray quote or `;` would otherwise become a
+/// command-injection vector. The trailing `clear` mirrors the existing
+/// `cd … && clear` behaviour in the SSH path so the prompt lands cleanly.
+/// Missing-branch failures are intentionally tolerated (`|| true`-style
+/// fallback) so a not-yet-started feature still opens a usable terminal.
+fn branch_bootstrap_line(branch: &Option<String>) -> Option<String> {
+    let raw = branch.as_ref()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let safe = crate::paths::shell_escape_posix(raw);
+    Some(format!(
+        "git checkout {safe} 2>/dev/null || git switch {safe} 2>/dev/null; clear\n"
+    ))
+}
+
 fn start_ssh_session(
     machine: &Machine,
     work_dir: &Option<String>,
+    work_branch: &Option<String>,
 ) -> Result<(ReadSource, WriteSink, Arc<Mutex<SessionKeepalive>>), String> {
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
@@ -266,6 +300,10 @@ fn start_ssh_session(
     if let Some(dir) = work_dir {
         let cd_cmd = format!("cd {} && clear\n", crate::paths::shell_escape_posix(dir));
         let _ = ssh_chan.write_all(cd_cmd.as_bytes());
+        let _ = ssh_chan.flush();
+    }
+    if let Some(bootstrap) = branch_bootstrap_line(work_branch) {
+        let _ = ssh_chan.write_all(bootstrap.as_bytes());
         let _ = ssh_chan.flush();
     }
 
@@ -545,5 +583,94 @@ pub fn detach_terminal_session(
         Ok(())
     } else {
         Err("Session not found".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::branch_bootstrap_line;
+
+    /// `None` (no pipeline context, e.g. `ProjectHome`) must skip the
+    /// bootstrap entirely — no `git checkout`, no `clear`, no noise.
+    #[test]
+    fn branch_bootstrap_returns_none_when_branch_absent() {
+        assert!(branch_bootstrap_line(&None).is_none());
+    }
+
+    /// Empty / whitespace-only strings are treated as absent so a stray
+    /// `info.branch === ""` upstream never injects an empty-arg command.
+    #[test]
+    fn branch_bootstrap_returns_none_for_blank_branch() {
+        assert!(branch_bootstrap_line(&Some(String::new())).is_none());
+        assert!(branch_bootstrap_line(&Some("   ".to_string())).is_none());
+    }
+
+    /// A well-formed branch produces a `checkout || switch` line and
+    /// always ends with `clear\n` so the prompt lands on the new branch.
+    #[test]
+    fn branch_bootstrap_emits_checkout_then_switch_with_clear() {
+        let line = branch_bootstrap_line(&Some("demeteo/features/abc".into()))
+            .expect("bootstrap must be Some");
+        assert!(
+            line.starts_with("git checkout demeteo/features/abc"),
+            "unexpected line: {line:?}"
+        );
+        assert!(
+            line.contains("|| git switch demeteo/features/abc"),
+            "missing switch fallback: {line:?}"
+        );
+        assert!(
+            line.trim_end().ends_with("clear"),
+            "missing clear: {line:?}"
+        );
+        assert!(
+            line.ends_with('\n'),
+            "must terminate with newline: {line:?}"
+        );
+    }
+
+    /// Branch names containing shell metacharacters (`;`, `$`, quotes)
+    /// must be shell-escaped so a malicious / malformed feature id cannot
+    /// inject extra commands. The escape function itself is unit-tested
+    /// in `shared/shell.rs`; this test guards the wiring here.
+    #[test]
+    fn branch_bootstrap_escapes_shell_metacharacters() {
+        let line =
+            branch_bootstrap_line(&Some("evil;rm -rf /".into())).expect("bootstrap must be Some");
+        assert!(
+            line.contains("'evil;rm -rf /'"),
+            "metachars must be wrapped in single quotes: {line:?}"
+        );
+        // The unescaped form must NOT appear — that would be the
+        // command-injection vector.
+        assert!(
+            !line.contains(" checkout evil;rm"),
+            "unescaped branch leaked into command: {line:?}"
+        );
+    }
+
+    /// A `branch` with a stray single quote is the trickiest case: it
+    /// must be quoted and the inner `'` escaped via the standard
+    /// `'\''` POSIX trick.
+    #[test]
+    fn branch_bootstrap_handles_inner_single_quote() {
+        let line = branch_bootstrap_line(&Some("feat'bad".into())).expect("bootstrap must be Some");
+        assert!(
+            line.contains("'feat'\\''bad'"),
+            "inner single quote must be escaped: {line:?}"
+        );
+    }
+
+    /// Surrounding whitespace is trimmed so `"  main  "` (e.g. from a UI
+    /// input) doesn't produce `git checkout   main` with extra spaces
+    /// that git refuses.
+    #[test]
+    fn branch_bootstrap_trims_surrounding_whitespace() {
+        let line =
+            branch_bootstrap_line(&Some("  feat/x  ".into())).expect("bootstrap must be Some");
+        assert!(
+            line.contains(" checkout feat/x "),
+            "branch not trimmed: {line:?}"
+        );
     }
 }
