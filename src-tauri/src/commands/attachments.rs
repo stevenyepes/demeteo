@@ -44,10 +44,27 @@ use crate::error::AppError;
 use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
 use crate::ports::db::FeatureRepository;
 use crate::state::AppContext;
+use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info, warn};
+
+/// Minimal metadata about a file on disk that the launch-stage
+/// (`AttachmentDropzone` `mode === "launch"`) needs BEFORE a feature
+/// exists: SHA-256 for the local dedup key (so re-dropping the same
+/// path collapses to one chip) and the byte length (so the chip
+/// renders the real size instead of a confusing "0 B").
+///
+/// Returned by the [`attachment_stage_metadata`] Tauri command.
+/// Mirrors the bytes + sha256 surface that `feature_add_attachment`
+/// produces server-side, minus the feature-scoped storage step (no
+/// feature exists yet at staging time).
+#[derive(Debug, Clone, Serialize)]
+pub struct StagedAttachmentMeta {
+    pub sha256: String,
+    pub size: u64,
+}
 
 const MAX_ATTACHMENT_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_ATTACHMENTS_PER_FEATURE: usize = 10;
@@ -251,6 +268,70 @@ pub async fn feature_add_attachment(
         source_filename.as_deref(),
         bytes,
     )
+}
+
+/// Compute the staging-time metadata for a path-based pick (Tauri
+/// drag-and-drop yields an absolute path, no browser `File`).
+///
+/// Reads the file once, returns `{ sha256, size }`. The React
+/// launch-stage uses the sha256 as the chip's React key AND as the
+/// dedup signal (so re-dropping the same path collapses to one chip)
+/// and the size to render the chip's byte-count label. Behaviour
+/// matches [`commit_attachment_inner`] for the bytes-fetch + sha256
+/// + support-check steps; the storage + manifest write are not
+/// performed (no feature_id exists yet at staging time).
+///
+/// Errors mirror [`commit_attachment_inner`]: missing file, oversized
+/// file, unsupported mime/ext. Returning `AppError` means the
+/// dropzone surfaces an inline error to the user instead of a
+/// silently-staged entry.
+#[tauri::command]
+pub async fn attachment_stage_metadata(
+    source_path: String,
+    mime: Option<String>,
+    source_filename: Option<String>,
+) -> Result<StagedAttachmentMeta, AppError> {
+    let src = std::path::PathBuf::from(&source_path);
+    let meta = std::fs::metadata(&src).map_err(|e| {
+        AppError::validation(format!("could not stat source file {}: {}", source_path, e))
+    })?;
+    if !meta.is_file() {
+        return Err(AppError::validation(format!(
+            "source path is not a regular file: {}",
+            source_path
+        )));
+    }
+    if meta.len() > MAX_ATTACHMENT_BYTES {
+        return Err(AppError::validation(format!(
+            "attachment too large: {} bytes (max {})",
+            meta.len(),
+            MAX_ATTACHMENT_BYTES
+        )));
+    }
+    let bytes = std::fs::read(&src).map_err(|e| {
+        AppError::validation(format!("could not read source file {}: {}", source_path, e))
+    })?;
+    let sha256 = compute_sha256_hex(&bytes);
+    let resolved_mime = resolve_mime(mime.as_deref(), source_filename.as_deref(), &src);
+    let ext = ext_for_mime(&resolved_mime)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            Path::new(source_filename.as_deref().unwrap_or(&source_path))
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "bin".to_string())
+        });
+    if !is_supported_attachment(&resolved_mime, &ext) {
+        return Err(AppError::validation(format!(
+            "unsupported attachment type: mime={} ext={} (allowed: png, jpg, gif, webp, pdf, txt, md, json)",
+            resolved_mime, ext
+        )));
+    }
+    Ok(StagedAttachmentMeta {
+        sha256,
+        size: bytes.len() as u64,
+    })
 }
 
 #[tauri::command]

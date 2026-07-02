@@ -567,6 +567,7 @@ pub fn run() {
             commands::attachments::feature_list_attachments,
             commands::attachments::attachment_read,
             commands::attachments::feature_remove_attachment,
+            commands::attachments::attachment_stage_metadata,
             commands::notifications::notification_mark_read,
             commands::notifications::notification_unread_count
         ])

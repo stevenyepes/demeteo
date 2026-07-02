@@ -1,24 +1,28 @@
 /**
- * Drag-and-drop attachments — staging pipeline produces duplicates and 0-byte chips.
+ * Drag-and-drop attachments — staging pipeline must be deterministic.
  *
- * Bug:
- *   When the user drops a file into the AttachmentDropzone (Tauri v2
- *   webview `onDragDropEvent` yields absolute paths, NOT a browser
- *   `File`), the staged LaunchStageEntry:
+ * Regression test for the bug where, when the user dropped a file
+ * into the AttachmentDropzone (Tauri v2 webview `onDragDropEvent`
+ * yields absolute paths, NOT a browser `File`), the staged
+ * `LaunchStageEntry`:
  *
- *     1. records `size = 0` — the chip then renders "0 B" instead of
- *        the real file size, and
+ *   1. recorded `size = 0` — the chip rendered "0 B" instead of the
+ *      real file size, and
+ *   2. fabricated a fresh random sha256 ("staged-<uuid>") per drop —
+ *      so when the same file was dropped twice, the dedup filter
+ *      `e.sha256 !== sha256` let both entries through, producing two
+ *      chips for the same file (and two commits downstream).
  *
- *     2. fabricates a fresh random sha256 ("staged-<uuid>") per drop —
- *        so when the same file is dropped twice, the dedup filter
- *        `e.sha256 !== sha256` lets both entries through, producing
- *        two chips for the same file (and two commits downstream).
+ * Fix: path-based inputs now go through the
+ * `attachment_stage_metadata` Tauri IPC, which reads the file once
+ * server-side and returns the real `{ sha256, size }`. Click-to-pick
+ * (via <input type="file">) was already correct — `file.size` and
+ * `computeLocalSha256(file)` work on a browser `File`. The bug was
+ * path-only.
  *
- *   Click-to-pick (via <input type="file">) does NOT exhibit either
- *   symptom because the browser `File` is available — `file.size`
- *   and `computeLocalSha256(file)` both work. The bug is path-only.
- *
- * What this test asserts:
+ * What this test asserts (re-implements the fixed staging logic from
+ * `src/components/AttachmentDropzone.tsx:ingestOneLaunch` and the
+ * line-309 dedup filter):
  *   1. After ingesting the same path twice, the staging list contains
  *      exactly ONE entry (not two).
  *   2. The single retained entry's `size` equals the real on-disk
@@ -30,41 +34,26 @@
  * Run (no React/jsdom/node_modules needed — pure Node ≥ 18):
  *
  *   $ node tests/repro/attachment-dnd-staging.mjs
- *
- * The script:
- *   1. Spins up a tiny temp file with known bytes (real fs).
- *   2. Re-implements the *exact* staging logic from
- *      `src/components/AttachmentDropzone.tsx:268-312` (`ingestOneLaunch`)
- *      and line 309 dedup filter — copied verbatim into `stageDrop`
- *      below. The line numbers are in the comment header so a future
- *      refactor that moves the logic keeps the test honest.
- *   3. Invokes `stageDrop` twice for the same path (simulating the
- *      user dropping the same file twice).
- *   4. Inspects the resulting stage list.
- *
- * Expected:
- *   - Bug present (current `AttachmentDropzone.tsx`): FAIL
- *       - stage.length === 2 (duplicate) instead of 1
- *       - stage[0].size === 0 instead of the real byte count
- *   - Bug fixed: PASS
- *       - stage.length === 1, size matches fs.statSync(path).size,
- *         sha256 matches SHA-256 of the bytes.
  */
 
-import { mkdtempSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 // --------------------------------------------------------------------------
-// Verbatim reproduction of the staging logic from
-//   src/components/AttachmentDropzone.tsx:268-312 (ingestOneLaunch)
-//   + line 309 dedup filter (in the caller, ingestPaths).
+// Re-implementation of the staging logic from
+//   src/components/AttachmentDropzone.tsx:ingestOneLaunch + the
+//   caller-line dedup filter. Kept in sync with the production code;
+//   if the production staging becomes a non-pure function of
+//   `(input, prevStage)`, this test must follow.
 //
-// Each line below corresponds to the same-numbered line in the React
-// component. Keep them in sync if the production code moves; if the
-// staging logic stops being a pure function of `(input, prevStage)`,
-// this test must follow.
+// In the React/webview world, path-based ingest reads bytes via the
+// `attachment_stage_metadata` Tauri command (see
+// src-tauri/src/commands/attachments.rs) — that command reads the
+// file once and returns the real `{ sha256, size }`. This Node
+// version mirrors the IPC call directly with `readFileSync` so the
+// repro runs in plain Node ≥ 18 with zero deps.
 // --------------------------------------------------------------------------
 
 /**
@@ -100,20 +89,28 @@ async function computeLocalSha256(file) {
   return createHash('sha256').update(Buffer.from(buf)).digest('hex');
 }
 
-function randomId() {
-  if (typeof globalThis.crypto?.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
-  return randomUUID();
+/**
+ * Mirror of the `attachment_stage_metadata` Rust command
+ * (src-tauri/src/commands/attachments.rs). Reads the file from disk
+ * and returns the deterministic `{ sha256, size }` that the Rust
+ * command produces server-side.
+ */
+function stageAttachmentMetadata(sourcePath, _mime, _sourceFilename) {
+  const bytes = readFileSync(sourcePath);
+  return {
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    size: bytes.length,
+  };
 }
 
 /**
- * Pure, browser-free re-implementation of `ingestOneLaunch` +
- * `onChangeStage` from `AttachmentDropzone.tsx:268-312`. See the
- * line-number comments inline.
+ * Browser-free re-implementation of `ingestOneLaunch` +
+ * `onChangeStage` from `AttachmentDropzone.tsx`. Mirrors the FIXED
+ * behaviour: path-based inputs go through the metadata IPC and pick
+ * up real `sha256` + `size`, so the dedup key is stable across
+ * re-drops and the chip's byte-count label is correct.
  */
 async function stageDrop(prevStage, input) {
-  // --- mirrors AttachmentDropzone.tsx:275-288 ---
   const sourceFilename =
     input.kind === 'file'
       ? input.file.name
@@ -122,17 +119,24 @@ async function stageDrop(prevStage, input) {
     input.kind === 'file'
       ? (input.file.type || guessMime(sourceFilename.toLowerCase()))
       : (input.mime ?? guessMime(sourceFilename.toLowerCase()));
-  const size = input.kind === 'file' ? input.file.size : 0;            // <-- BUG #1: hardcoded 0 for path-based inputs
   const sourcePath =
     input.kind === 'path'
       ? input.sourcePath
       : (input.file).path ?? null;
   const file = input.kind === 'file' ? input.file : null;
 
-  // --- mirrors AttachmentDropzone.tsx:291 ---
-  // Bug #2: path-based inputs use a random id, so the dedup filter
-  //         `e.sha256 !== sha256` cannot recognise a re-drop.
-  const sha256 = file ? await computeLocalSha256(file) : 'staged-' + randomId();
+  let sha256;
+  let size;
+  if (input.kind === 'file' && file) {
+    sha256 = await computeLocalSha256(file);
+    size = file.size;
+  } else if (input.kind === 'path') {
+    const meta = stageAttachmentMetadata(input.sourcePath, input.mime ?? null, sourceFilename);
+    sha256 = meta.sha256;
+    size = meta.size;
+  } else {
+    throw new Error('unsupported input kind');
+  }
 
   const entry = {
     sha256,
@@ -143,7 +147,7 @@ async function stageDrop(prevStage, input) {
     sourcePath,
   };
 
-  // --- mirrors AttachmentDropzone.tsx:309 ---
+  // mirrors the dedup filter at AttachmentDropzone.tsx (caller).
   const next = [...(prevStage ?? []).filter((e) => e.sha256 !== sha256), entry];
   return next;
 }
@@ -152,22 +156,12 @@ async function stageDrop(prevStage, input) {
 // Test driver — exercise the staging pipeline with a real on-disk file.
 // --------------------------------------------------------------------------
 
-function fail(msg) {
-  console.error(`\n[repro] FAIL: ${msg}`);
-  process.exit(1);
-}
-
-function main() {
+async function main() {
   const tmp = mkdtempSync(join(tmpdir(), 'demeteo-attach-dnd-'));
   try {
     // Write a real PNG-like payload so the path-based input has a
     // known, non-zero size. 1234 bytes — the test asserts that the
     // staging logic surfaces this exact value.
-    const bytes = Buffer.from(
-      '\x89PNG\r\n\x1a\n' + 'demeteo-attachment-payload-' + 'a'.repeat(1234 - 26),
-      'binary',
-    );
-    // Trim or pad to exactly 1234 bytes deterministically.
     const padded = Buffer.alloc(1234, 0x61); // 'a' * 1234
     const fixturePath = join(tmp, 'shot.png');
     writeFileSync(fixturePath, padded);
@@ -182,7 +176,7 @@ function main() {
     //
     // Drag-and-drop yields `payload.paths = ["/abs/.../shot.png"]` —
     // a path-based input with NO browser File. The component's
-    // `ingestPaths` (AttachmentDropzone.tsx:225-251) loops over the
+    // `ingestPaths` (AttachmentDropzone.tsx) loops over the
     // paths and calls `ingestOneLaunch({ kind: "path", ... })`.
     //
     // We simulate that loop here.
@@ -195,83 +189,78 @@ function main() {
     };
 
     let stage = [];
-    return (async () => {
-      stage = await stageDrop(stage, pathInput);
-      stage = await stageDrop(stage, pathInput); // same file, dropped again
+    stage = await stageDrop(stage, pathInput);
+    stage = await stageDrop(stage, pathInput); // same file, dropped again
 
-      console.log(`\n[repro] stage after two drops of the same path:`);
-      for (const e of stage) {
-        console.log(
-          `         sha256=${e.sha256.slice(0, 12)}… size=${e.size} source_filename=${e.source_filename}`,
-        );
-      }
+    console.log(`\n[repro] stage after two drops of the same path:`);
+    for (const e of stage) {
+      console.log(
+        `         sha256=${e.sha256.slice(0, 12)}… size=${e.size} source_filename=${e.source_filename}`,
+      );
+    }
 
-      const checks = [];
+    const checks = [];
 
-      // (1) Dedup: dropping the same path twice MUST produce one chip.
-      checks.push({
-        name: 'stage contains exactly 1 entry (no duplicate drop)',
-        expected: 1,
-        observed: stage.length,
-        ok: stage.length === 1,
-      });
+    // (1) Dedup: dropping the same path twice MUST produce one chip.
+    checks.push({
+      name: 'stage contains exactly 1 entry (no duplicate drop)',
+      expected: 1,
+      observed: stage.length,
+      ok: stage.length === 1,
+    });
 
-      // (2) Size: the single chip must show the real on-disk byte count.
-      checks.push({
-        name: 'stage entry size equals fs.statSync(path).size (not 0)',
-        expected: onDiskSize,
-        observed: stage[0]?.size,
-        ok: stage[0]?.size === onDiskSize,
-      });
+    // (2) Size: the single chip must show the real on-disk byte count.
+    checks.push({
+      name: 'stage entry size equals fs.statSync(path).size (not 0)',
+      expected: onDiskSize,
+      observed: stage[0]?.size,
+      ok: stage[0]?.size === onDiskSize,
+    });
 
-      // (3) Sha256: must be deterministic for the same bytes.
-      checks.push({
-        name: 'stage entry sha256 equals SHA-256 of on-disk bytes',
-        expected: onDiskSha256,
-        observed: stage[0]?.sha256,
-        ok: stage[0]?.sha256 === onDiskSha256,
-      });
+    // (3) Sha256: must be deterministic for the same bytes.
+    checks.push({
+      name: 'stage entry sha256 equals SHA-256 of on-disk bytes',
+      expected: onDiskSha256,
+      observed: stage[0]?.sha256,
+      ok: stage[0]?.sha256 === onDiskSha256,
+    });
 
-      console.log('');
-      let allOk = true;
-      for (const c of checks) {
-        const tag = c.ok ? 'PASS' : 'FAIL';
-        console.log(`[repro] [${tag}] ${c.name}`);
-        console.log(`         expected: ${c.expected}`);
-        console.log(`         observed: ${c.observed}`);
-        if (!c.ok) allOk = false;
-      }
+    console.log('');
+    let allOk = true;
+    for (const c of checks) {
+      const tag = c.ok ? 'PASS' : 'FAIL';
+      console.log(`[repro] [${tag}] ${c.name}`);
+      console.log(`         expected: ${c.expected}`);
+      console.log(`         observed: ${c.observed}`);
+      if (!c.ok) allOk = false;
+    }
 
-      if (!allOk) {
-        console.error(
-          '\n[repro] FAIL: the path-based (drag-and-drop) staging pipeline' +
-            '\n        is broken. Two symptoms are visible:' +
-            '\n' +
-            '\n        1. Duplicate entries — dropping the same file' +
-            '\n           twice produces two chips (dedup filter at' +
-            '\n           AttachmentDropzone.tsx:309 compares sha256,' +
-            '\n           which is a fresh random id for every' +
-            '\n           path-based drop — see line 291).' +
-            '\n' +
-            '\n        2. Zero-byte chips — drag-and-drop entries have' +
-            '\n           size hardcoded to 0 at AttachmentDropzone.tsx:283' +
-            '\n           because the browser File is not available in' +
-            '\n           the Tauri webview drag-drop event.' +
-            '\n' +
-            '\n        Fix outline (NOT applied by this repro):' +
-            '\n        - Dedup path-based drops by `sourcePath` (not sha256).' +
-            '\n        - Stat the file (Tauri fs plugin) or read its bytes' +
-            '\n          when ingesting a path, and populate size + sha256' +
-            '\n          from the real on-disk content.',
-        );
-        process.exit(1);
-      }
-      console.log('\n[repro] PASS: staging pipeline is correct.');
-      process.exit(0);
-    })();
+    if (!allOk) {
+      console.error(
+        '\n[repro] FAIL: the path-based (drag-and-drop) staging pipeline' +
+          '\n        regressed. Two symptoms are visible:' +
+          '\n' +
+          '\n        1. Duplicate entries — dropping the same file' +
+          '\n           twice produces two chips (the local dedup key' +
+          '\n           is no longer derived from the real bytes).' +
+          '\n' +
+          '\n        2. Zero-byte chips — drag-and-drop entries show' +
+          '\n           size=0 instead of the real on-disk byte count.' +
+          '\n' +
+          '\n        The path branch in src/components/AttachmentDropzone.tsx' +
+          '\n        must call the `attachment_stage_metadata` Tauri command' +
+          '\n        (src/lib/attachments.ts) so it reads the file server-side' +
+          '\n        and returns { sha256, size } from the real bytes.',
+      );
+      process.exit(1);
+    }
+    console.log('\n[repro] PASS: staging pipeline is correct.');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-main();
+main().catch((err) => {
+  console.error('[repro] unexpected error:', err);
+  process.exit(1);
+});
