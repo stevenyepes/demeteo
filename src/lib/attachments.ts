@@ -244,6 +244,51 @@ export async function computeLocalSha256(file: File): Promise<string> {
     .join("");
 }
 
+/**
+ * Stage-time metadata for a path-based attachment pick (Tauri
+ * drag-and-drop yields an absolute path; no browser `File` is
+ * available to Web Crypto).
+ *
+ * Routes to the Tauri command `attachment_stage_metadata`. The Rust
+ * side reads the bytes from `sourcePath`, sha256s them, and returns
+ * the size — mirroring the bytes-fetch + sha256 surface that
+ * `feature_add_attachment` produces, minus the feature-scoped
+ * storage step (no `feature_id` exists at staging time). The React
+ * launch-stage uses `sha256` as both the React key AND the
+ * re-drop dedup signal, and `size` so the chip renders the real
+ * byte count instead of a confusing "0 B".
+ *
+ * Errors propagate from Rust as `AppError::validation` (missing
+ * file, oversize, unsupported mime/ext) so the dropzone surfaces
+ * an inline error instead of a silently-staged entry.
+ */
+export interface StagedAttachmentMeta {
+  /** Lowercase hex SHA-256 of the on-disk bytes (matches the
+   *  `feature_add_attachment` server-side computation byte-for-byte). */
+  sha256: string;
+  /** Byte length, used to render the chip's size label. */
+  size: number;
+}
+
+/**
+ * Fetch the staging-time metadata for a dropped file.
+ *
+ * @param sourcePath absolute disk path from Tauri drag-and-drop.
+ * @param mime       optional mime hint (frontend can infer from filename).
+ * @param sourceFilename optional original filename (used to infer mime).
+ */
+export async function stageAttachmentMetadata(
+  sourcePath: string,
+  mime?: string | null,
+  sourceFilename?: string | null,
+): Promise<StagedAttachmentMeta> {
+  return invoke<StagedAttachmentMeta>("attachment_stage_metadata", {
+    sourcePath,
+    mime: mime ?? null,
+    sourceFilename: sourceFilename ?? null,
+  });
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

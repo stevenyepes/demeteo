@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   addAttachment,
   computeLocalSha256,
+  stageAttachmentMetadata,
   type AttachedFile,
   type AttachmentInput,
 } from "../lib/attachments";
@@ -280,15 +281,46 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
         input.kind === "file"
           ? (input.file.type || guessMime(sourceFilename.toLowerCase()))
           : (input.mime ?? guessMime(sourceFilename.toLowerCase()));
-      const size = input.kind === "file" ? input.file.size : 0;
       const sourcePath =
         input.kind === "path"
           ? input.sourcePath
           : (input.file as File & { path?: string }).path ?? null;
       const file = input.kind === "file" ? input.file : null;
 
-      // Local sha256 for dedup + the future manifest key parity.
-      const sha256 = file ? await computeLocalSha256(file) : "staged-" + randomId();
+      // Compute `sha256` + `size` from whatever bytes the ingest
+      // surfaced. File-based picks get Web Crypto over the browser
+      // `File` (already in memory). Path-based picks (Tauri drag-
+      // and-drop yields only the absolute path, no browser `File`)
+      // MUST go through a Rust IPC to read the bytes — without it
+      // the chip would show "0 B" and two drops of the same path
+      // would produce two chips (the dedup filter compares
+      // `sha256`, so a fresh "staged-<uuid>" key survives both
+      // drops — see the bug repro tests/repro/attachment-dnd-staging.mjs).
+      let sha256: string;
+      let size: number;
+      if (input.kind === "file" && file) {
+        sha256 = await computeLocalSha256(file);
+        size = file.size;
+      } else if (input.kind === "path") {
+        try {
+          const meta = await stageAttachmentMetadata(
+            input.sourcePath,
+            input.mime ?? null,
+            sourceFilename,
+          );
+          sha256 = meta.sha256;
+          size = meta.size;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          onError?.(message);
+          return;
+        }
+      } else {
+        // Should be unreachable — guarded by `input.kind` exhaustiveness.
+        const message = "AttachmentDropzone: unsupported ingest input kind";
+        onError?.(message);
+        return;
+      }
 
       const previewUrl =
         file && mime.startsWith("image/")
@@ -308,7 +340,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
 
       onChangeStage([...(stageEntries ?? []).filter((e) => e.sha256 !== sha256), entry]);
     },
-    [onChangeStage, stageEntries],
+    [onChangeStage, stageEntries, onError],
   );
 
   // -- render the chip list ----------------------------------------------
@@ -544,13 +576,6 @@ function readDataUrl(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
-}
-
-function randomId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return Math.random().toString(36).slice(2);
 }
 
 export default AttachmentDropzone;
