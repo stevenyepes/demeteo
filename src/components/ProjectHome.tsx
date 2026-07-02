@@ -40,6 +40,7 @@ const ProjectHome = () => {
     const [repositories, setRepositories] = useState<any[]>([]);
     const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
     const [workflows, setWorkflows] = useState<any[]>([]);
+    const [workflowById, setWorkflowById] = useState<Map<string, { name: string; is_starter: boolean }>>(new Map());
     const [selectedWorkflow, setSelectedWorkflow] = useState<any | null>(null);
     const [userOverriddenWorkflow, setUserOverriddenWorkflow] = useState(false);
     const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
@@ -168,6 +169,7 @@ const ProjectHome = () => {
                     const mapped: Feature[] = res.map((f: any) => ({
                         id: f.id,
                         project_id: f.project_id,
+                        workflow_id: f.workflow_id ?? undefined,
                         title: f.title,
                         status: f.status,
                         total_cost: f.total_cost,
@@ -207,11 +209,22 @@ const ProjectHome = () => {
             if (workflowsRes.status === 'fulfilled' && workflowsRes.value) {
                 const list = workflowsRes.value;
                 setWorkflows(list);
+                const lookup = new Map<string, { name: string; is_starter: boolean }>();
+                for (const wf of list) {
+                    if (wf && typeof wf.id === 'string' && wf.id.length > 0) {
+                        lookup.set(wf.id, {
+                            name: typeof wf.name === 'string' ? wf.name : '',
+                            is_starter: Boolean(wf.is_starter),
+                        });
+                    }
+                }
+                setWorkflowById(lookup);
                 if (list.length > 0) {
                     setSelectedWorkflow(list[0]);
                 }
             } else if (workflowsRes.status === 'rejected') {
                 console.error("Failed to fetch workflows:", workflowsRes.reason);
+                setWorkflowById(new Map());
             }
 
             // Handle proposed strategy settings
@@ -298,6 +311,7 @@ const ProjectHome = () => {
             const newFeature: Feature = {
                 id: res.id,
                 project_id: res.project_id,
+                workflow_id: res.workflow_id ?? undefined,
                 title: res.title,
                 status: res.status,
                 total_cost: res.total_cost,
@@ -957,7 +971,7 @@ const ProjectHome = () => {
 
                                     <div className="flex justify-between items-start gap-4">
                                         <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-3 mb-1">
+                                            <div className="flex items-center gap-3 mb-1 flex-wrap">
                                                 {feature.status === 'gated' ? (
                                                     <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/20 text-violet-400 uppercase">GATED APPROVAL</span>
                                                 ) : (
@@ -965,6 +979,33 @@ const ProjectHome = () => {
                                                         <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span> RUNNING FLEET
                                                     </span>
                                                 )}
+                                                {(() => {
+                                                    const wfMeta = feature.workflow_id
+                                                        ? workflowById.get(feature.workflow_id)
+                                                        : undefined;
+                                                    if (!wfMeta) {
+                                                        return (
+                                                            <span
+                                                                className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 border border-white/10 text-slate-500 uppercase"
+                                                                title="Workflow reference missing"
+                                                            >
+                                                                Workflow: unknown
+                                                            </span>
+                                                        );
+                                                    }
+                                                    return (
+                                                        <span
+                                                            className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/30 text-violet-300 font-outfit truncate max-w-[220px] inline-flex items-center gap-1"
+                                                            title={`Workflow: ${wfMeta.name}`}
+                                                        >
+                                                            <span className="text-violet-400/80">Workflow:</span>
+                                                            <span className="truncate">{wfMeta.name}</span>
+                                                            <span className="text-[9px] px-1 rounded bg-violet-500/20 text-violet-300 font-medium font-mono uppercase">
+                                                                {wfMeta.is_starter ? 'Starter' : 'Custom'}
+                                                            </span>
+                                                        </span>
+                                                    );
+                                                })()}
                                                 <span className="text-xs text-slate-500 font-mono truncate">{feature.id}</span>
                                             </div>
                                             <h3 className="text-lg font-outfit text-white line-clamp-2 break-words" title={feature.title}>{feature.title}</h3>
