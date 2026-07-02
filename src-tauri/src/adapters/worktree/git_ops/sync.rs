@@ -225,7 +225,7 @@ impl GitOpsHelper {
             .run_command(
                 machine_str,
                 &format!(
-                    "git -C {} merge {} -m \"Sync feature with origin/{}\"",
+                    "git -C {} merge {} -m \"chore(sync): sync feature with origin/{}\"",
                     safe_wt,
                     paths::shell_escape_posix(&tracking),
                     default_branch
