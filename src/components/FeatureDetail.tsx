@@ -499,6 +499,7 @@ export function FeatureDetail() {
   const [agentDrawerCtx, setAgentDrawerCtx] = useState<{
     machineId: string;
     worktreePath: string;
+    branch: string;
     computeType: string;
     remoteHost: string | null;
   } | null>(null);
@@ -513,6 +514,7 @@ export function FeatureDetail() {
       setAgentDrawerCtx({
         machineId: info.machine_id,
         worktreePath: info.worktree_path,
+        branch: info.branch,
         computeType,
         remoteHost: computeType === 'remote' ? info.machine_id : null,
       });
@@ -1421,6 +1423,7 @@ export function FeatureDetail() {
           projectId={featureId}
           computeType={agentDrawerCtx.computeType}
           remoteHost={agentDrawerCtx.remoteHost}
+          workBranch={agentDrawerCtx.branch}
           sidebarWidth={sidebarCollapsed ? 56 : 240}
         />
       )}

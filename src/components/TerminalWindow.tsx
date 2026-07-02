@@ -23,6 +23,9 @@ interface TerminalWindowProps {
   repoPath: string;
   /** Absolute path — skips resolveRepoDir when provided (e.g. feature worktrees) */
   workDir?: string;
+  /** Feature branch to `git checkout` after the PTY starts. Omit for
+   *  `ProjectHome`-style terminals (no pipeline context). */
+  workBranch?: string | null;
   /** Called once after the PTY session connects and is ready for input */
   onSessionStarted?: (sessionId: string) => void;
 }
@@ -33,6 +36,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
   remoteHost,
   repoPath,
   workDir: workDirProp,
+  workBranch,
   onSessionStarted,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -96,7 +100,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
       const machineId = computeType.toLowerCase() === "remote" ? remoteHost || "local" : "local";
 
       // 4. Start terminal session on the backend
-      const sessId = await startTerminalSession(machineId, channel, workDir);
+      const sessId = await startTerminalSession(machineId, channel, workDir, workBranch);
       setSessionId(sessId);
       setStatus("connected");
       onSessionStarted?.(sessId);
@@ -196,7 +200,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
     // Clean up terminal on unmount
     return () => {
       observer.disconnect();
-      
+
       const sessToClose = activeSessionIdRef.current;
       if (sessToClose) {
         closeTerminalSession(sessToClose).catch((e) => {
@@ -208,7 +212,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [projectId, repoPath]);
+  }, [projectId, repoPath, workBranch]);
 
   return (
     <div className="flex flex-col h-full w-full bg-[#050608] border border-white/5 rounded-xl overflow-hidden relative">

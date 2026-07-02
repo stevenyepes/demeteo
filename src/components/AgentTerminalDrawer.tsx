@@ -28,6 +28,9 @@ export interface AgentTerminalDrawerProps {
   projectId: string;
   computeType: string;
   remoteHost: string | null;
+  /** Feature branch (`demeteo/features/<id>`) to auto-checkout after the
+   *  PTY starts. Omit for terminal draws outside a feature context. */
+  workBranch?: string | null;
   /** Sidebar width in px so the drawer doesn't overlap it. Default 240. */
   sidebarWidth?: number;
 }
@@ -41,6 +44,7 @@ export const AgentTerminalDrawer: React.FC<AgentTerminalDrawerProps> = ({
   projectId,
   computeType,
   remoteHost,
+  workBranch,
   sidebarWidth = 240,
 }) => {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -151,6 +155,7 @@ export const AgentTerminalDrawer: React.FC<AgentTerminalDrawerProps> = ({
             remoteHost={remoteHost}
             repoPath={repoPath || ''}
             workDir={absoluteWorkDir}
+            workBranch={workBranch}
             onSessionStarted={setSessionId}
           />
         </div>
