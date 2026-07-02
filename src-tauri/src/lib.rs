@@ -556,6 +556,7 @@ pub fn run() {
             commands::bootstrap::get_proposed_strategy,
             commands::bootstrap::save_project_settings,
             commands::agent_config_probe::get_agent_models,
+            commands::app_version::get_app_version,
             commands::pricing::pricing_list,
             commands::pricing::pricing_for,
             commands::mr_publisher::publish_mr,

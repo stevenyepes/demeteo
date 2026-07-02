@@ -425,3 +425,79 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib ssh
 - [`DECISIONS.md`](DECISIONS.md) decisions 14, 15 — feature re-entry, telemetry.
 - [`DDD_MODEL.md`](DDD_MODEL.md) §4 Feature Orchestration invariants.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) §2 Port Catalogue (StepExecutor, GatePresenter).
+
+---
+
+## 7. Predecessor-running guard
+
+> **Origin:** the pipeline view could show a stale `awaiting_gate` chip on
+> a step the user already retried, allowing them to click "Retry Step"
+> or "Approve Gate" on a step whose predecessor was still in flight.
+> Outcome: actions that should have been blocked by backend invariants
+> reached `replay_steps_from` / the gate waiter, racing the still-running
+> agent.
+
+### Trigger conditions
+
+- A `gate_required` event arrives while a predecessor agent step is
+  still `running` / `verifying` (e.g. the agent hadn't yet finalised its
+  artifact when the orchestrator fired the gate).
+- A `step_retry` IPC lands on a `failed` step whose earlier step is
+  stuck in `awaiting_gate` after a system restart (the watchdog
+  re-emits the gate; the executor never resumes because the user never
+  acts on it).
+
+### What the guard does
+
+A single helper, `DagStepExecutor::assert_no_active_predecessors(target, intent)`,
+walks `steps_for_feature(target.feature_id)` and returns
+`Err(AppError::validation)` on the first non-terminal predecessor with
+`step_index < target.step_index`. The four blocking statuses are
+`pending`, `running`, `verifying`, `awaiting_gate`; `completed`,
+`failed`, `interrupted`, `skipped` are non-blocking.
+
+The helper is invoked at the top of:
+
+- `StepExecutor::step_retry` (after the target-status check).
+- `GatePresenter::gate_decide` (after the durable write was moved to
+  fire **after** the guard — the decision is no longer written when
+  blocked).
+
+The returned `AppError::validation` carries a message of the form:
+
+> `Step '<name>' is still <status>; wait for it to finish before <intent>.`
+
+so the UI can both render the blocker by name and route the toast to a
+warning instead of an error.
+
+### UI blocking contract (defence in depth)
+
+The frontend mirrors the same rule in pure TypeScript via
+`findActivePredecessor` (in `src/lib/features.ts`). Two surfaces use it:
+
+- `FeatureDetail.tsx`: each failed/interrupted step card computes
+  `activePredecessor`. When non-null, the "Retry Step" button is
+  `disabled`, a rose-bordered banner names the blocker, and the
+  toast routes to `kind: 'warning'` via `isBlockingError`.
+- `GateView.tsx`: on mount the modal calls `step_list_for_run`,
+  computes `blockedBy`, and renders a persistent banner above the
+  Approve / Redirect buttons (both disabled). The "Abort feature"
+  button stays enabled — aborting is a separate intent.
+
+A `gate_required` / `step_progress` event triggers an immediate
+`loadFeatureData()` so the stale "active" chip clears on the next tick
+instead of waiting for the 1 Hz heartbeat.
+
+### Tests
+
+- `test_step_retry_blocked_by_active_predecessor` — failed target with
+  a `running` predecessor returns `AppError::Validation` naming the
+  blocker.
+- `test_gate_decide_blocked_by_active_predecessor` — same for
+  `gate_decide` with a `verifying` predecessor.
+- `test_step_retry_unblocks_when_predecessor_is_terminal` — symmetry:
+  the guard does NOT fire when predecessors are `completed` /
+  `skipped` / `failed`.
+- `test_assert_no_active_predecessors_helper` — the helper itself
+  reports the *earliest* non-terminal predecessor (lower
+  `step_index` wins).

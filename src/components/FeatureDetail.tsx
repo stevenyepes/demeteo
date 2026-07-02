@@ -17,6 +17,11 @@ import { AttachmentChip } from './AttachmentChip';
 import { listAttachments, readAttachment, type AttachedFile } from '../lib/attachments';
 import PromptDialog from './PromptDialog';
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
+import {
+  retryStep,
+  isBlockingError,
+  findActivePredecessor,
+} from '../lib/features';
 import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
 import { useNavigation, useProject, useUIState } from '../context';
@@ -210,6 +215,25 @@ export function FeatureDetail() {
     if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
   }, []);
 
+  // Refs for each timeline step card. Used to scroll the active gate
+  // card into view when the user navigates here via a `gate_required`
+  // event so the active gate cannot be missed even if a stale
+  // `awaiting_gate` chip is still rendered on a sibling card.
+  const stepCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Scroll the active gate card into view once the timeline data has
+  // loaded and the matching step card has been mounted. Only fires
+  // when `view.gateStepExecutionId` is set (i.e. we arrived here from
+  // a `gate_required` event or a Decide Gate click).
+  useEffect(() => {
+    const targetId = view.gateStepExecutionId;
+    if (!targetId) return;
+    const el = stepCardRefs.current[targetId];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [view.gateStepExecutionId, steps.length]);
+
   useEffect(() => { loadFeatureData(); }, [featureId]);
 
   // Fetch the per-feature attachments manifest once per feature id.
@@ -287,7 +311,14 @@ export function FeatureDetail() {
   });
 
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
-    if (feature_id === featureId) navigate({ kind: 'detail', featureId, featureTitle, gateStepExecutionId: step_execution_id });
+    if (feature_id === featureId) {
+      // Force a refetch on the very next event tick so the timeline
+      // re-derives the "active" chip immediately rather than waiting
+      // for the next 1 Hz heartbeat. Prevents a stale
+      // `awaiting_gate` chip lingering alongside the new gate card.
+      loadFeatureData();
+      navigate({ kind: 'detail', featureId, featureTitle, gateStepExecutionId: step_execution_id });
+    }
   });
 
   useTauriEvent<{ feature_id: string; step_execution_id: string; content: string }>('agent_stream', ({ feature_id, step_execution_id, content }) => {
@@ -435,10 +466,16 @@ export function FeatureDetail() {
     try {
       const modelParam = selectedModel || null;
       const agentParam = selectedAgent || null;
-      await invoke('step_retry', { stepExecutionId, newModel: modelParam, newAgent: agentParam });
+      await retryStep({ stepExecutionId, newModel: modelParam, newAgent: agentParam });
       loadFeatureData();
     } catch (err) {
-      await messageDialog(formatError(err), { title: 'Retry Failed', kind: 'error' });
+      // Blocking-predecessor errors are surfaced as warnings rather
+      // than errors — the user did nothing wrong, the UI was stale.
+      const isBlocking = isBlockingError(err);
+      await messageDialog(formatError(err), {
+        title: isBlocking ? 'Retry Blocked' : 'Retry Failed',
+        kind: isBlocking ? 'warning' : 'error',
+      });
     }
   };
 
@@ -908,6 +945,10 @@ export function FeatureDetail() {
                   statusBg = 'border-amber-500/40 bg-amber-950/10 shadow-[0_0_15px_rgba(245,158,11,0.08)]';
                 }
 
+                const activePredecessor = findActivePredecessor(steps, step);
+                const isBlockedByPredecessor = (step.status === 'failed' || step.status === 'interrupted') && activePredecessor !== null;
+                const isActiveGate = view.gateStepExecutionId === step.id;
+
                 return (
                   <div key={step.id} className="relative group">
                     {/* Connector node circle */}
@@ -915,7 +956,11 @@ export function FeatureDetail() {
                       <span className="text-[10px] text-slate-400 font-bold">{idx + 1}</span>
                     </span>
 
-                    <div className={`p-5 rounded-xl border transition-all duration-300 ${statusBg}`}>
+                    <div
+                      ref={(el) => { stepCardRefs.current[step.id] = el; }}
+                      data-step-id={step.id}
+                      className={`p-5 rounded-xl border transition-all duration-300 ${statusBg} ${isActiveGate ? 'ring-2 ring-amber-500/40' : ''}`}
+                    >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           {icon}
@@ -995,11 +1040,30 @@ export function FeatureDetail() {
                             </div>
                             <button
                               onClick={() => handleRetryStep(step.id)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-xs font-bold transition shadow-[0_0_10px_rgba(239,68,68,0.4)]"
+                              disabled={isBlockedByPredecessor}
+                              title={
+                                isBlockedByPredecessor
+                                  ? `Step '${activePredecessor?.step_id}' is still ${activePredecessor?.status}. Wait for it to finish before retrying.`
+                                  : 'Re-run this step from scratch'
+                              }
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-rose-900/40 disabled:hover:bg-rose-900/40 disabled:cursor-not-allowed text-white rounded text-xs font-bold transition shadow-[0_0_10px_rgba(239,68,68,0.4)] disabled:shadow-none"
                             >
                               <RefreshCw className="w-3 h-3 animate-pulse" /> Retry Step
                             </button>
                           </div>
+
+                          {isBlockedByPredecessor && activePredecessor && (
+                            <div
+                              data-testid="retry-blocked-banner"
+                              className="flex items-start gap-2 px-3 py-2 rounded bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-400 font-mono"
+                              title={`Cannot retry while '${activePredecessor.step_id}' is ${activePredecessor.status}`}
+                            >
+                              <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                              <span>
+                                Blocked: <span className="font-semibold">{activePredecessor.step_id}</span> is still {activePredecessor.status}. Wait for it to finish before retrying.
+                              </span>
+                            </div>
+                          )}
 
                           {availableAgents.length > 0 && (
                             <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
