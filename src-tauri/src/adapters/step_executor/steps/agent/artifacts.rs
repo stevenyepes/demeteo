@@ -67,7 +67,11 @@ impl ExecutionDriver {
             &*self.exec,
             machine_str,
             wt_path,
-            &format!("feat({}): {}", self.f_id.as_str(), step_conf.title),
+            &format!(
+                "feat({}): {}",
+                self.f_id.as_str(),
+                step_conf.title.to_lowercase()
+            ),
             &self.artifact_subdir,
             self.commit_artifacts,
         )

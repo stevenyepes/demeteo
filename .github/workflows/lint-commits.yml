@@ -31,8 +31,6 @@ jobs:
         uses: wagoid/commitlint-github-action@v6
         with:
           configFile: .commitlintrc.json
-          # Only lint commits added on this push (not the whole history).
-          firstParent: true
           # Don't fail the action while legacy commits are still in master;
           # emit a warning until history is clean.
           failOnWarnings: false
