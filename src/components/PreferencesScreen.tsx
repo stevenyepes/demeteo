@@ -8,7 +8,8 @@ import { TabBar } from './ui/TabBar';
 import type { TabDef } from './ui/TabBar';
 import { useNavigation } from '../context';
 import { getAgentTimeouts, setAgentTimeouts } from '../lib/timeouts';
-import type { AgentTimeouts as AgentTimeoutsType } from '../types';
+import { getAppVersion } from '../lib/appVersion';
+import type { AgentTimeouts as AgentTimeoutsType, ReleaseChannel } from '../types';
 import { useErrorBus } from '../lib/errorBus';
 import { TimeoutField } from './ui/TimeoutField';
 
@@ -36,6 +37,7 @@ const PreferencesScreen = () => {
   const [timeoutsSaving, setTimeoutsSaving] = useState(false);
   const [timeoutsSaved, setTimeoutsSaved] = useState(false);
   const { reportError } = useErrorBus();
+  const [appVersion, setAppVersion] = useState<{ version: string; channel: ReleaseChannel } | null>(null);
 
   useEffect(() => {
     if (activeTab !== 'defaults') return;
@@ -49,6 +51,13 @@ const PreferencesScreen = () => {
       setWorkspaceDirInput(override ?? '');
       setTimeoutsInput(timeouts);
     })();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'about') return;
+    getAppVersion()
+      .then((info) => setAppVersion(info))
+      .catch(() => setAppVersion(null));
   }, [activeTab]);
 
   const handleBrowseWorkspaceDir = async () => {
@@ -299,7 +308,25 @@ const PreferencesScreen = () => {
               </div>
               <div>
                 <h3 className="text-base font-outfit font-bold text-white">Demeteo</h3>
-                <p className="text-xs text-slate-400">Multi-Agent Orchestrator v0.1.0</p>
+                <p className="text-xs text-slate-400 flex items-center gap-2">
+                  <span>Multi-Agent Orchestrator v{appVersion?.version ?? '…'}</span>
+                  {appVersion && (
+                    <span
+                      className={
+                        appVersion.channel === 'stable'
+                          ? 'px-1.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wide bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                          : 'px-1.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wide bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      }
+                      title={
+                        appVersion.channel === 'stable'
+                          ? 'Stable release build'
+                          : 'Nightly / development build'
+                      }
+                    >
+                      {appVersion.channel}
+                    </span>
+                  )}
+                </p>
               </div>
             </div>
             <div className="border-t border-white/5 pt-4 text-xs text-slate-400 space-y-2">
