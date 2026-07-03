@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import TopBar from "./components/TopBar";
 import ProjectRail from "./components/ProjectRail";
 import { formatError } from "./lib/errors";
@@ -20,9 +20,10 @@ import CreateProjectWizard from "./components/wizard/CreateProjectWizard";
 import PreferencesScreen from "./components/PreferencesScreen";
 import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
-import type { Project, Provider } from "./types";
+import type { AppView, Feature, Project, Provider } from "./types";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useTauriEvent } from "./hooks/useTauriEvent";
+import { MouseNavigationBridge } from "./hooks/useMouseNavigation";
 import {
   NavigationProvider, useNavigation,
   ProjectProvider, useProject,
@@ -30,16 +31,194 @@ import {
 } from "./context";
 import "./App.css";
 
+// ── Pure helpers (exported for unit tests in src/App.test.tsx) ─────────
+//
+// These are extracted as standalone functions so the per-spec
+// invariants (priority order of Escape, wrap-around cycling, "no-op
+// when list is empty") can be pinned down without rendering the full
+// app. `AppInner` dispatches the result of `pickEscapeAction` to
+// `uiDispatch` / `navigate` / `goBack`; the helpers themselves are
+// pure and own no React state.
+
+/**
+ * Return the feature that comes AFTER `currentId` in the list, wrapping
+ * around. If `currentId` is not in the list, return the first feature.
+ * If the list is empty, return `null`. Used by the `onNextFeature`
+ * keyboard handler to step through the active project's features.
+ */
+export function pickNextFeature(features: readonly Feature[], currentId: string | null): Feature | null {
+  if (features.length === 0) return null;
+  if (currentId === null) return features[0];
+  const idx = features.findIndex(f => f.id === currentId);
+  if (idx === -1) return features[0];
+  return features[(idx + 1) % features.length];
+}
+
+/**
+ * Return the feature that comes BEFORE `currentId` in the list, wrapping
+ * around. If `currentId` is not in the list, return the last feature.
+ * If the list is empty, return `null`. Used by the `onPreviousFeature`
+ * keyboard handler to step backwards through the active project's
+ * features.
+ */
+export function pickPreviousFeature(features: readonly Feature[], currentId: string | null): Feature | null {
+  if (features.length === 0) return null;
+  if (currentId === null) return features[features.length - 1];
+  const idx = features.findIndex(f => f.id === currentId);
+  if (idx === -1) return features[features.length - 1];
+  return features[(idx - 1 + features.length) % features.length];
+}
+
+/**
+ * Minimal UIState slice consumed by `pickEscapeAction`. The helper
+ * only needs the open flags (and the editing-provider boolean), so
+ * the slice stays narrow and the helper remains decoupled from the
+ * full UIState shape. Mirrors the relevant fields of
+ * `src/context/UIStateContext.tsx`.
+ */
+export interface UIStateSlice {
+  commandPaletteOpen: boolean;
+  docsPanelOpen: boolean;
+  isConnectModalOpen: boolean;
+  editingProvider: Provider | null;
+  startFeatureOpen: boolean;
+}
+
+/**
+ * Discriminated union of every state mutation a single Escape press
+ * can perform. The caller (AppInner) translates each variant into a
+ * concrete `uiDispatch` / `navigate` / `goBack` call.
+ */
+export type EscapeAction =
+  | { type: 'close-command-palette' }
+  | { type: 'close-docs-panel' }
+  | { type: 'close-connect-modal' }
+  | { type: 'close-start-feature' }
+  | { type: 'close-gate-view'; featureId: string; featureTitle: string }
+  | { type: 'navigate-back' };
+
+/**
+ * Decide which overlay (if any) a single Escape press should close.
+ *
+ * Priority order (topmost first, per the implementation spec AC-3):
+ *   1. command palette     (ui.commandPaletteOpen)
+ *   2. docs panel          (ui.docsPanelOpen)
+ *   3. provider connect    (ui.isConnectModalOpen || ui.editingProvider)
+ *   4. start-feature modal (ui.startFeatureOpen)
+ *   5. gate view overlay   (view.kind === 'detail' && view.gateStepExecutionId)
+ *   6. fallback            (navigate back)
+ *
+ * Per-modal ESC handlers in `CommandPalette`, `StartFeatureModal`,
+ * `DocsPanel`, `EnvModal`, `GateView`, etc. are expected to call
+ * `event.stopPropagation()` so the global hook only fires once. The
+ * notification-bell popover is owned by `NotificationBell` and
+ * dismisses itself on the same keypress; the prompt dialog
+ * (`FeatureDetail`'s local modal) is handled the same way.
+ */
+export function pickEscapeAction(ui: UIStateSlice, view: AppView): EscapeAction {
+  if (ui.commandPaletteOpen) return { type: 'close-command-palette' };
+  if (ui.docsPanelOpen) return { type: 'close-docs-panel' };
+  if (ui.isConnectModalOpen || ui.editingProvider !== null) return { type: 'close-connect-modal' };
+  if (ui.startFeatureOpen) return { type: 'close-start-feature' };
+  if (view.kind === 'detail' && view.gateStepExecutionId) {
+    return {
+      type: 'close-gate-view',
+      featureId: view.featureId,
+      featureTitle: view.featureTitle,
+    };
+  }
+  return { type: 'navigate-back' };
+}
+
 function AppInner() {
   const { reportError } = useErrorBus();
-  const { view, navigate } = useNavigation();
+  const { view, navigate, goBack, canGoBack } = useNavigation();
   const { state: proj, dispatch: projDispatch } = useProject();
   const { ui, uiDispatch } = useUIState();
 
   const { projects, currentProjectId, providers, reposByProject, workflowsForModal, initialLoadError } = proj;
+  // `commandPaletteOpen`, `docsPanelOpen`, `startFeatureOpen`, and
+  // `startFeatureWorkflowId` drive the per-overlay render branches
+  // below. `isConnectModalOpen` and `editingProvider` are read
+  // indirectly via the `ui` object passed to `pickEscapeAction`.
   const { commandPaletteOpen, docsPanelOpen, startFeatureOpen, startFeatureWorkflowId } = ui;
 
   const currentProject = useMemo(() => projects.find(p => p.id === currentProjectId) ?? null, [projects, currentProjectId]);
+  const currentFeatureId: string | null = view.kind === 'detail' ? view.featureId : null;
+
+  // Mirror of the active project's features, kept in memory for
+  // `Cmd+G` / `Cmd+Shift+G` cycling. ProjectHome owns its own copy
+  // for rendering; this list exists solely to drive the keyboard
+  // shortcut and is refreshed on project change + status events.
+  const [features, setFeatures] = useState<Feature[]>([]);
+
+  // Refetch the feature list whenever the active project changes.
+  // Cancellation flag prevents a slow fetch on the previous project
+  // from clobbering the list after the user switches.
+  useEffect(() => {
+    if (!currentProjectId) {
+      setFeatures([]);
+      return;
+    }
+    let cancelled = false;
+    const fetchFeatures = async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const list = await invoke<any[]>('fetch_active_features', { projectId: currentProjectId });
+        if (cancelled) return;
+        const mapped: Feature[] = (list ?? []).map((f: any) => ({
+          id: f.id,
+          project_id: f.project_id,
+          workflow_id: f.workflow_id ?? undefined,
+          title: f.title,
+          status: f.status,
+          total_cost: f.total_cost,
+          tokens: f.tokens || 0,
+          duration: f.duration,
+          created_at: f.created_at,
+          agent_kind: f.agent_kind,
+          model: f.model,
+        }));
+        setFeatures(mapped);
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to fetch features for keyboard cycling:", err);
+          setFeatures([]);
+        }
+      }
+    };
+    fetchFeatures();
+    return () => { cancelled = true; };
+  }, [currentProjectId]);
+
+  // Keep the in-memory feature list in sync with the orchestrator's
+  // status events. New features (just created via `start_feature`)
+  // are appended with a placeholder title; the detail view fetches
+  // the real title on navigation. Existing features have their
+  // status patched in place.
+  useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status }) => {
+    setFeatures(prev => {
+      const idx = prev.findIndex(f => f.id === feature_id);
+      if (idx === -1) {
+        return [
+          ...prev,
+          {
+            id: feature_id,
+            project_id: currentProjectId ?? '',
+            title: 'Feature',
+            status,
+            total_cost: 0,
+            tokens: 0,
+            duration: '',
+            created_at: Date.now(),
+          },
+        ];
+      }
+      const copy = prev.slice();
+      copy[idx] = { ...copy[idx], status };
+      return copy;
+    });
+  });
 
   // Map CTA events from ErrorToast into navigation
   useEffect(() => {
@@ -56,10 +235,31 @@ function AppInner() {
     return () => window.removeEventListener(ERROR_TOAST_CTA_EVENT, handler);
   }, [navigate, view]);
 
-  // Gate overlay — fires even when user is on a different view
+  // Gate overlay — fires even when user is on a different view.
+  // Uses 'replace' mode so the auto-navigation does not pollute
+  // the back stack (per AC-6 in the implementation spec). Also
+  // back-fills the feature into the cycling list if it is missing
+  // (e.g. the orchestrator resumed a feature the UI has not
+  // observed yet).
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
     const featureTitle = view.kind === 'detail' && view.featureId === feature_id ? view.featureTitle : 'Feature Pipeline';
-    navigate({ kind: 'detail', featureId: feature_id, featureTitle, gateStepExecutionId: step_execution_id });
+    setFeatures(prev => {
+      if (prev.some(f => f.id === feature_id)) return prev;
+      return [
+        ...prev,
+        {
+          id: feature_id,
+          project_id: currentProjectId ?? '',
+          title: featureTitle,
+          status: 'pending',
+          total_cost: 0,
+          tokens: 0,
+          duration: '',
+          created_at: Date.now(),
+        },
+      ];
+    });
+    navigate({ kind: 'detail', featureId: feature_id, featureTitle, gateStepExecutionId: step_execution_id }, 'replace');
   });
 
   // Initial data load
@@ -115,12 +315,45 @@ function AppInner() {
     onOpenDocs: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }),
     onOpenSettings: () => navigate({ kind: 'settings' }),
     onNewProject: () => navigate({ kind: 'new-project' }),
-    onNewFeature: () => uiDispatch({ type: 'OPEN_START_FEATURE' }),
+    onNewFeature: () => {
+      if (currentProjectId) {
+        uiDispatch({ type: 'OPEN_START_FEATURE' });
+      }
+    },
     onToggleSidebar: () => uiDispatch({ type: 'TOGGLE_SIDEBAR' }),
+    onCloseCurrentView: () => {
+      if (canGoBack) goBack();
+    },
+    onNextFeature: () => {
+      const next = pickNextFeature(features, currentFeatureId);
+      if (next) navigate({ kind: 'detail', featureId: next.id, featureTitle: next.title });
+    },
+    onPreviousFeature: () => {
+      const prev = pickPreviousFeature(features, currentFeatureId);
+      if (prev) navigate({ kind: 'detail', featureId: prev.id, featureTitle: prev.title });
+    },
     onEscape: () => {
-      if (commandPaletteOpen) uiDispatch({ type: 'SET_COMMAND_PALETTE', open: false });
-      else if (docsPanelOpen) uiDispatch({ type: 'SET_DOCS_PANEL', open: false });
-      else if (startFeatureOpen) uiDispatch({ type: 'CLOSE_START_FEATURE' });
+      const action = pickEscapeAction(ui, view);
+      switch (action.type) {
+        case 'close-command-palette':
+          uiDispatch({ type: 'SET_COMMAND_PALETTE', open: false });
+          break;
+        case 'close-docs-panel':
+          uiDispatch({ type: 'SET_DOCS_PANEL', open: false });
+          break;
+        case 'close-connect-modal':
+          uiDispatch({ type: 'SET_CONNECT_MODAL', open: false, editing: null });
+          break;
+        case 'close-start-feature':
+          uiDispatch({ type: 'CLOSE_START_FEATURE' });
+          break;
+        case 'close-gate-view':
+          navigate({ kind: 'detail', featureId: action.featureId, featureTitle: action.featureTitle });
+          break;
+        case 'navigate-back':
+          if (canGoBack) goBack();
+          break;
+      }
     },
     onNavigateProject: (index: number) => {
       const p = projects[index];
@@ -295,8 +528,32 @@ function AppInner() {
                     stepOverrides: params.stepOverrides ?? null,
                     stagedAttachments,
                   });
+                  // Pre-seed the cycling list with the new feature so
+                  // the user can immediately step through it with
+                  // Cmd+G. The orchestrator will also fire
+                  // `feature_status_changed`; the listener above is
+                  // idempotent so the entry is kept (status patched
+                  // in place) rather than duplicated.
+                  const title = feature.title;
+                  const id = feature.id;
+                  setFeatures(prev => {
+                    if (prev.some(f => f.id === id)) return prev;
+                    return [
+                      ...prev,
+                      {
+                        id,
+                        project_id: currentProjectId,
+                        title,
+                        status: feature.status,
+                        total_cost: feature.total_cost ?? 0,
+                        tokens: feature.tokens || 0,
+                        duration: feature.duration ?? '',
+                        created_at: feature.created_at ?? Date.now(),
+                      },
+                    ];
+                  });
                   uiDispatch({ type: 'CLOSE_START_FEATURE' });
-                  navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
+                  navigate({ kind: 'detail', featureId: id, featureTitle: title });
                 } catch (err) { reportError(err); }
               }}
             />
@@ -318,6 +575,15 @@ function App() {
   return (
     <ErrorBusProvider>
       <NavigationProvider>
+        {/*
+          MouseNavigationBridge installs the window-level XButton1 /
+          XButton2 listeners that drive `useNavigation().goBack()` /
+          `goForward()`. It must be mounted exactly once inside
+          NavigationProvider so the useNavigation() call inside the
+          hook resolves to a real provider. The bridge returns null
+          and contributes no UI of its own.
+        */}
+        <MouseNavigationBridge />
         <ProjectProvider>
           <UIStateProvider>
             <AppInner />
