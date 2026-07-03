@@ -35,6 +35,13 @@ impl ExecutionDriver {
             "failed",
             self.start_time,
         );
+        // Sweep every fingerprint-scoped session this feature touched.
+        // `handle_agent_step` only ever kills the *current* step's
+        // session on failure; an earlier successful step with a
+        // different permission-profile/model fingerprint (see
+        // `ExecutionDriver::agent_session_key`) would otherwise be
+        // left alive with nothing left to resume it.
+        self.registry.kill_all_for_feature(self.f_id.as_str()).await;
         self.capture_signal(
             Some(step_exec.id.0.clone()),
             crate::domain::memory::SignalKind::Failure,
@@ -50,6 +57,7 @@ impl ExecutionDriver {
             "cancelled",
             self.start_time,
         );
+        self.registry.kill_all_for_feature(self.f_id.as_str()).await;
     }
 
     pub(crate) fn evaluate_on_failure(

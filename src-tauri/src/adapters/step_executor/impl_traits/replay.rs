@@ -115,6 +115,8 @@ impl DagStepExecutor {
                         artifact_path: None,
                         artifact_paths: Some(Vec::new()),
                         error_message: Some(None),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     },
                 )?;
                 // Mirror the DB reset with a `StepProgress` event so
@@ -179,6 +181,8 @@ impl DagStepExecutor {
                         artifact_path: None,
                         artifact_paths: None,
                         error_message: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     },
                 );
             }

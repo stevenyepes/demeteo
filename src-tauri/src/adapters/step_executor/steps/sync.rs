@@ -54,6 +54,8 @@ impl ExecutionDriver {
                 artifact_path: None,
                 artifact_paths: None,
                 error_message: Some(None),
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             },
         );
         let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -106,6 +108,8 @@ impl ExecutionDriver {
                         artifact_path: None,
                         artifact_paths: None,
                         error_message: Some(None),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     },
                 );
                 let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -237,6 +241,8 @@ impl ExecutionDriver {
                         artifact_path: None,
                         artifact_paths: None,
                         error_message: Some(None),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     },
                 );
                 let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -274,6 +280,8 @@ impl ExecutionDriver {
                         artifact_path: None,
                         artifact_paths: None,
                         error_message: Some(Some(reason.clone())),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     },
                 );
                 let _ = self.notif.emit(&DomainEvent::StepProgress {

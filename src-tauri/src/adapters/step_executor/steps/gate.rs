@@ -143,6 +143,8 @@ fn reset_for_redirect(
                 artifact_path: Some(None),
                 artifact_paths: Some(Vec::new()),
                 error_message: Some(None),
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             },
         );
         let _ = notif.emit(&DomainEvent::StepProgress {
@@ -184,6 +186,8 @@ fn reset_for_redirect(
                 artifact_path: None,
                 artifact_paths: None,
                 error_message: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             },
         );
         let _ = notif.emit(&DomainEvent::StepProgress {
@@ -243,6 +247,8 @@ impl ExecutionDriver {
                 artifact_path: prev_artifact_path.as_ref().map(|p| Some(p.clone())),
                 artifact_paths: Some(prev_artifact_paths.clone()),
                 error_message: Some(None),
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             },
         );
         let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -366,6 +372,8 @@ impl ExecutionDriver {
                         artifact_path: ctx.prev_artifact_path.as_ref().map(|p| Some(p.clone())),
                         artifact_paths: Some(ctx.prev_artifact_paths.to_vec()),
                         error_message: Some(None),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     },
                 );
                 let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -850,6 +858,8 @@ mod redirect_reset_tests {
             artifact_paths: vec!["artifacts/spec.md".to_string()],
             error_message: None,
             iteration_count: 0,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             created_at: now,
             updated_at: now,
         }
@@ -871,6 +881,8 @@ mod redirect_reset_tests {
             artifact_paths: Vec::new(),
             error_message: None,
             iteration_count: 0,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             created_at: now,
             updated_at: now,
         }

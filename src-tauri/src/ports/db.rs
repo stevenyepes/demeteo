@@ -101,6 +101,10 @@ pub struct StepExecutionPatch {
     /// Bump the per-step retry counter. The driver uses this when
     /// following an `on_failure -> goto` edge. `None` = leave alone.
     pub iteration_count: Option<u32>,
+    /// Prompt-cache read/creation tokens from the step's last turn.
+    /// `None` → leave alone. `Some(None)` → NULL. `Some(Some(v))` → set.
+    pub cache_read_input_tokens: Option<Option<u64>>,
+    pub cache_creation_input_tokens: Option<Option<u64>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

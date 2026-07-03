@@ -187,6 +187,16 @@ pub(crate) struct ExecutionDriver {
     /// cache" chip while the step is running.
     pub last_cache_read: Option<u64>,
     pub last_cache_creation: Option<u64>,
+
+    /// The current step's agent-session registry key (see
+    /// `ExecutionDriver::agent_session_key`). Recomputed by
+    /// `refresh_watchdog_budget` at the top of each step so
+    /// `maybe_watchdog_reset` — which runs right after the step
+    /// finishes — targets the exact session `spawn_agent_session`
+    /// just used, rather than a bare feature id that no longer
+    /// identifies a single session once sessions are fingerprint
+    /// (permission profile + model) scoped.
+    pub current_session_key: String,
 }
 
 impl ExecutionDriver {
@@ -281,6 +291,40 @@ impl ExecutionDriver {
         parts.join("\n\n")
     }
 
+    /// Registry key for an agent step's session.
+    ///
+    /// Scoped to the feature **and** its effective permission profile
+    /// and model, not just the bare feature id. Anthropic's prompt
+    /// cache is invalidated wholesale (tools + system + messages) by
+    /// any change to the tool list, and Claude Code's
+    /// `--disallowedTools` removes bare tool names from the
+    /// wire-level tool definitions themselves (not just a permission
+    /// hook layer) — see `adapters/agent/claude_code/mod.rs`'s
+    /// `disallowed_tools_for`. Workflow steps deliberately vary their
+    /// tool set by role (a read-only critic vs. a shell-capable
+    /// implement step), so `--resume`ing one shared session across a
+    /// role change was paying full price to reprocess the *entire*
+    /// accumulated conversation on every such transition — strictly
+    /// worse than starting fresh, since a fresh session can still hit
+    /// Anthropic's cross-session prefix-hash cache for the same
+    /// role's byte-identical tools+system prefix (see `bare_mode`).
+    /// Steps whose profile+model match the previous step still share
+    /// one key (and its `--resume`d cache, e.g. `s-implement` →
+    /// `s-validate`); a change in either forces a fresh session
+    /// instead of paying that double tax.
+    pub(crate) fn agent_session_key(
+        f_id: &str,
+        step_conf: &StepConfig,
+        model: Option<&str>,
+    ) -> String {
+        let permissions = crate::domain::permission::resolve_profile(
+            step_conf.effective_capability(),
+            step_conf.allow_network,
+            step_conf.allow_shell,
+        );
+        format!("{f_id}::{permissions:?}::{}", model.unwrap_or("default"))
+    }
+
     /// Called after a step completes successfully. Reads the live
     /// agent session's cumulative token count, decides whether the
     /// watchdog threshold is breached, and on breach kills the
@@ -291,8 +335,14 @@ impl ExecutionDriver {
         // Pull the live cumulative tokens from the registry session
         // (if any). The driver doesn't hold the Arc<AgentSession>
         // directly, so we go through the registry — same instance
-        // the next step will reuse.
-        if let Ok(cumulative) = self.registry.cumulative_tokens(self.f_id.as_str()).await {
+        // the next step will reuse. Keyed by `current_session_key`
+        // (set in `refresh_watchdog_budget`), not the bare feature
+        // id — see `agent_session_key`.
+        if let Ok(cumulative) = self
+            .registry
+            .cumulative_tokens(&self.current_session_key)
+            .await
+        {
             self.session_cumulative_tokens = cumulative;
         }
 
@@ -303,7 +353,7 @@ impl ExecutionDriver {
         // Build the summary *before* killing so the artifact reads
         // still succeed (the session death doesn't touch disk).
         self.session_resume_summary = self.build_session_resume_summary();
-        self.registry.kill(self.f_id.as_str()).await;
+        self.registry.kill(&self.current_session_key).await;
         self.session_dirty = true;
         self.capture_signal(
             None,
@@ -318,13 +368,16 @@ impl ExecutionDriver {
         );
     }
 
-    /// Refresh the watchdog's model / budget from the next step's
-    /// `(agent_kind, model)` resolution. Called once per step in
-    /// `ExecutionDriver::run` so model overrides mid-run take
-    /// effect immediately.
-    pub(crate) fn refresh_watchdog_budget(&mut self, model: Option<&str>) {
+    /// Refresh the watchdog's model / budget / session key from the
+    /// next step's `(agent_kind, model)` resolution. Called once per
+    /// step in `ExecutionDriver::run` so model overrides mid-run take
+    /// effect immediately, and so `maybe_watchdog_reset` (which runs
+    /// *after* the step) targets the same session `spawn_agent_session`
+    /// just used.
+    pub(crate) fn refresh_watchdog_budget(&mut self, step_conf: &StepConfig, model: Option<&str>) {
         self.current_model = model.map(str::to_string);
         self.context_budget_tokens = model.and_then(|m| self.pricing.context_window(m));
+        self.current_session_key = Self::agent_session_key(&self.f_id_str, step_conf, model);
     }
 
     /// Capture a raw run observation for the memory agent's queue. Best-effort:
@@ -518,7 +571,7 @@ impl ExecutionDriver {
             // ceiling.
             {
                 let (_agent, model) = self.resolve_step_agent(&step_conf);
-                self.refresh_watchdog_budget(model.as_deref());
+                self.refresh_watchdog_budget(&step_conf, model.as_deref());
             }
 
             tracing::info!(
@@ -762,6 +815,16 @@ impl ExecutionDriver {
             target_status,
             self.start_time,
         );
+
+        // The pipeline is done. Agent-step sessions are killed inline
+        // on every non-success outcome (see `handle_agent_step`), but
+        // a session from the *last successful* step is deliberately
+        // left alive so a same-fingerprint retry could `--resume` it
+        // — nothing does that anymore once the run itself ends here,
+        // so sweep every session this feature ever touched (it may
+        // have visited more than one fingerprint) rather than leaking
+        // them for the life of the app.
+        self.registry.kill_all_for_feature(self.f_id.as_str()).await;
 
         // Drop any stale gate waiter left behind — the loop above
         // consumes them on success, but cancellation / failure paths

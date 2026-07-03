@@ -54,6 +54,22 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         "use_count",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    // Prompt-cache telemetry (V20). Previously computed by the
+    // UsageAccumulator and surfaced only on the live `StepProgress`
+    // notification — never persisted, so it vanished on the next
+    // reload. See adapters/step_executor/updates.rs.
+    add_column_if_missing(
+        conn,
+        "step_executions",
+        "cache_read_input_tokens",
+        "INTEGER",
+    )?;
+    add_column_if_missing(
+        conn,
+        "step_executions",
+        "cache_creation_input_tokens",
+        "INTEGER",
+    )?;
 
     Ok(())
 }
