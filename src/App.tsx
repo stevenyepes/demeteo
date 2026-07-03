@@ -185,6 +185,7 @@ function AppInner() {
                 onConnectProviders={() => { navigate({ kind: 'providers' }); uiDispatch({ type: 'SET_CONNECT_MODAL', open: true }); }}
                 onSyncWorktrees={() => navigate({ kind: 'new-project' })}
                 onDeployAgents={() => navigate({ kind: 'workflows' })}
+                onCreateFromZero={() => navigate({ kind: 'create-from-zero' })}
               />
             </>
           )}

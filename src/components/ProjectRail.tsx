@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
+import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles } from 'lucide-react';
 import { StatusBadge } from './ui/StatusBadge';
 import { useNavigation, useProject, useUIState } from '../context';
 
@@ -53,9 +53,16 @@ function ProjectRail() {
         <button
           onClick={() => setView('new-project')}
           className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
-          title="New Project"
+          title="Bootstrap Project"
         >
           <Plus className="w-5 h-5" />
+        </button>
+        <button
+          onClick={() => navigate({ kind: 'create-from-zero' })}
+          className="p-2 text-violet-300 hover:text-white rounded-lg hover:bg-violet-500/10 border border-transparent hover:border-violet-500/30 transition-colors shadow-[0_0_12px_rgba(139,92,246,0.2)]"
+          title="New from zero"
+        >
+          <Sparkles className="w-5 h-5" />
         </button>
         <div className="w-6 border-t border-white/10" />
         {projects.slice(0, 8).map(p => (
@@ -83,6 +90,13 @@ function ProjectRail() {
         <div className="flex gap-1">
           <button onClick={() => setView('new-project')} className="p-1 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors" title="Bootstrap Project">
             <Plus className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => navigate({ kind: 'create-from-zero' })}
+            className="p-1 text-violet-300 hover:text-white rounded hover:bg-violet-500/10 border border-transparent hover:border-violet-500/30 transition-colors shadow-[0_0_10px_rgba(139,92,246,0.2)]"
+            title="New from zero"
+          >
+            <Sparkles className="w-4 h-4" />
           </button>
           <button onClick={onToggleCollapse} className="p-1 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors" title="Collapse sidebar">
             <PanelLeftClose className="w-4 h-4" />

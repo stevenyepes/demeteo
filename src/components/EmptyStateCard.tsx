@@ -6,13 +6,15 @@ interface EmptyStateCardProps {
   onConnectProviders: () => void;
   onSyncWorktrees: () => void;
   onDeployAgents: () => void;
+  onCreateFromZero: () => void;
 }
 
-const EmptyStateCard: React.FC<EmptyStateCardProps> = ({ 
+const EmptyStateCard: React.FC<EmptyStateCardProps> = ({
   onSeedSample,
   onConnectProviders,
   onSyncWorktrees,
-  onDeployAgents
+  onDeployAgents,
+  onCreateFromZero,
 }) => {
   return (
     <div className="flex-1 flex items-center justify-center relative overflow-hidden">
@@ -34,27 +36,37 @@ const EmptyStateCard: React.FC<EmptyStateCardProps> = ({
           Demeteo is a modern, premium control center for orchestrating multi-agent workflows. Connect your repositories, construct custom pipelines, and let specialized AI fleets handle the coding.
         </p>
 
-        <div className="grid grid-cols-3 gap-6 mb-10 w-full">
-          <button 
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10 w-full">
+          <button
             onClick={onConnectProviders}
             className="bg-black/30 border border-white/5 hover:border-violet-500/30 hover:bg-violet-950/10 rounded-xl p-4 flex flex-col items-center transition-all duration-300 hover:scale-105 cursor-pointer group text-center"
           >
             <Box className="w-6 h-6 text-violet-400 mb-3 group-hover:scale-110 transition-transform" />
             <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Connect Providers</span>
           </button>
-          <button 
+          <button
             onClick={onSyncWorktrees}
             className="bg-black/30 border border-white/5 hover:border-cyan-500/30 hover:bg-cyan-950/10 rounded-xl p-4 flex flex-col items-center transition-all duration-300 hover:scale-105 cursor-pointer group text-center"
           >
             <Database className="w-6 h-6 text-cyan-400 mb-3 group-hover:scale-110 transition-transform" />
             <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Sync Worktrees</span>
           </button>
-          <button 
+          <button
             onClick={onDeployAgents}
             className="bg-black/30 border border-white/5 hover:border-emerald-500/30 hover:bg-emerald-950/10 rounded-xl p-4 flex flex-col items-center transition-all duration-300 hover:scale-105 cursor-pointer group text-center"
           >
             <Rocket className="w-6 h-6 text-emerald-400 mb-3 group-hover:scale-110 transition-transform" />
             <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Deploy Agents</span>
+          </button>
+          <button
+            data-testid="empty-state-create-from-zero"
+            onClick={onCreateFromZero}
+            className="relative bg-violet-950/30 border border-violet-500/40 hover:border-violet-400/70 hover:bg-violet-900/30 rounded-xl p-4 flex flex-col items-center transition-all duration-300 hover:scale-105 cursor-pointer group text-center overflow-hidden shadow-[0_0_25px_rgba(139,92,246,0.25)] hover:shadow-[0_0_35px_rgba(139,92,246,0.45)]"
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-violet-500/10 via-transparent to-cyan-500/10 pointer-events-none" />
+            <Sparkles className="relative w-6 h-6 text-violet-300 mb-3 group-hover:scale-110 transition-transform" />
+            <span className="relative text-sm font-outfit font-semibold text-violet-100 group-hover:text-white transition-colors">Create from Scratch</span>
+            <span className="relative text-[10px] font-mono text-violet-300/70 mt-1 uppercase tracking-wider">Primary</span>
           </button>
         </div>
 
