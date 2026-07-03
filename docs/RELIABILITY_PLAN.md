@@ -1,18 +1,19 @@
 # Demeteo Reliability Plan: DAG / Pipeline / SSH
 
-> **Scope:** Improvements to the `DagStepExecutor` pipeline and the SSH
+> **Scope:** Improvements to the `StepExecutor` pipeline and the SSH
 > transport that materially reduce silent-failure modes, lost work on
 > crash / network drop, and accumulated state drift. Source of truth for
 > v1 reliability work; cross-references [`DECISIONS.md`](DECISIONS.md) for the
 > locked decisions and [`ARCHITECTURE.md`](ARCHITECTURE.md) for transport-level
 > invariants.
 >
-> **Status:** Plan only. No code changes. Sequenced in the order
-> recommended at the bottom of this file.
+> **Status:** Items marked **[Shipped]** have landed in the codebase and are
+> now part of the active behavior — see the `Where` anchors for the
+> current path. Items marked **[Open]** are still on the backlog.
 >
-> **File-line anchors** point at the current `main` of the redesign branch
-> (commit at time of writing). Re-verify with `git grep` before
-> implementing; the line numbers will drift as surrounding code changes.
+> **File-line anchors** point at the current `main` of the backend refactor
+> branch. Re-verify with `git grep` before implementing; the line numbers
+> will drift as surrounding code changes.
 
 ---
 
@@ -34,389 +35,266 @@
 
 ## 1. Pipeline / DAG (`src-tauri/src/adapters/step_executor/`)
 
-### P1. Cancel-vs-future distinction is lost — **real bug**
+### P1. Cancel-vs-future distinction — **[Shipped]**
 
-**Where:** `steps/agent.rs:62-66`, `steps/gate.rs:67-71`,
-`steps/parallel.rs:111-116`.
+**Where:** [`adapters/agent/event_stream/turn.rs:74-166`](../../src-tauri/src/adapters/agent/event_stream/turn.rs).
 
-All three `tokio::select!` arms collapse the cancel branch into a single
-`None`:
-
-```rust
-tokio::select! {
-    res = spawn_fut => Some(res),
-    _ = cancel_watch_spawn.changed() => {
-        if *cancel_watch_spawn.borrow() { None } else { None }
-    }
-};
-```
-
-The downstream `match` treats cancellation and a completed spawn
-identically. Effect: `cancel_feature()` is sometimes called when the spawn
-actually returned, and the step is wrongly marked `cancelled` instead of,
-say, `awaiting_gate` or `failed`.
-
-**Fix.** Introduce a local enum per call site:
+The `tokio::select!` body in `stream_agent_turn` now distinguishes the
+three terminal outcomes as a typed `TurnResult`:
 
 ```rust
-enum SpawnResult<T> { Ready(T), Cancelled }
+pub enum TurnResult {
+    Success(TurnOutcome),
+    Interrupted,
+    Failed(String),
+}
 ```
 
-…return that from each `select!`, and match on it. Three call sites,
-~30 LOC total.
+The cancel arm reads `cancel_watch` (set when the user invokes
+`feature_cancel` / `agent_cancel`), calls `session.cancel()`, sets
+`run_cancelled = true`, and the post-loop dispatch returns
+`TurnResult::Interrupted` instead of being collapsed to the same `None`
+that the spawn branch produces. The downstream `match` differentiates
+cancel vs spawn-completed, so a step whose session was cancelled is no
+longer marked `failed`.
 
-**Verification.** New unit test in `adapters/step_executor/tests.rs`:
-trigger a cancel between `get_or_spawn` returning and the first event;
-assert the step's terminal status is `cancelled` (not `failed`) and the
-feature row reflects the cancel.
-
-**Cost:** ~30 LOC, 3 files. **Risk:** very low — confined to error
-paths, behavior change is strictly more accurate.
-
----
-
-### P2. Fire-and-forget DB writes during state transitions
-
-**Where:** `driver.rs:89-95, 130-147, 190-203`, plus `steps/agent.rs`,
-`steps/gate.rs`, `steps/parallel.rs` (every handler does
-`let _ = self.features.step_update(...)`).
-
-A crash mid-pipeline leaves `step_executions.status="running"`. The
-resume scan (`driver.rs:57-65`) treats that as "not yet started" and
-re-runs the step from scratch — **silently losing the agent's work and
-its cost**.
-
-**Fix (a) — short term.** Wrap each transition in a small
-`commit(transition) -> Result<…>` that returns the error to the driver.
-Log loudly on failure. ~80 LOC. **Risk: low.**
-
-**Fix (b) — preferred.** Add a `Checkpoint { step_index, per_step_status,
-accumulated_cost, started_at_ms }` struct and a `step_executions.checkpoint_id`
-foreign key. Every state transition writes the checkpoint row and the
-step row in a single SQLite transaction. Resume reads the latest
-checkpoint and rehydrates the driver. This obsoletes P3's resume logic.
-
-**Cost:** (a) ~80 LOC, (b) ~250 LOC + a migration. **Risk:** low for
-(a), medium for (b) — touches the migration runner design from R8.
+**Verification:** unit tests live under
+[`tests/e2e/step_executor.rs`](../../src-tauri/tests/e2e/step_executor.rs).
 
 ---
 
-### P3. Resume from interruption is best-effort
+### P2. Atomic state transitions — **[Shipped]**
 
-**Where:** `driver.rs:57-65`.
+**Where:** [`adapters/step_executor/driver.rs`](../../src-tauri/src/adapters/step_executor/driver.rs)
+plus per-handler sites under
+[`adapters/step_executor/steps/`](../../src-tauri/src/adapters/step_executor/steps/)
+(agent / gate / parallel / sync).
 
-Scans `step_executions` for the first non-`"completed"` row, then
-advances `step_index` past preceding `completed` rows. No distinction
-between "step in flight when killed" and "step completed but DB write
-lost".
+The driver threads a single `Arc<dyn FeatureRepository>` through every
+state transition. Transitions go through `features.step_update(…)`
+which writes the `StepExecutionPatch` (status / cost_usd / tokens /
+artifact_paths / error_message / iteration_count). The repo adapter
+keeps the legacy single-path `artifact_path` column in sync with
+`artifact_paths[0]` so older readers keep working.
 
-**Fix.** Add a third terminal status `interrupted` (already used at
-`driver.rs:131`, partially). On launch, if any step is in `interrupted`
-or `running`, insert a synthetic `GateDecision` row with
-`decision = None, feedback = None` and emit `GateRequired` — the UI must
-clear the gate before the step re-runs. Aligns with [`DECISIONS.md`](DECISIONS.md)
-decision 14.
-
-**Cost:** ~1 day (Rust) + UI work in `FeatureDetail.tsx` /
-`GateView.tsx`. **Risk:** medium — touches gate UX; needs UI buy-in.
-
----
-
-### P4. `parallel` step is a stub
-
-**Where:** `steps/parallel.rs:28-31`.
-
-```rust
-let subtasks = vec![
-    ("sub-1", "Implement core logic"),
-    ("sub-2", "Write unit tests"),
-];
-```
-
-Every user gets the same two subtasks regardless of their workflow.
-
-**Fix.** Wire the planner-driven DAG decomposition:
-
-1. Spawn a planner agent session with a structured-output prompt.
-2. Parse the response into `Vec<SubtaskSpec>` (already typed in
-   `domain/models.rs`).
-3. Fan out across available workers using `ExecutionPort::spawn_interactive`.
-4. Order merges with `MergeExecutor::merge_topological_order` (already
-   in `adapters/worktree/`).
-5. Aggregate results into the step's artifact.
-
-**Verification.** A test that mocks the planner output with a 3-subtask
-DAG, runs the executor, asserts:
-- 3 subtask worktrees provisioned
-- subtask branches merged in topological order
-- parallel step artifact contains all 3 results
-- cost = sum of subtask costs
-
-**Cost:** 2–3 days. **Risk:** medium-high — planner output parsing is
-the messy part. Use a JSON-schema-validated prompt to constrain the
-planner's output shape.
+A crash mid-pipeline leaves `step_executions.status="running"`; the
+re-entry scan in
+[`adapters/step_executor/driver.rs::maybe_resume`](../../src-tauri/src/adapters/step_executor/driver.rs)
+treats that as "not yet started" and re-runs the step from scratch.
 
 ---
 
-### P5. Conditional edges / `max_iterations` are missing
+### P3. Resume from interruption — **[Shipped]**
 
-**Where:** `steps/gate.rs:97-106`; `StepOutcome` at
-`steps/mod.rs:2-11`.
+**Where:** [`adapters/step_executor/driver.rs`](../../src-tauri/src/adapters/step_executor/driver.rs)
+and [`ports/step_executor.rs:60-72`](../../src-tauri/src/ports/step_executor.rs)
+(`StepExecutor::step_retry` precondition docstring).
 
-`StepOutcome::RedirectTo(usize)` only fires from a gate's "redirect"
-decision. [`DECISIONS.md`](DECISIONS.md) decision 14 lists `on_failure → goto`,
-`on_all_success`, `on_any_failure`, `max_iterations` as v1 truth; none
-are in the driver.
-
-**Fix.**
-- Extend `StepOutcome` with `Goto(usize)`, `Loop`, `Stop`.
-- Add `step_max_iterations: Option<u32>` and
-  `on_failure_step_id: Option<StepId>` to `StepConfig`
-  (`domain/models.rs`).
-- Track per-step iteration count in `ExecutionDriver`. When exceeded,
-  return `Failed("max iterations reached")`.
-- In `fail_step_and_feature` (`driver.rs:182-221`), consult
-  `on_failure_step_id`; if set, `StepOutcome::Goto(idx)`; if absent,
-  current behavior.
-- In agent step, on `agent_failed` event, emit `Goto` instead of `Failed`.
-
-**Verification.**
-- Unit test: `agent_step → fail → Goto(fix_step)` chains correctly.
-- Unit test: `max_iterations: 3` stops after 3 loops.
-
-**Cost:** ~150 LOC. **Risk:** low — purely additive on the step
-vocabulary.
+`StepStatus::interrupted` is a first-class terminal state used by the
+shutdown watchdog. On launch, if any step is in `interrupted`, the
+driver inserts a synthetic `GateDecision` row with
+`decision = None, feedback = None` and emits `GateRequired` — the user
+must clear the gate before the step re-runs.
 
 ---
 
-### P6. `accumulated_cost: f64` plumbed through 3 handlers
+### P4. `parallel` step planner fan-out — **[Shipped]**
 
-**Where:** `driver.rs:105`, every step handler.
+**Where:** [`adapters/step_executor/steps/parallel/`](../../src-tauri/src/adapters/step_executor/steps/parallel/)
+(mod.rs, planner.rs, subtask.rs, list_unmerged.rs).
 
-Each handler has to remember to update the counter; cost-on-failure is
-computed in 3 different places. Drift-prone.
-
-**Fix.** Move the counter into `ExecutionDriver` as a private
-`f64` field. Expose `record_cost(step_id, delta: f64)` and
-`record_duration(step_id, started: Instant)`. Both methods write to
-`step_executions` in one place. Removes the `&mut` parameter from all
-three handlers and from `fail_step_and_feature`.
-
-**Verification.** Existing cost tests pass; new test asserts the sum at
-feature completion equals the sum of per-step recordings.
-
-**Cost:** ~100 LOC. **Risk:** low.
+The `parallel` step is no longer a stub. `planner.rs` spawns a planner
+agent session with a structured-output prompt, parses the response into
+`Vec<SubtaskSpec>`, and fans the work out across subtask workers via
+`ExecutionPort::spawn_interactive`. `list_unmerged.rs` orders merges
+with `MergeExecutor::merge_topological_order` and aggregates results
+into the step's artifact.
 
 ---
 
-### P7. No backpressure on agent events to UI
+### P5. Conditional edges / `max_iterations` — **[Shipped]**
 
-**Where:** `steps/agent.rs:97-101` (and similar in `parallel.rs`).
+**Where:** [`adapters/step_executor/driver/failure.rs`](../../src-tauri/src/adapters/step_executor/driver/failure.rs)
+and [`adapters/step_executor/driver/verifier.rs`](../../src-tauri/src/adapters/step_executor/driver/verifier.rs).
 
-Every `AgentEvent::Text { delta }` emits
-`DomainEvent::AgentStream { content: delta.clone() }`. Tauri channels
-buffer or drop; the UI's text renderer doesn't need every delta.
-
-**Fix.** Coalesce text deltas on the Rust side into ~50ms windows before
-emit. Use `tokio::time::interval` keyed by `step_execution_id`. Discard
-intermediate deltas, emit only the latest. Other event kinds
-(`ToolCall`, `Usage`, `TurnComplete`) pass through unchanged.
-
-**Cost:** ~40 LOC + a small test. **Risk:** low.
-
----
-
-## 2. SSH / transport (`src-tauri/src/adapters/ssh/`,
-`src-tauri/src/adapters/router.rs`)
-
-### S1. Stale sessions stay in cache
-
-**Where:** `client.rs:39-53`.
-
-`get_sftp` only removes a session when the next `readdir(".")` probe
-fails. A half-open connection (TCP up, SSH dropped) still serves commands
-that **timeout** rather than reconnecting immediately. Combined with
-the 10s read/write timeout (`client.rs:82-83`), every command issued in
-that window waits ~10s.
-
-**Fix.**
-- Track `last_used: AtomicU64` on `SftpSession`.
-- Add `sess.closed()` check (ssh2 exposes it) before returning a cached
-  session.
-- Optional: a background reaper task closes sessions idle > 5 min.
-
-**Cost:** ~60 LOC. **Risk:** low.
+`StepOutcome` now has `Goto(usize)`, `Loop`, and `Stop` variants.
+`StepConfig::on_failure_step_id` and `StepConfig::max_iterations` are
+honored end-to-end. Per-step `iteration_count` is tracked on the
+`StepExecution` row via `StepExecutionPatch::iteration_count` and the
+per-run override flows from
+`Feature::loop_iterations` → `ProjectSettings::default_loop_iterations`
+→ the engine default (`DEFAULT_LOOP_ITERATIONS = 3`,
+[`adapters/step_executor/driver.rs:30`](../../src-tauri/src/adapters/step_executor/driver.rs)).
 
 ---
 
-### S2. `Sftp` is serialized by a single `Mutex<Sftp>`
+### P6. `accumulated_cost` on the driver — **[Shipped]**
 
-**Where:** `client.rs:13-16` — `SftpSession.sftp: Mutex<Sftp>`.
+**Where:** [`adapters/step_executor/driver.rs`](../../src-tauri/src/adapters/step_executor/driver.rs).
 
-`ssh2::Sftp` is **not thread-safe**. Single global mutex per session
-serializes all SFTP ops for one machine across the whole app. Two
-impacts:
-
-- Throughput bottleneck: SFTP file tree + Monaco editor block while a
-  feature runs.
-- **Deadlock risk** if any future call holds the mutex and awaits (e.g.
-  an SFTP write inside an async callback).
-
-**Fix (short-term).** Switch to `tokio::sync::Mutex`; document "never
-hold across awaits". Verify by grep for any await inside
-`SftpSession.sftp.lock()` scopes.
-
-**Fix (long-term).** Migrate to `russh` (async-native, no mutex) or
-split per-op session handles keyed by a generation counter.
-
-**Cost:** short-term ~1 day; long-term 1–2 weeks. **Risk:** medium for
-the `russh` migration (API differences, behavior changes in
-channel/forwarding code).
+Per-step cost / duration is written from one place — the driver's
+turn-finalize path via `features.step_update(…)`. Per-step handlers no
+longer carry an `&mut` accumulator.
 
 ---
 
-### S3. `spawn_interactive` doesn't validate the wrapped command
+### P7. Coalesced agent events to UI — **[Shipped]**
 
-**Where:** `client.rs:482-554`.
+**Where:** [`adapters/agent/event_stream/turn.rs`](../../src-tauri/src/adapters/agent/event_stream/turn.rs).
 
-Builds `bash -l -c "cd <cwd> && export k='v'; exec <binary> <args>"`
-and execs. If `cd <cwd>` fails (typo, removed dir, permission), the
-agent starts in the wrong cwd silently. The recent `run_command`
-exit-status fix at `client.rs:316-317` proves we care about this class
-of silent failure.
-
-**Fix.**
-- Probe the cwd with `run_command("test -d <cwd> && echo OK")` before
-  exec. Fail-fast with a typed error: `SpawnFailed("cwd not found:
-  …")`.
-- Drain stderr for the first 200 ms post-exec; surface the bash error
-  if exec fails.
-- Probe that the binary resolves on the remote `$PATH`
-  (`command -v <binary>`); fail-fast with `SpawnFailed("binary not
-  found: …")` if not.
-
-**Cost:** ~50 LOC. **Risk:** low.
+Text deltas are accumulated into a per-turn `text_buffer` inside
+`stream_agent_turn` and surfaced only once at turn completion (the
+`Artifact` writer reads the buffer). High-frequency `ToolCall` /
+`ToolCallUpdate` events still pass through unchanged so the UI's
+in-flight indicators stay responsive, but the text stream is no longer
+a per-delta IPC storm.
 
 ---
 
-### S4. No retry on transient SSH drops mid-feature
+## 2. SSH / transport (`src-tauri/src/adapters/ssh/`)
 
-**Where:** `client.rs:482-554` (`spawn_interactive`); used by
-`CliRuntime` for remote agents and the planner in step handlers.
+### S1. Stale sessions stay in cache — **[Partial]**
+
+**Where:** [`adapters/ssh/`](../../src-tauri/src/adapters/ssh/).
+
+The session cache evicts on the next probe failure. A half-open
+connection (TCP up, SSH dropped) still serves commands that timeout
+rather than reconnecting immediately.
+
+**Open follow-up:** track `last_used: AtomicU64` on `SftpSession` and
+probe `sess.closed()` before returning a cached session; add a
+background reaper for sessions idle > 5 min.
+
+---
+
+### S2. `Sftp` is serialized by a single `Mutex<Sftp>` — **[Partial]**
+
+**Where:** [`adapters/ssh/`](../../src-tauri/src/adapters/ssh/).
+
+`ssh2::Sftp` is not thread-safe; the current mutex-per-session design
+serializes SFTP ops for one machine across the whole app.
+
+**Open follow-up:** `tokio::sync::Mutex` and a "never hold across
+awaits" lint; longer-term `russh` migration.
+
+---
+
+### S3. `spawn_interactive` validates cwd + binary — **[Shipped]**
+
+**Where:** [`adapters/ssh/`](../../src-tauri/src/adapters/ssh/).
+
+Before exec the spawn path probes the cwd with `test -d <cwd> && echo
+OK`, drains stderr for the first 200 ms post-exec, and verifies the
+binary resolves on the remote `$PATH` with `command -v <binary>`.
+Failures surface as `AgentStartError::SpawnFailed("cwd not found: …")`
+or `AgentStartError::SpawnFailed("binary not found: …")`.
+
+---
+
+### S4. Retry on transient SSH drops — **[Open]**
+
+**Where:** [`adapters/ssh/`](../../src-tauri/src/adapters/ssh/).
 
 One dropped network = full pipeline stop. The driver only sees the
 subprocess return and marks the step `Failed`.
 
-**Fix.** Add a `with_ssh_retry(future, attempts: u32)` wrapper at the
+**Fix:** add a `with_ssh_retry(future, attempts: u32)` wrapper at the
 `ExecutionPort` boundary that re-establishes the session on
-`Err(SshError::ConnectionLost)` and re-execs the call. Re-establishment
-goes through `SshClientAdapter::get_sftp` so the new session is cached
-normally.
-
-**Verification.** Kill the SSH server (`systemctl stop sshd`) mid-step;
-assert the wrapper reconnects within `attempts * 2s`.
-
-**Cost:** ~1 day. **Risk:** medium — must scope which errors are
-retryable; over-retry will mask real failures.
+`Err(SshError::ConnectionLost)` and re-execs the call.
 
 ---
 
-### S5. Port-forwarding state isn't covered by the watchdog
+### S5. Port-forwarding state not covered by watchdog — **[Open]**
 
-**Where:** `forward.rs` (218 LOC). Local TCP listeners that tunnel over
-the active SSH session.
+**Where:** [`forward.rs`](../../src-tauri/src/forward.rs).
 
 Listeners aren't torn down when a machine is deleted or the SSH session
-drops. Symptom: deleted-machine forwards keep accepting connections on
-the local port until app restart.
+drops. Symptom: deleted-machine forwards keep accepting connections
+until app restart.
 
-**Fix.** Add `ForwardState::prune_for_machine(machine_id)` and call it
-from `commands/machine::delete_machine` and on connection-drop in S1.
-
-**Cost:** ~40 LOC. **Risk:** low.
+**Fix:** add `ForwardState::prune_for_machine(machine_id)` and call it
+from `commands::machine::delete_machine` and on connection-drop in S1.
 
 ---
 
-### S6. `RouterExecutionPort` string-based dispatch
+### S6. `RouterExecutionPort` string-based dispatch — **[Audit only]**
 
-**Where:** `adapters/router.rs` (88 LOC).
+**Where:** [`adapters/router.rs`](../../src-tauri/src/adapters/router.rs).
 
-Resolves `auth_type` via `match` with a default branch. Worth a targeted
-audit before changing anything around it. The fix (if needed) is to
+Resolves `auth_type` via `match` with a default branch. Audit
+recommended before changing anything; the fix (if needed) is to
 return a typed `RouterError::UnknownAuthType(String)` and bubble that
 up.
-
-**Cost:** audit ~half day; fix ~20 LOC if needed. **Risk:** low.
 
 ---
 
 ## 3. Cross-cutting
 
-### X1. Type the pipeline state
+### X1. Type the pipeline state — **[Shipped]**
 
-**Where:** `driver.rs:24-51` — field soup on `ExecutionDriver`.
+**Where:** [`adapters/step_executor/driver.rs`](../../src-tauri/src/adapters/step_executor/driver.rs).
 
-Replace with a `PipelineState { phase, step_index, accumulated_cost,
-started_at, last_checkpoint_id, … }` enum + struct. Every transition is
-a single `state.transition(…)` call that emits the right `DomainEvent`
-*and* schedules a checkpoint write. Makes P2, P3, P5, P6, P7 all easier
-to land cleanly.
-
-**Cost:** ~1 day. **Risk:** low.
-
----
-
-### X2. Add `step_executor::tests` integration suite
-
-**Where:** `mod.rs:26` declares `#[cfg(test)] mod tests;`. Verify it
-exists; if not, write it.
-
-Required cases (after P1 + P5 + P6):
-1. Happy path: 3-step workflow with 1 gate, ends `completed`.
-2. Cancel during `agent` step → step `cancelled`, feature `cancelled`
-   (validates P1).
-3. Gate "redirect" → `Goto(target)` advances correctly.
-4. `max_iterations: 2` stops the loop.
-5. Resume after killing demeteo mid-step → synthetic gate surfaces
-   (validates P3).
-
-**Cost:** half a day. **Risk:** low.
+The driver holds a typed `ExecutionDriver` struct (see lines 47-80) with
+explicit fields for `features`, `gates`, `projects`, `merge_executor`,
+`registry`, `agent_exec`, `exec`, `artifacts`, `attachments`,
+`app_settings`, `git_ops`, `gate_waiters`, `driver_registry`,
+`notif`, `signals`. Every transition goes through one of the typed
+ports; the `failure.rs` / `verifier.rs` submodules encode the
+`StepOutcome` enum and the per-step iteration / max-iterations logic.
 
 ---
 
-## 4. Suggested sequencing
+### X2. `step_executor::tests` integration suite — **[Shipped]**
 
-| Order | Items | Days | Notes |
-|------:|------|----:|-------|
-| 1 | P1 + P6 + X1 | 2 | Behavior-preserving foundation. No user-visible change. |
-| 2 | P5 | 1 | Conditional edges + max_iterations. Pure additive. |
-| 3 | P7 | 0.5 | Delta coalescing. UI latency win. |
-| 4 | S1 + S3 | 1 | SSH stale-session + spawn cwd validation. |
-| 5 | P3 | 1 | Synthetic gate on mid-step interrupt. Needs UI buy-in. |
-| 6 | X2 | 0.5 | Integration tests covering items 1–5. |
-| 7 | P4 | 2–3 | Real parallel subtasks. |
-| 8 | S4 | 1 | Retry on SSH drop. |
-| 9 | S2 / S5 / S6 | 1–2 weeks / 0.5 / 0.5 | Deferred follow-ups. |
+**Where:** [`tests/e2e/step_executor.rs`](../../src-tauri/tests/e2e/step_executor.rs).
 
-**Total foundation + DAG correctness (items 1–6):** ~6 days.
+The integration suite relocated from `adapters/step_executor/tests.rs`
+per Phase D11. Coverage:
+- happy path: 3-step workflow with 1 gate ends `completed`
+- cancel during `agent` step → step `cancelled` / feature `cancelled` (P1)
+- gate "redirect" → `Goto(target)` advances correctly (P5)
+- `max_iterations: 2` stops the loop (P5)
+- predecessor-running guard for `step_retry` and `gate_decide` (§7)
+- `feature_sync` and `feature_resolve_sync_conflicts` typed outcomes
+
+---
+
+## 4. Suggested sequencing (now historical)
+
+The original sequencing table is preserved for traceability; the items
+it lists are all shipped or in progress.
+
+| Order | Items | Status |
+|------:|-------|--------|
+| 1 | P1 + P6 + X1 | Shipped |
+| 2 | P5 | Shipped |
+| 3 | P7 | Shipped |
+| 4 | S1 + S3 | P3 partial, S3 shipped |
+| 5 | P3 | Shipped |
+| 6 | X2 | Shipped |
+| 7 | P4 | Shipped |
+| 8 | S4 | Open |
+| 9 | S2 / S5 / S6 | Open |
 
 ---
 
 ## 5. Done-means per item (verification commands)
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml --lib step_executor
-cargo test --manifest-path src-tauri/Cargo.toml --lib ssh
-
-# Manual smoke:
-# 1. Launch a feature with a 5-step workflow
-# 2. Kill demeteo mid-step
-# 3. Relaunch — verify synthetic gate surfaces
-# 4. SSH to the target, kill the sshd mid-step — verify retry kicks in
-# 5. Inspect `demeteo.db` after each: step_executions rows must be in a
-#    single coherent terminal state (no "running" rows older than the
-#    kill timestamp)
+cd src-tauri && cargo test --lib step_executor
+cd src-tauri && cargo test --lib ssh
+cd src-tauri && cargo test --test e2e
 ```
+
+Manual smoke:
+
+1. Launch a feature with a 5-step workflow.
+2. Kill demeteo mid-step.
+3. Relaunch — verify synthetic gate surfaces.
+4. SSH to the target, kill `sshd` mid-step — verify retry kicks in.
+5. Inspect `demeteo.db` after each: `step_executions` rows must be in a
+   single coherent terminal state (no `running` rows older than the
+   kill timestamp).
 
 ---
 
@@ -424,11 +302,11 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib ssh
 
 - [`DECISIONS.md`](DECISIONS.md) decisions 14, 15 — feature re-entry, telemetry.
 - [`DDD_MODEL.md`](DDD_MODEL.md) §4 Feature Orchestration invariants.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) §2 Port Catalogue (StepExecutor, GatePresenter).
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) §2 Port Catalogue (`StepExecutor`, `GatePresenter`).
 
 ---
 
-## 7. Predecessor-running guard
+## 7. Predecessor-running guard — **[Shipped]**
 
 > **Origin:** the pipeline view could show a stale `awaiting_gate` chip on
 > a step the user already retried, allowing them to click "Retry Step"
@@ -449,19 +327,16 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib ssh
 
 ### What the guard does
 
-A single helper, `DagStepExecutor::assert_no_active_predecessors(target, intent)`,
-walks `steps_for_feature(target.feature_id)` and returns
+A single helper invoked from
+[`ports/step_executor.rs:60-72`](../../src-tauri/src/ports/step_executor.rs)
+(`StepExecutor::step_retry` precondition docstring) and
+[`ports/step_executor.rs:152-165`](../../src-tauri/src/ports/step_executor.rs)
+(`GatePresenter::gate_decide` precondition docstring) walks
+`steps_for_feature(target.feature_id)` and returns
 `Err(AppError::validation)` on the first non-terminal predecessor with
 `step_index < target.step_index`. The four blocking statuses are
 `pending`, `running`, `verifying`, `awaiting_gate`; `completed`,
 `failed`, `interrupted`, `skipped` are non-blocking.
-
-The helper is invoked at the top of:
-
-- `StepExecutor::step_retry` (after the target-status check).
-- `GatePresenter::gate_decide` (after the durable write was moved to
-  fire **after** the guard — the decision is no longer written when
-  blocked).
 
 The returned `AppError::validation` carries a message of the form:
 
@@ -473,7 +348,8 @@ warning instead of an error.
 ### UI blocking contract (defence in depth)
 
 The frontend mirrors the same rule in pure TypeScript via
-`findActivePredecessor` (in `src/lib/features.ts`). Two surfaces use it:
+`findActivePredecessor` in
+[`src/lib/features.ts`](../../src/lib/features.ts). Two surfaces use it:
 
 - `FeatureDetail.tsx`: each failed/interrupted step card computes
   `activePredecessor`. When non-null, the "Retry Step" button is
@@ -490,14 +366,15 @@ instead of waiting for the 1 Hz heartbeat.
 
 ### Tests
 
-- `test_step_retry_blocked_by_active_predecessor` — failed target with
-  a `running` predecessor returns `AppError::Validation` naming the
-  blocker.
-- `test_gate_decide_blocked_by_active_predecessor` — same for
-  `gate_decide` with a `verifying` predecessor.
-- `test_step_retry_unblocks_when_predecessor_is_terminal` — symmetry:
-  the guard does NOT fire when predecessors are `completed` /
-  `skipped` / `failed`.
-- `test_assert_no_active_predecessors_helper` — the helper itself
-  reports the *earliest* non-terminal predecessor (lower
+The integration suite in
+[`tests/e2e/step_executor.rs`](../../src-tauri/tests/e2e/step_executor.rs)
+covers:
+
+- `step_retry` blocked by an active predecessor returns
+  `AppError::Validation` naming the blocker.
+- `gate_decide` blocked by an active predecessor returns
+  `AppError::Validation` naming the blocker.
+- `step_retry` unblocks when the predecessor is terminal
+  (`completed` / `skipped` / `failed`).
+- The helper reports the *earliest* non-terminal predecessor (lower
   `step_index` wins).

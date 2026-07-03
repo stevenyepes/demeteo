@@ -6,122 +6,155 @@
 > referenced here. This doc covers the hexagonal layout, the port surface,
 > the file layout, the Tauri command surface, and the frontend state model.
 
-## 1. The Hexagon (unchanged pattern, new ports)
+## 1. The Hexagon
 
 ```
 +-----------------+     +-----------------------------------------------+     +------------------+
 |  DRIVERS (UI)   |     |                  PORTS                        |     | DRIVEN ADAPTERS  |
 |                 |     |                                               |     |                  |
-|  React (Tauri   | ==> |  WorkflowRepository                           | <== |  SqliteAdapter   |
-|  webview)       |     |  ProjectRepository                            |     |  SshClientAdapt. |
-|  - ProjectRail  |     |  ProviderInstanceRepository                   |     |  LocalFsAdapter  |
-|  - ProjectHome  |     |  FeatureOrchestrator / StepExecutor           |     |  CliRuntime       |
-|  - FeatureDetail|     |  WorktreeManager / MergeExecutor / MrPublisher|     |  ArtifactStore   |
-|  - WorkflowEdit |     |  AgentRuntime / PermissionPolicyPort          |     |  PricingTable    |
-|  - Gates        |     |  UiStateRepository / DiskUsageCalculator      |     |                  |
+|  React (Tauri   | ==> |  DatabasePort (split into 8 sub-traits)      | <== |  SqliteAdapter   |
+|  webview)       |     |  StepExecutor / GatePresenter                 |     |  SshClientAdapt. |
+|  - ProjectRail  |     |  WorktreeOps / Merge / Conflict / MrPublisher |     |  LocalFsAdapter  |
+|  - ProjectHome  |     |  AgentRuntime / AgentExecutionPort            |     |  CliRuntime      |
+|  - FeatureDetail|     |  ExecutionPort / NotificationPort             |     |  ArtifactStore   |
+|  - GateView     |     |  PricingTable / MemoryLlmPort                  |     |  FsAttachment    |
+|  - WorkflowEdit |     |  ProviderHttpPort / ArtifactStore              |     |                  |
 |  - Settings     |     |                                               |     |                  |
 +-----------------+     +-----------------------^-----------------------+
-                                                 |
-                                                 v
-                   +-------------------------------------------------------+
-                   |                       CORE DOMAIN                     |
-                   |  - StepExecutor (small DAG engine)                    |
-                   |  - FeatureOrchestrator (lifecycle + checkpoints)      |
-                   |  - WorktreeStrategy + merge ordering                  |
-                   |  - ConflictPolicy cascade                             |
-                   |  - Pricing (model → cost)                             |
-                   +-------------------------------------------------------+
+                                                  |
+                                                  v
+                    +-------------------------------------------------------+
+                    |                       CORE DOMAIN                     |
+                    |  - StepExecutor driver (adapters/step_executor/driver)|
+                    |  - AgentSession lifecycle (one-shot CLI + JSON-lines) |
+                    |  - Worktree ops (clone / branch / merge / sync)       |
+                    |  - ConflictPolicy cascade                             |
+                    |  - StepCapability -> PermissionProfile + WriteScope   |
+                    |  - Pricing (model -> cost)                            |
+                    +-------------------------------------------------------+
 ```
 
-The hexagonal pattern is preserved exactly. The big change is in the *driver* side: the React frontend is no longer a chat-style supervisor with per-turn event streams. It's a small set of focused views (ProjectRail, ProjectHome, FeatureDetail, GateView, WorkflowEditor, Settings) that consume step transitions, not agent transcripts.
+The hexagonal pattern is preserved. The driver side is a small set of
+focused React views (`ProjectRail`, `ProjectHome`, `FeatureDetail`,
+`GateView`, `WorkflowEditor`, `Settings`) that consume step transitions,
+not agent transcripts. The port side is split into narrow,
+bounded-context-aligned traits (see §2). The core domain holds the
+step executor driver, the agent session lifecycle, and the worktree
+merge/sync machinery.
 
 ## 2. Port Catalogue
 
-### Carried from v1 (with simplifications)
+### Database port (split into sub-traits)
 
-- **`DatabasePort`** (`ports/db.rs`) — extends with the new tables; loses `thread_sessions` complexity. The legacy `thread_sessions` table is preserved in v1 for migration safety, marked deprecated, and removed in v2.
-- **`AgentRuntime`** (`ports/agent_runtime.rs`) — `CliRuntime` (one-shot CLI + JSON-lines) for all agents. `opencode` and `hermes` use `opencode run --format json` / `hermes run --format json`. `claude-code` and `antigravity` use their existing `--print --output-format stream-json` / `--print -` modes. ACP is deleted. The trait surface stays the same (same callers in `StepExecutor`); only the implementation changes.
-- **`PermissionPolicyPort`** (`ports/permission_policy.rs`) — renders a `PermissionPolicy` struct to a JSON string for the `OPENCODE_PERMISSION` env var. Default impl: `WorktreeScopedPolicy` injects `external_directory: "deny"` so the agent cannot touch paths outside its worktree.
-- **`ExecutionPort`** (`ports/execution.rs`) — `spawn_interactive` used only for remote agent processes (local agents use `tokio::process::Command` directly).
-- **`NotificationPort`** (`ports/notification.rs`) — slimmed. Per-turn streams removed; telemetry events only.
+The original `DatabasePort` trait carried 66 methods spanning 13 domains.
+It is split in [`src-tauri/src/ports/db.rs`](../../src-tauri/src/ports/db.rs)
+into eight narrow sub-ports aligned with the bounded contexts in
+[`DDD_MODEL.md`](DDD_MODEL.md):
 
-### New ports (v1)
+| Sub-port                  | Bounded context | Owns                                         |
+|---------------------------|-----------------|----------------------------------------------|
+| `MachineRepository`       | machines        | `Machine`, `AgentProfile`                    |
+| `ThreadRepository`        | threads         | `ThreadSession`, `Message`, `AgentConfig`, `WorkingMemoryEntry` |
+| `ProjectRepository`       | projects        | `Project`, `Repository`, `ProjectSettings`, `ProjectWorkflowOverride` |
+| `FeatureRepository`       | features        | `Feature`, `StepExecution`                   |
+| `WorkflowRepository`      | workflows       | `Workflow`, `WorkflowVersion`, `WorkflowSchedule` |
+| `GateRepository`          | gates           | `GateDecision`                               |
+| `AppSettingsRepository`   | app settings    | `ProviderInstance`, app-session KV, first-launch flags |
+| `MergeAuditRepository`    | merge audit     | `record_merge_outcome`, `record_sync_outcome`, worktree/repo context lookup |
+| `NotificationRepository`  | notifications   | `Notification` (bell cache)                  |
 
-- **`WorkflowRepository`** (`ports/workflow_repo.rs`)
-  - `workflow_create(workflow) -> Result<WorkflowId>`
-  - `workflow_update(workflow) -> Result<()>`
-  - `workflow_delete(workflow_id) -> Result<()>`
-  - `workflow_get(workflow_id) -> Result<Workflow>`
-  - `workflow_list() -> Result<Vec<WorkflowSummary>>`
-  - `workflow_save_version(workflow_id, version, json_blob, note) -> Result<VersionId>`
-  - `workflow_versions(workflow_id) -> Result<Vec<WorkflowVersion>>`
-  - `workflow_revert_to_version(workflow_id, version_id) -> Result<()>`
-- **`ProjectRepository`** (`ports/project_repo.rs`)
-  - `project_create(project) -> Result<ProjectId>`
-  - `project_update(project) -> Result<()>`
-  - `project_delete(project_id) -> Result<()>`
-  - `project_get(project_id) -> Result<Project>`
-  - `project_list() -> Result<Vec<ProjectSummary>>`
-  - `repository_add(project_id, repo) -> Result<RepoId>`
-  - `repository_remove(project_id, repo_id) -> Result<()>`
-  - `repository_list(project_id) -> Result<Vec<Repository>>`
-- **`ProviderInstanceRepository`** (`ports/provider_repo.rs`)
-  - `provider_connect(kind, host, pat) -> Result<ProviderInstanceId>` (validates the PAT first)
-  - `provider_disconnect(id) -> Result<()>`
-  - `provider_list() -> Result<Vec<ProviderInstance>>`
-  - `provider_validate(id) -> Result<ProviderUserInfo>` (re-runs the `/user` call; updates display name)
-- **`FeatureOrchestrator`** (`ports/feature_orchestrator.rs`)
-  - `feature_start(project_id, workflow_id, spec) -> Result<FeatureId>`
-  - `feature_pause(feature_id) -> Result<()>`
-  - `feature_resume(feature_id) -> Result<()>`
-  - `feature_cancel(feature_id) -> Result<()>`
-  - `feature_get(feature_id) -> Result<Feature>`
-  - `feature_list(project_id) -> Result<Vec<FeatureSummary>>`
-  - `feature_archive(feature_id) -> Result<()>`
-  - `feature_restore(feature_id) -> Result<()>` (archive → completed)
-  - `feature_rerun(feature_id) -> Result<FeatureId>` (creates a new FeatureRun)
-- **`StepExecutor`** (`ports/step_executor.rs`)
-  - `step_get(execution_id) -> Result<StepExecution>`
-  - `step_retry(execution_id) -> Result<()>` (opt-in per-step retry, planner-driven)
-  - `step_list_for_run(run_id) -> Result<Vec<StepExecution>>`
-- **`GatePresenter`** (lives in `StepExecutor`'s surface but has its own port for testability)
-  - `gate_pending_for_run(run_id) -> Result<Option<GateDecision>>`
-  - `gate_decide(execution_id, decision, feedback) -> Result<()>`
-- **`WorktreeManager`** (`ports/worktree_mgr.rs`)
-  - `worktree_create_feature_branch(project_id, slug) -> Result<BranchName>`
-  - `worktree_provision_subtask(run_id, subtask_id) -> Result<SubtaskWorktree>`
-  - `worktree_cleanup_subtask(subtask_id) -> Result<()>`
-  - `worktree_list_for_feature(feature_id) -> Result<Vec<SubtaskWorktree>>`
-- **`MergeExecutor`** (`ports/worktree_mgr.rs`)
-  - `merge_subtask_into_feature(subtask_id) -> Result<MergeResult>` (may produce ConflictReport)
-  - `merge_rebase_subtask(subtask_id) -> Result<RebaseResult>` (rebase before merge)
-  - `merge_topological_order(run_id) -> Result<Vec<SubtaskId>>` (DAG-derived order)
-- **`MrPublisher`** (`ports/worktree_mgr.rs`)
-  - `mr_publish(feature_id, draft, auto_merge) -> Result<MrUrl>`
-  - `mr_get_status(feature_id) -> Result<MrStatus>`
-- **`ConflictResolver`** (`ports/worktree_mgr.rs`)
-  - `conflict_resolve_agent(subtask_id) -> Result<Resolution>` (spawns resolution subtask)
-  - `conflict_resolve_manual(subtask_id, resolution) -> Result<()>`
-  - `conflict_get_report(subtask_id) -> Result<ConflictReport>`
-- **`ArtifactStore`** (`ports/artifact_store.rs`)
-  - `artifact_write(feature_id, step, content) -> Result<Path>`
-  - `artifact_read(feature_id, step) -> Result<String>`
-  - `artifact_list(feature_id) -> Result<Vec<ArtifactRef>>`
-  - `artifact_glob(feature_id, pattern) -> Result<Vec<ArtifactRef>>`
-- **`PricingTable`** (`ports/pricing.rs`)
-  - `cost_for(model, input_tokens, output_tokens) -> Result<Option<Cost>>`
-  - `models_known() -> Result<Vec<ModelPricing>>`
-  - `pricing_set(model, cost) -> Result<()>` (user override)
-- **`UiStateRepository`** (`ports/ui_state.rs`)
-  - `ui_pref_get(key) -> Result<Option<JsonValue>>`
-  - `ui_pref_set(key, value) -> Result<()>`
-  - `ui_pref_list() -> Result<Vec<(String, JsonValue)>>`
-- **`DiskUsageCalculator`** (`ports/ui_state.rs`)
-  - `disk_usage_global() -> Result<DiskUsageReport>`
-  - `disk_usage_project(project_id) -> Result<DiskUsageReport>`
-- **`DocsRepository`** (`ports/ui_state.rs`)
-  - `docs_list() -> Result<Vec<DocsEntry>>`
-  - `docs_get(slug) -> Result<String>` (markdown content)
+Each sub-port is small (≤ 12 methods), cohesive, and takes strongly-typed
+ID newtypes (`MachineId`, `ProjectId`, `FeatureId`, `StepExecutionId`,
+…). `AppContext` holds one `Arc<dyn …Repository>` per sub-port, and
+Tauri commands extract only the sub-port they need.
+
+### Mutation through Patch value objects
+
+`ThreadPatch`, `FeaturePatch`, `StepExecutionPatch` (`ports/db.rs:48-104`)
+replace the previous multi-argument `step_execution_update_status`,
+`update_thread_status`, etc. Each field is `Option<Option<T>>` so callers
+distinguish "leave alone" from "set to NULL".
+
+### Carried ports
+
+- **`AgentRuntime`** (`ports/agent_runtime.rs`) — `CliRuntime` (one-shot
+  CLI + JSON-lines) for all agents. `opencode` and `hermes` use
+  `opencode run --format json` / `hermes run --format json`; `claude-code`
+  uses `claude --print --output-format stream-json`; `antigravity` uses
+  `agy --print -`. ACP is removed. The trait surface stays dyn-safe
+  (`start` returns a boxed `AgentStartFuture`).
+- **`AgentExecutionPort`** (`ports/agent_execution.rs`) — `submit` /
+  `submit_agent` / `approve` / `reject` for hand-rolled and
+  agent-originated tool actions. `submit_agent` returns a typed
+  `ActionError { Network, NotFound, Internal }` (three variants).
+- **`ExecutionPort`** (`ports/execution.rs`) — `spawn_interactive` used
+  only for remote agent processes (local agents use
+  `tokio::process::Command` directly).
+- **`WorktreeOpsPort`** (`ports/worktree_ops.rs`) — worktree primitives
+  (`clone_repository`, `create_feature_branch`,
+  `provision_subtask_worktree`, `cleanup_subtask_worktree`,
+  `branch_delete`, `merge_subtask`, `sync_feature_with_upstream`,
+  `precheck_merge`). The precheck returns `MergePreCheck::{AlreadyMerged,
+  CleanMerge, WouldConflict}` — no separate `MergeStrategy` enum.
+- **`MergePort`** (`ports/merge.rs`) — per-subtask merge outcomes,
+  rebase ordering, audit recording (`SubtaskMerge`, `MergeOutcome`).
+- **`ConflictPort`** (`ports/conflict.rs`) — conflict detection and the
+  cascade entry points; the per-project `ConflictPolicy` enum
+  (`AlwaysGate | AutoAgent | AutoHuman`) lives in
+  `domain/models/merge.rs`.
+- **`MrPublisher`** (`ports/mr_publisher.rs`) — publish a draft MR/PR
+  via the project's provider instance; returns `MrInfo`.
+- **`ProviderHttpPort`** (`ports/provider_http.rs`) — typed wrapper
+  over `reqwest` + keyring for `validate_provider_pat` /
+  `fetch_provider_repos`.
+- **`ArtifactStore`** (`ports/artifact_store.rs`) and
+  **`AttachmentStore`** (`ports/attachment_store.rs`) — durable artifact
+  and attachment storage (filesystem-backed adapters).
+- **`PricingTable`** (`ports/pricing.rs`) — `cost_for(model, in, out)`,
+  `models_known`, `pricing_set`, `context_window`.
+- **`MemoryPort`** (`ports/memory.rs`),
+  **`MemoryLlmPort`** (`ports/memory_llm.rs`),
+  **`MemorySignalsPort`** (`ports/memory_signals.rs`) — typed inputs for
+  the opt-in Memory Agent. The LLM port points at a user-configured
+  OpenAI-compatible endpoint; it is the one place Demeteo calls a model
+  provider directly.
+- **`NotificationPort`** (`ports/notification.rs`) — telemetry events
+  to the React bell and step timeline; the per-feature event stream is
+  not consumed by the UI.
+
+### Step execution and gate ports
+
+The orchestrator's command surface for features is one trait:
+
+- **`StepExecutor`** (`ports/step_executor.rs`) — `feature_start`,
+  `feature_pause`, `feature_resume`, `feature_cancel`, `feature_sync`,
+  `feature_resolve_sync_conflicts`, `step_get`, `step_retry`,
+  `replay_from_step`, `step_list_for_run`. `feature_start` accepts
+  per-feature overrides (`agent_kind`, `model`, `commit_artifacts`,
+  `loop_iterations`, `step_overrides`, `staged_attachments`) and an
+  optional `FeaturePatch`-driven override for the feature row.
+  `feature_sync` and `feature_resolve_sync_conflicts` return
+  `SyncOutcomeView::{Ok, Conflict, Resolved, ResolutionFailed}` so the
+  React side can render the outcome without re-parsing the database.
+- **`GatePresenter`** (`ports/step_executor.rs`) — `gate_pending_for_run`,
+  `gate_decide`. Both ports are async (Tauri v2 supports async commands
+  natively); the previous `block_in_place` wrappers are removed.
+
+### Permission policy ports
+
+`PermissionPolicyPort` (no separate file) is folded into the agent
+runtime. The compiled policy is a four-axis
+[`PermissionProfile`](../../src-tauri/src/domain/permission.rs) —
+`read_fs`, `write_fs`, `execute`, `network`, each `Access::{Allow,
+Deny}` — plus a path-shaped `WriteScope::{None, ArtifactsOnly, All}`
+that the OS-level chmod fence (`adapters/worktree/git_ops/scope.rs`)
+turns into concrete writable paths. The scope and per-step
+`allow_network` / `allow_shell` overrides flow from
+`StepCapability::{ReadOnly, Artifacts, Verify, Implement}`; the
+runtime translates the abstract profile to its native dialect
+(opencode → `OPENCODE_PERMISSION` env; claude-code →
+`--disallowedTools`; hermes → `OPENCODE_PERMISSION` env; antigravity
+→ `OPENCODE_PERMISSION` env).
 
 ## 3. Directory Layout
 
@@ -129,145 +162,353 @@ The hexagonal pattern is preserved exactly. The big change is in the *driver* si
 src-tauri/src/
 ├── main.rs
 ├── lib.rs
+├── state.rs                       # AppContext / AppState (one Arc<dyn ...Repository> per sub-port)
+├── db.rs                          # SQLite connection + query helpers
 ├── domain/
-│   ├── mod.rs
-│   ├── models.rs                 # all entities + value objects
-│   ├── provider.rs               # ProviderInstance, ProviderKind
-│   ├── project.rs                # Project, Repository, WorktreeStrategy
-│   ├── workflow.rs               # Workflow, WorkflowVersion, StepConfig
-│   ├── feature.rs                # Feature, FeatureRun, StepExecution, GateDecision
-│   ├── worktree.rs               # SubtaskRun, SubtaskMerge, MergeStrategy
-│   ├── conflict.rs               # ConflictReport, ConflictPolicy
-│   └── pricing.rs                # PricingTable, model cost
+│   ├── ids.rs                     # ID newtypes (MachineId, ProjectId, FeatureId, …)
+│   ├── models/                    # Split by bounded context (was domain/models.rs)
+│   │   ├── mod.rs
+│   │   ├── agent_config.rs
+│   │   ├── feature.rs             # Feature, StepExecution, SubtaskRun, GateDecision, StepOverride
+│   │   ├── machine.rs             # Machine, AgentProfile
+│   │   ├── merge.rs               # SubtaskMerge, ConflictReport, ConflictPolicy, MergeOutcome
+│   │   ├── notification.rs
+│   │   ├── project.rs             # Project, Repository, WorktreeStrategy, ProjectSettings, ProjectWorkflowOverride
+│   │   ├── provider.rs
+│   │   ├── thread.rs              # ThreadSession, Message, WorkingMemoryEntry
+│   │   ├── timeouts.rs            # AgentTimeouts
+│   │   └── workflow.rs            # Workflow, WorkflowVersion, WorkflowSchedule
+│   ├── permission.rs              # StepCapability, PermissionProfile, WriteScope, Access, resolve_profile
+│   ├── agent_event.rs             # AgentEvent enum (Text, ToolCall, ToolCallUpdate, Plan, Usage, Error, TurnComplete, ModeChanged, ConfigChanged, ArtifactProduced)
+│   ├── artifact.rs                # Artifact
+│   ├── attachment.rs              # AttachedFile
+│   ├── action.rs                  # ActionKind, AgentAction
+│   ├── intercept.rs               # ExecutionResult, InterceptPayload
+│   ├── prompt_context.rs
+│   ├── text.rs
+│   ├── usage.rs                   # UsageAccumulator
+│   └── verifier.rs
 ├── ports/
 │   ├── mod.rs
-│   ├── db.rs                     # DatabasePort (extends with new tables)
-│   ├── execution.rs              # ExecutionPort (carries spawn_interactive)
-│   ├── agent_runtime.rs          # AgentRuntime (carried from v1)
-│   ├── workflow_repo.rs          # NEW: WorkflowRepository, WorkflowVersionRepository
-│   ├── project_repo.rs           # NEW: ProjectRepository
-│   ├── provider_repo.rs          # NEW: ProviderInstanceRepository
-│   ├── feature_orchestrator.rs   # NEW: FeatureOrchestrator
-│   ├── step_executor.rs          # NEW: StepExecutor + GatePresenter
-│   ├── worktree_mgr.rs           # NEW: WorktreeManager, MergeExecutor, MrPublisher, ConflictResolver
-│   ├── artifact_store.rs         # NEW: ArtifactStore
-│   ├── pricing.rs                # NEW: PricingTable
-│   ├── notification.rs           # NotificationPort (slimmed)
-│   └── ui_state.rs               # NEW: UiStateRepository, DiskUsageCalculator, DocsRepository
+│   ├── db.rs                      # Eight sub-ports + Patch value objects
+│   ├── execution.rs
+│   ├── agent_runtime.rs           # AgentRuntime + AgentSession + opencode_permission_env / no_permission_env
+│   ├── agent_execution.rs         # AgentExecutionPort + CommandOutcome + ActionError
+│   ├── step_executor.rs           # StepExecutor + GatePresenter + SyncOutcomeView
+│   ├── worktree_ops.rs            # WorktreeOpsPort + MergePreCheck
+│   ├── merge.rs
+│   ├── conflict.rs
+│   ├── mr_publisher.rs
+│   ├── artifact_store.rs
+│   ├── attachment_store.rs
+│   ├── provider_http.rs
+│   ├── pricing.rs
+│   ├── memory.rs
+│   ├── memory_llm.rs
+│   ├── memory_signals.rs
+│   └── notification.rs
 ├── adapters/
 │   ├── mod.rs
-│   ├── database/
+│   ├── database/                  # SQLite-backed implementations of the eight sub-ports
+│   ├── ssh/                       # SSH transport (keyring, ssh2)
+│   ├── local/                     # Local FS + subprocess adapters
+│   ├── agent/
 │   │   ├── mod.rs
-│   │   └── sqlite.rs             # all new tables; carries legacy
-│   ├── ssh/
+│   │   ├── cli_runtime.rs         # UnifiedCliRuntime (binary, install_cmd, parse_event, build_args, perm_env)
+│   │   ├── registry.rs            # AgentRegistry (simplified, no session dedup)
+│   │   ├── opencode/mod.rs        # CliRuntime + parse_opencode_event
+│   │   ├── hermes/mod.rs          # CliRuntime + parse_hermes_event
+│   │   ├── claude_code/mod.rs     # CliRuntime + parse_claude_code_event + disallowed_tools_for
+│   │   ├── antigravity/mod.rs     # CliRuntime + parse_antigravity_event
+│   │   ├── install.rs             # agent_install_and_start
+│   │   ├── direct_execution.rs
+│   │   ├── noop.rs
+│   │   ├── test_stubs.rs
+│   │   └── event_stream/
+│   │       ├── mod.rs
+│   │       ├── turn.rs            # stream_agent_turn (tokio::select! body)
+│   │       └── cleanup.rs
+│   ├── worktree/
 │   │   ├── mod.rs
-│   │   └── client.rs             # carries; adds per-feature worktree helpers
-│   ├── local/                    # NEW: local FS + subprocess adapters
+│   │   └── git_ops/
+│   │       ├── mod.rs
+│   │       ├── clone.rs
+│   │       ├── strategy.rs
+│   │       ├── worktree.rs
+│   │       ├── merge.rs
+│   │       ├── sync.rs
+│   │       ├── health.rs
+│   │       ├── scope.rs           # chmod fence driven by WriteScope
+│   │       └── tests.rs
+│   ├── artifact_store/
+│   ├── attachment_store/
+│   ├── memory_worker.rs
+│   ├── memory_llm.rs
+│   ├── mr_monitor.rs              # background MR-state poller
+│   ├── mr_publisher.rs
+│   ├── pricing.rs
+│   ├── provider_http.rs
+│   ├── conflict.rs
+│   ├── merge.rs
+│   ├── router.rs                  # RouterExecutionPort (local/remote dispatch)
+│   ├── scheduler.rs
+│   ├── step_executor/
 │   │   ├── mod.rs
-│   │   ├── fs.rs
-│   │   └── pty.rs                # (existing)
-│   ├── agent/                    # carried from v1, scoped to feature step
+│   │   ├── driver.rs              # ExecutionDriver (re-entry, terminal status, watchdog)
+│   │   ├── driver/
+│   │   │   ├── failure.rs         # fail_step_and_feature, StepOutcome variants
+│   │   │   └── verifier.rs        # on_failure -> goto, max_iterations
+│   │   ├── driver_registry.rs
+│   │   ├── steps/
+│   │   │   ├── mod.rs
+│   │   │   ├── agent/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── spawn.rs
+│   │   │   │   ├── artifacts.rs
+│   │   │   │   └── error_message.rs
+│   │   │   ├── gate.rs
+│   │   │   ├── parallel/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── planner.rs
+│   │   │   │   ├── subtask.rs
+│   │   │   │   └── list_unmerged.rs
+│   │   │   └── sync.rs
+│   │   ├── artifacts/
+│   │   ├── gate_waiter.rs
+│   │   ├── impl_traits/
+│   │   ├── setup.rs
+│   │   ├── sync.rs
+│   │   ├── tests/
+│   │   └── updates.rs
+│   ├── tauri_ui/                  # Tauri commands + event adapters
 │   │   ├── mod.rs
-│   │   ├── registry.rs            # simplified: no session dedup
-│   │   ├── cli_runtime.rs         # (existing) one-shot CLI + JSON-lines
-│   │   ├── permission_policy.rs   # NEW: PermissionPolicyPort impl
-│   │   ├── opencode/mod.rs         # CliAgentRuntime + parse_opencode_event
-│   │   ├── hermes/mod.rs           # CliAgentRuntime + parse_hermes_event
-│   │   ├── claude_code/mod.rs      # NEW: CliAgentRuntime + parse_claude_code_event
-│   │   └── antigravity/mod.rs     # NEW: CliAgentRuntime + parse_antigravity_event
-│   ├── workflow/                 # NEW: workflow catalog adapters
-│   │   ├── mod.rs
-│   │   ├── json_format.rs        # import/export
-│   │   └── starter_pack.rs       # bundled JSON files
-│   ├── worktree/                 # NEW: worktree + merge + publish
-│   │   ├── mod.rs
-│   │   ├── git_ops.rs
-│   │   ├── merge.rs
-│   │   ├── conflict.rs
-│   │   └── publish.rs
-│   ├── pricing/                  # NEW: hard-coded + editable pricing
-│   │   ├── mod.rs
-│   │   └── table.rs
-│   └── tauri_ui/                 # carried from v1
-│       ├── mod.rs
-│       ├── commands.rs           # new Tauri commands for the new ports
-│       └── events.rs             # slimmed event set
-└── plugins/                      # deferred (kept empty)
+│   │   ├── commands.rs            # thin IPC handlers grouped by bounded context
+│   │   └── events.rs              # slim event set
+│   └── … (sftp, forward, terminal, ssh client adapters)
+├── application/                   # Use cases / application services
+│   ├── mod.rs
+│   ├── agents.rs
+│   ├── agent_probe.rs
+│   ├── bootstrap.rs
+│   ├── lifecycle.rs
+│   ├── memory.rs
+│   ├── projects.rs
+│   ├── providers.rs
+│   └── timeouts.rs
+├── composition/                   # Composition root (wires ports to adapters, builds AppContext)
+│   └── mod.rs
+├── error/                         # AppError + IPC error envelope
+│   ├── mod.rs
+│   └── ipc.rs
+├── shared/                        # Cross-cutting utilities (no domain logic)
+│   ├── mod.rs
+│   ├── ids.rs
+│   ├── proc.rs
+│   ├── shell.rs
+│   └── time.rs
+├── infrastructure/                # OS-level infrastructure (worktree helper, etc.)
+│   ├── mod.rs
+│   └── worktree/
+├── commands/                      # Thin Tauri command handlers
+│   ├── mod.rs
+│   ├── agent_config.rs
+│   ├── agent_config_probe.rs
+│   ├── agent_exec.rs
+│   ├── agent_lifecycle.rs
+│   ├── agent_profile.rs
+│   ├── app_session.rs
+│   ├── app_version.rs
+│   ├── attachments.rs
+│   ├── bootstrap.rs
+│   ├── feature_lifecycle.rs
+│   ├── features.rs
+│   ├── git.rs
+│   ├── machine.rs
+│   ├── memory.rs
+│   ├── messages.rs
+│   ├── mr_publisher.rs
+│   ├── notifications.rs
+│   ├── pricing.rs
+│   ├── project.rs
+│   ├── providers.rs
+│   ├── ssh.rs
+│   ├── thread.rs
+│   ├── timeouts.rs
+│   └── workflows.rs
+├── sftp.rs
+├── ssh_util.rs
+├── terminal.rs
+├── forward.rs
+└── paths.rs
 
-src/
+src-tauri/
+└── migrations/                    # SQL migrations (refinery), V1–V19+
+
+src/                              # React frontend
 ├── main.tsx
-├── App.tsx                       # rewritten
-├── App.css
-├── types.ts                      # new types
-├── commandPalette.ts             # NEW
-├── uiPrefs.ts                    # NEW
-└── components/
-    ├── ProjectRail.tsx           # NEW (cross-project nav)
-    ├── ProjectHome.tsx           # NEW (current feature + queue + repo map)
-    ├── ProjectSettings.tsx       # NEW (per-project config)
-    ├── FeatureDetail.tsx         # NEW (step timeline + telemetry)
-    ├── GateView.tsx              # NEW (planner summary + artifact list)
-    ├── WorkflowEditor.tsx        # NEW (form-based step editor)
-    ├── WorkflowList.tsx          # NEW
-    ├── StartFeatureModal.tsx     # NEW (slim modal w/ inferred chips)
-    ├── PreFlightPanel.tsx        # NEW (step list + risks + repo fit)
-    ├── ProviderSettings.tsx      # NEW (per-provider-instance config)
-    ├── PreferencesScreen.tsx     # NEW (global Preferences)
-    ├── EmptyStateCard.tsx        # NEW (state-driven first-run UX)
-    ├── DocsPanel.tsx             # NEW (bundled markdown viewer)
-    ├── ConflictResolver.tsx      # NEW (Monaco 3-way merge)
-    ├── CommandPalette.tsx        # NEW (Cmd/Ctrl+K)
-    └── ... (carries: Sidebar, TerminalTabs, SSHTerminal, EnvModal → PreferencesScreen)
-
-src/docs/                         # NEW: bundled markdown
-├── index.md
-├── first-project.md
-├── how-workflows-work.md
-├── connecting-providers.md
-├── feature-branch-model.md
-└── conflict-resolution.md
+├── App.tsx
+├── types.ts
+├── components/
+│   ├── AgentTerminalDrawer.tsx
+│   ├── ArtifactViewer.tsx
+│   ├── AttachmentChip.tsx
+│   ├── AttachmentDropzone.tsx
+│   ├── CodeEditorView.tsx
+│   ├── CommandPalette.tsx
+│   ├── CommandSelector.tsx
+│   ├── DocsPanel.tsx
+│   ├── EmptyStateCard.tsx
+│   ├── EnvModal.tsx
+│   ├── ErrorToast.tsx
+│   ├── FeatureDetail.tsx
+│   ├── GateView.tsx
+│   ├── MachinesView.tsx
+│   ├── MemoryAgentSettings.tsx
+│   ├── NewProjectView.tsx
+│   ├── NotificationBell.tsx
+│   ├── PreferencesScreen.tsx
+│   ├── ProjectHome.tsx
+│   ├── ProjectRail.tsx
+│   ├── ProjectSettings.tsx
+│   ├── PromptDialog.tsx
+│   ├── ProviderSettings.tsx
+│   ├── ProvidersPage.tsx
+│   ├── settings/
+│   ├── Sidebar.tsx
+│   ├── StartFeatureModal.tsx
+│   ├── TerminalStatusOverlay.tsx
+│   ├── TerminalWindow.tsx
+│   ├── TopBar.tsx
+│   ├── ui/
+│   ├── WorkflowEditor.tsx
+│   └── WorkflowList.tsx
+├── lib/                           # Typed Tauri IPC wrappers (no raw invoke() in components)
+│   ├── agentModels.ts
+│   ├── appInfo.ts
+│   ├── appVersion.ts
+│   ├── attachments.ts
+│   ├── errorBus.tsx
+│   ├── errors.ts
+│   ├── features.ts                # findActivePredecessor, listBlockingPredecessor
+│   ├── featureSync.ts
+│   ├── modelImageSupport.ts
+│   ├── notifications.ts
+│   ├── project.ts
+│   ├── terminal.ts
+│   ├── timeouts.ts
+│   └── utils.ts
+├── hooks/
+└── docs/                          # Bundled user-facing help markdown (out of scope for engineering docs)
 ```
 
 ## 4. Tauri Command Surface
 
-### New commands (one per port method the UI calls)
+The commands registered in [`src-tauri/src/lib.rs:461-585`](../../src-tauri/src/lib.rs)
+are grouped by bounded context. All return `Result<T, String>` (or
+`AppError` for the step executor where validation messages matter).
 
-- `project_create`, `project_update`, `project_delete`, `project_list`, `project_get`
-- `repository_add`, `repository_remove`, `repository_list`
-- `provider_connect`, `provider_disconnect`, `provider_list`, `provider_validate`
-- `workflow_create`, `workflow_update`, `workflow_save_version`, `workflow_export`, `workflow_import`, `workflow_list`, `workflow_get`, `workflow_versions`, `workflow_revert_to_version`
-- `feature_start`, `feature_pause`, `feature_resume`, `feature_cancel`, `feature_get`, `feature_list`, `feature_archive`, `feature_restore`, `feature_rerun`
-- `step_get`, `step_retry`, `step_list_for_run`
+### Machines / agent profiles
+
+- `get_machines`, `add_machine`, `delete_machine`, `update_machine`,
+  `test_machine_connection`
+- `get_agent_profiles`, `add_agent_profile`, `delete_agent_profile`
+- `get_agent_configs`, `set_agent_configs`, `get_working_memory`,
+  `clear_working_memory`
+- `get_agent_models` (probe), `set_agent_timeouts`, `get_agent_timeouts`
+
+### Threads, messages, attachments, sessions
+
+- `get_thread_sessions`, `add_thread_session`, `update_thread_status`,
+  `delete_thread_session`
+- `get_messages`, `append_message`
+- `feature_add_attachment`, `feature_list_attachments`,
+  `attachment_read`, `feature_remove_attachment`,
+  `attachment_stage_metadata`
+- `get_app_session`, `set_app_session`, `delete_app_session`,
+  `get_app_info`, `get_workspace_dir`, `get_workspace_dir_setting`,
+  `set_workspace_dir_setting`, `get_app_version`
+
+### Agent lifecycle
+
+- `agent_start`, `agent_install_and_start`, `agent_prompt`,
+  `agent_cancel`, `agent_restart`, `agent_get_session_info`,
+  `agent_set_mode`, `agent_set_config_option`
+- `request_action`, `approve_intercept`, `reject_intercept`
+
+### Providers
+
+- `validate_provider_pat`, `fetch_provider_repos`,
+  `connect_provider_instance`, `list_provider_instances`,
+  `delete_provider_instance`
+
+### Projects + bootstrap
+
+- `create_project`, `get_projects`, `get_project_by_id`, `update_project`,
+  `delete_project`, `seed_sample_project`
+- `check_repos_dirty`, `get_repositories_for_project`,
+  `get_workspace_health`, `resolve_repo_dir`
+- `bootstrap_project`, `get_proposed_strategy`, `save_project_settings`
+- `project_memory_list`, `project_memory_upsert`,
+  `project_memory_delete`
+- `get_workflow_overrides`, `set_workflow_override`
+
+### Memory agent
+
+- `memory_agent_config_get`, `memory_agent_config_set`,
+  `memory_agent_test_connection`, `memory_agent_list_models`
+
+### Features + steps + gates
+
+- `start_feature`, `fetch_active_features`, `feature_get`,
+  `feature_pause`, `feature_resume`, `feature_cancel`,
+  `feature_sync`, `feature_resolve_sync_conflicts`,
+  `feature_get_worktree`, `feature_cleanup`
+- `step_get`, `step_list_for_run`, `step_retry`, `replay_from_step`
 - `gate_pending_for_run`, `gate_decide`
-- `worktree_list_for_feature`
-- `merge_topological_order`
-- `conflict_get_report`, `conflict_resolve_agent`, `conflict_resolve_manual`
-- `mr_publish`, `mr_get_status`
-- `artifact_get`, `artifact_list`, `artifact_glob`
-- `disk_usage` (project + global)
-- `migration_log` (read)
-- `preflight_validate` (static checks)
-- `ui_pref_get`, `ui_pref_set`
-- `docs_list`, `docs_get`
 
-### Modified commands (carried with reduced payload)
+### Git + worktrees
 
-- `add_thread_session` → REMOVED (replaced by `feature_start`)
-- `request_action` → REMOVED from UI path; kept as an internal port for the tool bridge if needed
-- All SFTP/SSH commands → kept (read/write files for Monaco editor and worktree ops)
+- `git_changed_files`, `git_file_at_ref`
+
+### Workflows
+
+- `workflow_list`, `workflow_get`, `workflow_create`, `workflow_update`,
+  `workflow_delete`, `workflow_versions`, `workflow_export`,
+  `workflow_import`, `workflow_revert_to_default`,
+  `workflow_save_schedule`
+
+### Pricing + MR publisher + notifications
+
+- `pricing_list`, `pricing_for`
+- `publish_mr`, `fetch_mr_state`
+- `notifications_list`, `notification_mark_read`,
+  `notification_unread_count`
+
+### Terminal, SFTP, forwarding (carried)
+
+- `set_machine_secret`, `delete_machine_secret`,
+  `start_terminal_session`, `write_terminal_session`,
+  `resize_terminal_session`, `close_terminal_session`,
+  `list_terminal_sessions`, `close_machine_sessions`,
+  `attach_terminal_session`, `detach_terminal_session`
+- `sftp_list_dir`, `sftp_read_file`, `sftp_write_file`,
+  `sftp_get_metadata`
+- `start_port_forward`, `stop_port_forward`
+- `test_ssh_connection`
 
 ### Removed events
 
-- `permission_requested` (no intercept UX in v1; conflict resolution is the new gate)
+- `permission_requested` (no intercept UX in v1; the gate is the
+  human-in-the-loop surface)
 - `command_executed` (no chat stream)
 
 ### New events
 
 - `feature_status_changed` (per-feature state transitions)
-- `step_progress` (heartbeat, optional, throttled to 1Hz)
-- `gate_required` (a gate needs user attention; the UI navigates to the gate view)
+- `step_progress` (heartbeat, throttled)
+- `gate_required` (a gate needs user attention; the UI navigates to
+  the gate view)
 - `conflict_detected` (a merge conflict needs resolution)
-- `migration_progress` (visible migration indicator for additive v1.x updates)
 
 ## 5. Frontend State Model (React, simplified)
 
@@ -279,7 +520,9 @@ The frontend is one stateful app, not a multi-pane chat UI:
 - `uiPrefs` (theme, accent, collapse state — persisted)
 - `commandPaletteOpen` (boolean)
 
-No per-thread session registry. No per-turn `Channel<AgentEvent>` stream. The agent session is now scoped to a step execution; the UI gets step transitions as events, not streams.
+No per-thread session registry. No per-turn `Channel<AgentEvent>` stream.
+The agent session is scoped to a step execution; the UI gets step
+transitions as events, not streams.
 
 ### Top-level navigation (one shell)
 
@@ -301,14 +544,28 @@ No per-thread session registry. No per-turn `Channel<AgentEvent>` stream. The ag
 └──────────┴─────────────────────────────────────────────────┘
 ```
 
-The "Mng" button at the bottom of the rail opens a project list / create / delete view (a full-page Preferences screen for project management). The "⚙" at the top opens global Preferences. The "?" opens the docs panel.
+The "Mng" button at the bottom of the rail opens a project list /
+create / delete view. The "⚙" at the top opens global Preferences.
+The "?" opens the docs panel.
 
-## 6. Migration Strategy (Q30)
+## 6. Migration Strategy
 
-- **v1.0 ships greenfield**: single init script `migrations/0001_initial.sql`. The legacy `thread_sessions` table is *not* created — we start clean.
-- **v1.x (additive)**: silent auto-migration. New tables, new nullable columns, new indexes. No user prompt.
-- **v2.0+ (breaking)**: schema version check on launch. If behind on a breaking migration, demeteo offers "wipe and re-init" with a confirmation prompt. The old DB is moved to `demeteo.db.wiped.<timestamp>`. The user can pre-export workflows + projects to JSON to re-import after the wipe.
-- **Pre-migration backup**: `cp demeteo.db demeteo.db.bak.<timestamp>` before any migration runs. 7-day retention, auto-pruned.
-- **Migration log**: `~/.local/share/demeteo/migrations.log`, always written, viewable from Preferences → Storage.
+The migration runner is `refinery`-based (`src-tauri/migrations/`).
+The schema is at V19+; v1 is no longer greenfield.
 
-See [`DECISIONS.md`](DECISIONS.md) for details on the migration strategy and system decisions.
+- **Additive migrations** (new tables, new nullable columns, new
+  indexes) apply silently on launch. No user prompt.
+- **Pre-migration backup:** the runner copies `demeteo.db` to
+  `demeteo.db.bak.<timestamp>` before any migration runs. 7-day
+  retention, auto-pruned.
+- **Migration log:** every migration writes one line to
+  `migrations.log` (next to `demeteo.db`), always viewable from
+  Preferences → Storage.
+- **Breaking changes:** for any breaking migration (drop/rename
+  column) the runner prompts "wipe and re-init" with a confirmation;
+  the old DB is moved to `demeteo.db.wiped.<timestamp>`. The user can
+  pre-export workflows + projects to JSON to re-import after the
+  wipe. Schema-version checks at launch enforce the rule.
+
+See [`DECISIONS.md`](DECISIONS.md) for the decisions that govern this
+plan.

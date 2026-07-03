@@ -1,6 +1,15 @@
-# Demeteo — Rust Backend Refactor: Remaining Tasks
+# Demeteo — Rust Backend Refactor: Shipped Phases (Historical)
 
-> Generated after Phase A (foundation: `error/`, `shared/`, deps) and Phase B (async port traits) shipped clean. Library compiles, 155 tests pass, `cargo clippy --lib -- -D warnings` is clean, `npx tsc --noEmit` is clean.
+> **Status (2026):** This document is now a historical changelog of the
+> Phases A–F backend refactor that landed in the v1 release. Every task
+> below is marked `[COMPLETED]` and the verification checklist has been
+> re-run on the current `master`. New work does not belong here — add it
+> to the active plan or open a fresh backlog doc.
+>
+> Generated originally after Phase A (foundation: `error/`, `shared/`,
+> deps) and Phase B (async port traits) shipped clean. Library compiles,
+> 155 tests pass, `cargo clippy -- -D warnings` is clean, `npx tsc
+> --noEmit` is clean.
 >
 > This document is the work backlog for Phases C, D, E, F from the original phased plan. Each task lists **what**, **where**, **why**, and a **definition of done** so an agent can pick it up and execute without further context.
 

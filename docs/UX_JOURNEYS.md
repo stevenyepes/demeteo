@@ -34,11 +34,12 @@ To ensure Demeteo feels like a premium desktop control center, all mockups must 
 
 The application functions within a single unified shell (no multi-window popouts for standard operations).
 
-- **Top Bar:** 
+- **Top Bar:**
   - Application Logo.
   - Command Palette trigger hint (`Cmd/Ctrl+K`).
   - Global Settings (`⚙` icon).
   - Documentation/Help (`?` icon).
+  - Notification Bell.
 - **Left Rail (Project Navigation):**
   - Search/filter input.
   - List of Projects (with active status dots).
@@ -63,8 +64,8 @@ The application functions within a single unified shell (no multi-window popouts
 
 ### Journey 3: Project Bootstrap
 *Creating a new workspace from remote repositories.*
-- **UI State:** `ProjectCreation` Form (Slim Modal).
-- **Inputs:** Project Name, Environment (Local/Remote SSH), select Repositories via connected Provider, assign default Planner (Agent).
+- **UI State:** `NewProjectView` (slim modal).
+- **Inputs:** Project Name, Environment (Local/Remote SSH), select Repositories via connected Provider.
 - **System Action:** Clones repos, detects default branch, PR template, CI setup.
 - **Next Step:** Shows the user a "Proposed Worktree Strategy" (branch naming conventions, merge flow). The user can approve or edit.
 
@@ -74,28 +75,29 @@ The application functions within a single unified shell (no multi-window popouts
 - **Hero Element:** "Start a Feature" slim input modal.
 - **Active Area:** Shows the currently running Feature (progress bar, current step, cost telemetry).
 - **Queue/History:** A list of pending or completed (archived) features.
-- **Repo Map:** A lazy-loaded, visual representation of the connected repositories and active feature branches.
+- **Repo Map:** A lazy-loaded list of connected repositories and active feature branches (driven by `RepoHealthStatus`; not a visual map).
 
 ### Journey 5: Starting a Feature
 *Taking a user requirement and kicking off an automated workflow.*
-- **UI State:** Slim Modal expands from Project Home.
+- **UI State:** Slim Modal expands from Project Home (`StartFeatureModal`).
 - **Inputs:** User describes the feature in a textarea.
 - **Auto-Inference:** The system locally matches keywords to suggest Repository Chips and detect conflicts (no LLM call in the modal).
-- **Customization:** User clicks "Customize..." to expand the form and override default Workflows, Target Repos, Conflict Policies, or set Budget limits.
+- **Customization:** User clicks "Customize..." to expand the form and override default Workflows, Target Repos, Conflict Policies, per-step agent/model overrides, commit-artifacts toggle, or set Budget limits.
 - **Pre-flight Validation:** Static checks display the workflow step list, potential risks, and repo fit. No cost is estimated here.
-- **Submit:** Kicks off the Feature and transitions the view to `FeatureDetail`.
+- **Attachments:** User may drop files / images into the attachment dropzone; they are persisted to the feature row before the driver spawns so the agent's first turn sees them.
+- **Submit:** Kicks off the Feature (`start_feature`) and transitions the view to `FeatureDetail`.
 
 ### Journey 6: Orchestration Monitoring (Feature Detail)
 *Watching the fleet of agents work without chat.*
 - **UI State:** `FeatureDetail` (Main Pane).
-- **Visualization:** A DAG/Timeline view of the steps (e.g., `research` → `spec` → `plan` → `tasks` → `implement-stub`).
+- **Visualization:** A list-style timeline of the steps (e.g., `research` → `spec` → `plan` → `tasks` → `implement-stub`). A circular-node DAG visualization is deferred.
 - **Telemetry:** Per-step cost ($) and duration (time) metrics. *(Note: No pre-launch cost estimates, only real-time accrued cost).*
 - **Status Indicators:** Steps use the color language (Emerald=Running, Ruby=Failed, Violet=Active).
-- **Actions:** Pause, Resume, or Cancel the feature.
+- **Actions:** Pause, Resume, Cancel, Sync, Resolve Sync Conflicts. Each failed/interrupted step card exposes "Retry Step" — disabled when a predecessor is in `pending | running | verifying | awaiting_gate`, with a rose-bordered banner naming the blocker.
 
 ### Journey 7: The Gate (Approval Workflow)
 *Where the orchestrator pauses for human intervention.*
-- **UI State:** `GateView` (Takes over the main pane or overlaps as a prominent card).
+- **UI State:** `GateView` — **full-screen takeover** of the main pane (no slide-up overlay in v1).
 - **Content:**
   - **Planner Summary Card:** What the agents did and why.
   - **Artifacts:** Code diffs, written specs, or merge request summaries.
@@ -103,27 +105,28 @@ The application functions within a single unified shell (no multi-window popouts
   - **Approve:** Continue execution.
   - **Redirect:** Open an input field to send feedback/corrections to the planner.
   - **Cancel:** Abort the current feature run.
+- **Predecessor-running guard:** when an earlier step is `pending | running | verifying | awaiting_gate`, the Approve and Redirect buttons are disabled and a rose-bordered banner names the blocker. The "Abort feature" button stays enabled.
 
 ### Journey 8: Handling Subtasks & Parallel Execution
 *Breaking down work across multiple agents simultaneously.*
 - **Trigger:** Workflow reaches a `parallel` step.
 - **UI State:** Subtask execution list inside the `FeatureDetail` timeline.
-- **Visuals:** A DAG or list of parallel tasks (one host, one agent per worktree). 
+- **Visuals:** A list of parallel tasks (one host, one agent per worktree).
 - **Feedback:** Continue-and-report semantics for failures. Shows error chips on failed subtasks, with an opt-in "Retry" button (with cost cap).
 
 ### Journey 9: Resolving Merge Conflicts
 *Handling overlapping changes smartly.*
-- **Trigger:** A subtask merge back into `feature/<slug>` fails.
-- **System Flow:** Auto-agent tries to resolve first. If it fails, the workflow hits a Gate.
-- **UI State:** `ConflictResolver` View.
-- **Content:** A Monaco-based 3-way merge editor.
-- **Actions:** User manually resolves code, saves, or chooses to Skip/Abort the subtask entirely.
+- **Trigger:** A subtask merge back into `feature/<slug>` fails, or `feature_sync` against `origin/<default>` leaves conflicts.
+- **System Flow:** Per `ConflictPolicy` (per-project setting): `auto_agent` (default) → `feature_resolve_sync_conflicts` spawns a resolution agent in a temp worktree, commits the fix, merges back, and replays the validation step. `auto_human` opens a Gate immediately with the file list. `always_gate` opens a Gate on every conflict.
+- **UI State:** Conflict UX lives inside the existing `GateView` (no dedicated Monaco 3-way merge component ships in v1) — the file list is shown, the user can retry, abort, or hand-roll a manual edit via the in-app terminal.
+- **Actions:** Approve (re-run after manual edit), Retry (re-spawn the auto-agent), Abort feature.
 
 ### Journey 10: Workflow Authoring
 *Creating the templates that agents follow.*
 - **UI State:** `WorkflowEditor` View.
-- **Content:** Form-first builder (v1.0) allowing users to piece together `agent`, `parallel`, and `gate` steps. 
+- **Content:** Form-first builder (v1.0) allowing users to piece together `agent`, `parallel`, and `gate` steps.
 - **Configuration:** Users set conditional edges (e.g., `on_failure -> goto`), max iterations, and artifact outputs (`full`, `summary_only`, `none`).
+- **Versioning:** Every save creates a new `WorkflowVersion` row; `workflow_versions` and `workflow_revert_to_default` round-trip the history.
 
 ## 5. UI Views & Screens to Design
 
@@ -132,9 +135,10 @@ Based on the journeys above, designers must deliver the following discrete scree
 1. **App Shell & Project Rail:** Base layout with cross-project navigation and the Command Palette (`Cmd+K`) active state.
 2. **First Run / Empty State Card:** Onboarding flow centered around running a sample project.
 3. **Project Creation & Worktree Strategy Forms:** Bootstrap flow with repo selection and strategy proposal.
-4. **Project Home:** The main dashboard featuring the "Start a Feature" slim modal, active run status, and repository map.
-5. **Feature Detail (Orchestration View):** The DAG timeline showing step progress, cost/duration telemetry, and subtask fan-outs.
-6. **Gate View:** The critical human-in-the-loop screen showing the planner's summary, diffs, and Approve/Redirect buttons.
-7. **Conflict Resolver:** An integrated Monaco 3-way merge editor within the app shell.
-8. **Workflow Editor:** The form-based UI for creating/editing workflow steps.
-9. **Settings & Preferences:** Global settings (theme, pricing tables) and Provider instances setup.
+4. **Project Home:** The main dashboard featuring the "Start a Feature" slim modal, active run status, and repository list.
+5. **Feature Detail (Orchestration View):** The step timeline showing step progress, cost/duration telemetry, subtask fan-outs, and the predecessor-running guard banner.
+6. **Gate View:** Full-screen takeover showing the planner's summary, diffs, and Approve/Redirect buttons (with predecessor-running guard).
+7. **Conflict UX (inside Gate View):** Conflict file list with retry / abort affordances. A dedicated Monaco 3-way merge editor is not in v1.
+8. **Workflow Editor:** The form-based UI for creating/editing workflow steps with version history.
+9. **Settings & Preferences:** Global settings (theme, memory agent, pricing tables) and Provider instances setup.
+10. **Machines & Agent Profiles:** Per-host agent configuration for legacy shell / custom-http agent kinds (ollama, openai, cli, custom_http).
