@@ -182,13 +182,22 @@ pub(crate) fn create_repo_body(
 pub(crate) fn parse_created_repo(kind: &str, data: &serde_json::Value) -> CreatedRepo {
     match kind.to_lowercase().as_str() {
         "gitlab" => CreatedRepo {
-            full_name: data["path_with_namespace"].as_str().unwrap_or("").to_string(),
-            default_branch: data["default_branch"].as_str().unwrap_or("main").to_string(),
+            full_name: data["path_with_namespace"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            default_branch: data["default_branch"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string(),
             clone_url: data["http_url_to_repo"].as_str().unwrap_or("").to_string(),
         },
         _ => CreatedRepo {
             full_name: data["full_name"].as_str().unwrap_or("").to_string(),
-            default_branch: data["default_branch"].as_str().unwrap_or("main").to_string(),
+            default_branch: data["default_branch"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string(),
             clone_url: data["clone_url"].as_str().unwrap_or("").to_string(),
         },
     }

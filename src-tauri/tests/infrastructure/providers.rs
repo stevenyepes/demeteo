@@ -33,7 +33,8 @@ fn create_repo_url_github_org_uses_orgs_endpoint() {
 #[test]
 fn create_repo_url_github_enterprise_uses_api_v3_prefix() {
     // Never hardcode github.com — an enterprise host must route through /api/v3.
-    let personal = create_repo_url("github.acme.dev", "github", &ns("octocat", "personal")).unwrap();
+    let personal =
+        create_repo_url("github.acme.dev", "github", &ns("octocat", "personal")).unwrap();
     assert_eq!(personal, "https://github.acme.dev/api/v3/user/repos");
     let org = create_repo_url("github.acme.dev", "github", &ns("acme", "org")).unwrap();
     assert_eq!(org, "https://github.acme.dev/api/v3/orgs/acme/repos");
@@ -67,7 +68,8 @@ fn req(namespace: NamespaceSummary, name: &str, private: bool) -> CreateRepoRequ
 
 #[test]
 fn create_repo_body_github_has_name_private_auto_init() {
-    let body = create_repo_body("github", &req(ns("octocat", "personal"), "my-repo", true)).unwrap();
+    let body =
+        create_repo_body("github", &req(ns("octocat", "personal"), "my-repo", true)).unwrap();
     assert_eq!(body["name"], "my-repo");
     assert_eq!(body["private"], true);
     assert_eq!(body["auto_init"], true);
