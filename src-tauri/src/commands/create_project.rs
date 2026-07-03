@@ -30,10 +30,11 @@
 //! `ports::create_project_port` / `adapters::create_project_adapter`.
 //! Repo creation is delegated to `ProviderHttpPort::create_repo`
 //! (the spec mandates HTTP-only repo creation — no `gh` / `glab`
-//! shell-out). The command layer resolves the provider's PAT via
-//! `credential_cache::get_or_fetch` against the keyring so the PAT
-//! **never crosses the IPC boundary** and is forwarded to the
-//! adapter as an `&str`.
+//! shell-out). The command layer resolves the provider's PAT via the
+//! shared `application::providers::resolve_provider_and_pat` helper
+//! (the **single** backend site that opens the `'demeteo'` keyring
+//! for a provider id) so the PAT **never crosses the IPC boundary**
+//! and is forwarded to the adapter as an `&str`.
 
 use crate::adapters::create_project_adapter::CreateProjectAdapter;
 use crate::domain::bootstrap::{BootstrapState, BootstrapStep};
@@ -286,8 +287,6 @@ pub async fn submit_create_project_step(
             let visibility = visibility.as_ref();
             let name = name.as_ref();
             let provider_id = provider_id.as_ref();
-            let provider_kind = provider_kind.as_ref();
-            let provider_host = provider_host.as_ref();
             let namespace_id = namespace_id.as_ref();
             let namespace_kind = namespace_kind.as_ref();
             let namespace_name = namespace_name.as_ref();
@@ -295,6 +294,14 @@ pub async fn submit_create_project_step(
             let machine_id = machine_id.as_ref().as_ref();
             let agent_kind = agent_kind.as_ref();
             let model = model.as_ref();
+
+            // The Commit payload still carries `provider_kind` and
+            // `provider_host` for the frontend's round-trip, but the
+            // authoritative source is the `ProviderInstance` returned
+            // by `resolve_provider_and_pat` below — discard the
+            // payload copies so future drift can't accidentally make
+            // them authoritative again.
+            let _ = (provider_kind.as_ref(), provider_host.as_ref());
 
             // Re-validate the slug at the commit boundary — the
             // user could have walked forward, gone back, edited the
@@ -314,21 +321,25 @@ pub async fn submit_create_project_step(
                 kind: namespace_kind.to_string(),
             };
 
-            // 0. Resolve the provider's PAT from the keyring via the
-            //    existing `credential_cache::get_or_fetch` helper. The
-            //    PAT **never crosses the IPC boundary** — the wizard
-            //    sends only `provider_id`, and this is the one place
-            //    the keyring is consulted on the Commit arm. Mirrors
-            //    `application::providers::create_repo`.
-            let pat = resolve_provider_pat(&ctx, provider_id)?;
+            // 0. Resolve the provider + PAT from the keyring via the
+            //    **single** application-layer helper. The PAT never
+            //    crosses the IPC boundary — the wizard sends only
+            //    `provider_id`. The returned tuple's `provider` is
+            //    also the authoritative source for `kind` and `host`
+            //    forwarded to `create_remote_repo` below, which keeps
+            //    AGENTS.md §0's "no business logic in commands"
+            //    invariant intact (no keyring code lives here).
+            let (provider, pat) =
+                crate::application::providers::resolve_provider_and_pat(&ctx, provider_id)
+                    .map_err(AppError::from)?;
 
             // 1. Create the remote repo via `ProviderHttpPort::create_repo`.
             //    No `gh` / `glab` shell-out — the adapter refuses to
             //    route through `ExecutionPort` entirely.
             let created_repo = port
                 .create_remote_repo(
-                    provider_kind,
-                    provider_host,
+                    &provider.kind,
+                    &provider.host,
                     &pat,
                     &namespace,
                     validated.as_str(),
@@ -443,37 +454,6 @@ pub async fn go_back_create_project(state: BootstrapState) -> Result<BootstrapSt
 
 fn is_supported_provider_kind(kind: &str) -> bool {
     matches!(kind.to_ascii_lowercase().as_str(), "github" | "gitlab")
-}
-
-/// Look up the connected `ProviderInstance` matching `provider_id` and
-/// resolve its PAT via the keyring-backed `credential_cache`. This is
-/// the only place the wizard touches the keyring — the PAT never
-/// enters the IPC payload and is forwarded to the adapter as a
-/// borrowed `&str`.
-///
-/// Mirrors `application::providers::resolve_provider_and_pat`. Lives
-/// here (and not in the application layer) to keep the wizard's
-/// Commit arm a self-contained one-shot: the wizard frontend can't
-/// call the public `provider_create_repo` command without sending
-/// the PAT, so we resolve it at this boundary instead.
-fn resolve_provider_pat(ctx: &AppContext, provider_id: &str) -> Result<String, AppError> {
-    use keyring::Entry;
-
-    let provider_id_typed = ProviderId::from(provider_id.to_string());
-    let providers = ctx
-        .app_settings
-        .get_provider_instances()
-        .map_err(AppError::from)?;
-    let provider = providers
-        .into_iter()
-        .find(|p| p.id == provider_id_typed)
-        .ok_or_else(|| AppError::validation(format!("provider not found: {provider_id}")))?;
-
-    crate::credential_cache::get_or_fetch(provider.id.as_str(), || {
-        let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
-        entry.get_password().map_err(|e| e.to_string())
-    })
-    .map_err(|e| AppError::provider(format!("credential lookup failed: {e}")))
 }
 
 #[cfg(test)]

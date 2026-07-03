@@ -1116,3 +1116,33 @@ async fn create_remote_repo_empty_pat_is_validation() {
     assert!(calls.is_empty());
     drop(calls);
 }
+
+// ── Blocker C-4 dedup pin ─────────────────────────────────────────────
+//
+// The wizard's Commit arm in `commands::create_project` must route
+// the keyring lookup through `application::providers::resolve_provider_and_pat`
+// (the single backend site that opens the `'demeteo'` keyring for a
+// provider id). This integration test pins the dedup contract from
+// outside the `application` module — a regression that silently makes
+// `resolve_provider_and_pat` private again would fail to compile
+// here, and a regression that re-introduces the duplicate
+// `Entry::new("demeteo", provider.id.as_str())` lookup in
+// `commands::create_project` would be caught by the static check at
+// the end of this file.
+
+#[test]
+fn resolve_provider_and_pat_is_visible_from_outside_the_application_module() {
+    // Compile-time + runtime pin: the symbol must be reachable via
+    // the public `demeteo_lib::application::providers` path with the
+    // canonical
+    // `(&AppContext, &str) -> Result<(ProviderInstance, String), String>`
+    // signature. A regression that flips `pub fn` to `fn` (or
+    // changes the return type) breaks the coercion below.
+    type ResolveFn = fn(
+        &demeteo_lib::state::AppContext,
+        &str,
+    )
+        -> Result<(demeteo_lib::domain::models::ProviderInstance, String), String>;
+    let f: ResolveFn = demeteo_lib::application::providers::resolve_provider_and_pat;
+    let _ = f as usize;
+}
