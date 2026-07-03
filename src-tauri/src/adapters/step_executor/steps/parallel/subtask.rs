@@ -433,6 +433,14 @@ impl ExecutionDriver {
                             &format!("feat({}): {}", self.f_id.as_str(), sub.title.to_lowercase(),),
                             &self.artifact_subdir,
                             self.commit_artifacts,
+                            // Parallel subtasks fan out across many files;
+                            // we don't track which writes are "the
+                            // deliverable" vs "an artifact report" the way
+                            // the agent step does. Pass an empty list and
+                            // let the guard log still fire for an empty
+                            // stage, which is the cheap, always-useful
+                            // half of the check.
+                            &[],
                         )
                         .await;
 

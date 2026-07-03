@@ -11,6 +11,7 @@ pub(crate) use attached::resolve_attached_artifacts;
 pub(crate) use attached::resolve_attached_user_attachments;
 pub(crate) use declared::commit_worktree_changes;
 pub(crate) use declared::compute_git_diff;
+pub(crate) use declared::is_under_prefix;
 pub(crate) use declared::read_worktree_file;
 pub(crate) use declared::resolve_declared_artifacts;
 pub use snapshot::WorktreeSnapshot;

@@ -83,6 +83,19 @@ pub struct ProjectSettings {
     /// this folder from `commit_worktree_changes` unless
     /// `commit_artifacts` is true. Default: `"artifacts/"`.
     /// See migration V12 and AGENTS.md §6.
+    ///
+    /// Note for `wf-starter-docs-update`: the docs-update workflow's
+    /// `s-draft` and `s-polish` steps are explicitly told (in their
+    /// `prompt_template`) to write the real doc body at the path the
+    /// survey/gate approved (typically under `docs/`) and to use
+    /// `{{artifact_dir}}` ONLY for the short change-summary report.
+    /// That separation is what keeps a "create a new doc explaining
+    /// feature X" feature from silently landing its body under
+    /// `artifacts/s-draft.md` (which `commit_artifacts=false` would
+    /// keep off the branch). The StartFeatureModal's advanced
+    /// section surfaces this toggle so users can opt a single
+    /// docs-update feature into committing its reports alongside the
+    /// new doc.
     #[serde(default = "default_artifact_subdir")]
     pub artifact_subdir: String,
     /// When false (default), the orchestrator's
@@ -91,6 +104,14 @@ pub struct ProjectSettings {
     /// being committed into the feature branch. The reports' content is
     /// still captured into the `FsArtifactStore` for the UI.
     /// Per-feature override lives on `Feature::commit_artifacts`.
+    ///
+    /// Note for `wf-starter-docs-update`: leave this `false` (the
+    /// default) for the "create a new doc" case so the new doc body
+    /// at its real `docs/...` path lands on the branch while the
+    /// `artifacts/s-draft.md` summary stays out. Flip it to `true`
+    /// (per-feature via the StartFeatureModal advanced section) if
+    /// the user wants both the doc and the change-summary report in
+    /// the same commit.
     #[serde(default)]
     pub commit_artifacts: bool,
 }

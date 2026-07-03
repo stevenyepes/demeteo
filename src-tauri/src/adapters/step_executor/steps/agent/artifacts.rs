@@ -1,6 +1,6 @@
 use crate::adapters::step_executor::artifacts::{
-    commit_worktree_changes, compute_git_diff, read_worktree_file, resolve_declared_artifacts,
-    WorktreeSnapshot,
+    commit_worktree_changes, compute_git_diff, is_under_prefix, read_worktree_file,
+    resolve_declared_artifacts, WorktreeSnapshot,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::artifact::Artifact;
@@ -33,6 +33,21 @@ impl ExecutionDriver {
         let changed = worktree_snapshot
             .delta(&*self.exec, machine_str, wt_path, &always, &[])
             .await;
+        // Snapshot the subset of `changed` that sits OUTSIDE the
+        // artifact subdir — these are the paths the user actually
+        // asked the agent to create or modify. We capture them
+        // before consuming `changed` in the loop below so they can
+        // be forwarded to `commit_worktree_changes`'s guard log.
+        let trimmed_subdir = self
+            .artifact_subdir
+            .trim()
+            .trim_start_matches("./")
+            .trim_end_matches('/');
+        let non_artifact_writes: Vec<String> = changed
+            .iter()
+            .filter(|p| !is_under_prefix(p, trimmed_subdir))
+            .cloned()
+            .collect();
         for rel_path in changed {
             let name = std::path::Path::new(&rel_path)
                 .file_stem()
@@ -74,7 +89,12 @@ impl ExecutionDriver {
             });
         }
 
-        // 3. Commit changes
+        // 3. Commit changes. The `non_artifact_writes` list computed
+        // above (paths the agent wrote that are NOT under the
+        // artifact subdir) is passed so the guard log inside
+        // `commit_worktree_changes` can flag the historical "agent
+        // put the real deliverable under artifacts/ instead of at
+        // the real path" failure mode (see declared.rs).
         let _ = commit_worktree_changes(
             &*self.exec,
             machine_str,
@@ -86,6 +106,7 @@ impl ExecutionDriver {
             ),
             &self.artifact_subdir,
             self.commit_artifacts,
+            &non_artifact_writes,
         )
         .await;
 
