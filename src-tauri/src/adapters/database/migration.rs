@@ -37,6 +37,9 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "project_settings", "default_model", "TEXT")?;
     // Project-level writability exceptions for the chmod scope fence (V18).
     add_column_if_missing(conn, "project_settings", "extra_writable_paths", "TEXT")?;
+    // Optional pre-harness prepare command (npm ci, cargo fetch, …) run
+    // inside each subtask worktree before the verifier's harness command.
+    add_column_if_missing(conn, "project_settings", "prepare_command", "TEXT")?;
     // Per-feature user attachments (V19). Defensive add for pre-existing databases.
     add_column_if_missing(conn, "features", "attachments_json", "TEXT")?;
     // Memory v2 enrichment (V17) — defensive for pre-existing databases.

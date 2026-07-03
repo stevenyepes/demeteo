@@ -197,10 +197,42 @@ pub async fn commit_worktree_changes(
     // cleaner pathspec.
     let trimmed = artifact_subdir.trim().trim_start_matches("./");
     let trimmed = trimmed.trim_end_matches('/');
-    let add_paths = if !commit_artifacts && !trimmed.is_empty() {
-        format!(" -- ':!{trimmed}'")
-    } else {
+    let mut exclusions = String::new();
+    if !commit_artifacts && !trimmed.is_empty() {
+        exclusions.push_str(&format!(" ':!{trimmed}'"));
+    }
+    // Exclude any of `paths::DEPENDENCY_CACHE_DIRS` that are actually
+    // symlinks in *this* worktree — i.e. the ones `provision_subtask_worktree`
+    // linked in from the primary checkout. `git add -A` already skips
+    // genuinely gitignored paths, but a symlink standing in for one of
+    // these isn't recognized against a trailing-slash `.gitignore` pattern
+    // (see `paths::DEPENDENCY_CACHE_DIRS`), so without this exclusion the
+    // symlink itself — an absolute host path — would be staged and
+    // committed onto the feature branch. Checking `-L` (rather than
+    // excluding the names unconditionally) means a project that
+    // legitimately tracks a directory sharing one of these names (e.g.
+    // Go's vendored `vendor/`) is unaffected — we only ever skip our own
+    // symlinks, never a real tracked directory.
+    let dirs = crate::paths::DEPENDENCY_CACHE_DIRS.join(" ");
+    // `; true` at the end matters: the loop's exit status would otherwise
+    // be that of the last `[ -L "$d" ]` test, which is false (non-zero)
+    // whenever the final candidate isn't a symlink — `run_command` treats
+    // any non-zero exit as `Err` and the whole exclusion list would be
+    // silently dropped.
+    let symlink_check = format!(
+        "cd {} && for d in {}; do [ -L \"$d\" ] && echo \"$d\"; done; true",
+        paths::shell_escape_posix(worktree_root),
+        dirs,
+    );
+    if let Ok(out) = exec.run_command(machine_id, &symlink_check).await {
+        for name in out.lines().map(str::trim).filter(|s| !s.is_empty()) {
+            exclusions.push_str(&format!(" ':!{name}'"));
+        }
+    }
+    let add_paths = if exclusions.is_empty() {
         String::new()
+    } else {
+        format!(" --{exclusions}")
     };
     let add_cmd = format!(
         "git -C {} add -A{add_paths}",

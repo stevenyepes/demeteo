@@ -59,6 +59,7 @@ interface SettingsCtx {
   coverageCommand: string; setCoverageCommand: (v: string) => void;
   conventionsFile: string; setConventionsFile: (v: string) => void;
   harnesses: { [key: string]: string }; setHarnesses: (v: { [key: string]: string }) => void;
+  prepareCommand: string; setPrepareCommand: (v: string) => void;
   prTemplate: string; setPrTemplate: (v: string) => void;
   conflictPolicy: string; setConflictPolicy: (v: string) => void;
   featureLifecycle: string; setFeatureLifecycle: (v: string) => void;
@@ -176,6 +177,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [coverageCommand, setCoverageCommand] = useState('');
   const [conventionsFile, setConventionsFile] = useState('');
   const [harnesses, setHarnesses] = useState<{ [key: string]: string }>({});
+  const [prepareCommand, setPrepareCommand] = useState('');
   const [prTemplate, setPrTemplate] = useState('');
   const [conflictPolicy, setConflictPolicy] = useState('always_gate');
   const [featureLifecycle, setFeatureLifecycle] = useState('archive');
@@ -380,6 +382,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setCoverageCommand(res.worktree_strategy.coverage_command || '');
           setConventionsFile(res.worktree_strategy.conventions_file || '');
           setHarnesses(res.worktree_strategy.harnesses || {});
+          setPrepareCommand(res.worktree_strategy.prepare_command || '');
           setPrTemplate(res.worktree_strategy.pr_template || '');
           setConflictPolicy(res.conflict_policy);
           setFeatureLifecycle(res.feature_lifecycle);
@@ -476,7 +479,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
   };
 
   const handleSave = async () => {
@@ -499,7 +502,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     } else {
       try {
         await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
         setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, nodes: computeType === 'local' ? 4 : 8 } : p));
         setStatus('success'); setOriginalRepos(selectedRepos);
         setTimeout(() => setStatus('idle'), 1500);
@@ -558,7 +561,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     healthData, isLoadingHealth, healthExpanded, setHealthExpanded, showHealthPanel, healthError,
     defaultBranch, setDefaultBranch, branchPrefix, setBranchPrefix, testCommand, setTestCommand,
     buildCommand, setBuildCommand, coverageCommand, setCoverageCommand, conventionsFile, setConventionsFile,
-    harnesses, setHarnesses, prTemplate, setPrTemplate, conflictPolicy, setConflictPolicy,
+    harnesses, setHarnesses, prepareCommand, setPrepareCommand, prTemplate, setPrTemplate, conflictPolicy, setConflictPolicy,
     featureLifecycle, setFeatureLifecycle, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,
     agentConfigs, setAgentConfigs, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,

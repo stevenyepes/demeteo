@@ -285,6 +285,22 @@ impl GitOpsHelper {
                 self.exec.run_command(machine_str, &fallback_cmd).await?;
             }
         }
+
+        // 6. `git worktree add` gives the subtask a clean checkout — it does
+        //    not carry over gitignored dependency caches (`node_modules/`,
+        //    `target/`, `.venv/`, …). Build/test harnesses run in this
+        //    worktree during agent and verify steps and fail with missing
+        //    dependencies otherwise. Symlink the well-known cache dirs from
+        //    the primary checkout when present there, so the harness sees
+        //    the same install without re-running `npm ci` / `cargo fetch`
+        //    per subtask. Best-effort: a failed link here shouldn't block
+        //    worktree provisioning — the step will simply see the missing
+        //    dependency and the harness fails as before.
+        let _ = self
+            .exec
+            .run_command(machine_str, &link_dependency_caches_cmd(repo_dir, &wt_dir))
+            .await;
+
         Ok(wt_dir)
     }
 
@@ -443,5 +459,98 @@ impl GitOpsHelper {
             return true;
         };
         current_sha.trim() != base.trim()
+    }
+
+    /// Resolve the commit where `branch` most recently diverged from
+    /// `default_branch` — the feature's fork point. Used to compute a
+    /// review diff that always covers the complete feature change,
+    /// independent of how many `on_failure` retries have merged work
+    /// back into `branch` since (a per-attempt base SHA, recaptured as
+    /// `branch`'s current tip on each retry, already includes prior
+    /// attempts' merged commits and so understates the diff).
+    ///
+    /// Returns `None` if either ref doesn't resolve or `git merge-base`
+    /// fails (e.g. the two branches share no history) — callers fall
+    /// back to their pre-existing per-attempt base.
+    pub async fn merge_base(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        default_branch: &str,
+        branch: &str,
+    ) -> Option<String> {
+        let machine_str = machine_id.unwrap_or("local");
+        let cmd = format!(
+            "git -C {} merge-base {} {}",
+            paths::shell_escape_posix(repo_dir),
+            paths::shell_escape_posix(default_branch),
+            paths::shell_escape_posix(branch),
+        );
+        self.exec
+            .run_command(machine_str, &cmd)
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+}
+
+/// Build the shell command that symlinks each entry in
+/// [`paths::DEPENDENCY_CACHE_DIRS`] from `repo_dir` into `wt_dir`, but
+/// only when the entry exists as a real path in `repo_dir` *and* git
+/// considers it ignored there. The `check-ignore` gate is the safety
+/// net: if a project genuinely tracks a directory that happens to share
+/// one of these names (unusual, but possible), it will not be ignored,
+/// so we leave the worktree's own (correct) checkout of it alone rather
+/// than shadowing it with a symlink to a different branch's copy.
+fn link_dependency_caches_cmd(repo_dir: &str, wt_dir: &str) -> String {
+    let repo_q = paths::shell_escape_posix(repo_dir);
+    let wt_q = paths::shell_escape_posix(wt_dir);
+    let dirs = paths::DEPENDENCY_CACHE_DIRS.join(" ");
+    format!(
+        "for d in {dirs}; do \
+         if [ -e {repo}/\"$d\" ] && [ ! -e {wt}/\"$d\" ] && git -C {repo} check-ignore -q \"$d\" 2>/dev/null; then \
+         ln -sfn {repo}/\"$d\" {wt}/\"$d\"; \
+         fi; \
+         done",
+        dirs = dirs,
+        repo = repo_q,
+        wt = wt_q,
+    )
+}
+
+#[cfg(test)]
+mod dependency_cache_link_tests {
+    use super::link_dependency_caches_cmd;
+
+    #[test]
+    fn command_iterates_every_known_cache_dir() {
+        let cmd = link_dependency_caches_cmd("/repo", "/repo_wt_1");
+        for dir in crate::paths::DEPENDENCY_CACHE_DIRS {
+            assert!(
+                cmd.contains(dir),
+                "expected command to reference '{}': {}",
+                dir,
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn command_gates_on_existence_and_check_ignore() {
+        // `/repo` and `/repo_wt_1` contain only shell-safe characters, so
+        // `shell_escape_posix` leaves them bare (no quoting needed).
+        let cmd = link_dependency_caches_cmd("/repo", "/repo_wt_1");
+        assert!(cmd.contains("check-ignore -q"));
+        assert!(cmd.contains("[ -e /repo/\"$d\" ]"));
+        assert!(cmd.contains("[ ! -e /repo_wt_1/\"$d\" ]"));
+        assert!(cmd.contains("ln -sfn /repo/\"$d\" /repo_wt_1/\"$d\""));
+    }
+
+    #[test]
+    fn paths_with_special_chars_are_escaped() {
+        let cmd = link_dependency_caches_cmd("/repos/my repo", "/repos/my repo_wt_1");
+        assert!(cmd.contains("'/repos/my repo'"));
+        assert!(cmd.contains("'/repos/my repo_wt_1'"));
     }
 }

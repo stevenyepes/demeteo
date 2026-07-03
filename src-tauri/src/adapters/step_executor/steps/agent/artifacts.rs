@@ -46,16 +46,28 @@ impl ExecutionDriver {
             }
         }
 
-        // 2. Compute git diff
-        let diff_ref = worktree_base_ref.as_deref().unwrap_or("HEAD");
-        let diff_body = compute_git_diff(&*self.exec, machine_str, wt_path, diff_ref).await;
+        // 2. Compute git diff. Prefer the feature's fork point (where
+        // `branch_name` diverged from the default branch) over
+        // `worktree_base_ref` (this attempt's pre-run tip) so the review
+        // diff always covers the complete feature change, not just the
+        // latest retry's incremental fix — see `resolve_fork_point_ref`.
+        // `worktree_base_ref` remains the fallback (fork point
+        // unavailable, e.g. default branch not configured) and is still
+        // used unchanged by the no-op-commit guard in `handle_agent_step`.
+        let fork_point = self.resolve_fork_point_ref(machine_str).await;
+        let diff_ref = fork_point
+            .as_deref()
+            .or(worktree_base_ref.as_deref())
+            .unwrap_or("HEAD")
+            .to_string();
+        let diff_body = compute_git_diff(&*self.exec, machine_str, wt_path, &diff_ref).await;
         if !diff_body.trim().is_empty() {
             produced_artifacts.push(Artifact {
                 name: "code-diff".to_string(),
                 mime: "text/x-diff".into(),
                 content: diff_body,
                 source: crate::domain::artifact::ArtifactSource::Diff {
-                    base: diff_ref.to_string(),
+                    base: diff_ref.clone(),
                     head: "WORKTREE".to_string(),
                     path_filter: None,
                 },

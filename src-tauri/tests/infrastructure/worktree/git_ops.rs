@@ -1021,3 +1021,271 @@ async fn test_scope_all_writes_sentinel_disables_enforcement() {
         .await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Regression: a fresh `git worktree add` doesn't carry over gitignored
+/// dependency caches (`node_modules/`, `target/`, …) because they were
+/// never committed. Without symlinking them in from the primary
+/// checkout, any harness run inside the subtask worktree (`npm test`,
+/// `cargo test`) fails immediately on missing dependencies.
+#[tokio::test]
+async fn test_provision_subtask_worktree_symlinks_dependency_caches() {
+    let (dir, helper) = make_repo("wt_dep_link").await;
+    let repo = dir.to_string_lossy().to_string();
+
+    // Simulate an already-installed primary checkout: a gitignored
+    // `node_modules/` with real content, plus a `target/` dir that is
+    // NOT gitignored (e.g. a misconfigured or unusual project) — this
+    // one must NOT be linked.
+    std::fs::write(format!("{repo}/.gitignore"), "node_modules/\n").unwrap();
+    std::fs::create_dir_all(format!("{repo}/node_modules")).unwrap();
+    std::fs::write(format!("{repo}/node_modules/pkg.js"), "module.exports = 1;").unwrap();
+    std::fs::create_dir_all(format!("{repo}/target")).unwrap();
+    std::fs::write(format!("{repo}/target/artifact.bin"), "binary").unwrap();
+    let exec = LocalSubprocessAdapter::new();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{repo}\" add .gitignore"))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" commit -m \"add gitignore\""),
+        )
+        .await;
+
+    let wt_path = helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-deps")
+        .await
+        .expect("provision should succeed");
+
+    // node_modules/ is gitignored in the primary checkout → symlinked in,
+    // and readable through the link.
+    let linked_pkg = format!("{wt_path}/node_modules/pkg.js");
+    assert!(
+        std::path::Path::new(&linked_pkg).exists(),
+        "expected node_modules/pkg.js to be reachable via symlink in the worktree"
+    );
+    let meta = std::fs::symlink_metadata(format!("{wt_path}/node_modules")).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "expected node_modules to be a symlink in the subtask worktree"
+    );
+
+    // target/ is NOT gitignored in this repo → must be left alone (git's
+    // own worktree checkout, empty, not our symlink).
+    let target_meta = std::fs::symlink_metadata(format!("{wt_path}/target"));
+    assert!(
+        target_meta.is_err(),
+        "target/ was not gitignored in this repo and must not be symlinked"
+    );
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt_path}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
+
+/// Regression: git does not recognize a symlink standing in for a
+/// directory as matching a trailing-slash `.gitignore` pattern (e.g.
+/// `node_modules/`), so the symlinked dependency cache shows up as
+/// untracked. `commit_worktree_changes`'s `git add -A` must not stage
+/// it — committing an absolute host path onto the feature branch would
+/// corrupt the branch for anyone else who checks it out.
+#[tokio::test]
+async fn test_commit_worktree_changes_never_stages_symlinked_dependency_caches() {
+    let (dir, helper) = make_repo("wt_dep_commit").await;
+    let repo = dir.to_string_lossy().to_string();
+
+    std::fs::write(format!("{repo}/.gitignore"), "node_modules/\n").unwrap();
+    std::fs::create_dir_all(format!("{repo}/node_modules")).unwrap();
+    std::fs::write(format!("{repo}/node_modules/pkg.js"), "module.exports = 1;").unwrap();
+    let exec = LocalSubprocessAdapter::new();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{repo}\" add .gitignore"))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" commit -m \"add gitignore\""),
+        )
+        .await;
+
+    let wt_path = helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-commit")
+        .await
+        .expect("provision should succeed");
+
+    // Sanity: confirm the symlink is present before committing (same
+    // assertion as the provisioning test, kept local so this test is
+    // self-contained if run in isolation).
+    let meta = std::fs::symlink_metadata(format!("{wt_path}/node_modules")).unwrap();
+    assert!(meta.file_type().is_symlink());
+
+    // A real change the agent made, alongside the pre-existing symlink.
+    std::fs::write(format!("{wt_path}/feature.txt"), "actual work").unwrap();
+
+    let sha = crate::adapters::step_executor::artifacts::commit_worktree_changes(
+        &exec,
+        "local",
+        &wt_path,
+        "test commit",
+        "artifacts/",
+        false,
+    )
+    .await
+    .expect("commit should succeed");
+
+    let committed_files = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{wt_path}\" show --name-only --pretty=format: {sha}"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        committed_files.contains("feature.txt"),
+        "the real change must still be committed: {committed_files}"
+    );
+    assert!(
+        !committed_files.contains("node_modules"),
+        "the symlinked dependency cache must never be committed: {committed_files}"
+    );
+
+    // The working tree must still have the symlink intact (unaffected by
+    // the exclusion — we skip *staging* it, not touch it on disk).
+    let meta_after = std::fs::symlink_metadata(format!("{wt_path}/node_modules")).unwrap();
+    assert!(meta_after.file_type().is_symlink());
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt_path}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
+
+/// Regression: the critic (and any other reviewer) must see the
+/// *complete* feature diff after a retry, not just the latest
+/// incremental fix. This reproduces the exact scenario reported: an
+/// implement step merges v1 into the feature branch, validation fails,
+/// the implement step retries and merges v2. A per-attempt base SHA
+/// (recaptured as the feature branch's tip at the start of the retry)
+/// already includes v1's commits, so a diff computed from it only shows
+/// v2 — `merge_base` against the default branch must return the
+/// original fork point regardless, so a diff computed from it covers
+/// v1 and v2 together.
+#[tokio::test]
+async fn test_merge_base_stays_at_fork_point_across_retries() {
+    let (dir, helper) = make_repo("merge_base_fork_point").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // The fork point: where "feature" branches off "main".
+    let fork_point = exec
+        .run_command("local", &format!("git -C \"{repo}\" rev-parse HEAD"))
+        .await
+        .unwrap()
+        .trim()
+        .to_string();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{repo}\" branch feature"))
+        .await;
+
+    // Attempt 1 (v1): merged into the feature branch, as a successful
+    // implement step would do.
+    let _ = exec
+        .run_command("local", &format!("git -C \"{repo}\" checkout feature"))
+        .await;
+    std::fs::write(format!("{repo}/v1.txt"), "v1 change").unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{repo}\" add v1.txt"))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" commit -m \"v1 implement\""),
+        )
+        .await;
+
+    // The buggy per-attempt base: `rev-parse feature` recaptured at the
+    // start of the retry — already past v1.
+    let per_attempt_base_v2 = exec
+        .run_command("local", &format!("git -C \"{repo}\" rev-parse feature"))
+        .await
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_ne!(
+        per_attempt_base_v2, fork_point,
+        "sanity: v1's commit must have moved the per-attempt base past the fork point"
+    );
+
+    // Attempt 2 (v2): the retry's incremental fix, also merged in.
+    std::fs::write(format!("{repo}/v2.txt"), "v2 fix").unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{repo}\" add v2.txt"))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" commit -m \"v2 retry fix\""),
+        )
+        .await;
+
+    // `merge_base` must still return the ORIGINAL fork point, not the
+    // per-attempt base captured mid-retry.
+    let resolved = helper
+        .merge_base(None, &repo, "main", "feature")
+        .await
+        .expect("merge_base should resolve");
+    assert_eq!(
+        resolved, fork_point,
+        "merge_base must stay at the true fork point across retries"
+    );
+
+    // Prove the practical consequence: a diff from the fork point
+    // contains both v1 and v2; a diff from the buggy per-attempt base
+    // contains only v2.
+    let full_diff = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" diff {resolved}..feature --name-only"),
+        )
+        .await
+        .unwrap();
+    assert!(full_diff.contains("v1.txt"), "full_diff: {full_diff}");
+    assert!(full_diff.contains("v2.txt"), "full_diff: {full_diff}");
+
+    let buggy_diff = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" diff {per_attempt_base_v2}..feature --name-only"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !buggy_diff.contains("v1.txt"),
+        "sanity: this demonstrates the bug being fixed — buggy_diff: {buggy_diff}"
+    );
+    assert!(buggy_diff.contains("v2.txt"), "buggy_diff: {buggy_diff}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_merge_base_returns_none_for_unrelated_branches() {
+    let conn = Connection::open_in_memory().unwrap();
+    let db = Arc::new(SqliteAdapter::new(conn).unwrap()) as Arc<dyn AppSettingsRepository>;
+    let helper = GitOpsHelper::new(db, Arc::new(LocalSubprocessAdapter::new()));
+    let resolved = helper
+        .merge_base(None, "/tmp/demeteo_nonexistent_repo_xyz", "main", "feature")
+        .await;
+    assert!(resolved.is_none());
+}

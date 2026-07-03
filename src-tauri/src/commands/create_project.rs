@@ -397,6 +397,7 @@ pub async fn submit_create_project_step(
                     conventions_file: None,
                     pr_template: None,
                     harnesses: None,
+                    prepare_command: None,
                     extra_writable_paths: Vec::new(),
                 },
                 conflict_policy: "always_gate".to_string(),

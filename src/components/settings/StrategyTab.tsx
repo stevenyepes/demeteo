@@ -31,6 +31,16 @@ export function StrategyTab() {
         <p className="text-xs text-slate-400 leading-relaxed">
           Define named test harness commands to verify agent-generated code (e.g., key: <code>lint</code>, command: <code>npm run lint</code>).
         </p>
+        <div>
+          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Prepare Command (optional)</label>
+          <input type="text" value={s.prepareCommand} onChange={e => s.setPrepareCommand(e.target.value)} placeholder="e.g. npm ci or cargo fetch" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+            Runs inside each subtask worktree right before the harness. Demeteo already symlinks gitignored dependency
+            caches (<code className="text-slate-300">node_modules/</code>, <code className="text-slate-300">target/</code>, <code className="text-slate-300">.venv/</code>, …) in
+            from the primary checkout, so most projects don't need this — reach for it only for codegen, DB migrations,
+            or a freshly-added dependency the symlink can't cover.
+          </p>
+        </div>
         <div className="space-y-3">
           {Object.entries(s.harnesses).map(([name, cmd]) => (
             <div key={name} className="flex gap-2 items-center">

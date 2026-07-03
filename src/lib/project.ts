@@ -84,6 +84,7 @@ export interface ProjectSettingsInput {
   conventions_file?: string | null;
   pr_template?: string | null;
   harnesses?: Record<string, string> | null;
+  prepare_command?: string | null;
   extra_writable_paths?: string[] | null;
   conflict_policy?: string;
   feature_lifecycle?: string;
@@ -142,6 +143,10 @@ export async function saveProjectSettings(
               ? input.harnesses
               : null)
           : (baseWs?.harnesses ?? null),
+      prepare_command:
+        input.prepare_command !== undefined
+          ? input.prepare_command
+          : (baseWs?.prepare_command ?? null),
       extra_writable_paths:
         input.extra_writable_paths !== undefined
           ? (Array.isArray(input.extra_writable_paths)

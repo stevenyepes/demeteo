@@ -1,7 +1,7 @@
 {
   "id": "wf-starter-standard",
   "name": "Standard Feature Pipeline",
-  "description": "Research the codebase, write a spec, implement in parallel, critic-review, validate with tests and security scan, and ship. Best for new features of moderate-to-high complexity.",
+  "description": "Research the codebase, write a spec, implement in parallel, validate with tests and security scan, critic-review, and ship. Best for new features of moderate-to-high complexity.",
   "is_starter": true,
   "steps": [
     {
@@ -73,31 +73,11 @@
       ]
     },
     {
-      "id": "s-critic",
-      "kind": "agent",
-      "title": "Critic Review",
-      "agent_kind": null,
-      "prompt_template": "You are a senior code reviewer with an adversarial mindset. Your role is to find problems — not to be kind.\n\nFeature goal: {{feature_description}}\nSpec artifact: [attached — s-spec]\nImplementation subtask artifacts: [attached — all s-implement summaries]\n\n## Review dimensions (check each explicitly)\n1. **Correctness** — does the implementation satisfy every acceptance criterion?\n2. **Spec compliance** — are there deviations from the spec's constraints?\n3. **Security** — hardcoded secrets, injection risks, path traversal, TOCTOU vulnerabilities.\n4. **Performance** — N+1 queries, unbounded loops, unnecessary allocations on hot paths.\n5. **Test coverage** — are edge cases and error paths tested?\n6. **Code quality** — naming, duplication, dead code, overly complex logic.\n\n## Output artifact (required)\n- `## Critical Issues` — MUST be fixed before ship (blocking)\n- `## Major Issues` — should be fixed (non-blocking but important)\n- `## Minor Issues` — nice-to-fix\n- `## Verdict` — one of: `PASS`, `PASS_WITH_NOTES`, `FAIL`\n\n## Stop condition\nYou are done when all 6 dimensions are assessed and a Verdict is written.",
-      "capability": "artifacts",
-      "artifacts": [
-        {
-          "name": "critic-review",
-          "capture": {
-            "kind": "last_write_to",
-            "path": "artifacts/critic-review.md"
-          },
-          "mode": "full"
-        }
-      ],
-      "on_failure": null,
-      "max_iterations": 1
-    },
-    {
       "id": "s-validate",
       "kind": "agent",
       "title": "Validate, Test & Security Scan",
       "agent_kind": null,
-      "prompt_template": "You are a QA engineer running the final validation gate before this feature merges. You VERIFY only — you do not modify source code. If something is broken, you report it precisely so an implementation step fixes it.\n\nFeature branch: {{feature_branch}}\nTest command: {{test_command}}\nCritic review artifact: [attached — s-critic]\n\n## Validation sequence (run in order, stop and report on first hard failure)\n1. **Build** — `{{build_command}}`. If it fails, report and stop.\n2. **Lint & Type Check** — run the project linter with warnings-as-errors.\n3. **Unit & Integration Tests** — `{{test_command}}`. Report pass/fail counts.\n4. **Security Scan** — run `cargo audit` or `npm audit`. Flag any `critical` or `high` advisories.\n5. **Critic Issue Resolution** — verify whether every `Critical Issue` from the critic artifact is resolved. Do NOT fix anything yourself; for each unresolved item, write a precise, actionable description of what remains so the implementation step can address it on retry.\n\n## Output artifact\n- Build: PASS / FAIL\n- Lint: PASS / FAIL + warning count\n- Tests: X passed, Y failed (list failing tests)\n- Security: N advisories (list critical/high)\n- Critic critical items resolved: list (and, for unresolved, what must be fixed)\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the artifact contains all five sections and an Overall verdict.",
+      "prompt_template": "You are a QA engineer running the final validation gate before this feature merges. You VERIFY only — you do not modify source code. If something is broken, you report it precisely so an implementation step fixes it.\n\nFeature branch: {{feature_branch}}\nTest command: {{test_command}}\n\n## Validation sequence (run in order, stop and report on first hard failure)\n1. **Build** — `{{build_command}}`. If it fails, report and stop.\n2. **Lint & Type Check** — run the project linter with warnings-as-errors.\n3. **Unit & Integration Tests** — `{{test_command}}`. Report pass/fail counts.\n4. **Security Scan** — run `cargo audit` or `npm audit`. Flag any `critical` or `high` advisories.\n\n## Output artifact\n- Build: PASS / FAIL\n- Lint: PASS / FAIL + warning count\n- Tests: X passed, Y failed (list failing tests)\n- Security: N advisories (list critical/high)\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the artifact contains all four sections and an Overall verdict.",
       "capability": "verify",
       "artifacts": [
         {
@@ -117,6 +97,26 @@
         "harness_name": null,
         "verdict_key": "verdict"
       }
+    },
+    {
+      "id": "s-critic",
+      "kind": "agent",
+      "title": "Critic Review",
+      "agent_kind": null,
+      "prompt_template": "You are a senior code reviewer with an adversarial mindset. Your role is to find problems — not to be kind.\n\nFeature goal: {{feature_description}}\nSpec artifact: [attached — s-spec]\nImplementation subtask artifacts: [attached — all s-implement summaries]\nValidation report (build and tests already passed): [attached — s-validate]\n\n## Review dimensions (check each explicitly)\n1. **Correctness** — does the implementation satisfy every acceptance criterion?\n2. **Spec compliance** — are there deviations from the spec's constraints?\n3. **Security** — hardcoded secrets, injection risks, path traversal, TOCTOU vulnerabilities.\n4. **Performance** — N+1 queries, unbounded loops, unnecessary allocations on hot paths.\n5. **Test coverage** — are edge cases and error paths tested?\n6. **Code quality** — naming, duplication, dead code, overly complex logic.\n\n## Output artifact (required)\n- `## Critical Issues` — MUST be fixed before ship (blocking)\n- `## Major Issues` — should be fixed (non-blocking but important)\n- `## Minor Issues` — nice-to-fix\n- `## Verdict` — one of: `PASS`, `PASS_WITH_NOTES`, `FAIL`\n\n## Stop condition\nYou are done when all 6 dimensions are assessed and a Verdict is written.",
+      "capability": "artifacts",
+      "artifacts": [
+        {
+          "name": "critic-review",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/critic-review.md"
+          },
+          "mode": "full"
+        }
+      ],
+      "on_failure": null,
+      "max_iterations": 1
     },
     {
       "id": "s-gate-ship",

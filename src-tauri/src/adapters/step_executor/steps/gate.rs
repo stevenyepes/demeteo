@@ -573,10 +573,10 @@ mod redirect_target_tests {
     #[test]
     fn standard_pipeline_ship_gate_feedback_lands_on_implement() {
         // Mirror `workflows/standard-feature-pipeline.json` exactly:
-        // s-gate-ship at index 6, s-validate (verify) at index 5,
-        // s-critic (artifacts) at index 4, s-implement (implement)
+        // s-gate-ship at index 6, s-critic (artifacts) at index 5,
+        // s-validate (verify) at index 4, s-implement (implement)
         // at index 3. Free-text implementation feedback must land on
-        // index 3, not on index 5.
+        // index 3, not on index 4 or 5.
         let steps = vec![
             step("s-research"),
             step("s-spec"),
@@ -586,12 +586,12 @@ mod redirect_target_tests {
                 crate::domain::permission::StepCapability::Implement,
             ),
             step_with_cap(
-                "s-critic",
-                crate::domain::permission::StepCapability::Artifacts,
-            ),
-            step_with_cap(
                 "s-validate",
                 crate::domain::permission::StepCapability::Verify,
+            ),
+            step_with_cap(
+                "s-critic",
+                crate::domain::permission::StepCapability::Artifacts,
             ),
             step("s-gate-ship"),
         ];
@@ -604,7 +604,7 @@ mod redirect_target_tests {
         assert_eq!(
             target,
             Some(3),
-            "must walk past s-validate and s-critic to s-implement"
+            "must walk past s-critic and s-validate to s-implement"
         );
     }
 

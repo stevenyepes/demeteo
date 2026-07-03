@@ -150,6 +150,17 @@ fn is_excluded(path: &str, extra: &[&str]) -> bool {
     if path.starts_with(".demeteo/") || path == ".demeteo" {
         return true;
     }
+    // Dependency-cache dirs that `provision_subtask_worktree` may have
+    // symlinked in (see `paths::DEPENDENCY_CACHE_DIRS`) show up as
+    // untracked in `git status` because a symlink doesn't match a
+    // trailing-slash `.gitignore` pattern. They're not the agent's work —
+    // filter them out defensively even though snapshot capture normally
+    // runs after the symlinks are created (so they'd already be part of
+    // the baseline `dirty` set and excluded from the delta on that path
+    // alone).
+    if crate::paths::DEPENDENCY_CACHE_DIRS.contains(&path) {
+        return true;
+    }
     for ex in extra {
         if path == *ex {
             return true;

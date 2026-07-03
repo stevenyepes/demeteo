@@ -239,6 +239,36 @@ pub fn shell_escape_posix(s: &str) -> String {
     crate::shared::shell::escape_posix(s)
 }
 
+/// Well-known gitignored dependency-cache directories that a fresh
+/// `git worktree add` doesn't carry over — they're gitignored, so no
+/// commit brings their contents along, and a bare worktree checkout
+/// leaves them empty. Build/test harnesses (`npm test`, `cargo test`,
+/// `pytest`) fail immediately without them.
+///
+/// `provision_subtask_worktree` symlinks each of these from the primary
+/// checkout into every subtask worktree when present and gitignored
+/// there, so steps get a working install without re-installing per
+/// worktree.
+///
+/// Important: a symlink standing in for a directory is NOT recognized
+/// by git as matching a trailing-slash `.gitignore` pattern (e.g.
+/// `node_modules/` matches a real directory but not a symlink named
+/// `node_modules`), so it shows up as untracked. Every place that
+/// stages files with `git add -A` (`commit_worktree_changes`) must
+/// pathspec-exclude these names explicitly — otherwise the symlink
+/// itself (an absolute host path) gets committed into the feature
+/// branch.
+pub const DEPENDENCY_CACHE_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    ".venv",
+    "venv",
+    ".next",
+    "vendor",
+    ".tox",
+    "__pycache__",
+];
+
 /// Current wall-clock time in milliseconds since the UNIX epoch.
 ///
 /// Used for `created_at` / `updated_at` columns, sidebar ordering, and

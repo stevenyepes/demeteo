@@ -34,12 +34,15 @@ impl ExecutionDriver {
         });
 
         let feature = self.features.get(&self.f_id).ok().flatten();
-        let mut harnesses = None;
-        if let Some(ref f) = feature {
-            if let Ok(Some(settings)) = self.projects.get_settings(&f.project_id) {
-                harnesses = settings.worktree_strategy.harnesses;
-            }
-        }
+        let settings = feature
+            .as_ref()
+            .and_then(|f| self.projects.get_settings(&f.project_id).ok().flatten());
+        let harnesses = settings
+            .as_ref()
+            .and_then(|s| s.worktree_strategy.harnesses.clone());
+        let prepare_command = settings
+            .as_ref()
+            .and_then(|s| s.worktree_strategy.prepare_command.clone());
 
         // Resolve the harness command: an explicitly named harness from project
         // settings takes priority, otherwise fall back to the project's detected
@@ -55,14 +58,46 @@ impl ExecutionDriver {
             .and_then(|name| harnesses.as_ref().and_then(|h| h.get(name)))
             .cloned()
             .or_else(|| {
-                feature.as_ref().and_then(|f| {
-                    self.projects
-                        .get_settings(&f.project_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|s| s.worktree_strategy.test_command.clone())
-                })
+                settings
+                    .as_ref()
+                    .and_then(|s| s.worktree_strategy.test_command.clone())
             });
+
+        // Restore write permissions before running anything. The capability
+        // scope fence (`apply_artifact_scope`) ran before the agent spawned
+        // and left most of the worktree `a-w`. The agent is done at this
+        // point, so the fence has served its purpose. Build tools (cargo,
+        // npm, tsc) need to write to target/, node_modules/, etc. — without
+        // this they fail with EPERM, not a real test failure.
+        if prepare_command.is_some() || harness_cmd.is_some() {
+            let _ = self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "chmod -R u+w {} 2>/dev/null || true",
+                        paths::shell_escape_posix(wt_path)
+                    ),
+                )
+                .await;
+        }
+
+        // Run the project's optional prepare command (`npm ci`, `cargo
+        // fetch`, codegen, migrations, …) before the harness. Dependency
+        // caches present in the primary checkout are already symlinked in
+        // by `provision_subtask_worktree`; this step exists for whatever
+        // that can't cover — a freshly added dependency, generated code,
+        // a schema migration the harness assumes has already run.
+        if let Some(ref cmd) = prepare_command {
+            let prepare_run_cmd = format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
+            if let Err(out) = self.exec.run_command(machine_str, &prepare_run_cmd).await {
+                let truncated = tail_chars(&out, 2000);
+                return Err(crate::domain::verifier::VerifierError::Verdict(format!(
+                    "prepare command '{}' exited with failure:\n{}",
+                    cmd, truncated
+                )));
+            }
+        }
 
         // Run the harness and capture both the output and whether it succeeded.
         // A non-zero exit code is an objective signal — we fail immediately
@@ -71,22 +106,6 @@ impl ExecutionDriver {
         // Err → non-zero exit or I/O error (both are failures).
         let harness_result: Option<(String, bool)> = match harness_cmd {
             Some(ref cmd) => {
-                // Restore write permissions before running the harness. The
-                // capability scope fence (`apply_artifact_scope`) ran before the
-                // agent spawned and left most of the worktree `a-w`. The agent is
-                // done at this point, so the fence has served its purpose. Build
-                // tools (cargo, npm, tsc) need to write to target/, node_modules/,
-                // etc. — without this they fail with EPERM, not a real test failure.
-                let _ = self
-                    .exec
-                    .run_command(
-                        machine_str,
-                        &format!(
-                            "chmod -R u+w {} 2>/dev/null || true",
-                            paths::shell_escape_posix(wt_path)
-                        ),
-                    )
-                    .await;
                 let harness_run_cmd =
                     format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
                 match self.exec.run_command(machine_str, &harness_run_cmd).await {
@@ -101,17 +120,14 @@ impl ExecutionDriver {
         // reason feeds back into the retry loop. The verifier agent is skipped —
         // its job is interpretation, not override of an objective exit code.
         if let Some((ref out, false)) = harness_result {
-            let truncated: String = out.chars().take(2000).collect();
+            let truncated = tail_chars(out, 2000);
             return Err(crate::domain::verifier::VerifierError::Verdict(format!(
                 "test harness exited with failure:\n{}",
                 truncated
             )));
         }
 
-        let mut produced_artifacts_summary = String::new();
-        for art in produced_artifacts {
-            produced_artifacts_summary.push_str(&format!("- File/Artifact: {}\n", art.name));
-        }
+        let produced_artifacts_summary = format_produced_artifacts_summary(produced_artifacts);
 
         let harness_section = match (&harness_cmd, &harness_result) {
             (Some(cmd), Some((output, _))) => format!(
@@ -439,6 +455,57 @@ impl ExecutionDriver {
     }
 }
 
+/// Build the "we also produced/modified the following files/artifacts"
+/// section of the verifier prompt. For `ToolWrite`-sourced artifacts
+/// (the common case: a report the step's own agent turn wrote via
+/// `LastWriteTo`, e.g. `validation-report.md`), point the verifier at
+/// the actual worktree-relative path and tell it to `Read` the file —
+/// its `cwd` is the same worktree, so the path resolves directly. Without
+/// this, the verifier only ever saw a bare artifact name it had no way
+/// to locate, so its judgment was effectively limited to the harness
+/// output plus generic instructions — none of the rich analysis the
+/// step's own agent turn produced (critic-issue cross-checks, security
+/// audit findings, etc.) ever reached the verdict.
+///
+/// Other artifact sources (`Diff`, `AgentText`, …) fall back to the
+/// bare-name line — a `Diff` artifact in particular is never written to
+/// disk in the worktree, so there's no path to point at.
+fn format_produced_artifacts_summary(
+    produced_artifacts: &[crate::domain::artifact::Artifact],
+) -> String {
+    let mut summary = String::new();
+    for art in produced_artifacts {
+        match &art.source {
+            crate::domain::artifact::ArtifactSource::ToolWrite { path } => {
+                summary.push_str(&format!(
+                    "- `{}` (artifact: {}) — use your Read tool to inspect the full content\n",
+                    path, art.name
+                ));
+            }
+            _ => {
+                summary.push_str(&format!("- File/Artifact: {}\n", art.name));
+            }
+        }
+    }
+    summary
+}
+
+/// Truncate `s` to at most `max` characters, keeping the *tail* rather
+/// than the head. Build/test failures are almost always at the end of
+/// the output (the failing assertion, the panic message, the compiler
+/// error) — a long build log's useful signal is at the bottom. Keeping
+/// the head instead (the previous behavior) surfaced the install/build
+/// banner and truncated away exactly the information the retry loop
+/// needs to act on.
+fn tail_chars(s: &str, max: usize) -> String {
+    let total = s.chars().count();
+    if total <= max {
+        return s.to_string();
+    }
+    let skip = total - max;
+    s.chars().skip(skip).collect()
+}
+
 /// Find the index of the `}` that closes the `{` at `start` in `bytes`,
 /// correctly skipping over string literals (including escaped characters).
 /// Returns `None` if the braces are unbalanced.
@@ -472,4 +539,110 @@ fn find_matching_close_brace(bytes: &[u8], start: usize) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod produced_artifacts_summary_tests {
+    use super::format_produced_artifacts_summary;
+    use crate::domain::artifact::{Artifact, ArtifactSource};
+
+    #[test]
+    fn tool_write_artifact_points_at_its_worktree_path() {
+        let arts = vec![Artifact::tool_write(
+            "validation-report",
+            "artifacts/validation-report.md",
+            "Overall: READY TO SHIP".to_string(),
+        )];
+        let summary = format_produced_artifacts_summary(&arts);
+        assert!(
+            summary.contains("artifacts/validation-report.md"),
+            "expected the worktree-relative path, got: {summary}"
+        );
+        assert!(
+            summary.contains("Read"),
+            "expected an instruction to Read the file, got: {summary}"
+        );
+    }
+
+    #[test]
+    fn non_tool_write_artifact_falls_back_to_bare_name() {
+        let arts = vec![Artifact {
+            name: "code-diff".to_string(),
+            mime: "text/x-diff".into(),
+            content: "diff --git a/x b/x".to_string(),
+            source: ArtifactSource::Diff {
+                base: "abc123".to_string(),
+                head: "WORKTREE".to_string(),
+                path_filter: None,
+            },
+        }];
+        let summary = format_produced_artifacts_summary(&arts);
+        assert!(summary.contains("File/Artifact: code-diff"));
+    }
+
+    #[test]
+    fn empty_input_produces_empty_summary() {
+        assert_eq!(format_produced_artifacts_summary(&[]), "");
+    }
+
+    #[test]
+    fn multiple_artifacts_each_get_their_own_line() {
+        let arts = vec![
+            Artifact::tool_write("validation-report", "artifacts/validation-report.md", "x"),
+            Artifact::tool_write("critic-review", "artifacts/critic-review.md", "y"),
+        ];
+        let summary = format_produced_artifacts_summary(&arts);
+        assert_eq!(summary.lines().count(), 2);
+        assert!(summary.contains("artifacts/validation-report.md"));
+        assert!(summary.contains("artifacts/critic-review.md"));
+    }
+}
+
+#[cfg(test)]
+mod tail_chars_tests {
+    use super::tail_chars;
+
+    #[test]
+    fn returns_input_unchanged_when_under_limit() {
+        assert_eq!(tail_chars("short output", 2000), "short output");
+    }
+
+    #[test]
+    fn returns_input_unchanged_when_exactly_at_limit() {
+        let s = "x".repeat(2000);
+        assert_eq!(tail_chars(&s, 2000), s);
+    }
+
+    #[test]
+    fn keeps_the_tail_not_the_head() {
+        // The failing assertion lives at the end of a long build log —
+        // the truncated output must contain it, not the install banner.
+        let head = "npm install banner...\n".repeat(200);
+        let tail =
+            "\nFAIL src/foo.test.ts\n  ✕ should do the thing\nAssertionError: expected 1 to be 2";
+        let full = format!("{head}{tail}");
+        let max = tail.chars().count();
+        let truncated = tail_chars(&full, max);
+        assert_eq!(
+            truncated, tail,
+            "expected exactly the tail (no banner leakage) when max == tail length"
+        );
+    }
+
+    #[test]
+    fn truncated_length_matches_max() {
+        let s = "a".repeat(5000);
+        let truncated = tail_chars(&s, 2000);
+        assert_eq!(truncated.chars().count(), 2000);
+    }
+
+    #[test]
+    fn respects_char_boundaries_with_multibyte_content() {
+        // Every char is 3 bytes (multi-byte UTF-8); a byte-oriented slice
+        // (e.g. naive `s[s.len() - max..]`) would panic mid-character.
+        let s = "€".repeat(3000);
+        let truncated = tail_chars(&s, 2000);
+        assert_eq!(truncated.chars().count(), 2000);
+        assert!(truncated.chars().all(|c| c == '€'));
+    }
 }

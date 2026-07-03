@@ -523,6 +523,14 @@ export interface WorktreeStrategy {
   pr_template: string | null;
   harnesses?: Record<string, string> | null;
   /**
+   * Optional shell command run inside each subtask worktree before the
+   * verifier's harness command (e.g. `npm ci`, `cargo fetch`, `prisma
+   * generate`). Runs after dependency-cache dirs from the primary
+   * checkout are symlinked in and after write permissions are restored.
+   * `null`/unset skips this step.
+   */
+  prepare_command?: string | null;
+  /**
    * Project-level writability exceptions for the chmod scope fence.
    * Repo-relative paths the agent may write to even when its step
    * capability (`read_only`, `artifacts`, `verify`) would otherwise

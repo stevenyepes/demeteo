@@ -39,6 +39,15 @@ pub struct WorktreeStrategy {
     pub pr_template: Option<String>,
     #[serde(default)]
     pub harnesses: Option<HashMap<String, String>>,
+    /// Optional shell command run inside each subtask worktree before the
+    /// verifier's harness command (`npm ci`, `cargo fetch`, `prisma
+    /// generate`, a DB migration, …). Runs after write permissions are
+    /// restored and after `provision_subtask_worktree`'s dependency-cache
+    /// symlinking, so it only needs to handle what symlinking a prior
+    /// install can't — codegen, migrations, freshly-added dependencies.
+    /// `None` (default) skips this step entirely.
+    #[serde(default)]
+    pub prepare_command: Option<String>,
     /// Project-wide writability exceptions, applied on top of the
     /// capability-driven chmod fence. Repo-relative paths the agent may
     /// write to even when the step's capability (`ReadOnly`,

@@ -225,23 +225,32 @@ impl ExecutionDriver {
 
         // Write parallel step artifact summary.
         //
-        // The diff is computed as a two-dot range
-        // (`<pre_step_tip>..<feature_branch>`) against `target_dir`,
-        // NOT as `git diff <pre_step_tip>` against `target_dir`'s
-        // working tree. `target_dir` is left on the project's default
-        // branch for the entire run — `create_feature_branch` only
-        // moves the ref, it never checks the branch out — so a
-        // single-ref `git diff` would compare the default branch's
-        // working tree against the pre-step feature-branch tip and
-        // show the implementation as `+` lines that exist in commits
-        // but are missing from the working tree. A reviewer reading
-        // that artifact reasonably concludes "the code was committed
-        // then removed from the working tree", i.e. reverted.
+        // The diff is computed as a two-dot range against `target_dir`,
+        // NOT as `git diff <ref>` against `target_dir`'s working tree.
+        // `target_dir` is left on the project's default branch for the
+        // entire run — `create_feature_branch` only moves the ref, it
+        // never checks the branch out — so a single-ref `git diff` would
+        // compare the default branch's working tree against the
+        // range-start tip and show the implementation as `+` lines that
+        // exist in commits but are missing from the working tree. A
+        // reviewer reading that artifact reasonably concludes "the code
+        // was committed then removed from the working tree", i.e.
+        // reverted.
         //
-        // The two-dot range instead shows what was committed to the
-        // feature branch during this step, which is what the critic
-        // and other downstream reviewers actually want to see.
-        let diff_ref = format!("{}..{}", base_sha, self.branch_name);
+        // The range starts at the feature's fork point (where
+        // `branch_name` diverged from the default branch), not at
+        // `base_sha` (this attempt's pre-run tip). On a retry, `base_sha`
+        // is recaptured as `branch_name`'s current tip, which already
+        // includes the prior attempt's merged commits — a range starting
+        // there would show only this retry's incremental fix, and the
+        // critic step downstream would review a fragment instead of the
+        // complete feature change. `base_sha` itself is untouched here;
+        // it's still used above for `git reset --hard` rollback, where
+        // per-attempt semantics are exactly what's wanted.
+        let diff_ref = match self.resolve_fork_point_ref(&machine_str).await {
+            Some(fork_point) => format!("{}..{}", fork_point, self.branch_name),
+            None => format!("{}..{}", base_sha, self.branch_name),
+        };
         let diff_body =
             compute_git_diff(&*self.exec, &machine_str, &self.target_dir, &diff_ref).await;
         let mut refs = Vec::new();

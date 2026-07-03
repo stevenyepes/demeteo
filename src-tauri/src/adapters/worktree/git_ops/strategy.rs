@@ -141,6 +141,7 @@ impl GitOpsHelper {
             conventions_file,
             pr_template,
             harnesses: None,
+            prepare_command: None,
             extra_writable_paths: Vec::new(),
         })
     }
