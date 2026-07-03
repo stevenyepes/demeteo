@@ -30,12 +30,23 @@ export interface CreatedRepo {
 
 /** Request shape for {@link providerCreateRepo}. Only the `providerId`
  *  is forwarded; the PAT is resolved backend-side via the credential
- *  cache, so the wizard never sees (or sends) a raw token. */
+ *  cache, so the wizard never sees (or sends) a raw token.
+ *
+ *  `providerHost` is the host captured from the selected provider on
+ *  the Provider step. It MUST be forwarded to the backend (as
+ *  `provider_host`) so sub-1's HTTP adapter can route the create-repo
+ *  request to a self-hosted enterprise host instead of the default
+ *  `api.github.com` / `/api/v4` endpoint. When the host is omitted the
+ *  backend falls back to the provider's configured default — see
+ *  `src-tauri/src/adapters/provider_http.rs` (`sanitize_host`). */
 export interface CreateRepoRequest {
   providerId: string;
   namespaceId: string;
   name: string;
   private: boolean;
+  /** Self-hosted provider host (e.g. `https://gh.corp.example.com`).
+   *  Plumbed from the Provider step; passed to the backend verbatim. */
+  providerHost?: string;
 }
 
 // ── Input shape that powers the wizard's submit ─────────────────────────
@@ -93,6 +104,11 @@ export async function listProviderNamespaces(
  *  let the user edit the slug / namespace and retry without losing
  *  prior selections.
  *
+ *  When `request.providerHost` is non-empty, it is forwarded to the
+ *  backend as `provider_host` (snake_case) so the HTTP adapter can
+ *  route to a self-hosted enterprise host. When omitted, the backend
+ *  falls back to the provider's configured default.
+ *
  *  See `commands::providers::provider_create_repo` in
  *  `src-tauri/src/commands/providers.rs`. */
 export async function providerCreateRepo(
@@ -103,6 +119,7 @@ export async function providerCreateRepo(
     namespaceId: request.namespaceId,
     name: request.name,
     private: request.private,
+    providerHost: request.providerHost ?? null,
   });
 }
 

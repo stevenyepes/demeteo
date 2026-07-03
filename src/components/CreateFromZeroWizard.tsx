@@ -48,6 +48,29 @@ export function validateSlug(value: string): string {
   return '';
 }
 
+/** Pure helper for the Machine-step **Next** gating. Extracted so the
+ *  unit test in `useCreateZeroWizardForm.test.tsx` can assert the
+ *  remote-tile blocking behaviour without mounting the full wizard.
+ *
+ *  Returns a non-empty human reason when the gate is closed (probe
+ *  still running, errored, or not yet fired) and an empty string when
+ *  the gate is open. The local-tile path is always open. */
+export function machineStepGateReason(args: {
+  machineKind: 'local' | 'remote';
+  machineId: string;
+  probeStatus: 'idle' | 'running' | 'success' | 'error';
+  probeError: string | null;
+}): string {
+  if (args.machineKind !== 'remote') return '';
+  if (!args.machineId) return 'Select a remote machine';
+  if (args.probeStatus === 'running') return 'Probing SSH connection…';
+  if (args.probeStatus === 'error') {
+    return args.probeError ?? 'SSH probe failed — pick another machine';
+  }
+  if (args.probeStatus === 'idle') return 'SSH probe not yet run';
+  return '';
+}
+
 /**
  * The Create-From-Zero wizard — a full-screen, progressive-disclosure
  * flow that takes a user from "I want to start fresh" to a running
@@ -98,6 +121,7 @@ const CreateFromZeroWizard: React.FC = () => {
     void bootstrap.run({
       projectName: form.projectName,
       providerId: form.providerId,
+      providerHost: form.providerHost,
       namespaceId: form.namespaceId,
       repoSlug: form.repoSlug,
       repoPrivate: form.repoPrivate,
@@ -106,7 +130,7 @@ const CreateFromZeroWizard: React.FC = () => {
       keyPassphrase: form.keyPassphrase,
       agentKind: form.agentKind,
       model: form.model,
-    }, onBootstrapSuccess);
+    } as Parameters<typeof bootstrap.run>[0], onBootstrapSuccess);
   }, [bootstrap, form, onBootstrapSuccess]);
 
   // Per-step gating — drives the **Next** enabled state. Each entry
@@ -118,8 +142,12 @@ const CreateFromZeroWizard: React.FC = () => {
       !form.providerId ? 'Pick a provider' :
       !form.namespaceId ? 'Pick a namespace' :
       validateSlug(form.repoSlug) ? `Repo name: ${validateSlug(form.repoSlug).toLowerCase()}` : '',
-    machine:
-      form.machineKind === 'remote' && !form.machineId ? 'Select a remote machine' : '',
+    machine: machineStepGateReason({
+      machineKind: form.machineKind,
+      machineId: form.machineId,
+      probeStatus: form.machineProbeStatus,
+      probeError: form.machineProbeError,
+    }),
     agent: !form.agentKind ? 'Pick a coding agent' : '',
     bootstrap: '',
     strategy: !form.defaultBranch.trim() ? 'Default branch required' : '',
@@ -194,6 +222,9 @@ const CreateFromZeroWizard: React.FC = () => {
                 machineId={form.machineId}
                 machines={form.machines}
                 keyPassphrase={form.keyPassphrase}
+                probeStatus={form.machineProbeStatus}
+                probeError={form.machineProbeError}
+                onRetest={form.retestMachineConnection}
                 onMachineKindChange={form.setMachineKind}
                 onMachineIdChange={form.setMachineId}
                 onKeyPassphraseChange={form.setKeyPassphrase}

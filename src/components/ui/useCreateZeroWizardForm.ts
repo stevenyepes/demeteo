@@ -29,6 +29,13 @@ export interface WizardFormState {
   workflowId: string;
 }
 
+/** State of the `test_machine_connection` probe for the currently
+ *  selected remote machine. `idle` is the initial / post-reset
+ *  state, `running` is the in-flight probe, `success` means the
+ *  probe resolved cleanly, and `error` carries a human-friendly
+ *  failure message shown inline on the Machine step. */
+export type MachineProbeStatus = 'idle' | 'running' | 'success' | 'error';
+
 export interface WizardFormSetters {
   setProjectName: (v: string) => void;
   setProviderId: (v: string) => void;
@@ -53,12 +60,28 @@ export interface WizardFormSetters {
 export interface WizardFormApi extends WizardFormState, WizardFormSetters {
   /** Connected provider instances (read from the global project store). */
   providers: ReadonlyArray<Provider>;
+  /** Host of the provider selected on the Provider step (or empty
+   *  string if none / host unresolved). Plumbed into the create-repo
+   *  request as `provider_host` so the backend HTTP adapter can
+   *  route to a self-hosted enterprise host. */
+  providerHost: string;
   namespaces: ProviderNamespace[];
   namespacesLoading: boolean;
   machines: Machine[];
   workflows: WorkflowSummary[];
   models: { value: string; name: string }[];
   modelsLoading: boolean;
+  /** State of the `test_machine_connection` probe for the selected
+   *  remote machine. The wizard's Machine-step **Next** button must
+   *  stay disabled until this is `success` — a failure surfaces
+   *  `probeError` inline so the user can pick a different machine
+   *  rather than committing against unreachable credentials. */
+  machineProbeStatus: MachineProbeStatus;
+  machineProbeError: string | null;
+  /** Re-runs the probe for the current `machineId`. Safe to call
+   *  multiple times; cancels in-flight probes via a cancellation
+   *  flag. */
+  retestMachineConnection: () => void;
   /** Resolved projectId once the bootstrap pipeline finishes. */
   projectId: string | null;
   setProjectId: (id: string | null) => void;
@@ -108,6 +131,11 @@ export function useCreateZeroWizardForm(): WizardFormApi {
   const [description, setDescription] = useState('');
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [workflowId, setWorkflowId] = useState('');
+  const [machineProbeStatus, setMachineProbeStatus] = useState<MachineProbeStatus>('idle');
+  const [machineProbeError, setMachineProbeError] = useState<string | null>(null);
+  /** Increments on every retest → forces the probe effect to re-fire
+   *  even when `machineId` is unchanged. */
+  const [probeNonce, bumpProbeNonce] = useState(0);
 
   // Mount-time data fetches: machines + workflows. Both lists are
   // needed by step UIs that load before the user reaches them, so we
@@ -185,6 +213,62 @@ export function useCreateZeroWizardForm(): WizardFormApi {
   // it doesn't belong.
   useEffect(() => { setKeyPassphrase(''); }, [machineKind]);
 
+  // Probe the remote machine via `test_machine_connection` whenever the
+  // user picks a remote machine. The probe is **gating**: the
+  // Machine-step Next control stays disabled until the probe resolves
+  // successfully, so a committing wizard can never silently fall back
+  // to local credentials against an unreachable remote machine.
+  // Cancellation flags prevent stale responses from leaking through
+  // when the user cycles through machines quickly.
+  useEffect(() => {
+    if (machineKind !== 'remote' || !machineId) {
+      setMachineProbeStatus('idle');
+      setMachineProbeError(null);
+      return;
+    }
+    let cancelled = false;
+    setMachineProbeStatus('running');
+    setMachineProbeError(null);
+    (async () => {
+      try {
+        await invoke('test_machine_connection', { machineId });
+        if (!cancelled) {
+          setMachineProbeStatus('success');
+          setMachineProbeError(null);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        setMachineProbeStatus('error');
+        setMachineProbeError(msg);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [machineKind, machineId, probeNonce]);
+
+  // Reset probe state when the user toggles back to local — there's
+  // nothing to test and the previous remote machine's status must
+  // not gate advancing.
+  useEffect(() => {
+    if (machineKind === 'local') {
+      setMachineProbeStatus('idle');
+      setMachineProbeError(null);
+    }
+  }, [machineKind]);
+
+  const retestMachineConnection = useCallback(() => {
+    bumpProbeNonce((n) => n + 1);
+  }, []);
+
+  // Resolve `providerHost` from the selected provider. Empty string
+  // when no provider is picked yet — the backend will fall back to
+  // the provider's default host in that case. Recomputed only when
+  // the provider store or the selected id change.
+  const providerHost = useMemo<string>(() => {
+    if (!providerId) return '';
+    return providers.find((p) => p.id === providerId)?.host ?? '';
+  }, [providers, providerId]);
+
   const applyStrategyToForm = useCallback((strategy: {
     default_branch: string;
     branch_prefix: string;
@@ -202,8 +286,10 @@ export function useCreateZeroWizardForm(): WizardFormApi {
     machineKind, machineId, keyPassphrase, agentKind, model,
     defaultBranch, branchPrefix, testCommand, prTemplate,
     conflictPolicy, featureLifecycle, description, workflowId,
-    providers, namespaces, namespacesLoading, machines, workflows,
-    models, modelsLoading, projectId,
+    providers, providerHost, namespaces, namespacesLoading,
+    machines, workflows, models, modelsLoading,
+    machineProbeStatus, machineProbeError, retestMachineConnection,
+    projectId,
     setProjectName, setProviderId, setNamespaceId, setRepoSlug, setRepoPrivate,
     setMachineKind, setMachineId, setKeyPassphrase, setAgentKind, setModel,
     setDefaultBranch, setBranchPrefix, setTestCommand, setPrTemplate,
@@ -214,8 +300,10 @@ export function useCreateZeroWizardForm(): WizardFormApi {
     machineKind, machineId, keyPassphrase, agentKind, model,
     defaultBranch, branchPrefix, testCommand, prTemplate,
     conflictPolicy, featureLifecycle, description, workflowId,
-    providers, namespaces, namespacesLoading, machines, workflows,
-    models, modelsLoading, projectId,
+    providers, providerHost, namespaces, namespacesLoading,
+    machines, workflows, models, modelsLoading,
+    machineProbeStatus, machineProbeError, retestMachineConnection,
+    projectId,
     applyStrategyToForm,
   ]);
 }

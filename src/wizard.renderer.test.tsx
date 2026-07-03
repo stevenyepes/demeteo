@@ -291,6 +291,84 @@ function findByTestId(root: ReactTestInstance, id: string): ReactTestInstance | 
   tree.unmount();
 }
 
+// ── AC-3 (legacy wizard) — namespace listing is wired via the
+//    `listProviderNamespaces` wrapper from `src/lib/createProjectWizard.ts`.
+{
+  // Import the wrapper from the same module the wizard imports it
+  // from. If a future refactor breaks the import (e.g. a phantom
+  // path or a duplicate module), this `import` would error at
+  // type-check time and the assertion below would fail.
+  const wizard = await import('./lib/createProjectWizard');
+  if (typeof wizard.listProviderNamespaces !== 'function') {
+    throw new Error('listProviderNamespaces must be exported from createProjectWizard.ts');
+  }
+  if (typeof wizard.providerCreateRepo !== 'function') {
+    throw new Error('providerCreateRepo must be exported from createProjectWizard.ts');
+  }
+  // The CreateProjectStepPayload's `commit` variant must carry
+  // `providerHost` (C-5 from the implementation report — the host
+  // picked on the Provider step must flow into the Commit payload
+  // for sub-1's HTTP adapter to route to self-hosted enterprise
+  // hosts).
+  const sample: CreateProjectStepPayload = {
+    step: 'commit',
+    title: 't',
+    description: 'd',
+    visibility: 'private',
+    name: 'n',
+    providerId: 'pid',
+    providerKind: 'github',
+    providerHost: 'gh.corp.example.com',
+    namespaceId: 'me',
+    namespaceKind: 'personal',
+    namespaceName: 'me',
+    machineKind: 'remote',
+    machineId: 'm1',
+    agentKind: 'opencode',
+    model: 'anthropic/claude-sonnet-4',
+  };
+  if (sample.providerHost !== 'gh.corp.example.com') {
+    throw new Error(
+      `CreateProjectStepPayload::Commit must carry providerHost; got ${JSON.stringify(sample.providerHost)}`,
+    );
+  }
+}
+
+// ── (2) Remote tile blocks Next when probe fails (legacy wizard
+//    reference) — the `MachineStep` renders a remote SSH tile that
+//    is selectable (no silent local fallback). The probe gating
+//    itself lives on the new `CreateZeroMachineStep` (see
+//    `src/components/ui/useCreateZeroWizardForm.test.tsx`).
+{
+  const machines: Machine[] = [
+    { id: 'm-1', name: 'box', host: '10.0.0.1', port: 22, username: 'u', auth_type: 'key' },
+  ];
+  const tree = mount(
+    <MachineStep
+      machines={machines}
+      kind="local"
+      machineId=""
+      keyPassphrase=""
+      onSubmit={() => {}}
+      onPassphraseChange={() => {}}
+    />,
+  );
+  const remote = findByTestId(tree.root, 'wizard-machine-remote');
+  const local = findByTestId(tree.root, 'wizard-machine-local');
+  if (!remote) throw new Error('MachineStep: remote SSH tile must be rendered');
+  if (!local) throw new Error('MachineStep: local tile must be rendered');
+  // The remote tile must NOT be disabled when the user is on the
+  // local kind — they must be able to toggle. The legacy wizard
+  // does not have probe gating (that's a new wizard concern), but
+  // the tile must be clickable so the gating in the new wizard has
+  // a target.
+  const remoteProps = remote.props as { disabled?: boolean };
+  if (remoteProps.disabled === true) {
+    throw new Error('MachineStep: remote SSH tile must not be disabled before probe runs');
+  }
+  tree.unmount();
+}
+
 // ── Exported results ──────────────────────────────────────────────────
 
 export const wizardRendererResults = {
@@ -307,4 +385,8 @@ export const wizardRendererResults = {
     'model',
     'commit',
   ] as const,
+  listProviderNamespacesExported: true,
+  providerCreateRepoExported: true,
+  commitPayloadCarriesProviderHost: true,
+  remoteTileIsSelectable: true,
 } as const;

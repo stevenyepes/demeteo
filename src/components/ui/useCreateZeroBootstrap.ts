@@ -30,6 +30,12 @@ function initialPhases(): BootstrapPhaseState[] {
 export interface BootstrapInput {
   projectName: string;
   providerId: string;
+  /** Host captured on the Provider step; forwarded as `provider_host`
+   *  to sub-1's HTTP adapter so it can route to a self-hosted
+   *  enterprise host (e.g. `https://gh.corp.example.com`). When
+   *  omitted the backend falls back to the provider's configured
+   *  default. */
+  providerHost?: string;
   namespaceId: string;
   repoSlug: string;
   repoPrivate: boolean;
@@ -104,12 +110,13 @@ export function useCreateZeroBootstrap(): UseCreateZeroBootstrapApi {
 
       // 2. create the repo on the provider
       setPhaseStatus('create_repo', 'running');
-      appendLog(`POST ${input.providerId} → ${input.repoSlug} (private=${input.repoPrivate})`);
+      appendLog(`POST ${input.providerId} → ${input.repoSlug} (private=${input.repoPrivate}${input.providerHost ? `, host=${input.providerHost}` : ''})`);
       const createRepo: CreateRepoRequest = {
         providerId: input.providerId,
         namespaceId: input.namespaceId,
         name: input.repoSlug,
         private: input.repoPrivate,
+        providerHost: input.providerHost,
       };
       const repo = await providerCreateRepo(createRepo);
       appendLog(`✓ repo created: ${repo.full_name} (default branch: ${repo.default_branch})`);
