@@ -32,6 +32,14 @@ impl ExecutionDriver {
         // is set, so UsageAccumulator can use the pricing table and compute cost_usd.
         let override_model =
             override_model.or_else(|| self.registry.default_model_for(&agent_kind));
+        // Same fingerprint-scoped key `spawn_agent_session` used to
+        // create/resume this step's session — see
+        // `ExecutionDriver::agent_session_key`. Every `registry.kill`
+        // below targets exactly this session, not the bare feature id
+        // (which no longer identifies a single session once sessions
+        // are permission-profile/model scoped).
+        let session_key =
+            Self::agent_session_key(self.f_id.as_str(), step_conf, override_model.as_deref());
 
         let (gate_decision, gate_feedback) =
             crate::adapters::step_executor::artifacts::get_latest_gate_decision(
@@ -358,6 +366,8 @@ impl ExecutionDriver {
                     artifact_path: None,
                     artifact_paths: None,
                     error_message: Some(Some("Execution cancelled by user".to_string())),
+                    cache_read_input_tokens: Some(*out_cache_read),
+                    cache_creation_input_tokens: Some(*out_cache_creation),
                 },
             );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -379,7 +389,7 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            let _ = self.registry.kill(self.f_id.as_str()).await;
+            let _ = self.registry.kill(&session_key).await;
             return StepOutcome::Cancelled;
         }
 
@@ -393,7 +403,7 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            let _ = self.registry.kill(self.f_id.as_str()).await;
+            let _ = self.registry.kill(&session_key).await;
             return failed_outcome;
         }
 
@@ -422,7 +432,7 @@ impl ExecutionDriver {
                         &subtask_id,
                     )
                     .await;
-                let _ = self.registry.kill(self.f_id.as_str()).await;
+                let _ = self.registry.kill(&session_key).await;
                 return StepOutcome::Failed(err);
             }
         };
@@ -453,7 +463,7 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            let _ = self.registry.kill(self.f_id.as_str()).await;
+            let _ = self.registry.kill(&session_key).await;
             tracing::warn!(
                 feature_id = %self.f_id,
                 step_id = %step_exec.step_id.0,
@@ -498,7 +508,7 @@ impl ExecutionDriver {
                         &subtask_id,
                     )
                     .await;
-                let _ = self.registry.kill(self.f_id.as_str()).await;
+                let _ = self.registry.kill(&session_key).await;
                 // Verdict failures feed into the on_failure retry loop.
                 // Infrastructure failures (timeout, spawn error, parse failure)
                 // skip the retry loop entirely — retrying the implementation
@@ -542,7 +552,7 @@ impl ExecutionDriver {
                         &subtask_id,
                     )
                     .await;
-                let _ = self.registry.kill(self.f_id.as_str()).await;
+                let _ = self.registry.kill(&session_key).await;
                 return StepOutcome::Failed(format!("out-of-scope diff check failed: {}", e));
             }
         };
@@ -556,7 +566,7 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            let _ = self.registry.kill(self.f_id.as_str()).await;
+            let _ = self.registry.kill(&session_key).await;
             self.capture_signal(
                 Some(step_exec.id.0.clone()),
                 crate::domain::memory::SignalKind::Retry,
@@ -725,6 +735,8 @@ impl ExecutionDriver {
                     artifact_path: None,
                     artifact_paths: None,
                     error_message: Some(Some("Execution cancelled by user".to_string())),
+                    cache_read_input_tokens: Some(*out_cache_read),
+                    cache_creation_input_tokens: Some(*out_cache_creation),
                 },
             );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -755,6 +767,8 @@ impl ExecutionDriver {
                             artifact_path: Some(artifact_path),
                             artifact_paths: Some(artifact_paths),
                             error_message: Some(None),
+                            cache_read_input_tokens: Some(*out_cache_read),
+                            cache_creation_input_tokens: Some(*out_cache_creation),
                         },
                     );
                     let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -811,7 +825,7 @@ impl ExecutionDriver {
             .await;
 
         if !matches!(outcome, StepOutcome::Completed) {
-            let _ = self.registry.kill(self.f_id.as_str()).await;
+            let _ = self.registry.kill(&session_key).await;
         }
 
         outcome

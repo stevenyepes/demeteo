@@ -84,6 +84,14 @@ pub struct StepExecution {
     pub error_message: Option<String>,
     #[serde(default)]
     pub iteration_count: u32,
+    /// Prompt-cache read tokens billed at the discounted rate for this
+    /// step (last-turn snapshot, not aggregated into `tokens`).
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
+    /// Prompt-cache creation tokens (priced above base input) for this
+    /// step (last-turn snapshot, not aggregated into `tokens`).
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
     pub created_at: i64,
     pub updated_at: i64,
 }

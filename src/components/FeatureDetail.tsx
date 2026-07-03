@@ -180,6 +180,8 @@ export function FeatureDetail() {
   }, [steps, featureStatus]);
   const [tokens, setTokens] = useState<number>(0);
   const [totalCost, setTotalCost] = useState<number>(0);
+  const [cacheReadTokens, setCacheReadTokens] = useState<number>(0);
+  const [cacheCreationTokens, setCacheCreationTokens] = useState<number>(0);
   const [duration, setDuration] = useState('0s');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -356,13 +358,19 @@ export function FeatureDetail() {
       let totalTokens = 0;
       let totalCost = 0;
       let totalSecs = 0;
+      let totalCacheRead = 0;
+      let totalCacheCreation = 0;
       for (const s of list) {
         totalTokens += s.tokens || 0;
         totalCost += s.cost_usd || 0;
         totalSecs += s.wall_clock_secs || 0;
+        totalCacheRead += s.cache_read_input_tokens || 0;
+        totalCacheCreation += s.cache_creation_input_tokens || 0;
       }
       setTokens(totalTokens);
       setTotalCost(totalCost);
+      setCacheReadTokens(totalCacheRead);
+      setCacheCreationTokens(totalCacheCreation);
       setDuration(formatDuration(totalSecs));
       if (f?.status) setFeatureStatus(f.status);
 
@@ -740,6 +748,17 @@ export function FeatureDetail() {
               <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Tokens</div>
               <div className="text-lg font-bold font-mono text-cyan-400">{formatTokens(tokens)}</div>
             </div>
+            {cacheReadTokens > 0 && (
+              <div className="text-right">
+                <div className="text-[10px] text-slate-500 uppercase font-bold">Cache Reads</div>
+                <div
+                  className="text-lg font-bold font-mono text-violet-400"
+                  title={`${cacheReadTokens.toLocaleString()} tokens served from prompt cache (billed at ~10% of base input price) across this pipeline. ${cacheCreationTokens.toLocaleString()} tokens written to cache.`}
+                >
+                  {formatTokens(cacheReadTokens)}
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button

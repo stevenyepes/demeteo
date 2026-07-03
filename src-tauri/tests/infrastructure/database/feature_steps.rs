@@ -81,6 +81,8 @@ fn make_step(
             artifact_paths: vec![],
             error_message: error_message.map(|s| s.to_string()),
             iteration_count: 0,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             created_at: now,
             updated_at: now,
         })

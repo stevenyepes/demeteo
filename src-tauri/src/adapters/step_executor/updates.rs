@@ -6,10 +6,8 @@ use crate::ports::db::{FeaturePatch, FeatureRepository, StepExecutionPatch};
 use crate::ports::notification::{DomainEvent, NotificationPort};
 
 /// Set a step execution to a final status (completed / failed / interrupted / awaiting_gate)
-/// and emit the corresponding notification. Always sets cost_usd, tokens and wall_clock_secs to the
-/// caller-provided values. Cache-token telemetry is surfaced via the `StepProgress`
-/// notification but not persisted to SQLite (no schema column in the
-/// Tier-1 cut — future V11 migration can persist).
+/// and emit the corresponding notification. Always sets cost_usd, tokens, wall_clock_secs
+/// and the cache-token telemetry to the caller-provided values.
 #[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_step_status(
@@ -37,6 +35,8 @@ pub(crate) fn update_step_status(
             artifact_path: artifact_path.map(Some),
             artifact_paths: None,
             error_message: error_message.map(Some),
+            cache_read_input_tokens: Some(cache_read_input_tokens),
+            cache_creation_input_tokens: Some(cache_creation_input_tokens),
         },
     );
     let _ = notif.emit(&DomainEvent::StepProgress {

@@ -123,6 +123,9 @@ impl DagStepExecutor {
             session_cumulative_tokens: 0,
             last_cache_read: None,
             last_cache_creation: None,
+            // Overwritten by `refresh_watchdog_budget` before the first
+            // step dispatches; the bare feature id is a safe default.
+            current_session_key: feature_id.to_string(),
         };
 
         let registry = self.driver_registry.clone();
@@ -276,6 +279,8 @@ impl StepExecutor for DagStepExecutor {
                 artifact_paths: Vec::new(),
                 error_message: None,
                 iteration_count: 0,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 created_at: now,
                 updated_at: now,
             };
@@ -341,6 +346,8 @@ impl StepExecutor for DagStepExecutor {
                         artifact_path: None,
                         artifact_paths: None,
                         error_message: Some(Some(e.clone())),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     },
                 );
             }

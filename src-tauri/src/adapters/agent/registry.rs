@@ -118,6 +118,37 @@ impl AgentRegistry {
         }
     }
 
+    /// Kill every registered session whose key belongs to `f_id`.
+    ///
+    /// Agent-step sessions are now keyed by `{f_id}::{fingerprint}`
+    /// (see `ExecutionDriver::agent_session_key`) rather than the bare
+    /// feature id, so a single pipeline run can leave more than one
+    /// live entry behind — one per distinct permission-profile/model
+    /// combination it visited. The old single-key `kill(f_id)` only
+    /// ever tore down the *last* one. Call this at every true
+    /// pipeline-terminal point (success, failure, cancellation) so
+    /// earlier same-feature segments don't leak for the life of the
+    /// app. Also catches the verifier/planner/subtask sessions, which
+    /// use `{f_id}-...` suffixes and normally self-clean — a harmless,
+    /// defensive superset.
+    pub async fn kill_all_for_feature(&self, f_id: &str) {
+        let mut sessions = self.sessions.lock().await;
+        let dead_keys: Vec<String> = sessions
+            .keys()
+            .filter(|k| {
+                k.as_str() == f_id
+                    || k.starts_with(&format!("{f_id}::"))
+                    || k.starts_with(&format!("{f_id}-"))
+            })
+            .cloned()
+            .collect();
+        for key in dead_keys {
+            if let Some(s) = sessions.remove(&key) {
+                let _ = s.kill();
+            }
+        }
+    }
+
     pub async fn kill_all(&self) {
         let mut sessions = self.sessions.lock().await;
         sessions.clear();

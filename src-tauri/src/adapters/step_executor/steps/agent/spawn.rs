@@ -12,6 +12,12 @@ impl ExecutionDriver {
         machine_str: &str,
         wt_path: &str,
     ) -> Result<std::sync::Arc<dyn AgentSession>, String> {
+        // Fingerprint-scoped, not just the feature id — see
+        // `ExecutionDriver::agent_session_key` for why. Steps whose
+        // permission profile + model match the previous step still
+        // resume the same session; a change in either spawns fresh.
+        let session_key =
+            Self::agent_session_key(self.f_id.as_str(), step_conf, override_model.as_deref());
         let mut agent_env = crate::ports::agent_runtime::agent_base_env();
         if let Some(ref m) = override_model {
             if agent_kind == "opencode"
@@ -49,7 +55,7 @@ impl ExecutionDriver {
         );
 
         let ctx = AgentContext {
-            thread_id: self.f_id_str.clone(),
+            thread_id: session_key.clone(),
             machine_id: machine_str.to_string(),
             binary: binary.clone(),
             args: vec![],
@@ -81,9 +87,7 @@ impl ExecutionDriver {
             }
         }
 
-        let spawn_fut = self
-            .registry
-            .get_or_spawn(self.f_id.as_str(), agent_kind, ctx);
+        let spawn_fut = self.registry.get_or_spawn(&session_key, agent_kind, ctx);
         let mut cancel_watch_spawn = self.cancel_watch.clone();
         let spawn_res = tokio::select! {
             res = spawn_fut => Some(res),
@@ -100,9 +104,9 @@ impl ExecutionDriver {
         // case anyway; this is the on-demand recovery path).
         let needs_respawn = matches!(&spawn_res, Some(Ok(s)) if !s.is_alive());
         if needs_respawn {
-            self.registry.kill(self.f_id.as_str()).await;
+            self.registry.kill(&session_key).await;
             let respawn_ctx = AgentContext {
-                thread_id: self.f_id_str.clone(),
+                thread_id: session_key.clone(),
                 machine_id: machine_str.to_string(),
                 binary,
                 args: vec![],
@@ -115,9 +119,9 @@ impl ExecutionDriver {
                 permissions,
                 bare_mode: agent_kind == "claude-code",
             };
-            let respawn_fut =
-                self.registry
-                    .get_or_spawn(self.f_id.as_str(), agent_kind, respawn_ctx);
+            let respawn_fut = self
+                .registry
+                .get_or_spawn(&session_key, agent_kind, respawn_ctx);
             let mut cancel_watch_respawn = self.cancel_watch.clone();
             return tokio::select! {
                 res = respawn_fut => match res {

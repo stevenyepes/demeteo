@@ -301,6 +301,8 @@ async fn test_executor_gate_decide() {
             artifact_paths: Vec::new(),
             error_message: None,
             iteration_count: 0,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             created_at: now,
             updated_at: now,
         })
@@ -466,6 +468,8 @@ async fn test_gate_decide_recovers_after_driver_death() {
             artifact_paths: Vec::new(),
             error_message: None,
             iteration_count: 0,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             created_at: now,
             updated_at: now,
         })
@@ -646,6 +650,8 @@ async fn test_step_retry_blocked_by_active_predecessor() {
                 artifact_paths: Vec::new(),
                 error_message: None,
                 iteration_count: 0,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 created_at: now,
                 updated_at: now,
             })
@@ -744,6 +750,8 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
                 artifact_paths: Vec::new(),
                 error_message: None,
                 iteration_count: 0,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 created_at: now,
                 updated_at: now,
             })
@@ -849,6 +857,8 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
                 artifact_paths: Vec::new(),
                 error_message: None,
                 iteration_count: 0,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 created_at: now,
                 updated_at: now,
             })
@@ -945,6 +955,8 @@ async fn test_assert_no_active_predecessors_helper() {
                 artifact_paths: Vec::new(),
                 error_message: None,
                 iteration_count: 0,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 created_at: now,
                 updated_at: now,
             })
