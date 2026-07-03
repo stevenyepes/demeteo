@@ -40,3 +40,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[patch.crates-io]
+quick-xml = { path = "vendor/quick-xml" }
