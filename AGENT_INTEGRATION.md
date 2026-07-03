@@ -565,7 +565,7 @@ We adopted `--bare` only for its prompt-cache benefit (a byte-identical static s
 
 **Token refresh is correct by construction.** Short-lived OAuth access tokens are renewed by Claude's own refresh-token exchange; because we never copy the access token out of the keychain, there is no stale-credential-on-disk to go bad and no global `~/.claude/settings.json` mutation to contaminate the user's own interactive `claude`.
 
-## Why not extract the token (`--settings`, `apiKeyHelper`, or `settings.json` env)?
+### 5.5.2 Why not extract the token (`--settings`, `apiKeyHelper`, or `settings.json` env)?
 
 Earlier iterations wired `--settings <path>` + `apiKeyHelper`, then `settings.json`-env injection. Both are kept here as rejected alternatives:
 

@@ -348,5 +348,3 @@ If `npx commitlint` exits non-zero, rewrite the message before committing.
 Valid types: `feat fix perf revert refactor docs style test build ci chore`
 
 ---
-
-
