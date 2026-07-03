@@ -9,6 +9,9 @@ interface ShortcutMap {
   onToggleSidebar?: () => void;
   onEscape?: () => void;
   onNavigateProject?: (index: number) => void;
+  onCloseCurrentView?: () => void;
+  onNextFeature?: () => void;
+  onPreviousFeature?: () => void;
 }
 
 export function useKeyboardShortcuts(handlers: ShortcutMap) {
@@ -22,6 +25,12 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
 
       if (e.key === 'Escape' && h.onEscape) {
         h.onEscape();
+        return;
+      }
+
+      if (e.key === 'F1') {
+        e.preventDefault();
+        h.onOpenDocs?.();
         return;
       }
 
@@ -46,6 +55,34 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
           } else {
             e.preventDefault();
             h.onNewProject?.();
+          }
+          break;
+        case 't':
+        case 'T':
+          if (!e.shiftKey) {
+            e.preventDefault();
+            h.onNewFeature?.();
+          }
+          break;
+        case 'w':
+        case 'W':
+          e.preventDefault();
+          h.onCloseCurrentView?.();
+          break;
+        case 'f':
+        case 'F':
+          if (e.shiftKey) {
+            e.preventDefault();
+            h.onOpenCommandPalette?.();
+          }
+          break;
+        case 'g':
+        case 'G':
+          e.preventDefault();
+          if (e.shiftKey) {
+            h.onPreviousFeature?.();
+          } else {
+            h.onNextFeature?.();
           }
           break;
         case ',':
