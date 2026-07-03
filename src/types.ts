@@ -66,7 +66,6 @@ export type AppView =
   | { kind: 'detail'; featureId: string; featureTitle: string; gateStepExecutionId?: string | null }
   | { kind: 'editor'; editorContext: EditorContext; featureId: string; featureTitle: string }
   | { kind: 'new-project' }
-  | { kind: 'create-from-zero' }
   | { kind: 'create-project' }
   | { kind: 'project-settings' }
   | { kind: 'workflows' }

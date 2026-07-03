@@ -2,7 +2,7 @@
 //
 // Spec finding C-4: the wizard entry from the project rail must sit
 // alongside the existing `+` Bootstrap Project button in the header
-// bar, labelled with a Sparkles icon, and route to `create-from-zero`
+// bar, labelled with a Sparkles icon, and route to `create-project`
 // (the same wizard as the empty-state card's fourth tile).
 //
 // This test file verifies:
@@ -11,7 +11,7 @@
 //       button AND a sibling Sparkles button titled "New from zero".
 //
 //   (b) Clicking the Sparkles button triggers `navigate` with
-//       `{ kind: 'create-from-zero' }` — NOT `new-project` and NOT
+//       `{ kind: 'create-project' }` — NOT `new-project` and NOT
 //       any other AppView variant.
 //
 //   (c) The collapsed rail also surfaces the same Sparkles button so
@@ -100,7 +100,7 @@ if (!newFromZeroBtn) {
 
 expandedTree.unmount();
 
-// ── (b) Clicking Sparkles routes to create-from-zero ─────────────────
+// ── (b) Clicking Sparkles routes to create-project ────────────────────
 
 const holder: { current: AppView | null } = { current: null };
 
@@ -127,9 +127,9 @@ const afterView = holder.current;
 if (!afterView) {
   throw new Error('ProjectRail: navigation context view should be set after click');
 }
-if (afterView.kind !== 'create-from-zero') {
+if (afterView.kind !== 'create-project') {
   throw new Error(
-    `ProjectRail: clicking "New from zero" must navigate to 'create-from-zero'; got '${afterView.kind}' ` +
+    `ProjectRail: clicking "New from zero" must navigate to 'create-project'; got '${afterView.kind}' ` +
     `(before-click view was '${beforeView?.kind ?? 'null'}'). The legacy 'new-project' route is forbidden here.`,
   );
 }
@@ -154,7 +154,7 @@ if (!collapsedSparkles) {
 }
 
 // And clicking it from the collapsed branch also routes to
-// create-from-zero.
+// create-project.
 const collapsedHolder: { current: AppView | null } = { current: null };
 collapsedTree.unmount();
 
@@ -174,9 +174,9 @@ if (!collapsedSparklesClick) {
   throw new Error('ProjectRail (collapsed, second mount): "New from zero" Sparkles button missing');
 }
 clickButton(collapsedSparklesClick);
-if (collapsedHolder.current?.kind !== 'create-from-zero') {
+if (collapsedHolder.current?.kind !== 'create-project') {
   throw new Error(
-    `ProjectRail (collapsed): clicking "New from zero" must navigate to 'create-from-zero'; ` +
+    `ProjectRail (collapsed): clicking "New from zero" must navigate to 'create-project'; ` +
     `got '${collapsedHolder.current?.kind ?? 'null'}'`,
   );
 }
@@ -187,10 +187,10 @@ export const projectRailTestResults = {
   expanded: {
     hasBootstrapButton: true,
     hasSparklesButton: true,
-    sparklesRoutesTo: 'create-from-zero',
+    sparklesRoutesTo: 'create-project',
   },
   collapsed: {
     hasSparklesButton: true,
-    sparklesRoutesTo: 'create-from-zero',
+    sparklesRoutesTo: 'create-project',
   },
 } as const;

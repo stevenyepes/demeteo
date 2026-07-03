@@ -58,7 +58,7 @@ function ProjectRail() {
           <Plus className="w-5 h-5" />
         </button>
         <button
-          onClick={() => navigate({ kind: 'create-from-zero' })}
+          onClick={() => navigate({ kind: 'create-project' })}
           className="p-2 text-violet-300 hover:text-white rounded-lg hover:bg-violet-500/10 border border-transparent hover:border-violet-500/30 transition-colors shadow-[0_0_12px_rgba(139,92,246,0.2)]"
           title="New from zero"
         >
@@ -92,7 +92,7 @@ function ProjectRail() {
             <Plus className="w-4 h-4" />
           </button>
           <button
-            onClick={() => navigate({ kind: 'create-from-zero' })}
+            onClick={() => navigate({ kind: 'create-project' })}
             className="p-1 text-violet-300 hover:text-white rounded hover:bg-violet-500/10 border border-transparent hover:border-violet-500/30 transition-colors shadow-[0_0_10px_rgba(139,92,246,0.2)]"
             title="New from zero"
           >

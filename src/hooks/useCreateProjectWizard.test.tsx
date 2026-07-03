@@ -1,21 +1,22 @@
-// Integration tests for the create-from-zero wizard hook
+// Integration tests for the create-project wizard hook
 // (`src/hooks/useCreateProjectWizard.ts`).
 //
 // These tests pin down AC-5 from the implementation spec:
 //
 //   (a) drive the full 7-step happy path and assert the resulting
 //       AppView transitions to the launched feature with the
-//       expected project id + feature title (NOT to the legacy
-//       `create-from-zero` view);
+//       expected project id + feature title (the post-launch
+//       `detail` view, derived via `viewForLaunchedFeature`);
 //
 //   (b) verify Back never revisits an auto-progressed screen — the
 //       hook must route Back through `state.history` (via the Rust
 //       `go_back_create_project` IPC), NOT by subtracting 1 from a
 //       step index;
 //
-//   (c) verify the AppView variant emitted on completion is
-//       `create-project` (detail view via `viewForLaunchedFeature`),
-//       not the legacy `create-from-zero` variant.
+//   (c) verify the AppView variant emitted on completion is the
+//       `detail` view emitted by the create-project wizard (via
+//       `viewForLaunchedFeature`), and that `isCreateProjectLaunchedView`
+//       correctly rejects any non-`detail` AppView.
 //
 // The hook accepts dependency injection (see
 // `CreateProjectWizardDeps`) so we can script the IPC seam without
@@ -258,20 +259,18 @@ onLaunched: (f) => {
     throw new Error(`hook.launched.feature_title mismatch`);
   }
 
-  // (c) The AppView emitted on completion is `create-project` (detail
-  // view via `viewForLaunchedFeature`), NOT the legacy
-  // `create-from-zero` variant.
+  // (c) The AppView emitted on completion is the `detail` view
+  // (the post-launch destination of the `create-project` wizard),
+  // not the wizard's own surface.
   const launchedView: AppView | null = launchedViewBox.current;
   if (!launchedView) {
     throw new Error("onLaunched callback did not fire");
   }
   if (launchedView.kind !== "detail") {
     throw new Error(
-      `launched view kind expected 'detail' (create-project view), got '${launchedView.kind}'`,
+      `launched view kind expected 'detail' (create-project post-launch view), got '${launchedView.kind}' — ` +
+      "the wizard's own 'create-project' surface would silently re-enter the wizard",
     );
-  }
-  if ((launchedView as AppView).kind === "create-from-zero") {
-    throw new Error("launched view MUST NOT be the legacy 'create-from-zero' variant");
   }
   const detail = launchedView as Extract<AppView, { kind: "detail" }>;
   if (detail.featureId !== launched.feature_id) {
@@ -418,9 +417,10 @@ onLaunched: (f) => {
 // ── (c) viewForLaunchedFeature + isCreateProjectLaunchedView contract ──
 
 {
-  // Pure-function check: the post-launch view derivation never
-  // returns a `create-from-zero` variant (that variant belongs to
-  // the older wizard which this hook is replacing).
+  // Pure-function check: the post-launch view derivation must
+  // always return a `detail` view (the wizard's own `create-project`
+  // surface would silently re-enter the wizard instead of routing
+  // to the launched feature's detail page).
   const launched: LaunchedFeature = {
     feature_id: "f",
     feature_title: "t",
@@ -432,19 +432,31 @@ onLaunched: (f) => {
     },
   };
   const view = viewForLaunchedFeature(launched) as AppView;
-  if (view.kind === "create-from-zero") {
-    throw new Error("viewForLaunchedFeature MUST NOT return the legacy 'create-from-zero' variant");
-  }
   if (view.kind !== "detail") {
-    throw new Error(`viewForLaunchedFeature expected 'detail', got '${view.kind}'`);
+    throw new Error(
+      `viewForLaunchedFeature expected 'detail', got '${view.kind}' — ` +
+      "the wizard's own 'create-project' surface would re-enter the wizard",
+    );
   }
   if (!isCreateProjectLaunchedView(view)) {
     throw new Error("isCreateProjectLaunchedView must accept the detail view");
   }
-  // Reject the legacy variant explicitly.
-  const legacy: AppView = { kind: "create-from-zero" };
-  if (isCreateProjectLaunchedView(legacy)) {
-    throw new Error("isCreateProjectLaunchedView MUST NOT accept 'create-from-zero'");
+  // Reject any non-detail AppView (covers `home`, `new-project`,
+  // `create-project` itself, and every other variant). This is the
+  // negative half of the contract: only `detail` counts as the
+  // post-launch destination.
+  const nonDetailSamples: AppView[] = [
+    { kind: "home" },
+    { kind: "new-project" },
+    { kind: "create-project" },
+    { kind: "empty-state" },
+  ];
+  for (const sample of nonDetailSamples) {
+    if (isCreateProjectLaunchedView(sample)) {
+      throw new Error(
+        `isCreateProjectLaunchedView MUST NOT accept '${sample.kind}'`,
+      );
+    }
   }
 }
 

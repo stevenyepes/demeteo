@@ -59,7 +59,7 @@ const EmptyStateCard: React.FC<EmptyStateCardProps> = ({
             <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Deploy Agents</span>
           </button>
           <button
-            data-testid="empty-state-create-from-zero"
+            data-testid="empty-state-create-project"
             onClick={onCreateFromZero}
             className="relative bg-violet-950/30 border border-violet-500/40 hover:border-violet-400/70 hover:bg-violet-900/30 rounded-xl p-4 flex flex-col items-center transition-all duration-300 hover:scale-105 cursor-pointer group text-center overflow-hidden shadow-[0_0_25px_rgba(139,92,246,0.25)] hover:shadow-[0_0_35px_rgba(139,92,246,0.45)]"
           >

@@ -1,6 +1,6 @@
 // Runtime smoke tests for the EmptyStateCard first-run landing card.
 //
-// Spec finding C-4: the wizard entry tile for `create-from-zero` must
+// Spec finding C-4: the wizard entry tile for `create-project` must
 // live on the empty-state card alongside Connect Providers / Sync
 // Worktrees / Deploy Agents. This test file verifies:
 //
@@ -79,9 +79,9 @@ renderer = mount(
   />,
 );
 
-const createFromZeroTile = findByTestId(renderer.root, 'empty-state-create-from-zero');
+const createFromZeroTile = findByTestId(renderer.root, 'empty-state-create-project');
 if (!createFromZeroTile) {
-  throw new Error('EmptyStateCard: fourth "Create from Scratch" tile is missing (data-testid="empty-state-create-from-zero")');
+  throw new Error('EmptyStateCard: fourth "Create from Scratch" tile is missing (data-testid="empty-state-create-project")');
 }
 
 const expectedLabels = ['Connect Providers', 'Sync Worktrees', 'Deploy Agents', 'Create from Scratch'];
@@ -118,7 +118,7 @@ if (allButtons.length < 4) {
 renderer.unmount();
 
 export const emptyStateCardTestResults = {
-  fourthTileTestId: 'empty-state-create-from-zero',
+  fourthTileTestId: 'empty-state-create-project',
   fourthTileLabel: 'Create from Scratch',
   onCreateFromZeroFired: true,
 } as const;

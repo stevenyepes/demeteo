@@ -362,7 +362,7 @@ const NewProjectView = () => {
                             <h1 className="text-3xl font-outfit font-bold text-white">Project Bootstrap</h1>
                             <button
                                 type="button"
-                                onClick={() => navigate({ kind: 'create-from-zero' })}
+                                onClick={() => navigate({ kind: 'create-project' })}
                                 disabled={bootstrapStep !== 'form'}
                                 className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-violet-500/10 border border-violet-500/40 text-violet-200 hover:bg-violet-500/20 hover:border-violet-500/60 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
                                 title="Create a brand-new repo on a connected provider, then launch the Standard Feature Pipeline"
