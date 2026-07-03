@@ -26,8 +26,9 @@ tracked as
 and
 [tauri-apps/tauri#14924](https://github.com/tauri-apps/tauri/issues/14924).
 
-**Auto-detected fix:** `src-tauri/src/lib.rs` detects the NVIDIA
-proprietary driver via `/proc/driver/nvidia/version` and sets:
+**Auto-detected fix:** `src-tauri/src/lib.rs:90-112` (`configure_linux_gpu_env`)
+detects the NVIDIA proprietary driver via
+`/proc/driver/nvidia/version` and sets:
 
 | Env var | Value | Reason |
 |---|---|---|

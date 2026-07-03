@@ -116,25 +116,25 @@
 
 ---
 
-## 9. WASM plugin host (existing ARCHITECTURE design → deferred)
+## 9. WASM plugin host (legacy ARCHITECTURE design → deferred)
 
 **The question:** Can third parties ship custom approval logic, telemetry integrations, or cross-cutting policy as WASM plugins?
 
-**The v1.0 answer:** No. The `PolicyEnforcedExecutionPort` + scope fence + per-project conflict policy cover all v1 needs.
+**The v1.0 answer:** No. The four-axis `PermissionProfile` (`read_fs | write_fs | execute | network`) plus the `WriteScope`-driven chmod fence plus the per-project `ConflictPolicy` cover all v1 needs.
 
-**The deferred work:** The original WASM plugin host design from the legacy `ARCHITECTURE.md` (now `docs/LEGACY_ARCHITECTURE.md`). Plugins loaded from `~/.config/demeteo/plugins/`, evaluated inside a `wasmtime` sandbox.
+**The deferred work:** A WASM plugin host loaded from `~/.config/demeteo/plugins/`, evaluated inside a `wasmtime` sandbox. Plugins can hook the approval / telemetry / policy points exposed by the host.
 
-**Why deferred:** Not needed for v1. Becomes valuable when third parties want to ship custom logic without rebuilding demeteo.
+**Why deferred:** Not needed for v1. Becomes valuable when third parties want to ship custom logic without rebuilding demeteo. The legacy `docs/LEGACY_ARCHITECTURE.md` referenced in the original wording does not exist in this repository; the spec should be re-derived if/when the host is built.
 
 ---
 
-## 10. Per-machine `AgentConfig` (model, workdir, env) (existing v1 design → deferred)
+## 10. Per-machine / per-project agent config (existing v1 design → partial)
 
 **The question:** Can the user configure an agent's model, working directory, and environment variables per machine?
 
-**The v1.0 answer:** No. The agent config is whatever the user set up on the host. Demeteo doesn't store or inject agent config (Q4 in interview; explicitly out of scope per the original `AGENT_INTEGRATION.md` §1).
+**The v1.0 answer:** *Partial.* Per-project defaults live on `ProjectSettings::default_agent_kind` and `default_model`. Per-workflow overrides live on `ProjectWorkflowOverride` rows (`step_id = None` for workflow-level, `Some(step_id)` for step-level). Per-feature overrides are snapshotted onto the feature row (`Feature::agent_kind`, `Feature::model`, `Feature::step_overrides`). A `WorkingMemoryEntry` shape exists for thread-scoped working memory. The per-machine `AgentProfile` rows exist for the legacy shell / custom-http agent kinds (ollama, openai, cli, custom_http) and are still managed in `Machine` / `AgentProfile`. Demeteo does **not** read, store, or inject the LLM API key itself; the user configures the agent on the host (decision 4).
 
-**The deferred work:** A structured `AgentConfig { kind, model, workdir, env_refs, model_pricing_override }` per machine, editable from `EnvModal` (or its successor). Per-step override of the default.
+**The deferred work:** A first-class structured `AgentConfig { kind, model, workdir, env_refs, model_pricing_override }` per machine, editable from `EnvModal` (or its successor). Per-step override of the default beyond the current `StepOverride` snapshot.
 
 **Why deferred:** Users already configure their agents. Demeteo managing this duplicates the agent's own config UX. Defer until there's a clear reason.
 
@@ -176,15 +176,15 @@
 
 ---
 
-## 14. Second non-ACP runtime (Anthropic → v1.1)
+## 14. Second non-CLI runtime (Anthropic → v1.1)
 
-**The question:** What if the planner's host doesn't have ACP support?
+**The question:** What if the planner's host doesn't have any of the four CLI agents?
 
-**The v1.0 answer:** The planner is a coding agent session (opencode or hermes, both ACP). The user picks the planner; if the planner doesn't support ACP, the install flow kicks in (existing in `AGENT_INTEGRATION.md` §5.3).
+**The v1.0 answer:** The planner is one of the four CLI coding agents (opencode, hermes, claude-code, antigravity). All four speak CLI mode with `--format json` / `--print --output-format stream-json`. The runtime trait (`AgentRuntime` + `AgentSession`) is transport-neutral; the `UnifiedCliRuntime` impl handles all four.
 
-**The deferred work:** A second non-ACP runtime for agents that don't speak ACP (e.g., raw Anthropic API for a custom planner). The runtime trait is transport-neutral, so this is just a new adapter.
+**The deferred work:** A non-CLI adapter for an agent that doesn't ship a CLI. Candidates: the `opencode serve` HTTP API (real-time permission approval via `POST /session/:id/permissions/:permissionID`), or a raw Anthropic API for a custom planner. The runtime trait surface already supports these (the per-adapter `perm_env` and `build_args` are the only knobs).
 
-**Why deferred:** v1's two agents (opencode, hermes) both speak ACP. The "second adapter must be non-ACP" rule from the original design interview is a v1.1 commitment, not a v1 requirement. Wait until a third agent needs to be supported.
+**Why deferred:** All four v1 agents speak CLI mode. The "second adapter must be non-CLI" rule from the original design interview is a v1.1 commitment, not a v1 requirement. (ACP itself was removed per decision 34; the deferred item is moot in that framing.)
 
 ---
 
@@ -223,6 +223,7 @@ These came up briefly but weren't deep-dived in the interview. Captured here for
 - **Pluggable UI themes beyond the dark neon system** — defer; the design system is the product identity.
 - **Mobile / web companion** — explicitly out of scope; demeteo is a desktop control plane.
 - **WebKitGTK + NVIDIA + Wayland Error 71** — not a deferred feature, but a documented platform quirk with an auto-detected workaround and `DEMETEO_DISABLE_GPU=1` escape hatch. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+- **Antigravity CLI upstream drift** — the npm-published `@antigravity/cli` does not currently match what the bundled `parse_antigravity_event` expects. The adapter is compiled and registered but the `antigravity` row in `README.md`'s "Supported agents" table is marked "not currently supported." A v1.x fix is to either re-pin against the upstream API or drop the adapter entirely.
 
 ---
 

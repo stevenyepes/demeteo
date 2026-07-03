@@ -15,9 +15,9 @@ Agents are invoked as one-shot CLI processes — no server, no handshake. They m
 | Agent | CLI invocation used |
 |-------|---------------------|
 | [opencode](https://github.com/anomalyco/opencode) | `opencode run --format json` |
-| [claude-code](https://claude.ai/code) | `claude --print --output-format stream-json` |
+| [claude-code](https://claude.ai/code) | `claude --print --verbose --output-format stream-json` |
 | [hermes](https://github.com/NousResearch/hermes-agent) | `hermes run --format json` |
-| antigravity | `agy --print -` — **not currently supported** (CLI changed, integration broken) |
+| antigravity | `agy --print -` — adapter is compiled but **not currently supported**; the npm-published `@antigravity/cli` does not match what the bundled parser expects. See [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md) §17. |
 
 ## Installation
 
@@ -98,13 +98,13 @@ A change is considered done when `tsc --noEmit` and `cargo clippy` both exit 0 a
 ## Architecture
 
 ```
-React Webview ──IPC──► Tauri Commands ──► FeatureOrchestrator
+React Webview ──IPC──► Tauri Commands ──► StepExecutor
                                                │
                            ┌───────────────────┤
                            ▼                   ▼
-                     AgentRuntime        WorktreeManager
-                     (CliRuntime)        (MergeExecutor)
-                           │                   │
+                     AgentRuntime        WorktreeOpsPort
+                     (UnifiedCliRuntime)  + Merge / Conflict
+                           │               + MrPublisher
                    opencode / hermes     Git worktrees
                    claude-code / ag      SSH/SFTP repos
 ```

@@ -19,14 +19,14 @@ trait catalogue), see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### v1 ships
 
-- A pluggable `AgentRuntime` trait with one concrete implementation: `CliRuntime` (one-shot CLI process + JSON-lines event stream).
-- Four agent configurations out of the box: **`opencode`**, **`hermes`**, **`claude-code`**, and **`antigravity`** — all via their CLI's JSON-output mode (`opencode run --format json`, `hermes run --format json`, `claude --print --output-format stream-json`, `agy --print -`).
+- A pluggable `AgentRuntime` trait with one concrete implementation: `UnifiedCliRuntime` (one-shot CLI process + JSON-lines event stream) under `adapters/agent/cli_runtime.rs`.
+- Four agent configurations out of the box: **`opencode`**, **`hermes`**, **`claude-code`**, and **`antigravity`** — all via their CLI's JSON-output mode (`opencode run --format json`, `hermes run --format json`, `claude --print --verbose --output-format stream-json`, `agy --print -`). The `antigravity` adapter is compiled and registered but its install command (`npm install -g @antigravity/cli`) does not currently match the upstream CLI's wire format — see `README.md`'s "Supported agents" footnote.
 - The runtime serves **both** the planner (an agent session that decomposes the feature into a step DAG) and the subtask agents (sessions that execute a single `agent` or `parallel` step's work). Same trait, same plumbing, different prompts.
 - Eager agent session lifecycle scoped to step executions (a process is spawned per `prompt` call, torn down on completion).
-- `OPENCODE_PERMISSION` env var per spawn; `external_directory: "deny"` to scope the worktree. The `PermissionPolicyPort` renders the policy JSON.
-- Cross-step conversation continuity via `--session <uuid> --continue` flags so a multi-step workflow shares the agent's context.
-- A typed three-layer error model (per-action / per-step / per-feature).
-- Per-step checkpoint persistence (DB-backed, populated on every state transition).
+- A four-axis `PermissionProfile` (`read_fs | write_fs | execute | network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None | ArtifactsOnly | All`). Compiled per step from the step's `StepCapability`. Each agent adapter translates the abstract profile to its native dialect at spawn (opencode / hermes / antigravity → `OPENCODE_PERMISSION` env; claude-code → `--disallowedTools`). `external_directory: "deny"` (opencode) is the worktree scope fence; the chmod fence in `adapters/worktree/git_ops/scope.rs` enforces the artifacts-vs-source path-shape uniformly across every agent.
+- Cross-step conversation continuity via per-agent session-id flags so a multi-step workflow shares the agent's context.
+- A typed three-layer error model (per-action `ActionError` / per-step `AgentEvent::Error` / per-feature watchdog).
+- Per-step checkpoint persistence (DB-backed, populated on every state transition via `StepExecutionPatch`).
 - The `AgentEvent` vocabulary is **internal** — consumed by the `StepExecutor`, not by the UI. The UI sees step transitions, not agent transcripts.
 
 ### v1 explicitly does NOT include
@@ -108,7 +108,15 @@ The agent *session* identifier is the CLI `--session <uuid>` argument passed to 
 
 There's no special "planner port" or "planner runtime." The planner is a coding agent session (opencode, hermes, claude-code, or antigravity) invoked with a *planning prompt* — the same `CliRuntime`, the same CLI invocation, the same JSON-lines event stream. The only special thing is the prompt template, which lives in the workflow step's config (the first `agent` step in the starter pack's Research → Spec → Plan → Tasks → Implement → Validate workflow, for example).
 
-The planner's selection is per-project (`Project.planner: { machine_id, agent_kind }` — see `ProjectRepository` in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §2). The user picks the planner when creating the project. The orchestrator resolves it at feature-start time.
+The planner's selection is per-project
+(`ProjectSettings::default_agent_kind` + `default_model` — see
+[`docs/DDD_MODEL.md`](docs/DDD_MODEL.md) §2 Project Management and
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §2 `ProjectRepository`).
+The user picks the planner when configuring project settings, and may
+layer a per-workflow override (`ProjectWorkflowOverride` with
+`step_id = None`) and per-step overrides. The orchestrator resolves
+the effective agent at feature-start time via
+`resolve_execution_context`.
 
 ### 3.3 Project host + provider instance
 
@@ -126,17 +134,25 @@ The agent runs on the **same host as the worktree**:
 
 ```rust
 use serde::{Deserialize, Serialize};
-use crate::domain::policy::ActionKind;
+use crate::domain::action::ActionKind;
+use crate::domain::artifact::Artifact;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
-    /// Streamed assistant text delta. The StepExecutor appends to the current
-    /// artifact buffer; not surfaced to the UI.
+    /// Streamed assistant text delta. The frontend appends to the most recent text block.
     Text { delta: String },
 
+    /// A durable artifact was produced (a file the agent just wrote,
+    /// a derived diff, a worktree navigation pointer, etc.). The
+    /// `StepExecutor` collects these into a per-step buffer and
+    /// resolves them against the step's declared `ArtifactDecl`s at
+    /// `TurnComplete`. **This is the cross-restart durable record** —
+    /// text events are ephemeral UI signals, this is what survives.
+    ArtifactProduced { artifact: Artifact },
+
     /// Agent wants to do something. The `tool_call_id` is the agent's id; the
-    /// `intercept_id` is Demeteo's internal handle.
+    /// `intercept_id` is Demeteo's internal handle (always minted for traceability).
     ToolCall {
         tool_call_id: String,
         intercept_id: String,
@@ -152,12 +168,13 @@ pub enum AgentEvent {
         preview: Option<String>,
     },
 
-    /// Token / cost telemetry
-    Usage {
-        input_tokens: u64,
-        output_tokens: u64,
-        cost_usd: Option<f64>,
-    },
+    /// Agent publishes an execution plan (opencode plan mode, etc.)
+    Plan { entries: Vec<PlanEntry> },
+
+    /// Token / cost telemetry. Emitted standalone by opencode and hermes
+    /// (multiple times per turn); attached to `TurnComplete.usage` by
+    /// Claude Code (one final snapshot per turn).
+    Usage(Usage),
 
     /// Soft error from the agent
     Error {
@@ -167,7 +184,39 @@ pub enum AgentEvent {
     },
 
     /// Agent finished the turn. The channel closes after this.
-    TurnComplete { stop_reason: StopReason },
+    /// `usage` carries the terminal cumulative token/cost snapshot for
+    /// the turn when the agent's wire format bundles them onto the
+    /// result line (Claude Code). Parsers that emit usage as separate
+    /// `Usage` events leave this `None`.
+    TurnComplete {
+        stop_reason: StopReason,
+        usage: Option<Usage>,
+    },
+
+    /// Agent switched modes (e.g., plan -> build). Carries the new mode id.
+    ModeChanged { mode_id: String },
+
+    /// Agent updated a config option (model, mode, reasoning level, etc.)
+    ConfigChanged { config_id: String, value: String },
+}
+
+/// Token / cost snapshot.
+///
+/// A standalone struct (rather than an inline enum variant) so that the
+/// `TurnComplete { usage: Option<Usage> }` carrier can hold the same
+/// shape as the standalone `Usage` event without a self-referential
+/// enum. `cache_read_input_tokens` and `cache_creation_input_tokens`
+/// are emitted by Claude Code today; opencode and hermes emit `0` until
+/// their wire formats expose them. The shared
+/// `UsageAccumulator` treats all four numeric fields as monotonically
+/// cumulative per turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: Option<f64>,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +229,12 @@ pub enum ToolCallStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanEntry {
+    pub step: String,
+    pub status: String, // "pending" | "in_progress" | "done" | "blocked"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     EndOfTurn,
@@ -189,7 +244,7 @@ pub enum StopReason {
 }
 ```
 
-The `Text` and `Plan` events are consumed by the `StepExecutor` to build the step's artifact (per the type-driven defaults in [`docs/DECISIONS.md`](docs/DECISIONS.md) decision 28). The `Usage` event feeds the per-step `cost_usd` and the per-feature telemetry (per the locked decision 15). The `TurnComplete` event drives the step's state transition.
+The `Text`, `ArtifactProduced`, and `Plan` events are consumed by the `StepExecutor` to build the step's artifact (per the type-driven defaults in [`docs/DECISIONS.md`](docs/DECISIONS.md) decision 28). The `Usage` event feeds the per-step `cost_usd` and the per-feature telemetry (per the locked decision 15). The `TurnComplete` event drives the step's state transition. `ModeChanged` and `ConfigChanged` flow back to the `AgentTerminalDrawer` for interactive sessions.
 
 The UI does **not** consume the agent event stream. It consumes `feature_status_changed` / `step_progress` / `gate_required` / `conflict_detected` events from the `NotificationPort`.
 
@@ -201,6 +256,7 @@ The UI does **not** consume the agent event stream. It consumes `feature_status_
 |-------------------|------------------------------------------------------|---------------------------------------|
 | `pending`         | Step is next up, not yet started                     | `StepExecutor` on run start           |
 | `running`         | Agent session is active                              | `StepExecutor` on first AgentEvent    |
+| `verifying`       | Step finished its agent turn; verifier / QA hook running | `StepExecutor` between turn and gate |
 | `awaiting_gate`   | A gate is awaiting user decision                     | `StepExecutor` on `gate_required`     |
 | `completed`       | Step finished; artifact written                      | `StepExecutor` on `TurnComplete`      |
 | `failed`          | Step failed; user action required                    | `StepExecutor` on terminal Error      |
@@ -208,6 +264,14 @@ The UI does **not** consume the agent event stream. It consumes `feature_status_
 | `interrupted`     | App was killed mid-step; synthetic gate on re-entry  | `StepExecutor` on shutdown watchdog   |
 
 Per-step checkpoints (decision 14) are atomic: a step transitions to `completed` only when its artifact is written and (if it's a gate) its `gate_decision` is recorded. Mid-step crashes surface as `interrupted`, and the next launch offers a synthetic gate with "Resume" (re-run the step) or "Skip" options.
+
+The four "blocking" statuses for the predecessor-running guard
+(`StepExecutor::step_retry`, `GatePresenter::gate_decide`) are
+`pending | running | verifying | awaiting_gate`. `completed`,
+`failed`, `interrupted`, and `skipped` are non-blocking — the guard
+walks `steps_for_feature(target.feature_id)` and returns
+`Err(AppError::validation)` on the first non-terminal predecessor with
+`step_index < target.step_index`.
 
 ### 3.6 The worktree-of-record is `feature/<slug>`
 
@@ -346,10 +410,17 @@ Each agent emits nd-JSON on stdout when run with the JSON-output flag:
 
 | Agent        | CLI invocation                                           | Event shape                                      |
 |--------------|---------------------------------------------------------|-------------------------------------------------|
-| opencode     | `opencode run --format json [args...]`                 | `{"type":"text","content":"..."}`               |
-| hermes       | `hermes run --format json [args...]`                    | (same as opencode; confirm at implementation)    |
-| claude-code  | `claude --print --output-format stream-json [args...]`  | `{"type":"text","content":"..."}`               |
+| opencode     | `opencode run --format json [args...]`                 | `{"type":"text","part":{"text":"..."}}`, `{"type":"step_finish","part":{"reason":"stop","tokens":{...},"cost":...}}`, `{"update":{"sessionUpdate":"agent_message_chunk",...}}` |
+| hermes       | `hermes run --format json [args...]`                    | `{"kind":"text","delta":"..."}`, `{"kind":"usage","inputTokens":...,"outputTokens":...,"costUsd":...,"cacheReadInputTokens":...,"cacheCreationInputTokens":...}`, `{"kind":"end_turn"}` |
+| claude-code  | `claude --print --verbose --output-format stream-json [args...]`  | `{"type":"system","subtype":"init","session_id":"..."}`, `{"type":"assistant","message":{"content":[{"type":"text","text":"..."},{"type":"tool_use","id":"...","name":"Bash","input":{...}}]}}`, `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"...","content":"...","is_error":false}]},"tool_use_result":{...}}`, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.187,"usage":{"input_tokens":...,"output_tokens":...,"cache_creation_input_tokens":...,"cache_read_input_tokens":...}}` |
 | antigravity  | `agy --print - [args...]`                              | `{"type":"text_delta","data":{"text":"..."}}`  |
+
+The per-agent parser is registered on `UnifiedCliRuntime.parse_event` and
+maps the agent's wire format onto `AgentEvent` variants. Unknown event
+types are silently dropped so future agent versions don't break the
+stream.
+
+<!-- EXAMPLE: new -->
 
 ### 5.3 Cross-step session continuity
 
@@ -436,17 +507,47 @@ On consent, the frontend invokes `agent_install_and_start(step_execution_id, age
 
 ### 5.5 Permission policy per spawn
 
-Each `CliRuntime::start` call injects the spawn-time policy as an env var:
+Each `UnifiedCliRuntime::start` call compiles the abstract
+`PermissionProfile` to the agent's native dialect and injects it as an
+env var or CLI flag:
+
+opencode / hermes / antigravity (`OPENCODE_PERMISSION` env, complete policy — never `ask`):
 
 ```
-OPENCODE_PERMISSION={"edit":"allow","read":"allow","bash":"ask","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"ask"}
+OPENCODE_PERMISSION={"edit":"allow","read":"allow","bash":"allow","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"allow"}
 ```
 
-The policy object is resolved from `AppContext.permission_policy` and written to `AgentContext.permission_policy_json` before spawn. The binary receives it as `OPENCODE_PERMISSION` in its env. The worktree scope is enforced by `external_directory: "deny"` (the binary refuses to operate on paths outside `cwd`).
+claude-code (`--disallowedTools`):
 
-`bash: "ask"` is the only gate that requires real-time human-in-the-loop. When the agent emits a bash action, the step pauses at the gate and the user approves or rejects via the `GateView` UI before the agent receives the result.
+```
+claude --print --verbose --output-format stream-json \
+       --dangerously-skip-permissions \
+       --disallowedTools "WebSearch,WebFetch" \
+       --exclude-dynamic-system-prompt-sections \
+       --setting-sources user,project \
+       --strict-mcp-config
+```
 
-When the `OPENCODE_PERMISSION` env var is absent (e.g., direct CLI invocation outside demeteo), the agent applies its own default policy.
+The compiled policy comes from `AgentContext::permissions`
+(`ports/agent_runtime.rs:65-73` — see `opencode_permission_json`).
+The four axes (`read_fs`, `write_fs`, `execute`, `network`) are each
+`Allow` or `Deny` only — never `ask`. The artifacts-vs-source path
+distinction is enforced uniformly by the OS-level chmod fence in
+`adapters/worktree/git_ops/scope.rs`, driven by
+`StepCapability::write_scope`. `external_directory: "deny"` (opencode)
+is the worktree scope fence; the binary refuses to operate on paths
+outside `cwd`. claude-code has no equivalent tool-level setting, so the
+chmod fence is the only enforcement on that agent.
+
+There is **no** `bash: "ask"` path in the compiled policy. A denied
+tool is rejected instantly; the agent gets a tool-result error and
+keeps going. Nothing blocks waiting on a human — that's the
+autonomous-pipeline guarantee. The gate-step approval surface (user
+clicks Approve / Redirect on the step timeline) is the only
+real-time human-in-the-loop affordance Demeteo provides.
+
+When the `OPENCODE_PERMISSION` env var is absent (e.g., direct CLI
+invocation outside demeteo), the agent applies its own default policy.
 
 ### 5.5.1 Claude Code auth: let Claude own it
 
@@ -464,7 +565,7 @@ We adopted `--bare` only for its prompt-cache benefit (a byte-identical static s
 
 **Token refresh is correct by construction.** Short-lived OAuth access tokens are renewed by Claude's own refresh-token exchange; because we never copy the access token out of the keychain, there is no stale-credential-on-disk to go bad and no global `~/.claude/settings.json` mutation to contaminate the user's own interactive `claude`.
 
-## Why not extract the token (`--settings`, `apiKeyHelper`, or `settings.json` env)?
+### 5.5.2 Why not extract the token (`--settings`, `apiKeyHelper`, or `settings.json` env)?
 
 Earlier iterations wired `--settings <path>` + `apiKeyHelper`, then `settings.json`-env injection. Both are kept here as rejected alternatives:
 
@@ -476,14 +577,14 @@ The trade-off: without `--bare`, user- and project-level hooks/skills/memory loa
 
 ### 5.6 Adapters
 
-Four agents, all via `CliRuntime`:
+Four agents, all via `UnifiedCliRuntime`:
 
-- `adapters/agent/opencode/mod.rs` — wraps `CliRuntime` with config `{ binary: "opencode", args: [], env: {}, install_command: "curl -fsSL https://opencode.ai/install | bash" }`.
-- `adapters/agent/hermes/mod.rs` — wraps `CliRuntime` with config `{ binary: "hermes", args: [], env: {}, install_command: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash" }`.
-- `adapters/agent/claude_code/mod.rs` — wraps `CliRuntime` with config `{ binary: "claude", args: ["--print", "--output-format", "stream-json"], env: {}, install_command: "npm install -g @anthropic-ai/claude-code" }`.
-- `adapters/agent/antigravity/mod.rs` — wraps `CliRuntime` with config `{ binary: "agy", args: ["--print", "-"], env: {}, install_command: "curl -fsSL https://raw.githubusercontent.com/everestVentures/antigravity/main/install.sh | bash" }`.
+- `adapters/agent/opencode/mod.rs` — `{ kind_str: "opencode", binary: "opencode", install_cmd: "curl -fsSL https://opencode.ai/install | bash", perm_env: opencode_permission_env, … }`.
+- `adapters/agent/hermes/mod.rs` — `{ kind_str: "hermes", binary: "hermes", install_cmd: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash", perm_env: opencode_permission_env, … }`.
+- `adapters/agent/claude_code/mod.rs` — `{ kind_str: "claude-code", binary: "claude", install_cmd: "npm install -g @anthropic-ai/claude-code", perm_env: no_permission_env (claude-code enforces via `--disallowedTools`), … }`.
+- `adapters/agent/antigravity/mod.rs` — `{ kind_str: "antigravity", binary: "agy", install_cmd: "npm install -g @antigravity/cli", perm_env: opencode_permission_env, … }`. **Status: known broken upstream.** The npm-published `@antigravity/cli` does not currently match what `parse_antigravity_event` expects. The adapter is compiled and registered, but the `antigravity` row in `README.md`'s "Supported agents" table is marked "not currently supported." See [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md) §17 for the deferred fix.
 
-The `CliRuntime` is generic over the binary — the agent-specific logic is just the `AgentConfig`, the availability check (which binary name to look up), and the `parse_event` function.
+The `UnifiedCliRuntime` is generic over the binary — the agent-specific logic is just the `AgentConfig`, the availability check (which binary name to look up), the `parse_event` function, the `build_args` function, and the `perm_env` translator (`opencode_permission_env` or `no_permission_env`).
 
 ### 5.7 Disclaimer
 
@@ -495,19 +596,47 @@ Both the README and the `ProviderSettings` UI strings should clarify that Demete
 
 ### 6.1 The problem
 
-Without a fence, an agent running with `cwd = <worktree>` can `cd ..` out of the worktree, read `/etc/passwd`, write to `~/.ssh/authorized_keys`, etc. The policy decorator catches writes and bash, but the bash-prefix match isn't a *path* check — `cat /etc/passwd` slips through unless the user has a `Reject` rule for `cat /etc/*`.
+Without a fence, an agent running with `cwd = <worktree>` can `cd ..` out of the worktree, read `/etc/passwd`, write to `~/.ssh/authorized_keys`, etc. The four-axis `PermissionProfile` (§5.5) catches writes and bash via tool-level rules, but tool names aren't a *path* check — a `Read` tool pointed at `/etc/passwd` still slips through unless the binary itself enforces a worktree scope.
 
 ### 6.2 The implementation
 
-The scope fence is `external_directory: "deny"` in the `OPENCODE_PERMISSION` env var (§5.5). The binary itself enforces this — paths outside `cwd` are refused at the binary level. No `PolicyEngine` involvement, no path canonicalization, no pre-rule.
+The scope fence has three layers:
 
-Bash commands that escape the worktree are caught by `bash: "ask"` — the user is prompted at the gate and can reject. There is no path-level bash prefix check.
+1. **Tool-level.** opencode / hermes / antigravity use the
+   `OPENCODE_PERMISSION` env var (§5.5) for tool-level allow / deny.
+   claude-code uses `--disallowedTools` with the same intent. The
+   `external_directory: "deny"` rule (opencode only) is the worktree
+   scope fence: paths outside `cwd` are refused at the binary level.
+2. **Path-shaped.** The OS-level chmod fence in
+   `adapters/worktree/git_ops/scope.rs` sets `chmod a-w` on
+   source-tree paths before each step and restores it after. The
+   fencings come from `WriteScope::{None, ArtifactsOnly, All}`, which
+   `StepCapability::write_scope` derives. The artifacts-vs-source
+   distinction is a *path* shape that no agent's tool model can
+   express, so the fence enforces it uniformly across every agent.
+3. **Pre-exec.** `spawn_interactive` (§2 S3 in
+   [`docs/RELIABILITY_PLAN.md`](docs/RELIABILITY_PLAN.md)) probes the
+   cwd with `test -d <cwd> && echo OK`, verifies the binary resolves
+   on the remote `$PATH` with `command -v <binary>`, and drains
+   stderr for the first 200 ms post-exec. Fail-fast surfaces as
+   `AgentStartError::SpawnFailed("cwd not found: …")` or
+   `AgentStartError::SpawnFailed("binary not found: …")`.
 
 ### 6.3 What this does NOT solve
 
-- **Bash command scope.** `cd / && cat /etc/passwd` is subject to `bash: "ask"`, not a path fence. The user must be attentive at gate prompts.
-- **TOCTOU.** Symlink races between resolution and execution are best-effort.
-- **Cross-worktree access in the feature branch.** The scope fence protects the subtask's worktree. A subtask that *should* see prior subtask merges gets them via the merge into `feature/<slug>` (not via a separate read path).
+- **Tool-name → path leak on claude-code.** claude-code has no
+  `external_directory` setting, so the chmod fence is the only
+  enforcement. The orchestrator restores the source tree's write
+  permissions at step boundaries, but a step that uses a non-source
+  write path (`/tmp/`, `node_modules/`, `target/`) is still
+  user-visible; project owners compensate with
+  `WorktreeStrategy::extra_writable_paths`.
+- **TOCTOU.** Symlink races between resolution and execution are
+  best-effort.
+- **Cross-worktree access in the feature branch.** The scope fence
+  protects the subtask's worktree. A subtask that *should* see prior
+  subtask merges gets them via the merge into `feature/<slug>` (not
+  via a separate read path).
 
 ---
 
@@ -515,21 +644,24 @@ Bash commands that escape the worktree are caught by `bash: "ask"` — the user 
 
 ### 7.1 Per-action errors (typed)
 
-`ActionError` (carried from v1, unchanged in shape):
+`ActionError` (`ports/agent_execution.rs:24-29`):
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionError {
     Network { message: String },
-    Permission { message: String },
     NotFound { message: String },
-    Policy { message: String },
     Internal { message: String },
 }
 ```
 
-The frontend maps each variant to a small set of recovery chips (per the legacy v1 spec). The Tauri commands that return this are: `project_*`, `workflow_*`, `feature_*`, `step_*`, `gate_*`, `merge_*`, `conflict_*`, `mr_*`, `sftp_*`, `test_ssh_connection`, etc. Existing free-form `Err` returns are migrated incrementally — the rule is "every new error path returns `ActionError`."
+The frontend maps each variant to a small set of recovery chips. The
+typed envelope is returned from `AgentExecutionPort::submit_agent`;
+`submit` (the legacy hand-rolled-action path) still returns
+`Result<CommandOutcome, String>` for backward compatibility. Existing
+free-form `Err(String)` returns on other commands are migrated
+incrementally — the rule is "every new error path returns `ActionError`."
 
 ### 7.2 Per-step errors (`AgentEvent::Error`)
 
@@ -548,104 +680,157 @@ The `AgentTransport::try_wait` is polled by a watchdog task per active step exec
 
 ## 8. Tauri Command Surface (post-pivot)
 
-The full list of new commands is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4. The runtime-relevant commands (the ones the `StepExecutor` and `FeatureOrchestrator` invoke on the agent runtime):
+The full list of commands is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4 and registered in [`src-tauri/src/lib.rs:461-585`](src-tauri/src/lib.rs). The runtime-relevant commands (the ones the `StepExecutor` and the agent lifecycle handler invoke on the agent runtime) live under `commands::agent_lifecycle`:
 
 ```rust
-// Phase R5
 #[tauri::command]
 async fn agent_start(
-    state: tauri::State<'_, AgentRegistryState>,
-    step_execution_id: String,
+    state: tauri::State<'_, AppContext>,
+    thread_id: String,
+    machine_id: String,
     agent_kind: String,
-) -> Result<AgentStartResult, String>;
+) -> Result<(), String>;
 
 #[tauri::command]
 async fn agent_install_and_start(
-    state: tauri::State<'_, AgentRegistryState>,
-    step_execution_id: String,
+    state: tauri::State<'_, AppContext>,
+    thread_id: String,
+    machine_id: String,
     agent_kind: String,
 ) -> Result<(), String>;
 
 #[tauri::command]
 async fn agent_prompt(
-    state: tauri::State<'_, AgentRegistryState>,
-    step_execution_id: String,
+    state: tauri::State<'_, AppContext>,
+    thread_id: String,
     text: String,
 ) -> Result<(), String>;  // prompt is enqueued; events flow via NotificationPort
 
 #[tauri::command]
 async fn agent_cancel(
-    state: tauri::State<'_, AgentRegistryState>,
-    step_execution_id: String,
+    state: tauri::State<'_, AppContext>,
+    thread_id: String,
+) -> Result<(), String>;
+
+#[tauri::command]
+async fn agent_restart(
+    state: tauri::State<'_, AppContext>,
+    thread_id: String,
+) -> Result<(), String>;
+
+#[tauri::command]
+async fn agent_get_session_info(
+    state: tauri::State<'_, AppContext>,
+    thread_id: String,
+) -> Result<SessionInfo, String>;
+
+#[tauri::command]
+async fn agent_set_mode(
+    state: tauri::State<'_, AppContext>,
+    thread_id: String,
+    mode_id: String,
+) -> Result<(), String>;
+
+#[tauri::command]
+async fn agent_set_config_option(
+    state: tauri::State<'_, AppContext>,
+    thread_id: String,
+    config_id: String,
+    value: String,
 ) -> Result<(), String>;
 ```
 
-The legacy `agent_prompt` returned a `Channel<AgentEvent>` for per-turn UI streaming. In the post-pivot design, the prompt is enqueued on the `StepExecutor`'s internal channel; the UI never subscribes to per-turn streams. The `StepExecutor` consumes the `AgentEvent` stream and emits `step_progress` / `feature_status_changed` / `gate_required` events that the UI does subscribe to.
+The interactive `AgentTerminalDrawer` calls `agent_start` /
+`agent_prompt` / `agent_cancel` / `agent_set_mode` /
+`agent_set_config_option`; pipeline steps don't use this command set
+(the `StepExecutor` spawns sessions directly through `AgentRegistry`).
+
+The legacy `agent_prompt` returned a `Channel<AgentEvent>` for per-turn UI streaming. In the post-pivot design, the prompt is enqueued on the `AgentRegistry`'s internal channel; the UI never subscribes to per-turn streams. The `StepExecutor` consumes the `AgentEvent` stream and emits `step_progress` / `feature_status_changed` / `gate_required` events that the UI does subscribe to.
 
 ---
 
-## 9. File Layout (post-pivot)
+## 9. File Layout (post-pivot, post-refactor)
 
-The files touched by the agent integration work, organized by phase. Existing files modified are marked with `(modified)`; new files are marked with `(new)`.
+The files touched by the agent integration work, organized by phase. Existing files modified are marked with `(modified)`; new files are marked with `(new)`. Paths reflect the current backend refactor layout (Phases A–G of `docs/BACKEND_REFACTOR_TASKS.md`).
 
 ### Phase R1 — Port + domain skeleton
 
 ```
 src-tauri/src/domain/
-  agent_event.rs                  (modified) AgentEvent vocabulary (Text/ToolCall/Usage/TurnComplete; Plan dropped)
-  models.rs                       (modified) add StepExecution, GateDecision, ConflictReport
+  agent_event.rs                  (modified) AgentEvent vocabulary (Text / ToolCall / ToolCallUpdate / Plan / Usage / Error / TurnComplete / ModeChanged / ConfigChanged / ArtifactProduced)
+  models/                         (split) per bounded context: agent_config.rs, feature.rs, machine.rs, merge.rs, notification.rs, project.rs, provider.rs, thread.rs, timeouts.rs, workflow.rs
+  permission.rs                   (new) StepCapability, PermissionProfile, WriteScope, Access, resolve_profile
 
 src-tauri/src/ports/
-  agent_runtime.rs                (modified) AgentContext adds step_execution_id
-  db.rs                           (modified) extend DatabasePort with new tables
-
-src-tauri/src/adapters/database/
-  sqlite.rs                       (modified) implement new tables; legacy thread_sessions preserved
+  agent_runtime.rs                (modified) AgentContext gains permissions, bare_mode; add opencode_permission_env, no_permission_env
+  db.rs                           (split) eight sub-ports (MachineRepository, ThreadRepository, ProjectRepository, FeatureRepository, WorkflowRepository, GateRepository, AppSettingsRepository, MergeAuditRepository, NotificationRepository) + Patch value objects
 ```
 
-### Phase R4 — Step executor + CliRuntime
+### Phase R4 — Step executor + `UnifiedCliRuntime`
 
 ```
 src-tauri/src/adapters/agent/
   mod.rs                          (modified) remove acp submodule; add claude_code, antigravity submodules
   registry.rs                     (simplified) remove session dedup; Arc<AgentSession> per prompt call
+  cli_runtime.rs                  (modified) inject OPENCODE_PERMISSION env var; thread session id; --session/--continue/--resume/--conversation flags per agent
   opencode/
-    mod.rs                        (modified) return CliAgentRuntime; add parse_opencode_event
+    mod.rs                        (modified) return UnifiedCliRuntime; add parse_opencode_event
   hermes/
-    mod.rs                        (modified) return CliAgentRuntime; add parse_hermes_event
+    mod.rs                        (modified) return UnifiedCliRuntime; add parse_hermes_event; --resume <sid> for cross-step continuity
   claude_code/
-    mod.rs                        (new) CliAgentRuntime + parse_claude_code_event
+    mod.rs                        (new) UnifiedCliRuntime + parse_claude_event + disallowed_tools_for; --disallowedTools / --exclude-dynamic-system-prompt-sections / --setting-sources user,project / --strict-mcp-config
   antigravity/
-    mod.rs                        (new) CliAgentRuntime + parse_antigravity_event
-  cli_runtime.rs                  (modified) inject OPENCODE_PERMISSION env var; add --session --continue wiring
-  permission_policy.rs            (new) PermissionPolicyPort + WorktreeScopedPolicy
+    mod.rs                        (new) UnifiedCliRuntime + parse_antigravity_event; install_cmd = `npm install -g @antigravity/cli` (currently broken upstream)
+  event_stream/
+    mod.rs
+    turn.rs                       (new) stream_agent_turn — typed TurnResult { Success(TurnOutcome), Interrupted, Failed(String) }
+    cleanup.rs
 ```
 
-### Phase R5 — Feature orchestrator
-
-```
-src-tauri/src/
-  domain/feature.rs               (new) Feature, FeatureRun, StepExecution, GateDecision, SubtaskRun
-  ports/feature_orchestrator.rs   (new) FeatureOrchestrator
-  ports/step_executor.rs          (new) StepExecutor, GatePresenter
-  ports/notification.rs           (modified) add feature_status_changed, step_progress, gate_required, conflict_detected
-  adapters/database/sqlite.rs     (modified) implement FeatureOrchestrator, StepExecutor against SQLite
-  adapters/tauri_ui/commands.rs   (modified) feature_start, feature_pause, feature_resume, feature_cancel, feature_get, feature_list, feature_archive, feature_restore, feature_rerun
-```
-
-### Phase R6 — Worktree & merge
+### Phase R5 — Step executor + feature orchestrator
 
 ```
 src-tauri/src/
-  domain/worktree.rs              (new) SubtaskRun, SubtaskMerge, MergeStrategy
-  domain/conflict.rs              (new) ConflictReport, ConflictPolicy
-  ports/worktree_mgr.rs           (new) WorktreeManager, MergeExecutor, MrPublisher, ConflictResolver
+  domain/models/feature.rs        (new) Feature, StepExecution, SubtaskRun, GateDecision, StepOverride
+  ports/step_executor.rs          (new) StepExecutor + GatePresenter + SyncOutcomeView (all async)
+  ports/notification.rs           (modified) slimmed; per-step events only
+  adapters/step_executor/
+    mod.rs
+    driver.rs                     (new) ExecutionDriver — re-entry, watchdog, terminal status
+    driver/
+      failure.rs                  (new) fail_step_and_feature, StepOutcome::{Goto, Loop, Stop}
+      verifier.rs                 (new) max_iterations, on_failure -> goto
+    driver_registry.rs
+    gate_waiter.rs
+    steps/
+      agent/
+        mod.rs, spawn.rs, artifacts.rs, error_message.rs
+      gate.rs
+      parallel/
+        mod.rs, planner.rs, subtask.rs, list_unmerged.rs
+      sync.rs
+    artifacts/, impl_traits/, setup.rs, sync.rs, tests/, updates.rs
+  adapters/database/              (split) eight sub-port impls + merge audit + notification tables
+  adapters/tauri_ui/              commands.rs + events.rs
+```
+
+### Phase R6 — Worktree, merge, sync, scope
+
+```
+src-tauri/src/
+  domain/models/merge.rs          (new) SubtaskMerge, FeatureSync, MergeOutcome, ConflictReport, ConflictFile, ConflictPolicy, UpstreamSyncOutcome/Failure
+  ports/worktree_ops.rs           (new) WorktreeOpsPort + MergePreCheck::{AlreadyMerged, CleanMerge, WouldConflict}
+  ports/merge.rs                  (new) MergePort
+  ports/conflict.rs               (new) ConflictPort
+  ports/mr_publisher.rs           (new) MrPublisher
   adapters/worktree/
-    mod.rs                        (new)
-    git_ops.rs                    (new) worktree create/remove, branch checkout
-    merge.rs                      (new) rebase + merge into feature branch
-    conflict.rs                   (new) detect conflicts, surface report
-    publish.rs                    (new) open MR via provider instance
+    mod.rs
+    git_ops/
+      mod.rs, clone.rs, strategy.rs, worktree.rs, merge.rs, sync.rs, health.rs, scope.rs, tests.rs
+  adapters/conflict.rs
+  adapters/merge.rs
+  adapters/mr_monitor.rs
+  adapters/mr_publisher.rs
 ```
 
 ### Phase R7 — UI
@@ -656,56 +841,66 @@ src/
   components/
     ProjectRail.tsx               (new) Q24-A
     ProjectHome.tsx               (new) Q21-B
-    FeatureDetail.tsx             (new) Q13
-    GateView.tsx                  (new) Q13
-    WorkflowEditor.tsx            (new) Q19
+    FeatureDetail.tsx             (new) Q13 — step timeline + predecessor-running guard
+    GateView.tsx                  (new) Q13 — full-screen takeover + predecessor-running guard
+    WorkflowEditor.tsx            (new) Q19 — form-first
     WorkflowList.tsx              (new)
     StartFeatureModal.tsx         (new) Q22
     PreFlightPanel.tsx            (new) Q23
+    NewProjectView.tsx            (new) — slim modal
     ProviderSettings.tsx          (new) Q17a
     PreferencesScreen.tsx         (new) Q29
+    MemoryAgentSettings.tsx       (new) — Memory Agent config (under Preferences → Memory)
+    MachinesView.tsx              (new) — per-host agent profiles
     EmptyStateCard.tsx            (new) Q27
-    DocsPanel.tsx                 (new) Q27
-    ConflictResolver.tsx          (new) Q20 (Monaco 3-way)
+    DocsPanel.tsx                 (new) Q27 — bundled markdown viewer
     CommandPalette.tsx            (new) Q24 / Q32
-    ... (carries: Sidebar, TerminalTabs, SSHTerminal; EnvModal removed in favor of ProviderSettings)
+    NotificationBell.tsx          (new)
+    AgentTerminalDrawer.tsx       (new) — interactive sessions, agent_set_mode / agent_set_config_option
+    AttachmentDropzone.tsx, AttachmentChip.tsx (new)
+    ArtifactViewer.tsx, CodeEditorView.tsx (new)
+    ... (carries: Sidebar, TopBar, ProjectSettings; EnvModal replaced by ProviderSettings)
 
-src/docs/                         (new) bundled markdown
-  index.md
-  first-project.md
-  how-workflows-work.md
-  connecting-providers.md
-  feature-branch-model.md
-  conflict-resolution.md
+src/docs/                         (new) bundled user-facing help markdown
+  index.md, first-project.md, how-workflows-work.md,
+  connecting-providers.md, feature-branch-model.md,
+  conflict-resolution.md, keyboard-shortcuts.md, troubleshooting.md
 ```
 
 ---
 
 ## 10. Phase Plan (R0–R8)
 
-Each phase has a "Done means…" statement. Phases are sequential; don't start the next until the current is verified. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the active structure.
+> **Status note (2026):** Phases R1–R7 have shipped. The remaining
+> follow-ups are tracked in [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md)
+> (Q1 multi-feature concurrency, Q2 YAML editor, Q3 save-run-as-template,
+> Q4 deep dry-run, Q8 command step, Q12 auto-update, Q14 second non-CLI
+> runtime, etc.).
 
-### Phase R1 — Greenfield schema & ports
+Each phase has a "Done means…" statement. Phases were sequential; this
+section is retained for traceability.
+
+### Phase R1 — Schema & ports (shipped)
 
 **Scope:** Add the new tables; add the new ports; no UI changes, no agent spawns.
 
 **Done means:**
 - `cargo build` passes; `cargo test` passes; the new tables and port contracts are covered.
 - The `PricingTable` is hard-coded with the 5–10 most common models.
-- The legacy `thread_sessions` table is preserved (for migration safety) but no port surfaces it.
+- The `DatabasePort` is split into eight sub-ports.
 
-### Phase R4 — Step executor + CliRuntime
+### Phase R4 — Step executor + `UnifiedCliRuntime` (shipped)
 
-**Scope:** Implement the `StepExecutor` and the `CliRuntime`. The runtime is called by the executor, not the UI.
+**Scope:** Implement the `StepExecutor` and the `UnifiedCliRuntime`. The runtime is called by the executor, not the UI.
 
 **Done means:**
 - A 5-step workflow (research → spec → plan → tasks → implement-stub) runs end-to-end on a local project.
 - The `gate` step between plan and tasks actually pauses; the user clicks Approve; the executor resumes.
 - A `parallel` step with 3 subtasks runs them; the executor collects all 3 results.
 - Every state transition is in `step_executions`; killing and restarting demeteo resumes from the last completed step.
-- `AcpRuntime`, `jsonrpc.rs`, `event_mapper.rs`, `tool_bridge.rs`, `transport_local.rs`, `transport_ssh.rs` are deleted from the codebase.
+- ACP / JSON-RPC transport adapters are deleted from the codebase.
 
-### Phase R5 — Feature orchestrator
+### Phase R5 — Feature orchestrator (shipped)
 
 **Scope:** The user-facing "Start a feature" flow. Per-feature lifecycle. Re-entry on launch.
 
@@ -713,16 +908,17 @@ Each phase has a "Done means…" statement. Phases are sequential; don't start t
 - A user can: open a project → click "New feature" → describe a feature → click "Launch" → see the feature running in ProjectHome → click into FeatureDetail → see the step timeline + telemetry → reach a gate → make a decision → watch the next step run.
 - Killing demeteo mid-feature and relaunching surfaces a synthetic gate; the user can resume or restart the interrupted step.
 
-### Phase R6 — Worktree & merge
+### Phase R6 — Worktree, merge, sync (shipped)
 
 **Scope:** Per-feature branch, per-subtask worktree, sequential merge, conflict resolution, optional MR.
 
 **Done means:**
 - A `parallel` step's subtasks land in `feature/<slug>` via the engine.
-- A conflict between two subtasks surfaces at a gate; the user picks auto-agent (spawn resolution) or manual (3-way merge).
+- A conflict between two subtasks surfaces at a gate; the user picks auto-agent (`feature_resolve_sync_conflicts` spawns a resolution agent and revalidates the step) or manual (`GateView` re-render with the file list).
 - A `publish` step at the end of the workflow opens a draft MR with the right title, body, and source/target branches.
+- `feature_sync` syncs `feature/<slug>` against `origin/<default>` and returns a typed `SyncOutcomeView::{Ok, Conflict, Resolved, ResolutionFailed}`.
 
-### Phase R7 — UX polish & docs
+### Phase R7 — UX polish & docs (shipped)
 
 **Scope:** All the "feel" surfaces. Project rail. Settings. First-run. Docs. Shortcuts.
 
@@ -732,14 +928,15 @@ Each phase has a "Done means…" statement. Phases are sequential; don't start t
 - The sample project runs a real feature on a real public repo, end-to-end, with the full Research → Spec → Plan → Tasks → Implement → Validate loop visible.
 - The docs panel has 5+ pages accessible from the "?" icon.
 - The command palette fuzzy-finds projects, features, workflows, settings, and actions.
+- The predecessor-running guard surfaces in both `FeatureDetail` (Retry Step button) and `GateView` (Approve / Redirect buttons).
 
-### Phase R8 — Hardening & migration
+### Phase R8 — Hardening & migration (shipped; ongoing additive migrations)
 
 **Scope:** Schema migration infrastructure. Wipe-and-reinit. Backups. Migration log.
 
 **Done means:**
-- The app can ship v1.1 with additive schema changes silently, with no user prompt.
-- The app can ship v2.0 with a breaking change; the user is prompted to wipe-and-reinit, with an option to export first.
+- The app can ship v1.x with additive schema changes silently, with no user prompt.
+- The app can ship a breaking change; the user is prompted to wipe-and-reinit, with an option to export first.
 - A pre-migration backup is always taken; the user can manually restore from `demeteo.db.bak.<timestamp>`.
 - The migration log records every migration with timestamp and outcome.
 
@@ -749,10 +946,11 @@ Each phase has a "Done means…" statement. Phases are sequential; don't start t
 
 Full list with phase placement: [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md). The runtime-relevant deferred items:
 
-1. **Second non-ACP runtime** (Anthropic) → v1.1. The runtime trait is transport-neutral; adding a non-ACP adapter is the v1.1 commitment from the legacy design interview.
-2. **Per-machine `AgentConfig`** (model, workdir, env) → deferred. Users configure their agents on the host. v1.1 candidate.
+1. **Second non-CLI runtime** (e.g. `opencode serve` HTTP, or a raw Anthropic API for a custom planner) → v1.1. The runtime trait surface (`ports/agent_runtime.rs`) already supports this; the per-adapter `perm_env` + `build_args` are the only knobs.
+2. **Per-machine structured `AgentConfig`** (model, workdir, env, pricing override) → v1.x. The legacy shell / custom-http `AgentProfile` rows exist; a first-class structured config is deferred.
 3. **WASM provider plugins** → v2+. Third parties shipping provider adapters as WASM modules.
-4. **WASM policy plugins** → v2+. The original WASM plugin host from the legacy architecture, deferred with the legacy spec.
-5. **Per-step retry policy with planner-as-advisor** → v1.x. The `RetryPolicy` struct on `StepConfig` is reserved but the planner-driven redirect is v1.x.
+4. **WASM policy plugins** → v2+. WASM plugin host loaded from `~/.config/demeteo/plugins/`.
+5. **Per-step retry policy with planner-as-advisor** → v1.x. `on_failure -> goto` + `max_iterations` are in place; a planner-as-advisor redirect (the agent drafts the redirect target) is a v1.x candidate.
+6. **Antigravity CLI upstream drift** → v1.x. The npm-published `@antigravity/cli` does not match the bundled `parse_antigravity_event`. Fix or drop the adapter.
 
 The full set of deferred items (Q1 multi-feature concurrency, Q19 YAML editor, Q19 save-run-as-template, Q20 deep dry-run, Q21 cost rollup, Q21 smart project home, Q24 tabs/split view, Q8 `command` step type, Q11 telemetry, Q12 auto-update) is in [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md).

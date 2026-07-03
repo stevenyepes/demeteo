@@ -60,7 +60,7 @@ Only after completing steps 1–5 may you write or modify code.
 
 ## 1. Project Identity
 
-**Demeteo** is a premium desktop app that lets a developer describe a feature in plain language; the app decomposes it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes, antigravity), manages Git worktrees per Step, and presents human-approval Gates before merging.
+**Demeteo** is a premium desktop app that lets a developer describe a feature in plain language; the app decomposes it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes — antigravity is compiled but **not currently supported** upstream; see `README.md` "Supported agents" footnote), manages Git worktrees per Step, and presents human-approval Gates before merging.
 
 > **Current phase: V1 — Core fleet-style multi-agent orchestrator** (fully implemented).
 
@@ -81,8 +81,9 @@ Only after completing steps 1–5 may you write or modify code.
 ## 2. Tech Stack
 
 ### Key constraints
-- `external_directory: "deny"` — agents are scoped to their worktree; never allow FS access outside it
+- `external_directory: "deny"` on opencode (the worktree scope fence) — combined with the OS-level chmod fence in `adapters/worktree/git_ops/scope.rs`, agents are scoped to their worktree; never allow FS access outside it
 - Agent integration is **one-shot CLI + JSON only** — no ACP, no JSON-RPC, no tool-call bridge
+- The compiled `PermissionProfile` is **complete** and only uses `allow` / `deny` (never `ask`); no real-time human-in-the-loop prompts at the tool level
 - Secrets live in the OS keyring only — never write credentials to SQLite or disk files
 
 ---
@@ -90,13 +91,13 @@ Only after completing steps 1–5 may you write or modify code.
 ## 3. Architecture in 30 Seconds
 
 ```
-React Webview ──IPC──► Tauri Commands ──► FeatureOrchestrator
+React Webview ──IPC──► Tauri Commands ──► StepExecutor
                                               │
                           ┌───────────────────┤
                           ▼                   ▼
-                    AgentRuntime        WorktreeManager
-                    (CliRuntime)        (MergeExecutor)
-                          │                   │
+                    AgentRuntime        WorktreeOpsPort
+                    (UnifiedCliRuntime)  + Merge / Conflict
+                          │               + MrPublisher
                   opencode / hermes     Git worktrees
                   claude-code / ag      SSH/SFTP repos
 ```
@@ -305,6 +306,8 @@ Any task that touches the items below requires a **Gate** (pause and ask the use
 | Reliability & DAG pipeline  | [docs/RELIABILITY_PLAN.md](docs/RELIABILITY_PLAN.md)                                   |
 | User stories & agent tasks  | [docs/USER_STORIES.md](docs/USER_STORIES.md)                                           |
 | UX spec & journeys          | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md)                                             |
+| Known platform issues       | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)                                           |
+| Backend refactor history    | [docs/BACKEND_REFACTOR_TASKS.md](docs/BACKEND_REFACTOR_TASKS.md)                       |
 
 ---
 
@@ -345,5 +348,3 @@ If `npx commitlint` exits non-zero, rewrite the message before committing.
 Valid types: `feat fix perf revert refactor docs style test build ci chore`
 
 ---
-
-
