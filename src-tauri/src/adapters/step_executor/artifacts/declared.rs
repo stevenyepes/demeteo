@@ -180,6 +180,19 @@ pub async fn compute_git_diff(
 /// lost — the PR just stays clean. When `commit_artifacts` is true
 /// the call falls back to a plain `git add -A` (legacy behaviour).
 ///
+/// `non_artifact_writes` is the list of repo-relative paths the
+/// agent actually wrote to during this step that are NOT under
+/// `artifact_subdir` (i.e. the paths the user actually asked the
+/// agent to create or modify). It is used by the guard log below
+/// to detect the historical "agent put the doc body in
+/// `artifacts/s-…​.md` instead of the real path" failure mode: if
+/// these paths exist in the worktree but the stage is empty (or
+/// only contains paths under `artifact_subdir`), we emit a
+/// `tracing::warn!` so the regression is observable instead of
+/// silently producing an empty commit. Pass `&[]` for parallel
+/// steps where this signal isn't tracked — the warn still fires
+/// for an empty stage, which is the cheaper half of the check.
+///
 /// Returns the new commit SHA on success, or an error string on
 /// failure.
 pub async fn commit_worktree_changes(
@@ -189,6 +202,7 @@ pub async fn commit_worktree_changes(
     message: &str,
     artifact_subdir: &str,
     commit_artifacts: bool,
+    non_artifact_writes: &[String],
 ) -> Result<String, String> {
     // Build the `git add` invocation. When the user has opted out
     // of committing artifacts, use a pathspec exclusion to keep
@@ -242,6 +256,57 @@ pub async fn commit_worktree_changes(
         .await
         .map_err(|e| format!("git add failed: {}", e))?;
 
+    // Guard log: surface the "agent's deliverable landed in
+    // `artifacts/` instead of at the real path" regression mode
+    // instead of silently producing an empty commit. The two cases
+    // we flag are:
+    //   (a) the stage is empty even though `non_artifact_writes`
+    //       lists paths the agent touched — the agent's writes
+    //       either vanished (e.g. permission-scope rejection) or
+    //       all went to excluded paths;
+    //   (b) the stage only contains paths under `artifact_subdir`
+    //       while `non_artifact_writes` lists paths outside it —
+    //       the agent emitted the real doc body into its summary
+    //       report (`artifacts/s-draft.md`, …) instead of the real
+    //       path, so the PR ends up carrying only the report and
+    //       the actual deliverable is stranded as an untracked file.
+    let diff_cached_cmd = format!(
+        "git -C {} diff --cached --name-only",
+        paths::shell_escape_posix(worktree_root),
+    );
+    if let Ok(staged_raw) = exec.run_command(machine_id, &diff_cached_cmd).await {
+        let staged: Vec<&str> = staged_raw
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if staged.is_empty() && !non_artifact_writes.is_empty() {
+            tracing::warn!(
+                worktree = %worktree_root,
+                message = %message,
+                expected_non_artifact_writes = ?non_artifact_writes,
+                "commit_worktree_changes: stage is empty but the agent reported writes outside `{}` — the agent's deliverable did not reach the index",
+                artifact_subdir,
+            );
+        } else if !non_artifact_writes.is_empty() && !staged.is_empty() {
+            let trimmed_subdir = artifact_subdir
+                .trim()
+                .trim_start_matches("./")
+                .trim_end_matches('/');
+            let stage_has_non_artifact = staged.iter().any(|p| !is_under_prefix(p, trimmed_subdir));
+            if !stage_has_non_artifact {
+                tracing::warn!(
+                    worktree = %worktree_root,
+                    message = %message,
+                    expected_non_artifact_writes = ?non_artifact_writes,
+                    staged = ?staged,
+                    "commit_worktree_changes: stage only contains paths under `{}` while the agent reported writes outside it — the agent's doc body likely landed in the summary report instead of the real path",
+                    artifact_subdir,
+                );
+            }
+        }
+    }
+
     let commit_cmd = format!(
         "git -C {} -c user.email=demeteo@local -c user.name=demeteo commit -m {} --allow-empty",
         paths::shell_escape_posix(worktree_root),
@@ -265,6 +330,17 @@ pub async fn commit_worktree_changes(
                 eprintln!("[commit_worktree_changes] {}", out.trim());
             }
         })
+}
+
+/// True when `path` sits at or under the directory `prefix` (a
+/// directory path with no trailing slash, e.g. `"artifacts"`).
+/// Matches both the directory itself (`"artifacts"`) and any file
+/// inside it (`"artifacts/s-draft.md"`).
+pub(crate) fn is_under_prefix(path: &str, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    path == prefix || path.starts_with(&format!("{prefix}/"))
 }
 
 fn is_likely_binary(content: &str) -> bool {

@@ -1135,6 +1135,7 @@ async fn test_commit_worktree_changes_never_stages_symlinked_dependency_caches()
         "test commit",
         "artifacts/",
         false,
+        &[],
     )
     .await
     .expect("commit should succeed");
