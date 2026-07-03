@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Server, RotateCw, AlertTriangle, Key } from 'lucide-react';
+import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Server, RotateCw, AlertTriangle, Key, Sparkles } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { formatError } from '../lib/errors';
 import type { Machine } from '../types';
@@ -358,7 +358,18 @@ const NewProjectView = () => {
                 {/* Left Panel: Basic Configuration */}
                 <div className="space-y-6">
                     <div>
-                        <h1 className="text-3xl font-outfit font-bold text-white mb-2">Project Bootstrap</h1>
+                        <div className="flex items-center justify-between gap-4 mb-2">
+                            <h1 className="text-3xl font-outfit font-bold text-white">Project Bootstrap</h1>
+                            <button
+                                type="button"
+                                onClick={() => navigate({ kind: 'create-project' })}
+                                disabled={bootstrapStep !== 'form'}
+                                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-violet-500/10 border border-violet-500/40 text-violet-200 hover:bg-violet-500/20 hover:border-violet-500/60 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                                title="Create a brand-new repo on a connected provider, then launch the Standard Feature Pipeline"
+                            >
+                                <Sparkles className="w-3.5 h-3.5" /> Create a project from zero
+                            </button>
+                        </div>
                         <p className="text-sm text-slate-400">Map your repositories to a secure orchestrator workspace.</p>
                     </div>
 

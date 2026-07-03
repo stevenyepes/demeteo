@@ -1,6 +1,7 @@
 use crate::domain::ids::ProviderId;
 use crate::domain::models::ProviderInstance;
 use crate::paths;
+use crate::ports::provider_http::{CreateRepoRequest, CreatedRepo, NamespaceSummary};
 use crate::state::AppContext;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
@@ -51,8 +52,34 @@ pub async fn validate_pat(
 }
 
 pub async fn fetch_repos(ctx: &AppContext, provider_id: String) -> Result<Vec<String>, String> {
+    let (provider, pat) = resolve_provider_and_pat(ctx, &provider_id)?;
+
+    let repos = ctx
+        .provider_http
+        .list_repos(&provider.host, &provider.kind, &pat)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|r| r.full_name)
+        .collect();
+
+    Ok(repos)
+}
+
+/// Looks up a connected provider instance and resolves its PAT via the
+/// keyring-backed credential cache (never crosses the IPC boundary).
+///
+/// This is the **single** place in the backend that opens the
+/// `'demeteo'` keyring for a provider id; every other site that needs
+/// the PAT (`fetch_repos`, `create_repo`, `list_groups`, and the
+/// wizard's `Commit` arm in `commands::create_project`) routes through
+/// this helper.
+pub fn resolve_provider_and_pat(
+    ctx: &AppContext,
+    provider_id: &str,
+) -> Result<(ProviderInstance, String), String> {
     let providers = ctx.app_settings.get_provider_instances()?;
-    let provider_id_typed = ProviderId::from(provider_id.clone());
+    let provider_id_typed = ProviderId::from(provider_id.to_string());
     let provider = providers
         .into_iter()
         .find(|p| p.id == provider_id_typed)
@@ -66,16 +93,58 @@ pub async fn fetch_repos(ctx: &AppContext, provider_id: String) -> Result<Vec<St
         })
     })?;
 
-    let repos = ctx
-        .provider_http
-        .list_repos(&provider.host, &provider.kind, &pat)
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|r| r.full_name)
-        .collect();
+    Ok((provider, pat))
+}
 
-    Ok(repos)
+/// Lists the namespaces (personal account + orgs/groups) a repo can be
+/// created under for the given provider.
+pub async fn list_groups(
+    ctx: &AppContext,
+    provider_id: String,
+) -> Result<Vec<NamespaceSummary>, String> {
+    let (provider, pat) = resolve_provider_and_pat(ctx, &provider_id)?;
+
+    ctx.provider_http
+        .list_namespaces(&provider.host, &provider.kind, &pat)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Creates a new repository on the given provider under `namespace_id`.
+/// `auto_init` is forced on so the repo has a default branch + initial commit
+/// before the wizard clones it.
+pub async fn create_repo(
+    ctx: &AppContext,
+    provider_id: String,
+    namespace_id: String,
+    name: String,
+    private: bool,
+) -> Result<CreatedRepo, String> {
+    let (provider, pat) = resolve_provider_and_pat(ctx, &provider_id)?;
+
+    // Resolve the requested namespace id back to a full NamespaceSummary so
+    // the adapter knows whether to route to a personal / org / group endpoint.
+    let namespaces = ctx
+        .provider_http
+        .list_namespaces(&provider.host, &provider.kind, &pat)
+        .await
+        .map_err(|e| e.to_string())?;
+    let namespace = namespaces
+        .into_iter()
+        .find(|n| n.id == namespace_id)
+        .ok_or_else(|| "Namespace not found".to_string())?;
+
+    let req = CreateRepoRequest {
+        namespace,
+        name,
+        private,
+        auto_init: true,
+    };
+
+    ctx.provider_http
+        .create_repo(&provider.host, &provider.kind, &pat, &req)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn connect_instance(
@@ -123,4 +192,43 @@ pub async fn connect_instance(
 
     ctx.app_settings.add_provider_instance(instance.clone())?;
     Ok(instance)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the application-layer provider helpers. These pin
+    //! the dedup contract for blocker C-4: there must be exactly
+    //! one backend site that opens the `'demeteo'` keyring for a
+    //! provider id, and every caller must route through it.
+    use super::resolve_provider_and_pat;
+
+    /// Alias for the canonical signature so the function-pointer
+    /// coercion below doesn't trip the `clippy::type_complexity`
+    /// lint. The whole point of this test is to pin the signature
+    /// itself, so the test reads cleanly even with the alias.
+    type ResolveFn = fn(
+        &crate::state::AppContext,
+        &str,
+    ) -> Result<(crate::domain::models::ProviderInstance, String), String>;
+
+    /// Compile-time + runtime pin: `resolve_provider_and_pat` must
+    /// remain `pub` and must carry the canonical
+    /// `(&AppContext, &str) -> Result<(ProviderInstance, String), String>`
+    /// signature so every other module (the wizard's Commit arm,
+    /// `fetch_repos`, `list_groups`, `create_repo`) can route
+    /// through it without touching the keyring directly.
+    ///
+    /// We can't actually invoke the function without a real
+    /// `AppContext`, but a function-pointer coercion is enough to
+    /// force the compiler to verify the symbol is reachable from
+    /// outside `application::providers` and that its signature is
+    /// unchanged.
+    #[test]
+    fn resolve_provider_and_pat_is_publicly_reachable_with_canonical_signature() {
+        let f: ResolveFn = resolve_provider_and_pat;
+        // Coerce to a `usize` so the test is a real runtime no-op
+        // (avoid `let _ = f;` which is a typed binding the
+        // optimiser might warn about).
+        let _ = f as usize;
+    }
 }

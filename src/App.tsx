@@ -16,6 +16,7 @@ import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
 import { CodeEditorView } from "./components/CodeEditorView";
 import StartFeatureModal from "./components/StartFeatureModal";
+import CreateProjectWizard from "./components/wizard/CreateProjectWizard";
 import PreferencesScreen from "./components/PreferencesScreen";
 import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
@@ -184,6 +185,7 @@ function AppInner() {
                 onConnectProviders={() => { navigate({ kind: 'providers' }); uiDispatch({ type: 'SET_CONNECT_MODAL', open: true }); }}
                 onSyncWorktrees={() => navigate({ kind: 'new-project' })}
                 onDeployAgents={() => navigate({ kind: 'workflows' })}
+                onCreateFromZero={() => navigate({ kind: 'create-project' })}
               />
             </>
           )}
@@ -205,6 +207,8 @@ function AppInner() {
           )}
 
           {view.kind === 'new-project' && <NewProjectView />}
+
+          {view.kind === 'create-project' && <CreateProjectWizard />}
 
           {view.kind === 'project-settings' && currentProject && <ProjectSettings />}
 

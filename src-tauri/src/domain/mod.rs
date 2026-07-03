@@ -1,7 +1,9 @@
 pub mod action;
 pub mod agent_event;
+pub mod app_view;
 pub mod artifact;
 pub mod attachment;
+pub mod bootstrap;
 pub mod ids;
 pub mod intercept;
 pub mod memory;

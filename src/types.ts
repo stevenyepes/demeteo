@@ -66,11 +66,120 @@ export type AppView =
   | { kind: 'detail'; featureId: string; featureTitle: string; gateStepExecutionId?: string | null }
   | { kind: 'editor'; editorContext: EditorContext; featureId: string; featureTitle: string }
   | { kind: 'new-project' }
+  | { kind: 'create-project' }
   | { kind: 'project-settings' }
   | { kind: 'workflows' }
   | { kind: 'workflow-editor'; workflowId: string | null }
   | { kind: 'providers' }
   | { kind: 'settings' };
+
+// ── Create-Project Wizard ──────────────────────────────────────────────
+//
+// The create-project wizard is a routed `AppView` that walks the user
+// through **exactly seven** one-decision-per-screen steps and then
+// auto-launches `wf-starter-standard` against the freshly-created repo
+// (see `src-tauri/src/domain/bootstrap.rs` + `commands/create_project.rs`).
+//
+// The variant order is fixed; the React step components import the
+// matching kebab-case slugs from `BootstrapStep`.
+
+/** The seven wizard steps, in canonical order. Locked — do not reorder
+ *  or insert variants; the React shell, the Rust `BootstrapStep`
+ *  enum, and the spec all share this contract. */
+export const BootstrapStep = {
+  Name: 'name',
+  Provider: 'provider',
+  Group: 'group',
+  Machine: 'machine',
+  Agent: 'agent',
+  Model: 'model',
+  Description: 'description',
+} as const;
+export type BootstrapStep = typeof BootstrapStep[keyof typeof BootstrapStep];
+
+/** All seven steps in display order — single source of truth for the
+ *  progress indicator. The wizard's `goBack` rewind MUST be based on
+ *  `state.history` (not a raw index into this array) so auto-progressed
+ *  steps cannot be silently re-entered; see `WizardShell`. */
+export const STEP_ORDER: ReadonlyArray<BootstrapStep> = [
+  BootstrapStep.Name,
+  BootstrapStep.Provider,
+  BootstrapStep.Group,
+  BootstrapStep.Machine,
+  BootstrapStep.Agent,
+  BootstrapStep.Model,
+  BootstrapStep.Description,
+];
+
+/** The wizard's state, as it lives in React memory between IPC calls.
+ *  Mirrors the Rust `BootstrapState` struct. The Rust side also stores
+ *  the canonical history (including auto-progressed entries) so the
+ *  frontend cannot lose its place on `goBack`. */
+export interface BootstrapState {
+  step: BootstrapStep;
+  history: BootstrapStep[];
+}
+
+/** Step-specific payload sent to `submit_create_project_step`. Mirrors
+ *  the Rust `CreateProjectStepPayload` discriminated union exactly
+ *  (kebab-case `step` tag). The variant order matters: the wizard UI
+ *  must emit the variant matching the current `BootstrapState.step`,
+ *  otherwise the Rust command rejects the call with a Validation error. */
+export type CreateProjectStepPayload =
+  | { step: 'name'; value: string }
+  | { step: 'provider'; providerId: string; kind: string }
+  | { step: 'group'; namespaceId: string; kind: string; name: string }
+  | { step: 'machine'; kind: 'local' | 'remote'; machineId: string | null }
+  | { step: 'agent'; kind: string }
+  | { step: 'model'; model: string }
+  | {
+      step: 'commit';
+      title: string;
+      description: string;
+      visibility: 'private' | 'public';
+      name: string;
+      providerId: string;
+      providerKind: string;
+      providerHost: string;
+      namespaceId: string;
+      namespaceKind: string;
+      namespaceName: string;
+      machineKind: 'local' | 'remote';
+      machineId: string | null;
+      agentKind: string;
+      model: string;
+    };
+
+/** Result of `submit_create_project_step` from the Rust command. The
+ *  frontend matches on `kind` to decide whether to stay in the wizard
+ *  (continue → render the returned state's current step) or navigate
+ *  to the launched feature's Detail view. */
+export type BootstrapOutcome =
+  | { kind: 'continue'; state: BootstrapState }
+  | { kind: 'launched'; feature: LaunchedFeature };
+
+/** Compact view of a successfully-launched feature, returned to the
+ *  wizard so it can navigate to the Detail view. Mirrors the Rust
+ *  `LaunchedFeature`. Field names are snake_case to match the IPC
+ *  payload (no `rename_all = "camelCase"` on the Rust side). The
+ *  `created_repo` field carries the same `CreatedRepo` shape that
+ *  `src/lib/createProjectWizard.ts` exposes — see that module. */
+export interface LaunchedFeature {
+  feature_id: string;
+  feature_title: string;
+  project_id: string;
+  created_repo: {
+    full_name: string;
+    default_branch: string;
+    clone_url: string;
+  };
+}
+
+// NOTE: `CreatedRepo` and `ProviderNamespace` are declared and
+// exported from `src/lib/createProjectWizard.ts` (alongside their
+// Tauri command wrappers). They are NOT re-declared here to avoid a
+// duplicate-interface compile error — wizard components import them
+// directly from the lib.
 
 export type ConfigOptionValue = {
   value: string;
