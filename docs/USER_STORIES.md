@@ -24,10 +24,10 @@
 - **UI Areas:** ProviderSettings, TopBar avatars
 
 **Tasks:**
-- [ ] Create `ProviderSettings` modal/view.
-- [ ] Implement form to capture Provider Type, Host URL, and PAT.
-- [ ] Wire UI to Tauri command for `/user` PAT validation.
-- [ ] Display connected provider avatar in `TopBar`.
+- [x] Create `ProviderSettings` modal/view.
+- [x] Implement form to capture Provider Type, Host URL, and PAT.
+- [x] Wire UI to Tauri command for `/user` PAT validation.
+- [x] Display connected provider avatar in `TopBar`.
 
 ## Story 3: Project Bootstrap
 **Description:** As a user, I want to create a new workspace by selecting remote repositories, so I can start running feature workflows against them.
@@ -38,10 +38,10 @@
 - **UI Areas:** NewProjectView
 
 **Tasks:**
-- [ ] Implement `NewProjectView` with form for Name, Compute Type, and Repositories.
-- [ ] Build Repo Selection Modal with fuzzy search.
-- [ ] Display "Proposed Worktree Strategy" UI post-selection.
-- [ ] Wire `Project.create` backend invocation.
+- [x] Implement `NewProjectView` with form for Name, Compute Type, and Repositories.
+- [x] Build Repo Selection Modal with fuzzy search.
+- [x] Display "Proposed Worktree Strategy" UI post-selection.
+- [x] Wire `Project.create` backend invocation.
 
 ## Story 4: The Project Home & Starting a Feature
 **Description:** As a user, I want a control center where I can describe a feature, see active pipelines, and monitor accumulated costs.
@@ -80,11 +80,11 @@
 - **UI Areas:** GateView
 
 **Tasks:**
-- [ ] Build `GateView` overlay sliding in from the bottom.
-- [ ] Render the "Orchestrator Synthesis" summary card.
-- [ ] Implement the Unified Code Diff Viewer to show `+`/`-` changes.
-- [ ] Add Radio inputs for Action selection (Approve vs Redirect).
-- [ ] Wire the "Resume Pipeline" button to send the gate decision to the Rust backend.
+- [x] Build `GateView` overlay sliding in from the bottom.
+- [x] Render the "Orchestrator Synthesis" summary card.
+- [x] Implement the Unified Code Diff Viewer to show `+`/`-` changes.
+- [x] Add Radio inputs for Action selection (Approve vs Redirect).
+- [x] Wire the "Resume Pipeline" button to send the gate decision to the Rust backend.
 
 ## Story 7: Resolving Merge Conflicts
 **Description:** As a user, I want to handle subtask merge conflicts using a smart cascade (agent first, then manual 3-way merge) to ensure branch integrity.
@@ -94,9 +94,9 @@
 - **DDD Domain:** [docs/DDD_MODEL.md](DDD_MODEL.md) (Worktree & Git: ConflictReport)
 
 **Tasks:**
-- [ ] Implement `ConflictResolver` component using Monaco editor's 3-way merge mode.
-- [ ] Add action buttons for "Skip/Abort Subtask" or "Save Manual Resolution".
-- [ ] Integrate conflict state rendering into `FeatureDetail` gate block.
+- [x] Implement `ConflictResolver` component using Monaco editor's 3-way merge mode.
+- [x] Add action buttons for "Skip/Abort Subtask" or "Save Manual Resolution".
+- [x] Integrate conflict state rendering into `FeatureDetail` gate block.
 
 ## Story 8: Workflow Authoring
 **Description:** As a user, I want to create and edit workflow templates to define custom execution steps, conditions, and agent assignments.
@@ -119,6 +119,32 @@
 - **UI Areas:** Sidebar, TopBar
 
 **Tasks:**
-- [ ] Implement `Sidebar` rendering active projects with status dots (`emerald`, `ruby`).
-- [ ] Add Command Palette (`Cmd+K`) triggering a fuzzy search overlay for navigation.
-- [ ] Wire the `?` icon to open the markdown `DocsPanel`.
+- [x] Implement `Sidebar` rendering active projects with status dots (`emerald`, `ruby`).
+- [x] Add Command Palette (`Cmd+K`) triggering a fuzzy search overlay for navigation.
+- [x] Wire the `?` icon to open the markdown `DocsPanel`.
+
+## Story 10: Single Escape / Overlay-Priority Stack (UX1.6)
+**Description:** As a user, I want exactly one Escape keypress to dismiss only the topmost overlay, and I want the dismissal order to follow a predictable priority — so that layered modals (Gate → palette → modal → toast → drawer) behave predictably instead of closing the wrong surface.
+**Feature IDs:** F35 (single Escape dismisses topmost overlay only), F40 (priority order: `GateView > CommandPalette > modal > toast > sheet`).
+**References:**
+- **UX Journey:** [Journey 11: Keyboard & Overlay Behavior](UX_JOURNEYS.md#journey-11-keyboard--overlay-behavior)
+- **Architecture:** [docs/ARCHITECTURE.md](ARCHITECTURE.md) (UiStateRepository — new `OverlayStackContext` reducer)
+- **DDD Domain:** [docs/DDD_MODEL.md](DDD_MODEL.md) (UI overlay aggregate)
+- **Decision:** [docs/DECISIONS.md](DECISIONS.md) — Decision 37
+- **Spec:** `artifacts/_context/implementation-spec.md` (UX1.6)
+- **UI Areas:** `Modal`, `GateView`, `StartFeatureModal`, `CommandPalette`, `DocsPanel`, `AgentTerminalDrawer`, `ErrorToast`, `NotificationBell`, `ProjectSettingsShell`, `EnvModal`, `ProviderSettings`, `NewProjectView`, `ProvidersPage`, `FeatureDetail`, `ConflictResolver`
+
+**Tasks:**
+- [x] Create `src/context/OverlayStackContext.tsx` exposing `OverlayStackProvider`, `useOverlayStack`, `useOverlay`, the `OverlayStackEntry` / `OverlayPriorityTier` types, and a pure `overlayStackReducer` ordering by `(tierRank, priority, -createdAt)`.
+- [x] Create `src/hooks/useOverlayEscape.ts` — the single global `keydown` listener (registered with `{ capture: true }`) that consults `top()` and dispatches to its `onEscape`.
+- [x] Re-export the new symbols from `src/context/index.tsx`.
+- [x] Add optional `stackId`, `stackTier`, `stackPriority`, `onStackEscape` props to `src/components/ui/Modal.tsx`; call `useOverlay(stackId, …)` when supplied and keep backdrop-click dismissal unchanged.
+- [x] Remove every per-component `window.addEventListener('keydown', …)` Escape branch (the single listener survives only in `useOverlayEscape`); enforce via repo-wide ripgrep.
+- [x] Migrate overlay call-sites to register through `useOverlay` with explicit tiers: `gate` (`GateView`), `modal` (`StartFeatureModal`, `PromptDialog`, `EnvModal`, `ProviderSettings`, `ProjectSettingsShell` inner modals, `NewProjectView` repo picker, `ProvidersPage` connect modal, `FeatureDetail` replay-confirm), `palette` (`CommandPalette`, `DocsPanel`), `drawer` (`AgentTerminalDrawer`, `FeatureDetail` agent drawer), `toast` (`ErrorToast` per-instance, `NotificationBell`).
+- [x] In `src/App.tsx`, wrap the tree in `<OverlayStackProvider>`, delete the legacy cascade at `src/App.tsx:119-123`, call `useOverlayEscape()` once at the shell, and inside the `gate_required` handler dispatch `CLOSE_OVERLAY('feature.start')` before navigating so a Gate overrides an open feature modal.
+- [x] Strip the `onEscape` field from `ShortcutMap` and the Escape branch from `src/hooks/useKeyboardShortcuts.ts`; non-Escape shortcuts (`Cmd+K`, `?`, `Cmd+,`) remain.
+- [x] Add `OPEN_OVERLAY` / `CLOSE_OVERLAY` additive reducer variants to `src/context/UIStateContext.tsx` so future call-sites can opt into stack semantics.
+- [x] Add reducer unit tests (`T1`–`T6`): tier ordering, within-tier priority ordering, `POP` by id, `POP` no-op, `REPLACE` in-place, `createdAt` tie-break.
+- [x] Append Journey 11 (Keyboard & Overlay Behavior) plus the UX1.6 acceptance checklist to `docs/UX_JOURNEYS.md`.
+- [x] Bump `docs/DECISIONS.md` to "37 locked decisions" and record Decision 37 (overlay priority tiers and single Escape listener).
+- [x] Rename the `docs/BACKEND_REFACTOR_TASKS.md` block at lines 509–514 to "Frontend UX Hardening (U1–U5) — COMPLETED" and append the U5 / F40 entry.
