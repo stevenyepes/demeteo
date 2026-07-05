@@ -15,6 +15,15 @@ edition = "2021"
 # cross-compiling for x86_64-unknown-linux-musl.
 default = ["keyring"]
 keyring = ["dep:keyring"]
+# Build openssl from source via openssl-sys's vendored feature instead
+# of letting pkg-config locate the host's libssl. Required when
+# cross-compiling to x86_64-unknown-linux-musl: the host's libssl-dev
+# is glibc-linked and won't link into a static musl binary, and
+# pkg-config cannot find a musl-compatible OpenSSL on a gnu host.
+# Enabled in this crate for the headless runner only; the desktop
+# Tauri app builds on linux-gnu/macOS/Windows where system openssl
+# is fine and skipping the vendored build saves several minutes.
+vendored-openssl = ["ssh2/vendored-openssl"]
 
 [dependencies]
 async-trait = "0.1"
