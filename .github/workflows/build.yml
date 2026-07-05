@@ -85,7 +85,9 @@ jobs:
   # ════════════════════════════════════════════════════════════════════
   build:
     needs: rc
-    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    if: |
+      needs.rc.result == 'success' ||
+      (needs.rc.result == 'skipped' && startsWith(github.ref, 'refs/tags/v'))
     strategy:
       fail-fast: false
       matrix:
