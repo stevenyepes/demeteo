@@ -61,6 +61,14 @@ pub(crate) struct ExecutionDriver {
     pub agent_exec: Arc<dyn AgentExecutionPort>,
     pub exec: Arc<dyn ExecutionPort>,
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// Path to the OS-specific app-local data directory (e.g.
+    /// `~/Library/Application Support/<bundle-id>` on macOS). Snapshotted
+    /// at driver construction from `DagStepExecutor` so future gates can
+    /// wire it into per-driver init (artifact-store base dir, log sinks,
+    /// watchdog scratch) without re-deriving it from `tauri::Manager`.
+    /// Intentionally retained ahead of that wiring — see Gate policy in
+    /// AGENTS.md §9 ("agent spawn / driver init").
+    #[allow(dead_code)]
     pub app_local_data_dir: PathBuf,
     /// Shared `app_settings` KV repository. Used by every agent-turn call
     /// site to resolve the effective timeouts via

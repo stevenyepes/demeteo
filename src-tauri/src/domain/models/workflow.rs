@@ -1,4 +1,4 @@
-use crate::domain::artifact::{ArtifactCapture, ArtifactDecl, ArtifactMode};
+use crate::domain::artifact::{ArtifactCapture, ArtifactDecl};
 use crate::domain::ids::{ProjectId, StepId, WorkflowId, WorkflowVersionId};
 use crate::domain::permission::StepCapability;
 use crate::domain::verifier::VerifierConfig;
@@ -161,7 +161,7 @@ mod capability_tests {
         s.artifacts = Some(vec![ArtifactDecl {
             name: "all".into(),
             capture: ArtifactCapture::AllWrites,
-            mode: ArtifactMode::Full,
+            mode: crate::domain::artifact::ArtifactMode::Full,
             inline: false,
         }]);
         assert_eq!(s.effective_capability(), StepCapability::Implement);

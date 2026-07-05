@@ -30,7 +30,8 @@ impl ExecutionDriver {
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
         // Extend the model override to the runtime default when no explicit override
         // is set, so UsageAccumulator can use the pricing table and compute cost_usd.
-        let override_model = override_model.or_else(|| self.registry.default_model_for(&agent_kind));
+        let override_model =
+            override_model.or_else(|| self.registry.default_model_for(&agent_kind));
 
         let (gate_decision, gate_feedback) =
             crate::adapters::step_executor::artifacts::get_latest_gate_decision(
@@ -205,8 +206,7 @@ impl ExecutionDriver {
         // the worktree so opencode's `external_directory: deny` doesn't block
         // the agent from reading them.
         let prompt = crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
-            &prompt,
-            &wt_path,
+            &prompt, &wt_path,
         );
 
         // 1. Spawn session
@@ -376,7 +376,7 @@ impl ExecutionDriver {
             )
             .await;
 
-        let (mut artifact_path, mut artifact_paths) = match artifacts_res {
+        let (artifact_path, artifact_paths) = match artifacts_res {
             Ok((path, paths)) => (path, paths),
             Err(err) => {
                 let _ = self
@@ -399,7 +399,8 @@ impl ExecutionDriver {
         // but the reason would be "nothing changed" — actionable, so we surface it here so
         // the retry loop feeds the message back to the implement step directly.
         if step_conf.on_failure.is_some()
-            && step_conf.effective_capability() == crate::domain::permission::StepCapability::Implement
+            && step_conf.effective_capability()
+                == crate::domain::permission::StepCapability::Implement
             && !self
                 .git_ops
                 .has_new_commits(
