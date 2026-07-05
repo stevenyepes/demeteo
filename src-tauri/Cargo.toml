@@ -47,3 +47,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+# Override transitive `quick-xml` to clear RUSTSEC-2026-0194 and RUSTSEC-2026-0195.
+# `plist v1.9.0` (pulled in by `tauri`) pinned `quick-xml = "^0.39.2"`, which is
+# below the 0.41.0 floor required to fix the two advisories. A `[patch.crates-io]`
+# redirect to the upstream tag is the documented Cargo escape hatch for that
+# exact case and keeps the lockfile deterministic. `cargo update -p plist` has
+# already moved the lockfile to `plist v1.10.0` (which itself depends on
+# `quick-xml ^0.41.0`); this `[patch.crates-io]` entry is a defensive guarantee
+# that a future `cargo update` cannot re-introduce the vulnerable 0.39.x line.
+[patch.crates-io]
+quick-xml = { git = "https://github.com/tafia/quick-xml", tag = "v0.41.0" }
