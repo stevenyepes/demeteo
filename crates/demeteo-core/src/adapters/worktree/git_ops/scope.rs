@@ -302,13 +302,22 @@ impl GitOpsHelper {
         }
 
         // 3. Walk the worktree's top-level entries. Every entry NOT
-        //    under any writable path gets `chmod -R a-w`.
-        let entries = std::fs::read_dir(wt)
+        //    under any writable path gets `chmod -R a-w`. The directory
+        //    listing must go through the machine-aware executor —
+        //    `std::fs::read_dir` only sees the host filesystem, which
+        //    is wrong for remote machines where the worktree lives
+        //    under the SSH target's home (e.g. for a `s-plan` step on
+        //    remote machine `home`, the host would see no
+        //    `/home/<user>/.demeteo/.../<worktree>` and fail with ENOENT).
+        let entries = self
+            .exec
+            .list_dir(machine, &wt.to_string_lossy())
+            .await
             .map_err(|e| format!("scope: read_dir({}) failed: {}", wt.display(), e))?;
 
         let mut protected: Vec<PathBuf> = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for entry in entries {
+            let path = PathBuf::from(&entry.path);
             let rel = path.strip_prefix(wt).unwrap_or(&path).to_path_buf();
             let is_writable = writable_paths
                 .iter()
