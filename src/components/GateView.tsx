@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { StepExecution } from '../types';
 import { Check, ArrowRight, X, ShieldAlert, Terminal, Sparkles } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
 import { useErrorBus } from '../lib/errorBus';
+import { useOptionalOverlayStack } from './OverlayRoot';
 
 interface GateViewProps {
   stepExecutionId: string;
@@ -21,6 +22,30 @@ export const GateView: React.FC<GateViewProps> = ({
   const [feedback, setFeedback] = useState('');
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [, setLoading] = useState(true);
+
+  // UX1.6 — gates are tier 'gate', the absolute top tier. The stack's
+  // dedicated listener at `<OverlayRoot>` owns Escape; we only register.
+  // (See Decision 37 — the gate must always be reachable; it sits above
+  // any feature modal that happens to still be mounted.)
+  const overlayStack = useOptionalOverlayStack();
+  const push = overlayStack?.push;
+  const pop = overlayStack?.pop;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!push || !pop) return;
+    const entry = push({
+      id: 'gate.approval',
+      tier: 'gate',
+      priority: 100,
+      label: 'Manual approval gate',
+      onEscape: () => onCloseRef.current(),
+    });
+    return () => {
+      pop(entry.id);
+    };
+  }, [push, pop]);
 
   useEffect(() => {
     loadGateData();

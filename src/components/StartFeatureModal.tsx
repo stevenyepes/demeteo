@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import type { Repository, WorkflowSummary } from '../types';
+import { useOptionalOverlayStack } from './OverlayRoot';
 
 interface StartFeatureModalProps {
   isOpen: boolean;
@@ -92,6 +93,17 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // concrete `true` / `false` on the Feature row. See migration V12.
   const [commitArtifacts, setCommitArtifacts] = useState<'inherit' | 'yes' | 'no'>('inherit');
   const titleRef = useRef<HTMLInputElement>(null);
+  // UX1.6 — `useOptionalOverlayStack` returns `null` when the consumer is
+  // rendered outside the provider (e.g. unit tests). Push/pop are
+  // stable identity thanks to `useCallback` inside `OverlayRoot`, so we
+  // can safely depend on them.
+  const overlayStack = useOptionalOverlayStack();
+  const push = overlayStack?.push;
+  const pop = overlayStack?.pop;
+  // Keep the latest `onClose` in a ref so re-renders with a new identity
+  // don't thrash the stack — Escape always calls the freshest one.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   // Initialize workflow picker to the requested default (or the first
   // workflow if none specified) when the modal opens.
@@ -116,6 +128,24 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setLoopIterations('');
     }
   }, [isOpen, workflows, defaultWorkflowId, workflowId]);
+
+  // UX1.6 — register with the global overlay stack. Escape routing and
+  // z-order are owned by `<OverlayRoot>`. We only push when open and pop
+  // when closed (or unmounted) so listeners never leak.
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!push || !pop) return;
+    const entry = push({
+      id: 'feature.start',
+      tier: 'modal',
+      priority: 50,
+      label: 'Start feature modal',
+      onEscape: () => onCloseRef.current(),
+    });
+    return () => {
+      pop(entry.id);
+    };
+  }, [isOpen, push, pop]);
 
   // Load the selected workflow's steps so the user can override the agent /
   // model per step. Gate steps don't run an agent, so they're filtered out.
@@ -222,9 +252,9 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   };
 
   const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      onClose();
-    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    // Escape is handled by the overlay stack — Cmd/Ctrl+Enter still
+    // belongs here so we don't lose the launch shortcut.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       launch();
     }
   };

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, ArrowRight } from 'lucide-react';
+import { useOptionalOverlayStack } from './OverlayRoot';
 
 interface CommandEntry {
   id: string;
@@ -32,6 +33,14 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
+  // UX1.6 — tier 'palette' sits between modals and drawers. Escape is
+  // owned by the global listener; we only push when open.
+  const overlayStack = useOptionalOverlayStack();
+  const push = overlayStack?.push;
+  const pop = overlayStack?.pop;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const filtered = query
     ? entries.filter(e => fuzzyMatch(`${e.label} ${e.description} ${e.category}`, query))
     : entries;
@@ -44,15 +53,29 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
     }
   }, [isOpen]);
 
+  // UX1.6 — register with the overlay stack while open; pop on close or
+  // unmount. Escape is no longer handled here.
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!push || !pop) return;
+    const entry = push({
+      id: 'command-palette',
+      tier: 'palette',
+      priority: 10,
+      label: 'Command palette',
+      onEscape: () => onCloseRef.current(),
+    });
+    return () => {
+      pop(entry.id);
+    };
+  }, [isOpen, push, pop]);
+
   useEffect(() => {
     setSelectedIndex(0);
   }, [query]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      onClose();
-      return;
-    }
+    // Escape is handled by the global overlay listener.
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setSelectedIndex(prev => Math.min(prev + 1, filtered.length - 1));

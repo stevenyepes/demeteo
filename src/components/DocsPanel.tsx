@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, BookOpen, ChevronRight, FileText } from 'lucide-react';
+import { useOptionalOverlayStack } from './OverlayRoot';
 
 interface DocPage {
   slug: string;
@@ -25,6 +26,30 @@ const DocsPanel: React.FC<DocsPanelProps> = ({ isOpen, onClose }) => {
   const [selectedSlug, setSelectedSlug] = useState<string>('first-project');
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(false);
+
+  // UX1.6 — palette tier; same tier as CommandPalette but with a slightly
+  // lower priority so a modal's `priority=50` outranks it as a tiebreaker
+  // if both happen to share the tier.
+  const overlayStack = useOptionalOverlayStack();
+  const push = overlayStack?.push;
+  const pop = overlayStack?.pop;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!push || !pop) return;
+    const entry = push({
+      id: 'docs-panel',
+      tier: 'palette',
+      priority: 5,
+      label: 'Documentation panel',
+      onEscape: () => onCloseRef.current(),
+    });
+    return () => {
+      pop(entry.id);
+    };
+  }, [isOpen, push, pop]);
 
   useEffect(() => {
     if (!isOpen) return;

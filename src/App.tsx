@@ -19,6 +19,7 @@ import StartFeatureModal from "./components/StartFeatureModal";
 import PreferencesScreen from "./components/PreferencesScreen";
 import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
+import { OverlayRoot } from "./components/OverlayRoot";
 import type { Project, Provider } from "./types";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useTauriEvent } from "./hooks/useTauriEvent";
@@ -55,8 +56,12 @@ function AppInner() {
     return () => window.removeEventListener(ERROR_TOAST_CTA_EVENT, handler);
   }, [navigate, view]);
 
-  // Gate overlay — fires even when user is on a different view
+  // Gate overlay — fires even when user is on a different view. Spec AC-5:
+  // close any open feature modal first so the gate surfaces on its own.
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
+    if (startFeatureOpen) {
+      uiDispatch({ type: 'CLOSE_START_FEATURE' });
+    }
     const featureTitle = view.kind === 'detail' && view.featureId === feature_id ? view.featureTitle : 'Feature Pipeline';
     navigate({ kind: 'detail', featureId: feature_id, featureTitle, gateStepExecutionId: step_execution_id });
   });
@@ -116,11 +121,6 @@ function AppInner() {
     onNewProject: () => navigate({ kind: 'new-project' }),
     onNewFeature: () => uiDispatch({ type: 'OPEN_START_FEATURE' }),
     onToggleSidebar: () => uiDispatch({ type: 'TOGGLE_SIDEBAR' }),
-    onEscape: () => {
-      if (commandPaletteOpen) uiDispatch({ type: 'SET_COMMAND_PALETTE', open: false });
-      else if (docsPanelOpen) uiDispatch({ type: 'SET_DOCS_PANEL', open: false });
-      else if (startFeatureOpen) uiDispatch({ type: 'CLOSE_START_FEATURE' });
-    },
     onNavigateProject: (index: number) => {
       const p = projects[index];
       if (p) { projDispatch({ type: 'SET_CURRENT', id: p.id }); navigate({ kind: 'home' }); }
@@ -292,16 +292,18 @@ function AppInner() {
 
 function App() {
   return (
-    <ErrorBusProvider>
-      <NavigationProvider>
-        <ProjectProvider>
-          <UIStateProvider>
-            <AppInner />
-            <ErrorToast />
-          </UIStateProvider>
-        </ProjectProvider>
-      </NavigationProvider>
-    </ErrorBusProvider>
+    <OverlayRoot>
+      <ErrorBusProvider>
+        <NavigationProvider>
+          <ProjectProvider>
+            <UIStateProvider>
+              <AppInner />
+              <ErrorToast />
+            </UIStateProvider>
+          </ProjectProvider>
+        </NavigationProvider>
+      </ErrorBusProvider>
+    </OverlayRoot>
   );
 }
 

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ShieldAlert, Check, Server, Code, GitBranch, X } from 'lucide-react';
 import { formatError } from '../lib/errors';
+import { useOptionalOverlayStack } from './OverlayRoot';
 
 interface ProviderSettingsProps {
     onConnected: (provider: { id: string; type: string; name: string; host: string; pat: string; username: string; avatarUrl: string }) => void;
@@ -16,6 +17,30 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
     const [pat, setPat] = useState('');
     const [status, setStatus] = useState<'idle' | 'validating' | 'success' | 'error'>('idle');
     const [errorMsg, setErrorMsg] = useState('');
+
+    // UX1.6 — modal register/pop. The modal mounts/unmounts based on
+    // parent state, so each mount is one push and the cleanup pops.
+    // Backdrop-click dismissal still calls `onClose` directly; the
+    // stack's Escape listener is a separate dispatch.
+    const overlayStack = useOptionalOverlayStack();
+    const push = overlayStack?.push;
+    const pop = overlayStack?.pop;
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
+
+    useEffect(() => {
+      if (!push || !pop) return;
+      const entry = push({
+        id: 'provider-settings',
+        tier: 'modal',
+        priority: 40,
+        label: 'Provider settings modal',
+        onEscape: () => onCloseRef.current(),
+      });
+      return () => {
+        pop(entry.id);
+      };
+    }, [push, pop]);
 
     const handleConnect = async () => {
         if (!name.trim()) {
