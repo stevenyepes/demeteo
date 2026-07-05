@@ -558,8 +558,7 @@ impl DagStepExecutor {
                                 &StepExecutionPatch {
                                     status: Some("interrupted".to_string()),
                                     error_message: Some(Some(
-                                        "Step orphaned: feature ended before step ran"
-                                            .to_string(),
+                                        "Step orphaned: feature ended before step ran".to_string(),
                                     )),
                                     ..Default::default()
                                 },

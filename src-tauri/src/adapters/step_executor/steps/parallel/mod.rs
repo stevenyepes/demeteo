@@ -467,7 +467,7 @@ impl ExecutionDriver {
                  {\"subtasks\": [{\"id\": \"sub-1\", \"title\": \"...\", \"description\": \"...\", \
                  \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"retry_note\": null}]}\n\
                  ```"
-                    .to_string()
+                .to_string()
             };
 
             let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(

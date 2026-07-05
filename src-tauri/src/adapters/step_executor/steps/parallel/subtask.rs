@@ -137,19 +137,20 @@ impl ExecutionDriver {
             // When retry_note is set but there is no global retry_ctx (e.g. a
             // cached DAG with pre-populated notes), synthesize a minimal ctx so
             // retry_feedback_section is not silently empty.
-            let effective_retry_ctx =
-                sub.retry_note
-                    .as_ref()
-                    .filter(|s| !s.trim().is_empty())
-                    .map(|note| crate::adapters::step_executor::driver::RetryContext {
+            let effective_retry_ctx = sub
+                .retry_note
+                .as_ref()
+                .filter(|s| !s.trim().is_empty())
+                .map(
+                    |note| crate::adapters::step_executor::driver::RetryContext {
                         feedback: note.clone(),
                         iteration: self.retry_ctx.as_ref().map_or(1, |rc| rc.iteration),
                         max: self.retry_ctx.as_ref().map_or(1, |rc| rc.max),
-                    })
-                    .or_else(|| self.retry_ctx.clone());
+                    },
+                )
+                .or_else(|| self.retry_ctx.clone());
             let sub_template = step_conf.prompt_template.as_deref().unwrap_or("");
-            let sub_retry_section =
-                format_retry_feedback_section(effective_retry_ctx.as_ref());
+            let sub_retry_section = format_retry_feedback_section(effective_retry_ctx.as_ref());
             let sub_uses_retry_section = template_uses_retry_section(sub_template);
             let sub_prompt = self
                 .base_ctx
@@ -177,8 +178,7 @@ impl ExecutionDriver {
                     &self.steps,
                 )
             };
-            let sub_prompt =
-                inject_artifact_contract(&sub_prompt, step_conf.artifacts.as_deref());
+            let sub_prompt = inject_artifact_contract(&sub_prompt, step_conf.artifacts.as_deref());
             // Surface retry feedback to the worker regardless of whether
             // the step's `prompt_template` references
             // `{{retry_feedback_section}}`. Matches the agent step
