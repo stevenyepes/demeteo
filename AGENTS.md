@@ -159,6 +159,13 @@ For the full hexagon, port catalogue, and directory layout → [docs/ARCHITECTUR
 
 ```
 demeteo/
+├── Cargo.toml                   # Cargo workspace root
+│                                # members: src-tauri, crates/demeteo-core, crates/demeteo-runner
+├── Cargo.lock                   # Workspace lockfile — single file, lives at the WORKSPACE root
+│                                # (NOT src-tauri/Cargo.lock). promote.yml updates this path.
+├── crates/                      # Cargo workspace members
+│   ├── demeteo-core/
+│   └── demeteo-runner/
 ├── src/                        # React frontend
 │   ├── components/             # One file = one component
 │   ├── hooks/                  # Custom React hooks

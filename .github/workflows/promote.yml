@@ -169,8 +169,10 @@ jobs:
       - name: Update Cargo.lock
         run: |
           # Update the version for the demeteo package in the lockfile.
+          # Lives at the WORKSPACE root (Cargo.toml workspace includes
+          # src-tauri + crates/demeteo-core + crates/demeteo-runner).
           sed -i "/^name = \"demeteo\"/{n;s/version = \"${{ steps.infer.outputs.base }}\"/version = \"${{ steps.infer.outputs.next }}\"/}" \
-            src-tauri/Cargo.lock
+            Cargo.lock
 
       # ── Reset rc counter to 0 against new base ──────────────────────
       - name: Reset rc counter
@@ -194,7 +196,7 @@ jobs:
           echo "── Cargo.toml ──"
           head -5 src-tauri/Cargo.toml | grep version
           echo "── Cargo.lock (demeteo entry) ──"
-          grep -A1 'name = "demeteo"' src-tauri/Cargo.lock | head -4
+          grep -A1 'name = "demeteo"' Cargo.lock | head -4
           echo "── rc-counter.json ──"
           cat .release/rc-counter.json
 
@@ -210,7 +212,7 @@ jobs:
             package.json \
             package-lock.json \
             src-tauri/Cargo.toml \
-            src-tauri/Cargo.lock \
+            Cargo.lock \
             src-tauri/tauri.conf.json \
             .release/rc-counter.json
           git commit -m "chore(release): bump to v${{ steps.infer.outputs.next }} (${{ steps.infer.outputs.bump_type }})"
