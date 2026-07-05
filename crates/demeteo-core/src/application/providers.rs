@@ -1,8 +1,10 @@
 use crate::domain::ids::ProviderId;
 use crate::domain::models::ProviderInstance;
+#[cfg(feature = "keyring")]
 use crate::paths;
 use crate::ports::provider_http::{CreateRepoRequest, CreatedRepo, NamespaceSummary};
 use crate::state::AppContext;
+#[cfg(feature = "keyring")]
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
@@ -86,11 +88,18 @@ pub fn resolve_provider_and_pat(
         .ok_or_else(|| "Provider not found".to_string())?;
 
     let pat = crate::credential_cache::get_or_fetch(provider.id.as_str(), || {
-        let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
-        entry.get_password().map_err(|e| {
-            tracing::warn!("Keyring error for id '{}': {}", provider.id, e);
-            e.to_string()
-        })
+        #[cfg(feature = "keyring")]
+        {
+            let entry = Entry::new("demeteo", provider.id.as_str()).map_err(|e| e.to_string())?;
+            entry.get_password().map_err(|e| {
+                tracing::warn!("Keyring error for id '{}': {}", provider.id, e);
+                e.to_string()
+            })
+        }
+        #[cfg(not(feature = "keyring"))]
+        {
+            Err("OS-keyring credential cache is disabled in this build".to_string())
+        }
     })?;
 
     Ok((provider, pat))
@@ -153,45 +162,54 @@ pub async fn connect_instance(
     host: String,
     pat: String,
 ) -> Result<ProviderInstance, String> {
-    let res = ctx
-        .provider_http
-        .validate_pat(&host, &provider_type, &pat)
-        .await
-        .map_err(|e| e.to_string())?;
+    #[cfg(not(feature = "keyring"))]
+    {
+        let _ = (ctx, &provider_type, &host, &pat);
+        Err("OS-keyring credential cache is disabled in this build".to_string())
+    }
 
-    let kind = provider_type.to_lowercase();
-    let sanitized_host = sanitize_host(&host);
-    let h = if sanitized_host.is_empty() {
-        if kind == "github" {
-            "github.com".to_string()
+    #[cfg(feature = "keyring")]
+    {
+        let res = ctx
+            .provider_http
+            .validate_pat(&host, &provider_type, &pat)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let kind = provider_type.to_lowercase();
+        let sanitized_host = sanitize_host(&host);
+        let h = if sanitized_host.is_empty() {
+            if kind == "github" {
+                "github.com".to_string()
+            } else {
+                "gitlab.com".to_string()
+            }
         } else {
-            "gitlab.com".to_string()
-        }
-    } else {
-        sanitized_host
-    };
+            sanitized_host
+        };
 
-    let id = ProviderId::from(format!("{}_{}", kind, h.replace('.', "_")));
+        let id = ProviderId::from(format!("{}_{}", kind, h.replace('.', "_")));
 
-    let entry = Entry::new("demeteo", id.as_str()).map_err(|e| e.to_string())?;
-    // Delete before set: macOS SecItemAdd fails if the item already exists.
-    // A stale entry (e.g. from a failed prior delete) would block re-connection.
-    let _ = entry.delete_credential();
-    entry.set_password(&pat).map_err(|e| e.to_string())?;
-    crate::credential_cache::set(id.as_str(), &pat);
+        let entry = Entry::new("demeteo", id.as_str()).map_err(|e| e.to_string())?;
+        // Delete before set: macOS SecItemAdd fails if the item already exists.
+        // A stale entry (e.g. from a failed prior delete) would block re-connection.
+        let _ = entry.delete_credential();
+        entry.set_password(&pat).map_err(|e| e.to_string())?;
+        crate::credential_cache::set(id.as_str(), &pat);
 
-    let now = paths::now_ms();
-    let instance = ProviderInstance {
-        id: id.clone(),
-        kind,
-        host: h,
-        username: res.username,
-        avatar_url: res.avatar_url,
-        created_at: now,
-    };
+        let now = paths::now_ms();
+        let instance = ProviderInstance {
+            id: id.clone(),
+            kind,
+            host: h,
+            username: res.username,
+            avatar_url: res.avatar_url,
+            created_at: now,
+        };
 
-    ctx.app_settings.add_provider_instance(instance.clone())?;
-    Ok(instance)
+        ctx.app_settings.add_provider_instance(instance.clone())?;
+        Ok(instance)
+    }
 }
 
 #[cfg(test)]

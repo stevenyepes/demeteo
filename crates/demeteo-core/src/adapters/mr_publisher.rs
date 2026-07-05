@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "keyring")]
 use keyring::Entry;
 use serde::Deserialize;
 
@@ -643,11 +644,18 @@ fn extract_number_from_url(url: &str) -> Option<u64> {
 
 fn resolve_pat(provider_id: &str) -> Result<String, String> {
     crate::credential_cache::get_or_fetch(provider_id, || {
-        let entry =
-            Entry::new("demeteo", provider_id).map_err(|e| format!("Keyring error: {}", e))?;
-        entry
-            .get_password()
-            .map_err(|e| format!("Provider PAT not found in keyring: {}", e))
+        #[cfg(feature = "keyring")]
+        {
+            let entry =
+                Entry::new("demeteo", provider_id).map_err(|e| format!("Keyring error: {}", e))?;
+            entry
+                .get_password()
+                .map_err(|e| format!("Provider PAT not found in keyring: {}", e))
+        }
+        #[cfg(not(feature = "keyring"))]
+        {
+            Err("OS-keyring credential cache is disabled in this build".to_string())
+        }
     })
 }
 

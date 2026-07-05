@@ -6,9 +6,19 @@ authors = ["Steven Yepes <contact@stvcloud.dev>"]
 license = "MIT"
 edition = "2021"
 
+[features]
+# OS-keyring-backed credential cache for the desktop app. Off in
+# `demeteo-runner` because (a) the runner is intentionally in-memory
+# only per crates/demeteo-runner/src/credentials.rs, and (b) the
+# keyring crate transitively pulls libdbus-sys, whose build script
+# needs pkg-config + libdbus-1-dev — neither available when
+# cross-compiling for x86_64-unknown-linux-musl.
+default = ["keyring"]
+keyring = ["dep:keyring"]
+
 [dependencies]
 async-trait = "0.1"
-keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"] }
+keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"], optional = true }
 parking_lot = "0.12"
 refinery = { version = "0.8", features = ["rusqlite"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

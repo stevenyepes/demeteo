@@ -262,11 +262,18 @@ fn get_sftp_blocking(
         "password" | "key" => {
             let key = format!("machine_{}", machine.id);
             crate::credential_cache::get_or_fetch(&key, || {
-                let entry = keyring::Entry::new("demeteo", &key)
-                    .map_err(|e| format!("Keyring error: {}", e))?;
-                entry
-                    .get_password()
-                    .map_err(|e| format!("Keyring error: {}", e))
+                #[cfg(feature = "keyring")]
+                {
+                    let entry = keyring::Entry::new("demeteo", &key)
+                        .map_err(|e| format!("Keyring error: {}", e))?;
+                    entry
+                        .get_password()
+                        .map_err(|e| format!("Keyring error: {}", e))
+                }
+                #[cfg(not(feature = "keyring"))]
+                {
+                    Err("OS-keyring credential cache is disabled in this build".to_string())
+                }
             })
             .ok()
         }
@@ -313,11 +320,18 @@ impl ExecutionPort for SshClientAdapter {
                 "password" | "key" => {
                     let key = format!("machine_{}", machine.id);
                     crate::credential_cache::get_or_fetch(&key, || {
-                        let entry = keyring::Entry::new("demeteo", &key)
-                            .map_err(|e| format!("Keyring error: {}", e))?;
-                        entry
-                            .get_password()
-                            .map_err(|e| format!("Keyring error: {}", e))
+                        #[cfg(feature = "keyring")]
+                        {
+                            let entry = keyring::Entry::new("demeteo", &key)
+                                .map_err(|e| format!("Keyring error: {}", e))?;
+                            entry
+                                .get_password()
+                                .map_err(|e| format!("Keyring error: {}", e))
+                        }
+                        #[cfg(not(feature = "keyring"))]
+                        {
+                            Err("OS-keyring credential cache is disabled in this build".to_string())
+                        }
                     })
                     .ok()
                 }
@@ -684,11 +698,18 @@ impl ExecutionPort for SshClientAdapter {
             "password" | "key" => {
                 let key = format!("machine_{}", machine.id);
                 crate::credential_cache::get_or_fetch(&key, || {
-                    let entry = keyring::Entry::new("demeteo", &key)
-                        .map_err(|e| format!("Keyring error: {}", e))?;
-                    entry
-                        .get_password()
-                        .map_err(|e| format!("Keyring error: {}", e))
+                    #[cfg(feature = "keyring")]
+                    {
+                        let entry = keyring::Entry::new("demeteo", &key)
+                            .map_err(|e| format!("Keyring error: {}", e))?;
+                        entry
+                            .get_password()
+                            .map_err(|e| format!("Keyring error: {}", e))
+                    }
+                    #[cfg(not(feature = "keyring"))]
+                    {
+                        Err("OS-keyring credential cache is disabled in this build".to_string())
+                    }
                 })
                 .ok()
             }

@@ -1,19 +1,27 @@
 use super::GitOpsHelper;
 use crate::paths;
+#[cfg(feature = "keyring")]
 use keyring::Entry;
 
 impl GitOpsHelper {
     /// Retrieve the token for the given provider from Keyring (cached in-process).
     pub fn get_provider_pat(&self, provider_id: &str) -> Result<String, String> {
         crate::credential_cache::get_or_fetch(provider_id, || {
-            let entry = Entry::new("demeteo", provider_id)
-                .map_err(|e| format!("Failed to access keyring: {}", e))?;
-            entry.get_password().map_err(|e| {
-                format!(
-                    "Token not found in keyring for provider '{}': {}",
-                    provider_id, e
-                )
-            })
+            #[cfg(feature = "keyring")]
+            {
+                let entry = Entry::new("demeteo", provider_id)
+                    .map_err(|e| format!("Failed to access keyring: {}", e))?;
+                entry.get_password().map_err(|e| {
+                    format!(
+                        "Token not found in keyring for provider '{}': {}",
+                        provider_id, e
+                    )
+                })
+            }
+            #[cfg(not(feature = "keyring"))]
+            {
+                Err("OS-keyring credential cache is disabled in this build".to_string())
+            }
         })
     }
 
