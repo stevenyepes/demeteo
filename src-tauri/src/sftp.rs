@@ -1,15 +1,6 @@
 use crate::state::AppContext;
-use serde::Serialize;
+pub use demeteo_core::ports::execution::SftpEntry;
 use tauri::State;
-
-#[derive(Serialize, Clone)]
-pub struct SftpEntry {
-    pub name: String,
-    pub path: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub modified: u64,
-}
 
 #[tauri::command]
 pub async fn sftp_list_dir(

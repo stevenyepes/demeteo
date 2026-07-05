@@ -1,20 +1,24 @@
 pub mod adapters;
-pub mod application;
 pub mod commands;
 pub mod composition;
-pub mod credential_cache;
-pub mod db;
-pub mod domain;
-pub mod error;
 pub mod forward;
-pub mod infrastructure;
-pub mod paths;
-pub mod ports;
 pub mod sftp;
-pub mod shared;
-pub mod ssh_util;
-pub mod state;
 pub mod terminal;
+
+// `domain`, `ports`, `application`, `shared`, `error`, `infrastructure`,
+// `paths`, `ssh_util`, `credential_cache`, and `state` live in `demeteo-core`
+// (see docs/REMOTE_EXECUTION_PLAN.md M0.1) — re-exported under their old
+// names so every existing `crate::domain::X` / `demeteo_lib::domain::X` call
+// site keeps working unchanged. `state` (`AppContext`) moved with them
+// despite the design doc's original plan to keep it local, because
+// `application/*` hard-depends on `AppContext` — leaving it behind would
+// have created a cycle between the two crates. `adapters` is a partial
+// re-export (most of it moved; `adapters::tauri_ui` stays local) — see
+// `adapters/mod.rs`.
+pub use demeteo_core::{
+    application, credential_cache, db, domain, error, infrastructure, paths, ports, shared,
+    ssh_util, state,
+};
 
 /// Compile-time release channel ("stable" or "nightly").
 ///
@@ -27,12 +31,9 @@ pub const RELEASE_CHANNEL: &str = match option_env!("DEMETEO_RELEASE_CHANNEL") {
     None => "stable",
 };
 
+use composition::{build_core_context, CoreConfig, ExecutionMode};
 use forward::ForwardState;
-use ports::agent_execution::AgentExecutionPort;
-use ports::agent_runtime::AgentRuntime;
-use ports::execution::ExecutionPort;
 use ports::notification::NotificationPort;
-use state::AppContext;
 use std::sync::Arc;
 use tauri::Manager;
 use terminal::SessionState;
@@ -206,225 +207,38 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let app_data_dir = app
                 .path()
                 .app_local_data_dir()
                 .expect("Failed to get local data dir");
             eprintln!("[demeteo] data dir: {}", app_data_dir.display());
-            let conn = db::init_db(app_data_dir.clone()).expect("Failed to initialize database");
 
-            let db_adapter = Arc::new(
-                adapters::database::SqliteAdapter::new(conn)
-                    .expect("Failed to initialize database adapter"),
-            );
-            let machines_repo: Arc<dyn crate::ports::db::MachineRepository> = db_adapter.clone();
-            let projects_repo: Arc<dyn crate::ports::db::ProjectRepository> = db_adapter.clone();
-            let features_repo: Arc<dyn crate::ports::db::FeatureRepository> = db_adapter.clone();
-            let workflows_repo: Arc<dyn crate::ports::db::WorkflowRepository> = db_adapter.clone();
-            let gates_repo: Arc<dyn crate::ports::db::GateRepository> = db_adapter.clone();
-            let app_settings_repo: Arc<dyn crate::ports::db::AppSettingsRepository> =
-                db_adapter.clone();
-            let memory_repo: Arc<dyn crate::ports::memory::ProjectMemoryPort> = db_adapter.clone();
-            let signals_repo: Arc<dyn crate::ports::memory_signals::MemorySignalsPort> =
-                db_adapter.clone();
-            let threads_repo: Arc<dyn crate::ports::db::ThreadRepository> = db_adapter.clone();
-            let merge_audit_repo: Arc<dyn crate::ports::db::MergeAuditRepository> =
-                db_adapter.clone();
-            let notifications_repo: Arc<dyn crate::ports::db::NotificationRepository> =
-                db_adapter.clone();
-
-            // Resolve the workspace directory: user-configurable base for repo
-            // storage, defaults to the Tauri app data dir. Takes effect on
-            // next launch after the setting is changed.
-            let workspace_dir: std::path::PathBuf = app_settings_repo
-                .get_app_session("workspace_base_dir")
-                .ok()
-                .flatten()
-                .and_then(|p| {
-                    if p.trim().is_empty() {
-                        return None;
-                    }
-                    let path = std::path::PathBuf::from(p.trim());
-                    if path.is_absolute() {
-                        Some(path)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| app_data_dir.clone());
-            eprintln!("[demeteo] workspace dir: {}", workspace_dir.display());
-
-            commands::workflows::seed_starter_workflows(&workflows_repo);
-            let ssh_adapter: Arc<dyn ExecutionPort> = Arc::new(
-                adapters::ssh::client::SshClientAdapter::new(machines_repo.clone()),
-            );
-            let local_adapter: Arc<dyn ExecutionPort> =
-                Arc::new(adapters::local::execution::LocalSubprocessAdapter::new());
-            let exec_inner: Arc<dyn ExecutionPort> =
-                Arc::new(adapters::router::RouterExecutionPort::new(
-                    machines_repo.clone(),
-                    ssh_adapter,
-                    local_adapter,
-                ));
             let notif_adapter: Arc<dyn NotificationPort> = Arc::new(
                 adapters::tauri_ui::notification::TauriNotificationAdapter::new(
                     app.handle().clone(),
                 ),
             );
-            let agent_exec: Arc<dyn AgentExecutionPort> = Arc::new(
-                adapters::agent::direct_execution::DirectExecutionPort::new(exec_inner.clone()),
+
+            // `.setup()` runs synchronously (not polled as a task), so
+            // there's no ambient "current" tokio runtime for the engine's
+            // background tasks to spawn onto — pass Tauri's own runtime
+            // handle explicitly instead (see build_core_context's doc).
+            let runtime = tauri::async_runtime::handle().inner().clone();
+            let ctx = build_core_context(
+                CoreConfig {
+                    app_data_dir: app_data_dir.clone(),
+                    execution_mode: ExecutionMode::Router,
+                },
+                notif_adapter,
+                runtime,
             );
+            eprintln!("[demeteo] workspace dir: {}", ctx.workspace_dir.display());
 
-            let agent_registry = Arc::new(adapters::agent::registry::AgentRegistry::new(vec![
-                Arc::new(adapters::agent::opencode::runtime()) as Arc<dyn AgentRuntime>,
-                Arc::new(adapters::agent::hermes::runtime()) as Arc<dyn AgentRuntime>,
-                Arc::new(adapters::agent::claude_code::runtime()) as Arc<dyn AgentRuntime>,
-                Arc::new(adapters::agent::antigravity::runtime()) as Arc<dyn AgentRuntime>,
-                Arc::new(adapters::agent::noop::NoopRuntime) as Arc<dyn AgentRuntime>,
-            ]));
-            let pricing: Arc<dyn ports::pricing::PricingTable> =
-                Arc::new(adapters::pricing::HardcodedPricingTable::new());
-            let mr_publisher: Arc<dyn ports::mr_publisher::MrPublisher> =
-                Arc::new(adapters::mr_publisher::HttpMrPublisher::new(
-                    app_settings_repo.clone(),
-                    projects_repo.clone(),
-                    features_repo.clone(),
-                    exec_inner.clone(),
-                    workspace_dir.clone(),
-                ));
+            commands::workflows::seed_starter_workflows(&ctx.workflows);
 
-            let worktree_ops = Arc::new(adapters::worktree::git_ops::GitOpsHelper::new(
-                app_settings_repo.clone(),
-                exec_inner.clone(),
-            ));
-
-            let provider_http =
-                Arc::new(adapters::provider_http::ReqwestProviderHttpAdapter::new());
-
-            let memory_llm: Arc<dyn ports::memory_llm::MemoryLlmPort> =
-                Arc::new(adapters::memory_llm::ReqwestMemoryLlmAdapter::new());
-
-            // Merge executor — owns the SQL audit table + the
-            // structured conflict-report shape. Wired here so the
-            // feature_sync command and the existing subtask→feature
-            // merge share the same conflict-detection code path.
-            let merge_executor: Arc<dyn ports::merge::MergeExecutor> = {
-                let git_ops_for_merge = adapters::worktree::git_ops::GitOpsHelper::new(
-                    app_settings_repo.clone(),
-                    exec_inner.clone(),
-                );
-                Arc::new(adapters::merge::SqliteMergeExecutor::new(
-                    merge_audit_repo.clone(),
-                    git_ops_for_merge,
-                    exec_inner.clone(),
-                    workspace_dir.clone(),
-                ))
-            };
-
-            // Build the DagStepExecutor before AppContext to avoid a
-            // circular dependency (the executor contains sub-port Arcs;
-            // AppContext contains the executor's Arc).
-            let attachment_store: Arc<dyn ports::attachment_store::AttachmentStore> = Arc::new(
-                adapters::attachment_store::fs::FsAttachmentStore::new(app_data_dir.clone()),
-            );
-            let attachment_json: Arc<dyn ports::attachment_store::AttachmentJsonPort> =
-                db_adapter.clone();
-            let step_executor_adapter = {
-                let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> = Arc::new(
-                    adapters::artifact_store::fs::FsArtifactStore::new(app_data_dir.clone()),
-                );
-                let exec = Arc::new(adapters::step_executor::DagStepExecutor::new(
-                    machines_repo.clone(),
-                    projects_repo.clone(),
-                    features_repo.clone(),
-                    workflows_repo.clone(),
-                    gates_repo.clone(),
-                    app_settings_repo.clone(),
-                    memory_repo.clone(),
-                    signals_repo.clone(),
-                    memory_llm.clone(),
-                    agent_registry.clone(),
-                    notif_adapter.clone(),
-                    notifications_repo.clone(),
-                    agent_exec.clone(),
-                    exec_inner.clone(),
-                    merge_executor.clone(),
-                    artifact_store,
-                    attachment_store.clone(),
-                    attachment_json.clone(),
-                    workspace_dir.clone(),
-                    pricing.clone(),
-                ));
-                // Reconcile DB + notifications first (synchronous, fast).
-                exec.startup_watchdog();
-                // Then spawn the actual driver resumes on the runtime.
-                // Without this, the re-emitted GateRequired events have
-                // no live driver behind them and the user's gate_decide
-                // is silently dropped — see the watchdog/registry docs.
-                let exec_for_resume = exec.clone();
-                tauri::async_runtime::spawn(async move {
-                    exec_for_resume.resume_interrupted_features().await;
-                });
-                exec
-            };
-
-            // Start workflow scheduler background task
-            adapters::scheduler::start_scheduler(
-                workflows_repo.clone(),
-                step_executor_adapter.clone(),
-            );
-
-            // Start the background MR-state monitor. Polls
-            // `MrPublisher::fetch_mr_state` every 2 minutes, persists
-            // a `Notification` row on transition to `merged`, and
-            // emits `DomainEvent::MrMerged` for the bell + toast.
-            adapters::mr_monitor::start_mr_monitor(
-                features_repo.clone(),
-                mr_publisher.clone(),
-                notifications_repo.clone(),
-                notif_adapter.clone(),
-            );
-
-            // Start the background memory agent. Polls the memory_signals
-            // queue, distills signals into project memories via the
-            // user-configured LLM. No-ops while the memory agent is disabled.
-            adapters::memory_worker::start_memory_worker(
-                app_settings_repo.clone(),
-                signals_repo.clone(),
-                memory_repo.clone(),
-                memory_llm.clone(),
-            );
-
-            app.manage(AppContext {
-                machines: machines_repo.clone(),
-                threads: threads_repo.clone(),
-                projects: projects_repo.clone(),
-                features: features_repo.clone(),
-                workflows: workflows_repo.clone(),
-                gates: gates_repo.clone(),
-                app_settings: app_settings_repo.clone(),
-                memory: memory_repo,
-                signals: signals_repo.clone(),
-                merge_audit: merge_audit_repo,
-                notifications: notifications_repo,
-                exec: exec_inner,
-                agent_exec,
-                notif: notif_adapter,
-                registry: agent_registry,
-                executor: step_executor_adapter.clone(),
-                presenter: step_executor_adapter,
-                pricing,
-                mr_publisher,
-                merge_executor,
-                worktree_ops,
-                provider_http,
-                memory_llm: memory_llm.clone(),
-                attachments: attachment_store,
-                attachment_json: db_adapter.clone(),
-                app_data_dir: app_data_dir.clone(),
-                workspace_dir: workspace_dir.clone(),
-            });
+            app.manage(ctx);
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
 
@@ -542,6 +356,20 @@ pub fn run() {
             commands::project::set_workflow_override,
             commands::features::fetch_active_features,
             commands::features::start_feature,
+            commands::remote_runner::remote_submit_run,
+            commands::remote_runner::remote_list_mirrored_runs,
+            commands::remote_runner::remote_reconcile_runs,
+            commands::remote_runner::remote_get_status,
+            commands::remote_runner::remote_probe_agent,
+            commands::remote_runner::remote_run_diff_url,
+            commands::remote_runner::remote_stream_events,
+            commands::remote_install::remote_runner_status,
+            commands::remote_install::remote_runner_local_check,
+            commands::remote_install::remote_enable_runs,
+            adapters::tauri_ui::runner_download::remote_runner_download,
+            adapters::tauri_ui::runner_download::remote_runner_download_cancel,
+            commands::remote_runner::remote_decide_gate,
+            commands::remote_runner::remote_cancel_run,
             commands::features::feature_pause,
             commands::features::feature_resume,
             commands::features::feature_cancel,

@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Plus, Server, Key, Lock, Cpu, Edit2, Trash2, Wifi, WifiOff, Loader, AlertCircle, RefreshCw, Monitor } from 'lucide-react';
+import { Plus, Server, Key, Lock, Cpu, Edit2, Trash2, Wifi, WifiOff, Loader, AlertCircle, RefreshCw, Monitor, Rocket, CheckCircle2, X } from 'lucide-react';
 import EnvModal, { blankForm, type EnvFormState } from './EnvModal';
+import { formatError } from '../lib/errors';
+import { useTauriEvent } from '../hooks/useTauriEvent';
 
 interface Machine {
   id: string;
@@ -14,6 +16,7 @@ interface Machine {
   agents?: string | null;
   use_login_shell?: boolean | null;
   setup_commands?: string | null;
+  notify_webhook_url?: string | null;
 }
 
 interface MachinesViewProps {
@@ -37,14 +40,165 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
   const [testState, setTestState] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'err'>>({});
   const [testErrors, setTestErrors] = useState<Record<string, string>>({});
 
+  // Remote runner install (docs/REMOTE_EXECUTION_PLAN.md M7.1) — the
+  // status pill below is auto-probed on mount + after every enable, so
+  // every machine card shows "running / installed-stopped / not yet
+  // installed" the moment the view opens, without the user having to
+  // click anything. The "refresh" button (the small icon to the right
+  // of the card) still re-probes on demand.
+  const [runnerState, setRunnerState] = useState<Record<string, {
+    status: 'idle' | 'checking' | 'downloading' | 'installing';
+    version?: string | null;
+    expectedVersion?: string | null;
+    serviceActive?: boolean | null;
+    lingering?: boolean | null;
+    error?: string | null;
+    downloadedBytes?: number;
+    totalBytes?: number | null;
+  }>>({});
+
+  // Only one download is ever in flight (the version-keyed cache means
+  // every machine reuses it), so a single ref is enough to route
+  // progress events to the machine row that's actually waiting on it.
+  const downloadingMachineIdRef = useRef<string | null>(null);
+  useTauriEvent<{ downloaded: number; total: number | null }>('runner-download-progress', (p) => {
+    const id = downloadingMachineIdRef.current;
+    if (!id) return;
+    setRunnerState((s) => ({
+      ...s,
+      [id]: { ...s[id], status: 'downloading', downloadedBytes: p.downloaded, totalBytes: p.total },
+    }));
+  });
+
+  type LocalRunnerCheck =
+    | { status: 'ready'; path: string; version: string | null; expected: string; stale_warning: string | null }
+    | { status: 'missing'; expected: string };
+
+  // Ambient, no-network/no-SSH info about what this laptop can push right
+  // now — populated on mount so machines don't all look unknown until the
+  // user clicks something, without auto-probing any remote host over SSH.
+  const [localRunnerInfo, setLocalRunnerInfo] = useState<LocalRunnerCheck | null>(null);
+
+  useEffect(() => {
+    invoke<LocalRunnerCheck>('remote_runner_local_check').then(setLocalRunnerInfo).catch(() => {});
+  }, []);
+
+  const probeRunner = async (m: Machine) => {
+    setRunnerState((s) => ({ ...s, [m.id]: { ...s[m.id], status: 'checking' } }));
+    try {
+      const [result, local] = await Promise.all([
+        invoke<{
+          installed: boolean;
+          version: string | null;
+          service_active: boolean | null;
+          lingering: boolean | null;
+        }>('remote_runner_status', { machineId: m.id }),
+        invoke<LocalRunnerCheck>('remote_runner_local_check'),
+      ]);
+      setRunnerState((s) => ({
+        ...s,
+        [m.id]: {
+          ...s[m.id],
+          status: 'idle',
+          version: result.installed ? result.version : null,
+          serviceActive: result.service_active,
+          lingering: result.lingering,
+          expectedVersion: local.expected,
+          error: null,
+        },
+      }));
+    } catch (e) {
+      setRunnerState((s) => ({ ...s, [m.id]: { ...s[m.id], status: 'idle', error: formatError(e) } }));
+    }
+  };
+
+  const probeRunnerSilent = async (machineId: string) => {
+    setRunnerState((s) => ({ ...s, [machineId]: { ...s[machineId], status: 'checking' } }));
+    try {
+      const result = await invoke<{
+        installed: boolean;
+        version: string | null;
+        service_active: boolean | null;
+        lingering: boolean | null;
+      }>('remote_runner_status', { machineId });
+      setRunnerState((s) => ({
+        ...s,
+        [machineId]: {
+          ...s[machineId],
+          status: 'idle',
+          version: result.installed ? result.version : null,
+          serviceActive: result.service_active,
+          lingering: result.lingering,
+          error: null,
+        },
+      }));
+    } catch (e) {
+      setRunnerState((s) => ({
+        ...s,
+        [machineId]: { ...s[machineId], status: 'idle', error: formatError(e) },
+      }));
+    }
+  };
+
+  const enableRunner = async (m: Machine) => {
+    try {
+      const check: LocalRunnerCheck = await invoke('remote_runner_local_check');
+      setLocalRunnerInfo(check);
+      let localBinPath: string;
+      if (check.status === 'ready') {
+        if (check.stale_warning && !confirm(`Warning: ${check.stale_warning}. Push it to "${m.name}" anyway?`)) {
+          return;
+        }
+        localBinPath = check.path;
+      } else {
+        if (!confirm(`demeteo-runner ${check.expected} is required but wasn't found locally. Download it now?`)) {
+          return;
+        }
+        setRunnerState((s) => ({ ...s, [m.id]: { status: 'downloading', expectedVersion: check.expected } }));
+        downloadingMachineIdRef.current = m.id;
+        try {
+          const downloaded: { path: string; version: string } = await invoke('remote_runner_download');
+          localBinPath = downloaded.path;
+        } finally {
+          downloadingMachineIdRef.current = null;
+        }
+      }
+      setRunnerState((s) => ({ ...s, [m.id]: { status: 'installing', expectedVersion: check.expected } }));
+      const result: { version: string | null; linger_enabled: boolean; warning: string | null } =
+        await invoke('remote_enable_runs', { machineId: m.id, localBinPath });
+      setRunnerState((s) => ({
+        ...s,
+        [m.id]: {
+          ...s[m.id],
+          status: 'idle',
+          version: result.version,
+          lingering: result.linger_enabled,
+          serviceActive: true,
+        },
+      }));
+    } catch (e) {
+      setRunnerState((s) => ({ ...s, [m.id]: { status: 'idle', error: formatError(e) } }));
+    }
+  };
+
+  const cancelDownload = async () => {
+    try {
+      await invoke('remote_runner_download_cancel');
+    } catch {
+      // best-effort — the in-flight download call will surface its own
+      // "cancelled" error to the catch block in enableRunner either way
+    }
+  };
+
   const fetchMachines = async () => {
     setLoading(true);
     setError('');
     try {
       const list: Machine[] = await invoke('get_machines');
       setMachines(list ?? []);
+      list.forEach((m) => { void probeRunnerSilent(m.id); });
     } catch (e: any) {
-      setError(String(e));
+      setError(formatError(e));
       setMachines([]);
     } finally {
       setLoading(false);
@@ -96,6 +250,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
           return Array.isArray(arr) ? arr.join('\n') : '';
         } catch { return ''; }
       })(),
+      notifyWebhookUrl: m.notify_webhook_url ?? '',
     };
   };
 
@@ -125,7 +280,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
       setTestState((s) => ({ ...s, [m.id]: 'ok' }));
     } catch (e: any) {
       setTestState((s) => ({ ...s, [m.id]: 'err' }));
-      setTestErrors((s) => ({ ...s, [m.id]: String(e) }));
+      setTestErrors((s) => ({ ...s, [m.id]: formatError(e) }));
     }
   };
 
@@ -137,7 +292,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
       fetchMachines();
       onChange?.();
     } catch (e: any) {
-      setError(String(e));
+      setError(formatError(e));
     }
   };
 
@@ -176,6 +331,24 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
           <div className="mb-4 text-[12px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-start gap-2">
             <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
             <span className="break-all">{error}</span>
+          </div>
+        )}
+
+        {localRunnerInfo && (
+          <div className="mb-4 text-[11px] text-slate-400 flex items-center gap-1.5">
+            {localRunnerInfo.status === 'ready' ? (
+              <>
+                <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                {localRunnerInfo.stale_warning
+                  ? `This laptop has a demeteo-runner build, but ${localRunnerInfo.stale_warning}.`
+                  : `This laptop has demeteo-runner ${localRunnerInfo.version ?? localRunnerInfo.expected} ready to push to any machine.`}
+              </>
+            ) : (
+              <>
+                <AlertCircle className="w-3 h-3 text-slate-500 shrink-0" />
+                {`demeteo-runner ${localRunnerInfo.expected} isn't cached on this laptop yet — "Enable remote runs" will prompt to download it.`}
+              </>
+            )}
           </div>
         )}
 
@@ -281,10 +454,143 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                           <span className="break-all">{testErrors[m.id]}</span>
                         </p>
                       )}
+                      {runnerState[m.id]?.status === 'downloading' && (
+                        <p className="mt-2 text-[11px] text-cyan-300 flex items-center gap-1">
+                          <Loader className="w-3 h-3 animate-spin" />
+                          Downloading demeteo-runner {runnerState[m.id]?.expectedVersion}
+                          {(() => {
+                            const st = runnerState[m.id];
+                            if (!st?.downloadedBytes) return '…';
+                            const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)}MB`;
+                            return st.totalBytes
+                              ? ` — ${mb(st.downloadedBytes)} / ${mb(st.totalBytes)} (${Math.round((st.downloadedBytes / st.totalBytes) * 100)}%)`
+                              : ` — ${mb(st.downloadedBytes)}`;
+                          })()}
+                        </p>
+                      )}
+                      {runnerState[m.id]?.status === 'installing' && (
+                        <p className="mt-2 text-[11px] text-cyan-300 flex items-center gap-1">
+                          <Loader className="w-3 h-3 animate-spin" />
+                          Installing demeteo-runner {runnerState[m.id]?.expectedVersion} on {m.name}…
+                        </p>
+                      )}
+                      {(() => {
+                        const st = runnerState[m.id];
+                        if (!st || st.status === 'downloading' || st.status === 'installing') return null;
+                        if (st.error) {
+                          return (
+                            <p className="mt-2 text-[11px] text-red-400 flex items-start gap-1">
+                              <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
+                              <span className="break-all">{st.error}</span>
+                            </p>
+                          );
+                        }
+                        if (st.status === 'checking' && !st.version) {
+                          return (
+                            <p className="mt-2 text-[11px] text-slate-500 flex items-center gap-1">
+                              <Loader className="w-3 h-3 animate-spin" />
+                              Checking demeteo-runner status…
+                            </p>
+                          );
+                        }
+                        if (!st.version) {
+                          return (
+                            <p className="mt-2 text-[11px] text-slate-500 flex items-center gap-1">
+                              <Cpu className="w-3 h-3" />
+                              Remote runner not installed — click <span className="text-slate-300">Enable remote runs</span> to provision it.
+                            </p>
+                          );
+                        }
+                        const v = st.version;
+                        const stale = st.expectedVersion && v !== st.expectedVersion;
+                        const isRunning = st.serviceActive === true;
+                        const pillTone = isRunning
+                          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+                          : st.serviceActive === false
+                          ? 'border-white/10 bg-white/5 text-slate-300'
+                          : 'border-white/10 bg-white/5 text-slate-400';
+                        const dotTone = isRunning
+                          ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)]'
+                          : st.serviceActive === false
+                          ? 'bg-slate-500'
+                          : 'bg-slate-600';
+                        const label = isRunning
+                          ? 'Running'
+                          : st.serviceActive === false
+                          ? 'Installed, stopped'
+                          : 'Installed';
+                        return (
+                          <>
+                            <div className={`mt-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px] font-medium max-w-full ${pillTone}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotTone} ${isRunning ? 'animate-pulse' : ''}`} />
+                              <span>{label}</span>
+                              <span>·</span>
+                              <span className="font-mono">{v}</span>
+                              {stale && (
+                                <span className="text-slate-400">
+                                  · update available ({st.expectedVersion})
+                                </span>
+                              )}
+                            </div>
+                            {isRunning && st.lingering === false && (
+                              <div className="mt-2 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 flex items-start gap-2">
+                                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                                <span className="break-words">
+                                  Lingering isn't enabled for this user — the runner will stop when you log out of SSH and won't auto-start on reboot. Ask an administrator to run <code className="px-1 py-0.5 rounded bg-white/5 text-amber-200">loginctl enable-linger &lt;user&gt;</code> on this machine.
+                                </span>
+                              </div>
+                            )}
+                            {st.serviceActive === false && (
+                              <p className="mt-1 text-[11px] text-slate-400 flex items-start gap-1">
+                                <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
+                                <span className="break-words">Service is installed but not running. Run <code className="px-1 py-0.5 rounded bg-white/5 text-slate-200">systemctl --user start demeteo-runner</code> on the remote host, or click <span className="text-slate-200">Upgrade runner</span> to re-provision.</span>
+                              </p>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => probeRunner(m)}
+                      disabled={runnerState[m.id]?.status === 'checking'}
+                      className="px-2 py-1.5 text-[11px] rounded-lg text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-all disabled:opacity-50"
+                      title="Check demeteo-runner status without installing"
+                    >
+                      {runnerState[m.id]?.status === 'checking' ? (
+                        <Loader className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => enableRunner(m)}
+                      disabled={runnerState[m.id]?.status === 'installing' || runnerState[m.id]?.status === 'downloading'}
+                      className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-50"
+                      title={runnerState[m.id]?.version ? 'Download (if needed), push the latest build and restart the runner' : 'Download and install demeteo-runner as a systemd --user service'}
+                    >
+                      {runnerState[m.id]?.status === 'installing' || runnerState[m.id]?.status === 'downloading' ? (
+                        <Loader className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                      ) : (
+                        <Rocket className="w-3.5 h-3.5" />
+                      )}
+                      {runnerState[m.id]?.status === 'downloading'
+                        ? 'Downloading…'
+                        : runnerState[m.id]?.version
+                        ? 'Upgrade runner'
+                        : 'Enable remote runs'}
+                    </button>
+                    {runnerState[m.id]?.status === 'downloading' && (
+                      <button
+                        onClick={cancelDownload}
+                        className="px-2 py-1.5 text-[11px] rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                        title="Cancel download"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button
                       onClick={() => handleTest(m)}
                       disabled={conn === 'testing'}

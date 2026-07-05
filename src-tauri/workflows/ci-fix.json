@@ -81,6 +81,7 @@
     {
       "id": "s-gate-ship",
       "kind": "gate",
+      "gate_class": "dangerous",
       "title": "Review Fix Before Merging",
       "agent_kind": null,
       "prompt_template": "Review the Fix artifact (s-fix) and the Verification result (s-verify). Approve to merge the fix and optionally open an MR. Redirect to re-run a prior step with specific feedback. Cancel to abort.",

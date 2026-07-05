@@ -1,0 +1,22 @@
+[package]
+name = "demeteo-core"
+version = "0.1.0"
+description = "Tauri-free engine: domain, ports, application, and adapters shared by the desktop app and the headless runner"
+authors = ["Steven Yepes <contact@stvcloud.dev>"]
+license = "MIT"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"] }
+parking_lot = "0.12"
+refinery = { version = "0.8", features = ["rusqlite"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ssh2 = "0.9"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tracing = "0.1"

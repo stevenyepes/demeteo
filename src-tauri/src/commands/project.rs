@@ -1,5 +1,5 @@
 use crate::application::projects::{ProjectConfig, RepoDirtyStatus};
-use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
+use crate::domain::ids::ProjectId;
 use crate::domain::models::{Project, RepoHealthStatus, Repository};
 use crate::error::AppError;
 use crate::paths;
@@ -17,37 +17,9 @@ pub async fn create_project(
     ctx: State<'_, AppContext>,
     config: ProjectConfig,
 ) -> Result<ProjectCreateResponse, AppError> {
-    let now = paths::now_ms();
-    let id_str = format!("p{}", now);
-    let id = ProjectId::from(id_str.clone());
-
-    let project = Project {
-        id: id.clone(),
-        name: config.name.clone(),
-        compute_type: config.compute_type.clone(),
-        remote_host: config.remote_host.clone().map(MachineId::from),
-        status: "bootstrapping".to_string(),
-        nodes: 0,
-        spend: 0.0,
-        tokens: 0,
-        created_at: now,
-    };
-
-    ctx.projects.add(project)?;
-
-    for (i, repo_cfg) in config.repos.iter().enumerate() {
-        let repo_id = RepositoryId::from(format!("{}_r{}", id_str, i));
-        let repo = Repository {
-            id: repo_id,
-            project_id: id.clone(),
-            provider_id: ProviderId::from(repo_cfg.provider_id.clone()),
-            repo_path: repo_cfg.repo_path.clone(),
-        };
-        ctx.projects.add_repository(repo)?;
-    }
-
+    let project = crate::application::projects::create(&ctx, config)?;
     Ok(ProjectCreateResponse {
-        id: id_str,
+        id: project.id.0,
         success: true,
     })
 }

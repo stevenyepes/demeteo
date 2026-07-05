@@ -7,7 +7,8 @@ import { ErrorToast, ERROR_TOAST_CTA_EVENT } from "./components/ErrorToast";
 import EmptyStateCard from "./components/EmptyStateCard";
 import NewProjectView from "./components/NewProjectView";
 import ProvidersPage from "./components/ProvidersPage";
-import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen } from "lucide-react";
+import RemoteRunInbox from "./components/RemoteRunInbox";
+import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen, Server, CheckCircle2, X as XIcon } from "lucide-react";
 import ProjectHome from "./components/ProjectHome";
 import ProjectSettings from "./components/ProjectSettings";
 import { WorkflowList } from "./components/WorkflowList";
@@ -152,6 +153,17 @@ function AppInner() {
   // shortcut and is refreshed on project change + status events.
   const [features, setFeatures] = useState<Feature[]>([]);
 
+  // M6.1: a remote unattended run has no local `Feature` to navigate to
+  // (the runner bootstraps its own project/feature on the remote DB) —
+  // this holds the confirmation banner shown in its place until the
+  // user dismisses it. Superseded by the M6.2 return inbox.
+  const [remoteLaunchInfo, setRemoteLaunchInfo] = useState<{
+    machineName: string;
+    runId: string;
+    title: string;
+    unattended: boolean;
+  } | null>(null);
+
   // Refetch the feature list whenever the active project changes.
   // Cancellation flag prevents a slow fetch on the previous project
   // from clobbering the list after the user switches.
@@ -267,6 +279,17 @@ function AppInner() {
     const fetchInitialData = async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
+
+        // M6.3's "reconcile-on-reopen" desktop notification only fires
+        // from inside this call — previously it only ran when the user
+        // manually opened the Remote Runs inbox, which defeats the
+        // "close the laptop, come back, get told" promise. Fire-and-forget:
+        // never blocks the rest of startup, and any newly-actionable run
+        // (PR ready/failed/parked/needs-credentials) surfaces as a
+        // notification right away instead of waiting for a manual check.
+        invoke('remote_reconcile_runs').catch((err) => {
+          console.error('Failed to reconcile remote runs on startup:', err);
+        });
 
         const backendProviders: any[] = await invoke('list_provider_instances');
         const mappedProviders: Provider[] = backendProviders.map(p => ({
@@ -390,6 +413,7 @@ function AppInner() {
     { id: 'nav-new-project', label: 'New Project', description: 'Bootstrap a new workspace', category: 'action' as const, icon: <Plus className="w-4 h-4" />, onSelect: () => navigate({ kind: 'new-project' }) },
     { id: 'nav-workflows', label: 'Workflows', description: 'View and edit workflow templates', category: 'action' as const, icon: <Sliders className="w-4 h-4" />, onSelect: () => navigate({ kind: 'workflows' }) },
     { id: 'nav-providers', label: 'Providers', description: 'Manage Git hosting connections', category: 'action' as const, icon: <Globe className="w-4 h-4" />, onSelect: () => navigate({ kind: 'providers' }) },
+    { id: 'nav-remote-inbox', label: 'Remote runs', description: 'Return inbox for runs on remote machines', category: 'action' as const, icon: <Server className="w-4 h-4" />, onSelect: () => navigate({ kind: 'remote-inbox' }) },
     { id: 'nav-settings', label: 'Settings', description: 'Global preferences and machines', category: 'settings' as const, icon: <SettingsIcon className="w-4 h-4" />, onSelect: () => navigate({ kind: 'settings' }) },
     { id: 'nav-docs', label: 'Documentation', description: 'User guide and reference', category: 'settings' as const, icon: <BookOpen className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
     { id: 'nav-shortcuts', label: 'Keyboard Shortcuts', description: 'View available shortcuts', category: 'settings' as const, icon: <Zap className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
@@ -473,6 +497,8 @@ function AppInner() {
 
           {view.kind === 'providers' && <ProvidersPage />}
 
+          {view.kind === 'remote-inbox' && <RemoteRunInbox />}
+
           {view.kind === 'settings' && <PreferencesScreen />}
 
           {/* Gate overlay — rendered on top of detail view */}
@@ -497,6 +523,37 @@ function AppInner() {
               onLaunch={async (params) => {
                 try {
                   const { invoke } = await import('@tauri-apps/api/core');
+
+                  // Remote runs (docs/REMOTE_EXECUTION_PLAN.md M6.1): no
+                  // local `Feature` is created — the runner bootstraps
+                  // its own project/feature on the remote machine's own
+                  // DB. Attachments aren't supported on this path yet
+                  // (no local feature id to stage them against).
+                  if (params.machineId) {
+                    const handle: { run_id: string; machine_id: string; status: string } =
+                      await invoke('remote_submit_run', {
+                        machineId: params.machineId,
+                        projectId: currentProjectId,
+                        workflowId: params.workflowId,
+                        title: params.title,
+                        description: params.description,
+                        agentKind: params.agentKind ?? null,
+                        model: params.model ?? null,
+                        loopIterations: params.loopIterations ?? null,
+                        unattended: params.unattended ?? false,
+                        maxCostUsd: params.maxCostUsd ?? null,
+                        maxWallClockSecs: params.maxWallClockMins != null ? params.maxWallClockMins * 60 : null,
+                      });
+                    setRemoteLaunchInfo({
+                      machineName: params.machineName ?? params.machineId,
+                      runId: handle.run_id,
+                      title: params.title,
+                      unattended: params.unattended ?? false,
+                    });
+                    uiDispatch({ type: 'CLOSE_START_FEATURE' });
+                    return;
+                  }
+
                   // Convert staged attachments (which carry a browser
                   // File handle or an absolute drag-drop path) into the
                   // Rust wire shape. The orchestrator persists them
@@ -557,6 +614,48 @@ function AppInner() {
                 } catch (err) { reportError(err); }
               }}
             />
+          )}
+
+          {/* Remote-run launch confirmation (M6.1). Superseded by the
+              M6.2 return inbox, which will show this run alongside every
+              other in-flight remote run instead of a one-off banner. */}
+          {remoteLaunchInfo && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+              <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+                <div className="px-6 py-5 flex items-start gap-3">
+                  <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-semibold text-white mb-1">Launched on {remoteLaunchInfo.machineName}</h3>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      <span className="text-slate-200">{remoteLaunchInfo.title}</span> is running on{' '}
+                      <span className="text-slate-200">{remoteLaunchInfo.machineName}</span>
+                      {remoteLaunchInfo.unattended
+                        ? '. You can close Demeteo — this run continues in the background.'
+                        : ', watched over SSH just like this session.'}
+                    </p>
+                    <p className="text-[10px] font-mono text-slate-600 mt-2">run {remoteLaunchInfo.runId}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRemoteLaunchInfo(null)}
+                    className="text-slate-500 hover:text-white transition-colors shrink-0"
+                    aria-label="Dismiss"
+                  >
+                    <XIcon className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="px-6 py-3 border-t border-white/5 bg-[#050508] flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setRemoteLaunchInfo(null)}
+                    className="px-4 py-2 rounded-lg text-xs font-bold bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all flex items-center gap-1.5"
+                  >
+                    <Server className="w-3.5 h-3.5" />
+                    Got it
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           <CommandPalette

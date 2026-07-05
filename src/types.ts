@@ -71,7 +71,37 @@ export type AppView =
   | { kind: 'workflows' }
   | { kind: 'workflow-editor'; workflowId: string | null }
   | { kind: 'providers' }
-  | { kind: 'settings' };
+  | { kind: 'settings' }
+  | { kind: 'remote-inbox' };
+
+/** Laptop-side mirror of one remote run (docs/REMOTE_EXECUTION_PLAN.md
+ *  M6.1/M6.2), keyed by `(machine_id, run_id)` — mirrors
+ *  `demeteo_core::ports::remote_run_mirror::RemoteRunMirror`. */
+export interface RemoteRunMirror {
+  machine_id: string;
+  run_id: string;
+  project_id: string | null;
+  title: string;
+  status: string;
+  error: string | null;
+  feature_id: string | null;
+  pr_url: string | null;
+  pushed_branch: string | null;
+  last_offset: number;
+  created_at: number;
+  updated_at: number;
+  last_notified_status: string | null;
+}
+
+/** One entry in a remote run's append-only event log (M3.3/M6.4) —
+ *  mirrors `demeteo_core::ports::run_events::RunEvent`. */
+export interface RunEvent {
+  offset: number;
+  run_id: string;
+  kind: string;
+  payload_json: string | null;
+  created_at: number;
+}
 
 // ── Create-Project Wizard ──────────────────────────────────────────────
 //
@@ -244,6 +274,12 @@ export type StepConfig = {
   allow_network?: boolean;
   /** Opt a non-shell capability into the shell (e.g. an Artifacts step that wants `git log`). */
   allow_shell?: boolean;
+  /**
+   * Blast-radius classification for `gate` steps (docs/REMOTE_EXECUTION_PLAN.md M5.1).
+   * `"dangerous"` (merge-to-default / push-protected / deploy / delete) parks under an
+   * unattended remote run instead of auto-approving; anything else is the `safe` default.
+   */
+  gate_class?: 'safe' | 'dangerous' | null;
 };
 
 export interface WorkflowWithSteps extends Workflow {

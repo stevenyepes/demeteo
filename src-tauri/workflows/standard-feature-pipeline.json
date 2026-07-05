@@ -121,6 +121,7 @@
     {
       "id": "s-gate-ship",
       "kind": "gate",
+      "gate_class": "dangerous",
       "title": "Approve Merge / Publish",
       "agent_kind": null,
       "prompt_template": "Review the Validation artifact (s-validate) and the Critic Review (s-critic). Approve to merge the feature branch and optionally open an MR. Redirect to reopen a prior step with specific feedback. Cancel to abort.",

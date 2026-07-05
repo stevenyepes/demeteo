@@ -14,6 +14,12 @@ interface EnvFormState {
   agents: string[];
   useLoginShell: boolean;
   setupCommands: string;
+  /** Optional "away" notification webhook (Slack incoming webhook / ntfy.sh /
+   *  anything accepting a `{"text": "..."}` POST) — fired by demeteo-runner
+   *  on this machine when an unattended run reaches a terminal/actionable
+   *  state while the laptop is disconnected. Injected into the runner's
+   *  systemd unit at install time; blank disables it. */
+  notifyWebhookUrl: string;
 }
 
 interface EnvModalProps {
@@ -36,6 +42,7 @@ const blankForm: EnvFormState = {
   agents: [],
   useLoginShell: false,
   setupCommands: '',
+  notifyWebhookUrl: '',
 };
 
 const EnvModal: React.FC<EnvModalProps> = ({
@@ -154,6 +161,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
       agents: agentsJson,
       use_login_shell: form.useLoginShell,
       setup_commands: setupJson,
+      notify_webhook_url: form.notifyWebhookUrl.trim() || null,
     };
   };
 
@@ -407,6 +415,22 @@ const EnvModal: React.FC<EnvModalProps> = ({
                   rows={3}
                   className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 resize-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-slate-500 mb-1">
+                  Notification webhook (optional) — Slack incoming webhook, ntfy.sh, or any URL accepting {'{"text": "..."}'}
+                </label>
+                <input
+                  type="text"
+                  value={form.notifyWebhookUrl}
+                  onChange={e => setForm({ ...form, notifyWebhookUrl: e.target.value })}
+                  placeholder="https://hooks.slack.com/services/..."
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2 px-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                />
+                <p className="text-[10px] text-slate-600 mt-1">
+                  Notified when an unattended run on this machine finishes, fails, or parks while you're disconnected.
+                </p>
               </div>
             </div>
 

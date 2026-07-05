@@ -550,7 +550,7 @@ The "?" opens the docs panel.
 
 ## 6. Migration Strategy
 
-The migration runner is `refinery`-based (`src-tauri/migrations/`).
+The migration runner is `refinery`-based (`crates/demeteo-core/migrations/`).
 The schema is at V19+; v1 is no longer greenfield.
 
 - **Additive migrations** (new tables, new nullable columns, new

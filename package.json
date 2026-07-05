@@ -14,13 +14,15 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "dev:tauri": "tauri dev --config src-tauri/tauri.dev.conf.json",
-    "dev:tauri:sw": "DEMETEO_DISABLE_GPU=1 tauri dev --config src-tauri/tauri.dev.conf.json"
+    "dev:tauri:sw": "DEMETEO_DISABLE_GPU=1 tauri dev --config src-tauri/tauri.dev.conf.json",
+    "build:runner": "bash scripts/build-runner.sh"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",

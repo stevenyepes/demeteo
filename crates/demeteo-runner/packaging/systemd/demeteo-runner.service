@@ -1,0 +1,21 @@
+[Unit]
+Description=Demeteo headless runner (control RPC + workflow engine)
+Documentation=https://github.com/stevenyepes/demeteo/blob/master/docs/REMOTE_EXECUTION.md
+After=network-online.target
+Wants=network-online.target
+# Bound restart storms: at most 10 restarts in 5 minutes before systemd
+# gives up and leaves the unit failed, rather than crash-looping forever.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/demeteo-runner serve
+Restart=always
+RestartSec=5
+# journald is the log sink; `journalctl --user -u demeteo-runner -f` tails it.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
