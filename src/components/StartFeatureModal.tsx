@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff } from 'lucide-react';
+import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff, Server, MoonStar, CheckCircle2, Loader2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import type { Repository, WorkflowSummary } from '../types';
+import type { Machine, Repository, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 
@@ -46,6 +46,22 @@ interface StartFeatureModalProps {
      * `feature_add_attachment(featureId, …)` after launch.
      */
     attachments?: LaunchStageEntry[];
+    /**
+     * Run this feature on a remote `demeteo-runner` instead of locally
+     * (docs/REMOTE_EXECUTION_PLAN.md M6.1). `undefined`/`'local'` means
+     * "run here" — the existing `start_feature` path. Any other value
+     * is a machine id the parent resolves via `remote_submit_run`.
+     */
+    machineId?: string;
+    /** Display name for `machineId`, so the caller doesn't need its own
+     * copy of the machines list just to show a confirmation. */
+    machineName?: string;
+    /** R6/R7: auto-approve safe gates, park dangerous ones. Only
+     * meaningful when `machineId` is set. */
+    unattended?: boolean;
+    /** M5.2 hard caps — `undefined` means no cap on that dimension. */
+    maxCostUsd?: number;
+    maxWallClockMins?: number;
   }) => void;
 }
 
@@ -111,6 +127,41 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [visionWarningDismissed, setVisionWarningDismissed] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
 
+  // Remote execution (M6.1): "Run on machine ▾" + unattended toggle +
+  // budget cap. `machineId === ''` means "run here" (today's behavior).
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [machineId, setMachineId] = useState<string>('');
+  const [unattended, setUnattended] = useState(false);
+  const [maxCostUsd, setMaxCostUsd] = useState<string>('');
+  const [maxWallClockMins, setMaxWallClockMins] = useState<string>('');
+
+  // Upfront agent-readiness check (M4.1's `probe_agent`, docs/
+  // REMOTE_EXECUTION_PLAN.md M6.1 gap): without this, a machine that was
+  // never provisioned or is missing the chosen agent only fails *after*
+  // the whole form is filled out and Launch is clicked. Only meaningful
+  // once an explicit agent is chosen — with no override the step's own
+  // default may differ per step, so there's nothing concrete to probe.
+  const [readiness, setReadiness] = useState<
+    { status: 'idle' } | { status: 'checking' } | { status: 'ready' } | { status: 'not_ready' } | { status: 'unreachable'; error: string }
+  >({ status: 'idle' });
+
+  useEffect(() => {
+    if (!machineId || !agentKind.trim()) {
+      setReadiness({ status: 'idle' });
+      return;
+    }
+    let cancelled = false;
+    setReadiness({ status: 'checking' });
+    invoke<{ kind: string; available: boolean }>('remote_probe_agent', { machineId, agentKind: agentKind.trim() })
+      .then((r) => {
+        if (!cancelled) setReadiness({ status: r.available ? 'ready' : 'not_ready' });
+      })
+      .catch((e) => {
+        if (!cancelled) setReadiness({ status: 'unreachable', error: String(e) });
+      });
+    return () => { cancelled = true; };
+  }, [machineId, agentKind]);
+
   // Initialize workflow picker to the requested default (or the first
   // workflow if none specified) when the modal opens.
   useEffect(() => {
@@ -134,8 +185,33 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setLoopIterations('');
       setAttachments([]);
       setVisionWarningDismissed(false);
+      setMachineId('');
+      setUnattended(false);
+      setMaxCostUsd('');
+      setMaxWallClockMins('');
+      setReadiness({ status: 'idle' });
     }
   }, [isOpen, workflows, defaultWorkflowId, workflowId]);
+
+  // Fetch remote machines whenever the modal opens (M6.1). Local runs
+  // don't need this list, so it's fetched lazily rather than threaded
+  // through from the parent.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list: Machine[] = await invoke('get_machines');
+        if (!cancelled) setMachines(list ?? []);
+      } catch (e) {
+        console.warn('failed to load machines for remote-run picker:', e);
+        if (!cancelled) setMachines([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   // Load the selected workflow's steps so the user can override the agent /
   // model per step. Gate steps don't run an agent, so they're filtered out.
@@ -245,6 +321,9 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       }))
       .filter((o) => o.agent_kind || o.model);
     const loopArg = loopIterations.trim() ? parseInt(loopIterations, 10) : undefined;
+    const costArg = machineId && maxCostUsd.trim() ? parseFloat(maxCostUsd) : undefined;
+    const wallClockArg =
+      machineId && maxWallClockMins.trim() ? parseInt(maxWallClockMins, 10) : undefined;
     onLaunch({
       workflowId,
       title: title.trim(),
@@ -256,6 +335,11 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       loopIterations: Number.isFinite(loopArg as number) ? loopArg : undefined,
       stepOverrides: overrides.length > 0 ? overrides : undefined,
       attachments: attachments.length > 0 ? attachments : undefined,
+      machineId: machineId || undefined,
+      machineName: machineId ? machines.find((m) => m.id === machineId)?.name : undefined,
+      unattended: machineId ? unattended : undefined,
+      maxCostUsd: Number.isFinite(costArg as number) ? costArg : undefined,
+      maxWallClockMins: Number.isFinite(wallClockArg as number) ? wallClockArg : undefined,
     });
   };
 
@@ -407,14 +491,24 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           )}
 
           {/* Customize (Q22: expand to full form) */}
-          <button
-            type="button"
-            onClick={() => setShowAdvanced((v) => !v)}
-            className="flex items-center gap-1.5 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
-          >
-            {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-            {showAdvanced ? 'Hide' : 'Customize…'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+            >
+              {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              {showAdvanced ? 'Hide' : 'Customize…'}
+            </button>
+            {/* Surface-level hint that remote/unattended execution exists
+                — otherwise it's invisible unless a user already knows to
+                expand Customize and look for it. */}
+            {!showAdvanced && machines.filter((m) => m.auth_type !== 'local').length > 0 && (
+              <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                <Server className="w-3 h-3" /> Remote machines available
+              </span>
+            )}
+          </div>
 
           {showAdvanced && (
             <div className="space-y-3 pl-3 border-l border-white/5">
@@ -444,6 +538,113 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   />
                 </div>
               </div>
+
+              {/* Run on machine (docs/REMOTE_EXECUTION_PLAN.md M6.1).
+                  Only remote machines run headless — the built-in local
+                  machine keeps using the existing `start_feature` path,
+                  so it's excluded from this picker. Given a distinct
+                  bordered treatment (not a plain text-input row) so the
+                  remote/unattended entry point doesn't blend into
+                  "Default agent"/"Default model" above it — this is the
+                  whole feature's entry point, easy to miss otherwise. */}
+              {machines.filter((m) => m.auth_type !== 'local').length > 0 && (
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                  <label className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5 uppercase tracking-wider">
+                    <Server className="w-3.5 h-3.5 text-cyan-400" />
+                    Run on machine
+                  </label>
+                  <select
+                    value={machineId}
+                    onChange={(e) => setMachineId(e.target.value)}
+                    className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                  >
+                    <option value="">This machine</option>
+                    {machines
+                      .filter((m) => m.auth_type !== 'local')
+                      .map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))}
+                  </select>
+
+                  {machineId && (
+                    <div className="mt-2 text-[11px] font-mono flex items-center gap-1.5">
+                      {readiness.status === 'checking' && (
+                        <span className="text-slate-500 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Checking agent readiness…</span>
+                      )}
+                      {readiness.status === 'ready' && (
+                        <span className="text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> {agentKind.trim()} is ready on this machine</span>
+                      )}
+                      {readiness.status === 'not_ready' && (
+                        <span className="text-amber-300 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> {agentKind.trim()} isn't installed/authed on this machine — launch will fail</span>
+                      )}
+                      {readiness.status === 'unreachable' && (
+                        <span className="text-amber-300 flex items-start gap-1">
+                          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                          <span>Couldn't reach this machine to check readiness — make sure "Enable remote runs" has been run on it (Machines settings).</span>
+                        </span>
+                      )}
+                      {readiness.status === 'idle' && !agentKind.trim() && (
+                        <span className="text-slate-500">Pick an agent above to check readiness on this machine.</span>
+                      )}
+                    </div>
+                  )}
+
+                  {machineId && (
+                    <div className="mt-2 space-y-2.5 pl-3 border-l border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setUnattended((v) => !v)}
+                        className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] font-semibold uppercase tracking-wider border transition-colors ${
+                          unattended
+                            ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
+                            : 'bg-[#050508] border-white/10 text-slate-400 hover:border-white/20'
+                        }`}
+                      >
+                        <MoonStar className="w-3.5 h-3.5" />
+                        Unattended
+                      </button>
+                      <p className="text-[10px] font-mono text-slate-500 leading-relaxed">
+                        {unattended
+                          ? 'Review gates and merges to the feature branch auto-approve. Merge-to-default and over-budget gates park for you — see the return inbox.'
+                          : 'Gates wait for you to decide, same as a local run — the run just executes on the chosen machine.'}
+                      </p>
+                      {unattended && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                              Max cost (USD)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={maxCostUsd}
+                              onChange={(e) => setMaxCostUsd(e.target.value)}
+                              placeholder="no cap"
+                              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                              Max wall-clock (min)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              value={maxWallClockMins}
+                              onChange={(e) => setMaxWallClockMins(e.target.value)}
+                              placeholder="no cap"
+                              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Per-step agent/model overrides. Blank row = inherit the
                   default above → the workflow step → the project default. */}
@@ -578,6 +779,15 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               >
                 <X className="w-3.5 h-3.5" />
               </button>
+            </div>
+          )}
+          {machineId && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 text-[11px] font-mono text-cyan-200/90">
+              <Server className="w-3.5 h-3.5 mt-0.5 shrink-0 text-cyan-400" />
+              <span>
+                Runs on <span className="font-semibold">{machines.find((m) => m.id === machineId)?.name ?? machineId}</span>.
+                {unattended ? ' You can close Demeteo — this run continues in the background.' : ' Gates still wait for you, but the work happens on that machine.'}
+              </span>
             </div>
           )}
           <div className="flex justify-between items-center">

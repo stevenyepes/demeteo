@@ -30,6 +30,7 @@ pub fn test_ssh_connection(
         auto_approved_rules: None,
         use_login_shell: None,
         setup_commands: None,
+        notify_webhook_url: None,
     };
 
     let (sess, _tcp) = crate::ssh_util::connect(&machine, secret)?;

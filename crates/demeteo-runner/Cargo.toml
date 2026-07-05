@@ -1,0 +1,20 @@
+[package]
+name = "demeteo-runner"
+version = "0.1.0"
+description = "Headless runner: executes a Demeteo workflow to completion on a Linux box with no desktop app attached"
+authors = ["Steven Yepes <contact@stvcloud.dev>"]
+license = "MIT"
+edition = "2021"
+
+[[bin]]
+name = "demeteo-runner"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1"
+demeteo-core = { path = "../demeteo-core" }
+keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

@@ -138,6 +138,15 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
+      # demeteo-runner ships as a static musl binary so it runs on any
+      # remote Linux box regardless of glibc version — built once, on
+      # the Linux leg, independent of the per-platform app target above.
+      - name: Install musl target for demeteo-runner
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get install -y musl-tools
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -167,6 +176,40 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: npx tauri build --target ${{ matrix.rust_target }}
 
+      # ── demeteo-runner (Linux leg only) ─────────────────────────────
+      # Built with the exact same version string as the app it ships
+      # alongside (nightly: <base>-N, stable: vX.Y.Z tag minus the `v`)
+      # so `demeteo-runner --version` can be string-compared directly
+      # against `app.package_info().version` when the laptop decides
+      # whether a locally cached runner build is up to date.
+      - name: Resolve demeteo-runner version
+        if: matrix.platform == 'ubuntu-22.04'
+        id: runner_version
+        shell: bash
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            echo "version=${{ needs.rc.outputs.next_version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build demeteo-runner
+        if: matrix.platform == 'ubuntu-22.04'
+        env:
+          DEMETEO_RUNNER_VERSION: ${{ steps.runner_version.outputs.version }}
+        run: |
+          cargo build --release -p demeteo-runner --target x86_64-unknown-linux-musl
+
+      - name: Package demeteo-runner asset
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          mkdir -p release-files/runner
+          cp src-tauri/target/x86_64-unknown-linux-musl/release/demeteo-runner \
+            release-files/runner/demeteo-runner-x86_64-unknown-linux-musl
+          ( cd release-files/runner && sha256sum demeteo-runner-x86_64-unknown-linux-musl \
+            > demeteo-runner-x86_64-unknown-linux-musl.sha256 )
+          ls -lh release-files/runner/
+
       # ── Upload artifacts ───────────────────────────────────────────
       # Artifact prefix matches trigger so nightly/stable never collide.
       - name: Upload artifacts (Linux, nightly)
@@ -178,6 +221,7 @@ jobs:
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/rpm/*.rpm
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage
+            release-files/runner/*
           if-no-files-found: error
           retention-days: 5
 
@@ -190,6 +234,7 @@ jobs:
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/rpm/*.rpm
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage
+            release-files/runner/*
           if-no-files-found: error
           retention-days: 14
 
@@ -263,7 +308,8 @@ jobs:
           mkdir -p release-files
           find artifacts -type f \
             \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \
-               -o -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \) \
+               -o -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \
+               -o -name "demeteo-runner-*" \) \
             -exec cp {} release-files/ \;
           echo "── Release files ──"
           ls -lh release-files/
@@ -350,7 +396,8 @@ jobs:
           mkdir -p release-files
           find artifacts -type f \
             \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \
-               -o -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \) \
+               -o -name "*.dmg" -o -name "*.msi" -o -name "*.exe" \
+               -o -name "demeteo-runner-*" \) \
             -exec cp {} release-files/ \;
           echo "── Release files ──"
           ls -lh release-files/

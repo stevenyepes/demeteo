@@ -19,6 +19,8 @@ pub mod notifications;
 pub mod pricing;
 pub mod project;
 pub mod providers;
+pub mod remote_install;
+pub mod remote_runner;
 pub mod ssh;
 pub mod thread;
 pub mod timeouts;

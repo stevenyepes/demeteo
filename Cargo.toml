@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/demeteo-core", "crates/demeteo-runner"]
+
+[patch.crates-io]
+quick-xml = { path = "src-tauri/vendor/quick-xml" }
