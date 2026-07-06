@@ -137,7 +137,7 @@ export function StrategyTab() {
         <div>
           <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Artifact Subfolder</label>
           <input type="text" value={s.artifactSubdir} onChange={e => s.setArtifactSubdir(e.target.value)} placeholder="artifacts/" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
-          <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">Repo-relative path. The orchestrator injects this as <code>{'{{artifact_dir}}'}</code> into every step's prompt and excludes it from <code>git add</code> when the commit switch is off.</p>
+          <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">Repo-relative path. The orchestrator injects this as <code>{'{{report_dir}}'}</code> (alias <code>{'{{artifact_dir}}'}</code>) into every step's prompt and excludes it from <code>git add</code> when the commit switch is off.</p>
         </div>
         <label className="flex items-start gap-3 p-3 rounded-lg border border-white/5 bg-black/20 cursor-pointer hover:border-cyan-500/30 transition-colors">
           <input type="checkbox" checked={s.commitArtifacts} onChange={e => s.setCommitArtifacts(e.target.checked)} className="mt-0.5 w-4 h-4 rounded border-white/20 bg-black/40 text-cyan-500 focus:ring-cyan-500/40 focus:ring-offset-0" />

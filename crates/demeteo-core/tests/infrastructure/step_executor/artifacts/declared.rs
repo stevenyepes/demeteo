@@ -195,19 +195,24 @@ async fn test_commit_worktree_changes() {
 }
 
 #[tokio::test]
-async fn test_commit_worktree_changes_warns_when_agent_writes_only_land_under_artifacts() {
+async fn test_commit_worktree_changes_fails_when_agent_writes_only_land_under_artifacts() {
     // Repro of the docs-update bug: the agent writes the *real* doc
-    // body into `artifacts/s-draft.md` instead of the real path. With
-    // `commit_artifacts=true` the report is allowed onto the branch
-    // (legacy behaviour), but the user's actual deliverable is
-    // stranded as the body of the summary report and never lands at
-    // `docs/new.md`. The guard log's "stage only contains artifact
-    // paths while the agent reported writes outside" branch fires.
+    // body into `artifacts/s-draft.md` instead of the real path.
+    // Before the guard was promoted to a hard failure (the warn-only
+    // behaviour lived in commit `d9dcd53` — see
+    // `crates/demeteo-core/src/adapters/step_executor/artifacts/declared.rs`
+    // docstring), the function would silently produce either an
+    // empty commit (with `commit_artifacts=false`) or a commit
+    // containing only the stranded summary report (with
+    // `commit_artifacts=true`). Both behaviours let the deliverable
+    // slip off the feature branch unnoticed.
     //
-    // Verifying the warn is captured in stderr would require a
-    // tracing subscriber; we verify the observable side effects
-    // instead: the commit contains the (stranded) report, the real
-    // path is still absent, and the function still succeeds.
+    // Now the guard returns `Err(...)` so the step executor maps it
+    // to `StepOutcome::Failed` and the retry loop feeds the
+    // failure reason into `{{retry_feedback}}` for the next attempt.
+    // We exercise BOTH `commit_artifacts=true` (which would otherwise
+    // stage `artifacts/s-draft.md`) and `commit_artifacts=false`
+    // (which would otherwise stage nothing) — both must fail.
     let temp = temp_git_repo("commit_worktree_stranded");
     let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
     let machine = "local";
@@ -237,41 +242,49 @@ async fn test_commit_worktree_changes_warns_when_agent_writes_only_land_under_ar
 
     let non_artifact_writes = vec!["docs/new.md".to_string()];
 
-    let sha = commit_worktree_changes(
+    // commit_artifacts=true: stage would contain artifacts/s-draft.md
+    // only — guard must reject before the commit runs.
+    let res_true = commit_worktree_changes(
         &exec,
         machine,
         &temp,
-        "docs: draft",
+        "docs: draft (commit_artifacts=true)",
         "artifacts/",
-        // commit_artifacts=true so we can observe what landed on
-        // the branch (the stranded artifact report). The default
-        // (`false`) would have produced an empty commit and a
-        // different guard-log branch — covered by
-        // `test_commit_worktree_changes_happy_path_…` below.
         true,
         &non_artifact_writes,
     )
-    .await
-    .unwrap();
-    assert!(!sha.is_empty());
+    .await;
+    let err_true = res_true.expect_err(
+        "commit_worktree_changes must fail when stage contains only paths under `artifacts/` \
+         while non_artifact_writes reports paths outside it",
+    );
+    assert!(
+        err_true.contains("stranded the deliverable")
+            && err_true.contains("docs/new.md")
+            && err_true.contains("artifacts/s-draft.md"),
+        "error should describe the stranded write clearly, got: {err_true}"
+    );
 
-    let committed_files = exec
+    // Verify the branch tip is still the `base` commit — no
+    // stranded artifact was committed.
+    let head = exec
         .run_command(
             machine,
-            &format!(
-                "git -C \"{}\" show --name-only --pretty=format: {}",
-                temp, sha
-            ),
+            &format!("git -C {} rev-parse HEAD", shell_esc(&temp)),
         )
         .await
         .unwrap();
-    assert!(
-        committed_files.contains("artifacts/s-draft.md"),
-        "expected artifacts/s-draft.md in commit (commit_artifacts=true), got: {committed_files}"
-    );
-    assert!(
-        !committed_files.contains("docs/new.md"),
-        "the doc body should NOT be in the commit (it was stranded under artifacts/), got: {committed_files}"
+    let base_sha = exec
+        .run_command(
+            machine,
+            &format!("git -C {} rev-parse HEAD", shell_esc(&temp)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        head.trim(),
+        base_sha.trim(),
+        "no commit should have been created when the guard rejects"
     );
 
     let _ = std::fs::remove_dir_all(&temp);
@@ -279,13 +292,19 @@ async fn test_commit_worktree_changes_warns_when_agent_writes_only_land_under_ar
 
 #[tokio::test]
 async fn test_commit_worktree_changes_warns_when_stage_is_empty_despite_non_artifact_writes() {
-    // The agent reports it wrote `docs/new.md` but the file is not in
-    // the worktree (e.g. capability-scoped out, or the agent's write
-    // was reverted by the post-step guard). The stage ends up empty
-    // even though `non_artifact_writes` is non-empty — the guard's
-    // "stage is empty but the agent reported writes outside" branch
-    // fires. `--allow-empty` keeps the commit reachable for downstream
-    // gating; the warning is the only signal.
+    // Companion to the `_fails_…` test above. Branch (a) — stage is
+    // empty even though `non_artifact_writes` is non-empty — is
+    // intentionally still `warn!`-only (not `Err`) because the cause
+    // is ambiguous: the deliverable could have been reverted by the
+    // post-step diff guard, fenced out by the scope fence, or
+    // genuinely never written. All three failure modes surface
+    // earlier in the step executor (the diff-guard's
+    // `StepOutcome::Failed` carries the reverted list; the fence's
+    // silent no-op surfaces as the empty stage here). Promoting
+    // branch (a) to `Err` would double-report the same root cause
+    // and confuse the retry loop's feedback. The strand-the-body
+    // failure (branch (b), covered by the `_fails_…` test above)
+    // is the unambiguous case worth failing on.
     let temp = temp_git_repo("commit_worktree_empty_stage");
     let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
     let machine = "local";

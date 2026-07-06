@@ -617,7 +617,26 @@ pub(crate) fn inject_operating_boundary(
     let mut lines: Vec<String> = Vec::new();
 
     let (mode, rules): (&str, Vec<String>) = match capability {
-        StepCapability::Implement => return prompt.to_string(),
+        StepCapability::Implement => (
+            "IMPLEMENT",
+            vec![
+                "You have full read/write access to the worktree, including source, tests, \
+                 configuration, documentation, and any other tracked or untracked file."
+                    .to_string(),
+                "There is no separate report folder for this step. Write the deliverable \
+                 directly at the path the task describes — e.g. the real repo path the gate \
+                 approved (`docs/<area>/<topic>.md` for a docs-update workflow, the function \
+                 under test for a refactor, the failing line for a bugfix)."
+                    .to_string(),
+                "Any change you write to a repo path (NOT under the project's report \
+                 subdir) is committed to the feature branch automatically. Any change you \
+                 write under the report subdir (the per-step change-summary folder the \
+                 orchestrator surfaces in the UI, named after your step id) stays in the \
+                 worktree as an untracked file unless the project has opted into \
+                 `commit_artifacts`."
+                    .to_string(),
+            ],
+        ),
         StepCapability::ReadOnly => (
             "REVIEW-ONLY",
             vec![

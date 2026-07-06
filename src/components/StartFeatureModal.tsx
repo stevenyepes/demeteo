@@ -743,7 +743,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 </p>
                 {workflowId === 'wf-starter-docs-update' && (
                   <p className="text-[10px] font-mono text-amber-300/80 mt-1.5 leading-relaxed">
-                    For docs-update: the new doc body lands at the real <code>docs/…​</code> path the survey/gate approved; <code>{'{{artifact_dir}}'}</code> holds only the short change-summary report. Leave <em>Project default</em> (commit <code>false</code>) so the new doc reaches the PR while the summary stays out of it.
+                    For docs-update: the new doc body lands at the real <code>docs/…​</code> path the survey/gate approved; <code>{'{{report_dir}}'}</code> holds only the short change-summary report. Leave <em>Project default</em> (commit <code>false</code>) so the new doc reaches the PR while the summary stays out of it.
                   </p>
                 )}
               </div>

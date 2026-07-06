@@ -295,14 +295,40 @@ pub async fn commit_worktree_changes(
                 .trim_end_matches('/');
             let stage_has_non_artifact = staged.iter().any(|p| !is_under_prefix(p, trimmed_subdir));
             if !stage_has_non_artifact {
-                tracing::warn!(
+                // Fail the step instead of silently producing a commit
+                // that contains only the summary report. The
+                // historical docs-update bug was exactly this: the
+                // agent emitted the real doc body under
+                // `artifacts/s-draft.md` instead of `docs/<area>/<topic>.md`,
+                // and the orchestrator happily committed the summary
+                // report (or, with `commit_artifacts=false`, silently
+                // produced an empty commit). Surfacing this as a
+                // `StepOutcome::Failed` lets the retry loop feed the
+                // failure reason back into `{{retry_feedback}}` so the
+                // next attempt is directed at the real repo path.
+                // See d9dcd53 for the original warn-only behaviour and
+                // the docs-update workflow's two-distinct-outputs
+                // prompt for the agent-side mitigation.
+                let reason = format!(
+                    "agent stranded the deliverable under `{}` instead of writing it to \
+                     the real repo path. Stage contains only artifact paths \
+                     ({:?}) while the agent reported writes outside the report subdir \
+                     ({:?}). Re-read the survey's 'Files to Create' / 'Files to Update' \
+                     sections and write the doc body to the real repo path (e.g. \
+                     `docs/<area>/<topic>.md`), NOT to {}/s-*.md.",
+                    trimmed_subdir, staged, non_artifact_writes, trimmed_subdir,
+                );
+                tracing::error!(
                     worktree = %worktree_root,
                     message = %message,
                     expected_non_artifact_writes = ?non_artifact_writes,
                     staged = ?staged,
-                    "commit_worktree_changes: stage only contains paths under `{}` while the agent reported writes outside it — the agent's doc body likely landed in the summary report instead of the real path",
+                    "commit_worktree_changes: agent stranded the deliverable under `{}` \
+                     — failing the step so the retry loop can redirect the agent to the \
+                     real repo path",
                     artifact_subdir,
                 );
+                return Err(reason);
             }
         }
     }

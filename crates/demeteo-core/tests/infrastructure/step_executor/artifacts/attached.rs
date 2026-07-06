@@ -295,14 +295,43 @@ fn test_resolve_attached_artifacts_default_uses_path_manifest() {
 use crate::domain::permission::{resolve_profile, PermissionProfile, StepCapability};
 
 #[test]
-fn boundary_implement_is_a_noop() {
+fn boundary_implement_emits_positive_preamble_with_full_access() {
+    // Implement steps historically got no boundary block at all
+    // (`return prompt.to_string()`). That left the agent without a
+    // positive signal that it can write anywhere in the worktree —
+    // it had to infer "no boundary = full access" from the absence
+    // of a restriction, and the inferred default was often wrong for
+    // agents that had just read a restrictive boundary (e.g. the
+    // ANALYSIS mode in s-survey). The boundary now emits an
+    // explicit IMPLEMENT preamble that names the no-separate-report-
+    // folder rule and the commit-vs-untracked contract for the
+    // report subdir, so agents carry over the right model between
+    // adjacent steps in a workflow.
     let prompt = "do the work";
     let out = inject_operating_boundary(
         prompt,
         StepCapability::Implement,
         &PermissionProfile::all_allow(),
     );
-    assert_eq!(out, prompt, "Implement steps get no boundary block");
+    assert!(
+        out.contains("IMPLEMENT mode"),
+        "Implement steps now get an explicit positive preamble, got: {out}"
+    );
+    assert!(
+        out.contains("full read/write access"),
+        "preamble must declare full read/write access, got: {out}"
+    );
+    assert!(
+        out.contains("no separate report folder") || out.contains("no separate \"report\" folder"),
+        "preamble must clarify there's no separate report folder for Implement steps, got: {out}"
+    );
+    // Original prompt is preserved after the block.
+    assert!(out.contains("do the work"));
+    // Block comes first.
+    assert!(
+        out.find("Operating Boundary").unwrap() < out.find("do the work").unwrap(),
+        "IMPLEMENT boundary must be prepended, not appended"
+    );
 }
 
 #[test]

@@ -79,8 +79,9 @@ pub struct ProjectSettings {
     pub default_loop_iterations: Option<u32>,
     /// Repo-relative folder where agents write their reports
     /// (`research-report.md`, `critic-review.md`, …). The orchestrator
-    /// injects `{{artifact_dir}}` into every step's prompt and excludes
-    /// this folder from `commit_worktree_changes` unless
+    /// injects `{{report_dir}}` (alias `{{artifact_dir}}`, kept for
+    /// back-compat with older workflows) into every step's prompt and
+    /// excludes this folder from `commit_worktree_changes` unless
     /// `commit_artifacts` is true. Default: `"artifacts/"`.
     /// See migration V12 and AGENTS.md §6.
     ///
@@ -88,7 +89,7 @@ pub struct ProjectSettings {
     /// `s-draft` and `s-polish` steps are explicitly told (in their
     /// `prompt_template`) to write the real doc body at the path the
     /// survey/gate approved (typically under `docs/`) and to use
-    /// `{{artifact_dir}}` ONLY for the short change-summary report.
+    /// `{{report_dir}}` ONLY for the short change-summary report.
     /// That separation is what keeps a "create a new doc explaining
     /// feature X" feature from silently landing its body under
     /// `artifacts/s-draft.md` (which `commit_artifacts=false` would
