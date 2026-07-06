@@ -13,7 +13,7 @@ pub struct ThreadStatusChanged {
     pub reason: Option<String>,
 }
 
-pub fn build_agent_context(
+pub async fn build_agent_context(
     ctx: &AppContext,
     thread_id: &str,
     agent_kind: &str,
@@ -39,13 +39,19 @@ pub fn build_agent_context(
         }
     });
     let binary = agent_kind.to_string();
+    // Machine-aware HOME: the local-auth interactive terminal gets
+    // the GUI's HOME; a remote machine gets the value cached on the
+    // SSH adapter (probed via `printf %s "$HOME"`). See
+    // `agent_base_env` for the full rationale.
+    let env =
+        crate::ports::agent_runtime::agent_base_env(ctx.exec.as_ref(), machine.id.0.as_str()).await;
 
     Ok(crate::ports::agent_runtime::AgentContext {
         thread_id: thread_id.to_string(),
         machine_id: machine.id.0.clone(),
         binary,
         args: vec![],
-        env: crate::ports::agent_runtime::agent_base_env(),
+        env,
         cwd,
         model: None,
         title: None,
@@ -114,7 +120,7 @@ pub async fn start_with_install(
         return Err(format!("INSTALL_BUT_STILL_MISSING:{}", runtime.kind()));
     }
 
-    let agent_ctx = build_agent_context(ctx, &thread_id, &agent_kind)?;
+    let agent_ctx = build_agent_context(ctx, &thread_id, &agent_kind).await?;
     runtime
         .start(agent_ctx)
         .await
@@ -133,7 +139,7 @@ pub async fn prompt<F>(
 where
     F: Fn(&str, serde_json::Value) + Send + Sync + 'static,
 {
-    let agent_ctx = build_agent_context(ctx, &thread_id, &agent_kind)?;
+    let agent_ctx = build_agent_context(ctx, &thread_id, &agent_kind).await?;
     let session = ctx
         .registry
         .get_or_spawn(&thread_id, &agent_kind, agent_ctx)

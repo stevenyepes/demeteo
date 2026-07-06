@@ -138,7 +138,11 @@ fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
 }
 
 /// Construct command-line arguments for Hermes CLI.
-fn build_hermes_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String> {
+fn build_hermes_args(
+    ctx: &AgentContext,
+    captured_session_id: Option<&str>,
+    prompt: &str,
+) -> Vec<String> {
     let mut args = vec![
         "run".to_string(),
         "--format".to_string(),
@@ -158,6 +162,12 @@ fn build_hermes_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> V
     if let Some(ref m) = ctx.model {
         args.push("--model".to_string());
         args.push(m.clone());
+    }
+    // Trailing positional = the initial message for this turn.
+    // Mirrors opencode's contract — see `build_opencode_args` for the
+    // spawn-vs-init race rationale.
+    if !prompt.is_empty() {
+        args.push(prompt.to_string());
     }
     args
 }

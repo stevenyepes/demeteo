@@ -503,7 +503,11 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
       try {
         await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
         await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
-        setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, nodes: computeType === 'local' ? 4 : 8 } : p));
+        // Keep `compute_type` / `remote_host` in sync with the DB so the
+        // Settings tab doesn't fall back to "Local Compute" the next
+        // time the user reopens it. Mirrors the re-bootstrap save path
+        // below (line ~531).
+        setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, nodes: computeType === 'local' ? 4 : 8, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null } : p));
         setStatus('success'); setOriginalRepos(selectedRepos);
         setTimeout(() => setStatus('idle'), 1500);
       } catch (err) { setStatus('error'); setErrorMsg(formatError(err)); }

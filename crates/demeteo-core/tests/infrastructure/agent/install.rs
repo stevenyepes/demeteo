@@ -38,6 +38,9 @@ impl ExecutionPort for StubExec {
     async fn resolve_home(&self, _: &str) -> Result<String, String> {
         Ok("/tmp".to_string())
     }
+    async fn resolve_user(&self, _: &str) -> Result<String, String> {
+        Ok("test".to_string())
+    }
     async fn control_rpc(
         &self,
         _: &str,

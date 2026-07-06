@@ -466,7 +466,8 @@ impl ExecutionDriver {
             || planner_kind == "claude-code"
             || planner_kind == "antigravity";
 
-        let mut planner_env = crate::ports::agent_runtime::agent_base_env();
+        let mut planner_env =
+            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
         if let Some(ref m) = override_model {
             // CLI agents take the model via a --model flag at spawn; only the
             // opencode-config-driven agents read OPENCODE_CONFIG_CONTENT.

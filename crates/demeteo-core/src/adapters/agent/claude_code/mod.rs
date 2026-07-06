@@ -372,7 +372,11 @@ fn claude_tool_use_to_event(tu: &serde_json::Value) -> AgentEvent {
 ///                             checkout, which is what we drop.
 ///   --strict-mcp-config       ignore project MCP servers (we pass none),
 ///                             keeping the tool set identical everywhere.
-fn build_claude_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String> {
+fn build_claude_args(
+    ctx: &AgentContext,
+    captured_session_id: Option<&str>,
+    prompt: &str,
+) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
         "--verbose".to_string(),
@@ -408,6 +412,13 @@ fn build_claude_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> V
     if let Some(ref m) = ctx.model {
         args.push("--model".to_string());
         args.push(m.clone());
+    }
+    // Trailing positional = the prompt for this turn. `--print` mode
+    // requires the prompt positionally; passing it via stdin is the
+    // racy pattern this signature replaces. See `build_opencode_args`
+    // for the spawn-vs-init race rationale.
+    if !prompt.is_empty() {
+        args.push(prompt.to_string());
     }
     args
 }

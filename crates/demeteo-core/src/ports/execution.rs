@@ -74,6 +74,21 @@ pub trait ExecutionPort: Send + Sync {
     /// Resolve the absolute home directory on the target host.
     async fn resolve_home(&self, machine_id: &str) -> Result<String, String>;
 
+    /// Resolve the SSH-authenticated username on the target host. The
+    /// returned value matches what the remote shell's passwd entry
+    /// would set `$USER` to — so the agent's `$USER` and `$HOME` are
+    /// always internally consistent (HOME from `resolve_home`, USER
+    /// from here, both derived from the same remote identity). For
+    /// local machines (`""` or `"local"`) the value is the GUI
+    /// process's own user.
+    ///
+    /// Returning a `Result` (rather than a default like the local
+    /// `$USER`) makes a misconfigured machine loud: an empty
+    /// `Machine.username` row surfaces as an error at agent-spawn
+    /// time instead of silently forwarding the GUI's user to a
+    /// remote box.
+    async fn resolve_user(&self, machine_id: &str) -> Result<String, String>;
+
     /// Call the `demeteo-runner` control RPC on `machine_id`
     /// (docs/REMOTE_EXECUTION_PLAN.md M6.1). Reaches
     /// `<home>/.local/share/demeteo-runner/control.sock` via OpenSSH

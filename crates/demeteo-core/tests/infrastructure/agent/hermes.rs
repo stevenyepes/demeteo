@@ -34,13 +34,13 @@ fn ctx_for_test() -> AgentContext {
 
 #[test]
 fn args_no_resume_when_session_id_missing() {
-    let args = build_hermes_args(&ctx_for_test(), None);
+    let args = build_hermes_args(&ctx_for_test(), None, "");
     assert!(!args.contains(&"--resume".to_string()), "got {args:?}");
 }
 
 #[test]
 fn args_resume_emitted_when_captured_session_id_set() {
-    let args = build_hermes_args(&ctx_for_test(), Some("hermes-sess-99"));
+    let args = build_hermes_args(&ctx_for_test(), Some("hermes-sess-99"), "");
     let resume_idx = args
         .iter()
         .position(|a| a == "--resume")
@@ -50,7 +50,7 @@ fn args_resume_emitted_when_captured_session_id_set() {
 
 #[test]
 fn args_run_format_json_always_present() {
-    let args = build_hermes_args(&ctx_for_test(), None);
+    let args = build_hermes_args(&ctx_for_test(), None, "");
     assert!(args.contains(&"run".to_string()));
     assert!(args.contains(&"--format".to_string()));
     assert!(args.contains(&"json".to_string()));
@@ -58,7 +58,7 @@ fn args_run_format_json_always_present() {
 
 #[test]
 fn args_model_passed_through() {
-    let args = build_hermes_args(&ctx_for_test(), None);
+    let args = build_hermes_args(&ctx_for_test(), None, "");
     let model_idx = args
         .iter()
         .position(|a| a == "--model")

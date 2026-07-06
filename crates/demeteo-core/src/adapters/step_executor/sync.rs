@@ -112,7 +112,8 @@ pub(crate) async fn resolve_sync_conflicts_shared(
 
     // Spawn a fresh agent session.
     let resolver_thread_id = format!("{}-{}", thread_id_prefix, paths::now_ms());
-    let mut agent_env = crate::ports::agent_runtime::agent_base_env();
+    let mut agent_env =
+        crate::ports::agent_runtime::agent_base_env(exec.as_ref(), machine_str).await;
     if let Some(ref m) = override_model {
         if agent_kind != "opencode"
             && agent_kind != "hermes"

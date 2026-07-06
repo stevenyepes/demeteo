@@ -262,13 +262,13 @@ fn ctx_for_test(bare_mode: bool) -> AgentContext {
 
 #[test]
 fn args_no_resume_when_session_id_missing() {
-    let args = build_claude_args(&ctx_for_test(false), None);
+    let args = build_claude_args(&ctx_for_test(false), None, "");
     assert!(!args.contains(&"--resume".to_string()), "got {args:?}");
 }
 
 #[test]
 fn args_resume_emitted_when_captured_session_id_set() {
-    let args = build_claude_args(&ctx_for_test(false), Some("sess-abc-123"));
+    let args = build_claude_args(&ctx_for_test(false), Some("sess-abc-123"), "");
     let resume_idx = args
         .iter()
         .position(|a| a == "--resume")
@@ -282,7 +282,7 @@ fn isolation_flags_only_when_bare_mode_true() {
     // `--bare` — `--bare` sets CLAUDE_CODE_SIMPLE=1 and disables
     // keychain/OAuth reads, which we rely on so Claude authenticates
     // (and refreshes) its own credential. See `build_claude_args`.
-    let with_bare = build_claude_args(&ctx_for_test(true), None);
+    let with_bare = build_claude_args(&ctx_for_test(true), None, "");
     assert!(
         !with_bare.contains(&"--bare".to_string()),
         "--bare must NOT be emitted (it disables keychain auth): got {with_bare:?}"
@@ -297,7 +297,7 @@ fn isolation_flags_only_when_bare_mode_true() {
     // load) but not machine-local `settings.local.json`.
     assert_eq!(with_bare[src_idx + 1], "user,project");
 
-    let without_bare = build_claude_args(&ctx_for_test(false), None);
+    let without_bare = build_claude_args(&ctx_for_test(false), None, "");
     assert!(!without_bare.contains(&"--exclude-dynamic-system-prompt-sections".to_string()));
     assert!(!without_bare.contains(&"--setting-sources".to_string()));
     assert!(!without_bare.contains(&"--strict-mcp-config".to_string()));
@@ -305,7 +305,7 @@ fn isolation_flags_only_when_bare_mode_true() {
 
 #[test]
 fn args_model_passed_through() {
-    let args = build_claude_args(&ctx_for_test(false), None);
+    let args = build_claude_args(&ctx_for_test(false), None, "");
     let model_idx = args
         .iter()
         .position(|a| a == "--model")
@@ -315,7 +315,7 @@ fn args_model_passed_through() {
 
 #[test]
 fn args_print_and_dangerously_skip_always_present() {
-    let args = build_claude_args(&ctx_for_test(true), Some("sess-1"));
+    let args = build_claude_args(&ctx_for_test(true), Some("sess-1"), "");
     assert!(args.contains(&"--print".to_string()));
     assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
     assert!(args.contains(&"--output-format".to_string()));
@@ -333,12 +333,12 @@ fn args_never_emit_settings() {
     // natively, so Demeteo injects no auth at all. (Note: `--settings`
     // is distinct from the `--setting-sources` flag emitted in bare
     // mode; this asserts the former is absent.)
-    let with_bare = build_claude_args(&ctx_for_test(true), Some("sess-1"));
+    let with_bare = build_claude_args(&ctx_for_test(true), Some("sess-1"), "");
     assert!(
         !with_bare.contains(&"--settings".to_string()),
         "--settings must NOT be emitted: got {with_bare:?}"
     );
-    let without_bare = build_claude_args(&ctx_for_test(false), None);
+    let without_bare = build_claude_args(&ctx_for_test(false), None, "");
     assert!(
         !without_bare.contains(&"--settings".to_string()),
         "--settings must NOT be emitted: got {without_bare:?}"

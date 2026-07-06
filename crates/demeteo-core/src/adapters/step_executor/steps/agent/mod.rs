@@ -295,10 +295,18 @@ impl ExecutionDriver {
 
         // Copy any external artifact paths referenced in path manifests into
         // the worktree so opencode's `external_directory: deny` doesn't block
-        // the agent from reading them.
-        let prompt = crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
-            &prompt, &wt_path,
-        );
+        // the agent from reading them. The write is routed through the
+        // machine-aware exec port so remote worktrees receive the file via
+        // SSH instead of (the previous) std::fs which silently dropped the
+        // bytes on the wrong host.
+        let prompt =
+            crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
+                &prompt,
+                &wt_path,
+                &*self.exec,
+                &machine_str,
+            )
+            .await;
 
         // Single-turn validate contract: hand the agent the harness output
         // the orchestrator already captured and require the verdict JSON at

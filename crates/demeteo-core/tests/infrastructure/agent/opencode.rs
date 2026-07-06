@@ -211,14 +211,14 @@ fn ctx_for_test() -> AgentContext {
 
 #[test]
 fn args_no_session_when_captured_id_missing() {
-    let args = build_opencode_args(&ctx_for_test(), None);
+    let args = build_opencode_args(&ctx_for_test(), None, "");
     assert!(!args.contains(&"--session".to_string()), "got {args:?}");
     assert!(!args.contains(&"--continue".to_string()), "got {args:?}");
 }
 
 #[test]
 fn args_session_emitted_without_continue_when_captured_id_set() {
-    let args = build_opencode_args(&ctx_for_test(), Some("oc-sess-77"));
+    let args = build_opencode_args(&ctx_for_test(), Some("oc-sess-77"), "");
     let session_idx = args
         .iter()
         .position(|a| a == "--session")
@@ -231,7 +231,7 @@ fn args_session_emitted_without_continue_when_captured_id_set() {
 
 #[test]
 fn args_use_real_opencode_flags_for_headless_runs() {
-    let args = build_opencode_args(&ctx_for_test(), None);
+    let args = build_opencode_args(&ctx_for_test(), None, "");
     // `--auto` is opencode's auto-approve flag; the Claude-ism
     // `--dangerously-skip-permissions` doesn't exist in opencode.
     assert!(args.contains(&"--auto".to_string()), "got {args:?}");
@@ -245,10 +245,33 @@ fn args_use_real_opencode_flags_for_headless_runs() {
 
 #[test]
 fn args_title_passed_through() {
-    let args = build_opencode_args(&ctx_for_test(), None);
+    let args = build_opencode_args(&ctx_for_test(), None, "");
     let title_idx = args
         .iter()
         .position(|a| a == "--title")
         .expect("--title should be present");
     assert_eq!(args[title_idx + 1], "research");
+}
+
+#[test]
+fn args_prompt_appears_as_trailing_positional() {
+    // opencode (and the other CLI runtimes) check for the prompt
+    // during their own `init` phase and die with "You must provide
+    // a message or a command" if it isn't there yet. A positional
+    // arg is visible to the child from the moment `execve(2)`
+    // returns, so it must be the trailing slot — not a flag value,
+    // not buried earlier in the argv.
+    let args = build_opencode_args(&ctx_for_test(), None, "fix the login bug");
+    assert_eq!(
+        args.last().map(String::as_str),
+        Some("fix the login bug"),
+        "prompt must be the trailing positional, got {args:?}"
+    );
+    // Empty prompts must NOT be pushed — a trailing empty arg would
+    // also fail opencode's "must provide a message" check.
+    let args = build_opencode_args(&ctx_for_test(), None, "");
+    assert!(
+        !args.contains(&"".to_string()),
+        "empty prompt must be omitted, got {args:?}"
+    );
 }

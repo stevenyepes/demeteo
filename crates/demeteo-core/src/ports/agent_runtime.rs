@@ -94,12 +94,21 @@ pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
 /// runtime from [`AgentContext::permissions`], so this no longer carries
 /// `OPENCODE_PERMISSION`.
 ///
-/// USER is explicitly forwarded because some CLIs (notably the native
-/// Claude Code install) use it to locate credentials. When the Tauri GUI
-/// app launches without a full login-session environment (e.g. from
-/// Finder/Dock on macOS), USER may be absent from the inherited env;
-/// deriving it here from the parent process ensures child agents always
-/// have it.
+/// HOME / USER / LOGNAME are **machine-aware** and resolved against
+/// `machine_id`. The Tauri GUI's HOME and USER (`/home/<developer>`
+/// and `<gui-user>` on the laptop) are meaningless to an agent
+/// running on a remote box over SSH; opencode and claude-code both
+/// read their config out of `$HOME`, and a wrong value causes the
+/// agent to exit with code 1 and no useful diagnostic. Worse, a
+/// split identity (`HOME=<remote>` but `USER=<gui>`) confuses some
+/// provider auth flows. For local runs we keep the parent
+/// process's values; for remote runs we ask the execution port —
+/// `resolve_home` (cached by the SSH adapter's first
+/// `printf %s "$HOME"` probe) and `resolve_user` (the
+/// `Machine.username` the SSH channel authenticates as).
+///
+/// SHELL and TMPDIR are inherited from the parent process for both
+/// local and remote runs; neither has a per-machine meaning.
 ///
 /// `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are intentionally **not**
 /// injected here. Because we no longer pass `--bare` (which would set
@@ -108,14 +117,73 @@ pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
 /// (macOS) or `~/.claude/.credentials.json` (all OSes). Demeteo handles
 /// no Anthropic credentials at all. A user who exports
 /// `ANTHROPIC_API_KEY=...` in their shell is still inherited and honored.
-pub fn agent_base_env() -> HashMap<String, String> {
+pub async fn agent_base_env(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+) -> HashMap<String, String> {
     let mut env = HashMap::new();
-    for key in ["USER", "LOGNAME", "HOME", "SHELL", "TMPDIR"] {
+    for key in ["SHELL", "TMPDIR"] {
         if let Ok(val) = std::env::var(key) {
             env.insert(key.to_string(), val);
         }
     }
+    let (home, user) = resolve_agent_identity(exec, machine_id).await;
+    if !home.is_empty() {
+        env.insert("HOME".to_string(), home);
+    }
+    if let Some(u) = user {
+        env.insert("USER".to_string(), u.clone());
+        env.insert("LOGNAME".to_string(), u);
+    } else {
+        // Local runs may not need a forced USER override (the parent
+        // process already has it), but if the GUI process happens to
+        // launch without USER set we still try to pull it from the
+        // exec port's view of the local machine identity.
+        for key in ["USER", "LOGNAME"] {
+            if let Ok(val) = std::env::var(key) {
+                env.insert(key.to_string(), val);
+            }
+        }
+    }
     env
+}
+
+/// Resolve the (HOME, USER) identity to forward to an agent process
+/// spawned against `machine_id`. Local runs (`""` or `"local"`)
+/// return the GUI process's HOME and no forced USER (the parent's
+/// `$USER` is inherited via `agent_base_env`'s `std::env::var`
+/// loop); remote runs return the values already cached by the SSH
+/// adapter — `home_cache` (probed via `printf %s "$HOME"` over the
+/// SSH channel) and the `Machine.username` the SSH channel
+/// authenticates as. Falls back to the parent process's HOME and
+/// skips the USER override if the remote resolution fails, so the
+/// agent at least has *some* HOME rather than crashing on a
+/// missing `~`.
+pub async fn resolve_agent_identity(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+) -> (String, Option<String>) {
+    if machine_id.is_empty() || machine_id == "local" {
+        return (std::env::var("HOME").unwrap_or_default(), None);
+    }
+    let home = match exec.resolve_home(machine_id).await {
+        Ok(h) if !h.is_empty() => h,
+        _ => std::env::var("HOME").unwrap_or_default(),
+    };
+    let user = exec.resolve_user(machine_id).await.ok();
+    (home, user)
+}
+
+/// Resolve just the HOME directory to forward as `$HOME` to an
+/// agent process spawned against `machine_id`. Thin wrapper over
+/// [`resolve_agent_identity`] for callers that don't need the
+/// matching USER (most legacy call sites, plus the SSH adapter's
+/// defense-in-depth override).
+pub async fn resolve_agent_home(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+) -> String {
+    resolve_agent_identity(exec, machine_id).await.0
 }
 
 #[derive(Debug, Error)]
@@ -303,3 +371,7 @@ pub struct SerializedAgentConfig {
     #[serde(default)]
     pub env: HashMap<String, String>,
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/agent_base_env.rs"]
+mod tests;
