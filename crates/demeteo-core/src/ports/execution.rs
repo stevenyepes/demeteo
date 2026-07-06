@@ -35,6 +35,25 @@ pub struct ShellOptions {
     /// locally and missing remotely. Callers that need the profile set
     /// `login_shell: true`; both adapters then honour it identically.
     pub login_shell: bool,
+    /// When `true` (only meaningful alongside `login_shell`), the login shell
+    /// is also **interactive** (`bash -l -i -c`), so the user's `~/.bashrc` is
+    /// sourced in addition to the login profile.
+    ///
+    /// This is what actually closes the PATH gap for the common developer
+    /// tool-managers — `mise`, `asdf`, `nvm`, `rbenv`, `pyenv` — whose
+    /// `activate` hook lives in `~/.bashrc` behind the standard non-interactive
+    /// guard (`case $- in *i*) ;; *) return;; esac`). A non-interactive login
+    /// shell hits that guard and returns before the tool is put on `PATH`, so
+    /// `command -v <tool>` reports "missing" even though an interactive login
+    /// (what the user sees when they SSH in) finds it.
+    ///
+    /// Kept *opt-in and separate* from `login_shell` because an interactive
+    /// shell sources the full `~/.bashrc`, which on some machines echoes a
+    /// banner to stdout — fine for a probe or an agent spawn whose stdout is a
+    /// stream, but corrupting for commands whose stdout is parsed
+    /// (`resolve_home`, model probes). Only callers that need the tool-manager
+    /// PATH (the availability probe, the agent spawn) set this.
+    pub interactive: bool,
     /// Working directory the command runs in. `None` means "the adapter's
     /// default cwd" (local: the GUI process's cwd; SSH: the login
     /// directory). `Some(dir)` is honoured identically by every adapter.
@@ -54,6 +73,17 @@ impl ShellOptions {
     pub fn login() -> Self {
         Self {
             login_shell: true,
+            ..Self::default()
+        }
+    }
+
+    /// Convenience constructor for an **interactive** login shell — the
+    /// "I need the user's PATH *including* `mise`/`asdf`/`nvm` tools that are
+    /// activated in `~/.bashrc`" case. See [`Self::interactive`].
+    pub fn login_interactive() -> Self {
+        Self {
+            login_shell: true,
+            interactive: true,
             ..Self::default()
         }
     }

@@ -72,10 +72,20 @@ impl AgentRuntime for UnifiedCliRuntime {
         if machine_id == "local" || machine_id.is_empty() {
             super::is_binary_on_local_path(self.binary)
         } else {
+            // Probe under an **interactive login** shell so the target user's
+            // full environment is sourced — the login profile *and* `~/.bashrc`,
+            // where developer tool-managers (`mise`/`asdf`/`nvm`) activate the
+            // toolchain that puts the agent binary on `PATH`. A bare non-login
+            // `command -v`, or even a non-interactive `bash -l`, misses those
+            // (the `.bashrc` non-interactive guard returns first) and reports a
+            // correctly-installed agent as "Missing". This must match the shell
+            // mode `spawn_interactive` uses to launch the agent, so "available"
+            // and "runnable" agree.
             let res = exec
-                .run_command(
+                .run_command_with(
                     machine_id,
                     &format!("command -v {} >/dev/null 2>&1 && echo ok", self.binary),
+                    crate::ports::execution::ShellOptions::login_interactive(),
                 )
                 .await;
             res.map(|out| out.trim() == "ok").unwrap_or(false)
