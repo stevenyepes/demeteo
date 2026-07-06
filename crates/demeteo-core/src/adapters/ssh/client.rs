@@ -656,6 +656,29 @@ impl ExecutionPort for SshClientAdapter {
         self.resolve_remote_home(machine_id)
     }
 
+    async fn resolve_user(&self, machine_id: &str) -> Result<String, String> {
+        if machine_id.is_empty() || machine_id == "local" {
+            return Err("Cannot resolve remote USER for local machine_id".to_string());
+        }
+        // The SSH channel authenticates as `Machine.username`, so the
+        // remote passwd entry's USER matches the machine record.
+        // Return the record's value verbatim — if the user typed in a
+        // machine with an empty username, the error from the lookup
+        // below will surface that loud rather than the agent
+        // silently running as the GUI's user.
+        let machine = crate::infrastructure::worktree::machine_resolver::resolve_machine(
+            &*self.machines,
+            machine_id,
+        )?;
+        if machine.username.is_empty() {
+            return Err(format!(
+                "Machine '{}' has no username configured; cannot resolve remote USER",
+                machine_id
+            ));
+        }
+        Ok(machine.username.clone())
+    }
+
     async fn control_rpc(
         &self,
         machine_id: &str,
@@ -729,6 +752,16 @@ impl ExecutionPort for SshClientAdapter {
 
         let use_login_shell = machine.use_login_shell.unwrap_or(false);
 
+        // Env composition (HOME / USER / LOGNAME resolution against
+        // the remote machine's identity) is the caller's
+        // responsibility — `agent_base_env` in `ports/agent_runtime.rs`
+        // is the single owner and consults `ExecutionPort::resolve_home`
+        // + `ExecutionPort::resolve_user`. This adapter is now a
+        // "pure" executor: it forwards whatever env the caller built,
+        // no business logic, no identity assumptions. The previous
+        // override here (HOME/USER/LOGNAME) was a defense-in-depth
+        // band-aid for a class of bugs the port-side refactor
+        // eliminates by construction.
         let mut env_str = String::new();
         for (k, v) in env {
             let escaped = v.replace('\'', "'\\''");

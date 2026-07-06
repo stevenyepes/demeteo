@@ -6,6 +6,7 @@ use crate::domain::permission::{PermissionProfile, StepCapability};
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::attachment_store::AttachmentStore;
 use crate::ports::db::GateRepository;
+use crate::ports::execution::ExecutionPort;
 
 /// Returns `(decision, feedback)` from the most recently *decided* gate step
 /// for a feature.  Used to inject `{{gate_decision}}` and `{{gate_feedback}}`
@@ -417,11 +418,18 @@ pub(crate) fn resolve_attached_user_attachments(
 /// `(sha256, ext)` is a no-op when the destination already exists.
 /// Logs a warning when the on-disk size differs from the recorded
 /// `size` (sha256 hash mismatch is the most likely cause).
-pub(crate) fn materialize_user_attachments_to_worktree(
+///
+/// `exec` and `machine_id` identify the target worktree's host. Reads
+/// always come from the local FS attachment store; writes go through
+/// the machine-aware exec port (SFTP for remote, `std::fs` for local)
+/// so the file lands where the agent will run.
+pub(crate) async fn materialize_user_attachments_to_worktree(
     feature_id: &str,
     attachments: &[AttachedFile],
     attachment_store: &dyn AttachmentStore,
     wt_path: &str,
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
 ) -> Vec<String> {
     if attachments.is_empty() {
         return Vec::new();
@@ -430,7 +438,22 @@ pub(crate) fn materialize_user_attachments_to_worktree(
         .join("artifacts")
         .join("_context")
         .join("attachments");
-    if std::fs::create_dir_all(&dest_root).is_err() {
+    let dest_root_str = dest_root.to_string_lossy().to_string();
+    // Ensure the destination directory exists on the target machine
+    // (works for both local and remote via the exec port). Fail loud
+    // here so the caller surfaces the error instead of silently
+    // shipping a prompt that points at files the agent can't read.
+    let mkdir_cmd = format!(
+        "mkdir -p {}",
+        crate::paths::shell_escape_posix(&dest_root_str)
+    );
+    if exec.run_command(machine_id, &mkdir_cmd).await.is_err() {
+        tracing::warn!(
+            dest_root = %dest_root_str,
+            machine_id = machine_id,
+            "failed to create user-attachments _context/ dir on target machine; \
+             agent reads will be blocked by external_directory: deny"
+        );
         return Vec::new();
     }
 
@@ -455,42 +478,61 @@ pub(crate) fn materialize_user_attachments_to_worktree(
             continue;
         }
         let dest = dest_root.join(format!("{}.{}", att.sha256, ext));
-        if dest.exists() {
-            // Idempotent re-run: if the destination already exists,
-            // sanity-check the size. A mismatch is the sha256-collision
-            // (in practice impossible) or a stale-file bug — log
-            // loudly and keep the on-disk bytes (the user's content
-            // is safe).
-            let src_meta = std::fs::metadata(&src_path).ok();
-            let dst_meta = std::fs::metadata(&dest).ok();
-            match (src_meta, dst_meta) {
-                (Some(s), Some(d)) if s.len() != d.len() => {
+        let dest_str = dest.to_string_lossy().to_string();
+        // Idempotency check via exec.get_metadata so it dispatches
+        // SFTP for remote and stat() for local — same primitive either
+        // way. When the file already exists we sanity-check the size
+        // against the source bytes (sha256 collision is impossible in
+        // practice; this catches stale-file bugs).
+        let already_exists =
+            matches!(exec.get_metadata(machine_id, &dest_str).await, Ok(meta) if !meta.is_dir);
+        if already_exists {
+            if let (Ok(src_bytes), Ok(dst_meta)) = (
+                std::fs::read(&src_path),
+                exec.get_metadata(machine_id, &dest_str).await,
+            ) {
+                let src_len = src_bytes.len() as u64;
+                if dst_meta.size != src_len {
                     tracing::warn!(
                         feature_id = feature_id,
                         src = %src_path.display(),
                         dst = %dest.display(),
-                        src_bytes = s.len(),
-                        dst_bytes = d.len(),
+                        src_bytes = src_len,
+                        dst_bytes = dst_meta.size,
                         sha256 = %att.sha256,
                         "user-attach re-copy found existing worktree file with different size; \
                          possible stale copy or sha256 collision"
                     );
                 }
-                _ => {}
             }
-            copied.push(dest.to_string_lossy().to_string());
+            copied.push(dest_str);
             continue;
         }
-        match std::fs::copy(&src_path, &dest) {
-            Ok(_) => {
-                copied.push(dest.to_string_lossy().to_string());
-            }
+        // Read the source locally (FsAttachmentStore is host-local)
+        // and push the bytes to the target machine via exec — the
+        // binary-safe variant handles image/png / application/pdf
+        // attachments that the String overload would mangle.
+        match std::fs::read(&src_path) {
+            Ok(bytes) => match exec.write_file_bytes(machine_id, &dest_str, &bytes).await {
+                Ok(_) => {
+                    copied.push(dest_str);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        feature_id = feature_id,
+                        src = %src_path.display(),
+                        dst = %dest_str,
+                        "failed to copy user attachment into worktree _context/"
+                    );
+                }
+            },
             Err(e) => {
                 tracing::warn!(
                     error = %e,
                     feature_id = feature_id,
                     src = %src_path.display(),
-                    "failed to copy user attachment into worktree _context/"
+                    "failed to read user attachment source from disk"
                 );
             }
         }
@@ -720,9 +762,23 @@ pub(crate) fn inject_operating_boundary(
 ///
 /// Path manifests use the format `- \`/absolute/path\`` (one path per
 /// bullet). Any absolute path NOT already under `wt_path` is copied to
-/// `{wt_path}/artifacts/_context/<filename>` and the path is rewritten
+/// `{wt_path}/artifacts/_context/` and the path is rewritten
 /// in the returned prompt.
-pub(crate) fn materialize_external_artifact_paths(prompt: &str, wt_path: &str) -> String {
+///
+/// `exec` and `machine_id` identify the target worktree's host — the
+/// write goes through the machine-aware exec port (SFTP for remote
+/// machines, `std::fs` for local) so the bytes actually land where the
+/// agent will run. Using host-local `std::fs` here was the regression
+/// that broke the simple-task pipeline on remote machines: the
+/// implement step's opencode agent ended up with a path manifest
+/// pointing at a path that exists only on the Tauri host, and the
+/// `external_directory: deny` fence then blocked every Read.
+pub(crate) async fn materialize_external_artifact_paths(
+    prompt: &str,
+    wt_path: &str,
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+) -> String {
     let wt = std::path::Path::new(wt_path);
     let mut result = prompt.to_string();
     let mut rewrites: Vec<(String, String)> = Vec::new();
@@ -748,10 +804,31 @@ pub(crate) fn materialize_external_artifact_paths(prompt: &str, wt_path: &str) -
         {
             if let Some(file_name) = path.file_name() {
                 let dest_dir = wt.join("artifacts").join("_context");
-                if std::fs::create_dir_all(&dest_dir).is_ok() {
-                    let dest = dest_dir.join(file_name);
-                    if std::fs::copy(path, &dest).is_ok() {
-                        rewrites.push((abs_path.to_string(), dest.to_string_lossy().to_string()));
+                let dest = dest_dir.join(file_name);
+                let dest_str = dest.to_string_lossy().to_string();
+                let dest_dir_str = dest_dir.to_string_lossy().to_string();
+
+                // Source is always the local FS artifact store; read it
+                // locally. Push the bytes to the worktree via the
+                // machine-aware exec port so remote worktrees receive
+                // the file over SSH and local worktrees stay on std::fs.
+                // The previous implementation used std::fs::copy and
+                // std::fs::create_dir_all unconditionally, which
+                // silently failed (or created a phantom local file at
+                // the remote worktree's path string) for remote steps
+                // — see AGENTS.md / docs for the regression writeup.
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    let mkdir_cmd = format!(
+                        "mkdir -p {}",
+                        crate::paths::shell_escape_posix(&dest_dir_str)
+                    );
+                    if exec.run_command(machine_id, &mkdir_cmd).await.is_ok()
+                        && exec
+                            .write_file(machine_id, &dest_str, &content)
+                            .await
+                            .is_ok()
+                    {
+                        rewrites.push((abs_path.to_string(), dest_str));
                     }
                 }
             }

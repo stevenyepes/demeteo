@@ -197,7 +197,8 @@ impl ExecutionDriver {
             .clone()
             .or_else(|| override_model.clone());
 
-        let mut agent_env = crate::ports::agent_runtime::agent_base_env();
+        let mut agent_env =
+            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
         if let Some(ref m) = verifier_model {
             if verifier_agent_kind != "opencode"
                 && verifier_agent_kind != "hermes"

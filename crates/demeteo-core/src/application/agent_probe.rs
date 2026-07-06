@@ -50,7 +50,7 @@ async fn probe_models_via_acp(
         machine_id: machine_id.to_string(),
         binary: probe_binary,
         args: vec![],
-        env: crate::ports::agent_runtime::agent_base_env(),
+        env: crate::ports::agent_runtime::agent_base_env(ctx.exec.as_ref(), machine_id).await,
         cwd,
         model: None,
         title: None,

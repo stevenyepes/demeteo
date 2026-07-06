@@ -391,7 +391,11 @@ fn parse_nested_session_update(
 }
 
 /// Construct command-line arguments for OpenCode run.
-pub fn build_opencode_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String> {
+pub fn build_opencode_args(
+    ctx: &AgentContext,
+    captured_session_id: Option<&str>,
+    prompt: &str,
+) -> Vec<String> {
     let mut args = vec![
         "run".to_string(),
         "--format".to_string(),
@@ -423,6 +427,17 @@ pub fn build_opencode_args(ctx: &AgentContext, captured_session_id: Option<&str>
     }
     args.push("--dir".to_string());
     args.push(ctx.cwd.clone());
+    // Trailing positional = the initial message for this turn. opencode
+    // checks for it during its own `init` phase; if it isn't there yet
+    // the agent dies with "You must provide a message or a command".
+    // Passing it as a positional arg (not via stdin) makes it visible to
+    // the child from the moment `execve(2)` returns, so init finds it
+    // regardless of the spawn→write race that a stdin prompt has to
+    // win. `Command::args` / `paths::shell_escape_posix` handle any
+    // OS-level quoting.
+    if !prompt.is_empty() {
+        args.push(prompt.to_string());
+    }
     args
 }
 

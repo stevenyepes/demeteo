@@ -153,6 +153,9 @@ async fn get_or_spawn_returns_structured_error_for_unknown_kind() {
         async fn resolve_home(&self, _: &str) -> Result<String, String> {
             Ok("/tmp".to_string())
         }
+        async fn resolve_user(&self, _: &str) -> Result<String, String> {
+            Ok("test".to_string())
+        }
         async fn control_rpc(
             &self,
             _: &str,
@@ -327,6 +330,9 @@ async fn is_available_force_bypasses_cache() {
             }
             async fn resolve_home(&self, _: &str) -> Result<String, String> {
                 Ok("/tmp".into())
+            }
+            async fn resolve_user(&self, _: &str) -> Result<String, String> {
+                Ok("test".into())
             }
             async fn control_rpc(
                 &self,

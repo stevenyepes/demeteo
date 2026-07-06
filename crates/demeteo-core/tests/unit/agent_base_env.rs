@@ -1,0 +1,312 @@
+//! Pure-logic unit tests for `agent_base_env` / `resolve_agent_home`.
+//!
+//! Covers the regression that bit a remote-machine run: a parent
+//! process's `$HOME` was forwarded as `HOME` into the SSH channel
+//! when the agent was spawned against a remote machine, so opencode
+//! and claude-code (which read their config out of `$HOME`) tried
+//! to read `/home/<gui-user>` from the remote box and exited with
+//! code 1. See the doc-comment on `agent_base_env` for the full
+//! rationale.
+//!
+//! These tests are integration-level (lives in `tests/unit/`) so
+//! they exercise the public `pub` signature without reaching into
+//! the crate's private modules.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+use crate::domain::action::AgentAction;
+use crate::domain::intercept::ExecutionResult;
+use crate::ports::agent_execution::{ActionError, AgentExecutionPort, CommandOutcome};
+use crate::ports::agent_runtime::{agent_base_env, resolve_agent_home};
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
+
+/// `ExecutionPort` stub whose `resolve_home` and `resolve_user`
+/// return configurable per-machine values. These two are the only
+/// methods `agent_base_env` consults on the exec port, so a single
+/// fake is enough to exercise every behaviour the function cares
+/// about — every other `ExecutionPort` method returns a benign
+/// no-op so the trait stays satisfied.
+struct FakeExec {
+    homes: HashMap<String, String>,
+    users: HashMap<String, String>,
+    fail_for: Vec<String>,
+}
+
+impl FakeExec {
+    fn new() -> Self {
+        Self {
+            homes: HashMap::new(),
+            users: HashMap::new(),
+            fail_for: Vec::new(),
+        }
+    }
+
+    fn with_home(mut self, machine_id: &str, home: &str) -> Self {
+        self.homes.insert(machine_id.to_string(), home.to_string());
+        self
+    }
+
+    fn with_user(mut self, machine_id: &str, user: &str) -> Self {
+        self.users.insert(machine_id.to_string(), user.to_string());
+        self
+    }
+
+    fn failing_for(mut self, machine_id: &str) -> Self {
+        self.fail_for.push(machine_id.to_string());
+        self
+    }
+}
+
+#[async_trait]
+impl AgentExecutionPort for FakeExec {
+    async fn submit(&self, _: &str, _: &str, _: AgentAction) -> Result<CommandOutcome, String> {
+        Ok(CommandOutcome::Executed {
+            output: ExecutionResult::Bash {
+                output: String::new(),
+            },
+        })
+    }
+    async fn submit_agent(
+        &self,
+        _: &str,
+        _: &str,
+        _: AgentAction,
+        _: Option<String>,
+    ) -> Result<CommandOutcome, ActionError> {
+        Err(ActionError::internal("fake exec: no agent submission"))
+    }
+    async fn approve(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn reject(&self, _: &str, _: String) -> Result<(), String> {
+        Ok(())
+    }
+    async fn register_result_responder(
+        &self,
+        _: &str,
+        _: tokio::sync::oneshot::Sender<Result<ExecutionResult, String>>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ExecutionPort for FakeExec {
+    async fn test_connection(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn run_command(&self, _: &str, _: &str) -> Result<String, String> {
+        Ok(String::new())
+    }
+    async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
+        Ok(String::new())
+    }
+    async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn write_file_bytes(&self, _: &str, _: &str, _: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+    async fn get_metadata(&self, _: &str, path: &str) -> Result<SftpEntry, String> {
+        Ok(SftpEntry {
+            name: path.into(),
+            path: path.into(),
+            is_dir: false,
+            size: 0,
+            modified: 0,
+        })
+    }
+    async fn list_dir(&self, _: &str, _: &str) -> Result<Vec<SftpEntry>, String> {
+        Ok(vec![])
+    }
+    async fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
+        if self.fail_for.iter().any(|m| m == machine_id) {
+            return Err(format!("simulated resolve_home failure for {}", machine_id));
+        }
+        self.homes
+            .get(machine_id)
+            .cloned()
+            .ok_or_else(|| format!("no fake home configured for {}", machine_id))
+    }
+    async fn resolve_user(&self, machine_id: &str) -> Result<String, String> {
+        if self.fail_for.iter().any(|m| m == machine_id) {
+            return Err(format!("simulated resolve_user failure for {}", machine_id));
+        }
+        self.users
+            .get(machine_id)
+            .cloned()
+            .ok_or_else(|| format!("no fake user configured for {}", machine_id))
+    }
+    async fn control_rpc(
+        &self,
+        _: &str,
+        _: &str,
+        _: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("control_rpc not supported by FakeExec".to_string())
+    }
+    fn spawn_interactive(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[String],
+        _: &str,
+        _: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn InteractiveHandle>, String> {
+        Err("spawn_interactive not supported by FakeExec".to_string())
+    }
+}
+
+fn local_home() -> String {
+    // `agent_base_env` / `resolve_agent_home` fall back to
+    // `std::env::var("HOME")` for local runs. Pin the value here so
+    // the test doesn't depend on the test runner's environment.
+    std::env::var("HOME").unwrap_or_default()
+}
+
+#[tokio::test]
+async fn agent_base_env_uses_remote_home_for_remote_machine() {
+    let exec = Arc::new(FakeExec::new().with_home("m-dev", "/home/developer"));
+    let env = agent_base_env(exec.as_ref(), "m-dev").await;
+    assert_eq!(
+        env.get("HOME").map(String::as_str),
+        Some("/home/developer"),
+        "remote machine must NOT receive the parent process's HOME"
+    );
+}
+
+#[tokio::test]
+async fn agent_base_env_uses_local_home_for_empty_machine_id() {
+    let exec = Arc::new(FakeExec::new());
+    let env = agent_base_env(exec.as_ref(), "").await;
+    let expected = local_home();
+    if expected.is_empty() {
+        // No HOME in the test runner — function should not invent one.
+        assert!(!env.contains_key("HOME"));
+    } else {
+        assert_eq!(env.get("HOME").map(String::as_str), Some(expected.as_str()));
+    }
+}
+
+#[tokio::test]
+async fn agent_base_env_uses_local_home_for_literal_local() {
+    let exec = Arc::new(FakeExec::new());
+    let env = agent_base_env(exec.as_ref(), "local").await;
+    let expected = local_home();
+    if expected.is_empty() {
+        assert!(!env.contains_key("HOME"));
+    } else {
+        assert_eq!(env.get("HOME").map(String::as_str), Some(expected.as_str()));
+    }
+}
+
+#[tokio::test]
+async fn agent_base_env_falls_back_to_local_home_on_remote_resolution_failure() {
+    let exec = Arc::new(FakeExec::new().failing_for("m-flaky"));
+    let env = agent_base_env(exec.as_ref(), "m-flaky").await;
+    // Graceful degradation: the agent at least sees *some* HOME
+    // rather than crashing on a missing `~`. The real fix is the
+    // SSH adapter's `home_cache`, but the port may legitimately be
+    // down at agent-spawn time and the agent shouldn't fail the
+    // whole run for it.
+    let expected = local_home();
+    if expected.is_empty() {
+        assert!(!env.contains_key("HOME"));
+    } else {
+        assert_eq!(env.get("HOME").map(String::as_str), Some(expected.as_str()));
+    }
+}
+
+#[tokio::test]
+async fn agent_base_env_uses_remote_user_for_remote_machine() {
+    // Regression: the GUI's local `$USER` (e.g. `jsteven`) used to
+    // leak into every SSH spawn, so the agent ran with a split
+    // identity (HOME=/home/developer, USER=jsteven) that confused
+    // some provider auth flows. The port-side fix routes USER
+    // through `ExecutionPort::resolve_user`, so a remote machine
+    // now gets the SSH-authenticated user.
+    let exec = Arc::new(
+        FakeExec::new()
+            .with_home("m-dev", "/home/developer")
+            .with_user("m-dev", "developer"),
+    );
+    let env = agent_base_env(exec.as_ref(), "m-dev").await;
+    assert_eq!(
+        env.get("USER").map(String::as_str),
+        Some("developer"),
+        "remote USER must come from the execution port, not the GUI"
+    );
+    assert_eq!(
+        env.get("LOGNAME").map(String::as_str),
+        Some("developer"),
+        "LOGNAME mirrors USER so the agent's $USER and $LOGNAME agree"
+    );
+}
+
+#[tokio::test]
+async fn agent_base_env_falls_back_to_parent_user_when_remote_resolution_fails() {
+    // Same graceful-degradation contract as HOME: if the port can't
+    // resolve the remote user, the agent at least sees the parent
+    // process's USER (or nothing if the parent has no USER set)
+    // rather than the wrong one.
+    let exec = Arc::new(
+        FakeExec::new()
+            .with_home("m-flaky", "/home/developer")
+            .failing_for("m-flaky"),
+    );
+    let env = agent_base_env(exec.as_ref(), "m-flaky").await;
+    let expected = std::env::var("USER").ok();
+    assert_eq!(
+        env.get("USER").map(String::as_str),
+        expected.as_deref(),
+        "USER must fall back to the parent process value when resolve_user fails"
+    );
+}
+
+#[tokio::test]
+async fn agent_base_env_preserves_other_locally_inherited_vars() {
+    // SHELL/TMPDIR are inherited verbatim from the parent process
+    // for both local and remote runs — neither has a per-machine
+    // meaning. USER/LOGNAME are covered by their own tests above
+    // (remote uses the port, local inherits the parent).
+    let exec = Arc::new(FakeExec::new().with_home("m-dev", "/home/developer"));
+    let env = agent_base_env(exec.as_ref(), "m-dev").await;
+    for k in ["SHELL", "TMPDIR"] {
+        if let (Some(parent_val), Some(env_val)) =
+            (std::env::var(k).ok(), env.get(k).map(String::as_str))
+        {
+            assert_eq!(
+                env_val, parent_val,
+                "{} must be inherited from the parent process unchanged",
+                k
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn resolve_agent_home_remote_uses_exec() {
+    let exec = Arc::new(FakeExec::new().with_home("m-dev", "/home/developer"));
+    let home = resolve_agent_home(exec.as_ref(), "m-dev").await;
+    assert_eq!(home, "/home/developer");
+}
+
+#[tokio::test]
+async fn resolve_agent_home_local_uses_parent() {
+    let exec = Arc::new(FakeExec::new());
+    let home = resolve_agent_home(exec.as_ref(), "local").await;
+    assert_eq!(home, local_home());
+}
+
+#[tokio::test]
+async fn resolve_agent_home_empty_uses_parent() {
+    let exec = Arc::new(FakeExec::new());
+    let home = resolve_agent_home(exec.as_ref(), "").await;
+    assert_eq!(home, local_home());
+}

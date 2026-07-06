@@ -5,12 +5,13 @@ use crate::state::AppContext;
 use std::sync::Arc;
 use tauri::{Emitter, State};
 
-fn build_agent_context(
+async fn build_agent_context(
     ctx: &AppContext,
     thread_id: &str,
     agent_kind: &str,
 ) -> Result<crate::ports::agent_runtime::AgentContext, AppError> {
     crate::application::agents::build_agent_context(ctx, thread_id, agent_kind)
+        .await
         .map_err(AppError::from)
 }
 
@@ -20,7 +21,7 @@ pub async fn agent_start(
     thread_id: String,
     agent_kind: String,
 ) -> Result<String, AppError> {
-    let agent_ctx = build_agent_context(&ctx, &thread_id, &agent_kind)?;
+    let agent_ctx = build_agent_context(&ctx, &thread_id, &agent_kind).await?;
     let runtime = ctx
         .registry
         .runtime_for(&agent_kind)
@@ -109,7 +110,7 @@ async fn resolve_session(
     let agent_kind = thread.agent_kind.as_deref().ok_or_else(|| {
         AppError::validation(format!("Thread {} has no agent configured", thread_id))
     })?;
-    let agent_ctx = build_agent_context(ctx, thread_id, agent_kind)?;
+    let agent_ctx = build_agent_context(ctx, thread_id, agent_kind).await?;
     let session = ctx
         .registry
         .get_or_spawn(thread_id, agent_kind, agent_ctx)

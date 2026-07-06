@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read};
 use std::pin::Pin;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,7 +21,19 @@ use crate::ports::execution::InteractiveHandle;
 pub type EventParser = fn(line: &str) -> Option<AgentEvent>;
 
 /// Construct command-line arguments for the CLI agent.
-pub type ArgsBuilder = fn(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String>;
+/// Build the argv for one agent invocation. The third argument is
+/// the prompt the user (or orchestrator) is sending this turn; the
+/// builder is responsible for placing it in whatever slot its
+/// runtime expects — opencode/claude-code/hermes take it as a
+/// trailing positional, antigravity reads it from stdin (its
+/// `agy --print -` form) — rather than the agent runtime
+/// `handle.write_line`-ing it after spawn, which races the
+/// runtime's own `init` phase ("You must provide a message or a
+/// command" on opencode). The signature makes the contract
+/// explicit so a future runtime that wants a different slot has
+/// to decide at build-args time, not at spawn time.
+pub type ArgsBuilder =
+    fn(ctx: &AgentContext, captured_session_id: Option<&str>, prompt: &str) -> Vec<String>;
 
 /// Translate the session's [`PermissionProfile`] into agent-native
 /// environment variables (e.g. opencode's `OPENCODE_PERMISSION`). Agents
@@ -136,7 +148,7 @@ pub struct UnifiedCliSession {
 }
 
 impl UnifiedCliSession {
-    fn build_command(&self) -> Command {
+    fn build_command(&self, prompt: &str) -> Command {
         let binary = self.resolved_binary.as_deref().unwrap_or(&self.ctx.binary);
         let mut cmd = Command::new(binary);
         let captured = {
@@ -146,10 +158,16 @@ impl UnifiedCliSession {
                 None
             }
         };
-        let args = (self.build_args)(&self.ctx, captured.as_deref());
+        let args = (self.build_args)(&self.ctx, captured.as_deref(), prompt);
         cmd.args(&args);
         cmd.current_dir(&self.ctx.cwd);
-        cmd.stdin(Stdio::piped());
+        // Stdin is wired to /dev/null (immediate EOF). The prompt is already
+        // passed as a positional argv, so no agent reads stdin during `init`
+        // or a turn; giving them a piped-but-never-written FD made opencode
+        // park on a stdin read and never emit its first `created id=ses_…`
+        // event (the "Waiting for agent output…" hang). /dev/null preserves
+        // the no-stdin-reads contract that argv-passed agents rely on.
+        cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         for (k, v) in &self.ctx.env {
@@ -165,7 +183,7 @@ impl UnifiedCliSession {
         parse_event: EventParser,
         tx: tokio::sync::mpsc::Sender<AgentEvent>,
     ) {
-        let mut cmd = self.build_command();
+        let mut cmd = self.build_command(text);
         let binary = self.resolved_binary.as_deref().unwrap_or(&self.ctx.binary);
 
         let mut child = match cmd.spawn() {
@@ -187,15 +205,8 @@ impl UnifiedCliSession {
 
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take();
-
-        if let Some(mut stdin) = child.stdin.take() {
-            let text_owned = text.to_string();
-            std::thread::spawn(move || {
-                let _ = stdin.write_all(text_owned.as_bytes());
-                let _ = stdin.write_all(b"\n");
-                let _ = stdin.flush();
-            });
-        }
+        // Stdin is `/dev/null` from `build_command`; the prompt is already
+        // passed as a positional arg, so nothing is ever written here.
 
         let child = Arc::new(Mutex::new(child));
         if let Ok(mut guard) = self.live_local.lock() {
@@ -254,7 +265,7 @@ impl UnifiedCliSession {
                 None
             }
         };
-        let args = (self.build_args)(&self.ctx, captured.as_deref());
+        let args = (self.build_args)(&self.ctx, captured.as_deref(), text);
         let machine_id = self.ctx.machine_id.clone();
         let binary = self.ctx.binary.clone();
         let cwd = self.ctx.cwd.clone();
@@ -272,8 +283,6 @@ impl UnifiedCliSession {
                 return;
             }
         };
-
-        let _ = handle.write_line(text);
 
         let handle = Arc::new(Mutex::new(handle));
         if let Ok(mut guard) = self.live_remote.lock() {
@@ -450,6 +459,17 @@ fn drain_lines<R, F>(
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
     let mut terminal = false;
+    // Ring buffer of the last `TAIL_CAP` non-empty, unparseable lines.
+    // These are the agent's stderr-ish / banner / error messages that
+    // the JSON parser dropped on the floor. When the agent exits
+    // non-zero the user used to see "agent exited with code 1" with
+    // no context — the actual reason (e.g. "Error: provider
+    // `minimax-coding-plan` not configured in /home/developer/.config/
+    // opencode/opencode.json") was sitting in these lines. Surfacing
+    // the tail makes the failure actionable.
+    const TAIL_CAP: usize = 20;
+    const TAIL_MAX_LINE: usize = 400;
+    let mut tail: Vec<String> = Vec::with_capacity(TAIL_CAP);
     loop {
         line.clear();
         match reader.read_line(&mut line) {
@@ -537,6 +557,21 @@ fn drain_lines<R, F>(
                         }
                         break;
                     }
+                } else {
+                    // The agent wrote something we didn't recognise —
+                    // a non-JSON line, a JSON line with an unknown
+                    // shape, or stderr mixed into the PTY stream.
+                    // Remember the last few so we can surface the
+                    // actual reason in the exit-code error.
+                    let mut s = trimmed.to_string();
+                    if s.len() > TAIL_MAX_LINE {
+                        s.truncate(TAIL_MAX_LINE);
+                        s.push('…');
+                    }
+                    if tail.len() == TAIL_CAP {
+                        tail.remove(0);
+                    }
+                    tail.push(s);
                 }
             }
         }
@@ -550,9 +585,17 @@ fn drain_lines<R, F>(
                 });
             }
             Some(code) => {
+                let suffix = if tail.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "\n\nLast agent output (unparsed; the JSON parser dropped these — typically stderr or a banner):\n{}",
+                        tail.join("\n")
+                    )
+                };
                 let _ = tx.blocking_send(AgentEvent::Error {
                     code: "agent_exit_nonzero".to_string(),
-                    message: format!("agent exited with code {}", code),
+                    message: format!("agent exited with code {}{}", code, suffix),
                     recoverable: false,
                 });
             }

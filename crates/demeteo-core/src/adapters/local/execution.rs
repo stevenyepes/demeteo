@@ -320,6 +320,17 @@ impl ExecutionPort for LocalSubprocessAdapter {
         .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
+    async fn resolve_user(&self, _machine_id: &str) -> Result<String, String> {
+        // Local agent: forward the GUI process's own USER so the agent
+        // sees the same identity the rest of the desktop does. Prefer
+        // USER (login identity) over LOGNAME; some minimal macOS GUI
+        // launches set only LOGNAME, but USER is what `bash -c 'echo
+        // $USER'` and most CLIs look at.
+        std::env::var("USER")
+            .or_else(|_| std::env::var("LOGNAME"))
+            .map_err(|_| "Neither USER nor LOGNAME is set on the local process".to_string())
+    }
+
     fn spawn_interactive(
         &self,
         _machine_id: &str,

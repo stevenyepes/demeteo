@@ -57,7 +57,21 @@ fn parse_antigravity_event(line: &str) -> Option<AgentEvent> {
 }
 
 /// Construct command-line arguments for Antigravity CLI (`agy`).
-fn build_antigravity_args(ctx: &AgentContext, captured_session_id: Option<&str>) -> Vec<String> {
+///
+/// Antigravity's `--print -` form reads the prompt from stdin, so
+/// unlike the other runtimes we *do* still need the agent runtime
+/// to write the prompt to stdin after spawn. The builder is the
+/// contract owner: it explicitly opts into the stdin path (via the
+/// `-` placeholder) rather than having the agent runtime silently
+/// choose it. The agent runtime (`UnifiedCliSession::spawn_*`)
+/// checks the `prompt.is_empty()` contract — if this builder ever
+/// needs the prompt positionally too, the fix lands here, not in
+/// the agent runtime layer.
+fn build_antigravity_args(
+    ctx: &AgentContext,
+    captured_session_id: Option<&str>,
+    _prompt: &str,
+) -> Vec<String> {
     let mut args = vec!["--print".to_string(), "-".to_string()];
 
     // Auto-approve tool permissions to run non-interactively without blocking

@@ -18,7 +18,8 @@ impl ExecutionDriver {
         // resume the same session; a change in either spawns fresh.
         let session_key =
             Self::agent_session_key(self.f_id.as_str(), step_conf, override_model.as_deref());
-        let mut agent_env = crate::ports::agent_runtime::agent_base_env();
+        let mut agent_env =
+            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
         if let Some(ref m) = override_model {
             if agent_kind == "opencode"
                 || agent_kind == "hermes"
@@ -75,7 +76,10 @@ impl ExecutionDriver {
         // feature row on every agent turn — a file added at the Gate
         // view becomes visible to the redirected step without any
         // extra wiring (the orchestrator stores attachments on the
-        // feature, not in any static run context).
+        // feature, not in any static run context). Routed through
+        // the machine-aware exec port so remote worktrees receive
+        // the file via SFTP instead of (the previous) std::fs which
+        // silently dropped the bytes on the wrong host.
         if let Ok(Some(feature)) = self.features.get(&self.f_id) {
             if !feature.attachments.is_empty() {
                 crate::adapters::step_executor::artifacts::materialize_user_attachments_to_worktree(
@@ -83,7 +87,10 @@ impl ExecutionDriver {
                     &feature.attachments,
                     &*self.attachments,
                     wt_path,
-                );
+                    &*self.exec,
+                    machine_str,
+                )
+                .await;
             }
         }
 

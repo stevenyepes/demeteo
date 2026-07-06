@@ -98,6 +98,10 @@ impl ExecutionPort for RouterExecutionPort {
         self.resolve(machine_id)?.resolve_home(machine_id).await
     }
 
+    async fn resolve_user(&self, machine_id: &str) -> Result<String, String> {
+        self.resolve(machine_id)?.resolve_user(machine_id).await
+    }
+
     async fn control_rpc(
         &self,
         machine_id: &str,

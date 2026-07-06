@@ -222,13 +222,22 @@ const NewProjectView = () => {
                 feature_lifecycle: featureLifecycle,
             });
 
+            // `compute_type` / `remote_host` MUST be carried into the
+            // local project list — otherwise Settings → General reads
+            // `activeProject.compute_type` as `undefined` and the form
+            // defaults to "Local Compute", making a remote project
+            // look like a local one even though the DB has the right
+            // values. Mirrors the wizard ADD_PROJECT path
+            // (CreateFromZeroWizard.tsx:107, CreateProjectWizard.tsx:247).
             const newProj = {
                 id: projectId,
                 name: projectName,
                 status: 'idle',
                 repos: selectedRepos.length,
                 nodes: 0,
-                spend: 0.00
+                spend: 0.00,
+                compute_type: computeType,
+                remote_host: computeType === 'remote' ? remoteHost : null,
             };
             setProjects(prev => [...prev, newProj]);
             setCurrentProjectId(projectId);

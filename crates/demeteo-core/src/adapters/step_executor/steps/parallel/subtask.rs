@@ -580,15 +580,23 @@ impl ExecutionDriver {
 
         // Copy any external artifact paths referenced in path manifests into
         // the worktree so opencode's `external_directory: deny` doesn't block
-        // the agent from reading them.
+        // the agent from reading them. Routed through the machine-aware
+        // exec port so remote worktrees receive the file via SSH instead
+        // of (the previous) std::fs which silently dropped the bytes on
+        // the wrong host.
         let sub_prompt =
             crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
                 &sub_prompt,
                 &wt_path,
-            );
+                &*self.exec,
+                machine_str,
+            )
+            .await;
 
         let agent_kind = planner_kind.to_string();
-        let mut worker_env = crate::ports::agent_runtime::agent_base_env();
+        let worker_machine = self.machine_id_opt.as_deref().unwrap_or("local");
+        let mut worker_env =
+            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), worker_machine).await;
         // CLI agents: pass model via --model flag, not OPENCODE_CONFIG_CONTENT.
         if let Some(ref m) = override_model {
             if agent_kind == "opencode"
