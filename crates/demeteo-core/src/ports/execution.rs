@@ -1,5 +1,63 @@
 use async_trait::async_trait;
 use serde::Serialize;
+use std::collections::BTreeMap;
+
+/// Prefix on the `Err` string of an [`ExecutionPort`] method when the
+/// failure is a **transport/connection** problem (the machine could not be
+/// reached, the SSH session dropped, auth failed) rather than a *command*
+/// failure (the command ran and exited non-zero). Decision **D3**: callers
+/// that need to distinguish "retry the connection" from "the command is
+/// broken" test for this prefix; the payload after it is the underlying
+/// message. A plain command failure carries stderr with no prefix.
+pub const TRANSPORT_ERROR_PREFIX: &str = "transport: ";
+
+/// Explicit shell context for [`ExecutionPort::run_command_with`]. Every
+/// field is data the caller supplies; **no adapter may fall back to ambient
+/// process state** (the GUI's `PATH`/`HOME`/cwd). This is decision **D2** in
+/// `docs/EXECUTION_CONSISTENCY_PLAN.md`: two adapters given the *same*
+/// `ShellOptions` must produce equivalent behaviour, so a command that
+/// "works local, silently wrong on remote" can no longer exist.
+///
+/// [`ExecutionPort::run_command`] is the thin default — it is exactly
+/// `run_command_with(.., ShellOptions::default())`, i.e. a non-login shell,
+/// the adapter's default cwd, and no extra env.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShellOptions {
+    /// When `true`, the command runs through a POSIX **login** shell
+    /// (`bash -l -c`), so the target user's profile is sourced (`PATH`,
+    /// `mise`/`asdf` shims, `~/.profile`, …). When `false` (the default),
+    /// it runs through a plain non-login `sh -c` with no profile.
+    ///
+    /// This is the field that closes the remote-only PATH gap: the SSH
+    /// adapter's historical bare `channel.exec` behaved like a non-login
+    /// shell with an even thinner environment, so anything resolved via a
+    /// profile-managed shim (`git`, `mise`-shimmed toolchains) was present
+    /// locally and missing remotely. Callers that need the profile set
+    /// `login_shell: true`; both adapters then honour it identically.
+    pub login_shell: bool,
+    /// Working directory the command runs in. `None` means "the adapter's
+    /// default cwd" (local: the GUI process's cwd; SSH: the login
+    /// directory). `Some(dir)` is honoured identically by every adapter.
+    pub cwd: Option<String>,
+    /// Extra environment variables exported *before* the command runs, on
+    /// top of whatever the (login or non-login) shell itself establishes.
+    /// This is the **only** caller-controlled environment; by contract
+    /// nothing else crosses the transport boundary. A `BTreeMap` so the
+    /// export order is deterministic (matters for conformance assertions
+    /// and reproducible remote command strings).
+    pub env: BTreeMap<String, String>,
+}
+
+impl ShellOptions {
+    /// Convenience constructor for a login-shell context with no cwd/env
+    /// override — the common "I need the user's PATH" case.
+    pub fn login() -> Self {
+        Self {
+            login_shell: true,
+            ..Self::default()
+        }
+    }
+}
 
 #[derive(Serialize, Clone)]
 pub struct SftpEntry {
@@ -35,6 +93,30 @@ pub trait InteractiveHandle: Send + Sync {
 /// `tokio::task::spawn_blocking` wrappers that previously sat in every
 /// command that called `run_command`. The synchronous `ssh2`/`std::fs`
 /// calls now live inside the impl, where they belong.
+///
+/// # Behavioural contract (C0, `docs/EXECUTION_CONSISTENCY_PLAN.md`)
+///
+/// This trait is the single behavioural contract every transport
+/// (`LocalSubprocessAdapter`, `SshClientAdapter`, `RouterExecutionPort`)
+/// must satisfy identically. It is enforced by the shared conformance suite
+/// in `crates/demeteo-core/tests/conformance/execution_port.rs` — new
+/// behaviour is added to that suite, not bug-hunted onto each path.
+///
+/// The three guarantees a caller may rely on regardless of transport:
+///
+/// 1. **Explicit context (D2).** Command execution never inherits ambient
+///    state from the GUI process. Shell mode, cwd, and environment are
+///    passed as [`ShellOptions`] and honoured identically. The bare
+///    `run_command` is `run_command_with(.., ShellOptions::default())`.
+/// 2. **Loud, uniform failure (D3).** A command that cannot run, or runs
+///    non-zero, is always `Err` — never `Ok("")`. The `Err` string always
+///    includes the captured stderr. A *transport/connection* failure (the
+///    machine could not be reached) is distinguishable from a
+///    *command* failure (it ran, exited non-zero) by the
+///    [`TRANSPORT_ERROR_PREFIX`] on the former.
+/// 3. **File ops mirror the shell contract.** `read_file` on a missing or
+///    unreadable path is `Err`, never `Ok("")`; `list_dir` returns the
+///    [`SftpEntry`] shape with `.`/`..` filtered and dirs-first ordering.
 #[async_trait]
 pub trait ExecutionPort: Send + Sync {
     /// Opens a TCP + SSH handshake + authentication against the machine and
@@ -42,8 +124,45 @@ pub trait ExecutionPort: Send + Sync {
     /// any connectivity or auth failure. Does NOT cache the session.
     async fn test_connection(&self, machine_id: &str) -> Result<(), String>;
 
-    async fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String>;
+    /// Run `cmd` through a **non-login** POSIX shell in the adapter's
+    /// default cwd with no caller-supplied environment. Exactly equivalent
+    /// to [`Self::run_command_with`] with [`ShellOptions::default`].
+    ///
+    /// Returns the command's stdout on a zero exit. On a non-zero exit the
+    /// result is `Err` with the captured stderr attached (never `Ok("")`);
+    /// on a transport failure the `Err` is prefixed with
+    /// [`TRANSPORT_ERROR_PREFIX`]. See the trait-level contract.
+    async fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String> {
+        self.run_command_with(machine_id, cmd, ShellOptions::default())
+            .await
+    }
 
+    /// Run `cmd` through a POSIX shell honouring `opts` — login vs non-login
+    /// shell, working directory, and exported environment (see
+    /// [`ShellOptions`]). Every adapter must honour every field identically;
+    /// this is the method the conformance suite drives to prove local/SSH
+    /// parity.
+    ///
+    /// Error semantics match [`Self::run_command`]: non-zero exit ⇒ `Err`
+    /// with stderr; unreachable machine ⇒ `Err` prefixed with
+    /// [`TRANSPORT_ERROR_PREFIX`].
+    ///
+    /// The default implementation delegates to [`Self::run_command`],
+    /// **ignoring `opts`** — it exists only so simple test stubs need not
+    /// implement both methods. Every real transport overrides it.
+    async fn run_command_with(
+        &self,
+        machine_id: &str,
+        cmd: &str,
+        opts: ShellOptions,
+    ) -> Result<String, String> {
+        let _ = opts;
+        self.run_command(machine_id, cmd).await
+    }
+
+    /// Read the UTF-8 contents of `path` on the target. A missing or
+    /// unreadable path is `Err` (D3) — callers must not treat "no file" as
+    /// an empty artifact.
     async fn read_file(&self, machine_id: &str, path: &str) -> Result<String, String>;
 
     async fn write_file(&self, machine_id: &str, path: &str, content: &str) -> Result<(), String>;
@@ -124,3 +243,11 @@ pub trait ExecutionPort: Send + Sync {
         env: &std::collections::HashMap<String, String>,
     ) -> Result<Box<dyn InteractiveHandle>, String>;
 }
+
+/// Shared behavioural conformance suite (C2.1). Included here so it compiles
+/// as part of the crate's `#[cfg(test)]` build and can reach the concrete
+/// adapters via `crate::…`, matching the repo's existing `#[path]`-included
+/// test convention.
+#[cfg(test)]
+#[path = "../../tests/conformance/execution_port.rs"]
+mod conformance;

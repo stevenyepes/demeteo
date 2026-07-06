@@ -1,7 +1,8 @@
 use crate::paths;
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{ExecutionPort, InteractiveHandle};
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, ShellOptions};
+use crate::shared::shell;
 use async_trait::async_trait;
 use ssh2::{Channel, Session, Sftp};
 use std::collections::HashMap;
@@ -300,6 +301,53 @@ fn get_sftp_blocking(
     Ok(sftp_session)
 }
 
+/// Open a fresh channel on `session`, exec `full_cmd`, drain stdout AND
+/// stderr, and enforce the exit-code invariant (D3): a non-zero exit is an
+/// `Err` carrying the captured stderr (never `Ok("")`). `full_cmd` is the
+/// already-assembled shell invocation (login/non-login wrapper + cwd + env);
+/// this helper is transport plumbing only and makes no assumptions about it.
+///
+/// This is the single drain-and-check path shared by `run_command_with`, so
+/// the exit-status handling that root-caused "UI says HEALTHY but the dir
+/// doesn't exist" lives in exactly one place.
+fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<String, String> {
+    let mut channel = session
+        .channel_session()
+        .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+    channel
+        .exec(full_cmd)
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
+
+    let mut stdout = String::new();
+    channel
+        .read_to_string(&mut stdout)
+        .map_err(|e| format!("Failed to read command stdout: {}", e))?;
+
+    // ssh2 keeps stderr on a separate stream. Drain it so the remote
+    // shell's error message is included in the Err variant.
+    let mut stderr = String::new();
+    let mut err_stream = channel.stderr();
+    let _ = err_stream.read_to_string(&mut stderr);
+
+    channel
+        .wait_close()
+        .map_err(|e| format!("Failed to wait for channel close: {}", e))?;
+    let exit_code = channel
+        .exit_status()
+        .map_err(|e| format!("Failed to read command exit status: {}", e))?;
+
+    if exit_code != 0 {
+        let detail = if stderr.trim().is_empty() {
+            format!("exit code: {}", exit_code)
+        } else {
+            stderr.trim().to_string()
+        };
+        return Err(format!("Command failed ({}): {}", detail, full_cmd));
+    }
+
+    Ok(stdout)
+}
+
 #[async_trait]
 impl ExecutionPort for SshClientAdapter {
     async fn test_connection(&self, machine_id: &str) -> Result<(), String> {
@@ -348,69 +396,42 @@ impl ExecutionPort for SshClientAdapter {
         .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
-    async fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String> {
+    async fn run_command_with(
+        &self,
+        machine_id: &str,
+        cmd: &str,
+        opts: ShellOptions,
+    ) -> Result<String, String> {
         // The underlying `ssh2` API is fully sync (TCP + SFTP + Channel
         // I/O). Run the work on the blocking pool so we don't stall
         // the tokio worker thread. The error type stays `String` to
         // match the port signature.
+        //
+        // `run_command` (no override) delegates here via the trait default
+        // with `ShellOptions::default()` — a non-login `sh -c` in the login
+        // directory with no extra env, matching the historical behaviour of
+        // the previous bare `channel.exec`, but now with cwd/env/login
+        // honoured identically to the local adapter when the caller opts in.
         let machine_id = machine_id.to_string();
         let cmd = cmd.to_string();
         let machines = self.machines.clone();
         let sessions = self.sessions.clone();
         tokio::task::spawn_blocking(move || -> Result<String, String> {
             let sftp_sess = get_sftp_blocking(&machines, &sessions, &machine_id)?;
-            let mut channel = sftp_sess
-                .session
-                .channel_session()
-                .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
-            channel
-                .exec(&cmd)
-                .map_err(|e| format!("Failed to execute command: {}", e))?;
 
-            // Drain both stdout AND stderr. The previous implementation only
-            // read stdout and ignored the channel's exit status, which meant
-            // a command that failed (e.g. `cd /nonexistent`) returned
-            // `Ok("")` and every caller — the workspace-health check in
-            // particular — concluded the operation succeeded. That is the
-            // root cause of "UI says CLONED + HEALTHY but the agent can't
-            // find the dir": the health probe was returning Ok on a path
-            // that didn't exist.
-            let mut stdout = String::new();
-            channel
-                .read_to_string(&mut stdout)
-                .map_err(|e| format!("Failed to read command stdout: {}", e))?;
+            // Assemble the shell invocation identically to the local
+            // adapter: exports run *inside* the body (after a login shell
+            // sources its profile) so the caller's env wins; `cd` is baked
+            // into the body so a failed `cd` aborts before the command runs.
+            let exports = shell::export_prefix(&opts.env);
+            let body = shell::command_body(opts.cwd.as_deref(), &exports, &cmd);
+            let full_cmd = if opts.login_shell {
+                format!("bash -l -c {}", paths::shell_escape_posix(&body))
+            } else {
+                format!("sh -c {}", paths::shell_escape_posix(&body))
+            };
 
-            // ssh2 keeps stderr on a separate stream. Drain it so the
-            // remote shell's error message is included in the Err variant
-            // (otherwise the user sees a useless "exit code: 1" with no
-            // context, which is what the original bash `cd: ...: No such
-            // file or directory` message was hiding behind).
-            let mut stderr = String::new();
-            let mut err_stream = channel.stderr();
-            let _ = err_stream.read_to_string(&mut stderr);
-
-            channel
-                .wait_close()
-                .map_err(|e| format!("Failed to wait for channel close: {}", e))?;
-            // `Channel::exit_status` returns the remote process's exit
-            // code as `Result<i32, Error>` (0 on success, non-zero on
-            // failure). We must check this — see the comment above.
-            let exit_code = channel
-                .exit_status()
-                .map_err(|e| format!("Failed to read command exit status: {}", e))?;
-
-            if exit_code != 0 {
-                // Preserve any captured stderr; fall back to a generic
-                // message if the remote shell didn't write anything.
-                let detail = if stderr.trim().is_empty() {
-                    format!("exit code: {}", exit_code)
-                } else {
-                    stderr.trim().to_string()
-                };
-                return Err(format!("Command failed ({}): {}", detail, cmd));
-            }
-
-            Ok(stdout)
+            exec_over_channel(&sftp_sess.session, &full_cmd)
         })
         .await
         .map_err(|e| format!("blocking task panicked: {}", e))?

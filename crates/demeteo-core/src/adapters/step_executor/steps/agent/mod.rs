@@ -508,8 +508,8 @@ impl ExecutionDriver {
             )
             .await;
 
-        let (artifact_path, artifact_paths) = match artifacts_res {
-            Ok((path, paths)) => (path, paths),
+        let (artifact_path, artifact_paths, missing_artifacts) = match artifacts_res {
+            Ok((path, paths, missing)) => (path, paths, missing),
             Err(err) => {
                 let _ = self
                     .git_ops
@@ -891,6 +891,38 @@ impl ExecutionDriver {
             failed_outcome
         } else {
             match merge_result {
+                // The step ran to a clean merge, but a declared
+                // deliverable (`ByName` / `LastWriteTo`) never
+                // materialised — fail instead of marking a green step
+                // with an empty artifact. This is the visible signal for
+                // the "agent ran but produced no plan/spec/report"
+                // misconfiguration class (bad model/tooling, a project
+                // `opencode.json` that blocks writes, agent wrote to the
+                // wrong path). The driver persists this message as the
+                // step's `error_message`, which the UI renders on the
+                // failed step, and routes it through `on_failure` retry.
+                Ok(()) if !missing_artifacts.is_empty() => {
+                    let deliverables = missing_artifacts
+                        .iter()
+                        .map(|m| format!("'{}' ({})", m.name, m.detail))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let plural = if missing_artifacts.len() == 1 {
+                        "declared artifact was"
+                    } else {
+                        "declared artifacts were"
+                    };
+                    StepOutcome::Failed(format!(
+                        "The step completed but {count} {plural} never produced: {deliverables}. \
+                         The agent ran but did not write its required deliverable — it may have \
+                         failed, written to a different path, or been blocked by its model/config \
+                         or the project's `opencode.json` (MCP servers, tool permissions). \
+                         Nothing downstream can consume this step.",
+                        count = missing_artifacts.len(),
+                        plural = plural,
+                        deliverables = deliverables,
+                    ))
+                }
                 Ok(()) => {
                     let wall = step_start.elapsed().as_secs();
                     let _ = self.features.step_update(

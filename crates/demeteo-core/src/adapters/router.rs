@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{ExecutionPort, InteractiveHandle};
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, ShellOptions};
 
 pub struct RouterExecutionPort {
     machines: Arc<dyn MachineRepository>,
@@ -47,8 +47,18 @@ impl ExecutionPort for RouterExecutionPort {
         self.resolve(machine_id)?.test_connection(machine_id).await
     }
 
-    async fn run_command(&self, machine_id: &str, cmd: &str) -> Result<String, String> {
-        self.resolve(machine_id)?.run_command(machine_id, cmd).await
+    async fn run_command_with(
+        &self,
+        machine_id: &str,
+        cmd: &str,
+        opts: ShellOptions,
+    ) -> Result<String, String> {
+        // Pure delegation to the resolved transport. `run_command` (no
+        // override) reaches the resolved adapter via the trait default,
+        // which routes back through this method with default options.
+        self.resolve(machine_id)?
+            .run_command_with(machine_id, cmd, opts)
+            .await
     }
 
     async fn read_file(&self, machine_id: &str, path: &str) -> Result<String, String> {
