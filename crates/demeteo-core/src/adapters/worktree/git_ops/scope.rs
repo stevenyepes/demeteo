@@ -27,6 +27,97 @@
 //!   (declaration doesn't constrain where the artifact ends up, so we
 //!   allow full write). Today this means `AllWrites` (the parallel
 //!   implement step's capture) opts out of scope enforcement — by design.
+//!
+//! ── s-audit-write-fence (analize-the-documentation-update-workflow-it-is) ────
+//!
+//! Cross-references the two-layer write fence against
+//! `src-tauri/workflows/docs-update.json`. Every file:line cited below
+//! is on the audit's hot list; any change to one forces the audit to be
+//! redone. The regression net is the
+//! `audit_*`-prefixed tests colocated with each file.
+//!
+//! **Capability chain (s-draft, s-polish).**
+//!
+//! `wf-starter-docs-update` declares `"capability": "implement"` on both
+//! `s-draft` (docs-update.json:42) and `s-polish` (docs-update.json:113).
+//! That translates to:
+//!
+//! | Link                           | Code                                         |
+//! |--------------------------------|----------------------------------------------|
+//! | `capability: "implement"`      | `src-tauri/workflows/docs-update.json:42,113`|
+//! | `StepCapability::Implement`    | `crates/demeteo-core/src/domain/permission.rs:51` |
+//! | `WriteScope::All`              | `crates/demeteo-core/src/domain/permission.rs:93` |
+//! | `[__ALL_WRITES__]` sentinel    | `crates/demeteo-core/src/adapters/worktree/git_ops/scope.rs:127` |
+//! | `apply_artifact_scope` no-op   | `crates/demeteo-core/src/adapters/worktree/git_ops/scope.rs:244-249` |
+//! | `verify_and_revert` no-op      | `crates/demeteo-core/src/adapters/worktree/git_ops/scope.rs:360-365` |
+//! | `edit:allow` + `bash:allow`    | `crates/demeteo-core/src/ports/agent_runtime.rs:65-73` |
+//!
+//! **Divergence #1 — chmod fence is a NO-OP for s-draft/s-polish.**
+//! `scope.rs:127` returns the `__ALL_WRITES__` sentinel for
+//! `WriteScope::All`. `apply_artifact_scope` early-returns `Ok(())`
+//! without running any chmod (`scope.rs:244-249`). The docs-update
+//! prompt at `docs-update.json:38, 41-42, 44, 49-50` repeatedly tells
+//! the agent to write the doc body at a real repo path (e.g.
+//! `docs/api/foo.md`) and warns "by project default its contents are NOT
+//! committed to the feature branch" — but at runtime there is *no*
+//! fence stopping the agent from putting the body under
+//! `{{artifact_dir}}`. Compliance with the prompt relies entirely on the
+//! model choosing correctly.
+//!
+//! **Divergence #2 — post-step diff guard is a NO-OP for s-draft/s-polish.**
+//! `verify_and_revert_out_of_scope_writes` early-returns an empty
+//! vector at `scope.rs:360-365` for the `__ALL_WRITES__` sentinel.
+//! Even if the agent put the entire doc body into
+//! `artifacts/s-draft.md` (the failure mode the prompt hedges against),
+//! the guard will *not* silently revert it. Combined with `commit_artifacts=false`
+//! at `crates/demeteo-core/src/adapters/step_executor/artifacts/declared.rs:215-217`
+//! (which excludes `artifacts/` from `git add -A`), the step "succeeds"
+//! with an empty `--allow-empty` commit
+//! (`crates/demeteo-core/src/adapters/step_executor/artifacts/declared.rs:310-311`),
+//! and the only signal of the regression is the
+//! `tracing::warn!` at `declared.rs:284-305`.
+//!
+//! **Divergence #3 — `OPENCODE_PERMISSION` cannot path-scope writes.**
+//! `opencode_permission_json` (`ports/agent_runtime.rs:65-73`) renders
+//! `edit:allow` for the Implement capability derived from
+//! `StepCapability::Implement` (`permission.rs:77-83`) plus
+//! `external_directory:deny`. There is no `path` / `path_pattern` /
+//! `glob` field in the JSON — confirmed by the new pinning test
+//! `audit_implement_capability_renders_no_write_pathspec_in_edit_field`.
+//! The audit pinning test
+//! `audit_docs_update_implement_step_has_no_chmod_fence` proves the
+//! consequence: an `Implement` agent can write to `docs/api/foo.md`
+//! *and* to `artifacts/s-draft.md` — both succeed at chmod time.
+//!
+//! **Brand-new doc path safety (the audit's specific question).**
+//!
+//! `verify_and_revert_out_of_scope_writes` does **NOT** silently revert
+//! a legitimate write to a brand-new path under
+//! `docs/<area>/<topic>.md`. It cannot: for s-draft/s-polish the
+//! `__ALL_WRITES__` sentinel causes the function to early-return an
+//! empty list at `scope.rs:360-365` before it ever inspects the
+//! working tree. Pinned by
+//! `test_docs_update_diff_guard_does_not_silently_revert_brand_new_doc_path`.
+//!
+//! **Failure-mode asymmetry (intentional but worth flagging).**
+//!
+//! The Implement fence is a no-op; this means *legitimate* writes
+//! (`docs/api/foo.md`) are preserved (good) **and** *misplaced* writes
+//! (`artifacts/s-draft.md`) are also preserved (the docs-update
+//! regression mode). The docs-update prompt handles this by warning
+//! the agent. The chmod fence + diff guard are the only mechanisms
+//! that *can* scope writes for s-draft/s-polish, but neither runs for
+//! `WriteScope::All`. A future capability rewrite that adds a
+//! path-scoped mode for Implement-step doc authoring would need to
+//! (a) introduce a new `StepCapability` or sub-variant (Gate per
+//! `AGENTS.md` §9), (b) introduce a new `WriteScope` arm so the
+//! fingerprint in
+//! `crates/demeteo-core/src/adapters/step_executor/driver.rs:315` stays
+//! stable, and (c) re-run this audit.
+//!
+//! **Out of scope for this audit (per `implementation-spec.md` §6).**
+//! The chmod fence itself, the `OPENCODE_PERMISSION` render, and the
+//! `external_directory:deny` rule are all explicitly do-not-modify.
 
 use std::path::{Path, PathBuf};
 

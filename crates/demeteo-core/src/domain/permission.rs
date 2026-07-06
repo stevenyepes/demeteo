@@ -267,4 +267,50 @@ mod tests {
         let back: StepCapability = serde_json::from_str("\"artifacts\"").unwrap();
         assert_eq!(back, StepCapability::Artifacts);
     }
+
+    // ── s-audit-write-fence pinning ───────────────────────────────────────
+    //
+    // The audit (see the doc-block on
+    // `crates/demeteo-core/src/adapters/worktree/git_ops/scope.rs`)
+    // names this exact chain as the source of the docs-update fence
+    // divergence: `capability: "implement"` in
+    // `wf-starter-docs-update` →
+    // `StepCapability::Implement` → `WriteScope::All` →
+    // `__ALL_WRITES__` sentinel → chmod + diff-guard no-ops.
+    // The two tests below pin each link of that chain so any change
+    // here forces the audit's file:line citations to be redone.
+
+    #[test]
+    fn audit_implement_capability_resolves_to_write_scope_all() {
+        // The single source of truth:
+        //   docs-update.json:42,113 — capability: "implement" for s-draft / s-polish
+        //   permission.rs:89-95    — Implement.write_scope() == WriteScope::All
+        assert_eq!(
+            StepCapability::Implement.write_scope(),
+            WriteScope::All,
+            "Implement capability MUST keep write_scope == WriteScope::All; \
+             changing this re-enables the chmod fence for s-draft/s-polish and \
+             invalidates the docs-update prompt's \"real path\" guidance"
+        );
+    }
+
+    #[test]
+    fn audit_resolve_profile_for_implement_carries_through_to_unfenced_writes() {
+        // The chained `resolve_profile` shape used by the agent runner
+        // — confirms no override narrows an Implement step back into
+        // the fenced set silently (no `allow_network` / `allow_shell`
+        // toggle can remove the All scope because those toggles don't
+        // touch write_fs at all).
+        let p = resolve_profile(StepCapability::Implement, false, false);
+        assert_eq!(p.write_fs, Access::Allow);
+        // ... and that surfaces as the editable surface for the runner.
+        let s = resolve_profile(StepCapability::Implement, false, false)
+            .write_fs
+            .opencode_str();
+        assert_eq!(
+            s, "allow",
+            "OPENCODE_PERMISSION must render edit:allow for Implement — the chmod \
+             fence is the only thing that scopes writes for s-draft/s-polish"
+        );
+    }
 }

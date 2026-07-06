@@ -974,6 +974,177 @@ async fn test_scope_diff_guard_keeps_in_scope_writes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// s-audit-write-fence pinning (analize-the-documentation-update-workflow-it-is)
+//
+// These tests pin the conclusions of the s-audit-write-fence audit on
+// src-tauri/workflows/docs-update.json. The audit cross-referenced:
+//   - chmod fence      : crates/demeteo-core/src/adapters/worktree/git_ops/scope.rs
+//   - post-step diff   : same file, `verify_and_revert_out_of_scope_writes`
+//   - OPENCODE_PERMISSION : crates/demeteo-core/src/ports/agent_runtime.rs:65-73
+//   - StepCapability::Implement -> WriteScope::All:
+//       crates/demeteo-core/src/domain/permission.rs:89-95
+//
+// The `s-draft` and `s-polish` steps in `wf-starter-docs-update`
+// (src-tauri/workflows/docs-update.json:42,113) declare
+// `capability: "implement"`, which translates to `WriteScope::All` and
+// the `__ALL_WRITES__` sentinel — making BOTH the chmod fence AND the
+// post-step diff guard no-ops. The audit doc-block on
+// `adapters/worktree/git_ops/scope.rs` lists every divergence; these
+// tests are the regression net so any future fence widening for the
+// Implement scope would force this audit to be redone.
+
+#[tokio::test]
+async fn test_docs_update_implement_step_has_no_chmod_fence() {
+    // Steps s-draft and s-polish in wf-starter-docs-update declare
+    // `capability: "implement"` (src-tauri/workflows/docs-update.json:42,113).
+    // The chain on the audit side:
+    //   permission.rs:77-83 -> Implement base_profile write_fs = Allow
+    //   permission.rs:89-95 -> Implement.write_scope() = WriteScope::All
+    //   scope.rs:127        -> WriteScope::All -> [__ALL_WRITES__] sentinel
+    //   scope.rs:244-249    -> apply_artifact_scope early-returns Ok(())
+    //                          for the __ALL_WRITES__ sentinel
+    //
+    // This test wires the entire chain against a real git repo and
+    // proves the fence is a no-op even when an attacker would have
+    // tried to write the doc body to e.g. src/main.rs.
+    let (dir, helper) = make_repo("audit_implement_no_fence").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // Source file the agent must be free to modify (Implement scope).
+    exec.write_file("local", &format!("{repo}/src/main.rs"), "fn main() {}")
+        .await
+        .unwrap();
+    exec.run_command("local", &format!("git -C \"{repo}\" add ."))
+        .await
+        .unwrap();
+    exec.run_command("local", &format!("git -C \"{repo}\" commit -m src"))
+        .await
+        .unwrap();
+
+    let wt = format!("{}_wt", repo);
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" worktree add \"{wt}\" HEAD"),
+    )
+    .await
+    .unwrap();
+
+    // Emit the same writable set the orchestrator would emit for an
+    // Implement step on s-draft/s-polish.
+    let writable_paths: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from("__ALL_WRITES__")];
+
+    helper
+        .apply_artifact_scope(None, &wt, &writable_paths)
+        .await
+        .expect("apply_artifact_scope on __ALL_WRITES__ must succeed without chmod");
+
+    // The doc prompt tells the agent to write to a real path like
+    // docs/api/foo.md — under the Implement fence there is no chmod
+    // applied, so this write succeeds (no scope enforced).
+    std::fs::create_dir_all(format!("{wt}/docs/api")).unwrap();
+    let doc_write = exec
+        .write_file("local", &format!("{wt}/docs/api/foo.md"), "# new doc body")
+        .await;
+    assert!(
+        doc_write.is_ok(),
+        "Implement scope must leave docs/<area>/<topic>.md writable (no fence)"
+    );
+
+    // Equally, an "agent puts the doc body in artifacts/" path
+    // (the failure mode the prompt is hedging against) is ALSO allowed
+    // at chmod time — the fence does nothing for this scope.
+    std::fs::create_dir_all(format!("{wt}/artifacts")).unwrap();
+    let stray_write = exec
+        .write_file("local", &format!("{wt}/artifacts/s-draft.md"), "stray body")
+        .await;
+    assert!(
+        stray_write.is_ok(),
+        "Implement scope must NOT chmod-block artifacts/<file>.md — there is no fence"
+    );
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_docs_update_diff_guard_does_not_silently_revert_brand_new_doc_path() {
+    // The audit question: does `verify_and_revert_out_of_scope_writes`
+    // silently revert a legitimate write to a brand-new path under
+    // `docs/<area>/<topic>.md`?
+    //
+    // Answer for s-draft/s-polish (Implement scope): NO — and not
+    // because the guard is smart, but because it is a NO-OP for the
+    // __ALL_WRITES__ sentinel (scope.rs:360-365). This test pins that
+    // answer against a real git repo, so a future tightening of the
+    // fence for Implement steps forces this audit to be redone.
+    let (dir, helper) = make_repo("audit_diff_no_revert_brand_new").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    let wt = format!("{}_wt", repo);
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" worktree add \"{wt}\" HEAD"),
+    )
+    .await
+    .unwrap();
+
+    // Same sentinel the Implement path emits.
+    let writable_paths: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from("__ALL_WRITES__")];
+
+    // Agent creates a brand-new doc path that has never existed in the
+    // worktree — this is the canonical case the docs-update workflow
+    // depends on (s-survey says "create docs/api/foo.md", s-gate-scope
+    // approves it, s-draft writes it).
+    std::fs::create_dir_all(format!("{wt}/docs/api")).unwrap();
+    std::fs::write(
+        format!("{wt}/docs/api/foo.md"),
+        "# brand new doc\n\nbrand new content\n",
+    )
+    .unwrap();
+
+    // Run the post-step diff guard. It must report ZERO reverts and
+    // leave the file alone, even though `docs/api/foo.md` was
+    // untracked, brand-new, and never declared to the orchestrator
+    // up-front.
+    let reverted = helper
+        .verify_and_revert_out_of_scope_writes(None, &wt, &writable_paths)
+        .await
+        .expect("diff guard must succeed for the __ALL_WRITES__ sentinel");
+
+    assert!(
+        reverted.is_empty(),
+        "Implement scope must not revert brand-new docs/<area>/<topic>.md \
+         writes; got reverted = {:?}",
+        reverted
+    );
+
+    // The file content survives untouched.
+    let still_here = std::fs::read_to_string(format!("{wt}/docs/api/foo.md"))
+        .expect("legitimate docs/<area>/<topic>.md write must remain on disk");
+    assert_eq!(
+        still_here, "# brand new doc\n\nbrand new content\n",
+        "brand-new doc path content must be byte-identical after the diff guard"
+    );
+
+    // Cleanup.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test]
 async fn test_scope_all_writes_sentinel_disables_enforcement() {
     let (dir, helper) = make_repo("scope_off").await;

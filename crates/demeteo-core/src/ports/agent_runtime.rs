@@ -89,6 +89,116 @@ pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
     HashMap::new()
 }
 
+#[cfg(test)]
+mod audit_write_fence_pinning {
+    //! s-audit-write-fence pinning (analize-the-documentation-update-workflow-it-is).
+    //!
+    //! These tests pin the JSON shape that [`opencode_permission_json`]
+    //! emits for the Implement capability consumed by `s-draft` and
+    //! `s-polish` in `wf-starter-docs-update`
+    //! (src-tauri/workflows/docs-update.json:42,113). The audit doc-block
+    //! on `crates/demeteo-core/src/adapters/worktree/git_ops/scope.rs`
+    //! names this as the source of divergence between fence behaviour
+    //! and the docs-update prompt's "real path" requirement: for
+    //! Implement, `edit:allow` + `bash:allow` + `external_directory:deny`
+    //! is what opencode enforces — there is no `edit` pathspec in the
+    //! JSON, so the chmod fence (which is a no-op for Implement) is the
+    //! ONLY mechanism that would scope writes, and it isn't running.
+    //!
+    //! Any change here forces the audit to be redone.
+    use super::*;
+    use crate::domain::permission::{resolve_profile, Access, StepCapability};
+
+    #[test]
+    fn audit_implement_capability_renders_no_write_pathspec_in_edit_field() {
+        // The exact JSON opencode will see for s-draft / s-polish.
+        // We assert field-by-field so a future widening (e.g. adding a
+        // `path`-scoped edit policy) is caught.
+        let profile = resolve_profile(StepCapability::Implement, false, false);
+        let json = opencode_permission_json(&profile);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("OPENCODE_PERMISSION must remain valid JSON");
+
+        assert_eq!(
+            parsed["edit"], "allow",
+            "Implement MUST render `edit:allow` — s-draft/s-polish are not fenced by the JSON"
+        );
+        assert_eq!(
+            parsed["bash"], "allow",
+            "Implement MUST render `bash:allow` — the chmod-escape hatch is open by \
+             design for implement steps, but combined with the chmod-fence no-op it \
+             means s-draft/s-polish can both bypass the fence and write anywhere"
+        );
+        assert_eq!(
+            parsed["external_directory"], "deny",
+            "external_directory is the agent's only path-shaped enforcement; it stays \
+             `deny` so the agent can't read or write outside its cwd (the worktree)"
+        );
+        assert_eq!(parsed["read"], "allow");
+        assert_eq!(
+            parsed["webfetch"], "deny",
+            "Implement keeps network off — no capability produces `allow` here"
+        );
+        assert_eq!(parsed["websearch"], "deny");
+        assert_eq!(
+            parsed["doom_loop"], "allow",
+            "doom_loop is unconditionally `allow` so a stuck tool never blocks the pipeline"
+        );
+
+        // Negative coverage: the JSON has NO `path` / `path_pattern` /
+        // `glob` keys. Those would be the only way to scope edits
+        // declaratively at the opencode layer; absence here is what
+        // makes the docs-update fence a pure chmod-fence concern.
+        for forbidden in ["path", "path_pattern", "glob", "include", "exclude"] {
+            assert!(
+                parsed.get(forbidden).is_none(),
+                "OPENCODE_PERMISSION must NOT carry a `{forbidden}` field for Implement; \
+                 adding one would silently re-scope writes from s-draft/s-polish"
+            );
+        }
+    }
+
+    #[test]
+    fn audit_opencode_permission_env_inserts_under_canonical_key() {
+        // The agent session reads the policy through this env map; the
+        // key MUST stay `OPENCODE_PERMISSION` — opencode-cli looks it
+        // up by that exact spelling.
+        let profile = resolve_profile(StepCapability::Implement, false, false);
+        let env = opencode_permission_env(&profile);
+        assert_eq!(env.len(), 1, "no other keys leak through `perm_env`");
+        let json = env
+            .get("OPENCODE_PERMISSION")
+            .expect("key MUST be exactly `OPENCODE_PERMISSION`");
+        assert!(
+            json.contains(r#""edit":"allow""#),
+            "env MUST carry the Implement edit-allow shape; got {json}"
+        );
+        assert!(
+            json.contains(r#""bash":"allow""#),
+            "env MUST carry the Implement bash-allow shape; got {json}"
+        );
+        assert!(
+            json.contains(r#""external_directory":"deny""#),
+            "env MUST carry the external_directory:deny shape; got {json}"
+        );
+    }
+
+    #[test]
+    fn audit_no_permission_env_returns_empty_for_implement() {
+        // claude-code / hermes / antigravity runtimes get an empty
+        // env from this translator — they enforce via their own CLI
+        // flags instead. Pinning the empty result guarantees the
+        // opencode path is the only place `OPENCODE_PERMISSION` can
+        // change.
+        let profile = resolve_profile(StepCapability::Implement, false, false);
+        assert!(no_permission_env(&profile).is_empty());
+        // The capability → opencode_str mapping the implement fence
+        // would-be-narrowed by.
+        assert_eq!(Access::Allow.opencode_str(), "allow");
+        assert_eq!(Access::Deny.opencode_str(), "deny");
+    }
+}
+
 /// Standard, permission-independent environment variables injected into
 /// every agent process. Permission policy is applied separately by the
 /// runtime from [`AgentContext::permissions`], so this no longer carries
