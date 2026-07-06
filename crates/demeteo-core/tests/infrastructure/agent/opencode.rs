@@ -217,15 +217,30 @@ fn args_no_session_when_captured_id_missing() {
 }
 
 #[test]
-fn args_session_and_continue_emitted_when_captured_id_set() {
+fn args_session_emitted_without_continue_when_captured_id_set() {
     let args = build_opencode_args(&ctx_for_test(), Some("oc-sess-77"));
     let session_idx = args
         .iter()
         .position(|a| a == "--session")
         .expect("--session should be present");
     assert_eq!(args[session_idx + 1], "oc-sess-77");
-    let continue_idx = session_idx + 2;
-    assert_eq!(args[continue_idx], "--continue");
+    // `--session <id>` alone continues that session; `--continue` means
+    // "continue the *last* session" and must not be paired with it.
+    assert!(!args.contains(&"--continue".to_string()), "got {args:?}");
+}
+
+#[test]
+fn args_use_real_opencode_flags_for_headless_runs() {
+    let args = build_opencode_args(&ctx_for_test(), None);
+    // `--auto` is opencode's auto-approve flag; the Claude-ism
+    // `--dangerously-skip-permissions` doesn't exist in opencode.
+    assert!(args.contains(&"--auto".to_string()), "got {args:?}");
+    assert!(
+        !args.contains(&"--dangerously-skip-permissions".to_string()),
+        "got {args:?}"
+    );
+    // stderr logs feed the orchestrator's silence heartbeat.
+    assert!(args.contains(&"--print-logs".to_string()), "got {args:?}");
 }
 
 #[test]

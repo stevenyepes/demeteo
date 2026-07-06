@@ -21,7 +21,7 @@ use planner::{extract_subtask_dag, SubtaskDag};
 impl ExecutionDriver {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_parallel_step(
-        &self,
+        &mut self,
         step_exec: &StepExecution,
         step_conf: &StepConfig,
         accumulated_cost: &mut f64,
@@ -62,30 +62,67 @@ impl ExecutionDriver {
             }
         };
 
-        // 1. Planner pass: ask the planner agent for a subtask DAG.
-        let dag = match self
-            .run_planner_pass(
-                step_exec,
-                step_conf,
-                accumulated_cost,
-                accumulated_tokens,
-                &planner_kind,
-                &override_model,
-                &machine_str,
-                step_execs,
-                step_index,
-            )
-            .await
-        {
-            Ok(d) => d,
-            Err(e) => return StepOutcome::Failed(e),
+        // 1. Obtain the subtask DAG — escalation ladder:
+        //    attempt 0 (first run)  → planner pass, cache the full DAG.
+        //    attempt 1 (first retry) → reuse the cached DAG, re-run only
+        //      the subtasks owning the verdict's implicated files, with
+        //      the feedback stamped as each one's retry_note. No planner
+        //      turn, no untouched workers.
+        //    attempt 2+ → the targeted fix didn't stick; full re-plan so
+        //      the planner can re-decompose in light of the feedback.
+        let retry_iteration = self.retry_ctx.as_ref().map(|rc| rc.iteration).unwrap_or(0);
+        let targeted_dag = if retry_iteration == 1 {
+            match (&self.cached_dag, &self.retry_ctx) {
+                (Some(cached), Some(rc)) => Some(planner::select_targeted_subtasks(
+                    cached,
+                    &rc.feedback,
+                    &rc.implicated_files,
+                )),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let dag = match targeted_dag {
+            Some(d) => {
+                eprintln!(
+                    "[parallel step] targeted retry: re-running {} of {} cached subtask(s)",
+                    d.subtasks.len(),
+                    self.cached_dag
+                        .as_ref()
+                        .map(|c| c.subtasks.len())
+                        .unwrap_or(0),
+                );
+                d
+            }
+            None => {
+                let planned = match self
+                    .run_planner_pass(
+                        step_exec,
+                        step_conf,
+                        accumulated_cost,
+                        accumulated_tokens,
+                        &planner_kind,
+                        &override_model,
+                        &machine_str,
+                        step_execs,
+                        step_index,
+                    )
+                    .await
+                {
+                    Ok(d) => d,
+                    Err(outcome) => return outcome,
+                };
+                // Cache only full plans — a targeted subset must never
+                // shadow the complete decomposition.
+                self.cached_dag = Some(planned.clone());
+                planned
+            }
         };
 
         let subtasks = dag.subtasks;
-        eprintln!(
-            "[parallel step] planner produced {} subtask(s)",
-            subtasks.len()
-        );
+        eprintln!("[parallel step] running {} subtask(s)", subtasks.len());
 
         // 2. Fan out: one worker per subtask.
         let mut all_artifact_refs = Vec::new();
@@ -108,7 +145,7 @@ impl ExecutionDriver {
             )
             .await;
 
-        if let Err(step_err_msg) = subtasks_res {
+        if let Err((step_err_msg, err_environmental)) = subtasks_res {
             let is_cancelled = *self.cancel_watch.borrow();
 
             // Roll back any partial subtask merges so the next retry starts
@@ -167,6 +204,9 @@ impl ExecutionDriver {
             if is_cancelled {
                 return StepOutcome::Cancelled;
             }
+            if err_environmental {
+                return StepOutcome::Environmental(step_err_msg);
+            }
             return StepOutcome::Failed(step_err_msg);
         }
 
@@ -212,8 +252,8 @@ impl ExecutionDriver {
                     )
                     .await;
                 return match verifier_err {
-                    crate::domain::verifier::VerifierError::Verdict(reason) => {
-                        StepOutcome::Failed(reason)
+                    crate::domain::verifier::VerifierError::Verdict(failure) => {
+                        StepOutcome::VerdictFailed(failure)
                     }
                     crate::domain::verifier::VerifierError::Infrastructure(msg) => {
                         StepOutcome::NonRetryable(format!(
@@ -333,7 +373,7 @@ impl ExecutionDriver {
         machine_str: &str,
         step_execs: &[StepExecution],
         step_index: usize,
-    ) -> Result<SubtaskDag, String> {
+    ) -> Result<SubtaskDag, StepOutcome> {
         let planner_thread_id = format!("{}-planner", self.f_id_str);
         let feature_desc = self.base_ctx.get("feature_description").to_string();
         let repo_list = self.base_ctx.get("repo_list").to_string();
@@ -354,10 +394,10 @@ impl ExecutionDriver {
         {
             Ok(p) => p,
             Err(e) => {
-                return Err(format!(
+                return Err(StepOutcome::Environmental(format!(
                     "parallel step: planner worktree provision failed: {}",
                     e
-                ))
+                )))
             }
         };
 
@@ -489,7 +529,10 @@ impl ExecutionDriver {
                         &planner_wt_id,
                     )
                     .await;
-                return Err(format!("parallel step: planner spawn failed: {:?}", e));
+                return Err(StepOutcome::Environmental(format!(
+                    "parallel step: planner spawn failed: {:?}",
+                    e
+                )));
             }
             None => {
                 let _ = self.registry.kill(&planner_thread_id).await;
@@ -502,7 +545,7 @@ impl ExecutionDriver {
                         &planner_wt_id,
                     )
                     .await;
-                return Err("parallel step: planner spawn cancelled".to_string());
+                return Err(StepOutcome::Cancelled);
             }
         };
 
@@ -562,7 +605,7 @@ impl ExecutionDriver {
                             &planner_wt_id,
                         )
                         .await;
-                    return Err("parallel step: planner cancelled".to_string());
+                    return Err(StepOutcome::Cancelled);
                 }
                 crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
                     let _ = self.registry.kill(&planner_thread_id).await;
@@ -575,7 +618,26 @@ impl ExecutionDriver {
                             &planner_wt_id,
                         )
                         .await;
-                    return Err(format!("parallel step: planner failed: {}", descriptive));
+                    return Err(StepOutcome::Failed(format!(
+                        "parallel step: planner failed: {}",
+                        descriptive
+                    )));
+                }
+                crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
+                    let _ = self.registry.kill(&planner_thread_id).await;
+                    let _ = self
+                        .git_ops
+                        .cleanup_subtask_worktree(
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &planner_wt_id,
+                        )
+                        .await;
+                    return Err(StepOutcome::Environmental(format!(
+                        "parallel step: planner failed: {}",
+                        descriptive
+                    )));
                 }
                 crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
                     *accumulated_cost += outcome.cost_usd;
@@ -612,7 +674,7 @@ impl ExecutionDriver {
 
         match parsed {
             Some(d) => Ok(d),
-            None => Err(format!(
+            None => Err(StepOutcome::Failed(format!(
                 "parallel step: planner did not return a valid subtask DAG after {} attempts. \
                  The agent's last response was: {}",
                 PLANNER_MAX_ATTEMPTS,
@@ -622,7 +684,7 @@ impl ExecutionDriver {
                 } else {
                     last_text
                 }
-            )),
+            ))),
         }
     }
 }

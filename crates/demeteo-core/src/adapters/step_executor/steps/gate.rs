@@ -301,6 +301,15 @@ impl ExecutionDriver {
             step_execution_id: step_exec.id.clone(),
         });
 
+        // A human gate can park the run for hours. Anthropic's prompt cache
+        // has a ~5-minute TTL, so `--resume`ing a session after the gate
+        // would replay the entire accumulated transcript at full input
+        // price — strictly worse than a fresh session that re-warms the
+        // shared static prefix. Kill everything now; the next agent step
+        // spawns fresh. (The reconciliation fast-path above skips this —
+        // a decision that already arrived means no idle gap.)
+        self.registry.kill_all_for_feature(self.f_id.as_str()).await;
+
         // Set up waiter and wait for either a fresh decision or cancellation.
         let waiter = GateWaiter::new();
         self.gate_waiters
@@ -430,6 +439,13 @@ impl ExecutionDriver {
                         feedback: cleaned.to_string(),
                         iteration: 1,
                         max: 1,
+                        failing_tests: Vec::new(),
+                        implicated_files: Vec::new(),
+                        // The user's guidance stays visible to every step
+                        // between the redirect target and this gate; it is
+                        // cleared when the gate itself completes (i.e. the
+                        // user approves the redone work).
+                        failing_step_id: ctx.step_exec.step_id.0.clone(),
                     });
                 }
 

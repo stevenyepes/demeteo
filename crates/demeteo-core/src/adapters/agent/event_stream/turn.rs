@@ -27,7 +27,14 @@ pub struct TurnOutcome {
 pub enum TurnResult {
     Success(TurnOutcome),
     Interrupted,
+    /// The agent itself reported an error (CLI error event). Retrying the
+    /// work with feedback may help.
     Failed(String),
+    /// The orchestrator killed or lost the turn for environmental reasons
+    /// — silence timeout, wall-clock cap, spawn failure, process crash.
+    /// The implementation is not at fault; callers must not route this
+    /// into an on_failure re-implementation loop.
+    Environmental(String),
 }
 
 /// Drive a single agent turn: stream events, accumulate usage, time out.
@@ -57,8 +64,17 @@ where
     let mut text_buffer = String::new();
     let mut produced_artifacts = Vec::new();
     let mut acc = UsageAccumulator::new(model);
-    let mut run_failed = None;
+    let mut run_failed: Option<TurnResult> = None;
     let mut run_cancelled = false;
+    // Tool calls the agent has issued but not yet resolved. While any are
+    // in flight the wire is legitimately silent — a `cargo build` or a big
+    // test suite produces no stdout events between `tool_use` and
+    // `tool_result`, and typically nothing on stderr either. Firing the
+    // fast/normal silence timeouts in that window kills healthy turns and
+    // masquerades as an implementation failure downstream. Only the wall
+    // cap bounds an in-flight tool call.
+    let mut pending_tool_calls: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     let fast_sleep = tokio::time::sleep(std::time::Duration::from_secs(timeouts.fast_timeout_s));
     let normal_sleep =
@@ -94,13 +110,40 @@ where
                             text_buffer.push_str(delta);
                         }
                     }
+                    AgentEvent::ToolCall { tool_call_id, .. } => {
+                        pending_tool_calls.insert(tool_call_id.clone());
+                    }
+                    AgentEvent::ToolCallUpdate {
+                        tool_call_id,
+                        status,
+                        ..
+                    } => {
+                        if matches!(
+                            status,
+                            crate::domain::agent_event::ToolCallStatus::Completed
+                                | crate::domain::agent_event::ToolCallStatus::Failed { .. }
+                        ) {
+                            pending_tool_calls.remove(tool_call_id);
+                        }
+                    }
                     AgentEvent::ArtifactProduced { artifact } => {
                         produced_artifacts.push(artifact.clone());
                     }
                     AgentEvent::TurnComplete { .. } => break,
-                    AgentEvent::Error { message, .. } => {
+                    AgentEvent::Error { message, code, .. } => {
                         let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(message, machine_str, exec).await;
-                        run_failed = Some(descriptive);
+                        // A process that couldn't spawn or died with a
+                        // non-zero exit is an environment problem, not
+                        // something re-implementing the code can fix. A
+                        // `cli_error` is the agent's own reported failure
+                        // — that one is feedback-worthy.
+                        let environmental =
+                            code == "spawn_failed" || code == "agent_exit_nonzero";
+                        run_failed = Some(if environmental {
+                            TurnResult::Environmental(descriptive)
+                        } else {
+                            TurnResult::Failed(descriptive)
+                        });
                         break;
                     }
                     _ => {}
@@ -109,7 +152,9 @@ where
                 acc.ingest_event(&event);
             }
             _ = &mut fast_sleep => {
-                if !first_event_seen {
+                if !first_event_seen || !pending_tool_calls.is_empty() {
+                    // Startup, or a tool call is in flight — silence is
+                    // expected; the wall cap is the only bound here.
                     fast_sleep.as_mut().reset(
                         tokio::time::Instant::now() + std::time::Duration::from_secs(timeouts.fast_timeout_s),
                     );
@@ -118,7 +163,7 @@ where
                 if hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > timeouts.fast_timeout_s * 1000) {
                     let msg = format!("Agent blocked: no output for {}s (stdout and stderr both silent)", timeouts.fast_timeout_s);
                     let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(&msg, machine_str, exec).await;
-                    run_failed = Some(descriptive);
+                    run_failed = Some(TurnResult::Environmental(descriptive));
                     break;
                 }
                 fast_sleep.as_mut().reset(
@@ -126,6 +171,12 @@ where
                 );
             }
             _ = &mut normal_sleep => {
+                if !pending_tool_calls.is_empty() {
+                    normal_sleep.as_mut().reset(
+                        tokio::time::Instant::now() + std::time::Duration::from_secs(timeouts.normal_timeout_s),
+                    );
+                    continue;
+                }
                 if let Some(ref h) = hb {
                     if h.last_activity_ago_ms() < timeouts.normal_timeout_s * 1000 {
                         normal_sleep.as_mut().reset(
@@ -136,15 +187,15 @@ where
                 }
                 let msg = format!("Agent response timed out (no output for {}s)", timeouts.normal_timeout_s);
                 let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(&msg, machine_str, exec).await;
-                run_failed = Some(descriptive);
+                run_failed = Some(TurnResult::Environmental(descriptive));
                 break;
             }
             _ = &mut wall_sleep => {
                 let elapsed = start_instant.elapsed().as_secs();
-                run_failed = Some(format!(
+                run_failed = Some(TurnResult::Environmental(format!(
                     "Agent step exceeded wall clock cap ({}s / {}s elapsed)",
                     timeouts.wall_cap_s, elapsed,
-                ));
+                )));
                 break;
             }
             _ = async {
@@ -169,7 +220,7 @@ where
         return TurnResult::Interrupted;
     }
     if let Some(err) = run_failed {
-        return TurnResult::Failed(err);
+        return err;
     }
 
     // Resolve cost: prefer agent-supplied cost_usd; fall back to pricing

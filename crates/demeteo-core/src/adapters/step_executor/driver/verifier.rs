@@ -8,6 +8,121 @@ use std::time::Instant;
 use tokio_stream::StreamExt;
 
 impl ExecutionDriver {
+    /// Resolve and run the project's prepare command + test harness inside
+    /// `wt_path`, and return the formatted "harness results" section for an
+    /// agent prompt.
+    ///
+    /// This is the harness-first primitive: it runs **before** any agent
+    /// turn, so a red harness fails the step objectively at zero token
+    /// cost, and a green harness's output is injected into the single
+    /// validate turn instead of paying for the agent to re-run the same
+    /// commands (which the capability chmod fence would block with EPERM
+    /// anyway — build tools need to write `target/`, `node_modules/`, …).
+    ///
+    /// Errors:
+    /// * prepare or harness exits non-zero → [`VerifierError::Verdict`]
+    ///   with the output tail as the actionable reason (feeds the
+    ///   on_failure retry loop).
+    pub(crate) async fn run_harness_first(
+        &self,
+        verifier_cfg: &crate::domain::verifier::VerifierConfig,
+        wt_path: &str,
+        machine_str: &str,
+    ) -> Result<String, crate::domain::verifier::VerifierError> {
+        let feature = self.features.get(&self.f_id).ok().flatten();
+        let settings = feature
+            .as_ref()
+            .and_then(|f| self.projects.get_settings(&f.project_id).ok().flatten());
+        let harnesses = settings
+            .as_ref()
+            .and_then(|s| s.worktree_strategy.harnesses.clone());
+        let prepare_command = settings
+            .as_ref()
+            .and_then(|s| s.worktree_strategy.prepare_command.clone());
+
+        let harness_name = verifier_cfg
+            .harness_name
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let harness_cmd = verifier_cfg
+            .harness_name
+            .as_ref()
+            .and_then(|name| harnesses.as_ref().and_then(|h| h.get(name)))
+            .cloned()
+            .or_else(|| {
+                settings
+                    .as_ref()
+                    .and_then(|s| s.worktree_strategy.test_command.clone())
+            });
+
+        // Idempotent write-restore. Fresh worktrees are writable, but a
+        // retried step may run in a worktree the fence already touched.
+        if prepare_command.is_some() || harness_cmd.is_some() {
+            let _ = self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "chmod -R u+w {} 2>/dev/null || true",
+                        paths::shell_escape_posix(wt_path)
+                    ),
+                )
+                .await;
+        }
+
+        if let Some(ref cmd) = prepare_command {
+            let prepare_run_cmd = format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
+            if let Err(out) = self.exec.run_command(machine_str, &prepare_run_cmd).await {
+                let truncated = tail_chars(&out, 2000);
+                return Err(crate::domain::verifier::VerifierError::Verdict(
+                    crate::domain::verifier::VerdictFailure::from_reason(format!(
+                        "prepare command '{}' exited with failure:\n{}",
+                        cmd, truncated
+                    )),
+                ));
+            }
+        }
+
+        let harness_result: Option<(String, bool)> = match harness_cmd {
+            Some(ref cmd) => {
+                let harness_run_cmd =
+                    format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
+                match self.exec.run_command(machine_str, &harness_run_cmd).await {
+                    Ok(out) => Some((out, true)),
+                    Err(out) => Some((out, false)),
+                }
+            }
+            None => None,
+        };
+
+        // Hard gate: non-zero exit is objective — fail without any agent
+        // involvement so nothing can "pass" a broken build.
+        if let Some((ref out, false)) = harness_result {
+            let truncated = tail_chars(out, 2000);
+            return Err(crate::domain::verifier::VerifierError::Verdict(
+                crate::domain::verifier::VerdictFailure::from_reason(format!(
+                    "test harness exited with failure:\n{}",
+                    truncated
+                )),
+            ));
+        }
+
+        Ok(match (&harness_cmd, &harness_result) {
+            (Some(cmd), Some((output, _))) => format!(
+                "We ran the test harness '{}' with the command '{}'.\n\
+                 The output of the test command was:\n\
+                 ```\n\
+                 {}\n\
+                 ```\n",
+                harness_name, cmd, output,
+            ),
+            _ => "No test harness was configured or detected for this project, so no test \
+                  command was run. Base your verdict on the instructions and the produced \
+                  artifacts below.\n"
+                .to_string(),
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_verifier_logic(
         &self,
@@ -33,116 +148,18 @@ impl ExecutionDriver {
             cache_creation_input_tokens: None,
         });
 
-        let feature = self.features.get(&self.f_id).ok().flatten();
-        let settings = feature
-            .as_ref()
-            .and_then(|f| self.projects.get_settings(&f.project_id).ok().flatten());
-        let harnesses = settings
-            .as_ref()
-            .and_then(|s| s.worktree_strategy.harnesses.clone());
-        let prepare_command = settings
-            .as_ref()
-            .and_then(|s| s.worktree_strategy.prepare_command.clone());
-
-        // Resolve the harness command: an explicitly named harness from project
-        // settings takes priority, otherwise fall back to the project's detected
-        // `test_command`. If neither is available we run no command and let the
-        // verifier agent decide purely from the instructions and artifacts.
+        // Resolve + run prepare and harness via the shared harness-first
+        // primitive. A non-zero exit propagates as a Verdict failure
+        // before any verifier agent spawns.
         let harness_name = verifier_cfg
             .harness_name
             .clone()
             .unwrap_or_else(|| "default".to_string());
-        let harness_cmd = verifier_cfg
-            .harness_name
-            .as_ref()
-            .and_then(|name| harnesses.as_ref().and_then(|h| h.get(name)))
-            .cloned()
-            .or_else(|| {
-                settings
-                    .as_ref()
-                    .and_then(|s| s.worktree_strategy.test_command.clone())
-            });
-
-        // Restore write permissions before running anything. The capability
-        // scope fence (`apply_artifact_scope`) ran before the agent spawned
-        // and left most of the worktree `a-w`. The agent is done at this
-        // point, so the fence has served its purpose. Build tools (cargo,
-        // npm, tsc) need to write to target/, node_modules/, etc. — without
-        // this they fail with EPERM, not a real test failure.
-        if prepare_command.is_some() || harness_cmd.is_some() {
-            let _ = self
-                .exec
-                .run_command(
-                    machine_str,
-                    &format!(
-                        "chmod -R u+w {} 2>/dev/null || true",
-                        paths::shell_escape_posix(wt_path)
-                    ),
-                )
-                .await;
-        }
-
-        // Run the project's optional prepare command (`npm ci`, `cargo
-        // fetch`, codegen, migrations, …) before the harness. Dependency
-        // caches present in the primary checkout are already symlinked in
-        // by `provision_subtask_worktree`; this step exists for whatever
-        // that can't cover — a freshly added dependency, generated code,
-        // a schema migration the harness assumes has already run.
-        if let Some(ref cmd) = prepare_command {
-            let prepare_run_cmd = format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
-            if let Err(out) = self.exec.run_command(machine_str, &prepare_run_cmd).await {
-                let truncated = tail_chars(&out, 2000);
-                return Err(crate::domain::verifier::VerifierError::Verdict(format!(
-                    "prepare command '{}' exited with failure:\n{}",
-                    cmd, truncated
-                )));
-            }
-        }
-
-        // Run the harness and capture both the output and whether it succeeded.
-        // A non-zero exit code is an objective signal — we fail immediately
-        // without invoking the verifier agent, so the agent can't "pass" a
-        // broken build. The exit status from `run_command`: Ok → exit 0,
-        // Err → non-zero exit or I/O error (both are failures).
-        let harness_result: Option<(String, bool)> = match harness_cmd {
-            Some(ref cmd) => {
-                let harness_run_cmd =
-                    format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
-                match self.exec.run_command(machine_str, &harness_run_cmd).await {
-                    Ok(out) => Some((out, true)),
-                    Err(out) => Some((out, false)),
-                }
-            }
-            None => None,
-        };
-
-        // Hard gate: if the harness exited non-zero, fail as a Verdict so the
-        // reason feeds back into the retry loop. The verifier agent is skipped —
-        // its job is interpretation, not override of an objective exit code.
-        if let Some((ref out, false)) = harness_result {
-            let truncated = tail_chars(out, 2000);
-            return Err(crate::domain::verifier::VerifierError::Verdict(format!(
-                "test harness exited with failure:\n{}",
-                truncated
-            )));
-        }
+        let harness_section = self
+            .run_harness_first(verifier_cfg, wt_path, machine_str)
+            .await?;
 
         let produced_artifacts_summary = format_produced_artifacts_summary(produced_artifacts);
-
-        let harness_section = match (&harness_cmd, &harness_result) {
-            (Some(cmd), Some((output, _))) => format!(
-                "We ran the test harness '{}' with the command '{}'.\n\
-                 The output of the test command was:\n\
-                 ```\n\
-                 {}\n\
-                 ```\n",
-                harness_name, cmd, output,
-            ),
-            _ => "No test harness was configured or detected for this project, so no test \
-                  command was run. Base your verdict on the instructions and the produced \
-                  artifacts below.\n"
-                .to_string(),
-        };
 
         let verifier_prompt = format!(
             "You are a verifier agent performing a verification task.\n\n\
@@ -153,7 +170,11 @@ impl ExecutionDriver {
              {}\n\n\
              Please analyze the available information and artifacts, then provide a JSON object containing the verification verdict.\n\
              The JSON object must have a key '{}' with the value either \"pass\" or \"fail\".\n\
-             For example: {{ \"{}\": \"pass\" }} or {{ \"{}\": \"fail\", \"reason\": \"...\" }}.\n\
+             On \"fail\", also include:\n\
+             - \"reason\": a concise, actionable description naming exactly what to fix\n\
+             - \"failing_tests\": an array of failing test identifiers, verbatim from the harness output ([] if none)\n\
+             - \"implicated_files\": an array of repo-relative file paths that most likely must change to fix the failure ([] if unknown)\n\
+             For example: {{ \"{}\": \"pass\" }} or {{ \"{}\": \"fail\", \"reason\": \"...\", \"failing_tests\": [\"...\"], \"implicated_files\": [\"src/foo.rs\"] }}.\n\
              Do not output any other text or code blocks outside the JSON.",
             verifier_cfg.instructions,
             harness_section,
@@ -168,8 +189,16 @@ impl ExecutionDriver {
             .clone()
             .unwrap_or_else(|| default_agent_kind.to_string());
 
+        // Verifier-specific model override. Interpreting harness output
+        // into one verdict object is a small-model job; a cheap model
+        // here cuts the recurring cost of every retry loop.
+        let verifier_model: Option<String> = verifier_cfg
+            .model
+            .clone()
+            .or_else(|| override_model.clone());
+
         let mut agent_env = crate::ports::agent_runtime::agent_base_env();
-        if let Some(ref m) = override_model {
+        if let Some(ref m) = verifier_model {
             if verifier_agent_kind != "opencode"
                 && verifier_agent_kind != "hermes"
                 && verifier_agent_kind != "claude-code"
@@ -196,7 +225,7 @@ impl ExecutionDriver {
             args: vec![],
             env: agent_env,
             cwd: wt_path.to_string(),
-            model: override_model.clone(),
+            model: verifier_model.clone(),
             title: Some(format!("Verify: {}", harness_name)),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
@@ -247,7 +276,7 @@ impl ExecutionDriver {
 
         let mut run_failed = None;
         let mut run_cancelled = false;
-        let mut usage_acc = crate::domain::usage::UsageAccumulator::new(override_model.clone());
+        let mut usage_acc = crate::domain::usage::UsageAccumulator::new(verifier_model.clone());
 
         loop {
             tokio::select! {
@@ -343,81 +372,8 @@ impl ExecutionDriver {
             return Err(crate::domain::verifier::VerifierError::Infrastructure(err));
         }
 
-        // Strip extended-thinking tags before JSON parsing — verifier agents
-        // using thinking mode emit <think>…</think> as raw text and the parser
-        // would otherwise trip over them or include them in the JSON search.
-        let text_buffer = crate::domain::text::strip_think_tags(&text_buffer);
-
-        // Walk forward through every {…} span. For each balanced span:
-        //   - Valid JSON with the verdict key → record it, skip past the span.
-        //   - Valid JSON without the verdict key → step forward by 1 so inner
-        //     nested objects are independently evaluated (handles models that
-        //     wrap the verdict in an outer object like {"result": {"verdict":"pass"}}).
-        //   - Malformed JSON → skip past the span to avoid O(n²) re-parsing.
-        let mut parsed_val: Option<serde_json::Value> = None;
-        let bytes = text_buffer.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'{' {
-                if let Some(close) = find_matching_close_brace(bytes, i) {
-                    match serde_json::from_str::<serde_json::Value>(&text_buffer[i..=close]) {
-                        Ok(val)
-                            if val.is_object() && val.get(&verifier_cfg.verdict_key).is_some() =>
-                        {
-                            parsed_val = Some(val);
-                            i = close + 1;
-                            continue;
-                        }
-                        Ok(_) => {
-                            // Valid JSON but no verdict key at top level; step
-                            // forward by 1 so inner objects get evaluated.
-                        }
-                        Err(_) => {
-                            // Balanced braces but not valid JSON; skip the span.
-                            i = close + 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-            i += 1;
-        }
-
-        let val = match parsed_val {
-            Some(v) => v,
-            None => {
-                let start = text_buffer.find('{');
-                let end = text_buffer.rfind('}');
-                let json_str = if let (Some(s), Some(e)) = (start, end) {
-                    if s < e {
-                        &text_buffer[s..=e]
-                    } else {
-                        text_buffer.trim()
-                    }
-                } else {
-                    text_buffer.trim()
-                };
-                serde_json::from_str(json_str).map_err(|e| {
-                    crate::domain::verifier::VerifierError::Infrastructure(format!(
-                        "Failed to parse verifier output JSON: {} (raw: {})",
-                        e, json_str
-                    ))
-                })?
-            }
-        };
-
-        let verdict_str = val
-            .get(&verifier_cfg.verdict_key)
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                crate::domain::verifier::VerifierError::Infrastructure(format!(
-                    "Verifier output missing verdict key '{}'",
-                    verifier_cfg.verdict_key
-                ))
-            })?;
-
-        match verdict_str.to_lowercase().as_str() {
-            "pass" => {
+        match parse_verdict_text(&text_buffer, &verifier_cfg.verdict_key) {
+            ParsedVerdict::Pass => {
                 tracing::info!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
@@ -425,33 +381,142 @@ impl ExecutionDriver {
                 );
                 Ok(())
             }
-            "fail" => {
-                let reason = val
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Verifier check failed (no reason provided)");
+            ParsedVerdict::Fail(failure) => {
                 tracing::warn!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
-                    reason = %reason,
+                    reason = %failure.reason,
                     "verifier verdict: fail"
                 );
-                Err(crate::domain::verifier::VerifierError::Verdict(
-                    reason.to_string(),
-                ))
+                Err(crate::domain::verifier::VerifierError::Verdict(failure))
             }
-            other => {
+            ParsedVerdict::Missing(desc) => {
                 tracing::warn!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
-                    verdict = %other,
-                    "verifier infrastructure error: unrecognised verdict"
+                    desc = %desc,
+                    "verifier infrastructure error: unusable verdict"
                 );
-                Err(crate::domain::verifier::VerifierError::Infrastructure(
-                    format!("Invalid verifier verdict: '{}'", other),
-                ))
+                Err(crate::domain::verifier::VerifierError::Infrastructure(desc))
             }
         }
+    }
+}
+
+/// Result of scanning free text for a verdict JSON object.
+pub(crate) enum ParsedVerdict {
+    Pass,
+    Fail(crate::domain::verifier::VerdictFailure),
+    /// No JSON object carrying the verdict key was found, or its value
+    /// was neither "pass" nor "fail". The string describes the problem.
+    Missing(String),
+}
+
+/// Scan `raw_text` (a full agent turn's text output) for a JSON object
+/// carrying `verdict_key`. Tolerates prose around the JSON, fenced code
+/// blocks, extended-thinking tags, and verdicts nested one level deep.
+///
+/// Shared by the dedicated verifier turn (parallel steps) and the
+/// harness-first single-turn validate path (agent steps), so both parse
+/// the wire contract identically.
+pub(crate) fn parse_verdict_text(raw_text: &str, verdict_key: &str) -> ParsedVerdict {
+    // Strip extended-thinking tags before JSON parsing — agents using
+    // thinking mode emit <think>…</think> as raw text and the parser
+    // would otherwise trip over them or include them in the JSON search.
+    let text_buffer = crate::domain::text::strip_think_tags(raw_text);
+
+    // Walk forward through every {…} span. For each balanced span:
+    //   - Valid JSON with the verdict key → record it, skip past the span.
+    //   - Valid JSON without the verdict key → step forward by 1 so inner
+    //     nested objects are independently evaluated (handles models that
+    //     wrap the verdict in an outer object like {"result": {"verdict":"pass"}}).
+    //   - Malformed JSON → skip past the span to avoid O(n²) re-parsing.
+    let mut parsed_val: Option<serde_json::Value> = None;
+    let bytes = text_buffer.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            if let Some(close) = find_matching_close_brace(bytes, i) {
+                match serde_json::from_str::<serde_json::Value>(&text_buffer[i..=close]) {
+                    Ok(val) if val.is_object() && val.get(verdict_key).is_some() => {
+                        parsed_val = Some(val);
+                        i = close + 1;
+                        continue;
+                    }
+                    Ok(_) => {
+                        // Valid JSON but no verdict key at top level; step
+                        // forward by 1 so inner objects get evaluated.
+                    }
+                    Err(_) => {
+                        // Balanced braces but not valid JSON; skip the span.
+                        i = close + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let val = match parsed_val {
+        Some(v) => v,
+        None => {
+            let start = text_buffer.find('{');
+            let end = text_buffer.rfind('}');
+            let json_str = if let (Some(s), Some(e)) = (start, end) {
+                if s < e {
+                    &text_buffer[s..=e]
+                } else {
+                    text_buffer.trim()
+                }
+            } else {
+                text_buffer.trim()
+            };
+            match serde_json::from_str(json_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    return ParsedVerdict::Missing(format!(
+                        "Failed to parse verifier output JSON: {} (raw: {})",
+                        e,
+                        tail_chars(json_str, 500)
+                    ))
+                }
+            }
+        }
+    };
+
+    let Some(verdict_str) = val.get(verdict_key).and_then(|v| v.as_str()) else {
+        return ParsedVerdict::Missing(format!(
+            "Verifier output missing verdict key '{}'",
+            verdict_key
+        ));
+    };
+
+    match verdict_str.to_lowercase().as_str() {
+        "pass" => ParsedVerdict::Pass,
+        "fail" => {
+            let reason = val
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Verifier check failed (no reason provided)");
+            let string_list = |key: &str| -> Vec<String> {
+                val.get(key)
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            ParsedVerdict::Fail(crate::domain::verifier::VerdictFailure {
+                reason: reason.to_string(),
+                failing_tests: string_list("failing_tests"),
+                implicated_files: string_list("implicated_files"),
+            })
+        }
+        other => ParsedVerdict::Missing(format!("Invalid verifier verdict: '{}'", other)),
     }
 }
 
@@ -644,5 +709,78 @@ mod tail_chars_tests {
         let truncated = tail_chars(&s, 2000);
         assert_eq!(truncated.chars().count(), 2000);
         assert!(truncated.chars().all(|c| c == '€'));
+    }
+}
+
+#[cfg(test)]
+mod parse_verdict_text_tests {
+    use super::{parse_verdict_text, ParsedVerdict};
+
+    #[test]
+    fn pass_verdict_amid_prose() {
+        let text = "Report written to artifacts/validation-report.md.\n\n{ \"verdict\": \"pass\" }";
+        assert!(matches!(
+            parse_verdict_text(text, "verdict"),
+            ParsedVerdict::Pass
+        ));
+    }
+
+    #[test]
+    fn fail_verdict_carries_structured_fields() {
+        let text = r#"Done. {"verdict": "fail", "reason": "auth test broken", "failing_tests": ["auth::login_works"], "implicated_files": ["src/auth.rs"]}"#;
+        match parse_verdict_text(text, "verdict") {
+            ParsedVerdict::Fail(vf) => {
+                assert_eq!(vf.reason, "auth test broken");
+                assert_eq!(vf.failing_tests, vec!["auth::login_works"]);
+                assert_eq!(vf.implicated_files, vec!["src/auth.rs"]);
+            }
+            _ => panic!("expected fail verdict"),
+        }
+    }
+
+    #[test]
+    fn fail_without_lists_defaults_to_empty() {
+        let text = r#"{"verdict": "fail", "reason": "nope"}"#;
+        match parse_verdict_text(text, "verdict") {
+            ParsedVerdict::Fail(vf) => {
+                assert!(vf.failing_tests.is_empty());
+                assert!(vf.implicated_files.is_empty());
+            }
+            _ => panic!("expected fail verdict"),
+        }
+    }
+
+    #[test]
+    fn nested_verdict_object_is_found() {
+        let text = r#"{"result": {"verdict": "pass"}}"#;
+        assert!(matches!(
+            parse_verdict_text(text, "verdict"),
+            ParsedVerdict::Pass
+        ));
+    }
+
+    #[test]
+    fn missing_verdict_reports_missing() {
+        assert!(matches!(
+            parse_verdict_text("all good, ship it!", "verdict"),
+            ParsedVerdict::Missing(_)
+        ));
+    }
+
+    #[test]
+    fn invalid_verdict_value_reports_missing() {
+        assert!(matches!(
+            parse_verdict_text(r#"{"verdict": "maybe"}"#, "verdict"),
+            ParsedVerdict::Missing(_)
+        ));
+    }
+
+    #[test]
+    fn think_tags_are_stripped_before_parsing() {
+        let text = "<think>{\"verdict\": \"fail\"} draft</think>{\"verdict\": \"pass\"}";
+        assert!(matches!(
+            parse_verdict_text(text, "verdict"),
+            ParsedVerdict::Pass
+        ));
     }
 }

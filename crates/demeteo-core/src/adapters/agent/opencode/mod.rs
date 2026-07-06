@@ -398,13 +398,20 @@ pub fn build_opencode_args(ctx: &AgentContext, captured_session_id: Option<&str>
         "json".to_string(),
     ];
 
-    // Non-interactive auto-approval for allowed tools, avoiding execution hangs
-    args.push("--dangerously-skip-permissions".to_string());
+    // Auto-approve anything OPENCODE_PERMISSION doesn't explicitly deny so a
+    // headless run never parks on a permission ask. (`--auto` is opencode's
+    // real flag; the old `--dangerously-skip-permissions` was a Claude-ism
+    // that opencode's arg parser silently ignored.)
+    args.push("--auto".to_string());
+    // Logs on stderr feed the orchestrator's stderr heartbeat, so long tool
+    // runs aren't misread as "agent blocked".
+    args.push("--print-logs".to_string());
 
     if let Some(sid) = captured_session_id {
+        // `--session <id>` alone continues that session; `--continue` (which
+        // means "continue the *last* session") is redundant alongside it.
         args.push("--session".to_string());
         args.push(sid.to_string());
-        args.push("--continue".to_string());
     }
     if let Some(ref m) = ctx.model {
         args.push("--model".to_string());

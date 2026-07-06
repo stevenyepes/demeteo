@@ -77,7 +77,7 @@
       "kind": "agent",
       "title": "Validate, Test & Security Scan",
       "agent_kind": null,
-      "prompt_template": "You are a QA engineer running the final validation gate before this feature merges. You VERIFY only — you do not modify source code. If something is broken, you report it precisely so an implementation step fixes it.\n\nFeature branch: {{feature_branch}}\nTest command: {{test_command}}\n\n## Validation sequence (run in order, stop and report on first hard failure)\n1. **Build** — `{{build_command}}`. If it fails, report and stop.\n2. **Lint & Type Check** — run the project linter with warnings-as-errors.\n3. **Unit & Integration Tests** — `{{test_command}}`. Report pass/fail counts.\n4. **Security Scan** — run `cargo audit` or `npm audit`. Flag any `critical` or `high` advisories.\n\n## Output artifact\n- Build: PASS / FAIL\n- Lint: PASS / FAIL + warning count\n- Tests: X passed, Y failed (list failing tests)\n- Security: N advisories (list critical/high)\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the artifact contains all four sections and an Overall verdict.",
+      "prompt_template": "You are a QA engineer running the final validation gate before this feature merges. You VERIFY only — you do not modify source code, and you do NOT re-run the build or tests: the orchestrator has already executed the project's test harness in this worktree and its results are appended to this prompt under 'Harness Results'. Treat that output as authoritative.\n\nFeature branch: {{feature_branch}}\n\n## Validation sequence\n1. **Interpret the harness output** — summarize build/test results (pass/fail counts, failing tests verbatim).\n2. **Review the change** — inspect the implementation diff (`git diff` / `git log` are available read-only) against the spec artifact's acceptance criteria. Check each criterion explicitly.\n3. **Scan for red flags** — hardcoded secrets, obviously unhandled error paths, TODOs left in shipped code. Read files as needed; do not execute build tooling.\n\n## Output artifact (write to artifacts/validation-report.md)\n- Harness: summary of the provided results\n- Acceptance criteria: one line per criterion, MET / NOT MET with evidence\n- Red flags: list, or 'none'\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the artifact contains all sections and an Overall verdict, and your reply ends with the required verdict JSON described below.",
       "capability": "verify",
       "artifacts": [
         {
@@ -93,7 +93,7 @@
       "max_iterations": null,
       "verifier": {
         "agent_kind": null,
-        "instructions": "Decide whether the implementation satisfies the feature goal and every acceptance criterion in the spec. The build/test harness output is provided above. Return \"pass\" only if the harness succeeded AND the changes are correct and complete; otherwise return \"fail\" with a concise, actionable reason naming exactly what to fix.",
+        "instructions": "Decide whether the implementation satisfies the feature goal and every acceptance criterion in the spec. The harness output above is authoritative and already succeeded (a failing harness never reaches you). Return \"pass\" only if the changes are also correct and complete against the spec; otherwise return \"fail\" with a concise, actionable reason naming exactly what to fix, the failing_tests (if any), and the implicated_files that must change.",
         "harness_name": null,
         "verdict_key": "verdict"
       }

@@ -41,6 +41,22 @@ pub(crate) struct RetryContext {
     pub iteration: u32,
     /// Effective max iterations for this loop.
     pub max: u32,
+    /// Failing test identifiers from a structured verdict (empty for
+    /// plain failures). Lets the retried step's prompt name the exact
+    /// tests to fix and the parallel step target the owning subtasks.
+    pub failing_tests: Vec<String>,
+    /// Repo-relative files a structured verdict implicated (empty for
+    /// plain failures). The parallel step re-runs only the subtasks
+    /// whose ownership intersects these.
+    pub implicated_files: Vec<String>,
+    /// Step id of the step whose failure opened this loop iteration.
+    /// The feedback stays alive for *every* step between the redirect
+    /// target and this step, and is cleared only when this step finally
+    /// completes — so e.g. a re-run of `s-validate` still knows what it
+    /// failed on last time instead of re-checking blind. Empty string
+    /// means "clear after the next completed step" (legacy behavior,
+    /// used by synthesized per-subtask contexts).
+    pub failing_step_id: String,
 }
 
 /// Holds all shared state for a single feature execution run.
@@ -187,6 +203,20 @@ pub(crate) struct ExecutionDriver {
     /// cache" chip while the step is running.
     pub last_cache_read: Option<u64>,
     pub last_cache_creation: Option<u64>,
+
+    /// The last *full* subtask DAG the planner produced for this run's
+    /// parallel step. On retry attempt 1 the parallel step reuses it to
+    /// re-run only the subtasks owning the verdict's implicated files —
+    /// skipping the planner turn and the untouched workers entirely.
+    /// Attempt 2+ re-plans from scratch (the targeted fix didn't stick).
+    /// In-memory only: an app restart just means one extra planner turn.
+    pub cached_dag: Option<crate::adapters::step_executor::steps::parallel::planner::SubtaskDag>,
+
+    /// Step-execution ids that already consumed their single free
+    /// in-place retry after an environmental failure (agent blocked,
+    /// spawn failure, worktree provisioning). Second environmental
+    /// failure on the same step execution fails the feature.
+    pub env_retried: std::collections::HashSet<String>,
 
     /// The current step's agent-session registry key (see
     /// `ExecutionDriver::agent_session_key`). Recomputed by
@@ -669,6 +699,21 @@ impl ExecutionDriver {
             self.last_cache_read = step_cache_read;
             self.last_cache_creation = step_cache_creation;
 
+            // A verdict failure follows the exact same on_failure path as a
+            // plain failure — normalize it here and keep the structured
+            // half aside so the retry context can carry failing tests and
+            // implicated files to the redirected step.
+            let (outcome, verdict_failure) = match outcome {
+                crate::adapters::step_executor::steps::StepOutcome::VerdictFailed(vf) => {
+                    let msg = vf.to_feedback();
+                    (
+                        crate::adapters::step_executor::steps::StepOutcome::Failed(msg),
+                        Some(vf),
+                    )
+                }
+                other => (other, None),
+            };
+
             match outcome {
                 crate::adapters::step_executor::steps::StepOutcome::Completed => {
                     let wall = step_start.elapsed().as_secs();
@@ -703,10 +748,18 @@ impl ExecutionDriver {
                     // + `session_resume_summary` injection.
                     self.maybe_watchdog_reset().await;
                     self.step_index += 1;
-                    // Retry feedback is scoped to the single redirected step;
-                    // once it completes, clear it so later steps don't inherit
-                    // stale feedback.
-                    self.retry_ctx = None;
+                    // Retry feedback lives until the step that originally
+                    // failed completes successfully. Intermediate steps (the
+                    // redirect target and everything between it and the
+                    // failing step) all see the feedback; once the failing
+                    // step passes, the loop is closed and the feedback is
+                    // stale.
+                    let loop_closed = self.retry_ctx.as_ref().is_none_or(|rc| {
+                        rc.failing_step_id.is_empty() || rc.failing_step_id == step_exec.step_id.0
+                    });
+                    if loop_closed {
+                        self.retry_ctx = None;
+                    }
                 }
                 crate::adapters::step_executor::steps::StepOutcome::Failed(msg) => {
                     tracing::warn!(
@@ -761,6 +814,15 @@ impl ExecutionDriver {
                                 feedback,
                                 iteration,
                                 max,
+                                failing_step_id: step_exec.step_id.0.clone(),
+                                failing_tests: verdict_failure
+                                    .as_ref()
+                                    .map(|vf| vf.failing_tests.clone())
+                                    .unwrap_or_default(),
+                                implicated_files: verdict_failure
+                                    .as_ref()
+                                    .map(|vf| vf.implicated_files.clone())
+                                    .unwrap_or_default(),
                             });
                             self.step_index = redirect_idx;
                             continue;
@@ -774,6 +836,66 @@ impl ExecutionDriver {
                         )
                         .await;
                     }
+                    return;
+                }
+                crate::adapters::step_executor::steps::StepOutcome::VerdictFailed(_) => {
+                    unreachable!("VerdictFailed is normalized into Failed above")
+                }
+                crate::adapters::step_executor::steps::StepOutcome::Environmental(msg) => {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        reason = %msg,
+                        "step failed (environmental)"
+                    );
+                    if *self.cancel_watch.borrow() {
+                        self.cancel_feature().await;
+                        return;
+                    }
+                    // The environment broke — a timeout, a dead process, a
+                    // worktree that wouldn't provision. Redirecting to an
+                    // implementation step can't fix any of that, and burning
+                    // the on_failure budget on it starves real retries. Give
+                    // the step one free in-place retry; a second
+                    // environmental failure fails the feature with a message
+                    // that names the environment, not the code.
+                    if self.env_retried.insert(step_exec.id.0.clone()) {
+                        self.capture_signal(
+                            Some(step_exec.id.0.clone()),
+                            crate::domain::memory::SignalKind::Retry,
+                            format!(
+                                "Step '{}' hit an environmental failure, retrying in place: {}",
+                                step_exec.step_id.0, msg
+                            ),
+                        );
+                        super::updates::update_step_status(
+                            &*self.features,
+                            &*self.notif,
+                            step_exec,
+                            &self.f_id,
+                            "pending",
+                            accumulated_cost,
+                            Some(accumulated_tokens),
+                            step_start.elapsed().as_secs(),
+                            None,
+                            Some(format!(
+                                "{} (environment issue — retrying step in place)",
+                                msg
+                            )),
+                            self.last_cache_read,
+                            self.last_cache_creation,
+                        );
+                        // Same step_index — the loop re-dispatches this step.
+                        continue;
+                    }
+                    self.fail_step_and_feature(
+                        step_exec,
+                        &format!("[environment — not an implementation failure] {}", msg),
+                        accumulated_cost,
+                        accumulated_tokens,
+                        step_start,
+                    )
+                    .await;
                     return;
                 }
                 crate::adapters::step_executor::steps::StepOutcome::NonRetryable(msg) => {

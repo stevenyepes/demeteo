@@ -240,6 +240,7 @@ mod lint_tests {
     fn with_verifier(mut s: StepConfig) -> StepConfig {
         s.verifier = Some(VerifierConfig {
             agent_kind: None,
+            model: None,
             instructions: "check it".into(),
             harness_name: None,
             verdict_key: "verdict".into(),

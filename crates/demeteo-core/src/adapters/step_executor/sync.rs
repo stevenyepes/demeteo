@@ -181,7 +181,8 @@ pub(crate) async fn resolve_sync_conflicts_shared(
             let _ = registry.kill(&resolver_thread_id).await;
             return Err("Resolver execution interrupted".to_string());
         }
-        crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+        crate::adapters::agent::event_stream::TurnResult::Failed(descriptive)
+        | crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
             let _ = registry.kill(&resolver_thread_id).await;
             return Err(descriptive);
         }

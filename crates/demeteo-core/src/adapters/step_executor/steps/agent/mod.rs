@@ -169,7 +169,7 @@ impl ExecutionDriver {
         {
             Ok(p) => p,
             Err(e) => {
-                return StepOutcome::Failed(format!(
+                return StepOutcome::Environmental(format!(
                     "agent step worktree provision failed ({}): {}",
                     subtask_id, e
                 ));
@@ -197,6 +197,55 @@ impl ExecutionDriver {
                 &wt_path,
             )
             .await;
+
+        // Harness-first: when this step carries a verifier config, run the
+        // objective prepare + harness commands NOW — before the chmod fence
+        // (build tools need to write `target/`, `node_modules/`, …) and
+        // before any agent turn. A red harness fails the step at zero token
+        // cost; a green harness's output is injected into the step's single
+        // agent turn, which writes the report artifact AND emits the verdict
+        // JSON itself — no separate verifier session, no second test run.
+        let mut harness_section: Option<String> = None;
+        if let Some(ref verifier_cfg) = step_conf.verifier {
+            let _ = self.notif.emit(&DomainEvent::StepProgress {
+                feature_id: self.f_id.clone(),
+                step_id: step_exec.step_id.0.clone(),
+                status: "verifying".into(),
+                cost_usd: Some(*accumulated_cost),
+                tokens: Some(*accumulated_tokens),
+                wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            });
+            match self
+                .run_harness_first(verifier_cfg, &wt_path, &machine_str)
+                .await
+            {
+                Ok(section) => harness_section = Some(section),
+                Err(err) => {
+                    let _ = self
+                        .git_ops
+                        .cleanup_subtask_worktree(
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &subtask_id,
+                        )
+                        .await;
+                    return match err {
+                        crate::domain::verifier::VerifierError::Verdict(failure) => {
+                            StepOutcome::VerdictFailed(failure)
+                        }
+                        crate::domain::verifier::VerifierError::Infrastructure(msg) => {
+                            StepOutcome::NonRetryable(format!(
+                                "[verifier infrastructure error — check verifier config] {}",
+                                msg
+                            ))
+                        }
+                    };
+                }
+            }
+        }
 
         // Apply the capability-driven scope fence before the agent
         // spawns. The capability decides the write posture (ReadOnly =
@@ -227,7 +276,7 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            return StepOutcome::Failed(format!("artifact scope setup failed: {}", e));
+            return StepOutcome::Environmental(format!("artifact scope setup failed: {}", e));
         }
 
         let worktree_base_ref = self
@@ -250,6 +299,34 @@ impl ExecutionDriver {
         let prompt = crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
             &prompt, &wt_path,
         );
+
+        // Single-turn validate contract: hand the agent the harness output
+        // the orchestrator already captured and require the verdict JSON at
+        // the end of its reply. The turn both writes the report artifact
+        // and issues the verdict — replacing the old flow of (agent re-runs
+        // tests) + (orchestrator re-runs tests) + (third verifier session).
+        let prompt = match (&step_conf.verifier, &harness_section) {
+            (Some(verifier_cfg), Some(section)) => format!(
+                "{prompt}\n\n\
+                 ## Harness Results (already executed by the orchestrator)\n\
+                 {section}\n\
+                 Do NOT re-run the build or test suite — the results above are \
+                 authoritative and were produced from this exact worktree.\n\n\
+                 ## Required Verdict\n\
+                 {instructions}\n\
+                 After writing your report artifact, END your reply with a single \
+                 JSON object (no other JSON after it):\n\
+                 {{ \"{key}\": \"pass\" }}\n\
+                 or\n\
+                 {{ \"{key}\": \"fail\", \"reason\": \"what exactly to fix\", \
+                 \"failing_tests\": [\"test id\"], \"implicated_files\": [\"src/foo.rs\"] }}",
+                prompt = prompt,
+                section = section,
+                instructions = verifier_cfg.instructions,
+                key = verifier_cfg.verdict_key,
+            ),
+            _ => prompt,
+        };
 
         // 1. Spawn session
         let session = match self
@@ -337,6 +414,9 @@ impl ExecutionDriver {
             }
             crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
                 run_failed = Some(StepOutcome::Failed(descriptive));
+            }
+            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
+                run_failed = Some(StepOutcome::Environmental(descriptive));
             }
             crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
                 *accumulated_cost += outcome.cost_usd;
@@ -477,53 +557,97 @@ impl ExecutionDriver {
             );
         }
 
-        // 4. Run verifier
+        // 4. Verdict — parsed from the same turn's text (harness-first
+        // single-turn path). The harness already ran pre-turn and its
+        // non-zero exit already failed the step, so at this point the
+        // objective half is green; the agent's verdict covers the
+        // subjective half (correct and complete vs. the spec).
         if let Some(ref verifier_cfg) = step_conf.verifier {
-            let verifier_result = self
-                .run_verifier_logic(
-                    step_exec,
-                    verifier_cfg,
-                    &wt_path,
-                    &produced_artifacts,
-                    accumulated_cost,
-                    accumulated_tokens,
-                    step_start,
-                    &agent_kind,
-                    &override_model,
+            use crate::adapters::step_executor::driver::verifier::{
+                parse_verdict_text, ParsedVerdict,
+            };
+            let mut verdict = parse_verdict_text(&text_buffer, &verifier_cfg.verdict_key);
+
+            // The turn produced no usable verdict object. Re-ask the SAME
+            // session with a strict JSON-only correction before giving up —
+            // one cheap resumed turn instead of a whole fresh verifier
+            // session.
+            if matches!(verdict, ParsedVerdict::Missing(_)) {
+                let correction = format!(
+                    "Your previous reply did not end with a usable verdict object. \
+                     Reply with ONLY a single JSON object — no prose, no code fence — \
+                     of the form {{ \"{key}\": \"pass\" }} or \
+                     {{ \"{key}\": \"fail\", \"reason\": \"...\", \
+                     \"failing_tests\": [], \"implicated_files\": [] }}",
+                    key = verifier_cfg.verdict_key,
+                );
+                let timeouts =
+                    crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
+                let correction_res = crate::adapters::agent::event_stream::stream_agent_turn(
+                    &*session,
+                    &correction,
+                    timeouts,
+                    Some(self.cancel_watch.clone()),
                     &machine_str,
+                    &*self.exec,
+                    override_model.clone(),
+                    self.pricing.clone(),
+                    |_event| {},
                 )
                 .await;
+                if let crate::adapters::agent::event_stream::TurnResult::Success(outcome) =
+                    correction_res
+                {
+                    *accumulated_cost += outcome.cost_usd;
+                    *accumulated_tokens += outcome.tokens;
+                    verdict = parse_verdict_text(&outcome.text, &verifier_cfg.verdict_key);
+                }
+            }
 
-            if let Err(verifier_err) = verifier_result {
-                let _ = self
-                    .registry
-                    .kill(&format!("{}-verifier", self.f_id.as_str()))
-                    .await;
-                let _ = self
-                    .git_ops
-                    .cleanup_subtask_worktree(
-                        self.machine_id_opt.as_deref(),
-                        &self.target_dir,
-                        &self.branch_name,
-                        &subtask_id,
-                    )
-                    .await;
-                let _ = self.registry.kill(&session_key).await;
-                // Verdict failures feed into the on_failure retry loop.
-                // Infrastructure failures (timeout, spawn error, parse failure)
-                // skip the retry loop entirely — retrying the implementation
-                // step cannot fix a broken verifier config.
-                return match verifier_err {
-                    crate::domain::verifier::VerifierError::Verdict(reason) => {
-                        StepOutcome::Failed(reason)
-                    }
-                    crate::domain::verifier::VerifierError::Infrastructure(msg) => {
-                        StepOutcome::NonRetryable(format!(
-                            "[verifier infrastructure error — check verifier config] {}",
-                            msg
-                        ))
-                    }
-                };
+            match verdict {
+                ParsedVerdict::Pass => {
+                    tracing::info!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        "verdict: pass"
+                    );
+                }
+                ParsedVerdict::Fail(failure) => {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        reason = %failure.reason,
+                        "verdict: fail"
+                    );
+                    let _ = self
+                        .git_ops
+                        .cleanup_subtask_worktree(
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &subtask_id,
+                        )
+                        .await;
+                    let _ = self.registry.kill(&session_key).await;
+                    return StepOutcome::VerdictFailed(failure);
+                }
+                ParsedVerdict::Missing(desc) => {
+                    let _ = self
+                        .git_ops
+                        .cleanup_subtask_worktree(
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &subtask_id,
+                        )
+                        .await;
+                    let _ = self.registry.kill(&session_key).await;
+                    return StepOutcome::NonRetryable(format!(
+                        "[verifier infrastructure error — no usable verdict from the \
+                         validate turn] {}",
+                        desc
+                    ));
+                }
             }
         }
 
@@ -660,6 +784,11 @@ impl ExecutionDriver {
                     }
                     crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
                         conflict_failed = Some(StepOutcome::Failed(descriptive));
+                    }
+                    crate::adapters::agent::event_stream::TurnResult::Environmental(
+                        descriptive,
+                    ) => {
+                        conflict_failed = Some(StepOutcome::Environmental(descriptive));
                     }
                     crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
                         *accumulated_cost += outcome.cost_usd;
@@ -896,6 +1025,9 @@ mod retry_feedback_tests {
             feedback: feedback.into(),
             iteration: 1,
             max: 1,
+            failing_tests: Vec::new(),
+            implicated_files: Vec::new(),
+            failing_step_id: String::new(),
         }
     }
 

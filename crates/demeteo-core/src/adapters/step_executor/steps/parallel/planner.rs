@@ -24,6 +24,57 @@ pub struct SubtaskDag {
     pub subtasks: Vec<PlannedSubtask>,
 }
 
+/// Build the attempt-1 targeted retry DAG from the cached full plan.
+///
+/// Selects only the subtasks whose file ownership intersects the
+/// verdict's `implicated_files`, and stamps the retry feedback onto each
+/// selected subtask as its `retry_note`. Falls back to re-running every
+/// subtask when the verdict named no files (or none matched) — a blind
+/// retry is still correct, just not cheap.
+pub(crate) fn select_targeted_subtasks(
+    cached: &SubtaskDag,
+    feedback: &str,
+    implicated_files: &[String],
+) -> SubtaskDag {
+    fn norm(p: &str) -> String {
+        p.trim().trim_start_matches("./").to_string()
+    }
+    let implicated: Vec<String> = implicated_files
+        .iter()
+        .map(|s| norm(s))
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let owns = |sub: &PlannedSubtask| -> bool {
+        sub.files.iter().any(|f| {
+            let f = norm(f);
+            implicated.iter().any(|i| {
+                *i == f || i.ends_with(&format!("/{}", f)) || f.ends_with(&format!("/{}", i))
+            })
+        })
+    };
+
+    let mut selected: Vec<PlannedSubtask> = if implicated.is_empty() {
+        cached.subtasks.clone()
+    } else {
+        let hits: Vec<PlannedSubtask> = cached
+            .subtasks
+            .iter()
+            .filter(|s| owns(s))
+            .cloned()
+            .collect();
+        if hits.is_empty() {
+            cached.subtasks.clone()
+        } else {
+            hits
+        }
+    };
+    for sub in &mut selected {
+        sub.retry_note = Some(feedback.to_string());
+    }
+    SubtaskDag { subtasks: selected }
+}
+
 /// Best-effort JSON extractor for the planner's text output. Tries
 /// (in order): a ```json ... ``` fence, a top-level `{...}` block, then
 /// any `[...]` block. Returns the first object that deserializes as
@@ -111,4 +162,63 @@ fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod targeted_retry_tests {
+    use super::*;
+
+    fn dag() -> SubtaskDag {
+        SubtaskDag {
+            subtasks: vec![
+                PlannedSubtask {
+                    id: "sub-1".into(),
+                    title: "backend".into(),
+                    description: "d1".into(),
+                    files: vec!["src/api/mod.rs".into(), "src/api/routes.rs".into()],
+                    test_command: None,
+                    retry_note: None,
+                },
+                PlannedSubtask {
+                    id: "sub-2".into(),
+                    title: "frontend".into(),
+                    description: "d2".into(),
+                    files: vec!["ui/App.tsx".into()],
+                    test_command: None,
+                    retry_note: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn selects_only_subtasks_owning_implicated_files() {
+        let out = select_targeted_subtasks(&dag(), "fix the route", &["src/api/routes.rs".into()]);
+        assert_eq!(out.subtasks.len(), 1);
+        assert_eq!(out.subtasks[0].id, "sub-1");
+        assert_eq!(out.subtasks[0].retry_note.as_deref(), Some("fix the route"));
+    }
+
+    #[test]
+    fn empty_implicated_files_falls_back_to_all_subtasks() {
+        let out = select_targeted_subtasks(&dag(), "fb", &[]);
+        assert_eq!(out.subtasks.len(), 2);
+        assert!(out
+            .subtasks
+            .iter()
+            .all(|s| s.retry_note.as_deref() == Some("fb")));
+    }
+
+    #[test]
+    fn unmatched_implicated_files_fall_back_to_all_subtasks() {
+        let out = select_targeted_subtasks(&dag(), "fb", &["totally/else.rs".into()]);
+        assert_eq!(out.subtasks.len(), 2);
+    }
+
+    #[test]
+    fn dot_slash_prefix_is_normalized() {
+        let out = select_targeted_subtasks(&dag(), "fb", &["./ui/App.tsx".into()]);
+        assert_eq!(out.subtasks.len(), 1);
+        assert_eq!(out.subtasks[0].id, "sub-2");
+    }
 }
