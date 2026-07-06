@@ -4,23 +4,40 @@ use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::execution::ExecutionPort;
 use std::sync::Arc;
 
+/// A declared artifact (`ByName` / `LastWriteTo`) that the agent's turn
+/// produced no matching output for. Surfaced by
+/// [`resolve_declared_artifacts`] so the step executor can **fail** the
+/// step with an actionable message instead of silently marking it
+/// `completed` with an empty deliverable (the "green step, no plan
+/// artifact" misconfiguration class). `detail` is a human hint about
+/// what the capture expected (the path or name).
+#[derive(Debug, Clone)]
+pub(crate) struct MissingArtifact {
+    pub name: String,
+    pub detail: String,
+}
+
 /// Resolve `declarations` against the `ArtifactProduced` events emitted
 /// by the agent during a step turn. Writes matching artifacts through
-/// the store and returns the list of references (paths for the FS
-/// adapter) to persist in `StepExecution.artifact_paths`.
-///
-/// Artifacts that cannot be matched are silently skipped with a
-/// `tracing::warn!` — the step executor will still mark the step as
-/// completed successfully; missing artifacts are a prompt-engineering
-/// concern, not a runtime failure.
+/// the store and returns `(refs, missing)`:
+/// * `refs` — the list of references (paths for the FS adapter) to
+///   persist in `StepExecution.artifact_paths`.
+/// * `missing` — the `ByName` / `LastWriteTo` declarations that matched
+///   no produced artifact. These are the step's declared *deliverables*;
+///   a non-empty `missing` means the agent ran but did not produce what
+///   the workflow contract requires, so the caller fails the step (the
+///   deliverable is the whole point of the step). Catch-all captures
+///   (`AllWrites`, `ChangedFiles`, `Diff`, `Worktree`) are never counted
+///   as missing — an empty result is legitimate for them.
 pub(crate) fn resolve_declared_artifacts(
     declarations: &[ArtifactDecl],
     produced: &[Artifact],
     store: &Arc<dyn ArtifactStore>,
     feature_id: &str,
     step_id: &str,
-) -> Vec<String> {
+) -> (Vec<String>, Vec<MissingArtifact>) {
     let mut refs = Vec::new();
+    let mut missing = Vec::new();
 
     for decl in declarations {
         let matched: Option<&Artifact> = match &decl.capture {
@@ -70,17 +87,43 @@ pub(crate) fn resolve_declared_artifacts(
             match store.put(feature_id, step_id, artifact) {
                 Ok(reference) => refs.push(reference),
                 Err(e) => {
-                    eprintln!(
-                        "[artifacts] step={} decl={}: Failed to store artifact: {}",
-                        step_id, decl.name, e,
+                    tracing::warn!(
+                        step = %step_id,
+                        decl = %decl.name,
+                        error = %e,
+                        "resolve_declared_artifacts: failed to store artifact",
                     );
                 }
             }
         } else {
-            eprintln!(
-                "[artifacts] step={} decl={}: No matching ArtifactProduced event",
-                step_id, decl.name,
+            // D3: a declared capture (e.g. `LastWriteTo`) that matched no
+            // `ArtifactProduced` event is a surfaced diagnostic, not a silent
+            // skip — this is the signal that the step "succeeded" but its
+            // declared deliverable never materialised. Only `ByName` /
+            // `LastWriteTo` reach this branch (catch-all captures `continue`
+            // above), so every entry here is a genuinely missing deliverable
+            // the caller will fail the step on.
+            let detail = match &decl.capture {
+                ArtifactCapture::LastWriteTo { path } => {
+                    format!("expected a write to `{}`", path)
+                }
+                ArtifactCapture::ByName { name } => {
+                    format!("expected an artifact named `{}`", name)
+                }
+                // Unreachable — the other captures `continue` before here —
+                // but keep it total so a future capture kind is handled.
+                _ => "no matching agent output".to_string(),
+            };
+            tracing::warn!(
+                step = %step_id,
+                decl = %decl.name,
+                capture = ?decl.capture,
+                "resolve_declared_artifacts: no ArtifactProduced event matched this declaration — failing the step",
             );
+            missing.push(MissingArtifact {
+                name: decl.name.clone(),
+                detail,
+            });
         }
     }
 
@@ -107,7 +150,7 @@ pub(crate) fn resolve_declared_artifacts(
         }
     }
 
-    refs
+    (refs, missing)
 }
 
 /// Read the post-write content of `rel_path` (relative to the
@@ -128,7 +171,24 @@ pub async fn read_worktree_file(
     rel_path: &str,
 ) -> Option<String> {
     let abs = format!("{}/{}", worktree_root.trim_end_matches('/'), rel_path);
-    let content = exec.read_file(machine_id, &abs).await.ok()?;
+    // D3: surface the read failure instead of swallowing it. A declared
+    // artifact path that can't be read is exactly the "silent no-artifacts
+    // on SSH" bug — the read errored (e.g. the remote file was never
+    // produced, or the transport dropped) and the old `.ok()?` turned that
+    // into a green step with an empty artifact. We still return `None`
+    // (there is genuinely nothing to capture), but now it is observable.
+    let content = match exec.read_file(machine_id, &abs).await {
+        Ok(content) => content,
+        Err(e) => {
+            tracing::warn!(
+                machine_id = %machine_id,
+                path = %abs,
+                error = %e,
+                "read_worktree_file: declared artifact path could not be read — capturing nothing for it",
+            );
+            return None;
+        }
+    };
     if is_likely_binary(&content) {
         return None;
     }
@@ -155,7 +215,24 @@ pub async fn compute_git_diff(
         paths::shell_escape_posix(worktree_root),
         paths::shell_escape_posix(base_ref),
     );
-    exec.run_command(machine_id, &cmd).await.unwrap_or_default()
+    // D3: an empty diff and a *failed* diff are not the same thing. The old
+    // `.unwrap_or_default()` collapsed both to `""`, so a broken worktree or
+    // an unresolvable `base_ref` looked identical to "no changes". Keep the
+    // empty-string fallback (callers treat it as "no diff") but surface the
+    // failure so it is diagnosable.
+    match exec.run_command(machine_id, &cmd).await {
+        Ok(diff) => diff,
+        Err(e) => {
+            tracing::warn!(
+                machine_id = %machine_id,
+                worktree = %worktree_root,
+                base_ref = %base_ref,
+                error = %e,
+                "compute_git_diff: git diff failed — treating as an empty diff",
+            );
+            String::new()
+        }
+    }
 }
 
 /// Stage every change in the worktree and commit it with `message`.
@@ -373,11 +450,30 @@ fn is_likely_binary(content: &str) -> bool {
     if content.contains('\0') {
         return true;
     }
-    let head = &content[..content.len().min(8192)];
+    // Slice at a UTF-8 char boundary at or below 8 KiB. Indexing a `String`
+    // directly at `content.len().min(8192)` panics when byte 8192 lands in
+    // the middle of a multibyte char (common for the large UTF-8 reports
+    // this capture path exists to handle) — walk back to the nearest
+    // boundary instead.
+    let head = head_str(content, 8192);
     if head.len() > 256 && !head.contains('\n') {
         return true;
     }
     false
+}
+
+/// Borrow the leading `max` bytes of `s`, truncated down to the nearest
+/// UTF-8 char boundary so it never panics on a multibyte char straddling
+/// `max`. Returns all of `s` when it is shorter than `max`.
+fn head_str(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 fn strip_extension(name: &str) -> Option<String> {

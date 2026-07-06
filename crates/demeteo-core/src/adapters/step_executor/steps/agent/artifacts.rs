@@ -1,6 +1,6 @@
 use crate::adapters::step_executor::artifacts::{
     commit_worktree_changes, compute_git_diff, is_under_prefix, read_worktree_file,
-    resolve_declared_artifacts, WorktreeSnapshot,
+    resolve_declared_artifacts, MissingArtifact, WorktreeSnapshot,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::artifact::Artifact;
@@ -17,7 +17,7 @@ impl ExecutionDriver {
         worktree_snapshot: &WorktreeSnapshot,
         worktree_base_ref: &Option<String>,
         produced_artifacts: &mut Vec<Artifact>,
-    ) -> Result<(Option<String>, Vec<String>), String> {
+    ) -> Result<(Option<String>, Vec<String>, Vec<MissingArtifact>), String> {
         let decls = step_conf.artifacts.as_deref().unwrap_or(&[]);
 
         // 1. Process files using delta
@@ -110,8 +110,12 @@ impl ExecutionDriver {
         )
         .await;
 
-        // 4. Resolve artifacts
-        let refs = resolve_declared_artifacts(
+        // 4. Resolve artifacts. `missing` is the set of declared
+        // `ByName`/`LastWriteTo` deliverables the agent never produced;
+        // the caller fails the step on a non-empty list so a step that
+        // "ran" but produced no plan/spec/report is visible instead of a
+        // green step with an empty artifact.
+        let (refs, missing) = resolve_declared_artifacts(
             decls,
             produced_artifacts,
             &self.artifacts,
@@ -126,6 +130,6 @@ impl ExecutionDriver {
         } else {
             refs.first().cloned()
         };
-        Ok((primary, refs))
+        Ok((primary, refs, missing))
     }
 }

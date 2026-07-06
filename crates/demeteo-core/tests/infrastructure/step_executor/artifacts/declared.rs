@@ -18,12 +18,13 @@ fn test_resolve_declared_artifacts_by_name() {
     let declarations = vec![ArtifactDecl::full_path("spec", "docs/spec.md")];
     let produced = vec![Artifact::tool_write("spec", "docs/spec.md", "# My Spec\n")];
 
-    let refs = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
+    let (refs, missing) = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
     assert_eq!(refs.len(), 1);
     assert!(refs[0].contains("artifacts/f-test/s-impl/spec"));
     let content = store.get(&refs[0]).unwrap();
     assert_eq!(content, "# My Spec\n");
+    assert!(missing.is_empty(), "a matched declaration is not missing");
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
@@ -57,11 +58,12 @@ fn test_resolve_declared_artifacts_last_write() {
         Artifact::tool_write("final", "docs/spec.md", "# Final\n"),
     ];
 
-    let refs = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
+    let (refs, missing) = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
     assert_eq!(refs.len(), 1);
     let content = store.get(&refs[0]).unwrap();
     assert_eq!(content, "# Final\n");
+    assert!(missing.is_empty(), "a matched declaration is not missing");
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
@@ -94,9 +96,13 @@ fn test_resolve_declared_artifacts_all_writes() {
         Artifact::tool_write("f1-v2", "src/lib.rs", "// lib v2\n"),
     ];
 
-    let refs = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
+    let (refs, missing) = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
     assert_eq!(refs.len(), 2);
+    assert!(
+        missing.is_empty(),
+        "AllWrites never yields a missing deliverable"
+    );
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
@@ -135,9 +141,52 @@ fn test_resolve_declared_artifacts_skips_diff_and_worktree() {
         },
     ];
 
-    let refs = resolve_declared_artifacts(&declarations, &[], &store, "f-test", "s-impl");
+    let (refs, missing) = resolve_declared_artifacts(&declarations, &[], &store, "f-test", "s-impl");
 
     assert!(refs.is_empty());
+    assert!(
+        missing.is_empty(),
+        "Diff/Worktree captures are catch-alls, never counted as missing"
+    );
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// A `LastWriteTo` deliverable the agent never wrote is reported in
+/// `missing` (not silently skipped) so the step executor fails the step
+/// instead of marking it `completed` with an empty artifact — the
+/// "green step, no plan produced" misconfiguration class.
+#[test]
+fn test_resolve_declared_artifacts_reports_missing_deliverable() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "demeteo_test_resolve_missing_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let store: Arc<dyn ArtifactStore> = Arc::new(
+        crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
+    );
+
+    // The step declares a plan at `artifacts/plan.md`, but the agent
+    // produced an unrelated write — nothing matches the declaration.
+    let declarations = vec![ArtifactDecl::full_path("plan", "artifacts/plan.md")];
+    let produced = vec![Artifact::tool_write("notes", "scratch/notes.md", "# notes\n")];
+
+    let (refs, missing) =
+        resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-plan");
+
+    assert!(refs.is_empty(), "no declaration matched, so no refs stored");
+    assert_eq!(missing.len(), 1, "the unmatched plan deliverable is missing");
+    assert_eq!(missing[0].name, "plan");
+    assert!(
+        missing[0].detail.contains("artifacts/plan.md"),
+        "detail names the expected path: {}",
+        missing[0].detail
+    );
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
@@ -510,4 +559,28 @@ fn temp_git_repo(label: &str) -> String {
 
 fn shell_esc(s: &str) -> String {
     crate::paths::shell_escape_posix(s)
+}
+
+/// C2.4 regression: `is_likely_binary` must not panic when a multibyte
+/// UTF-8 char straddles the 8 KiB inspection boundary. Before the fix,
+/// `&content[..8192]` sliced mid-char and panicked on exactly the large
+/// UTF-8 reports this capture path exists to handle.
+#[test]
+fn is_likely_binary_no_panic_on_multibyte_straddling_8192() {
+    // Early newline (so the >256-bytes-no-newline heuristic treats it as
+    // text), then pad so a 3-byte char ('☃') occupies bytes 8190..8193 —
+    // byte 8192 lands mid-char and is NOT a char boundary.
+    let mut s = String::from("first line\n");
+    s.push_str(&"a".repeat(8190 - s.len()));
+    assert_eq!(s.len(), 8190);
+    s.push('☃'); // bytes 8190..8193; boundary at 8190 and 8193, not 8192
+    s.push('\n');
+    s.push_str("more text");
+    // Must not panic, and text-with-early-newline is not binary.
+    assert!(!is_likely_binary(&s));
+
+    // head_str must return a valid &str (no panic) truncated at/below 8192.
+    let head = head_str(&s, 8192);
+    assert!(head.len() <= 8192);
+    assert!(s.starts_with(head));
 }

@@ -310,7 +310,11 @@ impl ExecutionDriver {
             )
             .await;
 
-            let refs = resolve_declared_artifacts(
+            // Parallel implement subtasks capture via `AllWrites`
+            // (`ChangedFiles`), which never populates `missing` (only
+            // `ByName`/`LastWriteTo` deliverables can be "missing"), so the
+            // second element is ignored here by design.
+            let (refs, _missing) = resolve_declared_artifacts(
                 decls,
                 &produced_artifacts,
                 &self.artifacts,

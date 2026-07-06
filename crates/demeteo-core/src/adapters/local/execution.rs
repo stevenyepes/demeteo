@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{ExecutionPort, InteractiveHandle};
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, ShellOptions};
 use crate::shared::proc::sanitize_child_env;
+use crate::shared::shell;
 
 pub struct LocalSubprocessAdapter;
 
@@ -79,9 +80,31 @@ impl InteractiveHandle for LocalChildProcess {
     }
 }
 
-fn local_run_command(cmd: &str) -> Result<String, String> {
-    let mut command = Command::new("sh");
-    command.arg("-c").arg(cmd);
+/// Run `cmd` locally honouring `opts` (see [`ShellOptions`]). Honours the
+/// same login/non-login + cwd + env contract the SSH adapter does, so both
+/// transports behave identically for identical options (D2):
+/// * login shell ⇒ `bash -l -c <body>` (profile sourced), else `sh -c <body>`;
+/// * `cwd` is applied via the child's working directory;
+/// * `env` is exported *inside* the body so it wins over a login profile,
+///   matching the SSH construction exactly.
+fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, String> {
+    let exports = shell::export_prefix(&opts.env);
+    // cwd is applied via `current_dir` below, so it is not baked into the
+    // body here (unlike the SSH adapter, which has no separate cwd channel).
+    let body = shell::command_body(None, &exports, cmd);
+
+    let mut command = if opts.login_shell {
+        let mut c = Command::new("bash");
+        c.arg("-l").arg("-c").arg(&body);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(&body);
+        c
+    };
+    if let Some(cwd) = &opts.cwd {
+        command.current_dir(cwd);
+    }
     sanitize_child_env(&mut command);
     let output = command
         .output()
@@ -104,19 +127,33 @@ fn local_run_command(cmd: &str) -> Result<String, String> {
     Ok(result)
 }
 
+/// Non-login, default-cwd, no-extra-env convenience used by the adapter's
+/// own internal helpers (`setup_worktree`, `resolve_home`). Equivalent to
+/// `run_command`.
+fn local_run_command(cmd: &str) -> Result<String, String> {
+    local_run_command_with(cmd, &ShellOptions::default())
+}
+
 #[async_trait]
 impl ExecutionPort for LocalSubprocessAdapter {
     async fn test_connection(&self, _machine_id: &str) -> Result<(), String> {
         Ok(())
     }
 
-    async fn run_command(&self, _machine_id: &str, cmd: &str) -> Result<String, String> {
+    async fn run_command_with(
+        &self,
+        _machine_id: &str,
+        cmd: &str,
+        opts: ShellOptions,
+    ) -> Result<String, String> {
         // The underlying `std::process::Command` is sync; run it on
         // the blocking pool so we don't stall the tokio worker
         // thread. The error type stays `String` to match the port
         // signature; the `?` conversions happen inside the closure.
+        // `run_command` (no override) delegates here via the trait
+        // default with `ShellOptions::default()`.
         let cmd = cmd.to_string();
-        tokio::task::spawn_blocking(move || local_run_command(&cmd))
+        tokio::task::spawn_blocking(move || local_run_command_with(&cmd, &opts))
             .await
             .map_err(|e| format!("blocking task panicked: {}", e))?
     }

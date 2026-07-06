@@ -85,7 +85,24 @@ async fn git_status_porcelain(
         "git -C {} status --porcelain --untracked-files=all",
         paths::shell_escape_posix(worktree_root),
     );
-    exec.run_command(machine_id, &cmd).await.unwrap_or_default()
+    // D3: an empty status (clean/non-git worktree) is a legitimate
+    // fallback, but a *failed* command is not — the old
+    // `.unwrap_or_default()` hid a transport failure or broken worktree
+    // behind "nothing is dirty", which silently zeroes out the step's
+    // captured delta. Keep the empty-string fallback but make the failure
+    // observable.
+    match exec.run_command(machine_id, &cmd).await {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::warn!(
+                machine_id = %machine_id,
+                worktree = %worktree_root,
+                error = %e,
+                "git_status_porcelain: git status failed — treating the worktree as clean",
+            );
+            String::new()
+        }
+    }
 }
 
 /// Parse `git status --porcelain` output into a deduplicated set
