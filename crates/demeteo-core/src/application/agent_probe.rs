@@ -93,8 +93,18 @@ async fn probe_models_via_cli(
         "antigravity" => "agy",
         other => other,
     };
+    // Interactive login shell so a tool-manager-provided binary (mise/asdf/
+    // nvm) is on PATH — matching the availability probe and agent spawn.
+    // A plain `run_command` runs non-login and can't find e.g. a
+    // mise-managed `opencode`, so `opencode models` errors and the caller
+    // silently falls back to the hardcoded `fallback_models` list. See
+    // `ShellOptions::interactive`.
     let output = exec
-        .run_command(machine_id, &format!("{} models", binary))
+        .run_command_with(
+            machine_id,
+            &format!("{} models", binary),
+            crate::ports::execution::ShellOptions::login_interactive(),
+        )
         .await?;
     let models: Vec<ConfigOptionValue> = output
         .lines()

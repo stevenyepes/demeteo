@@ -204,6 +204,162 @@ impl InteractiveHandle for ChunkyHandle {
     }
 }
 
+/// Records the `ShellOptions` (and command) handed to `run_command_with`
+/// so the availability-probe test can assert it runs under a login shell.
+/// Every other port method is an inert stub — the probe only ever calls
+/// `run_command`/`run_command_with`.
+struct ShellOptsRecorder {
+    last_opts: std::sync::Mutex<Option<crate::ports::execution::ShellOptions>>,
+    last_cmd: std::sync::Mutex<Option<String>>,
+}
+
+impl ShellOptsRecorder {
+    fn new() -> Self {
+        Self {
+            last_opts: std::sync::Mutex::new(None),
+            last_cmd: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::ports::execution::ExecutionPort for ShellOptsRecorder {
+    async fn test_connection(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    // Deliberately DO NOT override `run_command`: its trait default routes
+    // through `run_command_with(.., ShellOptions::default())`, so a
+    // regression that reverts the probe to the bare non-login `run_command`
+    // still lands here — and records `login_shell: false`, failing the test.
+    async fn run_command_with(
+        &self,
+        _: &str,
+        cmd: &str,
+        opts: crate::ports::execution::ShellOptions,
+    ) -> Result<String, String> {
+        *self.last_cmd.lock().unwrap() = Some(cmd.to_string());
+        *self.last_opts.lock().unwrap() = Some(opts);
+        // Non-empty stdout other than "ok" would make the probe report
+        // unavailable; echo the sentinel the probe greps for.
+        Ok("ok".to_string())
+    }
+    async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
+        Ok(String::new())
+    }
+    async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn write_file_bytes(&self, _: &str, _: &str, _: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+    async fn get_metadata(
+        &self,
+        _: &str,
+        path: &str,
+    ) -> Result<crate::ports::execution::SftpEntry, String> {
+        Ok(crate::ports::execution::SftpEntry {
+            name: path.into(),
+            path: path.into(),
+            is_dir: false,
+            size: 0,
+            modified: 0,
+        })
+    }
+    async fn list_dir(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
+        Ok(vec![])
+    }
+    async fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn resolve_home(&self, _: &str) -> Result<String, String> {
+        Ok("/tmp".to_string())
+    }
+    async fn resolve_user(&self, _: &str) -> Result<String, String> {
+        Ok("stub".to_string())
+    }
+    async fn control_rpc(
+        &self,
+        _: &str,
+        _: &str,
+        _: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("unsupported".to_string())
+    }
+    fn spawn_interactive(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[String],
+        _: &str,
+        _: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn InteractiveHandle>, String> {
+        Err("stub".to_string())
+    }
+}
+
+fn probe_build_args(_: &AgentContext, _: Option<&str>, _: &str) -> Vec<String> {
+    vec![]
+}
+
+fn probe_perm_env(
+    _: &crate::domain::permission::PermissionProfile,
+) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::new()
+}
+
+/// A remote availability probe must run under a **login** shell so the
+/// target user's profile is sourced (`PATH` additions from
+/// `~/.profile`/`~/.bashrc`, `mise`/`asdf` shims, installer dirs like
+/// opencode's `~/.opencode/bin`). A bare non-login `command -v` misses all
+/// of those and reports a correctly-installed agent as "Missing".
+#[test]
+fn remote_availability_probe_uses_a_login_shell() {
+    let runtime = UnifiedCliRuntime {
+        kind_str: "opencode",
+        binary: "opencode",
+        install_cmd: "curl -fsSL https://opencode.ai/install | bash",
+        parse_event: mock_parse_event,
+        build_args: probe_build_args,
+        perm_env: probe_perm_env,
+    };
+    let rec = ShellOptsRecorder::new();
+
+    let tokio_rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let available = tokio_rt.block_on(runtime.is_available(&rec, "demeteo-remote"));
+
+    assert!(available, "probe returning 'ok' should report the agent available");
+
+    let opts = rec
+        .last_opts
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("remote probe must go through run_command_with");
+    assert!(
+        opts.login_shell,
+        "remote availability probe must request a login shell so the profile PATH is sourced"
+    );
+    assert!(
+        opts.interactive,
+        "remote availability probe must be interactive so ~/.bashrc (mise/asdf/nvm tool \
+         activation) is sourced — matching how the agent is actually spawned"
+    );
+
+    let cmd = rec.last_cmd.lock().unwrap().clone().unwrap_or_default();
+    assert!(
+        cmd.contains("command -v opencode"),
+        "probe should resolve the agent binary, got: {}",
+        cmd
+    );
+}
+
 #[test]
 fn handle_reader_reassembles_split_line_via_try_read() {
     let handle = Arc::new(Mutex::new(Box::new(ChunkyHandle::new(

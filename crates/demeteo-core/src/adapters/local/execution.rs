@@ -95,7 +95,14 @@ fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, Stri
 
     let mut command = if opts.login_shell {
         let mut c = Command::new("bash");
-        c.arg("-l").arg("-c").arg(&body);
+        c.arg("-l");
+        // Interactive login also sources `~/.bashrc` (mise/asdf/nvm tool
+        // activation); see `ShellOptions::interactive`. Kept in lockstep with
+        // the SSH adapter so both transports resolve the same PATH (D2).
+        if opts.interactive {
+            c.arg("-i");
+        }
+        c.arg("-c").arg(&body);
         c
     } else {
         let mut c = Command::new("sh");

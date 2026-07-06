@@ -426,7 +426,12 @@ impl ExecutionPort for SshClientAdapter {
             let exports = shell::export_prefix(&opts.env);
             let body = shell::command_body(opts.cwd.as_deref(), &exports, &cmd);
             let full_cmd = if opts.login_shell {
-                format!("bash -l -c {}", paths::shell_escape_posix(&body))
+                // `-i` (interactive) sources `~/.bashrc`, where tool-managers
+                // (mise/asdf/nvm) put their PATH activation behind the standard
+                // non-interactive guard; a plain `-l` login shell misses them.
+                // See `ShellOptions::interactive`.
+                let flags = if opts.interactive { "-l -i -c" } else { "-l -c" };
+                format!("bash {} {}", flags, paths::shell_escape_posix(&body))
             } else {
                 format!("sh -c {}", paths::shell_escape_posix(&body))
             };
@@ -802,7 +807,16 @@ impl ExecutionPort for SshClientAdapter {
                 paths::shell_escape_posix(binary),
                 args_str
             );
-            format!("bash -l -c {}", paths::shell_escape_posix(&inner))
+            // Interactive (`-i`) so `~/.bashrc` is sourced — that's where
+            // mise/asdf/nvm activate the toolchain that puts the agent binary
+            // on PATH. A non-interactive `bash -l` login shell hits the
+            // standard `.bashrc` non-interactive guard and never activates
+            // them, so `exec opencode` would fail with "command not found"
+            // even though the binary is installed. A PTY is always requested
+            // above, so `-i` has a controlling terminal and stays quiet. This
+            // mirrors the interactive availability probe (see
+            // `ShellOptions::interactive`) so "available" and "runnable" agree.
+            format!("bash -l -i -c {}", paths::shell_escape_posix(&inner))
         } else {
             format!(
                 "cd {} && {} {} {}",
