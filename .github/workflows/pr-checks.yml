@@ -82,3 +82,25 @@ jobs:
         with:
           configFile: .commitlintrc.json
           failOnWarnings: false
+
+  # C2.2 — proves local/SSH parity by running the byte-identical
+  # `exec_contract` against `SshClientAdapter` pointed at a throwaway
+  # loopback sshd. Separate job: it needs Docker but none of the Tauri/
+  # webkit toolchain the `verify` job installs.
+  # (docs/EXECUTION_CONSISTENCY_PLAN.md)
+  ssh-conformance:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Run ExecutionPort SSH conformance suite
+        run: crates/demeteo-core/tests/conformance/run-ssh-conformance.sh

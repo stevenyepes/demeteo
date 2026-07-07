@@ -24,6 +24,13 @@ keyring = ["dep:keyring"]
 # Tauri app builds on linux-gnu/macOS/Windows where system openssl
 # is fine and skipping the vendored build saves several minutes.
 vendored-openssl = ["ssh2/vendored-openssl"]
+# Opt-in for the C2.2 SSH leg of the `exec_contract` conformance suite
+# (docs/EXECUTION_CONSISTENCY_PLAN.md). Off by default so a Docker-less
+# `cargo test` still passes; the CI job (and
+# tests/conformance/run-ssh-conformance.sh) stands up a loopback sshd,
+# exports DEMETEO_SSH_CONFORMANCE_*, and runs the same assertions the
+# local adapter passes — the only way to prove local/SSH parity.
+ssh-conformance = []
 
 [dependencies]
 async-trait = "0.1"
