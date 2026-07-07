@@ -150,6 +150,187 @@ fn drain_lines_stops_at_terminal_event_even_if_more_data_pending() {
     assert!(matches!(&events[1], AgentEvent::TurnComplete { .. }));
 }
 
+/// A reader that yields some data, then fails with a read error — the shape
+/// of the remote SSH stream when the transport drops mid-turn.
+struct FailingReader {
+    data: Cursor<Vec<u8>>,
+    errored: bool,
+}
+
+impl Read for FailingReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.data.read(buf) {
+            Ok(0) if !self.errored => {
+                self.errored = true;
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Timed out waiting on socket",
+                ))
+            }
+            other => other,
+        }
+    }
+}
+
+#[test]
+fn drain_lines_reports_stream_loss_when_read_errors_and_agent_still_running() {
+    // Regression: the remote agent's SSH stream broke mid-turn while the
+    // process was still running (`exit_code_fn` → None). The old behaviour
+    // fabricated a clean TurnComplete, so a half-finished agent looked like
+    // a successful step with a mysteriously missing artifact.
+    let reader = FailingReader {
+        data: Cursor::new(b"{\"type\":\"text\",\"delta\":\"partial\"}\n".to_vec()),
+        errored: false,
+    };
+    let events = run_drain(reader, || None);
+    assert_eq!(events.len(), 2, "got: {:?}", events);
+    assert!(matches!(&events[0], AgentEvent::Text { delta } if delta == "partial"));
+    match &events[1] {
+        AgentEvent::Error { code, message, .. } => {
+            assert_eq!(code, "agent_stream_lost");
+            assert!(message.contains("Timed out"), "got: {}", message);
+        }
+        e => panic!("expected agent_stream_lost Error, got {:?}", e),
+    }
+}
+
+#[test]
+fn drain_lines_still_completes_on_clean_eof_without_exit_status() {
+    // Clean EOF + no exit status yet (local child closed stdout but hasn't
+    // been reaped) stays a normal turn completion.
+    let reader = Cursor::new(br#"{"type":"text","delta":"done"}"#.to_vec());
+    let events = run_drain(reader, || None);
+    assert_eq!(events.len(), 2, "got: {:?}", events);
+    assert!(matches!(&events[1], AgentEvent::TurnComplete { .. }));
+}
+
+/// Live end-to-end check of the remote agent stream through the REAL
+/// production wiring: `SshClientAdapter::spawn_interactive` (PTY, login
+/// shell, 10s session timeout, 30s keepalive) → `HandleReader` →
+/// `drain_lines`. The fake agent's output crosses both historical
+/// killers: the ~30s keepalive-due read abort and a >10s silent gap.
+///
+/// Ignored by default (needs a reachable machine). Run with:
+/// `DEMETEO_SSH_PROBE=<host>,<user>,<key_path> cargo test -p demeteo-core \
+///  remote_pty_stream_survives -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn remote_pty_stream_survives_keepalive_and_silence_live() {
+    use crate::domain::models::Machine;
+    use crate::ports::execution::ExecutionPort;
+
+    let Ok(spec) = std::env::var("DEMETEO_SSH_PROBE") else {
+        panic!("set DEMETEO_SSH_PROBE=<host>,<user>,<key_path>");
+    };
+    let mut it = spec.splitn(3, ',');
+    let (host, user, key) = (
+        it.next().unwrap().to_string(),
+        it.next().expect("user").to_string(),
+        it.next().expect("key path").to_string(),
+    );
+
+    struct OneMachine(Machine);
+    impl crate::ports::db::MachineRepository for OneMachine {
+        fn get_machines(&self) -> Result<Vec<Machine>, String> {
+            Ok(vec![self.0.clone()])
+        }
+        fn get_machine(
+            &self,
+            id: &crate::domain::ids::MachineId,
+        ) -> Result<Option<Machine>, String> {
+            Ok((id.0 == self.0.id.0).then(|| self.0.clone()))
+        }
+        fn add(&self, _: Machine) -> Result<(), String> {
+            unimplemented!()
+        }
+        fn update(&self, _: Machine) -> Result<(), String> {
+            unimplemented!()
+        }
+        fn delete(&self, _: &crate::domain::ids::MachineId) -> Result<(), String> {
+            unimplemented!()
+        }
+        fn get_agent_profiles(
+            &self,
+            _: &crate::domain::ids::MachineId,
+        ) -> Result<Vec<crate::domain::models::AgentProfile>, String> {
+            Ok(vec![])
+        }
+        fn add_agent_profile(
+            &self,
+            _: crate::domain::models::AgentProfile,
+        ) -> Result<(), String> {
+            unimplemented!()
+        }
+        fn delete_agent_profile(
+            &self,
+            _: &crate::domain::ids::AgentProfileId,
+        ) -> Result<(), String> {
+            unimplemented!()
+        }
+    }
+
+    let machine = Machine {
+        id: crate::domain::ids::MachineId("m-probe".into()),
+        name: "probe".into(),
+        host,
+        port: 22,
+        username: user,
+        auth_type: "key".into(),
+        key_path: Some(key),
+        agents: None,
+        auto_approved_rules: None,
+        use_login_shell: Some(true),
+        setup_commands: None,
+        notify_webhook_url: None,
+    };
+    let adapter = crate::adapters::ssh::client::SshClientAdapter::new(std::sync::Arc::new(
+        OneMachine(machine),
+    ));
+
+    // Fake agent: JSON burst every 3s for 36s (crosses the 30s keepalive),
+    // then 15s of total silence (crosses the 10s session timeout), then a
+    // final text + end_turn.
+    let script = r#"for i in $(seq 1 12); do echo "{\"type\":\"text\",\"delta\":\"tick-$i\"}"; sleep 3; done; sleep 15; echo '{"type":"text","delta":"after-silence"}'; echo '{"type":"end_turn"}'"#;
+    let handle = adapter
+        .spawn_interactive(
+            "m-probe",
+            "bash",
+            &["-c".to_string(), script.to_string()],
+            "/tmp",
+            &std::collections::HashMap::new(),
+        )
+        .expect("spawn_interactive");
+
+    let handle = std::sync::Arc::new(std::sync::Mutex::new(handle));
+    let exit_handle = handle.clone();
+    let reader = HandleReader { handle };
+    let start = std::time::Instant::now();
+    let events = run_drain(reader, move || {
+        exit_handle
+            .lock()
+            .ok()
+            .and_then(|h| h.try_wait().ok().flatten())
+    });
+    let elapsed = start.elapsed();
+
+    let texts: Vec<&AgentEvent> = events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::Text { .. }))
+        .collect();
+    assert!(
+        elapsed.as_secs() >= 50,
+        "stream ended early at {:?} — transport truncation regressed. events: {:?}",
+        elapsed,
+        events
+    );
+    assert_eq!(texts.len(), 13, "missing text events: {:?}", events);
+    assert!(
+        matches!(events.last(), Some(AgentEvent::TurnComplete { .. })),
+        "expected trailing TurnComplete, got: {:?}",
+        events.last()
+    );
+}
+
 #[test]
 fn drain_lines_returns_early_when_consumer_drops() {
     let (tx, rx) = mpsc::channel::<AgentEvent>(1);
