@@ -164,10 +164,12 @@ pub async fn step_get(
     ctx: State<'_, AppContext>,
     execution_id: String,
 ) -> Result<StepExecution, AppError> {
-    ctx.executor
-        .step_get(&execution_id)
-        .await
-        .map_err(AppError::from)
+    // Read-model path (C3): display reads go through `RunView`, not the
+    // executor, so a runner-owned step can later resolve from the shadow.
+    ctx.run_view
+        .step(&StepExecutionId::from(execution_id))
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found("Step execution not found".to_string()))
 }
 
 #[tauri::command]
@@ -175,9 +177,8 @@ pub async fn step_list_for_run(
     ctx: State<'_, AppContext>,
     feature_id: String,
 ) -> Result<Vec<StepExecution>, AppError> {
-    ctx.executor
-        .step_list_for_run(&feature_id)
-        .await
+    ctx.run_view
+        .steps(&FeatureId::from(feature_id))
         .map_err(AppError::from)
 }
 
@@ -246,8 +247,8 @@ pub fn feature_get(
     ctx: State<'_, AppContext>,
     feature_id: String,
 ) -> Result<Option<Feature>, AppError> {
-    ctx.features
-        .get(&FeatureId::from(feature_id))
+    ctx.run_view
+        .feature(&FeatureId::from(feature_id))
         .map_err(AppError::from)
 }
 
