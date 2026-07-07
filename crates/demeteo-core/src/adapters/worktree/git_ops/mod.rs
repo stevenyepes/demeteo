@@ -5,6 +5,19 @@ use crate::ports::worktree_ops::{MergePreCheck, SyncFailure, SyncOutcome, Worktr
 use async_trait::async_trait;
 use std::sync::Arc;
 
+/// Git plumbing shared by local, desktop-over-SSH, and runner execution.
+///
+/// **Shell-context audit (C1.3, `docs/EXECUTION_CONSISTENCY_PLAN.md`).** Every
+/// `exec.run_command` here deliberately uses the *non-login* default
+/// [`ShellOptions`](crate::ports::execution::ShellOptions): these commands
+/// invoke the system `git` binary, which lives on the default `PATH` of both a
+/// local `sh -c` and a bare SSH channel, so no login profile is required and
+/// both transports resolve it identically (D2). Working directories are always
+/// passed explicitly (absolute paths, `git -C`, or a `cd …` prefix) — never the
+/// ambient process cwd. Toolchain-managed tools that *do* need the user's login
+/// profile (`mise`/`asdf`/`nvm` shims) never run through here; they run through
+/// the login-shell paths — the agent spawn (`spawn_interactive`), the harness
+/// gate (`driver::verifier::harness_shell_options`), and remote agent install.
 pub struct GitOpsHelper {
     pub(crate) app_settings: Arc<dyn AppSettingsRepository>,
     pub(crate) exec: Arc<dyn ExecutionPort>,

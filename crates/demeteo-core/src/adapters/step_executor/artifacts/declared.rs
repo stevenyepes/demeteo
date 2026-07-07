@@ -1,3 +1,12 @@
+//! Declared-artifact capture (git snapshot/diff/commit of a step's output).
+//!
+//! **Shell-context audit (C1.3, `docs/EXECUTION_CONSISTENCY_PLAN.md`).** The
+//! `exec.run_command` calls in this module all shell out to the system `git`
+//! binary with an explicit `git -C <worktree>` cwd, so the non-login default
+//! [`ShellOptions`](crate::ports::execution::ShellOptions) is intended: `git`
+//! is on the default `PATH` of both a local `sh -c` and a bare SSH channel, and
+//! no login profile is consulted, so local and SSH capture identically (D2). No
+//! call here relies on ambient env or ambient cwd.
 use crate::domain::artifact::{Artifact, ArtifactCapture, ArtifactDecl, ArtifactSource};
 use crate::paths;
 use crate::ports::artifact_store::ArtifactStore;

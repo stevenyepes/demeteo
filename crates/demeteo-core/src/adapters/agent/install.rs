@@ -55,7 +55,17 @@ async fn run_remote(
     machine_id: &str,
     install_command: &str,
 ) -> Result<(), String> {
-    exec.run_command(machine_id, install_command).await?;
+    // Run the install command under an interactive login shell so the target
+    // user's package managers (`npm` via nvm, `mise`, `asdf`, Homebrew) are on
+    // `PATH` — the same shell mode the availability probe and agent spawn use.
+    // A bare non-login shell here would fail to resolve an `npm i -g …` /
+    // `mise use …` installer even though the tool is present for the user (D2).
+    exec.run_command_with(
+        machine_id,
+        install_command,
+        crate::ports::execution::ShellOptions::login_interactive(),
+    )
+    .await?;
     Ok(())
 }
 

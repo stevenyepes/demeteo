@@ -70,9 +70,21 @@ impl ExecutionDriver {
                 .await;
         }
 
+        // Run the prepare/harness commands in the *same* shell mode the coding
+        // agent ran in, with the worktree as an explicit cwd (D2 — never rely on
+        // ambient state). On a machine flagged `use_login_shell`, the agent was
+        // spawned under an interactive login shell so `mise`/`asdf`/`nvm`-shimmed
+        // toolchains are on `PATH`; the harness gate must see the identical
+        // environment, or a project whose `npm test`/`pytest` the agent ran fine
+        // would fail here with "command not found" only on remote.
+        let opts = self.harness_shell_options(machine_str, wt_path);
+
         if let Some(ref cmd) = prepare_command {
-            let prepare_run_cmd = format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
-            if let Err(out) = self.exec.run_command(machine_str, &prepare_run_cmd).await {
+            if let Err(out) = self
+                .exec
+                .run_command_with(machine_str, cmd, opts.clone())
+                .await
+            {
                 let truncated = tail_chars(&out, 2000);
                 return Err(crate::domain::verifier::VerifierError::Verdict(
                     crate::domain::verifier::VerdictFailure::from_reason(format!(
@@ -84,14 +96,14 @@ impl ExecutionDriver {
         }
 
         let harness_result: Option<(String, bool)> = match harness_cmd {
-            Some(ref cmd) => {
-                let harness_run_cmd =
-                    format!("cd {} && {}", paths::shell_escape_posix(wt_path), cmd);
-                match self.exec.run_command(machine_str, &harness_run_cmd).await {
-                    Ok(out) => Some((out, true)),
-                    Err(out) => Some((out, false)),
-                }
-            }
+            Some(ref cmd) => match self
+                .exec
+                .run_command_with(machine_str, cmd, opts.clone())
+                .await
+            {
+                Ok(out) => Some((out, true)),
+                Err(out) => Some((out, false)),
+            },
             None => None,
         };
 
@@ -121,6 +133,37 @@ impl ExecutionDriver {
                   artifacts below.\n"
                 .to_string(),
         })
+    }
+
+    /// Build the [`ShellOptions`](crate::ports::execution::ShellOptions) the
+    /// prepare/test harness runs under: the worktree as an explicit cwd, and
+    /// login mode mirroring the coding agent's spawn. Resolving the machine's
+    /// `use_login_shell` here (not baking a `cd … &&` string) is the D2
+    /// "explicit context" move — the harness gate and the agent see the same
+    /// `PATH`, so a toolchain the agent used never silently vanishes for the
+    /// gate on a remote box. A missing/unknown machine (or `local`) resolves to
+    /// a plain non-login shell, matching the historical default.
+    fn harness_shell_options(
+        &self,
+        machine_str: &str,
+        wt_path: &str,
+    ) -> crate::ports::execution::ShellOptions {
+        let use_login = crate::infrastructure::worktree::machine_resolver::resolve_machine(
+            &*self.machines,
+            machine_str,
+        )
+        .ok()
+        .and_then(|m| m.use_login_shell)
+        .unwrap_or(false);
+        crate::ports::execution::ShellOptions {
+            login_shell: use_login,
+            // Interactive matches `spawn_interactive`: mise/asdf/nvm activate in
+            // `~/.bashrc` behind the non-interactive guard, so only `-i` puts
+            // their shims on PATH. Off when not a login shell.
+            interactive: use_login,
+            cwd: Some(wt_path.to_string()),
+            env: Default::default(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
