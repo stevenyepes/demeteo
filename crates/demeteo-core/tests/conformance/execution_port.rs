@@ -11,7 +11,11 @@
 //! * non-zero exit ⇒ `Err` carrying stderr (D3) — never `Ok("")`;
 //! * missing file ⇒ `Err`, not `Ok("")` (D3);
 //! * `list_dir` entry shape (name/is_dir, `.`/`..` filtered);
-//! * login-shell env resolution (D2 — the caller's env crosses the boundary).
+//! * login-shell env resolution (D2 — the caller's env crosses the boundary);
+//! * a command silent longer than the transport's blocking-call timeout still
+//!   drains to EOF and returns its output (D3 — a slow, silent command is not
+//!   a transport failure; this is leak #1: local drains a pipe forever, SSH
+//!   used to abort at the 10s session timeout).
 //!
 //! New behaviour is added *here*, not bug-hunted onto each adapter. The SSH
 //! target is wired the same way against a loopback `sshd` in C2.2 (feature-
@@ -122,6 +126,26 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
         echoed.trim(),
         "marker-value",
         "caller-supplied env must be visible inside the login shell",
+    );
+
+    // --- long silent command survives the blocking-call timeout (D3) -----
+    // A command that produces no output for longer than the SSH session's
+    // 10s blocking-call timeout (`ssh_util::connect`) must still drain to
+    // EOF and return its output — never abort with "Timed out waiting on
+    // socket". Locally there is no socket timeout so this passes trivially;
+    // on SSH it reproduces the reported drift where `cargo test` compiles
+    // silently for >10s and the prepare command spuriously "fails"
+    // (`docs/EXECUTION_CONSISTENCY_PLAN.md`, leak #1). The 13s silence clears
+    // the 10s timeout with margin. This is the failing assertion that the
+    // shared timeout-tolerant drain helper (B) must turn green on SSH.
+    let out = port
+        .run_command(machine_id, "sleep 13; printf %s survived-the-silence")
+        .await
+        .expect("a command silent longer than the session timeout must still complete");
+    assert_eq!(
+        out.trim(),
+        "survived-the-silence",
+        "output produced after a >timeout silent gap must be captured to EOF",
     );
 }
 
