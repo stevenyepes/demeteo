@@ -1,14 +1,28 @@
 use super::*;
 use crate::ports::execution::InteractiveHandle;
 use crate::ports::execution::SftpEntry;
+use crate::ports::execution::ShellOptions;
+use std::sync::{Arc, Mutex};
 
-struct StubExec;
+#[derive(Default)]
+struct StubExec {
+    last_opts: Arc<Mutex<Option<ShellOptions>>>,
+}
 #[async_trait::async_trait]
 impl ExecutionPort for StubExec {
     async fn test_connection(&self, _: &str) -> Result<(), String> {
         Ok(())
     }
     async fn run_command(&self, _: &str, _: &str) -> Result<String, String> {
+        Ok(String::new())
+    }
+    async fn run_command_with(
+        &self,
+        _: &str,
+        _: &str,
+        opts: ShellOptions,
+    ) -> Result<String, String> {
+        *self.last_opts.lock().unwrap() = Some(opts);
         Ok(String::new())
     }
     async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
@@ -79,8 +93,14 @@ fn local_install_missing_command_fails() {
 }
 
 #[tokio::test]
-async fn remote_install_delegates_to_run_command() {
-    let exec = StubExec;
+async fn remote_install_runs_under_interactive_login_shell() {
+    // A remote agent install must resolve the user's package managers
+    // (npm via nvm, mise, asdf, brew), which only an interactive login shell
+    // puts on PATH — regression guard for the C1.3 explicit-context migration.
+    let exec = StubExec::default();
     let res = run_official_install(&exec, "remote_1", "curl -fsSL https://x/install | bash").await;
     assert!(res.is_ok());
+    let opts = exec.last_opts.lock().unwrap().clone().expect("opts recorded");
+    assert!(opts.login_shell, "remote install must use a login shell");
+    assert!(opts.interactive, "remote install must be interactive");
 }

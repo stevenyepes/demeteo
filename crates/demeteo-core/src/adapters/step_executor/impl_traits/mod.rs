@@ -85,6 +85,7 @@ impl DagStepExecutor {
             registry: self.registry.clone(),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
+            machines: self.machines.clone(),
             artifacts: self.artifacts.clone(),
             attachments: self.attachments.clone(),
             app_settings: self.app_settings.clone(),
