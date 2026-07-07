@@ -11,6 +11,7 @@
       "agent_kind": null,
       "prompt_template": "You are a senior software architect performing a pre-implementation codebase audit.\n\nThe user wants to build: {{feature_description}}\n\nProject conventions: {{project_conventions}}\nRepositories in scope: {{repo_list}}\n\n## Your task\n1. Identify every file likely to change. For each file: filename, reason, change type (create / modify / delete).\n2. Identify every existing pattern the implementation must follow (naming, error handling, module boundaries, test conventions).\n3. Flag potential risks: circular dependencies, shared state, performance-sensitive paths, security-sensitive areas.\n4. List any external dependencies or APIs the feature will touch.\n\n## Output artifact (required sections, in order)\n- `## Affected Files` — table: filename | change type | reason\n- `## Patterns to Follow` — bullet list with code references\n- `## Risk Register` — table: risk | likelihood (H/M/L) | mitigation\n- `## External Dependencies` — list\n\nWrite this artifact to `artifacts/research-report.md` — create the file. Producing it only as your reply is NOT sufficient; the file must exist.\n\n## Stop condition\nYou are done when `artifacts/research-report.md` exists and contains all four sections and every affected file has a stated reason.",
       "capability": "artifacts",
+      "allow_shell": true,
       "artifacts": [
         {
           "name": "research-report",
@@ -31,6 +32,7 @@
       "agent_kind": null,
       "prompt_template": "You are a technical lead turning a research report into a binding implementation specification.\n\nFeature goal: {{feature_description}}\nResearch artifact: [attached — previous step artifact]\n\n## Your task\nWrite a detailed, actionable spec that any developer (or agent) can implement without ambiguity. If this is a retry from a previous attempt, revise the existing `artifacts/implementation-spec.md` in light of the user's feedback rather than rewriting from scratch.\n\n## Required spec sections\n1. **Acceptance Criteria** — 3–7 testable, binary-pass/fail statements.\n2. **Data Model Changes** — new fields, tables, types, or enum variants with their schema.\n3. **Files to Create or Modify** — from the research artifact, with a one-line change description per file.\n4. **Public API Changes** — new commands, events, or ports; breaking vs additive.\n5. **Testing Strategy** — unit tests required, integration tests, happy path + edge cases.\n6. **Constraints** — things the implementation must NOT do.\n7. **Open Questions** — issues that need user decision before implementation.\n\n## Stop condition\nYou are done when all 7 sections are present and Acceptance Criteria are phrased as testable assertions (not goals).\n\n{{retry_feedback_section}}",
       "capability": "artifacts",
+      "allow_shell": true,
       "artifacts": [
         {
           "name": "implementation-spec",
@@ -105,6 +107,7 @@
       "agent_kind": null,
       "prompt_template": "You are a senior code reviewer with an adversarial mindset. Your role is to find problems — not to be kind.\n\nFeature goal: {{feature_description}}\nSpec artifact: [attached — s-spec]\nImplementation subtask artifacts: [attached — all s-implement summaries]\nValidation report (build and tests already passed): [attached — s-validate]\n\n## Review dimensions (check each explicitly)\n1. **Correctness** — does the implementation satisfy every acceptance criterion?\n2. **Spec compliance** — are there deviations from the spec's constraints?\n3. **Security** — hardcoded secrets, injection risks, path traversal, TOCTOU vulnerabilities.\n4. **Performance** — N+1 queries, unbounded loops, unnecessary allocations on hot paths.\n5. **Test coverage** — are edge cases and error paths tested?\n6. **Code quality** — naming, duplication, dead code, overly complex logic.\n\n## Output artifact (required)\n- `## Critical Issues` — MUST be fixed before ship (blocking)\n- `## Major Issues` — should be fixed (non-blocking but important)\n- `## Minor Issues` — nice-to-fix\n- `## Verdict` — one of: `PASS`, `PASS_WITH_NOTES`, `FAIL`\n\nWrite this review to `artifacts/critic-review.md` — create the file. Producing it only as your reply is NOT sufficient; the file must exist.\n\n## Stop condition\nYou are done when `artifacts/critic-review.md` exists with all 6 dimensions assessed and a Verdict written.",
       "capability": "artifacts",
+      "allow_shell": true,
       "artifacts": [
         {
           "name": "critic-review",

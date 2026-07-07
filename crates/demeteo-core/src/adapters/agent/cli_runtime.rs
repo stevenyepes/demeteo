@@ -405,31 +405,12 @@ impl AgentSession for UnifiedCliSession {
     }
 
     fn is_alive(&self) -> bool {
-        // Local child: try_wait returns Some(_) when the process has exited.
-        if let Ok(guard) = self.live_local.lock() {
-            if let Some(child_arc) = guard.as_ref() {
-                if let Ok(mut child) = child_arc.lock() {
-                    if child.try_wait().ok().flatten().is_some() {
-                        return false;
-                    }
-                }
-            }
-            return true;
-        }
-        // Remote channel: probe the InteractiveHandle. `try_wait` returns
-        // Some when the channel has closed (EOF or process exit).
-        if let Ok(guard) = self.live_remote.lock() {
-            if let Some(handle_arc) = guard.as_ref() {
-                if let Ok(h) = handle_arc.lock() {
-                    if h.try_wait().ok().flatten().is_some() {
-                        return false;
-                    }
-                }
-            }
-            return true;
-        }
-        // Mutex poisoned → conservative dead.
-        false
+        // A CLI session spawns a fresh process per turn (`prompt` kills any
+        // previous one) and its resumable state is the captured session id
+        // in the agent's own on-disk store — it survives process exit. So a
+        // finished child does not make the session dead, and the driver's
+        // dead-session respawn fallback must not churn it between steps.
+        true
     }
 
     fn cumulative_tokens(&self) -> u64 {
@@ -450,8 +431,35 @@ struct HandleReader {
 
 impl Read for HandleReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let h = self.handle.lock().expect("HandleReader mutex poisoned");
-        h.try_read(buf)
+        // `try_read` reports `WouldBlock` for retryable conditions (the SSH
+        // adapter maps its 10s blocking-read timeout and the keepalive-due
+        // interruption to it). Retry those instead of letting `drain_lines`
+        // treat them as end-of-stream — a long LLM thinking pause with no
+        // wire traffic is legitimate agent behaviour; the silence/wall
+        // watchdogs in `stream_agent_turn` own the "agent is stuck" call.
+        // The handle mutex is re-acquired per attempt so `kill()` can grab
+        // it between retries and close the channel (the next read then
+        // returns EOF).
+        loop {
+            let res = {
+                let h = self.handle.lock().expect("HandleReader mutex poisoned");
+                h.try_read(buf)
+            };
+            match res {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    // The SSH read blocks ~10s per attempt, so this loop is
+                    // normally slow; the sleep only guards against a handle
+                    // that reports WouldBlock immediately.
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                other => return other,
+            }
+        }
     }
 }
 
@@ -469,6 +477,10 @@ fn drain_lines<R, F>(
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
     let mut terminal = false;
+    // Set when the loop ends on a read *error* rather than a clean EOF.
+    // The distinction matters below: an errored stream whose process has
+    // no exit status is a lost transport, not a finished turn.
+    let mut read_error: Option<std::io::Error> = None;
     // Ring buffer of the last `TAIL_CAP` non-empty, unparseable lines.
     // These are the agent's stderr-ish / banner / error messages that
     // the JSON parser dropped on the floor. When the agent exits
@@ -483,7 +495,11 @@ fn drain_lines<R, F>(
     loop {
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
+            Err(e) => {
+                read_error = Some(e);
+                break;
+            }
             Ok(_) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
@@ -587,14 +603,41 @@ fn drain_lines<R, F>(
         }
     }
     if !terminal {
-        match exit_code_fn() {
-            Some(0) | None => {
+        match (exit_code_fn(), read_error) {
+            // A read *error* with no exit status means the process is (as
+            // far as we know) still running and we lost its stream.
+            // Fabricating a TurnComplete here made the step executor treat
+            // a half-finished agent as done and fail on the missing
+            // deliverable. Surface it as an environmental error instead so
+            // the driver can retry the step without blaming the
+            // implementation.
+            (None, Some(err)) => {
+                let suffix = if tail.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "\n\nLast agent output before the stream broke:\n{}",
+                        tail.join("\n")
+                    )
+                };
+                let _ = tx.blocking_send(AgentEvent::Error {
+                    code: "agent_stream_lost".to_string(),
+                    message: format!(
+                        "lost the agent's output stream while the agent was still running ({}){}",
+                        err, suffix
+                    ),
+                    recoverable: false,
+                });
+            }
+            // Clean EOF with a zero/unknown exit is the normal "agent
+            // finished and closed its stream" ending.
+            (Some(0) | None, _) => {
                 let _ = tx.blocking_send(AgentEvent::TurnComplete {
                     stop_reason: StopReason::EndOfTurn,
                     usage: None,
                 });
             }
-            Some(code) => {
+            (Some(code), _) => {
                 let suffix = if tail.is_empty() {
                     String::new()
                 } else {

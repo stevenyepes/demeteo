@@ -11,6 +11,7 @@
       "agent_kind": "claude-code",
       "prompt_template": "You are a senior engineer producing a concise, actionable implementation plan for a simple task.\n\nFeature description: {{feature_description}}\nProject conventions: {{project_conventions}}\nRepositories in scope: {{repo_list}}\n\n## Your task\nExplore the codebase to understand the relevant area, then produce a plan with these sections:\n\n1. **Files to Change** — table: file path | change type (create/modify) | what to change\n2. **Implementation Approach** — step-by-step sequence. Each step must be a single atomic change (one file or one logical change).\n3. **Acceptance Criteria** — 2-5 testable, binary-pass/fail statements that define done.\n4. **Open Questions** — anything ambiguous that the implementer will need to decide.\n\n## Rules\n- Do NOT write any code. Produce the plan document only.\n- Keep it short — this is a simple task, not a full spec.\n\n## Output artifact (required)\nWrite your completed plan to `artifacts/implementation-plan.md` — create the file. Producing the plan only as your reply is NOT sufficient; the file must exist. ('Do NOT write any code' above refers to source code, not this plan document.)\n\n## Stop condition\nYou are done when `artifacts/implementation-plan.md` exists with all 4 sections and Acceptance Criteria are testable assertions.",
       "capability": "artifacts",
+      "allow_shell": true,
       "artifacts": [
         {
           "name": "implementation-plan",

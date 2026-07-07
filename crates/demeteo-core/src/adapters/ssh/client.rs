@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 struct RemoteChannelHandle {
     channel: Mutex<Channel>,
-    _session: Session,
+    session: Session,
 }
 
 impl InteractiveHandle for RemoteChannelHandle {
@@ -26,7 +26,28 @@ impl InteractiveHandle for RemoteChannelHandle {
 
     fn try_read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut channel = self.channel.lock().unwrap();
-        channel.read(buf)
+        match channel.read(buf) {
+            Ok(n) => Ok(n),
+            // A timeout here is NOT end-of-stream: the session carries a 10s
+            // blocking-call timeout (see `ssh_util::connect`), and with
+            // keepalive configured libssh2 aborts a blocking read the moment
+            // a keepalive comes due (~30s after handshake) even while data
+            // is flowing. Send the keepalive libssh2 is waiting on and
+            // report `WouldBlock` so the caller retries instead of treating
+            // a healthy mid-turn stream as ended. Covered live by the
+            // ignored `remote_pty_stream_survives_keepalive_and_silence_live`
+            // test.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                let _ = self.session.keepalive_send();
+                Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, e))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn kill(&self) -> Result<(), String> {
@@ -36,6 +57,13 @@ impl InteractiveHandle for RemoteChannelHandle {
 
     fn try_wait(&self) -> Result<Option<i32>, String> {
         let channel = self.channel.lock().unwrap();
+        // `exit_status()` returns Ok(0) while the remote process is still
+        // running (libssh2 only learns the real status once the channel
+        // reaches EOF). Answer "still running" until then so callers never
+        // mistake a live agent for a clean exit.
+        if !channel.eof() {
+            return Ok(None);
+        }
         match channel.exit_status() {
             Ok(code) => Ok(Some(code)),
             Err(e) => Err(e.to_string()),
@@ -834,7 +862,7 @@ impl ExecutionPort for SshClientAdapter {
 
         Ok(Box::new(RemoteChannelHandle {
             channel: Mutex::new(channel),
-            _session: sess,
+            session: sess,
         }))
     }
 }
