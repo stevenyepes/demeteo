@@ -145,3 +145,103 @@ async fn local_subprocess_adapter_satisfies_the_contract() {
     exec_contract(port, "local", &workdir).await;
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// C2.2 — the same `exec_contract`, against a real SSH target
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Running the byte-identical assertions above against `SshClientAdapter` is
+// the only thing that proves local/SSH parity: a regression that reintroduces
+// the bare non-login `channel.exec` (dropping cwd/env/login-shell) turns *this*
+// red while the local leg stays green.
+//
+// Gated behind the `ssh-conformance` feature so a Docker-less `cargo test`
+// still passes. The CI job — and `tests/conformance/run-ssh-conformance.sh`
+// for local runs — stands up a throwaway loopback `sshd`
+// (tests/conformance/sshd/Dockerfile) and exports the connection as env:
+//
+//   DEMETEO_SSH_CONFORMANCE_HOST      (default 127.0.0.1)
+//   DEMETEO_SSH_CONFORMANCE_PORT      (default 2222)
+//   DEMETEO_SSH_CONFORMANCE_USER      (default demeteo)
+//   DEMETEO_SSH_CONFORMANCE_PASSWORD  (required)
+//   DEMETEO_SSH_CONFORMANCE_WORKDIR   (default /home/<user>/conformance)
+#[cfg(feature = "ssh-conformance")]
+#[tokio::test]
+async fn ssh_client_adapter_satisfies_the_contract() {
+    use crate::adapters::ssh::client::SshClientAdapter;
+    use crate::domain::ids::{AgentProfileId, MachineId};
+    use crate::domain::models::{AgentProfile, Machine};
+    use crate::ports::db::MachineRepository;
+
+    // Minimal single-machine repo pointing the adapter at the container.
+    struct OneMachine(Machine);
+    impl MachineRepository for OneMachine {
+        fn get_machines(&self) -> Result<Vec<Machine>, String> {
+            Ok(vec![self.0.clone()])
+        }
+        fn get_machine(&self, id: &MachineId) -> Result<Option<Machine>, String> {
+            Ok((id.0 == self.0.id.0).then(|| self.0.clone()))
+        }
+        fn add(&self, _: Machine) -> Result<(), String> {
+            unimplemented!()
+        }
+        fn update(&self, _: Machine) -> Result<(), String> {
+            unimplemented!()
+        }
+        fn delete(&self, _: &MachineId) -> Result<(), String> {
+            unimplemented!()
+        }
+        fn get_agent_profiles(&self, _: &MachineId) -> Result<Vec<AgentProfile>, String> {
+            Ok(vec![])
+        }
+        fn add_agent_profile(&self, _: AgentProfile) -> Result<(), String> {
+            unimplemented!()
+        }
+        fn delete_agent_profile(&self, _: &AgentProfileId) -> Result<(), String> {
+            unimplemented!()
+        }
+    }
+
+    let host =
+        std::env::var("DEMETEO_SSH_CONFORMANCE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port_num: i32 = std::env::var("DEMETEO_SSH_CONFORMANCE_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(2222);
+    let user =
+        std::env::var("DEMETEO_SSH_CONFORMANCE_USER").unwrap_or_else(|_| "demeteo".to_string());
+    let password = std::env::var("DEMETEO_SSH_CONFORMANCE_PASSWORD")
+        .expect("DEMETEO_SSH_CONFORMANCE_PASSWORD must be set for the ssh-conformance test");
+    let workdir = std::env::var("DEMETEO_SSH_CONFORMANCE_WORKDIR")
+        .unwrap_or_else(|_| format!("/home/{user}/conformance"));
+
+    let machine_id = "ssh-conformance";
+    let machine = Machine {
+        id: MachineId(machine_id.to_string()),
+        name: "ssh-conformance".to_string(),
+        host,
+        port: port_num,
+        username: user,
+        auth_type: "password".to_string(),
+        key_path: None,
+        agents: None,
+        auto_approved_rules: None,
+        use_login_shell: Some(false),
+        setup_commands: None,
+        notify_webhook_url: None,
+    };
+    // Seed the in-process credential cache so the adapter's password lookup
+    // never reaches the OS keyring (which the test build may lack, and which
+    // has no secret for this throwaway host anyway).
+    crate::credential_cache::set(&format!("machine_{machine_id}"), &password);
+
+    let port: Arc<dyn ExecutionPort> = Arc::new(SshClientAdapter::new(Arc::new(OneMachine(machine))));
+
+    // Ensure the workdir exists, mirroring `fresh_local_workdir` for the local
+    // leg — the shared `exec_contract` assumes a pre-existing writable dir.
+    port.run_command(machine_id, &format!("mkdir -p {workdir}"))
+        .await
+        .expect("failed to create the remote conformance workdir");
+
+    exec_contract(port, machine_id, &workdir).await;
+}
