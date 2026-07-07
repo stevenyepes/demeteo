@@ -152,6 +152,14 @@ pub struct AppContext {
     /// `(machine_id, run_id)`. Unused by `demeteo-runner` — only the
     /// Tauri app populates it.
     pub remote_run_mirror: Arc<dyn RemoteRunMirrorPort>,
+
+    /// Single read model for a run's rendered surface — feature, steps,
+    /// per-step artifacts, agent stream, cost (C3,
+    /// `docs/EXECUTION_CONSISTENCY_PLAN.md`). UI display commands read through
+    /// this instead of reaching for `features`/`threads`/`exec` directly, so a
+    /// runner-owned feature can later be sourced from a shadow mirror (C4)
+    /// transparently to the UI.
+    pub run_view: Arc<crate::application::run_view::RunView>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

@@ -256,6 +256,14 @@ pub fn build_core_context(
         &runtime,
     );
 
+    // Single read model for the rendered run surface (C3). Delegates to the
+    // laptop repos for local/SSH runs; the C4 runner mirror plugs in here.
+    let run_view = Arc::new(crate::application::run_view::RunView::new(
+        features_repo.clone(),
+        threads_repo.clone(),
+        exec_inner.clone(),
+    ));
+
     AppContext {
         machines: machines_repo,
         threads: threads_repo,
@@ -287,5 +295,6 @@ pub fn build_core_context(
         runner_runs: runner_runs_repo,
         run_events: run_events_repo,
         remote_run_mirror: remote_run_mirror_repo,
+        run_view,
     }
 }
