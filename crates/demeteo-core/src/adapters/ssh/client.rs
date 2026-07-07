@@ -6,9 +6,68 @@ use crate::shared::shell;
 use async_trait::async_trait;
 use ssh2::{Channel, Session, Sftp};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Outer wall-clock bound for draining a single one-shot SSH command. The
+/// keepalive-aware loop in [`drain_stream`] lets a command stay silent for as
+/// long as it needs without the session's 10s blocking-call timeout aborting
+/// it (that was the "`cargo test` compiles silently for >10s → prepare command
+/// spuriously fails" bug — see the conformance suite's long-silent-command
+/// clause). We still cap total drain time so a genuinely wedged remote can't
+/// hang a step forever. This is a transport backstop, not a per-command tuning
+/// knob — finer wall-clock limits and cooperative cancellation belong to the
+/// caller's timeout layer.
+const TRANSPORT_WALL_CAP: Duration = Duration::from_secs(30 * 60);
+
+/// Tag `msg` as a *transport/connection* failure (the machine could not be
+/// reached or the channel broke) rather than a *command* failure (it ran and
+/// exited non-zero). Callers distinguish the two via
+/// [`crate::ports::execution::TRANSPORT_ERROR_PREFIX`] (C0.2, D3) — e.g. the
+/// verifier routes a transport failure to `Infrastructure` (non-retryable)
+/// instead of a `Verdict` that would pointlessly re-run a failing build.
+fn transport_err(msg: impl std::fmt::Display) -> String {
+    format!("{}{}", crate::ports::execution::TRANSPORT_ERROR_PREFIX, msg)
+}
+
+/// Drain `reader` (an ssh2 channel or its stderr stream) to EOF into
+/// `buf_out`, tolerating the session's blocking-call timeout the way the
+/// interactive [`RemoteChannelHandle::try_read`] path does: a `TimedOut` /
+/// `WouldBlock` read is **not** end-of-stream — libssh2 aborts a blocking read
+/// the moment a keepalive comes due (~30s after handshake) even while the
+/// command is alive and simply quiet. Send the keepalive it's waiting on and
+/// retry, so a long silent compile drains to real EOF instead of failing with
+/// "Timed out waiting on socket". `deadline` bounds the whole drain so a
+/// wedged remote is still killable. Bytes are accumulated raw and decoded once
+/// by the caller — decoding per chunk could split a multibyte UTF-8 sequence.
+fn drain_stream<R: Read>(
+    reader: &mut R,
+    session: &Session,
+    buf_out: &mut Vec<u8>,
+    deadline: Instant,
+    what: &str,
+) -> Result<(), String> {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(()),
+            Ok(n) => buf_out.extend_from_slice(&chunk[..n]),
+            Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Err(transport_err(format!(
+                        "Timed out after the transport wall cap ({}s) waiting for {}",
+                        TRANSPORT_WALL_CAP.as_secs(),
+                        what
+                    )));
+                }
+                let _ = session.keepalive_send();
+            }
+            Err(e) => return Err(transport_err(format!("Failed to read {}: {}", what, e))),
+        }
+    }
+}
 
 struct RemoteChannelHandle {
     channel: Mutex<Channel>,
@@ -116,10 +175,10 @@ fn probe_home_over_channel(session: &Session) -> Result<String, String> {
     channel
         .exec("printf %s \"$HOME\"")
         .map_err(|e| format!("Failed to exec HOME probe over SSH: {}", e))?;
-    let mut raw = String::new();
-    channel
-        .read_to_string(&mut raw)
-        .map_err(|e| format!("Failed to read HOME probe output: {}", e))?;
+    let deadline = Instant::now() + TRANSPORT_WALL_CAP;
+    let mut raw_bytes = Vec::new();
+    drain_stream(&mut channel, session, &mut raw_bytes, deadline, "HOME probe output")?;
+    let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
     channel
         .wait_close()
         .map_err(|e| format!("Failed to wait for HOME probe channel: {}", e))?;
@@ -228,10 +287,16 @@ fn control_rpc_blocking(
         .send_eof()
         .map_err(|e| format!("Failed to send EOF on control-RPC channel: {}", e))?;
 
-    let mut raw = String::new();
-    channel
-        .read_to_string(&mut raw)
-        .map_err(|e| format!("Failed to read control-RPC response: {}", e))?;
+    let deadline = Instant::now() + TRANSPORT_WALL_CAP;
+    let mut raw_bytes = Vec::new();
+    drain_stream(
+        &mut channel,
+        &sftp_sess.session,
+        &mut raw_bytes,
+        deadline,
+        "control-RPC response",
+    )?;
+    let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
     let _ = channel.close();
     let _ = channel.wait_close();
 
@@ -341,28 +406,34 @@ fn get_sftp_blocking(
 fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<String, String> {
     let mut channel = session
         .channel_session()
-        .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
+        .map_err(|e| transport_err(format!("Failed to open SSH channel: {}", e)))?;
     channel
         .exec(full_cmd)
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
+        .map_err(|e| transport_err(format!("Failed to execute command: {}", e)))?;
 
-    let mut stdout = String::new();
-    channel
-        .read_to_string(&mut stdout)
-        .map_err(|e| format!("Failed to read command stdout: {}", e))?;
+    // Timeout-tolerant drain: a long silent command (e.g. `cargo test`
+    // compiling) must not be aborted by the session's 10s blocking-call
+    // timeout. See `drain_stream` / `TRANSPORT_WALL_CAP`.
+    let deadline = Instant::now() + TRANSPORT_WALL_CAP;
+    let mut stdout_bytes = Vec::new();
+    drain_stream(&mut channel, session, &mut stdout_bytes, deadline, "command stdout")?;
+    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
 
     // ssh2 keeps stderr on a separate stream. Drain it so the remote
     // shell's error message is included in the Err variant.
-    let mut stderr = String::new();
-    let mut err_stream = channel.stderr();
-    let _ = err_stream.read_to_string(&mut stderr);
+    let mut stderr_bytes = Vec::new();
+    {
+        let mut err_stream = channel.stderr();
+        let _ = drain_stream(&mut err_stream, session, &mut stderr_bytes, deadline, "command stderr");
+    }
+    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
     channel
         .wait_close()
-        .map_err(|e| format!("Failed to wait for channel close: {}", e))?;
+        .map_err(|e| transport_err(format!("Failed to wait for channel close: {}", e)))?;
     let exit_code = channel
         .exit_status()
-        .map_err(|e| format!("Failed to read command exit status: {}", e))?;
+        .map_err(|e| transport_err(format!("Failed to read command exit status: {}", e)))?;
 
     if exit_code != 0 {
         let detail = if stderr.trim().is_empty() {
@@ -445,7 +516,17 @@ impl ExecutionPort for SshClientAdapter {
         let machines = self.machines.clone();
         let sessions = self.sessions.clone();
         tokio::task::spawn_blocking(move || -> Result<String, String> {
-            let sftp_sess = get_sftp_blocking(&machines, &sessions, &machine_id)?;
+            // A failure to establish/reuse the session is a transport failure,
+            // not a command failure — tag it so callers (e.g. the verifier)
+            // don't misclassify an unreachable machine as a red build.
+            let sftp_sess = get_sftp_blocking(&machines, &sessions, &machine_id)
+                .map_err(|e| {
+                    if e.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX) {
+                        e
+                    } else {
+                        transport_err(e)
+                    }
+                })?;
 
             // Assemble the shell invocation identically to the local
             // adapter: exports run *inside* the body (after a login shell

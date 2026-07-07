@@ -85,6 +85,15 @@ impl ExecutionDriver {
                 .run_command_with(machine_str, cmd, opts.clone())
                 .await
             {
+                // A transport failure (unreachable machine, dropped channel,
+                // drain timeout) is not a red build — surface it as
+                // Infrastructure (non-retryable) instead of a Verdict that
+                // would pointlessly re-run the same command. See C0.2 / D3.
+                if is_transport_failure(&out) {
+                    return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                        format!("prepare command '{}' could not run: {}", cmd, out),
+                    ));
+                }
                 let truncated = tail_chars(&out, 2000);
                 return Err(crate::domain::verifier::VerifierError::Verdict(
                     crate::domain::verifier::VerdictFailure::from_reason(format!(
@@ -102,6 +111,13 @@ impl ExecutionDriver {
                 .await
             {
                 Ok(out) => Some((out, true)),
+                // A transport failure is infrastructure, not a red harness —
+                // don't gate a Verdict on it (C0.2 / D3).
+                Err(out) if is_transport_failure(&out) => {
+                    return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                        format!("test harness '{}' could not run: {}", cmd, out),
+                    ))
+                }
                 Err(out) => Some((out, false)),
             },
             None => None,
@@ -599,6 +615,17 @@ fn format_produced_artifacts_summary(
     summary
 }
 
+/// Whether an `ExecutionPort` error string denotes a *transport* failure
+/// (the machine could not be reached, the channel broke, or the drain timed
+/// out) rather than a *command* failure (it ran and exited non-zero). Keyed
+/// off the [`TRANSPORT_ERROR_PREFIX`](crate::ports::execution::TRANSPORT_ERROR_PREFIX)
+/// contract (C0.2, `docs/EXECUTION_CONSISTENCY_PLAN.md`) so the verifier can
+/// route transport failures to `Infrastructure` (non-retryable) instead of a
+/// `Verdict` that would re-run a build that never actually failed.
+fn is_transport_failure(err: &str) -> bool {
+    err.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX)
+}
+
 /// Truncate `s` to at most `max` characters, keeping the *tail* rather
 /// than the head. Build/test failures are almost always at the end of
 /// the output (the failing assertion, the panic message, the compiler
@@ -753,6 +780,27 @@ mod tail_chars_tests {
         let truncated = tail_chars(&s, 2000);
         assert_eq!(truncated.chars().count(), 2000);
         assert!(truncated.chars().all(|c| c == '€'));
+    }
+}
+
+#[cfg(test)]
+mod is_transport_failure_tests {
+    use super::is_transport_failure;
+    use crate::ports::execution::TRANSPORT_ERROR_PREFIX;
+
+    #[test]
+    fn transport_prefixed_error_is_transport() {
+        let err = format!("{}Timed out after the transport wall cap (1800s)", TRANSPORT_ERROR_PREFIX);
+        assert!(is_transport_failure(&err));
+    }
+
+    #[test]
+    fn command_failure_is_not_transport() {
+        // The non-zero-exit path ("Command failed (...)") carries no prefix,
+        // so it stays a Verdict (a real red build the retry loop should act on).
+        assert!(!is_transport_failure(
+            "Command failed (exit code: 1): cd src-tauri && cargo test"
+        ));
     }
 }
 
