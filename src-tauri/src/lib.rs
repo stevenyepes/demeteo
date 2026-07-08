@@ -359,6 +359,8 @@ pub fn run() {
             commands::remote_runner::remote_submit_run,
             commands::remote_runner::remote_list_mirrored_runs,
             commands::remote_runner::remote_reconcile_runs,
+            commands::remote_runner::remote_refresh_run,
+            commands::remote_runner::remote_run_for_feature,
             commands::remote_runner::remote_get_status,
             commands::remote_runner::remote_probe_agent,
             commands::remote_runner::remote_run_diff_url,

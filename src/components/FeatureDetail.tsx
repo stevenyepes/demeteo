@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
-import { StepExecution } from '../types';
+import { StepExecution, RemoteRunMirror } from '../types';
+import { TERMINAL_STATUSES } from './RemoteRunInbox';
 import { getAgentModels } from '../lib/agentModels';
 import { useErrorBus } from '../lib/errorBus';
 import { formatError } from '../lib/errors';
@@ -237,6 +238,51 @@ export function FeatureDetail() {
   }, [view.gateStepExecutionId, steps.length]);
 
   useEffect(() => { loadFeatureData(); }, [featureId]);
+
+  // Remote (shadow) run live refresh (docs/REMOTE_EXECUTION_PLAN.md
+  // M6.4). A feature that ran on a remote machine receives none of the
+  // local `step_progress` / `feature_status_changed` Tauri events — those
+  // fire on the runner, not this laptop — so without this its timeline
+  // would freeze at whatever the last reconcile captured. While such a
+  // run is non-terminal we poll its runner (`remote_refresh_run`, which
+  // re-hydrates the shadow) and re-read the mirrored steps, driving the
+  // exact same timeline UI a local run gets from its events. `null` for a
+  // locally-run feature (not in the mirror) — the poll never starts.
+  const [remoteRun, setRemoteRun] = useState<RemoteRunMirror | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<RemoteRunMirror | null>('remote_run_for_feature', { featureId })
+      .then((r) => { if (!cancelled) setRemoteRun(r); })
+      .catch(() => { if (!cancelled) setRemoteRun(null); });
+    return () => { cancelled = true; };
+  }, [featureId]);
+
+  useEffect(() => {
+    if (!remoteRun) return;
+    const { machine_id: machineId, run_id: runId } = remoteRun;
+    // A finished run's shadow can't change further — pull once so the
+    // terminal state's steps/artifacts are current, then stop polling.
+    if (TERMINAL_STATUSES.includes(remoteRun.status)) {
+      loadFeatureData();
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const updated = await invoke<RemoteRunMirror | null>('remote_refresh_run', { machineId, runId });
+        if (cancelled) return;
+        if (updated) setRemoteRun(updated);
+        loadFeatureData();
+      } catch {
+        // Transient tunnel hiccup — the next tick retries. Nothing to
+        // surface: the shadow keeps showing the last good state.
+      }
+    };
+    const interval = setInterval(poll, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteRun?.machine_id, remoteRun?.run_id, remoteRun?.status]);
 
   // Fetch the per-feature attachments manifest once per feature id.
   // The orchestrator already wires `feature_list_attachments` in
@@ -728,6 +774,22 @@ export function FeatureDetail() {
             >
               {status}
             </span>
+            {/* Remote run marker (M6.4). A `remoteRun` that is still
+                non-terminal is being live-tailed by the poll above, so the
+                badge pulses to signal "this timeline is updating from a
+                remote machine, same as a local run". */}
+            {remoteRun && (
+              <span
+                className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider flex items-center gap-1 bg-cyan-500/10 text-cyan-400 border-cyan-500/20 ${
+                  TERMINAL_STATUSES.includes(remoteRun.status) ? '' : 'animate-pulse'
+                }`}
+                title={`Running on remote machine ${remoteRun.machine_id}${
+                  TERMINAL_STATUSES.includes(remoteRun.status) ? '' : ' — live'
+                }`}
+              >
+                <Cpu className="w-3 h-3" /> Remote
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>
         </div>
