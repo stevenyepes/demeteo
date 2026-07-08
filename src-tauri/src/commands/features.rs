@@ -252,6 +252,24 @@ pub fn feature_get(
         .map_err(AppError::from)
 }
 
+/// The UTF-8 body of a run's declared artifact. This is a *display* read of a
+/// run surface, so it goes through `RunView` (C3) rather than `sftp_read_file`
+/// directly — that is the seam C4 uses to serve a runner-owned feature's
+/// artifact from the lazily-cached laptop shadow. General filesystem browsing
+/// (the code editor) stays on `sftp_read_file`; only run-artifact display uses
+/// this.
+#[tauri::command]
+pub async fn artifact_body(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    path: String,
+) -> Result<String, AppError> {
+    ctx.run_view
+        .artifact_body(&machine_id, &path)
+        .await
+        .map_err(AppError::from)
+}
+
 /// Sync the feature branch with `origin/<default_branch>`. Returns
 /// a `SyncOutcomeView` the UI can render directly:
 /// - `Ok` when the merge was clean (or there was nothing to merge).

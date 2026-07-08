@@ -43,7 +43,11 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
       setError(null);
       setWorktreeRef(null);
       try {
-        const fileContent = await invoke<string>('sftp_read_file', {
+        // Run-artifact display read goes through the RunView-backed
+        // `artifact_body` command (C3), not `sftp_read_file` directly — so a
+        // runner-owned feature's artifact can later resolve from the laptop
+        // shadow without this component knowing where the run executed.
+        const fileContent = await invoke<string>('artifact_body', {
           machineId: 'local',
           path: artifactPath,
         });

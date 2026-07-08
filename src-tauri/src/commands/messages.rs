@@ -10,8 +10,11 @@ pub fn get_messages(
     ctx: State<'_, AppContext>,
     thread_id: String,
 ) -> Result<Vec<Message>, AppError> {
-    ctx.threads
-        .get_messages(&ThreadId::from(thread_id))
+    // Read-model path (C3): the persisted agent stream is a display read, so it
+    // flows through `RunView` (not `ThreadRepository` directly) — the seam C4
+    // uses to source a runner-owned run's transcript from the laptop shadow.
+    ctx.run_view
+        .agent_stream(&ThreadId::from(thread_id))
         .map_err(AppError::from)
 }
 
