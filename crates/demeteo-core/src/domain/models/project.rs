@@ -113,6 +113,16 @@ pub struct ProjectSettings {
     /// (per-feature via the StartFeatureModal advanced section) if
     /// the user wants both the doc and the change-summary report in
     /// the same commit.
+    ///
+    /// Note for remote runner runs (C4.4): the default `false` used to be
+    /// a silent data-loss trap for remote features — the PR was the only
+    /// channel back to the laptop, so uncommitted reports were invisible.
+    /// That no longer holds: C4.2's shadow mirror pulls each remote step's
+    /// declared artifacts into the laptop `FsArtifactStore` and `RunView`
+    /// renders them via the return inbox's "View feature". So `false`
+    /// stays the clean default for remote too (reports reach the laptop
+    /// through the mirror, not the branch); `true` is now a deliberate
+    /// "also commit them to the PR" opt-in, not the only way to see them.
     #[serde(default)]
     pub commit_artifacts: bool,
 }

@@ -741,6 +741,14 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
                   Each step produces a report (<code>research-report.md</code>, <code>critic-review.md</code>, …). The project's default is configured in project settings.
                 </p>
+                {machineId && (
+                  <p className="text-[10px] font-mono text-cyan-300/80 mt-1.5 leading-relaxed">
+                    Remote run: the reports are mirrored back to this laptop and always
+                    reachable from the <em>Return inbox → View feature</em> — leaving this
+                    <em> No</em> keeps them out of the PR without losing them. Choose
+                    <em> Yes</em> only if you also want them committed to the branch.
+                  </p>
+                )}
                 {workflowId === 'wf-starter-docs-update' && (
                   <p className="text-[10px] font-mono text-amber-300/80 mt-1.5 leading-relaxed">
                     For docs-update: the new doc body lands at the real <code>docs/…​</code> path the survey/gate approved; <code>{'{{report_dir}}'}</code> holds only the short change-summary report. Leave <em>Project default</em> (commit <code>false</code>) so the new doc reaches the PR while the summary stays out of it.
