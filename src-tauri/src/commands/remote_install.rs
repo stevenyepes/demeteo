@@ -174,14 +174,28 @@ pub async fn remote_enable_runs(
         .await
         .map_err(AppError::from)?;
 
+    // Write to a sibling temp path and `mv` it into place rather than
+    // SFTP-truncating `bin_dst` directly: on an upgrade the previous
+    // binary is still running under `demeteo-runner.service`, and an
+    // in-place O_TRUNC open of a running executable hits Linux's
+    // ETXTBSY — which SFTP has no status code for, so it surfaces as
+    // an opaque "SFTP(4) failure". `rename(2)` has no such restriction
+    // (the running process keeps its old inode open), so this makes
+    // fresh installs and upgrades-of-a-live-service equally safe.
+    let bin_tmp = format!("{bin_dst}.new");
     ctx.exec
-        .write_file_bytes(&machine_id, &bin_dst, &bytes)
+        .write_file_bytes(&machine_id, &bin_tmp, &bytes)
         .await
         .map_err(AppError::from)?;
     ctx.exec
         .run_command(
             &machine_id,
-            &format!("chmod +x {}", shell_escape_posix(&bin_dst)),
+            &format!(
+                "chmod +x {} && mv -f {} {}",
+                shell_escape_posix(&bin_tmp),
+                shell_escape_posix(&bin_tmp),
+                shell_escape_posix(&bin_dst),
+            ),
         )
         .await
         .map_err(AppError::from)?;
