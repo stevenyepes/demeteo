@@ -394,7 +394,7 @@ Goal: the full "close the laptop, come back to results" journey (R10, §8, P7).
   upgrades it in place; a machine where linger can't be enabled installs but
   surfaces the persistence caveat.
 
-### M7.2 — Audit, secret scrubbing, security review
+### M7.2 — Audit, secret scrubbing, security review — **DONE**
 
 - **What:** Immutable audit trail per unattended run (every auto-approved gate,
   command, diff, cost) synced back; event-log/notification secret scrubbing; run
@@ -402,6 +402,30 @@ Goal: the full "close the laptop, come back to results" journey (R10, §8, P7).
 - **Why:** §5 non-repudiation + §6 hygiene.
 - **DoD:** Audit visible in the inbox; no secret leaks in synced data; security
   review actioned.
+- **Shipped:**
+  - *Audit trail = the append-only `run_events` log, surfaced in the inbox.*
+    `run.rs` already emits the control-plane decisions (gate auto-approve, park,
+    over-budget, needs-credentials, push, PR) plus a new **`cost`** event at
+    terminal state. The return inbox's log viewer (`RemoteRunInbox.tsx`,
+    relabelled **"Audit log"**) is now reachable from *every* bucket — including
+    successful `pr_ready` runs, whose auto-approved-gate trail is exactly what
+    non-repudiation needs. **Scope note:** per-*command* rows stay in the mirrored
+    step/feature view ("View feature", C4.3) rather than being duplicated into
+    `run_events` — capturing the agent's own commands would need an engine-level
+    audit sink, out of scope for "surface the existing log". The event log covers
+    the runner's control-plane commands (clone/push/PR) and all gate/budget
+    decisions.
+  - *Secret scrubbing at the sink.* New `demeteo-core::shared::secret_scrub`
+    (dependency-free; masks GitHub/GitLab PATs and URL-embedded basic-auth) is
+    applied in the two adapter choke points that persist laptop-visible text —
+    `RunEventsPort::append` (payload) and `RunnerRunPort::update_status` (error)
+    — so the direct `rpc.rs` failure-path writers that bypass `run::emit` are
+    covered too, plus the away-notification webhook body.
+  - *Security review actioned.* Two findings fixed: (1) the error/event sinks
+    above bypassed scrubbing; (2) the `0600` control socket had a bind-then-chmod
+    TOCTOU — closed by creating the runner data dir `0700` before the socket/DB
+    exist (`main.rs::ensure_private_data_dir`), which also protects the event-log
+    DB from other local users.
 
 ### M7.3 — Resolve remaining open questions
 
