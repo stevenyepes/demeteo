@@ -15,8 +15,10 @@ import {
   Inbox,
   Radio,
   X,
+  ListTree,
 } from 'lucide-react';
 import type { Machine, RemoteRunMirror, RunEvent } from '../types';
+import { useNavigation } from '../context';
 
 /**
  * Return inbox (docs/REMOTE_EXECUTION_PLAN.md M6.2, design §8). Groups
@@ -365,6 +367,7 @@ const RemoteRunInbox: React.FC = () => {
   const [reconciling, setReconciling] = useState(false);
   const [error, setError] = useState<string>('');
   const [liveRun, setLiveRun] = useState<RemoteRunMirror | null>(null);
+  const { navigate } = useNavigation();
 
   const machineName = useCallback(
     (id: string) => machines.find((m) => m.id === id)?.name ?? id,
@@ -505,6 +508,18 @@ const RemoteRunInbox: React.FC = () => {
                           )}
                         </div>
                         <div className="shrink-0 flex items-center gap-2">
+                          {run.feature_id && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                navigate({ kind: 'detail', featureId: run.feature_id!, featureTitle: run.title })
+                              }
+                              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
+                              title="Open the full feature view — steps, artifacts, and cost mirrored from the runner (C4.3)"
+                            >
+                              <ListTree className="w-3 h-3" /> View feature
+                            </button>
+                          )}
                           {(bucket === 'running' || bucket === 'parked') && (
                             <button
                               type="button"
