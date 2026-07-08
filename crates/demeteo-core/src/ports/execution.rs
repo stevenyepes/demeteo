@@ -288,3 +288,11 @@ mod conformance;
 #[cfg(test)]
 #[path = "../../tests/conformance/topology_equivalence.rs"]
 mod topology_equivalence;
+
+/// Harness-failure triage driver-integration fixtures (C6): a red harness in a
+/// real running feature triages regression-vs-environment and routes each to
+/// the right terminal path. Included the same `#[path]` way so it can drive the
+/// engine via `crate::…` and reach the C5 stub runtime.
+#[cfg(test)]
+#[path = "../../tests/conformance/harness_triage.rs"]
+mod harness_triage;

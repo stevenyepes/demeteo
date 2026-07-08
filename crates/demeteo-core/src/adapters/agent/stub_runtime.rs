@@ -42,6 +42,17 @@
 //! A trailing `@stub-verdict <key>` directive makes the stub end its reply
 //! with `{"<key>":"pass"}` so single-turn validate steps (which parse a
 //! verdict object out of the agent text) pass deterministically.
+//!
+//! A `@stub-triage <category>` directive makes the stub end its reply with a
+//! harness-triage verdict object (`{"category":"<category>", …}`) that
+//! [`parse_triage_text`](crate::adapters::step_executor::driver::verifier::parse_triage_text)
+//! lifts out. This is what lets the C6 harness-failure triage classifier be
+//! driven deterministically end-to-end: a failing harness command whose output
+//! carries `@stub-triage environment` reaches the triage agent (which runs on
+//! the feature's own `agent_kind`, i.e. the stub) via `build_triage_prompt`, so
+//! the classifier returns `environment` without a real model. `<category>` is
+//! echoed verbatim; anything other than `environment` parses back as
+//! `regression` (the classifier's fail-safe default).
 
 use std::path::Path;
 use std::pin::Pin;
@@ -54,9 +65,7 @@ use tokio_stream::Stream;
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::models::SessionInfo;
-use crate::ports::agent_runtime::{
-    AgentContext, AgentRuntime, AgentSession, AgentStartFuture,
-};
+use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartFuture};
 
 /// The `agent_kind` a `RunSpec`/feature selects to route to this runtime.
 pub const STUB_AGENT_KIND: &str = "stub";
@@ -121,13 +130,20 @@ struct WriteDirective {
 struct StubDirectives {
     writes: Vec<WriteDirective>,
     verdict_key: Option<String>,
+    /// Harness-triage category to echo back (`environment` / `regression`).
+    /// Drives the C6 classifier deterministically.
+    triage_category: Option<String>,
 }
 
-/// Extract `@stub-write` / `@stub-verdict` directives from a rendered
-/// prompt. Whitespace-tolerant; ignores everything else.
+/// Extract `@stub-write` / `@stub-verdict` / `@stub-triage` directives from a
+/// rendered prompt. Whitespace-tolerant; a directive must be the first token
+/// on its (trimmed) line, so a prompt merely *mentioning* one in prose — e.g.
+/// the failing-command echo embedded mid-line in a triage prompt — does not
+/// match. Ignores everything else.
 fn parse_directives(text: &str) -> StubDirectives {
     let mut writes = Vec::new();
     let mut verdict_key = None;
+    let mut triage_category = None;
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("@stub-write") {
@@ -142,12 +158,34 @@ fn parse_directives(text: &str) -> StubDirectives {
             if !key.is_empty() {
                 verdict_key = Some(key.to_string());
             }
+        } else if let Some(rest) = line.strip_prefix("@stub-triage") {
+            let category = rest.trim();
+            if !category.is_empty() {
+                triage_category = Some(category.to_string());
+            }
         }
     }
     StubDirectives {
         writes,
         verdict_key,
+        triage_category,
     }
+}
+
+/// A deterministic harness-triage verdict object for the given category,
+/// shaped exactly like the JSON the C6 classifier prompt asks for so
+/// `parse_triage_text` reads it back. Only `environment` carries a non-empty
+/// remediation (regression's is empty by contract).
+fn triage_json(category: &str) -> String {
+    let remediation = if category == "environment" {
+        "install the missing system dependency on the target machine"
+    } else {
+        ""
+    };
+    format!(
+        "{{\"category\":\"{category}\",\"reason\":\"stub triage: classified as {category}\",\
+         \"remediation\":\"{remediation}\"}}"
+    )
 }
 
 /// Deterministic body written for a given directive path. Kept stable
@@ -246,6 +284,14 @@ impl AgentSession for StubSession {
                 let _ = tx
                     .send(AgentEvent::Text {
                         delta: format!("{{\"{key}\":\"pass\"}}"),
+                    })
+                    .await;
+            }
+
+            if let Some(category) = directives.triage_category {
+                let _ = tx
+                    .send(AgentEvent::Text {
+                        delta: triage_json(&category),
                     })
                     .await;
             }
