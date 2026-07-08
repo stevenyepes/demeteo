@@ -13,7 +13,8 @@
 //! socket client, no RPC framework dependency.
 
 use crate::services::RunnerServices;
-use demeteo_core::domain::ids::FeatureId;
+use demeteo_core::domain::ids::{FeatureId, ThreadId};
+use demeteo_core::domain::models::{Feature, Message, StepExecution};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use demeteo_core::ports::run_events::RunEvent;
@@ -52,6 +53,18 @@ struct StreamEventsParams {
     run_id: String,
     #[serde(default)]
     from_offset: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadArtifactParams {
+    run_id: String,
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListMessagesParams {
+    run_id: String,
+    thread_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +187,15 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "get_status" => get_status(svc, req.params)
             .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "get_feature" => get_feature(svc, req.params)
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "list_steps" => list_steps(svc, req.params)
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "read_artifact" => read_artifact(svc, req.params)
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "list_messages" => list_messages(svc, req.params)
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "list_runs" => svc
             .ctx
@@ -473,6 +495,121 @@ async fn get_status(
     })
 }
 
+/// Resolve a `run_id` to the `FeatureId` its background execution
+/// bootstrapped. The C4 read-model RPCs (`get_feature`/`list_steps`/
+/// `read_artifact`/`list_messages`) all key on `run_id` — the laptop's
+/// idempotency key — and hop through the run's feature to reach the
+/// engine's own `features`/`threads`/artifact state. `Err` if the run is
+/// unknown or hasn't reached feature-bootstrap yet (nothing to render).
+fn feature_id_for_run(svc: &Arc<RunnerServices>, run_id: &str) -> Result<FeatureId, String> {
+    let run = svc
+        .ctx
+        .runner_runs
+        .get(run_id)?
+        .ok_or_else(|| format!("no such run: {}", run_id))?;
+    let fid = run
+        .feature_id
+        .ok_or_else(|| format!("run {} has not bootstrapped a feature yet", run_id))?;
+    Ok(FeatureId::from(fid))
+}
+
+/// C4.1: the runner's own `Feature` row for a run, so the laptop can
+/// hydrate a read-only shadow of it (C4.2) and render it with the same
+/// fidelity as a native feature (status/model/mr_url/aggregate cost).
+fn get_feature(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+) -> Result<Option<Feature>, String> {
+    let params: RunIdParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    let fid = feature_id_for_run(svc, &params.run_id)?;
+    svc.ctx.features.get(&fid)
+}
+
+/// C4.1: the run's step executions in creation order, each carrying its
+/// own cost/tokens/artifact refs — the shadow step list the laptop
+/// hydrates so `RunView::steps` serves a runner feature transparently.
+fn list_steps(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+) -> Result<Vec<StepExecution>, String> {
+    let params: RunIdParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    let fid = feature_id_for_run(svc, &params.run_id)?;
+    svc.ctx.features.steps_for_feature(&fid)
+}
+
+/// C4.1: the UTF-8 body of one declared artifact, for the laptop's lazy
+/// artifact cache (C4.2). **Guarded:** the requested `path` must be a
+/// declared artifact of one of the run's steps — the control socket is
+/// not a general remote-file read (a bare `read_file` would let any
+/// tunnelled caller exfiltrate arbitrary files as the runner user). The
+/// read itself goes through the engine's own `ExecutionPort`, which on
+/// the runner is the local subprocess adapter (the runner *is* the
+/// machine), and honours the port's error contract: a missing/unreadable
+/// path is an `Err`, never `Ok("")`.
+async fn read_artifact(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+) -> Result<String, String> {
+    let params: ReadArtifactParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    let fid = feature_id_for_run(svc, &params.run_id)?;
+    let steps = svc.ctx.features.steps_for_feature(&fid)?;
+    let refs = steps
+        .iter()
+        .map(|s| (s.artifact_path.as_deref(), s.artifact_paths.as_slice()));
+    if !is_declared_artifact(refs, &params.path) {
+        return Err(format!(
+            "path is not a declared artifact of run {}: {}",
+            params.run_id, params.path
+        ));
+    }
+    svc.ctx.exec.read_file("local", &params.path).await
+}
+
+/// The `read_artifact` guard: is `path` a declared artifact among these
+/// steps' refs? A step declares artifacts via a single `artifact_path`
+/// and/or a `artifact_paths` list; a match on either counts. Pure over
+/// the two ref shapes (not `StepExecution`) so it's trivially testable
+/// without building the full row.
+fn is_declared_artifact<'a>(
+    step_refs: impl IntoIterator<Item = (Option<&'a str>, &'a [String])>,
+    path: &str,
+) -> bool {
+    step_refs
+        .into_iter()
+        .any(|(single, many)| single == Some(path) || many.iter().any(|p| p == path))
+}
+
+/// C4.1: a step's persisted agent transcript (the durable message
+/// history `RunView::agent_stream` renders), so the laptop shadow can
+/// show a runner run's conversation, not just its coarse event log.
+///
+/// `run_id` is accepted (and validated to exist + have a feature) so the
+/// wire shape matches the other C4 read RPCs and a caller can't page a
+/// thread on a run that never bootstrapped; the thread itself is trusted
+/// by id, exactly as `decide_gate` trusts a bare `gate_id`. The socket's
+/// `0600` + SSH-forwarding authz — the same boundary that already grants
+/// the laptop full SFTP file read on this box — is the real access
+/// control here, not a per-thread ownership check (the engine's
+/// `thread_id` is a derived session key not stored on the step row, so
+/// re-deriving it to gate reads would be brittle without adding any
+/// boundary the tunnel doesn't already imply).
+fn list_messages(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+) -> Result<Vec<Message>, String> {
+    let params: ListMessagesParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    // Presence/bootstrap check only — surfaces a clear error for a bad
+    // `run_id` instead of silently returning an empty transcript.
+    feature_id_for_run(svc, &params.run_id)?;
+    svc.ctx
+        .threads
+        .get_messages(&ThreadId::from(params.thread_id))
+}
+
 /// R9: "catch up on everything missed by offset — never relies on a live
 /// socket having been connected." A client (or a laptop mirror, once
 /// M6's SSH-forwarding client exists) calls this repeatedly with the
@@ -532,4 +669,49 @@ async fn cancel_run(
         svc.creds.remove(&params.run_id);
     }
     Ok(run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_declared_artifact;
+
+    fn refs<'a>(
+        pairs: &'a [(Option<&'a str>, Vec<String>)],
+    ) -> impl IntoIterator<Item = (Option<&'a str>, &'a [String])> {
+        pairs.iter().map(|(s, m)| (*s, m.as_slice()))
+    }
+
+    #[test]
+    fn matches_single_artifact_path() {
+        let steps = [(Some("/w/report.md"), vec![])];
+        assert!(is_declared_artifact(refs(&steps), "/w/report.md"));
+    }
+
+    #[test]
+    fn matches_within_artifact_paths_list() {
+        let steps = [(
+            None,
+            vec!["/w/a.txt".to_string(), "/w/b.txt".to_string()],
+        )];
+        assert!(is_declared_artifact(refs(&steps), "/w/b.txt"));
+    }
+
+    #[test]
+    fn rejects_undeclared_path() {
+        // The security-relevant case: a path no step declared must not
+        // be readable over the control socket, even a plausible sibling.
+        let steps = [
+            (Some("/w/report.md"), vec!["/w/a.txt".to_string()]),
+            (None, vec!["/w/b.txt".to_string()]),
+        ];
+        assert!(!is_declared_artifact(refs(&steps), "/w/../.ssh/id_rsa"));
+        assert!(!is_declared_artifact(refs(&steps), "/w/report.md.bak"));
+        assert!(!is_declared_artifact(refs(&steps), "/etc/passwd"));
+    }
+
+    #[test]
+    fn rejects_when_no_steps_declare_anything() {
+        let steps: [(Option<&str>, Vec<String>); 0] = [];
+        assert!(!is_declared_artifact(refs(&steps), "/w/report.md"));
+    }
 }
