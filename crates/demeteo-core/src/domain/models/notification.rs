@@ -28,6 +28,12 @@ pub enum NotificationKind {
     /// is breaking on its own within the configured
     /// `max_iterations`.
     RetryBudgetExhausted,
+    /// A harness failure was triaged (C6) as an *environment* problem —
+    /// the box is missing a system library / toolchain / service, or has a
+    /// permission/network fault the coding agent cannot fix by editing
+    /// source. The run terminated early with remediation; the user must
+    /// provision the machine, not review the code.
+    EnvironmentNotReady,
 }
 
 impl NotificationKind {
@@ -41,6 +47,7 @@ impl NotificationKind {
             NotificationKind::FeatureCompleted => "feature_completed",
             NotificationKind::MergeConflict => "merge_conflict",
             NotificationKind::RetryBudgetExhausted => "retry_budget_exhausted",
+            NotificationKind::EnvironmentNotReady => "environment_not_ready",
         }
     }
 }
@@ -56,6 +63,7 @@ impl FromStr for NotificationKind {
             "feature_completed" => Ok(NotificationKind::FeatureCompleted),
             "merge_conflict" => Ok(NotificationKind::MergeConflict),
             "retry_budget_exhausted" => Ok(NotificationKind::RetryBudgetExhausted),
+            "environment_not_ready" => Ok(NotificationKind::EnvironmentNotReady),
             _ => Err(()),
         }
     }

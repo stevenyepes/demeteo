@@ -92,4 +92,13 @@ pub enum VerifierError {
     /// cancelled, or an unrecognised verdict value. The inner string describes
     /// the infrastructure problem for the user.
     Infrastructure(String),
+    /// The harness ran and failed, but triage (C6, D7) determined the cause is
+    /// the *execution environment* not being provisioned — a missing system
+    /// library / toolchain / binary / service, a permission or network problem —
+    /// which editing source code cannot fix. Routed to
+    /// [`StepOutcome::NonRetryable`](crate::adapters::step_executor::steps::StepOutcome)
+    /// so it terminates immediately instead of burning the implement retry
+    /// budget. The inner string is user-facing remediation (what to install /
+    /// fix, the failing command, and how to reproduce it), not a stack trace.
+    Environment(String),
 }

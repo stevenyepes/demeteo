@@ -10,6 +10,7 @@ import type {
   Notification,
   MrMergedEvent,
   RetryBudgetExhaustedEvent,
+  EnvironmentNotReadyEvent,
 } from "../types";
 
 /**
@@ -72,6 +73,23 @@ export function NotificationBell() {
     ({ step_id, attempt, max, reason }) => {
       setToast({
         message: `Step '${step_id}' couldn't be fixed after ${attempt} attempt(s) (of ${max}). ${reason}`,
+        accent: "amber",
+      });
+      refresh();
+      setTimeout(() => setToast(null), 8000);
+    }
+  );
+
+  // Fired when a harness failure is triaged (C6) as an environment
+  // problem — the box is missing a system library / toolchain /
+  // service the coding agent can't install. Distinct from
+  // `retry_budget_exhausted`: it fires *immediately* (no wasted
+  // retries) and the fix is provisioning the machine, not the code.
+  useTauriEvent<EnvironmentNotReadyEvent>(
+    "environment_not_ready",
+    ({ step_id, reason }) => {
+      setToast({
+        message: `Step '${step_id}' — environment not ready. ${reason}`,
         accent: "amber",
       });
       refresh();
@@ -232,6 +250,8 @@ function kindLabel(kind: string): string {
       return "Merge conflict";
     case "retry_budget_exhausted":
       return "Retry budget exhausted";
+    case "environment_not_ready":
+      return "Environment not ready";
     default:
       return kind;
   }
@@ -248,6 +268,7 @@ function kindAccent(kind: string): { dot: string } {
     case "merge_conflict":
       return { dot: "bg-ruby-400 text-ruby-400" };
     case "retry_budget_exhausted":
+    case "environment_not_ready":
       return { dot: "bg-amber-400 text-amber-400" };
     default:
       return { dot: "bg-slate-400 text-slate-400" };

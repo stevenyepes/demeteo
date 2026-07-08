@@ -284,6 +284,7 @@ impl StepExecutor for DagStepExecutor {
                 iteration_count: 0,
                 cache_read_input_tokens: None,
                 cache_creation_input_tokens: None,
+                last_failure_fingerprint: None,
                 created_at: now,
                 updated_at: now,
             };
@@ -341,6 +342,7 @@ impl StepExecutor for DagStepExecutor {
                 let _ = self.features.step_update(
                     &s.id,
                     &StepExecutionPatch {
+                        last_failure_fingerprint: None,
                         iteration_count: None,
                         status: Some("failed".to_string()),
                         cost_usd: None,
@@ -594,6 +596,7 @@ impl DagStepExecutor {
                                     let _ = self.features.step_update(
                                         &s.id,
                                         &StepExecutionPatch {
+                                            last_failure_fingerprint: None,
                                             status: Some("interrupted".to_string()),
                                             cost_usd: s.cost_usd.map(Some),
                                             wall_clock_secs: s.wall_clock_secs.map(Some),
@@ -661,6 +664,7 @@ impl DagStepExecutor {
                             let _ = self.features.step_update(
                                 &s.id,
                                 &StepExecutionPatch {
+                                    last_failure_fingerprint: None,
                                     status: Some("interrupted".to_string()),
                                     error_message: Some(Some(
                                         "Step orphaned: feature ended before step ran".to_string(),

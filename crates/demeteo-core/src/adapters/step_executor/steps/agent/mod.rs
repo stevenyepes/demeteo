@@ -218,7 +218,7 @@ impl ExecutionDriver {
                 cache_creation_input_tokens: None,
             });
             match self
-                .run_harness_first(verifier_cfg, &wt_path, &machine_str)
+                .run_harness_first(step_exec, verifier_cfg, &wt_path, &machine_str)
                 .await
             {
                 Ok(section) => harness_section = Some(section),
@@ -241,6 +241,13 @@ impl ExecutionDriver {
                                 "[verifier infrastructure error — check verifier config] {}",
                                 msg
                             ))
+                        }
+                        // Triaged (C6) as an environment problem: the box is not
+                        // provisioned, editing source can't fix it. The message
+                        // is already user-facing remediation and the
+                        // notification was fired at triage time — terminate now.
+                        crate::domain::verifier::VerifierError::Environment(msg) => {
+                            StepOutcome::NonRetryable(msg)
                         }
                     };
                 }
@@ -446,6 +453,7 @@ impl ExecutionDriver {
             let _ = self.features.step_update(
                 &step_exec.id,
                 &StepExecutionPatch {
+                    last_failure_fingerprint: None,
                     iteration_count: None,
                     status: Some("interrupted".to_string()),
                     cost_usd: Some(Some(*accumulated_cost)),
@@ -864,6 +872,7 @@ impl ExecutionDriver {
             let _ = self.features.step_update(
                 &step_exec.id,
                 &StepExecutionPatch {
+                    last_failure_fingerprint: None,
                     iteration_count: None,
                     status: Some("interrupted".to_string()),
                     cost_usd: Some(Some(*accumulated_cost)),
@@ -928,6 +937,7 @@ impl ExecutionDriver {
                     let _ = self.features.step_update(
                         &step_exec.id,
                         &StepExecutionPatch {
+                            last_failure_fingerprint: None,
                             iteration_count: None,
                             status: Some("completed".to_string()),
                             cost_usd: Some(Some(*accumulated_cost)),

@@ -46,6 +46,7 @@ impl ExecutionDriver {
         let _ = self.features.step_update(
             &step_exec.id,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 iteration_count: None,
                 status: Some("running".to_string()),
                 cost_usd: Some(Some(*accumulated_cost)),
@@ -100,6 +101,7 @@ impl ExecutionDriver {
                 let _ = self.features.step_update(
                     &step_exec.id,
                     &StepExecutionPatch {
+                        last_failure_fingerprint: None,
                         iteration_count: None,
                         status: Some("completed".to_string()),
                         cost_usd: Some(Some(*accumulated_cost)),
@@ -233,6 +235,7 @@ impl ExecutionDriver {
                 let _ = self.features.step_update(
                     &step_exec.id,
                     &StepExecutionPatch {
+                        last_failure_fingerprint: None,
                         iteration_count: None,
                         status: Some("completed".to_string()),
                         cost_usd: None,
@@ -272,6 +275,7 @@ impl ExecutionDriver {
                 let _ = self.features.step_update(
                     &step_exec.id,
                     &StepExecutionPatch {
+                        last_failure_fingerprint: None,
                         iteration_count: None,
                         status: Some("failed".to_string()),
                         cost_usd: None,

@@ -135,6 +135,7 @@ fn reset_for_redirect(
         let _ = features.step_update(
             &target_exec.id,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 iteration_count: None,
                 status: Some("pending".to_string()),
                 cost_usd: Some(Some(0.0)),
@@ -178,6 +179,7 @@ fn reset_for_redirect(
         let _ = features.step_update(
             gate_step_execution_id,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 iteration_count: None,
                 status: Some("pending".to_string()),
                 cost_usd: None,
@@ -239,6 +241,7 @@ impl ExecutionDriver {
         let _ = self.features.step_update(
             &step_exec.id,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 iteration_count: None,
                 status: Some("awaiting_gate".to_string()),
                 cost_usd: Some(Some(*accumulated_cost)),
@@ -373,6 +376,7 @@ impl ExecutionDriver {
                 let _ = self.features.step_update(
                     &ctx.step_exec.id,
                     &StepExecutionPatch {
+                        last_failure_fingerprint: None,
                         iteration_count: None,
                         status: Some("completed".to_string()),
                         cost_usd: Some(Some(*ctx.accumulated_cost)),
@@ -862,6 +866,7 @@ mod redirect_reset_tests {
     fn make_step_exec(id: &str, step_id: &str, index: u32, status: &str) -> StepExecution {
         let now = crate::paths::now_ms();
         StepExecution {
+            last_failure_fingerprint: None,
             id: StepExecutionId::from(id.to_string()),
             feature_id: FeatureId::from("f-1".to_string()),
             step_id: crate::domain::ids::StepId::from(step_id.to_string()),
@@ -885,6 +890,7 @@ mod redirect_reset_tests {
     fn make_gate_exec(id: &str, index: u32) -> StepExecution {
         let now = crate::paths::now_ms();
         StepExecution {
+            last_failure_fingerprint: None,
             id: StepExecutionId::from(id.to_string()),
             feature_id: FeatureId::from("f-1".to_string()),
             step_id: crate::domain::ids::StepId::from("s-gate".to_string()),

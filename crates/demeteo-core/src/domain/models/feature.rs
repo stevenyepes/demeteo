@@ -92,6 +92,12 @@ pub struct StepExecution {
     /// step (last-turn snapshot, not aggregated into `tokens`).
     #[serde(default)]
     pub cache_creation_input_tokens: Option<u64>,
+    /// Normalized fingerprint of the last failing harness/prepare output for
+    /// this step (C6). Set by the harness gate on a `Verdict` failure so the
+    /// *next* attempt can detect a failure that reproduces unchanged and route
+    /// it to regression-vs-environment triage. `None` until the first failure.
+    #[serde(default)]
+    pub last_failure_fingerprint: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

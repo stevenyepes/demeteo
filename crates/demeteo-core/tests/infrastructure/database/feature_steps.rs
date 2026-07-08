@@ -68,6 +68,7 @@ fn make_step(
         .as_millis() as i64;
     adapter
         .step_create(StepExecution {
+            last_failure_fingerprint: None,
             id: sid.clone(),
             feature_id: feature_id.clone(),
             step_id: StepId::from("s1".to_string()),
@@ -119,6 +120,7 @@ fn step_error_set_some_some() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 error_message: Some(Some("new error".to_string())),
                 ..Default::default()
             },
@@ -137,6 +139,7 @@ fn step_error_clear_with_some_none() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 error_message: Some(None),
                 ..Default::default()
             },
@@ -165,6 +168,7 @@ fn step_cost_set_some_some() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 cost_usd: Some(Some(42.5)),
                 ..Default::default()
             },
@@ -183,6 +187,7 @@ fn step_cost_clear_with_some_none() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 cost_usd: Some(None),
                 ..Default::default()
             },
@@ -211,6 +216,7 @@ fn step_wall_set_some_some() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 wall_clock_secs: Some(Some(120)),
                 ..Default::default()
             },
@@ -229,6 +235,7 @@ fn step_wall_clear_with_some_none() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 wall_clock_secs: Some(None),
                 ..Default::default()
             },
@@ -257,6 +264,7 @@ fn step_artifact_set_some_some() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 artifact_path: Some(Some("/new/path".to_string())),
                 ..Default::default()
             },
@@ -278,6 +286,7 @@ fn step_artifact_clear_with_some_none() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 artifact_path: Some(None),
                 ..Default::default()
             },
@@ -309,6 +318,7 @@ fn step_artifact_paths_set_replaces_list_and_mirrors_legacy() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 artifact_paths: Some(vec!["/a/x.md".to_string(), "/a/y.diff".to_string()]),
                 ..Default::default()
             },
@@ -328,6 +338,7 @@ fn step_artifact_paths_clears_legacy_when_empty() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 artifact_paths: Some(vec![]),
                 ..Default::default()
             },
@@ -346,6 +357,7 @@ fn step_artifact_path_only_mirrors_into_list() {
         .step_update(
             &sid,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 artifact_path: Some(Some("/legacy/only".to_string())),
                 ..Default::default()
             },

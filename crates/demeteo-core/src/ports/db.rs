@@ -105,6 +105,10 @@ pub struct StepExecutionPatch {
     /// `None` → leave alone. `Some(None)` → NULL. `Some(Some(v))` → set.
     pub cache_read_input_tokens: Option<Option<u64>>,
     pub cache_creation_input_tokens: Option<Option<u64>>,
+    /// Persist the normalized fingerprint of the step's last failing
+    /// harness/prepare output (C6). `None` → leave alone. `Some(None)` → NULL
+    /// (clear on success). `Some(Some(fp))` → set.
+    pub last_failure_fingerprint: Option<Option<String>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

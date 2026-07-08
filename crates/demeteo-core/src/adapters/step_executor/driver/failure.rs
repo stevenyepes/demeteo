@@ -174,6 +174,7 @@ impl ExecutionDriver {
         let _ = self.features.step_update(
             &step_exec.id,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 iteration_count: Some(already + 1),
                 ..Default::default()
             },

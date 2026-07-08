@@ -11,8 +11,8 @@ pub fn step_create(adapter: &SqliteAdapter, s: StepExecution) -> Result<(), Stri
     let artifact_paths_json =
         serde_json::to_string(&s.artifact_paths).map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT INTO step_executions (id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at,cache_read_input_tokens,cache_creation_input_tokens)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+        "INSERT INTO step_executions (id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at,cache_read_input_tokens,cache_creation_input_tokens,last_failure_fingerprint)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         params![
             s.id, s.feature_id, s.step_id, s.step_index, s.step_kind, s.status,
             s.cost_usd, s.tokens, s.wall_clock_secs.map(|v| v as i64),
@@ -20,6 +20,7 @@ pub fn step_create(adapter: &SqliteAdapter, s: StepExecution) -> Result<(), Stri
             s.created_at, s.updated_at,
             s.cache_read_input_tokens.map(|v| v as i64),
             s.cache_creation_input_tokens.map(|v| v as i64),
+            s.last_failure_fingerprint,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -33,7 +34,7 @@ pub fn step_get(
     let conn = adapter.conn.lock()?;
     let mut stmt = conn
         .prepare(
-            "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at,cache_read_input_tokens,cache_creation_input_tokens
+            "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at,cache_read_input_tokens,cache_creation_input_tokens,last_failure_fingerprint
              FROM step_executions WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
@@ -58,6 +59,7 @@ pub fn step_get(
                 iteration_count: row.get::<_, u32>(12)?,
                 cache_read_input_tokens: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                 cache_creation_input_tokens: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                last_failure_fingerprint: row.get::<_, Option<String>>(17)?,
                 created_at: row.get(13)?,
                 updated_at: row.get(14)?,
             })
@@ -177,6 +179,16 @@ pub fn step_update(
         }
         None => {}
     }
+    match &patch.last_failure_fingerprint {
+        Some(Some(fp)) => {
+            sets.push("last_failure_fingerprint=?");
+            binds.push(Box::new(fp.clone()));
+        }
+        Some(None) => {
+            sets.push("last_failure_fingerprint=NULL");
+        }
+        None => {}
+    }
     if sets.is_empty() {
         return Ok(());
     }
@@ -197,7 +209,7 @@ pub fn steps_for_feature(
     let conn = adapter.conn.lock()?;
     let mut stmt = conn
         .prepare(
-            "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at,cache_read_input_tokens,cache_creation_input_tokens
+            "SELECT id,feature_id,step_id,step_index,step_kind,status,cost_usd,tokens,wall_clock_secs,artifact_path,artifact_paths,error_message,iteration_count,created_at,updated_at,cache_read_input_tokens,cache_creation_input_tokens,last_failure_fingerprint
              FROM step_executions WHERE feature_id=?1 ORDER BY step_index ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -222,6 +234,7 @@ pub fn steps_for_feature(
                 iteration_count: row.get::<_, u32>(12)?,
                 cache_read_input_tokens: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                 cache_creation_input_tokens: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                last_failure_fingerprint: row.get::<_, Option<String>>(17)?,
                 created_at: row.get(13)?,
                 updated_at: row.get(14)?,
             })

@@ -60,6 +60,16 @@ identically in the UI regardless of where it ran, through one read model.
 - **D6 — Every milestone is independently valuable.** We can stop after any `C`
   and have shipped something real. `C0`–`C2` alone resolve the current
   "silent no-artifacts on SSH" class.
+- **D7 — A red harness is triaged before it feeds the retry loop.** A non-zero
+  exit that is *not* a transport failure is not automatically the code's fault.
+  Before it becomes a retryable `Verdict`, an agent decides whether it is a
+  **regression** (the change under test broke it → retry the implement step) or
+  an **environment** failure (the box is not provisioned — missing system
+  library / toolchain / service, permission, network — which editing source
+  cannot fix → terminal, with remediation guidance for the user). Uncertainty
+  defaults to `regression` so we never wrongly terminate a real regression.
+  (Sharpens D3: failures are not only loud and uniform, they are *correctly
+  routed*.)
 
 ## Milestone map
 
@@ -71,6 +81,7 @@ identically in the UI regardless of where it ran, through one read model.
 | C3 | `RunView` read model | 2 | UI reads feature/steps/artifacts through one layer; no behaviour change for local/SSH | D1 |
 | C4 | Runner state mirror | 3 | A runner feature renders on the laptop with full fidelity (steps, artifacts, stream, cost) | D5 — folds into `REMOTE_EXECUTION_PLAN.md` M6 |
 | C5 | Topology conformance | 4 | The same feature run through all three transports asserts an equivalent `RunView` | D4 |
+| C6 | Failure triage | 1 | A failure that survives one retry unchanged is triaged; an unrecoverable environment failure then terminates with remediation instead of burning the full implement retry budget | D3, D7 |
 
 Ordering is linear for C0→C2 (each depends on the prior). C3 depends on C2. C4
 depends on C3. C5 depends on C4. **C0–C2 is the prerequisite foundation and also
@@ -326,12 +337,144 @@ artifact types must work on all three transports or CI is red.
 
 ---
 
+## C6 — Harness failure triage (regression vs. environment)
+
+**Context.** The harness-first gate (`driver/verifier.rs::run_harness_first`)
+classifies a non-zero prepare/test exit as exactly two things: a *transport*
+failure (message carries `TRANSPORT_ERROR_PREFIX` → `VerifierError::Infrastructure`
+→ `StepOutcome::NonRetryable`, terminal) or **everything else** →
+`VerifierError::Verdict` → `StepOutcome::VerdictFailed` → `evaluate_on_failure`
+→ jump back to the implement step. That "everything else" bucket is too coarse.
+
+A missing system dependency exits non-zero and carries no transport prefix, so
+it lands in `Verdict` and drives the implement retry loop. But the implement
+agent edits *source code* — it cannot `apt install libwebkit2gtk-4.1-dev`. Every
+retry is guaranteed-wasted tokens ending in "retry budget exhausted" instead of
+a clear "provision the box" message. **Observed:** the demeteo Simple Task
+Pipeline run against a remote box: `prepare command 'cd src-tauri && cargo test'
+exited with failure: … The system library 'gdk-3.0' … was not found … (retrying:
+will jump to 's-implement' …)`.
+
+**Rejected approach — output pattern-matching.** Keying off signatures like
+`was not found in the pkg-config search path` / `command not found` is brittle
+across languages and build systems (every framework spells "missing dep"
+differently) and needs perpetual maintenance. Not pursued.
+
+**Chosen approach — an agent triages the failure.** The gate stays zero-cost on
+green (no agent spawns when the harness passes); an agent is consulted **only on
+the failure path**, where a small classification call is cheap relative to the
+retry loop it prevents. It answers one question: is this failure caused by the
+*change under test* (a **regression** the implementer should fix) or by the
+*execution environment not being provisioned* (missing system library /
+toolchain / binary / service, permission, or network — an **environment**
+failure that editing source cannot fix)?
+
+### C6.1 — Add the `Environment` failure category
+
+- **What:** Add `VerifierError::Environment(String)` alongside `Verdict` and
+  `Infrastructure`, and route it to `StepOutcome::NonRetryable` at both harness
+  call sites (so it bypasses `evaluate_on_failure` entirely — no implement jump,
+  no retry-budget spend). The inner string is user-facing remediation, not a
+  stack trace.
+- **Where:** `domain/verifier.rs` (enum + doc-comment); the match arms in
+  `adapters/step_executor/steps/agent/mod.rs:235` and
+  `adapters/step_executor/steps/parallel/mod.rs:255`.
+- **Why:** D7 — the terminal machinery already exists (`NonRetryable`); the gap
+  is a category that reaches it for a *ran-but-environmentally-doomed* command.
+- **DoD:** An `Environment` error fails the step immediately with its message; a
+  unit test asserts it never reaches `evaluate_on_failure`.
+
+### C6.2 — Persistence-gated triage agent
+
+- **What:** Do **not** triage a harness/prepare failure on first sight — let it
+  retry once as today (`Verdict`). Trigger the triage agent only when the retry
+  reproduces the **same** failure: a genuine regression usually *changes* across
+  a retry (different error, or the implement step fixes it), whereas an
+  environment failure reproduces near-identically, so "survived a retry
+  unchanged" is itself strong evidence of `environment` and hands the classifier
+  real signal instead of a single-shot guess. Detect persistence by comparing a
+  normalized fingerprint of the failing output (strip timestamps / paths / run-
+  ids) against the prior attempt's, keyed on `step_exec` (the retry lands back in
+  the same step via `on_failure`, so `iteration_count`/the persisted last-failure
+  fingerprint is the natural carrier). On a persistent failure, call the small
+  classifier agent (cheap model, reuse the verifier's model-override plumbing)
+  with the command, the machine, and the output tail; it returns JSON
+  `{ "category": "regression" | "environment", "reason": "...",
+  "remediation": "..." }`. `environment` → `VerifierError::Environment`
+  (terminal); `regression` → stay on the existing `Verdict` path (it will exhaust
+  the remaining budget as today). **Fail-safe:** any classifier error, timeout,
+  cancellation, or unparseable/unknown category defaults to `Verdict` — we never
+  let a broken triage wrongly terminate a genuine regression, we only ever
+  *withhold* the remaining retries once we're confident they're futile.
+- **Cost/benefit of the gate:** the environment case now eats exactly **one**
+  retry cycle before terminating (accepted — one retry is tolerable), in exchange
+  for (a) zero triage toll on regressions that fix on the first retry, and (b) a
+  much more reliable classification grounded in reproduction rather than a guess.
+- **Where:** `driver/verifier.rs::run_harness_first` — the two `Err(out) if
+  !is_transport_failure` branches (prepare `:82`, harness `:107`/`:128`); a new
+  `triage_harness_failure(cmd, machine, output) -> TriageVerdict` helper next to
+  `parse_verdict_text` (reuse its JSON-scan tolerance); the last-failure
+  fingerprint persisted via `StepExecutionPatch` (alongside `iteration_count` in
+  `evaluate_on_failure`, `failure.rs:174`) so the second attempt can compare.
+- **Why:** D7 — moves the regression/environment decision off a hard-coded
+  heuristic onto a model that reads the actual error (generalizes across
+  languages/frameworks without a pattern table), and grounds *when* it fires on
+  observed reproduction rather than a first-failure guess.
+- **DoD:** A first harness failure retries with **no** triage call (assert the
+  classifier is not invoked on attempt 1). A second, fingerprint-identical
+  `gdk-3.0`-missing failure invokes triage and returns `environment` (fixture
+  with a stubbed agent) → terminal. A second failure whose output *differs* from
+  the first is treated as ongoing progress and stays on `Verdict` (no premature
+  terminate). A stubbed classifier failure on the persistent path falls back to
+  `Verdict`.
+- **Implementation note — the fingerprint normalization earns its keep.** It is
+  the load-bearing part and it fails in two opposite ways:
+  - *Under-normalizes* (leaves timestamps, tmp/worktree paths, run-ids in): two
+    truly-identical environment failures look "different", triage never fires,
+    and we silently fall back to burning the full budget — i.e. today's bug,
+    unfixed and invisible. The `differing-output → keep retrying` DoD fixture does
+    **not** catch this direction.
+  - *Over-normalizes* (strips too aggressively): a genuinely *different*
+    regression error on the retry reads as "same", triggering triage — and a
+    possible premature terminate — on what was real progress. The
+    `differing-output → keep retrying` fixture guards this side.
+  Guard both directions: keep the over-normalization fixture, and **add its
+  mirror** — two runs of the same missing-lib failure whose logs differ only in
+  worktree path / timestamp must fingerprint-**match** (so triage does fire).
+  Normalize conservatively: mask only known-volatile spans (absolute worktree
+  path, ISO/epoch timestamps, the feature/step run-id) and nothing else.
+
+### C6.3 — Actionable remediation surfaced to the user
+
+- **What:** Build the `Environment` message from the triage `remediation` plus
+  the concrete context the orchestrator already holds: the exact failing command,
+  the target machine, and a copy-pasteable reproduce line
+  (`ssh <machine> → cd <worktree> && <cmd>`). Persist it through the same
+  notification path `evaluate_on_failure` uses for `RetryBudgetExhausted` (bell +
+  live toast), but fire it **immediately** — no wasted attempts first. Consider a
+  distinct `NotificationKind::EnvironmentNotReady` so the copy reads "provision
+  the box," not "your turn to fix the code."
+- **Where:** `driver/verifier.rs` (message construction);
+  `driver/failure.rs` / `domain/models` (notification kind, if added).
+- **Why:** Directly answers "guide the user to check the command that fails on
+  the remote machine" — the failure names *what* ran, *where*, and *how to
+  reproduce and fix it*, instead of a truncated build-log tail.
+- **DoD:** The remote `gdk-3.0` case fails `s-validate` after **one** retry (not
+  the full budget) with a message naming the command, the machine, the reproduce
+  line, and the remediation; a bell notification records it.
+
+---
+
 ## Sequencing & risk
 
 - **C0–C2 first, always.** Small blast radius, and independently resolves the
   current SSH silent-artifact bug. C1.1 changes the `ExecutionPort` surface —
   contained but rippling; land it as a signature-add (new `*_with` method) so
   existing callers compile untouched, then migrate in C1.3.
+- **C6 is independent of C3–C5** — it only touches the failure path of the
+  harness gate (C0–C2 foundation) and the `VerifierError`/`StepOutcome` routing.
+  Land it standalone whenever the wasted-retry cost bites; it does not block or
+  depend on the read-model / runner-mirror work.
 - **C3 is a no-op refactor** — safe to land anytime after C2, gates C4.
 - **C4 is the large lift** and overlaps `REMOTE_EXECUTION_PLAN.md` M6; treat this
   plan's C4 as that milestone's execution detail rather than duplicating it.
