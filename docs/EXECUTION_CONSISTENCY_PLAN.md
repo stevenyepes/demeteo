@@ -335,6 +335,36 @@ artifact types must work on all three transports or CI is red.
 - **DoD:** The test passes on all three transports; removing the C4 mirror (so
   the runner `RunView` is empty) turns it red.
 
+**Status (2026-07-08): local + SSH legs DONE; runner leg deliberately
+deferred.** Shipped:
+
+- A deterministic, no-LLM agent — `adapters/agent/stub_runtime.rs`
+  (`agent_kind: "stub"`, gated on the `DEMETEO_STUB_AGENT` env so it is never
+  registered in production) — parses `@stub-write <path>` directives out of the
+  step prompt and produces the declared artifact, so one workflow reaches a
+  terminal state with byte-deterministic output on any transport.
+- `tests/conformance/topology_equivalence.rs`: `topology_local_leg_…` (the
+  reference, no Docker) and `topology_local_matches_ssh` (behind the
+  `ssh-conformance` feature, against the C2.2 sshd container) assert an equal
+  `RunViewSnapshot` — same step set, same declared-artifact bodies, same
+  terminal status.
+- CI: `tests/conformance/run-topology-conformance.sh` + a `topology-conformance`
+  job in `.github/workflows/pr-checks.yml`.
+
+**Why the runner leg (c) is deferred, not dropped.** Its marginal correctness
+value is small relative to its cost: the runner runs the *identical*
+`LocalOnly` engine the local leg already proves, and C4.3 makes a runner-owned
+feature render through `RunView` with **no** runner-specific branch (the shadow
+hydrate has unit coverage). So the only thing a runner container additionally
+exercises is the `control_rpc`→hydrate **reconcile transport**. Standing that up
+requires (1) an in-container git host (the runner's `execute_run` clones/pushes
+a real remote, and the clone can't be pre-skipped because the `project_id` is
+minted in-container) and (2) a refactor extracting the reconcile-and-hydrate
+core out of the Tauri-`State`-bound `remote_reconcile_runs`/private
+`hydrate_shadow_feature` so a test can drive it. Pick this up as its own change,
+starting with the reconcile refactor; the equivalence harness above is already
+shaped to accept a third leg.
+
 ---
 
 ## C6 — Harness failure triage (regression vs. environment)

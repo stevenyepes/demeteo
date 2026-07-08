@@ -281,3 +281,10 @@ pub trait ExecutionPort: Send + Sync {
 #[cfg(test)]
 #[path = "../../tests/conformance/execution_port.rs"]
 mod conformance;
+
+/// Topology-equivalence gate (C5): one workflow, every transport, one
+/// equivalent `RunView`. Included the same `#[path]` way so it can reach the
+/// composition root and concrete adapters via `crate::…`.
+#[cfg(test)]
+#[path = "../../tests/conformance/topology_equivalence.rs"]
+mod topology_equivalence;

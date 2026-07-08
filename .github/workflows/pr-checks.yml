@@ -104,3 +104,27 @@ jobs:
 
       - name: Run ExecutionPort SSH conformance suite
         run: crates/demeteo-core/tests/conformance/run-ssh-conformance.sh
+
+  # C5 — topology-equivalence gate: one workflow run through local and
+  # desktop-over-SSH must render an equivalent RunView (the runner leg lives in
+  # the separate runner-conformance job because it additionally needs an
+  # in-container git host). Uses the deterministic `stub` agent so a run
+  # reaches a terminal state with no real LLM CLI. Separate job for the same
+  # reason as ssh-conformance: it needs Docker, not the Tauri toolchain.
+  # (docs/EXECUTION_CONSISTENCY_PLAN.md)
+  topology-conformance:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Run topology equivalence suite (local + SSH)
+        run: crates/demeteo-core/tests/conformance/run-topology-conformance.sh

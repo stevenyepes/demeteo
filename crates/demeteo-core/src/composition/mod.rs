@@ -135,13 +135,21 @@ pub fn build_core_context(
         adapters::agent::direct_execution::DirectExecutionPort::new(exec_inner.clone()),
     );
 
-    let agent_registry = Arc::new(adapters::agent::registry::AgentRegistry::new(vec![
+    let mut runtimes: Vec<Arc<dyn AgentRuntime>> = vec![
         Arc::new(adapters::agent::opencode::runtime()) as Arc<dyn AgentRuntime>,
         Arc::new(adapters::agent::hermes::runtime()) as Arc<dyn AgentRuntime>,
         Arc::new(adapters::agent::claude_code::runtime()) as Arc<dyn AgentRuntime>,
         Arc::new(adapters::agent::antigravity::runtime()) as Arc<dyn AgentRuntime>,
         Arc::new(adapters::agent::noop::NoopRuntime) as Arc<dyn AgentRuntime>,
-    ]));
+    ];
+    // C5 topology gate only: the deterministic no-LLM `"stub"` agent is
+    // registered exclusively when `DEMETEO_STUB_AGENT` is set (see
+    // `adapters::agent::stub_runtime`). Every production path leaves the env
+    // var unset, so no workflow can ever select it.
+    if adapters::agent::stub_runtime::stub_agent_enabled() {
+        runtimes.push(Arc::new(adapters::agent::stub_runtime::StubRuntime) as Arc<dyn AgentRuntime>);
+    }
+    let agent_registry = Arc::new(adapters::agent::registry::AgentRegistry::new(runtimes));
     let pricing: Arc<dyn ports::pricing::PricingTable> =
         Arc::new(adapters::pricing::HardcodedPricingTable::new());
     let mr_publisher: Arc<dyn ports::mr_publisher::MrPublisher> =
