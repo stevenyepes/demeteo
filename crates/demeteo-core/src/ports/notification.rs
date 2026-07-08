@@ -110,6 +110,19 @@ pub enum DomainEvent {
         max: u32,
         reason: String,
     },
+
+    /// Emitted when a harness failure was triaged (C6) as an *environment*
+    /// problem — the box is missing a system library / toolchain / service, or
+    /// has a permission/network fault the coding agent cannot fix by editing
+    /// source. Fired *immediately* (before the retry budget is spent), so the
+    /// user is told to provision the machine instead of watching doomed
+    /// retries. `reason` is the full remediation message (what to install, the
+    /// failing command, and a copy-pasteable reproduce line).
+    EnvironmentNotReady {
+        feature_id: FeatureId,
+        step_id: String,
+        reason: String,
+    },
 }
 
 /// The single deep interface for orchestrator → UI event emission.

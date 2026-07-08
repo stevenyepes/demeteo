@@ -27,6 +27,7 @@ pub(crate) fn update_step_status(
     let _ = features.step_update(
         &step_exec.id,
         &StepExecutionPatch {
+            last_failure_fingerprint: None,
             iteration_count: None,
             status: Some(status.to_string()),
             cost_usd: Some(Some(cost_usd)),

@@ -381,7 +381,8 @@ export type NotificationKind =
   | 'step_failed'
   | 'feature_completed'
   | 'merge_conflict'
-  | 'retry_budget_exhausted';
+  | 'retry_budget_exhausted'
+  | 'environment_not_ready';
 
 /** Mirrors the Rust `Notification` struct on the `notifications`
  *  table. `feature_url` is a relative deep link; the bell decides
@@ -417,6 +418,18 @@ export interface RetryBudgetExhaustedEvent {
   target_id: string;
   attempt: number;
   max: number;
+  reason: string;
+}
+
+/** Wire shape of `DomainEvent::EnvironmentNotReady` — fired when a
+ *  harness failure is triaged (C6) as an environment problem (missing
+ *  system library / toolchain / service, permission or network fault)
+ *  the coding agent cannot fix. Fired immediately, before the retry
+ *  budget is spent; `reason` carries the full remediation + reproduce
+ *  line. Drives the toast in `NotificationBell`. */
+export interface EnvironmentNotReadyEvent {
+  feature_id: string;
+  step_id: string;
   reason: string;
 }
 

@@ -302,6 +302,7 @@ async fn test_executor_gate_decide() {
 
     features
         .step_create(StepExecution {
+            last_failure_fingerprint: None,
             id: StepExecutionId::from("se-1"),
             feature_id: FeatureId::from("f-1"),
             step_id: StepId::from("step-1"),
@@ -469,6 +470,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
     let se_id = StepExecutionId::from("se-recov");
     features
         .step_create(StepExecution {
+            last_failure_fingerprint: None,
             id: se_id.clone(),
             feature_id: FeatureId::from("f-recov"),
             step_id: StepId::from("step-1"),
@@ -651,6 +653,7 @@ async fn test_step_retry_blocked_by_active_predecessor() {
     for (idx, status) in [(0u32, "completed"), (1, "running"), (2, "failed")] {
         features
             .step_create(StepExecution {
+                last_failure_fingerprint: None,
                 id: StepExecutionId::from(format!("se-guard-{idx}")),
                 feature_id: FeatureId::from("f-guard"),
                 step_id: StepId::from(format!("step-{idx}")),
@@ -747,6 +750,7 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
     for (idx, status) in [(0u32, "verifying"), (1, "awaiting_gate")] {
         features
             .step_create(StepExecution {
+                last_failure_fingerprint: None,
                 id: StepExecutionId::from(format!("se-gg-{idx}")),
                 feature_id: FeatureId::from("f-gg"),
                 step_id: StepId::from(format!("step-{idx}")),
@@ -858,6 +862,7 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
     for (idx, status) in [(0u32, "completed"), (1, "skipped"), (2, "failed")] {
         features
             .step_create(StepExecution {
+                last_failure_fingerprint: None,
                 id: StepExecutionId::from(format!("se-unb-{idx}")),
                 feature_id: FeatureId::from("f-unb"),
                 step_id: StepId::from(format!("step-{idx}")),
@@ -956,6 +961,7 @@ async fn test_assert_no_active_predecessors_helper() {
     ] {
         features
             .step_create(StepExecution {
+                last_failure_fingerprint: None,
                 id: StepExecutionId::from(format!("se-h-{idx}")),
                 feature_id: FeatureId::from("f-h"),
                 step_id: StepId::from(format!("step-{idx}")),

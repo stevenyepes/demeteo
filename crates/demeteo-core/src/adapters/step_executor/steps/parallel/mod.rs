@@ -172,6 +172,7 @@ impl ExecutionDriver {
             let _ = self.features.step_update(
                 &step_exec.id,
                 &StepExecutionPatch {
+                    last_failure_fingerprint: None,
                     iteration_count: None,
                     status: Some(status_str.to_string()),
                     cost_usd: Some(Some(*accumulated_cost)),
@@ -261,6 +262,13 @@ impl ExecutionDriver {
                             msg
                         ))
                     }
+                    // Triaged (C6) as an environment problem: the box is not
+                    // provisioned, editing source can't fix it. The message is
+                    // already user-facing remediation and the notification was
+                    // fired at triage time — terminate now, don't retry.
+                    crate::domain::verifier::VerifierError::Environment(msg) => {
+                        StepOutcome::NonRetryable(msg)
+                    }
                 };
             }
         }
@@ -336,6 +344,7 @@ impl ExecutionDriver {
         let _ = self.features.step_update(
             &step_exec.id,
             &StepExecutionPatch {
+                last_failure_fingerprint: None,
                 iteration_count: None,
                 status: Some("completed".to_string()),
                 cost_usd: Some(Some(*accumulated_cost)),

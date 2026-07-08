@@ -57,6 +57,7 @@ fn test_resolve_attached_artifacts() {
 
     let step_execs = vec![
         StepExecution {
+            last_failure_fingerprint: None,
             id: StepExecutionId::from("se-1"),
             feature_id: FeatureId::from("f-1"),
             step_id: crate::domain::ids::StepId::from("s-research"),
@@ -76,6 +77,7 @@ fn test_resolve_attached_artifacts() {
             updated_at: 0,
         },
         StepExecution {
+            last_failure_fingerprint: None,
             id: StepExecutionId::from("se-2"),
             feature_id: FeatureId::from("f-1"),
             step_id: crate::domain::ids::StepId::from("s-spec"),
@@ -194,6 +196,7 @@ fn test_resolve_attached_artifacts_uses_artifact_paths() {
     let artifact_str = artifact_file.to_string_lossy().to_string();
 
     let step_execs = vec![StepExecution {
+        last_failure_fingerprint: None,
         id: StepExecutionId::from("se-1"),
         feature_id: FeatureId::from("f-1"),
         step_id: crate::domain::ids::StepId::from("s-research"),
@@ -249,6 +252,7 @@ fn test_resolve_attached_artifacts_default_uses_path_manifest() {
     let artifact_str = artifact_file.to_string_lossy().to_string();
 
     let step_execs = vec![StepExecution {
+        last_failure_fingerprint: None,
         id: StepExecutionId::from("se-1"),
         feature_id: FeatureId::from("f-1"),
         step_id: crate::domain::ids::StepId::from("s-research"),

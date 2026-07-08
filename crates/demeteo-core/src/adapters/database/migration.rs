@@ -76,6 +76,17 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         "cache_creation_input_tokens",
         "INTEGER",
     )?;
+    // Harness-failure triage (C6, docs/EXECUTION_CONSISTENCY_PLAN.md). A
+    // normalized fingerprint of the previous attempt's failing harness/prepare
+    // output, so the driver can tell a *persistent* (reproduces unchanged)
+    // failure from one that is still changing across retries — the signal that
+    // gates the regression-vs-environment triage agent.
+    add_column_if_missing(
+        conn,
+        "step_executions",
+        "last_failure_fingerprint",
+        "TEXT",
+    )?;
 
     Ok(())
 }

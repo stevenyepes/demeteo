@@ -107,6 +107,7 @@ impl DagStepExecutor {
                 self.features.step_update(
                     &s.id,
                     &StepExecutionPatch {
+                        last_failure_fingerprint: None,
                         iteration_count: None,
                         status: Some("pending".to_string()),
                         cost_usd: s.cost_usd.map(Some),
@@ -173,6 +174,7 @@ impl DagStepExecutor {
                 let _ = self.features.step_update(
                     sid,
                     &StepExecutionPatch {
+                        last_failure_fingerprint: None,
                         iteration_count: None,
                         status: Some(original_status.clone()),
                         cost_usd: None,
