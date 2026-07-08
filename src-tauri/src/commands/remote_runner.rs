@@ -430,6 +430,99 @@ fn mime_for_path(path: &str) -> String {
     .to_string()
 }
 
+/// Poll one run's runner for status, apply it to the mirror, and — once
+/// the run has bootstrapped a feature — hydrate its read-only shadow
+/// (C4.2). Shared by the whole-inbox reconcile (M6.2/M6.3) and the
+/// single-run live refresh (M6.4, [`remote_refresh_run`]). On a *fresh*
+/// poll returns `Some((status, error))` so the caller can run its own
+/// notification diff — this helper itself never notifies. Returns `None`
+/// when there was no fresh status from the runner (machine unreachable),
+/// so the caller does not notify off stale data — matching the original
+/// reconcile, which only ever notified on a successful poll. Mirrors the
+/// `unreachable`-vs-known-terminal rule (§7.1): a machine we can't reach
+/// flips a live row to `unreachable` but leaves an already-terminal row
+/// untouched.
+async fn reconcile_one_run(
+    ctx: &AppContext,
+    row: &RemoteRunMirror,
+) -> Option<(String, Option<String>)> {
+    let now = crate::paths::now_ms();
+    let result = ctx
+        .exec
+        .control_rpc(
+            &row.machine_id,
+            "get_status",
+            serde_json::json!({ "run_id": row.run_id }),
+        )
+        .await;
+    match result {
+        Ok(v) => {
+            // A dangerous parked gate (M5.1) doesn't move the runner's own
+            // coarse `status` column — the feature is still nominally
+            // "running", just blocked on one decision — so `parked_gate_id`
+            // (set only in that case) wins over whatever `status` says.
+            let status = if json_str(&v, "parked_gate_id").is_some() {
+                "parked".to_string()
+            } else {
+                json_str(&v, "status").unwrap_or_else(|| row.status.clone())
+            };
+            let error = json_str(&v, "error");
+            let feature_id = json_str(&v, "feature_id");
+            let mr_url = json_str(&v, "mr_url");
+            let pushed_branch = json_str(&v, "pushed_branch");
+            let _ = ctx.remote_run_mirror.update_status(
+                &row.machine_id,
+                &row.run_id,
+                &status,
+                error.as_deref(),
+                feature_id.as_deref(),
+                mr_url.as_deref(),
+                pushed_branch.as_deref(),
+                0,
+                now,
+            );
+
+            // C4.2: once the run has bootstrapped a feature and we know the
+            // local project it was composed from, hydrate a read-only shadow
+            // of it (feature + steps + cached artifacts) so it renders on the
+            // laptop with full fidelity. Best-effort: a hydration failure
+            // never regresses the mirror status just applied.
+            if let (Some(fid), Some(pid)) = (&feature_id, &row.project_id) {
+                if !fid.is_empty() {
+                    if let Err(e) =
+                        hydrate_shadow_feature(ctx, &row.machine_id, &row.run_id, pid).await
+                    {
+                        eprintln!(
+                            "shadow hydrate failed for run {} (feature {fid}): {e}",
+                            row.run_id
+                        );
+                    }
+                }
+            }
+            Some((status, error))
+        }
+        Err(_) if HARD_TERMINAL.contains(&row.status.as_str()) => {
+            // Already know how this run ended; an unreachable machine
+            // doesn't change that (and there's no fresh status to notify on).
+            None
+        }
+        Err(_) => {
+            let _ = ctx.remote_run_mirror.update_status(
+                &row.machine_id,
+                &row.run_id,
+                "unreachable",
+                None,
+                None,
+                None,
+                None,
+                0,
+                now,
+            );
+            None
+        }
+    }
+}
+
 /// Reconcile every mirrored run against its runner's live `get_status`
 /// (docs/REMOTE_EXECUTION_PLAN.md M6.2, design R9). A machine that can't
 /// be reached flips the mirror to `unreachable` — never `failed` (§7.1)
@@ -452,106 +545,34 @@ pub async fn remote_reconcile_runs(
     let rows = ctx.remote_run_mirror.list().map_err(AppError::from)?;
     let mut notify_bodies: Vec<String> = Vec::new();
     for row in &rows {
-        let now = crate::paths::now_ms();
-        let result = ctx
-            .exec
-            .control_rpc(
-                &row.machine_id,
-                "get_status",
-                serde_json::json!({ "run_id": row.run_id }),
-            )
-            .await;
-        match result {
-            Ok(v) => {
-                // A dangerous parked gate (M5.1) doesn't move the
-                // runner's own coarse `status` column — the feature is
-                // still nominally "running", just blocked on one
-                // decision — so `parked_gate_id` (set only in that
-                // case) wins over whatever `status` says, giving the
-                // inbox a distinct "parked" bucket to group on.
-                let status = if json_str(&v, "parked_gate_id").is_some() {
-                    "parked".to_string()
-                } else {
-                    json_str(&v, "status").unwrap_or_else(|| row.status.clone())
-                };
-                let error = json_str(&v, "error");
-                let feature_id = json_str(&v, "feature_id");
-                let mr_url = json_str(&v, "mr_url");
-                let pushed_branch = json_str(&v, "pushed_branch");
-                let _ = ctx.remote_run_mirror.update_status(
-                    &row.machine_id,
-                    &row.run_id,
-                    &status,
-                    error.as_deref(),
-                    feature_id.as_deref(),
-                    mr_url.as_deref(),
-                    pushed_branch.as_deref(),
-                    0,
-                    now,
-                );
+        let Some((status, error)) = reconcile_one_run(&ctx, row).await else {
+            continue;
+        };
 
-                // C4.2: once the run has bootstrapped a feature and we know
-                // the local project it was composed from, hydrate a
-                // read-only shadow of it (feature + steps + cached
-                // artifacts) so it renders on the laptop with full fidelity.
-                // Best-effort: a hydration failure never fails the poll or
-                // regresses the mirror status just applied.
-                if let (Some(fid), Some(pid)) = (&feature_id, &row.project_id) {
-                    if !fid.is_empty() {
-                        if let Err(e) =
-                            hydrate_shadow_feature(&ctx, &row.machine_id, &row.run_id, pid).await
-                        {
-                            eprintln!(
-                                "shadow hydrate failed for run {} (feature {fid}): {e}",
-                                row.run_id
-                            );
-                        }
-                    }
+        if NOTIFY_ON.contains(&status.as_str())
+            && row.last_notified_status.as_deref() != Some(status.as_str())
+        {
+            let body = match status.as_str() {
+                "awaiting_mr" | "completed" => format!("{} — PR ready", row.title),
+                "failed" => format!(
+                    "{} — failed{}",
+                    row.title,
+                    error
+                        .as_deref()
+                        .map(|e| format!(": {e}"))
+                        .unwrap_or_default()
+                ),
+                "parked" => format!("{} — parked, needs your decision", row.title),
+                "over-budget" => format!("{} — hit its budget cap", row.title),
+                "needs-credentials" => {
+                    format!("{} — needs credentials re-injected", row.title)
                 }
-
-                if NOTIFY_ON.contains(&status.as_str())
-                    && row.last_notified_status.as_deref() != Some(status.as_str())
-                {
-                    let body = match status.as_str() {
-                        "awaiting_mr" | "completed" => format!("{} — PR ready", row.title),
-                        "failed" => format!(
-                            "{} — failed{}",
-                            row.title,
-                            error
-                                .as_deref()
-                                .map(|e| format!(": {e}"))
-                                .unwrap_or_default()
-                        ),
-                        "parked" => format!("{} — parked, needs your decision", row.title),
-                        "over-budget" => format!("{} — hit its budget cap", row.title),
-                        "needs-credentials" => {
-                            format!("{} — needs credentials re-injected", row.title)
-                        }
-                        _ => row.title.clone(),
-                    };
-                    notify_bodies.push(body);
-                    let _ =
-                        ctx.remote_run_mirror
-                            .mark_notified(&row.machine_id, &row.run_id, &status);
-                }
-            }
-            Err(_) if HARD_TERMINAL.contains(&row.status.as_str()) => {
-                // Already know how this run ended; an unreachable
-                // machine doesn't change that.
-            }
-            Err(_) => {
-                let _ = ctx.remote_run_mirror.update_status(
-                    &row.machine_id,
-                    &row.run_id,
-                    "unreachable",
-                    None,
-                    None,
-                    None,
-                    None,
-                    0,
-                    now,
-                );
-            }
+                _ => row.title.clone(),
+            };
+            notify_bodies.push(body);
+            let _ = ctx
+                .remote_run_mirror
+                .mark_notified(&row.machine_id, &row.run_id, &status);
         }
     }
 
@@ -571,6 +592,49 @@ pub async fn remote_reconcile_runs(
     }
 
     ctx.remote_run_mirror.list().map_err(AppError::from)
+}
+
+/// Single-run live refresh (docs/REMOTE_EXECUTION_PLAN.md M6.4). Polls
+/// exactly one remote run's runner, applies its status, re-hydrates its
+/// shadow feature, and returns the updated mirror row. Unlike
+/// [`remote_reconcile_runs`] it touches a single run and **never** fires a
+/// desktop notification — reopen-reconcile owns that channel; a run the
+/// user is actively watching shouldn't double-notify. This is the poll
+/// `FeatureDetail` drives while a remote run is open, so the mirrored
+/// steps/status update live the way a *local* run's Tauri events drive its
+/// timeline. `None` means the run isn't mirrored on this laptop.
+#[tauri::command]
+pub async fn remote_refresh_run(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+) -> Result<Option<RemoteRunMirror>, AppError> {
+    let Some(row) = ctx
+        .remote_run_mirror
+        .get(&machine_id, &run_id)
+        .map_err(AppError::from)?
+    else {
+        return Ok(None);
+    };
+    reconcile_one_run(&ctx, &row).await;
+    ctx.remote_run_mirror
+        .get(&machine_id, &run_id)
+        .map_err(AppError::from)
+}
+
+/// Resolve the mirror row for a shadow feature (M6.4). `FeatureDetail`
+/// calls this once per feature to learn whether it's a remote run and, if
+/// so, which `(machine_id, run_id)` to live-refresh — a locally-run
+/// feature simply isn't in the mirror and yields `None`.
+#[tauri::command]
+pub fn remote_run_for_feature(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<RemoteRunMirror>, AppError> {
+    let rows = ctx.remote_run_mirror.list().map_err(AppError::from)?;
+    Ok(rows
+        .into_iter()
+        .find(|r| r.feature_id.as_deref() == Some(feature_id.as_str())))
 }
 
 #[derive(Debug, Serialize)]
