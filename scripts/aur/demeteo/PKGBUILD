@@ -1,6 +1,6 @@
 # Maintainer: Steven Yepes <stevenyepes@aur.archlinux.org>
 pkgname=demeteo
-pkgver=0.1.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Fleet-style multi-agent orchestrator for software development"
 arch=('x86_64')
@@ -38,7 +38,7 @@ conflicts=('demeteo')
 # "The package itself is a mixed Rust/C/C++ project: disable the lto option."
 options=('!strip' '!lto')
 source=("https://github.com/stevenyepes/demeteo/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums=('83f9be2a0f113b6cbd7d4277c94ae0aec092235366e7d791c7f8840ca24d19f8')
 
 prepare() {
   cd "${pkgname}-${pkgver}"
