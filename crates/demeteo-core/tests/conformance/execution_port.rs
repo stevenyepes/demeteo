@@ -259,7 +259,8 @@ async fn ssh_client_adapter_satisfies_the_contract() {
     // has no secret for this throwaway host anyway).
     crate::credential_cache::set(&format!("machine_{machine_id}"), &password);
 
-    let port: Arc<dyn ExecutionPort> = Arc::new(SshClientAdapter::new(Arc::new(OneMachine(machine))));
+    let port: Arc<dyn ExecutionPort> =
+        Arc::new(SshClientAdapter::new(Arc::new(OneMachine(machine))));
 
     // Ensure the workdir exists, mirroring `fresh_local_workdir` for the local
     // leg — the shared `exec_contract` assumes a pre-existing writable dir.

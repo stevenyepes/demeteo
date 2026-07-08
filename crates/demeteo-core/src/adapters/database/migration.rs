@@ -81,12 +81,7 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // output, so the driver can tell a *persistent* (reproduces unchanged)
     // failure from one that is still changing across retries — the signal that
     // gates the regression-vs-environment triage agent.
-    add_column_if_missing(
-        conn,
-        "step_executions",
-        "last_failure_fingerprint",
-        "TEXT",
-    )?;
+    add_column_if_missing(conn, "step_executions", "last_failure_fingerprint", "TEXT")?;
 
     Ok(())
 }

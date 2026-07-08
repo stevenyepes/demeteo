@@ -147,7 +147,8 @@ pub fn build_core_context(
     // `adapters::agent::stub_runtime`). Every production path leaves the env
     // var unset, so no workflow can ever select it.
     if adapters::agent::stub_runtime::stub_agent_enabled() {
-        runtimes.push(Arc::new(adapters::agent::stub_runtime::StubRuntime) as Arc<dyn AgentRuntime>);
+        runtimes
+            .push(Arc::new(adapters::agent::stub_runtime::StubRuntime) as Arc<dyn AgentRuntime>);
     }
     let agent_registry = Arc::new(adapters::agent::registry::AgentRegistry::new(runtimes));
     let pricing: Arc<dyn ports::pricing::PricingTable> =

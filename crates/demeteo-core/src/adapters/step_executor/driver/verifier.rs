@@ -1185,7 +1185,10 @@ mod triage_tests {
     fn unparseable_or_unknown_defaults_to_regression() {
         // Fail-safe: a broken/garbage classifier answer must never terminate a
         // real regression — it falls back to the retry path.
-        assert_eq!(parse_triage_text("I could not decide."), TriageVerdict::Regression);
+        assert_eq!(
+            parse_triage_text("I could not decide."),
+            TriageVerdict::Regression
+        );
         assert_eq!(
             parse_triage_text(r#"{"category":"banana"}"#),
             TriageVerdict::Regression
@@ -1337,7 +1340,10 @@ mod is_transport_failure_tests {
 
     #[test]
     fn transport_prefixed_error_is_transport() {
-        let err = format!("{}Timed out after the transport wall cap (1800s)", TRANSPORT_ERROR_PREFIX);
+        let err = format!(
+            "{}Timed out after the transport wall cap (1800s)",
+            TRANSPORT_ERROR_PREFIX
+        );
         assert!(is_transport_failure(&err));
     }
 

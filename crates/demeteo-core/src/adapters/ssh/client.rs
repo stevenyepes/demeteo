@@ -177,7 +177,13 @@ fn probe_home_over_channel(session: &Session) -> Result<String, String> {
         .map_err(|e| format!("Failed to exec HOME probe over SSH: {}", e))?;
     let deadline = Instant::now() + TRANSPORT_WALL_CAP;
     let mut raw_bytes = Vec::new();
-    drain_stream(&mut channel, session, &mut raw_bytes, deadline, "HOME probe output")?;
+    drain_stream(
+        &mut channel,
+        session,
+        &mut raw_bytes,
+        deadline,
+        "HOME probe output",
+    )?;
     let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
     channel
         .wait_close()
@@ -416,7 +422,13 @@ fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<String, String
     // timeout. See `drain_stream` / `TRANSPORT_WALL_CAP`.
     let deadline = Instant::now() + TRANSPORT_WALL_CAP;
     let mut stdout_bytes = Vec::new();
-    drain_stream(&mut channel, session, &mut stdout_bytes, deadline, "command stdout")?;
+    drain_stream(
+        &mut channel,
+        session,
+        &mut stdout_bytes,
+        deadline,
+        "command stdout",
+    )?;
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
 
     // ssh2 keeps stderr on a separate stream. Drain it so the remote
@@ -424,7 +436,13 @@ fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<String, String
     let mut stderr_bytes = Vec::new();
     {
         let mut err_stream = channel.stderr();
-        let _ = drain_stream(&mut err_stream, session, &mut stderr_bytes, deadline, "command stderr");
+        let _ = drain_stream(
+            &mut err_stream,
+            session,
+            &mut stderr_bytes,
+            deadline,
+            "command stderr",
+        );
     }
     let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
@@ -519,14 +537,13 @@ impl ExecutionPort for SshClientAdapter {
             // A failure to establish/reuse the session is a transport failure,
             // not a command failure — tag it so callers (e.g. the verifier)
             // don't misclassify an unreachable machine as a red build.
-            let sftp_sess = get_sftp_blocking(&machines, &sessions, &machine_id)
-                .map_err(|e| {
-                    if e.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX) {
-                        e
-                    } else {
-                        transport_err(e)
-                    }
-                })?;
+            let sftp_sess = get_sftp_blocking(&machines, &sessions, &machine_id).map_err(|e| {
+                if e.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX) {
+                    e
+                } else {
+                    transport_err(e)
+                }
+            })?;
 
             // Assemble the shell invocation identically to the local
             // adapter: exports run *inside* the body (after a login shell
@@ -539,7 +556,11 @@ impl ExecutionPort for SshClientAdapter {
                 // (mise/asdf/nvm) put their PATH activation behind the standard
                 // non-interactive guard; a plain `-l` login shell misses them.
                 // See `ShellOptions::interactive`.
-                let flags = if opts.interactive { "-l -i -c" } else { "-l -c" };
+                let flags = if opts.interactive {
+                    "-l -i -c"
+                } else {
+                    "-l -c"
+                };
                 format!("bash {} {}", flags, paths::shell_escape_posix(&body))
             } else {
                 format!("sh -c {}", paths::shell_escape_posix(&body))

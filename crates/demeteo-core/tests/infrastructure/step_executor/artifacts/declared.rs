@@ -18,7 +18,8 @@ fn test_resolve_declared_artifacts_by_name() {
     let declarations = vec![ArtifactDecl::full_path("spec", "docs/spec.md")];
     let produced = vec![Artifact::tool_write("spec", "docs/spec.md", "# My Spec\n")];
 
-    let (refs, missing) = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
+    let (refs, missing) =
+        resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
     assert_eq!(refs.len(), 1);
     assert!(refs[0].contains("artifacts/f-test/s-impl/spec"));
@@ -58,7 +59,8 @@ fn test_resolve_declared_artifacts_last_write() {
         Artifact::tool_write("final", "docs/spec.md", "# Final\n"),
     ];
 
-    let (refs, missing) = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
+    let (refs, missing) =
+        resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
     assert_eq!(refs.len(), 1);
     let content = store.get(&refs[0]).unwrap();
@@ -96,7 +98,8 @@ fn test_resolve_declared_artifacts_all_writes() {
         Artifact::tool_write("f1-v2", "src/lib.rs", "// lib v2\n"),
     ];
 
-    let (refs, missing) = resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
+    let (refs, missing) =
+        resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-impl");
 
     assert_eq!(refs.len(), 2);
     assert!(
@@ -141,7 +144,8 @@ fn test_resolve_declared_artifacts_skips_diff_and_worktree() {
         },
     ];
 
-    let (refs, missing) = resolve_declared_artifacts(&declarations, &[], &store, "f-test", "s-impl");
+    let (refs, missing) =
+        resolve_declared_artifacts(&declarations, &[], &store, "f-test", "s-impl");
 
     assert!(refs.is_empty());
     assert!(
@@ -174,13 +178,21 @@ fn test_resolve_declared_artifacts_reports_missing_deliverable() {
     // The step declares a plan at `artifacts/plan.md`, but the agent
     // produced an unrelated write — nothing matches the declaration.
     let declarations = vec![ArtifactDecl::full_path("plan", "artifacts/plan.md")];
-    let produced = vec![Artifact::tool_write("notes", "scratch/notes.md", "# notes\n")];
+    let produced = vec![Artifact::tool_write(
+        "notes",
+        "scratch/notes.md",
+        "# notes\n",
+    )];
 
     let (refs, missing) =
         resolve_declared_artifacts(&declarations, &produced, &store, "f-test", "s-plan");
 
     assert!(refs.is_empty(), "no declaration matched, so no refs stored");
-    assert_eq!(missing.len(), 1, "the unmatched plan deliverable is missing");
+    assert_eq!(
+        missing.len(),
+        1,
+        "the unmatched plan deliverable is missing"
+    );
     assert_eq!(missing[0].name, "plan");
     assert!(
         missing[0].detail.contains("artifacts/plan.md"),

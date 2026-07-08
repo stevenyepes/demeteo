@@ -188,7 +188,10 @@ mod tests {
             .unwrap();
 
         let stored = adapter.get("run-1").unwrap().unwrap().error.unwrap();
-        assert!(!stored.contains("glpat-ABCDEF0123456789wxyz"), "token leaked: {stored}");
+        assert!(
+            !stored.contains("glpat-ABCDEF0123456789wxyz"),
+            "token leaked: {stored}"
+        );
         assert!(stored.contains("***"));
     }
 }

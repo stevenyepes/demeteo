@@ -196,8 +196,14 @@ mod tests {
         // The classic leak vector: a token embedded as HTTP basic-auth.
         let url = "https://x-access-token:ghp_secretsecretsecret0123456789abcd@github.com/o/r.git";
         let out = scrub_secrets(url);
-        assert!(!out.contains("ghp_secretsecretsecret0123456789abcd"), "leaked: {out}");
-        assert!(out.contains("https://x-access-token:***@github.com/o/r.git"), "got: {out}");
+        assert!(
+            !out.contains("ghp_secretsecretsecret0123456789abcd"),
+            "leaked: {out}"
+        );
+        assert!(
+            out.contains("https://x-access-token:***@github.com/o/r.git"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -206,7 +212,10 @@ mod tests {
         let url = "https://alice:sup3rSecretValue@example.com/path";
         let out = scrub_secrets(url);
         assert!(!out.contains("sup3rSecretValue"), "leaked: {out}");
-        assert!(out.contains("https://alice:***@example.com/path"), "got: {out}");
+        assert!(
+            out.contains("https://alice:***@example.com/path"),
+            "got: {out}"
+        );
     }
 
     #[test]

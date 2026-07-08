@@ -135,8 +135,7 @@ fn init_local_repo(workspace_dir: &Path, project_id: &str, repo_path: &str) {
     git(&["init", "-b", "main"]);
     git(&["config", "user.email", "demeteo@local"]);
     git(&["config", "user.name", "demeteo"]);
-    std::fs::write(dir.join("README.md"), "# topology conformance fixture\n")
-        .expect("seed README");
+    std::fs::write(dir.join("README.md"), "# topology conformance fixture\n").expect("seed README");
     git(&["add", "-A"]);
     git(&["commit", "-m", "seed"]);
 }
@@ -160,7 +159,10 @@ async fn poll_terminal(ctx: &AppContext, feature_id: &FeatureId) -> String {
         }
         if started.elapsed() > MAX_WAIT {
             // Dump step diagnostics so a hang/failure is legible.
-            let steps = ctx.features.steps_for_feature(feature_id).unwrap_or_default();
+            let steps = ctx
+                .features
+                .steps_for_feature(feature_id)
+                .unwrap_or_default();
             panic!(
                 "feature {} did not reach a terminal state in {:?}; last status {}, steps: {:#?}",
                 feature_id.as_str(),
@@ -168,7 +170,11 @@ async fn poll_terminal(ctx: &AppContext, feature_id: &FeatureId) -> String {
                 feature.status,
                 steps
                     .iter()
-                    .map(|s| (s.step_id.0.clone(), s.status.clone(), s.error_message.clone()))
+                    .map(|s| (
+                        s.step_id.0.clone(),
+                        s.status.clone(),
+                        s.error_message.clone()
+                    ))
                     .collect::<Vec<_>>()
             );
         }
@@ -237,7 +243,12 @@ fn fresh_app_data_dir(tag: &str) -> std::path::PathBuf {
 /// shortcut every offline path relies on. Local seeding uses `std::fs` +
 /// `git`; remote seeding runs the identical git sequence over the execution
 /// port so the fixture lands on the target host.
-async fn seed_repo(ctx: &AppContext, project_id: &str, compute_type: &str, machine_id: Option<&str>) {
+async fn seed_repo(
+    ctx: &AppContext,
+    project_id: &str,
+    compute_type: &str,
+    machine_id: Option<&str>,
+) {
     match machine_id {
         None => init_local_repo(&ctx.workspace_dir, project_id, REPO_PATH),
         Some(mid) => {
@@ -274,7 +285,11 @@ async fn seed_repo(ctx: &AppContext, project_id: &str, compute_type: &str, machi
 /// engine was composed. Declared-artifact bodies are always read from the
 /// engine host's local `FsArtifactStore` (`machine_id = "local"`), so that
 /// read is transport-independent by construction.
-async fn run_leg(ctx: &AppContext, compute_type: &str, machine_id: Option<&str>) -> RunViewSnapshot {
+async fn run_leg(
+    ctx: &AppContext,
+    compute_type: &str,
+    machine_id: Option<&str>,
+) -> RunViewSnapshot {
     ctx.app_settings
         .add_provider_instance(ProviderInstance {
             id: ProviderId::from(PROVIDER_ID),
@@ -326,7 +341,11 @@ async fn run_leg(ctx: &AppContext, compute_type: &str, machine_id: Option<&str>)
         .expect("feature_start");
 
     let status = poll_terminal(ctx, &feature.id).await;
-    for s in ctx.features.steps_for_feature(&feature.id).unwrap_or_default() {
+    for s in ctx
+        .features
+        .steps_for_feature(&feature.id)
+        .unwrap_or_default()
+    {
         eprintln!(
             "[topology] step {} status={} error={:?} artifacts={:?}",
             s.step_id.0, s.status, s.error_message, s.artifact_paths

@@ -255,10 +255,7 @@ fn remote_pty_stream_survives_keepalive_and_silence_live() {
         ) -> Result<Vec<crate::domain::models::AgentProfile>, String> {
             Ok(vec![])
         }
-        fn add_agent_profile(
-            &self,
-            _: crate::domain::models::AgentProfile,
-        ) -> Result<(), String> {
+        fn add_agent_profile(&self, _: crate::domain::models::AgentProfile) -> Result<(), String> {
             unimplemented!()
         }
         fn delete_agent_profile(
@@ -515,7 +512,10 @@ fn remote_availability_probe_uses_a_login_shell() {
         .unwrap();
     let available = tokio_rt.block_on(runtime.is_available(&rec, "demeteo-remote"));
 
-    assert!(available, "probe returning 'ok' should report the agent available");
+    assert!(
+        available,
+        "probe returning 'ok' should report the agent available"
+    );
 
     let opts = rec
         .last_opts
