@@ -4,9 +4,14 @@
 //! Unix-socket forwarding (R4) — see
 //! `crates/demeteo-core/src/adapters/ssh/client.rs`.
 
+use crate::adapters::artifact_store::fs::FsArtifactStore;
+use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::ids::{ProjectId, WorkflowId};
+use crate::domain::models::feature::{Feature, StepExecution};
 use crate::domain::run_spec::{RunBudget, RunSpec, RunSpecProvider};
 use crate::error::AppError;
+use crate::ports::artifact_store::ArtifactStore;
+use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::remote_run_mirror::RemoteRunMirror;
 use crate::state::AppContext;
 use serde::Serialize;
@@ -213,6 +218,218 @@ const NOTIFY_ON: &[&str] = &[
     "needs-credentials",
 ];
 
+/// C4.2: hydrate a read-only *shadow* of a runner-owned feature into the
+/// laptop DB + artifact cache, so `RunView` (C4.3) can render it with the
+/// same fidelity as a native run (steps, cost, artifacts) without the UI
+/// knowing it ran on a different machine.
+///
+/// **The mirror row is itself the runner-owned marker.** A feature whose
+/// id appears in `remote_run_mirror` is a shadow the laptop only ever
+/// *reads* — the engine never drives it (there is no local run behind
+/// it), so no extra "read-only" column is needed on `features`.
+///
+/// Fetches the runner's own `Feature` + `StepExecution` rows over the
+/// control channel, re-parents the feature to the **local** `project_id`
+/// (so the `features.project_id` FK holds and the inbox deep-links into a
+/// local project view — the runner's own project id doesn't exist on the
+/// laptop), and upserts. Each step's declared artifacts are pulled **once**
+/// into the laptop `FsArtifactStore` and the shadow step's paths rewritten
+/// to those local references, so the artifact viewer reads them as ordinary
+/// local files with no remote round-trip. Idempotent and best-effort: safe
+/// to call on every reconcile; a captured artifact belongs to a finished
+/// step and is never re-pulled (the offset-equivalent gate).
+async fn hydrate_shadow_feature(
+    ctx: &AppContext,
+    machine_id: &str,
+    run_id: &str,
+    local_project_id: &str,
+) -> Result<(), String> {
+    let feat_val = ctx
+        .exec
+        .control_rpc(
+            machine_id,
+            "get_feature",
+            serde_json::json!({ "run_id": run_id }),
+        )
+        .await?;
+    // The run may not have bootstrapped a feature yet (early states), in
+    // which case `get_feature` reports `null` — nothing to shadow.
+    if feat_val.is_null() {
+        return Ok(());
+    }
+    let mut feature: Feature =
+        serde_json::from_value(feat_val).map_err(|e| format!("shadow feature decode: {e}"))?;
+    // Re-home under the local project so the FK holds; keep the runner's
+    // feature id (== the mirror's `feature_id`) so status/inbox deep-links
+    // resolve to this same shadow.
+    feature.project_id = ProjectId::new(local_project_id);
+
+    let steps_val = ctx
+        .exec
+        .control_rpc(
+            machine_id,
+            "list_steps",
+            serde_json::json!({ "run_id": run_id }),
+        )
+        .await?;
+    let steps: Vec<StepExecution> =
+        serde_json::from_value(steps_val).map_err(|e| format!("shadow steps decode: {e}"))?;
+
+    let fid = feature.id.clone();
+    if ctx.features.get(&fid)?.is_none() {
+        ctx.features.add(feature.clone())?;
+    } else {
+        // Refresh the mutable surface a re-reconcile can change (status,
+        // aggregate cost/tokens, PR url) — the shadow tracks the runner.
+        ctx.features.update(
+            &fid,
+            &FeaturePatch {
+                status: Some(feature.status.clone()),
+                total_cost: Some(Some(feature.total_cost)),
+                duration: Some(Some(feature.duration.clone())),
+                tokens: Some(Some(feature.tokens)),
+                agent_kind: Some(feature.agent_kind.clone()),
+                model: Some(feature.model.clone()),
+                mr_url: Some(feature.mr_url.clone()),
+                mr_state: Some(feature.mr_state.clone()),
+            },
+        )?;
+    }
+
+    let store = FsArtifactStore::new(ctx.app_data_dir.clone());
+    for step in steps {
+        let local_paths =
+            cache_step_artifacts(ctx, &store, machine_id, run_id, fid.as_str(), &step).await;
+        let single = local_paths.first().cloned();
+        if ctx.features.step_get(&step.id)?.is_none() {
+            let mut shadow = step.clone();
+            shadow.artifact_path = single;
+            shadow.artifact_paths = local_paths;
+            ctx.features.step_create(shadow)?;
+        } else {
+            ctx.features.step_update(
+                &step.id,
+                &StepExecutionPatch {
+                    status: Some(step.status.clone()),
+                    cost_usd: Some(step.cost_usd),
+                    tokens: Some(step.tokens),
+                    wall_clock_secs: Some(step.wall_clock_secs),
+                    error_message: Some(step.error_message.clone()),
+                    artifact_path: Some(single),
+                    artifact_paths: Some(local_paths),
+                    ..Default::default()
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Pull a shadow step's declared artifacts into the laptop artifact cache
+/// once, returning the *local* references to store on the shadow step. If
+/// the laptop already cached artifacts for this step, they are reused with
+/// no remote read — a captured artifact belongs to a finished step and
+/// won't change, which is the offset-equivalent "don't re-pull" gate C4.2
+/// calls for. A per-artifact fetch failure is surfaced (logged) and
+/// skipped rather than aborting the whole hydration.
+async fn cache_step_artifacts(
+    ctx: &AppContext,
+    store: &FsArtifactStore,
+    machine_id: &str,
+    run_id: &str,
+    feature_id: &str,
+    step: &StepExecution,
+) -> Vec<String> {
+    let remote = declared_remote_paths(step.artifact_path.as_deref(), &step.artifact_paths);
+    if remote.is_empty() {
+        return Vec::new();
+    }
+
+    // Offset-equivalent gate: already-cached artifacts are not re-pulled.
+    if let Ok(existing) = store.list_for_step(feature_id, step.id.as_str()) {
+        if !existing.is_empty() && existing.len() >= remote.len() {
+            return existing;
+        }
+    }
+
+    let mut local = Vec::new();
+    for path in remote {
+        match ctx
+            .exec
+            .control_rpc(
+                machine_id,
+                "read_artifact",
+                serde_json::json!({ "run_id": run_id, "path": path }),
+            )
+            .await
+        {
+            Ok(v) => {
+                let body = v.as_str().unwrap_or_default().to_string();
+                let name = std::path::Path::new(&path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("artifact")
+                    .to_string();
+                // `ToolWrite` makes the store infer the file extension from
+                // the runner's path (preserving `.md`/`.diff`/…) and write
+                // the fetched `body` verbatim — it never re-reads from disk.
+                let artifact = Artifact {
+                    name,
+                    mime: mime_for_path(&path),
+                    content: body,
+                    source: ArtifactSource::ToolWrite { path: path.clone() },
+                };
+                match store.put(feature_id, step.id.as_str(), &artifact) {
+                    Ok(local_ref) => local.push(local_ref),
+                    Err(e) => {
+                        eprintln!("shadow artifact cache write failed for {path}: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("shadow artifact fetch failed for {path}: {e}");
+            }
+        }
+    }
+    local
+}
+
+/// A shadow step's declared artifact paths on the runner, de-duplicated
+/// with the legacy single `artifact_path` first. These are the exact
+/// paths the `read_artifact` RPC will be asked for (and which the runner
+/// re-validates against its own step rows), so keeping the set minimal
+/// keeps the number of remote reads minimal.
+fn declared_remote_paths(single: Option<&str>, many: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(p) = single {
+        out.push(p.to_string());
+    }
+    for p in many {
+        if !out.iter().any(|e| e == p) {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
+/// Best-effort media type from a path's extension — only used to populate
+/// the cached `Artifact`; the on-disk filename's extension comes from the
+/// path itself via `ArtifactSource::ToolWrite`.
+fn mime_for_path(path: &str) -> String {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    match ext {
+        "md" | "markdown" => "text/markdown",
+        "diff" | "patch" => "text/x-diff",
+        "json" => "application/json",
+        "html" => "text/html",
+        _ => "text/plain",
+    }
+    .to_string()
+}
+
 /// Reconcile every mirrored run against its runner's live `get_status`
 /// (docs/REMOTE_EXECUTION_PLAN.md M6.2, design R9). A machine that can't
 /// be reached flips the mirror to `unreachable` — never `failed` (§7.1)
@@ -272,6 +489,25 @@ pub async fn remote_reconcile_runs(
                     0,
                     now,
                 );
+
+                // C4.2: once the run has bootstrapped a feature and we know
+                // the local project it was composed from, hydrate a
+                // read-only shadow of it (feature + steps + cached
+                // artifacts) so it renders on the laptop with full fidelity.
+                // Best-effort: a hydration failure never fails the poll or
+                // regresses the mirror status just applied.
+                if let (Some(fid), Some(pid)) = (&feature_id, &row.project_id) {
+                    if !fid.is_empty() {
+                        if let Err(e) =
+                            hydrate_shadow_feature(&ctx, &row.machine_id, &row.run_id, pid).await
+                        {
+                            eprintln!(
+                                "shadow hydrate failed for run {} (feature {fid}): {e}",
+                                row.run_id
+                            );
+                        }
+                    }
+                }
 
                 if NOTIFY_ON.contains(&status.as_str())
                     && row.last_notified_status.as_deref() != Some(status.as_str())
@@ -627,4 +863,40 @@ pub async fn remote_cancel_run(
         )
         .map_err(AppError::from)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{declared_remote_paths, mime_for_path};
+
+    #[test]
+    fn declared_paths_single_first_and_deduped() {
+        let out = declared_remote_paths(
+            Some("/w/report.md"),
+            &["/w/report.md".to_string(), "/w/diff.patch".to_string()],
+        );
+        // The legacy single path leads, and it is not repeated even though
+        // it also appears in the list.
+        assert_eq!(out, vec!["/w/report.md", "/w/diff.patch"]);
+    }
+
+    #[test]
+    fn declared_paths_none_single_uses_list_only() {
+        let out = declared_remote_paths(None, &["/w/a.txt".to_string(), "/w/b.txt".to_string()]);
+        assert_eq!(out, vec!["/w/a.txt", "/w/b.txt"]);
+    }
+
+    #[test]
+    fn declared_paths_empty_when_nothing_declared() {
+        assert!(declared_remote_paths(None, &[]).is_empty());
+    }
+
+    #[test]
+    fn mime_inferred_from_extension() {
+        assert_eq!(mime_for_path("/w/report.md"), "text/markdown");
+        assert_eq!(mime_for_path("/w/change.diff"), "text/x-diff");
+        assert_eq!(mime_for_path("/w/manifest.json"), "application/json");
+        // Unknown / extensionless falls back to plain text.
+        assert_eq!(mime_for_path("/w/LICENSE"), "text/plain");
+    }
 }
