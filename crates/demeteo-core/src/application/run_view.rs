@@ -12,10 +12,18 @@
 //! and the machine filesystem, so every method here is a thin delegation to
 //! those repos — this is a no-op refactor for those transports (the DoD for
 //! C3.1 is byte-identical output). The payoff is C4: a runner-owned feature
-//! lives in the runner's own DB/store, and `RunView` becomes the one seam that
-//! transparently sources it from a laptop-side shadow + lazy artifact cache, so
-//! the UI renders a remote run with identical fidelity without knowing where it
-//! ran.
+//! lives in the runner's own DB/store, yet renders through this exact same
+//! seam with no runner-specific branch. That works because C4.2's reconcile
+//! (`commands/remote_runner::hydrate_shadow_feature`) hydrates a **read-only
+//! shadow** of the runner's feature + steps into the laptop's *own*
+//! `features`/`step_executions` tables and pulls each declared artifact into
+//! the laptop `FsArtifactStore`, rewriting the shadow step's `artifact_path`
+//! to that local cache path. So by the time the UI reads a runner feature,
+//! `feature`/`steps`/`step`/`artifact_body` are all served from local state
+//! identically to a native run — the `remote_run_mirror` row is the only thing
+//! that marks it runner-owned. (The persisted `agent_stream` transcript is not
+//! shadowed; the live agent stream is an at-execution-time push channel that no
+//! completed run — local or remote — re-renders post-hoc.)
 //!
 //! Keep this layer **read-only**. Mutations (start/cancel/retry/gate-decide)
 //! stay on the executor/presenter ports; folding them in here would blur the
@@ -77,8 +85,11 @@ impl RunView {
     /// The UTF-8 body of a declared artifact at `path` on `machine_id`. For
     /// local/SSH this is a direct read of the machine filesystem via the
     /// execution port (a missing/unreadable path is an `Err`, never `Ok("")`,
-    /// per the port contract). C4 overrides this for runner-owned features to
-    /// serve from the lazily-cached shadow copy.
+    /// per the port contract). For a runner-owned feature no special-casing is
+    /// needed here: C4.2 already cached the body into the laptop
+    /// `FsArtifactStore` and rewrote the shadow step's path to that local
+    /// cache path, so the caller passes `machine_id = "local"` with the cache
+    /// path and this reads it like any native artifact.
     pub async fn artifact_body(&self, machine_id: &str, path: &str) -> Result<String, String> {
         self.exec.read_file(machine_id, path).await
     }
