@@ -1,6 +1,6 @@
 [package]
 name = "demeteo-core"
-version = "0.1.0"
+version.workspace = true
 description = "Tauri-free engine: domain, ports, application, and adapters shared by the desktop app and the headless runner"
 authors = ["Steven Yepes <contact@stvcloud.dev>"]
 license = "MIT"
