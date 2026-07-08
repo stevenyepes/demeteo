@@ -1,6 +1,6 @@
 [package]
 name = "demeteo"
-version = "1.0.0"
+version.workspace = true
 description = "Desktop control plane for orchestrating local and remote AI coding agents"
 authors = ["Steven Yepes <contact@stvcloud.dev>"]
 license = "MIT"

@@ -1,6 +1,6 @@
 [package]
 name = "demeteo-runner"
-version = "0.1.0"
+version.workspace = true
 description = "Headless runner: executes a Demeteo workflow to completion on a Linux box with no desktop app attached"
 authors = ["Steven Yepes <contact@stvcloud.dev>"]
 license = "MIT"

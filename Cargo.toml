@@ -2,5 +2,14 @@
 resolver = "2"
 members = ["src-tauri", "crates/demeteo-core", "crates/demeteo-runner"]
 
+# Single source of truth for the version every crate reports. All three
+# members inherit this via `version.workspace = true`, so `CARGO_PKG_VERSION`
+# — and therefore `demeteo-runner --version`'s fallback — is always the real
+# product version, not a per-crate value that drifts. `promote.yml` bumps
+# only this line at release time. (Nightly `<base>-N` builds, which never
+# mutate Cargo.toml, still override the runner via `DEMETEO_RUNNER_VERSION`.)
+[workspace.package]
+version = "1.0.0"
+
 [patch.crates-io]
 quick-xml = { path = "src-tauri/vendor/quick-xml" }
