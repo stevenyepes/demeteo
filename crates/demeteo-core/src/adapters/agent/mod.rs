@@ -8,6 +8,7 @@ pub mod install;
 pub mod noop;
 pub mod opencode;
 pub mod registry;
+pub mod stub_runtime;
 
 // Shared test stubs for `hermes::tests`, `claude_code::tests`, and
 // `opencode::tests`. Each of those test files imports the stubs via
