@@ -32,7 +32,7 @@ use demeteo_core::composition::{build_core_context, CoreConfig, ExecutionMode};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use services::RunnerServices;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Version reported by `--version`. CI sets `DEMETEO_RUNNER_VERSION` at
@@ -57,6 +57,25 @@ fn runner_data_dir() -> PathBuf {
         })
         .unwrap_or_else(std::env::temp_dir);
     base.join("demeteo-runner")
+}
+
+/// Create the runner's data dir with `0700` perms **before** anything is
+/// created inside it (the SQLite DB, the askpass helper, and — critically
+/// — the `0600` control socket).
+///
+/// M3.1's whole authz model is "no other local user can reach the control
+/// socket". `rpc::serve` binds the socket and *then* chmods it to `0600`,
+/// a narrow TOCTOU window where the socket briefly carries umask perms.
+/// An owner-only parent directory closes that window structurally — no
+/// other uid can traverse into the dir to reach the socket at all,
+/// whatever the socket's own mode is mid-bind — and also keeps the run
+/// event log / spec DB unreadable by other local users (defence in depth
+/// on top of the M7.2 secret scrubbing, §6).
+fn ensure_private_data_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let mut perms = std::fs::metadata(dir)?.permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o700);
+    std::fs::set_permissions(dir, perms)
 }
 
 fn print_usage() {
@@ -103,6 +122,10 @@ fn main() {
 async fn serve(runtime: tokio::runtime::Handle) -> i32 {
     let app_data_dir = runner_data_dir();
     eprintln!("[demeteo-runner] data dir: {}", app_data_dir.display());
+    if let Err(e) = ensure_private_data_dir(&app_data_dir) {
+        eprintln!("[demeteo-runner] failed to secure data dir (0700): {}", e);
+        return 1;
+    }
 
     // `build_core_context` already runs the engine's own restart
     // reconciliation for individual features/steps (`startup_watchdog` +
@@ -192,6 +215,10 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
 
     let app_data_dir = runner_data_dir();
     eprintln!("[demeteo-runner] data dir: {}", app_data_dir.display());
+    if let Err(e) = ensure_private_data_dir(&app_data_dir) {
+        eprintln!("[demeteo-runner] failed to secure data dir (0700): {}", e);
+        return 1;
+    }
 
     let ctx = build_core_context(
         CoreConfig {

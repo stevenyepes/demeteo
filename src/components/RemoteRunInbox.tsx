@@ -228,6 +228,7 @@ const EVENT_KIND_LABEL: Record<string, string> = {
   parked: 'Parked — needs a decision',
   over_budget: 'Over budget',
   needs_credentials: 'Needs credentials',
+  cost: 'Total cost',
   terminal_state: 'Reached terminal state',
   pushed: 'Branch pushed',
   pr_opened: 'PR opened',
@@ -530,14 +531,14 @@ const RemoteRunInbox: React.FC = () => {
                               <Radio className="w-3 h-3" /> Live
                             </button>
                           )}
-                          {(bucket === 'failed' || bucket === 'cancelled') && (
+                          {bucket !== 'running' && bucket !== 'parked' && (
                             <button
                               type="button"
                               onClick={() => setLiveRun(run)}
                               className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
-                              title="View this run's full event log — the error above is only a summary"
+                              title="View this run's immutable audit trail — every auto-approved gate, budget check, and cost, as the runner recorded it"
                             >
-                              <Radio className="w-3 h-3" /> View log
+                              <ListTree className="w-3 h-3" /> Audit log
                             </button>
                           )}
                           {bucket === 'pr_ready' && run.pr_url && (

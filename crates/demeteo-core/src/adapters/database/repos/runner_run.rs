@@ -1,6 +1,7 @@
 use rusqlite::params;
 
 use crate::ports::runner_run::{RunnerRun, RunnerRunPort};
+use crate::shared::secret_scrub::scrub_secrets;
 
 use super::super::SqliteAdapter;
 
@@ -51,6 +52,14 @@ impl RunnerRunPort for SqliteAdapter {
         pushed_branch: Option<&str>,
         now: i64,
     ) -> Result<(), String> {
+        // Secret scrubbing (M7.2, §6): `error` is usually a stringified
+        // foreign error (a failed clone/push/PR) and is surfaced verbatim
+        // in the laptop's return inbox and `get_status`. This column is a
+        // laptop-visible sink, so scrub any credential-shaped substring
+        // here — the single choke point that also covers the direct
+        // failure-path writers in `rpc.rs` that don't go through
+        // `run::emit`.
+        let error = error.map(|e| scrub_secrets(e).into_owned());
         let conn = self.conn.lock()?;
         conn.execute(
             "UPDATE runner_runs
@@ -155,5 +164,31 @@ impl RunnerRunPort for SqliteAdapter {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),
             other => Err(other.to_string()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::database::SqliteAdapter;
+    use rusqlite::Connection;
+
+    #[test]
+    fn update_status_scrubs_secrets_from_error() {
+        // The `error` column is surfaced verbatim in the laptop's return
+        // inbox, so it's the most-visible secret sink — a token in a
+        // failed-run error must not survive the write (M7.2, §6). This
+        // also guards the direct `rpc.rs` failure-path writer, which
+        // doesn't go through `run::emit`.
+        let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+        adapter.get_or_create("run-1", "{}", 1).unwrap();
+        let leaky = "push rejected: glpat-ABCDEF0123456789wxyz was revoked";
+        adapter
+            .update_status("run-1", "failed", None, None, Some(leaky), None, 2)
+            .unwrap();
+
+        let stored = adapter.get("run-1").unwrap().unwrap().error.unwrap();
+        assert!(!stored.contains("glpat-ABCDEF0123456789wxyz"), "token leaked: {stored}");
+        assert!(stored.contains("***"));
     }
 }

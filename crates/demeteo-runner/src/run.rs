@@ -65,6 +65,11 @@ pub struct RunOutcome {
 /// Append an event to `run_id`'s log (M3.3). Best-effort: a failure to
 /// write the event log must never abort the run itself, so this only
 /// logs to stderr on error rather than propagating one.
+///
+/// **Secret scrubbing (M7.2, §6)** happens at the sink, not here: the
+/// `RunEventsPort::append` adapter scrubs every payload before it's
+/// persisted, so the *direct* failure-path appends in `rpc.rs` (which
+/// bypass this helper) are covered by the same guarantee.
 fn emit(ctx: &AppContext, run_id: &str, kind: &str, payload: impl Serialize) {
     let payload_json = serde_json::to_string(&payload).ok();
     if let Err(e) = ctx
@@ -474,6 +479,23 @@ async fn await_terminal_and_push_inner(
         "[demeteo-runner] run reached terminal state: {}",
         final_status
     );
+
+    // M7.2 audit: record the run's total spend as its own event so the
+    // audit trail is complete on the *cost* dimension too, not just gate
+    // decisions and lifecycle. Summed from the live per-step costs (same
+    // source the budget cap reads) because `feature.total_cost` is only
+    // rolled up at terminal state and the runner's own feature row may
+    // not reflect it yet on the first poll after completion.
+    if let Ok(steps) = svc.ctx.features.steps_for_feature(feature_id) {
+        let total_cost: f64 = steps.iter().map(|s| s.cost_usd.unwrap_or(0.0)).sum();
+        emit(
+            &svc.ctx,
+            run_id,
+            "cost",
+            format!("${:.4} across {} steps", total_cost, steps.len()),
+        );
+    }
+
     emit(&svc.ctx, run_id, "terminal_state", &final_status);
 
     if !matches!(final_status.as_str(), "completed" | "awaiting_mr") {

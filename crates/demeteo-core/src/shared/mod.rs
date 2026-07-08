@@ -15,6 +15,7 @@
 
 pub mod ids;
 pub mod proc;
+pub mod secret_scrub;
 pub mod shell;
 pub mod time;
 

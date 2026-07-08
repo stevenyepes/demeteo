@@ -18,6 +18,7 @@
 //! same as the M1-M5 behavior this replaces.
 
 use async_trait::async_trait;
+use demeteo_core::shared::secret_scrub::scrub_secrets;
 
 #[async_trait]
 pub trait AwayNotifier: Send + Sync {
@@ -55,7 +56,11 @@ impl WebhookAwayNotifier {
 #[async_trait]
 impl AwayNotifier for WebhookAwayNotifier {
     async fn notify(&self, title: &str, body: &str) {
-        let text = format!("{}\n{}", title, body);
+        // Secret scrubbing (M7.2, §6): the body is often a stringified
+        // foreign error (a failed clone/push/PR call) that could echo a
+        // credential-bearing URL — scrub before it leaves the host for a
+        // webhook we don't control.
+        let text = scrub_secrets(&format!("{}\n{}", title, body)).into_owned();
         let result = self
             .client
             .post(&self.url)
