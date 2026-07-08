@@ -374,6 +374,7 @@ pub fn run() {
             commands::features::feature_resume,
             commands::features::feature_cancel,
             commands::features::feature_get,
+            commands::features::artifact_body,
             commands::features::step_get,
             commands::features::step_list_for_run,
             commands::features::gate_pending_for_run,
