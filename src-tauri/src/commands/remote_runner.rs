@@ -492,6 +492,80 @@ pub async fn remote_stream_events(
         .map_err(AppError::from)
 }
 
+/// C4.1 read-model RPCs. These reach the runner's `get_feature`/
+/// `list_steps`/`read_artifact`/`list_messages` over the same control
+/// socket, and are the raw fetch primitives the C4.2 reconcile path uses
+/// to hydrate a read-only shadow of a runner-owned feature into the
+/// laptop DB + artifact cache. They return the runner's JSON verbatim (a
+/// `Feature`/`Vec<StepExecution>`/artifact body string/`Vec<Message>`)
+/// so the shadow-hydration layer owns the deserialization + local
+/// rewrite, not this thin transport wrapper.
+#[tauri::command]
+pub async fn remote_get_feature(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+) -> Result<serde_json::Value, AppError> {
+    ctx.exec
+        .control_rpc(
+            &machine_id,
+            "get_feature",
+            serde_json::json!({ "run_id": run_id }),
+        )
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn remote_list_steps(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+) -> Result<serde_json::Value, AppError> {
+    ctx.exec
+        .control_rpc(
+            &machine_id,
+            "list_steps",
+            serde_json::json!({ "run_id": run_id }),
+        )
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn remote_read_artifact(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+    path: String,
+) -> Result<serde_json::Value, AppError> {
+    ctx.exec
+        .control_rpc(
+            &machine_id,
+            "read_artifact",
+            serde_json::json!({ "run_id": run_id, "path": path }),
+        )
+        .await
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn remote_list_messages(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+    thread_id: String,
+) -> Result<serde_json::Value, AppError> {
+    ctx.exec
+        .control_rpc(
+            &machine_id,
+            "list_messages",
+            serde_json::json!({ "run_id": run_id, "thread_id": thread_id }),
+        )
+        .await
+        .map_err(AppError::from)
+}
+
 /// Clear a parked gate on a remote run from the laptop (M5.3's
 /// `decide_gate` RPC, exposed here so the return inbox's "Parked (needs
 /// you)" bucket can act on it).
