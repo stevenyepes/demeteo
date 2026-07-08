@@ -689,10 +689,7 @@ mod tests {
 
     #[test]
     fn matches_within_artifact_paths_list() {
-        let steps = [(
-            None,
-            vec!["/w/a.txt".to_string(), "/w/b.txt".to_string()],
-        )];
+        let steps = [(None, vec!["/w/a.txt".to_string(), "/w/b.txt".to_string()])];
         assert!(is_declared_artifact(refs(&steps), "/w/b.txt"));
     }
 

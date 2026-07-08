@@ -78,7 +78,10 @@ mod tests {
 
         let events = adapter.list_since("run-1", 0).unwrap();
         let stored = events[0].payload_json.as_deref().unwrap();
-        assert!(!stored.contains("ghp_0123456789abcdef"), "token leaked: {stored}");
+        assert!(
+            !stored.contains("ghp_0123456789abcdef"),
+            "token leaked: {stored}"
+        );
         assert!(stored.contains("***"));
     }
 }

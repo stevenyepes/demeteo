@@ -100,7 +100,12 @@ async fn remote_install_runs_under_interactive_login_shell() {
     let exec = StubExec::default();
     let res = run_official_install(&exec, "remote_1", "curl -fsSL https://x/install | bash").await;
     assert!(res.is_ok());
-    let opts = exec.last_opts.lock().unwrap().clone().expect("opts recorded");
+    let opts = exec
+        .last_opts
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("opts recorded");
     assert!(opts.login_shell, "remote install must use a login shell");
     assert!(opts.interactive, "remote install must be interactive");
 }
