@@ -192,6 +192,9 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "list_steps" => list_steps(svc, req.params)
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "get_worktree" => get_worktree(svc, req.params)
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "read_artifact" => read_artifact(svc, req.params)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
@@ -537,6 +540,28 @@ fn list_steps(
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
     let fid = feature_id_for_run(svc, &params.run_id)?;
     svc.ctx.features.steps_for_feature(&fid)
+}
+
+/// Variant A of the detached-run "Browse Code" fix: the runner's own
+/// worktree path + branch for a run, so the laptop can point its existing
+/// SFTP file browser at the *runner's* real checkout instead of the path it
+/// would compute from the shadow's re-homed local project (which is wrong —
+/// the code lives in the runner's workspace under the runner's project id).
+///
+/// The returned `machine_id` is always `"local"` (the runner is `LocalOnly`
+/// — it is the machine); the laptop ignores it and substitutes the mirror's
+/// real machine id, reaching this path over the same SSH it already holds to
+/// the runner's box. No file bytes cross the control socket here — only the
+/// path — so this widens nothing: reads go over the laptop's existing SFTP,
+/// exactly like Browse Code on any other SSH machine.
+async fn get_worktree(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+) -> Result<demeteo_core::application::worktree::FeatureWorktreeInfo, String> {
+    let params: RunIdParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    let fid = feature_id_for_run(svc, &params.run_id)?;
+    demeteo_core::application::worktree::resolve_feature_worktree(&svc.ctx, &fid).await
 }
 
 /// C4.1: the UTF-8 body of one declared artifact, for the laptop's lazy

@@ -8,7 +8,9 @@
 //! Both build the same engine the desktop app uses
 //! (`demeteo_core::composition::build_core_context`) with
 //! `ExecutionMode::LocalOnly` (no nested SSH — the runner *is* the
-//! machine, docs/REMOTE_EXECUTION.md §3) and a noop `NotificationPort`.
+//! machine, docs/REMOTE_EXECUTION.md §3) and a `RunEventBridge`
+//! `NotificationPort` that mirrors the engine's live `DomainEvent` stream
+//! into the run event log (`notify_bridge`).
 //! `run` holds the actual "bootstrap project, run workflow, push branch"
 //! pipeline (R3), shared by both entry points.
 //!
@@ -20,6 +22,7 @@
 mod away_notify;
 mod credentials;
 mod git_askpass;
+mod notify_bridge;
 mod reconcile;
 mod rpc;
 mod run;
@@ -27,10 +30,10 @@ mod services;
 
 use away_notify::{AwayNotifier, NoopAwayNotifier, WebhookAwayNotifier};
 use credentials::CredentialStore;
-use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
 use demeteo_core::composition::{build_core_context, CoreConfig, ExecutionMode};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
+use notify_bridge::RunEventBridge;
 use services::RunnerServices;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -201,14 +204,21 @@ async fn serve(runtime: tokio::runtime::Handle) -> i32 {
     // below is the M2.3 layer on top: it re-attaches runner_runs rows
     // (this daemon's own submit/status mirror) to whatever the engine
     // just resumed, under a bounded reboot-retry budget.
+    // Bridge the engine's live `DomainEvent` stream into the run event log
+    // so remote runs report per-step progress / retries / failures, not just
+    // coarse lifecycle events. Wired *after* the context is built (it needs
+    // the `run_events`/`runner_runs` ports the build constructs); until then
+    // it drops events exactly as the old noop adapter did.
+    let notify_bridge = Arc::new(RunEventBridge::new());
     let ctx = Arc::new(build_core_context(
         CoreConfig {
             app_data_dir: app_data_dir.clone(),
             execution_mode: ExecutionMode::LocalOnly,
         },
-        Arc::new(NoopNotificationAdapter),
+        notify_bridge.clone(),
         runtime,
     ));
+    notify_bridge.wire(ctx.run_events.clone(), ctx.runner_runs.clone());
     let askpass_path = git_askpass::ensure_askpass_script(&app_data_dir)
         .unwrap_or_else(|e| panic!("failed to write askpass helper: {}", e));
     let away_notifier: Arc<dyn AwayNotifier> = match WebhookAwayNotifier::from_env() {
@@ -288,14 +298,16 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
         return 1;
     }
 
-    let ctx = build_core_context(
+    let notify_bridge = Arc::new(RunEventBridge::new());
+    let ctx = Arc::new(build_core_context(
         CoreConfig {
             app_data_dir: app_data_dir.clone(),
             execution_mode: ExecutionMode::LocalOnly,
         },
-        Arc::new(NoopNotificationAdapter),
+        notify_bridge.clone(),
         runtime,
-    );
+    ));
+    notify_bridge.wire(ctx.run_events.clone(), ctx.runner_runs.clone());
     let askpass_path = git_askpass::ensure_askpass_script(&app_data_dir)
         .unwrap_or_else(|e| panic!("failed to write askpass helper: {}", e));
     let creds = Arc::new(CredentialStore::new());
@@ -318,7 +330,7 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
         None => Arc::new(NoopAwayNotifier),
     };
     let svc = Arc::new(RunnerServices {
-        ctx: Arc::new(ctx),
+        ctx,
         creds,
         askpass_path,
         away_notifier,

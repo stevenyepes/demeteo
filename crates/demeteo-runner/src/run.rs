@@ -279,6 +279,28 @@ pub async fn execute_run(
     eprintln!("[demeteo-runner] feature {} started", feature.id.as_str());
     emit(&svc.ctx, run_id, "feature_started", &feature.id.0);
 
+    // Record the project/feature ids on the run row *now*, not just at
+    // terminal state. Two things depend on it mid-run: (1) the
+    // `RunEventBridge` resolves `feature_id -> run_id` from this row to tag
+    // per-step progress events, and (2) `get_status` reports `feature_id`,
+    // which is what lets the laptop hydrate the run's read-only shadow
+    // (steps/tokens/cost) *while it runs* instead of only once it finishes.
+    // Best-effort: a failure here only costs early visibility, never the run.
+    if let Err(e) = svc.ctx.runner_runs.update_status(
+        run_id,
+        "running",
+        Some(project.id.as_str()),
+        Some(feature.id.as_str()),
+        None,
+        None,
+        paths::now_ms(),
+    ) {
+        eprintln!(
+            "[demeteo-runner] warning: failed to record feature id on run {}: {}",
+            run_id, e
+        );
+    }
+
     await_terminal_and_push(svc, run_id, &project.id, &feature.id, spec).await
 }
 

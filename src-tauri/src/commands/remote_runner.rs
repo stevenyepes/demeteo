@@ -695,7 +695,16 @@ async fn cache_step_artifacts(
                     source: ArtifactSource::ToolWrite { path: path.clone() },
                 };
                 match store.put(feature_id, step.id.as_str(), &artifact) {
-                    Ok(local_ref) => local.push(local_ref),
+                    // Two distinct runner paths that share a basename (e.g. the
+                    // same file declared both as `artifact_path` and inside
+                    // `artifact_paths`, or captured under two absolute paths)
+                    // resolve to the *same* local cache file — `put` is
+                    // idempotent on `{name}.{ext}`. Dedupe so the shadow step's
+                    // `artifact_paths` never carries the identical local ref
+                    // twice (which surfaced as a duplicate-React-key crash in
+                    // the per-step artifact list).
+                    Ok(local_ref) if !local.contains(&local_ref) => local.push(local_ref),
+                    Ok(_) => {}
                     Err(e) => {
                         eprintln!("shadow artifact cache write failed for {path}: {e}");
                     }
@@ -1160,6 +1169,36 @@ pub async fn remote_list_messages(
         )
         .await
         .map_err(AppError::from)
+}
+
+/// Variant A of the detached-run "Browse Code" fix: resolve the *runner's*
+/// real worktree path + branch for a run, then re-home `machine_id` onto the
+/// mirror's box so the laptop's existing SFTP `CodeEditorView` browses the
+/// actual checkout. The runner reports `machine_id: "local"` (it is the
+/// machine it ran on); we overwrite it with the mirror's SSH machine — the
+/// path is a path *on that box*, reachable over the SSH the laptop already
+/// has. This is the only field we override; `worktree_path`/`branch`/
+/// `default_branch` are the runner's own, so the browse targets exactly
+/// where the run worked.
+#[tauri::command]
+pub async fn remote_get_worktree(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+) -> Result<serde_json::Value, AppError> {
+    let mut info = ctx
+        .exec
+        .control_rpc(
+            &machine_id,
+            "get_worktree",
+            serde_json::json!({ "run_id": run_id }),
+        )
+        .await
+        .map_err(AppError::from)?;
+    if let Some(obj) = info.as_object_mut() {
+        obj.insert("machine_id".to_string(), serde_json::json!(machine_id));
+    }
+    Ok(info)
 }
 
 /// Clear a parked gate on a remote run from the laptop (M5.3's
