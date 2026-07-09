@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff, Server, MoonStar, CheckCircle2, Loader2 } from 'lucide-react';
+import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff, Server, MoonStar } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import type { Machine, Repository, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { modelSupportsImagesByName } from '../lib/modelImageSupport';
+import { getAgentModels } from '../lib/agentModels';
+import { HarnessModelPicker, type ModelOption } from './ui/HarnessModelPicker';
+import type { AgentConfigView } from './settings/ProjectSettingsContext';
 
 interface StartFeatureModalProps {
   isOpen: boolean;
   projectId: string;
-  /** Available workflows — the user picks one. */
-  workflows: WorkflowSummary[];
   /** Repos attached to the project. Used to infer chips and detect conflicts. */
   repositories: Repository[];
   /** Display name for the project (shown in the header). */
@@ -92,7 +93,6 @@ interface StepRow {
 const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   isOpen,
   projectId,
-  workflows,
   repositories,
   projectName,
   defaultWorkflowId,
@@ -101,11 +101,38 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  // Workflow templates the user picks from. Fetched by the modal itself
+  // on open (like `machines` below) so every entry point — command
+  // palette, keyboard shortcut, Workflows page — sees a populated list;
+  // relying on a caller to pre-load it left the picker empty from most
+  // of them.
+  const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [workflowId, setWorkflowId] = useState<string>('');
   const [agentKind, setAgentKind] = useState<string>('');
   const [model, setModel] = useState<string>('');
+  // Agents actually configured/available on the target machine (or the
+  // project's local config when running here). Drives the agent pickers
+  // below instead of a hardcoded list, so the modal never offers an
+  // agent that isn't installed on the chosen machine — the same
+  // `get_agent_configs` probe the Strategy settings tab uses.
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigView[]>([]);
+  // Model lists per agent kind, probed lazily from the target machine via
+  // `getAgentModels` — the same `get_agent_models` command the Strategy
+  // settings tab and Project home use. Keyed by agent kind (not machine)
+  // because the map is cleared whenever the target machine changes; the
+  // underlying `getAgentModels` cache is keyed by `(machine, agent)` and
+  // dedupes concurrent probes. A key present in `modelsLoading` but absent
+  // from `modelsByAgent` means an in-flight probe.
+  const [modelsByAgent, setModelsByAgent] = useState<Record<string, ModelOption[]>>({});
+  const [modelsLoading, setModelsLoading] = useState<Record<string, boolean>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [conflicts, setConflicts] = useState<Set<string>>(new Set());
+  // Explicit target-repo selection. `null` means "follow auto-detect"
+  // (repos inferred from the description, or all project repos when none
+  // are mentioned); a non-null array is the user's explicit choice made
+  // in Customize. Kept as an override so untouched launches behave
+  // exactly as before.
+  const [repoOverride, setRepoOverride] = useState<string[] | null>(null);
   // Steps of the selected workflow + per-step agent/model overrides.
   // A blank entry means "inherit" the workflow/project default for that step.
   const [steps, setSteps] = useState<StepRow[]>([]);
@@ -135,33 +162,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [maxCostUsd, setMaxCostUsd] = useState<string>('');
   const [maxWallClockMins, setMaxWallClockMins] = useState<string>('');
 
-  // Upfront agent-readiness check (M4.1's `probe_agent`, docs/
-  // REMOTE_EXECUTION_PLAN.md M6.1 gap): without this, a machine that was
-  // never provisioned or is missing the chosen agent only fails *after*
-  // the whole form is filled out and Launch is clicked. Only meaningful
-  // once an explicit agent is chosen — with no override the step's own
-  // default may differ per step, so there's nothing concrete to probe.
-  const [readiness, setReadiness] = useState<
-    { status: 'idle' } | { status: 'checking' } | { status: 'ready' } | { status: 'not_ready' } | { status: 'unreachable'; error: string }
-  >({ status: 'idle' });
-
-  useEffect(() => {
-    if (!machineId || !agentKind.trim()) {
-      setReadiness({ status: 'idle' });
-      return;
-    }
-    let cancelled = false;
-    setReadiness({ status: 'checking' });
-    invoke<{ kind: string; available: boolean }>('remote_probe_agent', { machineId, agentKind: agentKind.trim() })
-      .then((r) => {
-        if (!cancelled) setReadiness({ status: r.available ? 'ready' : 'not_ready' });
-      })
-      .catch((e) => {
-        if (!cancelled) setReadiness({ status: 'unreachable', error: String(e) });
-      });
-    return () => { cancelled = true; };
-  }, [machineId, agentKind]);
-
   // Initialize workflow picker to the requested default (or the first
   // workflow if none specified) when the modal opens.
   useEffect(() => {
@@ -183,15 +183,35 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setSteps([]);
       setStepOverrides({});
       setLoopIterations('');
+      setRepoOverride(null);
       setAttachments([]);
       setVisionWarningDismissed(false);
       setMachineId('');
       setUnattended(false);
       setMaxCostUsd('');
       setMaxWallClockMins('');
-      setReadiness({ status: 'idle' });
     }
   }, [isOpen, workflows, defaultWorkflowId, workflowId]);
+
+  // Fetch selectable workflows whenever the modal opens. Fetched here
+  // rather than threaded through from the parent so the picker is never
+  // empty regardless of which entry point opened the modal.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list: WorkflowSummary[] = await invoke('workflow_list');
+        if (!cancelled) setWorkflows(list ?? []);
+      } catch (e) {
+        console.warn('failed to load workflows for start-feature picker:', e);
+        if (!cancelled) setWorkflows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   // Fetch remote machines whenever the modal opens (M6.1). Local runs
   // don't need this list, so it's fetched lazily rather than threaded
@@ -212,6 +232,32 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       cancelled = true;
     };
   }, [isOpen]);
+
+  // Load the agents configured/available on the target machine so the
+  // agent pickers reflect reality. Re-fetched when the machine changes;
+  // `''` (run here) resolves to the built-in local config via `'local'`.
+  // `refresh: false` uses the cached availability probe — the Strategy
+  // settings tab owns the expensive "Re-check" path.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    const mid = machineId || 'local';
+    (async () => {
+      try {
+        const list: AgentConfigView[] = await invoke('get_agent_configs', {
+          machineId: mid,
+          refresh: false,
+        });
+        if (!cancelled) setAgentConfigs(list ?? []);
+      } catch (e) {
+        console.warn('failed to load agent configs for start-feature picker:', e);
+        if (!cancelled) setAgentConfigs([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, machineId]);
 
   // Load the selected workflow's steps so the user can override the agent /
   // model per step. Gate steps don't run an agent, so they're filtered out.
@@ -251,6 +297,16 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     });
   }, [description, repositories]);
 
+  // Repos the run targets when the user hasn't overridden the selection:
+  // the inferred ones, or all project repos when nothing was inferred.
+  const autoRepoIds = useMemo(
+    () => (inferredRepos.length > 0 ? inferredRepos.map((r) => r.id) : repositories.map((r) => r.id)),
+    [inferredRepos, repositories],
+  );
+  // Single source of truth for what will actually run. An explicit
+  // override wins; otherwise fall back to auto-detect.
+  const selectedRepoIds = repoOverride ?? autoRepoIds;
+
   // Vision-capability check: shown as a soft warning when the user
   // attaches at least one image and the resolved model does NOT
   // advertise image support. The signal is the same one the agent
@@ -267,6 +323,87 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     [agentKind, model],
   );
   const showVisionWarning = hasImageAttachment && !modelSupportsImagesNow;
+
+  // Agent choices for the pickers: the machine's enabled agents (antigravity
+  // is excluded from configs app-wide). Falls back to the static kinds if the
+  // probe returned nothing (e.g. an unreachable machine) so the pickers are
+  // never empty. `available` drives the "not installed" hint on each option.
+  const agentOptions = useMemo(() => {
+    const enabled = agentConfigs.filter((a) => a.enabled && a.kind !== 'antigravity');
+    if (enabled.length > 0) return enabled;
+    return AGENT_KINDS.filter((k) => k !== 'antigravity').map((k) => ({
+      kind: k,
+      enabled: true,
+      available: true,
+      install_command: '',
+    }));
+  }, [agentConfigs]);
+  const agentKinds = useMemo(() => agentOptions.map((a) => a.kind), [agentOptions]);
+
+  // The agent kinds any picker currently needs a model list for: the
+  // "all steps" default plus every per-step override that names an agent.
+  // A blank agent means "inherit" — there's no concrete agent to probe, so
+  // its model select stays disabled (same as the Strategy tab).
+  const neededModelKinds = useMemo(() => {
+    const set = new Set<string>();
+    if (agentKind) set.add(agentKind);
+    for (const s of steps) {
+      const k = stepOverrides[s.id]?.agent_kind;
+      if (k) set.add(k);
+    }
+    return Array.from(set);
+  }, [agentKind, steps, stepOverrides]);
+
+  // Kinds already probed for the *current* machine. Held in a ref (not
+  // state) so the fetch effect below can dedupe without depending on
+  // `modelsByAgent`/`modelsLoading` — depending on the maps it writes would
+  // retrigger the effect and cancel its own in-flight probe, leaving the
+  // picker stuck on "Probing models…".
+  const probedRef = useRef<Set<string>>(new Set());
+
+  // Model lists are per-machine, so drop any cached lists (and the
+  // probed-set) when the target machine changes or the modal reopens. This
+  // effect is declared before the fetch effect so, on a machine switch, the
+  // reset runs first and the fetch effect re-probes against the new machine.
+  useEffect(() => {
+    probedRef.current = new Set();
+    setModelsByAgent({});
+    setModelsLoading({});
+  }, [machineId, isOpen]);
+
+  // Lazily probe models for each needed agent kind against the target
+  // machine (`''` → run here → `'local'`). `getAgentModels` dedupes and
+  // caches by `(machine, agent)`, so re-fires here are cheap. Fire-and-
+  // forget: `probedRef` guards against duplicate probes, and each probe
+  // commits its own result independently.
+  useEffect(() => {
+    if (!isOpen) return;
+    const mid = machineId || 'local';
+    for (const kind of neededModelKinds) {
+      if (probedRef.current.has(kind)) continue;
+      probedRef.current.add(kind);
+      setModelsLoading((prev) => ({ ...prev, [kind]: true }));
+      getAgentModels(mid, kind)
+        .then((list) =>
+          setModelsByAgent((prev) => ({
+            ...prev,
+            [kind]: (list ?? []).map((m) => ({ value: m.value, name: m.name })),
+          })),
+        )
+        .catch((e) => {
+          console.warn('failed to probe models for', kind, e);
+          setModelsByAgent((prev) => ({ ...prev, [kind]: [] }));
+        })
+        .finally(() => setModelsLoading((prev) => ({ ...prev, [kind]: false })));
+    }
+  }, [isOpen, machineId, neededModelKinds]);
+
+  // Model list + loading flag for a given agent kind, shaped for
+  // `HarnessModelPicker`. A blank kind has no models to show.
+  const modelsFor = (kind: string): { models: ModelOption[]; loading: boolean } => {
+    if (!kind) return { models: [], loading: false };
+    return { models: modelsByAgent[kind] ?? [], loading: Boolean(modelsLoading[kind]) };
+  };
 
   // Q26 / Q11 — detect repos already used by another active feature
   // (so we can warn the user before they kick off a parallel run).
@@ -303,11 +440,15 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
   if (!isOpen) return null;
 
-  const canLaunch = title.trim().length > 0 && description.trim().length > 0 && workflowId !== '';
+  const canLaunch =
+    title.trim().length > 0 &&
+    description.trim().length > 0 &&
+    workflowId !== '' &&
+    (repositories.length === 0 || selectedRepoIds.length > 0);
 
   const launch = () => {
     if (!canLaunch) return;
-    const targetRepos = inferredRepos.length > 0 ? inferredRepos.map((r) => r.id) : repositories.map((r) => r.id);
+    const targetRepos = selectedRepoIds;
     const commitArtifactsArg =
       commitArtifacts === 'inherit'
         ? undefined
@@ -444,7 +585,11 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             </select>
           </div>
 
-          {/* Inferred repo chips (Q25 — local keyword matching, no LLM) */}
+          {/* Target repositories (Q25 — repos inferred from the description
+              pre-check; toggling switches to an explicit selection). Kept
+              always-visible and interactive: which repos a run touches is
+              fundamental, not an advanced tweak, so it doesn't live behind
+              Customize. */}
           {repositories.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-2">
@@ -453,40 +598,47 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   Target repositories
                 </span>
                 <span className="text-[10px] font-mono text-slate-500">
-                  (auto-detected from description; edit in Customize)
+                  {repoOverride === null ? '(auto-detected from description)' : '(custom selection)'}
                 </span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {inferredRepos.length === 0 ? (
-                  <span className="text-xs text-slate-500 italic">
-                    No repos mentioned — will run against all project repos.
-                  </span>
-                ) : (
-                  inferredRepos.map((r) => {
-                    const inUse = conflicts.has(r.id);
-                    return (
-                      <span
-                        key={r.id}
-                        className={`inline-flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-md border ${
-                          inUse
-                            ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-                            : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200'
-                        }`}
-                        title={r.repo_path}
-                      >
-                        <GitBranch className="w-3 h-3" />
-                        {r.repo_path}
-                        {inUse && (
-                          <span className="flex items-center gap-1 ml-1 text-amber-300">
-                            <AlertTriangle className="w-3 h-3" />
-                            conflict
-                          </span>
-                        )}
-                      </span>
+              <div className="space-y-1">
+                {repositories.map((r) => {
+                  const checked = selectedRepoIds.includes(r.id);
+                  const inUse = conflicts.has(r.id);
+                  const toggle = () =>
+                    setRepoOverride(
+                      checked
+                        ? selectedRepoIds.filter((id) => id !== r.id)
+                        : [...selectedRepoIds, r.id],
                     );
-                  })
-                )}
+                  return (
+                    <label
+                      key={r.id}
+                      className="flex items-center gap-2 text-xs font-mono text-slate-300 cursor-pointer"
+                      title={r.repo_path}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={toggle}
+                        className="accent-cyan-500"
+                      />
+                      <span className="truncate">{r.repo_path}</span>
+                      {inUse && (
+                        <span className="flex items-center gap-1 text-amber-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          conflict
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
               </div>
+              {selectedRepoIds.length === 0 && (
+                <p className="text-[10px] font-mono text-amber-300 mt-1.5">
+                  Select at least one repository to launch.
+                </p>
+              )}
             </div>
           )}
 
@@ -512,31 +664,30 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
           {showAdvanced && (
             <div className="space-y-3 pl-3 border-l border-white/5">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                    Default agent — all steps
-                  </label>
-                  <input
-                    type="text"
-                    value={agentKind}
-                    onChange={(e) => setAgentKind(e.target.value)}
-                    placeholder="blank = project default"
-                    className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                    Default model — all steps
-                  </label>
-                  <input
-                    type="text"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder="claude-opus-4-8, …"
-                    className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
-                  />
-                </div>
+              <div>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                  Default agent &amp; model — all steps
+                </label>
+                <HarnessModelPicker
+                  agentKinds={agentKinds}
+                  models={modelsFor(agentKind).models}
+                  modelsLoading={modelsFor(agentKind).loading}
+                  agentKind={agentKind}
+                  model={model}
+                  onAgentKindChange={(k) => {
+                    setAgentKind(k);
+                    // The selected model belongs to the previous agent's
+                    // namespace — clear it so we don't submit a mismatched pair.
+                    setModel('');
+                  }}
+                  onModelChange={setModel}
+                  onClear={() => {
+                    setAgentKind('');
+                    setModel('');
+                  }}
+                  agentPlaceholder="project default"
+                  modelPlaceholder="Agent default model"
+                />
               </div>
 
               {/* Run on machine (docs/REMOTE_EXECUTION_PLAN.md M6.1).
@@ -567,29 +718,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                         </option>
                       ))}
                   </select>
-
-                  {machineId && (
-                    <div className="mt-2 text-[11px] font-mono flex items-center gap-1.5">
-                      {readiness.status === 'checking' && (
-                        <span className="text-slate-500 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Checking agent readiness…</span>
-                      )}
-                      {readiness.status === 'ready' && (
-                        <span className="text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> {agentKind.trim()} is ready on this machine</span>
-                      )}
-                      {readiness.status === 'not_ready' && (
-                        <span className="text-amber-300 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> {agentKind.trim()} isn't installed/authed on this machine — launch will fail</span>
-                      )}
-                      {readiness.status === 'unreachable' && (
-                        <span className="text-amber-300 flex items-start gap-1">
-                          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-                          <span>Couldn't reach this machine to check readiness — make sure "Enable remote runs" has been run on it (Machines settings).</span>
-                        </span>
-                      )}
-                      {readiness.status === 'idle' && !agentKind.trim() && (
-                        <span className="text-slate-500">Pick an agent above to check readiness on this machine.</span>
-                      )}
-                    </div>
-                  )}
 
                   {machineId && (
                     <div className="mt-2 space-y-2.5 pl-3 border-l border-white/5">
@@ -653,7 +781,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
                     Per-step overrides (optional)
                   </label>
-                  <div className="space-y-1.5">
+                  <div className="space-y-2.5">
                     {steps.map((s, i) => {
                       const ov = stepOverrides[s.id] || { agent_kind: '', model: '' };
                       const setOv = (patch: Partial<{ agent_kind: string; model: string }>) =>
@@ -661,32 +789,26 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                           const cur = prev[s.id] || { agent_kind: '', model: '' };
                           return { ...prev, [s.id]: { ...cur, ...patch } };
                         });
+                      const m = modelsFor(ov.agent_kind);
                       return (
-                        <div key={s.id} className="flex items-center gap-2">
-                          <span
-                            className="text-[11px] text-slate-400 font-mono w-40 shrink-0 truncate"
+                        <div key={s.id}>
+                          <div
+                            className="text-[11px] text-slate-400 font-mono mb-1 truncate"
                             title={s.title}
                           >
                             {i + 1}. {s.title}
-                          </span>
-                          <select
-                            value={ov.agent_kind}
-                            onChange={(e) => setOv({ agent_kind: e.target.value })}
-                            className="flex-1 min-w-0 bg-[#050508] border border-white/10 rounded-lg px-2 py-1.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
-                          >
-                            <option value="">inherit</option>
-                            {AGENT_KINDS.map((ak) => (
-                              <option key={ak} value={ak}>
-                                {ak}
-                              </option>
-                            ))}
-                          </select>
-                          <input
-                            type="text"
-                            value={ov.model}
-                            onChange={(e) => setOv({ model: e.target.value })}
-                            placeholder="model (inherit)"
-                            className="flex-1 min-w-0 bg-[#050508] border border-white/10 rounded-lg px-2 py-1.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                          </div>
+                          <HarnessModelPicker
+                            agentKinds={agentKinds}
+                            models={m.models}
+                            modelsLoading={m.loading}
+                            agentKind={ov.agent_kind}
+                            model={ov.model}
+                            onAgentKindChange={(k) => setOv({ agent_kind: k, model: '' })}
+                            onModelChange={(model) => setOv({ model })}
+                            onClear={() => setOv({ agent_kind: '', model: '' })}
+                            agentPlaceholder="inherit"
+                            modelPlaceholder="inherit"
                           />
                         </div>
                       );

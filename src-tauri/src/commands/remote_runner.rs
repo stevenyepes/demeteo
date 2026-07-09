@@ -637,46 +637,6 @@ pub fn remote_run_for_feature(
         .find(|r| r.feature_id.as_deref() == Some(feature_id.as_str())))
 }
 
-#[derive(Debug, Serialize)]
-pub struct RemoteAgentReadiness {
-    pub kind: String,
-    pub available: bool,
-}
-
-/// Upfront agent-readiness check (M4.1's `probe_agent` RPC, already
-/// implemented runner-side but never exposed to the laptop UI until
-/// now): lets `StartFeatureModal` warn *before* Launch is clicked that
-/// the selected machine/agent combination will fail, instead of only
-/// finding out after `remote_submit_run` rejects it synchronously. A
-/// `control_rpc` failure here (machine unreachable, or `demeteo-runner`
-/// never installed) is surfaced as an `Err` — distinct from a
-/// successful probe reporting `available: false` — so the UI can tell
-/// "this machine isn't set up for remote runs" apart from "the agent
-/// itself isn't ready on it".
-#[tauri::command]
-pub async fn remote_probe_agent(
-    ctx: State<'_, AppContext>,
-    machine_id: String,
-    agent_kind: String,
-) -> Result<RemoteAgentReadiness, AppError> {
-    let v = ctx
-        .exec
-        .control_rpc(
-            &machine_id,
-            "probe_agent",
-            serde_json::json!({ "kind": agent_kind }),
-        )
-        .await
-        .map_err(AppError::from)?;
-    Ok(RemoteAgentReadiness {
-        kind: json_str(&v, "kind").unwrap_or(agent_kind),
-        available: v
-            .get("available")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false),
-    })
-}
-
 /// Fresh (non-mirrored) `get_status`, including the `parked_gate_id`
 /// the mirror collapses into a plain `"parked"` status string. The
 /// inbox calls this right before showing the "clear gate" action so it
