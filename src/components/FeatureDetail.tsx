@@ -25,8 +25,9 @@ import {
 } from '../lib/features';
 import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
+import { RemoteGateActions, RunEventTimeline } from './RunEventTimeline';
 import { useNavigation, useProject, useUIState } from '../context';
-import { formatCost } from '../lib/utils';
+import { formatCost, relativeTime } from '../lib/utils';
 
 
 
@@ -160,12 +161,13 @@ export function bytesToDataUrl(mime: string, bytes: Uint8Array): string {
 
 export function FeatureDetail() {
   const { view, navigate } = useNavigation();
-  const { state: { currentProjectId } } = useProject();
+  const { state: { currentProjectId, projects } } = useProject();
   const { ui: { sidebarCollapsed } } = useUIState();
 
   if (view.kind !== 'detail') return null;
   const { featureId } = view;
   const projectId = currentProjectId ?? undefined;
+  const currentProject = projects.find(p => p.id === currentProjectId) ?? null;
 
   const { reportError } = useErrorBus();
   const [steps, setSteps] = useState<StepExecution[]>([]);
@@ -278,6 +280,23 @@ export function FeatureDetail() {
       .catch(() => { /* the raw machine id is an acceptable fallback */ });
     return () => { cancelled = true; };
   }, [remoteRun?.machine_id]);
+
+  // Immediate re-sync after a user action on the remote run (gate
+  // decided from the Activity section) — the 3s poll would catch up
+  // anyway, but the decision should reflect instantly.
+  const refreshRemoteRun = async () => {
+    if (!remoteRun) return;
+    try {
+      const updated = await invoke<RemoteRunMirror | null>('remote_refresh_run', {
+        machineId: remoteRun.machine_id,
+        runId: remoteRun.run_id,
+      });
+      if (updated) setRemoteRun(updated);
+      loadFeatureData();
+    } catch {
+      // Transient tunnel hiccup — the next poll tick retries.
+    }
+  };
 
   useEffect(() => {
     if (!remoteRun) return;
@@ -787,22 +806,33 @@ export function FeatureDetail() {
             >
               {runStatusMeta(status).label}
             </span>
-            {/* Remote run marker (M6.4). A `remoteRun` that is still
-                non-terminal is being live-tailed by the poll above, so the
-                badge pulses to signal "this timeline is updating from a
-                remote machine, same as a local run". */}
-            {remoteRun && (
-              <span
-                className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider flex items-center gap-1 bg-cyan-500/10 text-cyan-400 border-cyan-500/20 ${
-                  TERMINAL_STATUSES.includes(remoteRun.status) ? '' : 'animate-pulse'
-                }`}
-                title={`Running on remote machine ${remoteRun.machine_id}${
-                  TERMINAL_STATUSES.includes(remoteRun.status) ? '' : ' — live'
-                }`}
-              >
-                <Cpu className="w-3 h-3" /> Remote
-              </span>
-            )}
+            {/* Transport badge: where this run executes. Detached runs
+                (mirror-listed) pulse while the 3s poll live-tails them;
+                attached-remote is a project-level fact; everything else
+                is a plain local run. */}
+            <span
+              className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider flex items-center gap-1 ${
+                remoteRun || currentProject?.compute_type === 'remote'
+                  ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                  : 'bg-white/5 text-slate-500 border-white/10'
+              } ${remoteRun && !TERMINAL_STATUSES.includes(remoteRun.status) ? 'animate-pulse' : ''}`}
+              title={
+                remoteRun
+                  ? `Detached run on ${remoteMachineName ?? remoteRun.machine_id}${
+                      TERMINAL_STATUSES.includes(remoteRun.status) ? '' : ' — live'
+                    }`
+                  : currentProject?.compute_type === 'remote'
+                  ? `Executes on ${currentProject.remote_host ?? 'the project machine'} over SSH, orchestrated by this app`
+                  : 'Executes on this machine'
+              }
+            >
+              <Cpu className="w-3 h-3" />
+              {remoteRun
+                ? 'Remote · Detached'
+                : currentProject?.compute_type === 'remote'
+                ? 'Remote · SSH'
+                : 'Local'}
+            </span>
           </div>
           <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>
         </div>
@@ -1019,6 +1049,27 @@ export function FeatureDetail() {
           <div className={`overflow-y-auto p-8 transition-all duration-500 ${
             selectedArtifactPath ? 'w-[40%] border-r border-white/5 bg-[#08090c]/40' : 'w-full max-w-6xl mx-auto'
           }`}>
+            {remoteRun && (
+              /* Activity feed for a detached run: the runner's own event
+                 log (submitted → cloned → gates → pushed → PR), inline
+                 where the run lives instead of a separate modal. */
+              <div className="mb-6 space-y-1.5">
+                <RunEventTimeline
+                  run={remoteRun}
+                  machineName={remoteMachineName ?? remoteRun.machine_id}
+                />
+                <div className="flex items-center justify-between gap-3 px-1">
+                  <p className="text-[10px] font-mono text-slate-500">
+                    {TERMINAL_STATUSES.includes(remoteRun.status)
+                      ? `Final state synced ${relativeTime(remoteRun.updated_at)}`
+                      : `Last synced ${relativeTime(remoteRun.updated_at)} · polling every 3s`}
+                  </p>
+                  {remoteRun.status === 'parked' && (
+                    <RemoteGateActions run={remoteRun} onResolved={refreshRemoteRun} />
+                  )}
+                </div>
+              </div>
+            )}
             <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
               {remoteRun && steps.length === 0 && (
                 /* Eager shadow, pre-hydration: the run was submitted a
