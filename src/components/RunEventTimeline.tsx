@@ -34,7 +34,120 @@ const EVENT_KIND_LABEL: Record<string, string> = {
   pr_opened: 'PR opened',
   pr_open_failed: 'PR failed to open',
   cancelled: 'Cancelled',
+  // Per-step telemetry bridged from the engine's live DomainEvent stream
+  // (the runner's RunEventBridge). These carry structured JSON payloads;
+  // `describeEvent` renders them rather than `formatPayload`.
+  step_progress: 'Step',
+  feature_status: 'Status',
+  retry_exhausted: 'Retries exhausted',
+  env_not_ready: 'Environment not ready',
+  gate_required: 'Gate reached',
+  step_output: 'Output',
 };
+
+type EventTone = 'default' | 'success' | 'warn' | 'error';
+
+/** Label color per tone — the label span in the timeline row. */
+const TONE_CLASS: Record<EventTone, string> = {
+  default: 'text-cyan-300',
+  success: 'text-emerald-300',
+  warn: 'text-amber-300',
+  error: 'text-ruby-300',
+};
+
+function fmtTokens(t: number | null | undefined): string | null {
+  if (t == null) return null;
+  if (t >= 1000) return `${(t / 1000).toFixed(t >= 10_000 ? 0 : 1)}k tok`;
+  return `${t} tok`;
+}
+
+function fmtCost(c: number | null | undefined): string | null {
+  if (c == null) return null;
+  return `$${c < 0.1 ? c.toFixed(4) : c.toFixed(2)}`;
+}
+
+const STEP_STATUS_LABEL: Record<string, string> = {
+  running: 'running',
+  completed: 'done',
+  failed: 'failed',
+  pending: 'queued',
+  skipped: 'skipped',
+  awaiting_gate: 'gate',
+};
+
+/**
+ * Turn one `RunEvent` into a `{ label, detail, tone }` triple for the
+ * timeline row. The structured per-step kinds (bridged from the engine's
+ * `DomainEvent` stream) get a compact human rendering — "s-impl running ·
+ * 12k tok · $0.04" — while the legacy string-payload kinds fall back to
+ * `formatPayload`, unchanged.
+ */
+function describeEvent(kind: string, payloadJson: string | null): {
+  label: string;
+  detail: string;
+  tone: EventTone;
+} {
+  const fallbackLabel = EVENT_KIND_LABEL[kind] ?? kind;
+  let p: any = null;
+  if (payloadJson) {
+    try {
+      p = JSON.parse(payloadJson);
+    } catch {
+      /* not JSON — handled by formatPayload fallback below */
+    }
+  }
+
+  switch (kind) {
+    case 'step_progress': {
+      if (!p || typeof p !== 'object') break;
+      const status = String(p.status ?? '');
+      const bits = [
+        fmtTokens(p.tokens),
+        fmtCost(p.cost_usd),
+        p.wall_clock_secs != null ? `${p.wall_clock_secs}s` : null,
+      ].filter(Boolean);
+      const tone: EventTone =
+        status === 'failed' ? 'error' : status === 'completed' ? 'success' : 'default';
+      const detail = [`${p.step_id} ${STEP_STATUS_LABEL[status] ?? status}`, ...bits].join(' · ');
+      return { label: 'Step', detail, tone };
+    }
+    case 'feature_status':
+      return { label: 'Status', detail: String(p?.status ?? ''), tone: 'default' };
+    case 'step_output': {
+      // Coalesced agent stream text. Collapse interior whitespace runs so a
+      // multi-line burst renders as one scannable line in the timeline.
+      const text = String(p?.text ?? '').replace(/\s+/g, ' ').trim();
+      return { label: '›', detail: text, tone: 'default' };
+    }
+    case 'retry_exhausted':
+      return {
+        label: fallbackLabel,
+        detail: `${p?.step_id ?? 'step'} — attempt ${p?.attempt ?? '?'} of ${p?.max ?? '?'}${
+          p?.reason ? `: ${p.reason}` : ''
+        }`,
+        tone: 'error',
+      };
+    case 'env_not_ready':
+      return {
+        label: fallbackLabel,
+        detail: `${p?.step_id ?? 'step'} — ${p?.reason ?? ''}`,
+        tone: 'error',
+      };
+    case 'gate_required':
+      return { label: fallbackLabel, detail: '', tone: 'warn' };
+    case 'parked':
+    case 'over_budget':
+    case 'needs_credentials':
+      return { label: fallbackLabel, detail: formatPayload(payloadJson), tone: 'warn' };
+    case 'pr_open_failed':
+    case 'failed':
+      return { label: fallbackLabel, detail: formatPayload(payloadJson), tone: 'error' };
+    case 'pr_opened':
+      return { label: fallbackLabel, detail: formatPayload(payloadJson), tone: 'success' };
+  }
+
+  return { label: fallbackLabel, detail: formatPayload(payloadJson), tone: 'default' };
+}
 
 /**
  * Approve/reject a detached run's parked gate from the laptop (M5.3's
@@ -281,17 +394,20 @@ export const RunEventTimeline: React.FC<{ run: RemoteRunMirror; machineName: str
           {events.length === 0 && !error && (
             <p className="text-slate-500">Waiting for events…</p>
           )}
-          {events.map((e) => (
-            <div key={e.offset} className="flex items-start gap-2">
-              <span className="text-slate-600 shrink-0">{new Date(e.created_at).toLocaleTimeString()}</span>
-              <div className="min-w-0">
-                <span className="text-cyan-300">{EVENT_KIND_LABEL[e.kind] ?? e.kind}</span>
-                {e.payload_json && (
-                  <span className="text-slate-400 ml-1.5 break-words">{formatPayload(e.payload_json)}</span>
-                )}
+          {events.map((e) => {
+            const { label, detail, tone } = describeEvent(e.kind, e.payload_json);
+            return (
+              <div key={e.offset} className="flex items-start gap-2">
+                <span className="text-slate-600 shrink-0">{new Date(e.created_at).toLocaleTimeString()}</span>
+                <div className="min-w-0">
+                  <span className={TONE_CLASS[tone]}>{label}</span>
+                  {detail && (
+                    <span className="text-slate-400 ml-1.5 break-words">{detail}</span>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div ref={bottomRef} />
         </div>
       )}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
@@ -619,6 +619,28 @@ export function FeatureDetail() {
     }
   };
 
+  // Resolve the feature's worktree path + branch for Browse Code. A detached
+  // (runner) run's code lives in the *runner's* workspace, not where
+  // `feature_get_worktree` would compute from the shadow's re-homed local
+  // project — so route those through `remote_get_worktree`, which asks the
+  // runner for its real path and re-homes `machine_id` onto the mirror's box
+  // (reachable over the SSH the laptop already holds). Local/SSH runs keep
+  // the direct path.
+  const resolveWorktreeInfo = useCallback(async (): Promise<{
+    machine_id: string;
+    worktree_path: string;
+    branch: string;
+    default_branch: string;
+  }> => {
+    if (remoteRun) {
+      return invoke('remote_get_worktree', {
+        machineId: remoteRun.machine_id,
+        runId: remoteRun.run_id,
+      });
+    }
+    return invoke('feature_get_worktree', { featureId });
+  }, [remoteRun, featureId]);
+
   const [publishing, setPublishing] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -879,10 +901,7 @@ export function FeatureDetail() {
             <button
               onClick={async () => {
                 try {
-                  const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
-                    'feature_get_worktree',
-                    { featureId }
-                  );
+                  const info = await resolveWorktreeInfo();
                   navigate({ kind: 'editor', editorContext: { machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch }, featureId, featureTitle });
                 } catch (err) {
                   reportError(err);
@@ -1282,9 +1301,15 @@ export function FeatureDetail() {
                       )}
 
                       {(() => {
-                        const allPaths = step.artifact_paths?.length
-                          ? step.artifact_paths
-                          : step.artifact_path ? [step.artifact_path] : [];
+                        // Dedupe: two runner artifacts that share a basename
+                        // cache to one local file, so `artifact_paths` can
+                        // carry the same local ref twice — a duplicate here is
+                        // a duplicate React key below. Keep first occurrence.
+                        const allPaths = Array.from(new Set(
+                          step.artifact_paths?.length
+                            ? step.artifact_paths
+                            : step.artifact_path ? [step.artifact_path] : []
+                        ));
                         const isAgentStep = step.step_kind === 'agent';
                         const visiblePaths = isAgentStep
                           ? allPaths.filter(p => classifyArtifact(p).kind === 'markdown')
@@ -1402,10 +1427,7 @@ export function FeatureDetail() {
                     artifactPath={selectedArtifactPath}
                     onOpenEditorForPath={async (filePath) => {
                       try {
-                        const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
-                          'feature_get_worktree',
-                          { featureId }
-                        );
+                        const info = await resolveWorktreeInfo();
                         navigate({ kind: 'editor', editorContext: { machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch, initialFile: filePath }, featureId, featureTitle });
                       } catch (err) {
                         reportError(err);

@@ -9,3 +9,4 @@ pub mod providers;
 pub mod run_view;
 pub mod timeouts;
 pub mod workflows;
+pub mod worktree;
