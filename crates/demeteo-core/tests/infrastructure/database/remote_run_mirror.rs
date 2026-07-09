@@ -12,10 +12,13 @@ fn setup() -> SqliteAdapter {
 fn upsert_submitted_is_idempotent_by_machine_and_run() {
     let adapter = setup();
     let a = adapter
-        .upsert_submitted("m1", "r1", Some("p1"), "Add OAuth", 1000)
+        .upsert_submitted("m1", "r1", Some("p1"), Some("f-eager"), "Add OAuth", 1000)
         .unwrap();
     assert_eq!(a.status, "pending");
     assert_eq!(a.project_id.as_deref(), Some("p1"));
+    // The eager shadow feature id is present from submit time — the
+    // run is navigable before the first reconcile.
+    assert_eq!(a.feature_id.as_deref(), Some("f-eager"));
 
     // Re-submitting the same (machine_id, run_id) is a no-op — same
     // semantics as the runner's own idempotent `submit_run` (R9).
@@ -24,11 +27,13 @@ fn upsert_submitted_is_idempotent_by_machine_and_run() {
             "m1",
             "r1",
             Some("different-project"),
+            Some("f-other"),
             "different title",
             2000,
         )
         .unwrap();
     assert_eq!(b.project_id.as_deref(), Some("p1"));
+    assert_eq!(b.feature_id.as_deref(), Some("f-eager"));
     assert_eq!(b.title, "Add OAuth");
     assert_eq!(b.created_at, 1000);
 
@@ -39,10 +44,10 @@ fn upsert_submitted_is_idempotent_by_machine_and_run() {
 fn same_run_id_on_different_machines_is_distinct() {
     let adapter = setup();
     adapter
-        .upsert_submitted("m1", "r1", None, "on m1", 1000)
+        .upsert_submitted("m1", "r1", None, None, "on m1", 1000)
         .unwrap();
     adapter
-        .upsert_submitted("m2", "r1", None, "on m2", 1000)
+        .upsert_submitted("m2", "r1", None, None, "on m2", 1000)
         .unwrap();
     assert_eq!(adapter.list().unwrap().len(), 2);
     assert!(adapter.get("m1", "r1").unwrap().is_some());
@@ -53,7 +58,7 @@ fn same_run_id_on_different_machines_is_distinct() {
 fn update_status_preserves_fields_not_passed() {
     let adapter = setup();
     adapter
-        .upsert_submitted("m1", "r1", Some("p1"), "Add OAuth", 1000)
+        .upsert_submitted("m1", "r1", Some("p1"), Some("f-eager"), "Add OAuth", 1000)
         .unwrap();
 
     adapter
@@ -62,7 +67,9 @@ fn update_status_preserves_fields_not_passed() {
     let row = adapter.get("m1", "r1").unwrap().unwrap();
     assert_eq!(row.status, "running");
     assert_eq!(row.last_offset, 3);
-    assert!(row.feature_id.is_none());
+    // A `None` feature_id in update_status never clears the eager id
+    // set at submit time (COALESCE semantics).
+    assert_eq!(row.feature_id.as_deref(), Some("f-eager"));
 
     adapter
         .update_status(
@@ -100,7 +107,7 @@ fn update_status_preserves_fields_not_passed() {
 fn mark_notified_is_independent_of_status_updates() {
     let adapter = setup();
     adapter
-        .upsert_submitted("m1", "r1", None, "Add OAuth", 1000)
+        .upsert_submitted("m1", "r1", None, None, "Add OAuth", 1000)
         .unwrap();
     adapter
         .update_status(

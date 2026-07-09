@@ -6,7 +6,7 @@
 
 use crate::adapters::artifact_store::fs::FsArtifactStore;
 use crate::domain::artifact::{Artifact, ArtifactSource};
-use crate::domain::ids::{ProjectId, WorkflowId};
+use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::feature::{Feature, StepExecution};
 use crate::domain::run_spec::{RunBudget, RunSpec, RunSpecProvider};
 use crate::error::AppError;
@@ -23,6 +23,23 @@ pub struct RemoteRunHandle {
     pub run_id: String,
     pub machine_id: String,
     pub status: String,
+    /// Id of the eager shadow Feature inserted at submit time — the
+    /// frontend navigates straight to `FeatureDetail` with it, the same
+    /// landing a local launch gets.
+    pub feature_id: String,
+}
+
+/// Flip the eager placeholder Feature to `failed` when the submit RPC
+/// itself fails — the run never started, and a perpetually-"pending"
+/// ghost row would otherwise sit in the project's pipeline list.
+fn mark_placeholder_failed(ctx: &AppContext, feature_id: &str) {
+    let _ = ctx.features.update(
+        &FeatureId::from(feature_id.to_string()),
+        &FeaturePatch {
+            status: Some("failed".to_string()),
+            ..Default::default()
+        },
+    );
 }
 
 fn json_str(v: &serde_json::Value, key: &str) -> Option<String> {
@@ -115,7 +132,38 @@ pub async fn remote_submit_run(
         None
     };
 
+    // Eager shadow feature: the laptop chooses the feature id, inserts a
+    // placeholder Feature it can navigate to immediately, and ships the
+    // id in the spec so the runner's `feature_start` reuses it. From
+    // second zero the run is one Feature on both databases; the first
+    // reconcile's hydration (C4.2) updates this row in place instead of
+    // creating a late twin.
+    let now = crate::paths::now_ms();
+    let feature_id = format!("f-{}", crate::paths::new_id());
+    ctx.features
+        .add(Feature {
+            id: FeatureId::from(feature_id.clone()),
+            project_id: pid.clone(),
+            workflow_id: Some(wf_id.clone()),
+            title: title.clone(),
+            status: "pending".to_string(),
+            total_cost: 0.0,
+            duration: "0s".to_string(),
+            tokens: 0,
+            created_at: now,
+            agent_kind: agent_kind.clone(),
+            model: model.clone(),
+            mr_url: None,
+            mr_state: Some("none".to_string()),
+            commit_artifacts: None,
+            loop_iterations,
+            step_overrides: Vec::new(),
+            attachments: Vec::new(),
+        })
+        .map_err(AppError::from)?;
+
     let spec = RunSpec {
+        feature_id: Some(feature_id.clone()),
         title: title.clone(),
         description,
         provider: RunSpecProvider {
@@ -136,7 +184,7 @@ pub async fn remote_submit_run(
     // a duplicate feature on the runner.
     let run_id = format!("laptop-{}", crate::paths::new_id());
 
-    let submitted = ctx
+    let submitted = match ctx
         .exec
         .control_rpc(
             &machine_id,
@@ -144,26 +192,34 @@ pub async fn remote_submit_run(
             serde_json::json!({ "run_id": run_id, "spec": spec }),
         )
         .await
-        .map_err(AppError::from)?;
+    {
+        Ok(v) => v,
+        Err(e) => {
+            mark_placeholder_failed(&ctx, &feature_id);
+            return Err(AppError::from(e));
+        }
+    };
     let status = json_str(&submitted, "status").unwrap_or_else(|| "pending".to_string());
     if status == "failed" {
         let err = json_str(&submitted, "error")
             .unwrap_or_else(|| "the runner rejected this run".to_string());
+        mark_placeholder_failed(&ctx, &feature_id);
         return Err(AppError::from(err));
     }
 
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "inject_credentials",
-            serde_json::json!({ "run_id": run_id, "git_pat": pat }),
-        )
-        .await
-        .map_err(AppError::from)?;
-
-    let now = crate::paths::now_ms();
+    // Mirror the run before injecting credentials: if the injection RPC
+    // fails, the run already exists on the runner (it will park
+    // `needs-credentials`), and an unmirrored run would be invisible to
+    // reconcile forever.
     ctx.remote_run_mirror
-        .upsert_submitted(&machine_id, &run_id, Some(&project_id), &title, now)
+        .upsert_submitted(
+            &machine_id,
+            &run_id,
+            Some(&project_id),
+            Some(&feature_id),
+            &title,
+            now,
+        )
         .map_err(AppError::from)?;
     ctx.remote_run_mirror
         .update_status(
@@ -179,10 +235,20 @@ pub async fn remote_submit_run(
         )
         .map_err(AppError::from)?;
 
+    ctx.exec
+        .control_rpc(
+            &machine_id,
+            "inject_credentials",
+            serde_json::json!({ "run_id": run_id, "git_pat": pat }),
+        )
+        .await
+        .map_err(AppError::from)?;
+
     Ok(RemoteRunHandle {
         run_id,
         machine_id,
         status,
+        feature_id,
     })
 }
 
@@ -470,6 +536,24 @@ async fn reconcile_one_run(
             let feature_id = json_str(&v, "feature_id");
             let mr_url = json_str(&v, "mr_url");
             let pushed_branch = json_str(&v, "pushed_branch");
+            // Version skew: an old runner that ignored `RunSpec::feature_id`
+            // reports its own generated id. The runner's id must win —
+            // hydration keys the shadow off the runner's `get_feature` id,
+            // so keeping the laptop's eager id would strand the shadow
+            // forever. Retire the orphaned placeholder so it doesn't sit
+            // "pending" in the pipeline list for eternity.
+            if let (Some(local), Some(remote)) = (row.feature_id.as_deref(), feature_id.as_deref())
+            {
+                if !remote.is_empty() && local != remote {
+                    eprintln!(
+                        "remote run {}: runner reports feature {remote} but the laptop \
+                         expected {local} (runner predates RunSpec::feature_id?) — \
+                         adopting the runner's id",
+                        row.run_id
+                    );
+                    mark_placeholder_failed(ctx, local);
+                }
+            }
             let _ = ctx.remote_run_mirror.update_status(
                 &row.machine_id,
                 &row.run_id,

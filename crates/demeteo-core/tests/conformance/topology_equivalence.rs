@@ -326,6 +326,7 @@ async fn run_leg(
     let feature = ctx
         .executor
         .feature_start(
+            None,
             project.id.as_str(),
             workflow_id.as_str(),
             "Topology Feature",

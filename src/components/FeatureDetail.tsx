@@ -249,6 +249,10 @@ export function FeatureDetail() {
   // exact same timeline UI a local run gets from its events. `null` for a
   // locally-run feature (not in the mirror) — the poll never starts.
   const [remoteRun, setRemoteRun] = useState<RemoteRunMirror | null>(null);
+  // Display name for `remoteRun.machine_id` — resolved lazily (only
+  // when the feature turns out to be a remote run) from the same
+  // machines list every other view uses.
+  const [remoteMachineName, setRemoteMachineName] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -257,6 +261,23 @@ export function FeatureDetail() {
       .catch(() => { if (!cancelled) setRemoteRun(null); });
     return () => { cancelled = true; };
   }, [featureId]);
+
+  useEffect(() => {
+    if (!remoteRun) {
+      setRemoteMachineName(null);
+      return;
+    }
+    let cancelled = false;
+    invoke<{ id: string; name: string }[]>('get_machines')
+      .then((machines) => {
+        if (cancelled) return;
+        setRemoteMachineName(
+          machines.find((m) => m.id === remoteRun.machine_id)?.name ?? null,
+        );
+      })
+      .catch(() => { /* the raw machine id is an acceptable fallback */ });
+    return () => { cancelled = true; };
+  }, [remoteRun?.machine_id]);
 
   useEffect(() => {
     if (!remoteRun) return;
@@ -999,6 +1020,27 @@ export function FeatureDetail() {
             selectedArtifactPath ? 'w-[40%] border-r border-white/5 bg-[#08090c]/40' : 'w-full max-w-6xl mx-auto'
           }`}>
             <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
+              {remoteRun && steps.length === 0 && (
+                /* Eager shadow, pre-hydration: the run was submitted a
+                   moment ago and the runner hasn't bootstrapped a
+                   feature yet, so there are no shadow steps to mirror.
+                   The 3s remote_refresh_run poll above fills this in as
+                   soon as the runner reports them. */
+                <div className="glass-panel p-6 border border-cyan-500/20">
+                  <div className="flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin shrink-0" />
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">
+                        Submitted to {remoteMachineName ?? remoteRun.machine_id}
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        The runner is cloning the repository and bootstrapping the workflow.
+                        Steps appear here automatically — you can close Demeteo; the run continues.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
               {steps.map((step, idx) => {
                 let icon = <Hourglass className="w-4 h-4 text-slate-500 animate-pulse" />;
                 let statusBg = 'border-white/5 bg-white/[0.01]';

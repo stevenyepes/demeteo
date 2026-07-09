@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import TopBar from "./components/TopBar";
 import ProjectRail from "./components/ProjectRail";
 import { formatError } from "./lib/errors";
-import { ErrorBusProvider, useErrorBus } from "./lib/errorBus";
+import { ErrorBusProvider } from "./lib/errorBus";
 import { ErrorToast, ERROR_TOAST_CTA_EVENT } from "./components/ErrorToast";
 import EmptyStateCard from "./components/EmptyStateCard";
 import NewProjectView from "./components/NewProjectView";
@@ -23,6 +23,7 @@ import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
 import type { AppView, Feature, Project, Provider } from "./types";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useLaunchRun } from "./hooks/useLaunchRun";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { MouseNavigationBridge } from "./hooks/useMouseNavigation";
 import {
@@ -132,7 +133,6 @@ export function pickEscapeAction(ui: UIStateSlice, view: AppView): EscapeAction 
 }
 
 function AppInner() {
-  const { reportError } = useErrorBus();
   const { view, navigate, goBack, canGoBack } = useNavigation();
   const { state: proj, dispatch: projDispatch } = useProject();
   const { ui, uiDispatch } = useUIState();
@@ -152,6 +152,16 @@ function AppInner() {
   // for rendering; this list exists solely to drive the keyboard
   // shortcut and is refreshed on project change + status events.
   const [features, setFeatures] = useState<Feature[]>([]);
+
+  // One launch code path for every composer (F28). Pre-seeds the
+  // cycling list with the new feature so the user can immediately step
+  // through it with Cmd+G; the `feature_status_changed` listener is
+  // idempotent so the entry is patched in place, not duplicated.
+  const launchRun = useLaunchRun({
+    projectId: currentProjectId,
+    onLaunched: (feature) =>
+      setFeatures(prev => (prev.some(f => f.id === feature.id) ? prev : [...prev, feature])),
+  });
 
   // Refetch the feature list whenever the active project changes.
   // Cancellation flag prevents a slow fetch on the previous project
@@ -501,95 +511,8 @@ function AppInner() {
               defaultWorkflowId={startFeatureWorkflowId}
               onClose={() => uiDispatch({ type: 'CLOSE_START_FEATURE' })}
               onLaunch={async (params) => {
-                try {
-                  const { invoke } = await import('@tauri-apps/api/core');
-
-                  // Remote runs (docs/REMOTE_EXECUTION_PLAN.md M6.1): no
-                  // local `Feature` is created — the runner bootstraps
-                  // its own project/feature on the remote machine's own
-                  // DB. Attachments aren't supported on this path yet
-                  // (no local feature id to stage them against).
-                  if (params.machineId) {
-                    const handle: { run_id: string; machine_id: string; status: string } =
-                      await invoke('remote_submit_run', {
-                        machineId: params.machineId,
-                        projectId: currentProjectId,
-                        workflowId: params.workflowId,
-                        title: params.title,
-                        description: params.description,
-                        agentKind: params.agentKind ?? null,
-                        model: params.model ?? null,
-                        loopIterations: params.loopIterations ?? null,
-                        unattended: params.unattended ?? false,
-                        maxCostUsd: params.maxCostUsd ?? null,
-                        maxWallClockSecs: params.maxWallClockMins != null ? params.maxWallClockMins * 60 : null,
-                      });
-                    // No local Feature yet (until M-C's eager shadow) —
-                    // land on the Runs inbox where the fresh row shows.
-                    void handle;
-                    uiDispatch({ type: 'CLOSE_START_FEATURE' });
-                    navigate({ kind: 'remote-inbox' });
-                    return;
-                  }
-
-                  // Convert staged attachments (which carry a browser
-                  // File handle or an absolute drag-drop path) into the
-                  // Rust wire shape. The orchestrator persists them
-                  // BEFORE the driver is spawned — see
-                  // `commands::attachments::StagedAttachmentInput` and
-                  // the matching plumbing in
-                  // `StepExecutor::feature_start`. Without this batch,
-                  // the agent's first turn races the post-launch
-                  // `feature_add_attachment` calls and the user sees
-                  // "no image attached" responses from a freshly-
-                  // attached screenshot.
-                  const stagedAttachments = await Promise.all((params.attachments ?? []).map(async (a) => ({
-                    source_path: a.sourcePath ?? '',
-                    mime: a.mime ?? null,
-                    source_filename: a.source_filename ?? null,
-                    bytes: a.file
-                      ? Array.from(new Uint8Array(await a.file.arrayBuffer()))
-                      : null,
-                  })));
-                  const feature: any = await invoke('start_feature', {
-                    projectId: currentProjectId,
-                    workflowId: params.workflowId,
-                    title: params.title,
-                    description: params.description,
-                    agentKind: params.agentKind ?? null,
-                    model: params.model ?? null,
-                    commitArtifacts: params.commitArtifacts ?? null,
-                    loopIterations: params.loopIterations ?? null,
-                    stepOverrides: params.stepOverrides ?? null,
-                    stagedAttachments,
-                  });
-                  // Pre-seed the cycling list with the new feature so
-                  // the user can immediately step through it with
-                  // Cmd+G. The orchestrator will also fire
-                  // `feature_status_changed`; the listener above is
-                  // idempotent so the entry is kept (status patched
-                  // in place) rather than duplicated.
-                  const title = feature.title;
-                  const id = feature.id;
-                  setFeatures(prev => {
-                    if (prev.some(f => f.id === id)) return prev;
-                    return [
-                      ...prev,
-                      {
-                        id,
-                        project_id: currentProjectId,
-                        title,
-                        status: feature.status,
-                        total_cost: feature.total_cost ?? 0,
-                        tokens: feature.tokens || 0,
-                        duration: feature.duration ?? '',
-                        created_at: feature.created_at ?? Date.now(),
-                      },
-                    ];
-                  });
-                  uiDispatch({ type: 'CLOSE_START_FEATURE' });
-                  navigate({ kind: 'detail', featureId: id, featureTitle: title });
-                } catch (err) { reportError(err); }
+                const feature = await launchRun(params);
+                if (feature) uiDispatch({ type: 'CLOSE_START_FEATURE' });
               }}
             />
           )}

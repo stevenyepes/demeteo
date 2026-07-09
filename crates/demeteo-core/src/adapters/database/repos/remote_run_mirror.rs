@@ -32,15 +32,16 @@ impl RemoteRunMirrorPort for SqliteAdapter {
         machine_id: &str,
         run_id: &str,
         project_id: Option<&str>,
+        feature_id: Option<&str>,
         title: &str,
         now: i64,
     ) -> Result<RemoteRunMirror, String> {
         let conn = self.conn.lock()?;
         conn.execute(
             "INSERT OR IGNORE INTO remote_run_mirror
-                (machine_id, run_id, project_id, title, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)",
-            params![machine_id, run_id, project_id, title, now],
+                (machine_id, run_id, project_id, feature_id, title, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?6)",
+            params![machine_id, run_id, project_id, feature_id, title, now],
         )
         .map_err(|e| e.to_string())?;
         let row: RemoteRunMirror = conn
