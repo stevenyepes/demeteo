@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import { StepExecution, RemoteRunMirror } from '../types';
-import { TERMINAL_STATUSES } from './RemoteRunInbox';
+import { runStatusMeta, TERMINAL_STATUSES, TONE_CHIP } from '../lib/runStatus';
 import { getAgentModels } from '../lib/agentModels';
 import { useErrorBus } from '../lib/errorBus';
 import { formatError } from '../lib/errors';
@@ -761,18 +761,10 @@ export function FeatureDetail() {
             <h1 className="text-xl font-bold font-display text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1" title={featureTitle}>{featureTitle}</h1>
             <span
               className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
-                status === 'running'
-                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 animate-pulse'
-                  : status === 'verifying'
-                  ? 'bg-violet-500/10 text-violet-400 border-violet-500/20 animate-pulse shadow-[0_0_10px_rgba(139,92,246,0.2)]'
-                  : status === 'gated'
-                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
-                  : status === 'completed'
-                  ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
-                  : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-              }`}
+                TONE_CHIP[runStatusMeta(status).tone]
+              } ${runStatusMeta(status).active ? 'animate-pulse' : ''}`}
             >
-              {status}
+              {runStatusMeta(status).label}
             </span>
             {/* Remote run marker (M6.4). A `remoteRun` that is still
                 non-terminal is being live-tailed by the poll above, so the

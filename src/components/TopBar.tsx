@@ -68,10 +68,10 @@ function TopBar({ connectedProvider }: TopBarProps) {
         <button
           onClick={() => navigate({ kind: 'remote-inbox' })}
           className="relative text-slate-400 hover:text-white transition-all hover:bg-white/5 p-1.5 rounded flex items-center gap-1 text-xs"
-          title={actionableCount > 0 ? `Return inbox — ${actionableCount} remote run${actionableCount === 1 ? '' : 's'} need attention` : 'Return inbox — remote runs'}
+          title={actionableCount > 0 ? `Runs — ${actionableCount} run${actionableCount === 1 ? '' : 's'} need attention` : 'Runs — every run launched on a remote machine'}
         >
           <Inbox className="w-4 h-4 text-amber-400" />
-          <span className="hidden md:inline font-mono">Remote runs</span>
+          <span className="hidden md:inline font-mono">Runs</span>
           {actionableCount > 0 ? (
             <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold leading-4 text-center">
               {actionableCount > 9 ? '9+' : actionableCount}

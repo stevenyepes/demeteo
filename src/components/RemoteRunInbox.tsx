@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import type { Machine, RemoteRunMirror, RunEvent } from '../types';
 import { Modal } from './ui/Modal';
+import { StatusBadge } from './ui/StatusBadge';
+import { runStatusMeta, TERMINAL_STATUSES, TONE_BORDER_L, TONE_TEXT } from '../lib/runStatus';
 import { useNavigation } from '../context';
 
 /**
@@ -49,20 +51,22 @@ const BUCKET_ORDER: Bucket[] = [
   'cancelled',
 ];
 
+/** Per-bucket label + icon; colors come from the shared status
+ *  vocabulary (`lib/runStatus.ts`, F27) via each bucket's
+ *  representative status, so the inbox can't drift from the rest of
+ *  the app again. */
 const BUCKET_META: Record<
   Bucket,
-  { label: string; icon: React.ComponentType<{ className?: string }>; accent: string; border: string }
+  { label: string; icon: React.ComponentType<{ className?: string }>; status: string }
 > = {
-  pr_ready: { label: 'PR ready', icon: CheckCircle2, accent: 'text-emerald-400', border: 'border-l-emerald-500/60' },
-  failed: { label: 'Failed', icon: XCircle, accent: 'text-ruby-400', border: 'border-l-ruby-500/60' },
-  parked: { label: 'Parked — needs you', icon: PauseCircle, accent: 'text-amber-400', border: 'border-l-amber-500/60' },
-  needs_credentials: { label: 'Needs credentials', icon: KeyRound, accent: 'text-amber-400', border: 'border-l-amber-500/60' },
-  running: { label: 'Running', icon: Loader, accent: 'text-cyan-400', border: 'border-l-cyan-500/60' },
-  unreachable: { label: 'Unreachable', icon: WifiOff, accent: 'text-slate-500', border: 'border-l-slate-600/60' },
-  cancelled: { label: 'Cancelled', icon: Ban, accent: 'text-slate-500', border: 'border-l-slate-600/60' },
+  pr_ready: { label: 'PR ready', icon: CheckCircle2, status: 'awaiting_mr' },
+  failed: { label: 'Failed', icon: XCircle, status: 'failed' },
+  parked: { label: 'Parked — needs you', icon: PauseCircle, status: 'parked' },
+  needs_credentials: { label: 'Needs credentials', icon: KeyRound, status: 'needs-credentials' },
+  running: { label: 'Running', icon: Loader, status: 'running' },
+  unreachable: { label: 'Unreachable', icon: WifiOff, status: 'unreachable' },
+  cancelled: { label: 'Cancelled', icon: Ban, status: 'cancelled' },
 };
-
-export const TERMINAL_STATUSES = ['failed', 'cancelled', 'awaiting_mr', 'completed'];
 
 export function bucketFor(status: string): Bucket {
   switch (status) {
@@ -442,7 +446,7 @@ const RemoteRunInbox: React.FC = () => {
           <div>
             <h2 className="text-2xl font-outfit font-bold text-white mb-1 flex items-center gap-2">
               <Inbox className="w-6 h-6 text-cyan-400" />
-              Return inbox
+              Runs
             </h2>
             <p className="text-sm text-slate-400">
               Every run launched on a remote machine, reconciled from each runner's own state.
@@ -484,23 +488,31 @@ const RemoteRunInbox: React.FC = () => {
           <div className="space-y-6">
             {BUCKET_ORDER.filter((b) => grouped[b].length > 0).map((bucket) => {
               const meta = BUCKET_META[bucket];
+              const tone = runStatusMeta(meta.status).tone;
+              const accent = TONE_TEXT[tone];
               const Icon = meta.icon;
               return (
                 <div key={bucket}>
                   <div className="flex items-center gap-2 mb-2">
-                    <Icon className={`w-4 h-4 ${meta.accent}`} />
-                    <h3 className={`text-xs font-mono uppercase tracking-wider ${meta.accent}`}>{meta.label}</h3>
+                    <Icon className={`w-4 h-4 ${accent}`} />
+                    <h3 className={`text-xs font-mono uppercase tracking-wider ${accent}`}>{meta.label}</h3>
                     <span className="text-[10px] text-slate-600 font-mono">{grouped[bucket].length}</span>
                   </div>
                   <div className="space-y-2">
                     {grouped[bucket].map((run) => (
                       <div
                         key={`${run.machine_id}:${run.run_id}`}
-                        className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${meta.border}`}
+                        className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[tone]}`}
                       >
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 text-slate-200 text-sm font-medium">
                             <span className="truncate">{run.title}</span>
+                            <StatusBadge
+                              status={run.status}
+                              variant="pill"
+                              label={runStatusMeta(run.status).label}
+                              className="shrink-0"
+                            />
                           </div>
                           <div className="text-[11px] text-slate-500 font-mono mt-0.5 flex flex-wrap gap-x-3">
                             <span>{machineName(run.machine_id)}</span>
