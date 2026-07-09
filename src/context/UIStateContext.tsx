@@ -1,5 +1,17 @@
 import { createContext, useContext, useReducer } from 'react';
 import type { Provider } from '../types';
+import type { LaunchStageEntry } from '../components/AttachmentDropzone';
+
+/**
+ * Prefill for the Start Feature modal when it is opened from the
+ * inline composer on ProjectHome. The composer captures a title and
+ * staged attachments, then hands them off; the modal owns the actual
+ * launch (Alternative A — one launch surface).
+ */
+export interface StartFeatureSeed {
+  title?: string;
+  attachments?: LaunchStageEntry[];
+}
 
 interface UIState {
   sidebarCollapsed: boolean;
@@ -9,6 +21,7 @@ interface UIState {
   editingProvider: Provider | null;
   startFeatureOpen: boolean;
   startFeatureWorkflowId: string | null;
+  startFeatureSeed: StartFeatureSeed | null;
 }
 
 type UIAction =
@@ -17,7 +30,7 @@ type UIAction =
   | { type: 'SET_COMMAND_PALETTE'; open: boolean }
   | { type: 'SET_DOCS_PANEL'; open: boolean }
   | { type: 'SET_CONNECT_MODAL'; open: boolean; editing?: Provider | null }
-  | { type: 'OPEN_START_FEATURE'; workflowId?: string | null }
+  | { type: 'OPEN_START_FEATURE'; workflowId?: string | null; seed?: StartFeatureSeed }
   | { type: 'CLOSE_START_FEATURE' };
 
 const initial: UIState = {
@@ -28,6 +41,7 @@ const initial: UIState = {
   editingProvider: null,
   startFeatureOpen: false,
   startFeatureWorkflowId: null,
+  startFeatureSeed: null,
 };
 
 function reducer(state: UIState, action: UIAction): UIState {
@@ -47,9 +61,14 @@ function reducer(state: UIState, action: UIAction): UIState {
         editingProvider: action.editing !== undefined ? action.editing ?? null : state.editingProvider,
       };
     case 'OPEN_START_FEATURE':
-      return { ...state, startFeatureOpen: true, startFeatureWorkflowId: action.workflowId ?? null };
+      return {
+        ...state,
+        startFeatureOpen: true,
+        startFeatureWorkflowId: action.workflowId ?? null,
+        startFeatureSeed: action.seed ?? null,
+      };
     case 'CLOSE_START_FEATURE':
-      return { ...state, startFeatureOpen: false, startFeatureWorkflowId: null };
+      return { ...state, startFeatureOpen: false, startFeatureWorkflowId: null, startFeatureSeed: null };
     default:
       return state;
   }

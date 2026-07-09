@@ -1,28 +1,22 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, Cpu, Play, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal, Code, EyeOff, X } from 'lucide-react';
+import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal, Code } from 'lucide-react';
 import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { invoke } from '@tauri-apps/api/core';
-import { ConfigOptionValue, Feature, WorktreeStrategy, ProjectSettingsData } from '../types';
+import { Feature, WorktreeStrategy, ProjectSettingsData } from '../types';
 import { formatTokens } from '../lib/utils';
-import { getAgentModels } from '../lib/agentModels';
-import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 import { formatError } from '../lib/errors';
-import { useErrorBus } from '../lib/errorBus';
 import { saveProjectSettings } from '../lib/project';
 import { TerminalWindow } from './TerminalWindow';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
-import { useLaunchRun } from '../hooks/useLaunchRun';
 import { useNavigation, useProject, useUIState } from '../context';
 
 const ProjectHome = () => {
     const { navigate } = useNavigation();
     const { state: { currentProjectId, projects }, dispatch: projDispatch } = useProject();
-    const { ui: { sidebarCollapsed } } = useUIState();
+    const { ui, uiDispatch } = useUIState();
     const activeProject = projects.find(p => p.id === currentProjectId)!;
-    const { reportError } = useErrorBus();
     const [featureInput, setFeatureInput] = useState('');
-    const [isExpanded, setIsExpanded] = useState(false);
     const [features, setFeatures] = useState<Feature[]>([]);
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
@@ -37,65 +31,31 @@ const ProjectHome = () => {
         setFeatures(prev => prev.map(f => f.id === feature_id ? { ...f, status } : f));
     });
 
-    // Repositories and Workflows integration
+    // Repositories drive the terminal tab / coding-session target.
     const [repositories, setRepositories] = useState<any[]>([]);
-    const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
-    const [workflows, setWorkflows] = useState<any[]>([]);
+    // Workflow id → display meta, used to label the Active Pipelines list.
     const [workflowById, setWorkflowById] = useState<Map<string, { name: string; is_starter: boolean }>>(new Map());
-    const [selectedWorkflow, setSelectedWorkflow] = useState<any | null>(null);
-    const [userOverriddenWorkflow, setUserOverriddenWorkflow] = useState(false);
-    const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
 
-    // Coding Agent & Model Selector States
-    const [agentConfigs, setAgentConfigs] = useState<any[]>([]);
-    const [selectedAgentKind, setSelectedAgentKind] = useState<string>('');
-    const [selectedModel, setSelectedModel] = useState<string>('');
-    const [availableModels, setAvailableModels] = useState<ConfigOptionValue[]>([]);
-    const [isLoadingModels, setIsLoadingModels] = useState(false);
-    const [isDelegating, setIsDelegating] = useState(false);
-
-    // Defaults from settings
-    const [defaultAgentKind, setDefaultAgentKind] = useState<string>('');
-    const [defaultModel, setDefaultModel] = useState<string>('');
-
-    // Staged attachments for the inline composer. Persisted by the
-    // start_feature caller; see AttachmentDropzone.tsx for the
-    // launch-stage contract.
+    // Staged attachments for the inline composer. Handed to the Start
+    // Feature modal as a seed on launch; see AttachmentDropzone.tsx for
+    // the launch-stage contract.
     const [attachments, setAttachments] = useState<LaunchStageEntry[]>([]);
 
-    // Shared launch path (F28) — prepends the new feature to the
-    // pipeline list and navigates to FeatureDetail.
-    const launchRun = useLaunchRun({
-        projectId: activeProject.id,
-        onLaunched: (feature) => setFeatures(prev => [feature, ...prev]),
-    });
-    const [visionWarningDismissed, setVisionWarningDismissed] = useState(false);
-
-    // Fetch models on selected agent change
-    useEffect(() => {
-        let cancelled = false;
-        const fetchModels = async () => {
-            if (!selectedAgentKind) {
-                setAvailableModels([]);
-                return;
-            }
-            setIsLoadingModels(true);
-            try {
-                const machineId = activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local';
-                const models = await getAgentModels(machineId, selectedAgentKind);
-                if (!cancelled) setAvailableModels(models);
-            } catch (err) {
-                if (!cancelled) {
-                    console.warn("Failed to fetch models for agent:", selectedAgentKind, err);
-                    setAvailableModels([]);
-                }
-            } finally {
-                if (!cancelled) setIsLoadingModels(false);
-            }
-        };
-        fetchModels();
-        return () => { cancelled = true; };
-    }, [selectedAgentKind, activeProject.compute_type, activeProject.remote_host]);
+    // The inline composer is a lightweight seed for the one launch
+    // surface (Alternative A): it captures a title + attachments and
+    // hands off to the Start Feature modal, which owns every launch
+    // knob (repos, runner, overrides) and the actual start_feature call.
+    const openStartFeature = () => {
+        uiDispatch({
+            type: 'OPEN_START_FEATURE',
+            seed: {
+                title: featureInput.trim() || undefined,
+                attachments: attachments.length > 0 ? attachments : undefined,
+            },
+        });
+        setFeatureInput('');
+        setAttachments([]);
+    };
 
     // Retry and recovery states
     const [localBootstrapStep, setLocalBootstrapStep] = useState<'idle' | 'bootstrapping' | 'strategy_proposal' | 'error'>('idle');
@@ -160,14 +120,11 @@ const ProjectHome = () => {
     useEffect(() => {
         const fetchWorkspaceData = async () => {
             setIsLoadingFeatures(true);
-            const machineId = activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local';
 
-            const [featuresRes, reposRes, workflowsRes, settingsRes, configsRes] = await Promise.allSettled([
+            const [featuresRes, reposRes, workflowsRes] = await Promise.allSettled([
                 invoke<Feature[]>('fetch_active_features', { projectId: activeProject.id }),
                 invoke<any[]>('get_repositories_for_project', { projectId: activeProject.id }),
                 invoke<any[]>('workflow_list'),
-                invoke<ProjectSettingsData | null>('get_proposed_strategy', { projectId: activeProject.id }),
-                invoke<any[]>('get_agent_configs', { machineId })
             ]);
 
             // Handle active features
@@ -213,10 +170,10 @@ const ProjectHome = () => {
                 console.error("Failed to fetch repositories:", reposRes.reason);
             }
 
-            // Handle workflows
+            // Handle workflows — only the id → label lookup is needed
+            // here now (the launcher's workflow picker lives in the modal).
             if (workflowsRes.status === 'fulfilled' && workflowsRes.value) {
                 const list = workflowsRes.value;
-                setWorkflows(list);
                 const lookup = new Map<string, { name: string; is_starter: boolean }>();
                 for (const wf of list) {
                     if (wf && typeof wf.id === 'string' && wf.id.length > 0) {
@@ -227,87 +184,13 @@ const ProjectHome = () => {
                     }
                 }
                 setWorkflowById(lookup);
-                if (list.length > 0) {
-                    setSelectedWorkflow(list[0]);
-                }
             } else if (workflowsRes.status === 'rejected') {
                 console.error("Failed to fetch workflows:", workflowsRes.reason);
                 setWorkflowById(new Map());
             }
-
-            // Handle proposed strategy settings
-            if (settingsRes.status === 'fulfilled' && settingsRes.value) {
-                const settings = settingsRes.value;
-                if (settings) {
-                    const defAgent = settings.default_agent_kind || '';
-                    const defModel = settings.default_model || '';
-                    setDefaultAgentKind(defAgent);
-                    setDefaultModel(defModel);
-                    setSelectedAgentKind(defAgent);
-                    setSelectedModel(defModel);
-                }
-            } else if (settingsRes.status === 'rejected') {
-                console.error("Failed to fetch project settings:", settingsRes.reason);
-            }
-
-            // Handle agent configs
-            if (configsRes.status === 'fulfilled' && configsRes.value) {
-                setAgentConfigs(configsRes.value || []);
-            } else {
-                if (configsRes.status === 'rejected') {
-                    console.error("Failed to fetch agent configs:", configsRes.reason);
-                }
-                setAgentConfigs([]);
-            }
         };
         fetchWorkspaceData();
     }, [activeProject.id]);
-
-    useEffect(() => {
-        if (!featureInput || userOverriddenWorkflow) return;
-        
-        const inputLower = featureInput.toLowerCase();
-        let matchedWf = workflows[0];
-        
-        if (inputLower.includes('bug') || inputLower.includes('fix') || inputLower.includes('issue') || inputLower.includes('error') || inputLower.includes('crash')) {
-            matchedWf = workflows.find(w => w.name.toLowerCase().includes('bug') || w.name.toLowerCase().includes('fix')) || matchedWf;
-        } else if (inputLower.includes('refactor') || inputLower.includes('cleanup') || inputLower.includes('rewrite')) {
-            matchedWf = workflows.find(w => w.name.toLowerCase().includes('refactor')) || matchedWf;
-        } else if (inputLower.includes('doc') || inputLower.includes('readme') || inputLower.includes('comment')) {
-            matchedWf = workflows.find(w => w.name.toLowerCase().includes('doc')) || matchedWf;
-        } else if (inputLower.includes('experiment') || inputLower.includes('test') || inputLower.includes('prototype')) {
-            matchedWf = workflows.find(w => w.name.toLowerCase().includes('experiment') || w.name.toLowerCase().includes('test')) || matchedWf;
-        }
-        
-        if (matchedWf) {
-            setSelectedWorkflow(matchedWf);
-        }
-    }, [featureInput, workflows, userOverriddenWorkflow]);
-
-    const handleStartFeature = async () => {
-        if (!featureInput) return;
-        if (!selectedWorkflow) {
-            reportError("Please select a workflow from the customization panel or build one first.", { kind: "validation" });
-            return;
-        }
-        setIsDelegating(true);
-        try {
-            // One launch code path (F28): the shared hook converts
-            // staged attachments to the Rust wire shape, invokes
-            // start_feature, and navigates to FeatureDetail.
-            const feature = await launchRun({
-                workflowId: selectedWorkflow.id,
-                title: featureInput,
-                description: featureInput,
-                agentKind: selectedAgentKind || undefined,
-                model: selectedModel || undefined,
-                attachments: attachments.length > 0 ? attachments : undefined,
-            });
-            if (feature) setAttachments([]);
-        } finally {
-            setIsDelegating(false);
-        }
-    };
 
     const isCurrentlyFailed = activeProject.status === 'error';
     const isCurrentlyBootstrapping = activeProject.status === 'bootstrapping';
@@ -509,378 +392,36 @@ const ProjectHome = () => {
 
                 {activeTab === 'pipelines' || activeProject.compute_type !== 'remote' ? (
                     <div className="flex-1 overflow-y-auto space-y-8 pr-1 min-h-0">
-                        {/* Start Feature Expanded Card */}
-                <div className={`glass-panel rounded-2xl overflow-hidden transition-[padding] duration-300 ${isExpanded ? 'p-6' : 'p-2 relative group'}`}>
-                    {!isExpanded && (
-                        <div className="absolute inset-0 bg-gradient-to-r from-violet-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                    )}
-
-                    <div className="relative flex items-start gap-4">
-                        <div className={`mt-2 ml-2 rounded-full flex items-center justify-center transition-colors ${isExpanded ? 'bg-violet-500/20 text-violet-400 p-2' : 'text-slate-500'}`}>
-                            <Zap className="w-5 h-5" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                            {isExpanded ? (
-                                <>
-                                    <h3 className="font-outfit text-white font-medium mb-4">Start a new Feature Pipeline</h3>
-                                    <div className="w-full mb-4">
-                                        {/* Attachments dropzone — sits above the
-                                            description mirroring the
-                                            StartFeatureModal layout. */}
-                                        <div className="mb-3">
-                                            <div className="flex items-center gap-2 mb-1.5">
-                                                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Attachments</span>
-                                                <span className="text-[10px] font-mono text-slate-600">
-                                                    optional · referenced as [attachment -- &lt;name&gt;] in prompts
-                                                </span>
-                                            </div>
-                                            <AttachmentDropzone
-                                                mode="launch"
-                                                label="Add files"
-                                                stageEntries={attachments}
-                                                onChangeStage={setAttachments}
-                                                maxChips={6}
-                                            />
-                                        </div>
-                                        <textarea
-                                            autoFocus
-                                            value={featureInput}
-                                            onChange={(e) => setFeatureInput(e.target.value)}
-                                            placeholder="Describe the feature or bug you want the agent fleet to build... (e.g., 'Configure OAuth2 with Google authentication')"
-                                            className="w-full block bg-black/20 border border-white/5 rounded-lg p-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 min-h-[120px] transition-colors duration-200 resize-none"
-                                        />
-                                        
-                                        {/* Active Executor Configuration Summary (Micro-telemetry) */}
-                                        {featureInput.length > 0 && (
-                                            <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-400 font-mono pl-1">
-                                                <Zap className="w-3.5 h-3.5 text-violet-400" />
-                                                <span>Pipeline Agent:</span>
-                                                <span className="text-white font-semibold">
-                                                    {selectedAgentKind ? selectedAgentKind.replace(/-/g, ' ') : (defaultAgentKind ? `${defaultAgentKind.replace(/-/g, ' ')} (default)` : 'Auto (Workflow)')}
-                                                </span>
-                                                <span className="text-slate-600">•</span>
-                                                <span>Model:</span>
-                                                <span className="text-cyan-400 font-semibold">
-                                                    {selectedModel ? selectedModel : (defaultModel ? `${defaultModel} (default)` : 'Default')}
-                                                </span>
-                                            </div>
-                                        )}
-                                    </div>
-
-
-
-                                    {/* Real-time Keyword Auto-Inference & Suggested Repos */}
-                                    {featureInput.length > 3 && (
-                                        <div className="mt-4 p-3.5 border border-cyan-500/20 bg-cyan-500/5 rounded-xl flex flex-col gap-3 relative overflow-hidden">
-                                            <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-xl pointer-events-none"></div>
-                                            <div className="flex items-center gap-2 text-xs font-semibold text-cyan-300">
-                                                <Cpu className="w-4 h-4 animate-pulse" />
-                                                <span>Pipeline Smart Inference</span>
-                                            </div>
-
-                                            {/* Highlighted Workflow */}
-                                            {selectedWorkflow && (
-                                                <div className="text-xs text-slate-300 flex items-center gap-1.5 flex-wrap">
-                                                    <span>Workflow matched:</span>
-                                                    <span className="px-2 py-0.5 rounded bg-violet-500/20 border border-violet-500/30 text-violet-300 font-medium font-outfit">
-                                                        {selectedWorkflow.name}
-                                                    </span>
-                                                    {selectedWorkflow.schedule && (
-                                                        <span className="px-2 py-0.5 rounded bg-violet-500/25 border border-violet-500/40 text-violet-300 text-[10px] font-medium font-outfit flex items-center gap-1">
-                                                            <Clock className="w-3 h-3 text-violet-400" /> Scheduled: {selectedWorkflow.schedule.cron}
-                                                        </span>
-                                                    )}
-                                                    {userOverriddenWorkflow && (
-                                                        <span className="text-[10px] text-slate-500">(custom override)</span>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* Suggested Repositories Chips */}
-                                            <div className="text-xs text-slate-300 space-y-1.5">
-                                                <div>Suggested Repository Scope:</div>
-                                                <div className="flex flex-wrap gap-2">
-                                                    {repositories.map(repo => {
-                                                        const isSuggested = featureInput.toLowerCase().includes(repo.name.toLowerCase()) ||
-                                                                            featureInput.toLowerCase().includes(repo.path.split('/').pop().toLowerCase());
-                                                        const isSelected = selectedRepos.includes(repo.path);
-
-                                                        return (
-                                                            <button
-                                                                type="button"
-                                                                key={repo.path}
-                                                                onClick={() => {
-                                                                    setSelectedRepos(prev => 
-                                                                        prev.includes(repo.path)
-                                                                            ? prev.filter(r => r !== repo.path)
-                                                                            : [...prev, repo.path]
-                                                                    );
-                                                                }}
-                                                                className={`px-3 py-1 rounded-full text-xs font-mono transition-all border ${
-                                                                    isSelected 
-                                                                        ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                                                                        : isSuggested
-                                                                            ? 'bg-violet-500/10 border-violet-500/30 text-violet-300 animate-pulse'
-                                                                            : 'bg-black/40 border-white/5 text-slate-500 hover:border-white/10'
-                                                                }`}
-                                                            >
-                                                                {repo.path}
-                                                                {isSuggested && (
-                                                                    <span className="ml-1 text-[9px] px-1 rounded bg-violet-500/20 text-violet-300">Suggested</span>
-                                                                )}
-                                                            </button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Customize panel drawer */}
-                                    {isCustomizeOpen && (
-                                        <div className="mt-4 p-4 border border-white/5 bg-black/45 rounded-xl space-y-4 animate-fadeIn">
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                {/* Workflow Select */}
-                                                <div>
-                                                    <label className="block text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">Orchestration Workflow</label>
-                                                    <select
-                                                        value={selectedWorkflow?.id || ''}
-                                                        onChange={e => {
-                                                            const wf = workflows.find(w => w.id === e.target.value);
-                                                            if (wf) {
-                                                                setSelectedWorkflow(wf);
-                                                                setUserOverriddenWorkflow(true);
-                                                            }
-                                                        }}
-                                                        className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500/50"
-                                                    >
-                                                        {workflows.map(wf => (
-                                                            <option key={wf.id} value={wf.id}>
-                                                              {wf.name} ({wf.is_starter ? 'Starter' : 'Custom'}){wf.schedule ? ' ⏰' : ''}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-
-                                                {/* Repositories checkboxes */}
-                                                <div>
-                                                    <label className="block text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">Target Repositories</label>
-                                                    <div className="text-xs text-slate-300 font-mono p-2 bg-[#08090c] border border-white/10 rounded-lg max-h-[85px] overflow-y-auto space-y-1">
-                                                        {repositories.length === 0 ? (
-                                                            <span className="text-slate-500 italic">No repositories mapped.</span>
-                                                        ) : (
-                                                            repositories.map(repo => {
-                                                                const isSelected = selectedRepos.includes(repo.path);
-                                                                return (
-                                                                    <label key={repo.path} className="flex items-center gap-2 cursor-pointer hover:text-white select-none">
-                                                                        <input
-                                                                            type="checkbox"
-                                                                            checked={isSelected}
-                                                                            onChange={() => {
-                                                                                setSelectedRepos(prev =>
-                                                                                    prev.includes(repo.path)
-                                                                                        ? prev.filter(r => r !== repo.path)
-                                                                                        : [...prev, repo.path]
-                                                                                );
-                                                                            }}
-                                                                            className="rounded border-slate-600 bg-transparent text-cyan-500 focus:ring-0 w-3 h-3 cursor-pointer"
-                                                                        />
-                                                                        <span>{repo.path}</span>
-                                                                    </label>
-                                                                );
-                                                            })
-                                                        )}
-                                                    </div>
-                                                </div>
-
-                                                {/* AI Agent Override */}
-                                                <div>
-                                                    <label className="block text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">
-                                                        AI Agent Override {defaultAgentKind && `(Default: ${defaultAgentKind})`}
-                                                    </label>
-                                                    <div className="flex flex-wrap gap-2">
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => {
-                                                                setSelectedAgentKind('');
-                                                                setSelectedModel('');
-                                                            }}
-                                                            className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                                                                !selectedAgentKind
-                                                                    ? 'bg-violet-500/10 border-violet-500/50 text-violet-300'
-                                                                    : 'bg-black/40 border-white/5 text-slate-400 hover:border-white/10'
-                                                            }`}
-                                                        >
-                                                            Use Default
-                                                        </button>
-                                                        {agentConfigs.filter(a => a.enabled && a.kind !== 'antigravity').map(agent => (
-                                                            <button
-                                                                key={agent.kind}
-                                                                type="button"
-                                                                onClick={() => {
-                                                                    setSelectedAgentKind(agent.kind);
-                                                                    setSelectedModel('');
-                                                                }}
-                                                                className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all capitalize ${
-                                                                    selectedAgentKind === agent.kind
-                                                                        ? 'bg-violet-500/10 border-violet-500/50 text-violet-300'
-                                                                        : 'bg-black/40 border-white/5 text-slate-400 hover:border-white/10'
-                                                                }`}
-                                                            >
-                                                                {agent.kind.replace(/-/g, ' ')}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
-
-                                                {/* Model Selection Override */}
-                                                <div>
-                                                    <label className="block text-[10px] font-mono text-slate-500 mb-1.5 uppercase tracking-wider">
-                                                        LLM Model Override {defaultModel && `(Default: ${defaultModel})`}
-                                                    </label>
-                                                    {isLoadingModels ? (
-                                                        <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg p-2 text-xs text-slate-400 flex items-center gap-2">
-                                                            <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-                                                            <span>Probing models...</span>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="flex gap-2">
-                                                            <select
-                                                                value={selectedModel}
-                                                                onChange={e => setSelectedModel(e.target.value)}
-                                                                className="flex-1 min-w-0 bg-[#08090c] border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500/50"
-                                                                disabled={!selectedAgentKind}
-                                                            >
-                                                                <option value="">Use Default Model</option>
-                                                                {availableModels.map(m => (
-                                                                    <option key={m.value} value={m.value}>{m.name}</option>
-                                                                ))}
-                                                                {selectedModel && !availableModels.some(m => m.value === selectedModel) && (
-                                                                    <option value={selectedModel}>{selectedModel} (custom)</option>
-                                                                )}
-                                                            </select>
-                                                            <input
-                                                                type="text"
-                                                                value={selectedModel}
-                                                                onChange={e => setSelectedModel(e.target.value)}
-                                                                placeholder="Custom override"
-                                                                className="w-1/3 shrink-0 min-w-[120px] bg-black/40 border border-white/10 rounded-lg p-1.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600"
-                                                                disabled={!selectedAgentKind}
-                                                            />
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-
-                                            {/* Pre-flight Step Timeline Preview */}
-                                            {selectedWorkflow && (
-                                                <div className="space-y-2 border-t border-white/5 pt-3">
-                                                    <h4 className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Workflow Step Timeline Preview</h4>
-                                                    <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-2 overflow-x-auto pb-2 w-full max-w-full">
-                                                        {selectedWorkflow.steps && selectedWorkflow.steps.length > 0 ? (
-                                                            selectedWorkflow.steps.map((step: any, idx: number) => (
-                                                                <Fragment key={step.id}>
-                                                                    <div className="flex items-center gap-2.5 p-2.5 rounded bg-black/40 border border-white/5 min-w-[150px] max-w-[200px] shrink-0">
-                                                                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                                                                            step.kind === 'gate'
-                                                                                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/30'
-                                                                                : step.kind === 'parallel'
-                                                                                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                                                                                    : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                                                        }`}>
-                                                                            {idx + 1}
-                                                                        </div>
-                                                                        <div className="min-w-0">
-                                                                            <div className="text-xs text-white font-medium truncate">{step.title}</div>
-                                                                            <div className="text-[9px] text-slate-500 capitalize">{step.kind}</div>
-                                                                        </div>
-                                                                    </div>
-                                                                    {idx < selectedWorkflow.steps.length - 1 && (
-                                                                        <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0 hidden md:block" />
-                                                                    )}
-                                                                </Fragment>
-                                                            ))
-                                                        ) : (
-                                                            <span className="text-xs text-slate-500 italic">No steps defined in this workflow.</span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    <div className="mt-4 flex flex-col gap-3">
-                                        {(() => {
-                                            const hasImg = attachments.some((a) => a.mime.startsWith('image/'));
-                                            const supports = modelSupportsImagesByName(
-                                                selectedAgentKind || defaultAgentKind,
-                                                selectedModel || defaultModel,
-                                            );
-                                            return hasImg && !supports && !visionWarningDismissed ? (
-                                                <div
-                                                    role="alert"
-                                                    className="flex items-start gap-2 px-3 py-2 rounded-lg border border-violet-500/40 bg-ruby-500/10 text-ruby-200"
-                                                >
-                                                    <EyeOff className="w-4 h-4 mt-0.5 shrink-0 text-ruby-300" />
-                                                    <div className="flex-1 min-w-0 text-[11px] font-mono leading-snug">
-                                                        <span className="font-semibold">
-                                                            Model {(selectedModel || defaultModel || '(unset)').trim()} does not read images
-                                                        </span>
-                                                        <span className="text-ruby-200/80">
-                                                            {' '}— attachments will be referenced as paths only and not inlined.
-                                                        </span>
-                                                    </div>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setVisionWarningDismissed(true)}
-                                                        aria-label="Dismiss vision warning"
-                                                        className="shrink-0 text-ruby-200 hover:text-white transition-colors"
-                                                    >
-                                                        <X className="w-3.5 h-3.5" />
-                                                    </button>
-                                                </div>
-                                            ) : null;
-                                        })()}
-                                        <div className="flex justify-between items-center">
-                                            <div className="flex gap-4 items-center">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setIsCustomizeOpen(!isCustomizeOpen)}
-                                                    className="text-xs font-semibold text-slate-400 hover:text-white flex items-center gap-1.5 transition-colors"
-                                                >
-                                                    <Settings className="w-3.5 h-3.5" />
-                                                    {isCustomizeOpen ? 'Hide Customization' : 'Customize...'}
-                                                </button>
-                                            </div>
-                                            <div className="flex gap-3">
-                                                <button onClick={() => setIsExpanded(false)} className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
-                                                <button
-                                                    onClick={handleStartFeature}
-                                                    disabled={isDelegating}
-                                                    className="px-6 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all flex items-center gap-2"
-                                                >
-                                                    {isDelegating ? <RotateCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Delegate Workspace
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                </>
-                            ) : (
-                                <div className="w-full">
+                        {/* Inline composer — a lightweight seed for the
+                            single launch surface. It captures a title +
+                            attachments, then hands off to the Start
+                            Feature modal, which owns every launch knob
+                            and the actual start_feature call. Ctrl/Cmd+T
+                            opens the same modal with no seed. */}
+                        <div className="glass-panel rounded-2xl p-4 relative group overflow-hidden">
+                            <div className="absolute inset-0 bg-gradient-to-r from-violet-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+                            <div className="relative flex items-start gap-4">
+                                <div className="mt-2 ml-1 text-violet-400 shrink-0">
+                                    <Zap className="w-5 h-5" />
+                                </div>
+                                <div className="flex-1 min-w-0">
                                     <input
                                         type="text"
-                                        onClick={() => setIsExpanded(true)}
+                                        value={featureInput}
+                                        onChange={(e) => setFeatureInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                openStartFeature();
+                                            }
+                                        }}
                                         placeholder="Draft and delegate a new feature pipeline..."
-                                        className="w-full bg-transparent border-none p-2 text-sm text-white placeholder-slate-500 focus:outline-none cursor-pointer"
-                                        readOnly
+                                        className="w-full bg-transparent border-none p-2 text-sm text-white placeholder-slate-500 focus:outline-none"
                                     />
-                                    {/* Collapsed chip row: shows already-staged
-                                        attachments so they survive the
-                                        expand/collapse round-trip. Bypasses
-                                        the dropzone — use the expanded form
-                                        to add more. */}
-                                    <div className="px-2 pb-2 flex flex-wrap items-center gap-2">
+                                    {/* Collapsed chip row: staged attachments
+                                        ride along into the modal seed. Use the
+                                        modal to add more once it opens. */}
+                                    <div className="px-2 pb-1 flex flex-wrap items-center gap-2">
                                         <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Attachments</span>
                                         <AttachmentDropzone
                                             mode="launch"
@@ -890,11 +431,20 @@ const ProjectHome = () => {
                                             maxChips={6}
                                         />
                                     </div>
+                                    <div className="mt-2 flex items-center justify-between gap-3 pl-2">
+                                        <span className="text-[11px] text-slate-500 font-mono">
+                                            Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400">Enter</kbd> to configure &amp; launch
+                                        </span>
+                                        <button
+                                            onClick={openStartFeature}
+                                            className="px-4 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white rounded-md shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all flex items-center gap-1.5"
+                                        >
+                                            Continue <ChevronRight className="w-4 h-4" />
+                                        </button>
+                                    </div>
                                 </div>
-                            )}
+                            </div>
                         </div>
-                    </div>
-                </div>
 
                 {/* Code with Agent card */}
                 <button
@@ -1052,7 +602,7 @@ const ProjectHome = () => {
             projectId={activeProject.id}
             computeType={activeProject.compute_type || 'local'}
             remoteHost={activeProject.remote_host || null}
-            sidebarWidth={sidebarCollapsed ? 56 : 240}
+            sidebarWidth={ui.sidebarCollapsed ? 56 : 240}
           />
         )}
         </div>
