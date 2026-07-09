@@ -116,7 +116,9 @@ fn enrich_path_from_login_shell() {
             return;
         }
         Err(e) => {
-            eprintln!("[demeteo-runner] login-shell PATH probe failed ({e}); leaving PATH unchanged");
+            eprintln!(
+                "[demeteo-runner] login-shell PATH probe failed ({e}); leaving PATH unchanged"
+            );
             return;
         }
     };
