@@ -8,7 +8,7 @@ use crate::adapters::artifact_store::fs::FsArtifactStore;
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::feature::{Feature, StepExecution};
-use crate::domain::run_spec::{RunBudget, RunSpec, RunSpecProvider};
+use crate::domain::run_spec::{RunBudget, RunSpec, RunSpecAttachment, RunSpecProvider};
 use crate::error::AppError;
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
@@ -27,6 +27,84 @@ pub struct RemoteRunHandle {
     /// frontend navigates straight to `FeatureDetail` with it, the same
     /// landing a local launch gets.
     pub feature_id: String,
+}
+
+/// Hard cap per attachment on the detached path. The local path accepts
+/// up to 100 MB per file; SFTP-spooling multi-hundred-MB blobs through
+/// the submit call would stall it for minutes, so the detached path is
+/// deliberately tighter (mirrored in the Start Feature modal copy).
+const MAX_DETACHED_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
+
+/// Spool pre-launch attachments onto the runner host over SFTP before
+/// `submit_run`, returning the [`RunSpecAttachment`] references the spec
+/// carries — raw bytes never ride the line-JSON control RPC. Keyed by
+/// `run_id`; the runner deletes the whole spool directory when the run
+/// reaches a terminal state (with the credential teardown).
+async fn spool_attachments(
+    ctx: &AppContext,
+    machine_id: &str,
+    run_id: &str,
+    staged: Vec<crate::commands::attachments::StagedAttachmentInput>,
+) -> Result<Vec<RunSpecAttachment>, String> {
+    if staged.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Same data-dir convention `enable_remote_runs` provisions the
+    // runner with (`{home}/.local/share/demeteo-runner`).
+    let home = ctx.exec.resolve_home(machine_id).await?;
+    let spool_dir = format!("{home}/.local/share/demeteo-runner/attachment-spool/{run_id}");
+    ctx.exec
+        .run_command(
+            machine_id,
+            &format!("mkdir -p {}", crate::paths::shell_escape_posix(&spool_dir)),
+        )
+        .await?;
+
+    let mut out = Vec::new();
+    for (i, a) in staged.into_iter().enumerate() {
+        let bytes = match a.bytes {
+            Some(b) => b,
+            None => tokio::fs::read(&a.source_path)
+                .await
+                .map_err(|e| format!("failed to read attachment {}: {e}", a.source_path))?,
+        };
+        if bytes.len() > MAX_DETACHED_ATTACHMENT_BYTES {
+            return Err(format!(
+                "attachment {} is {} MB — detached runs cap attachments at {} MB",
+                a.source_filename.as_deref().unwrap_or(&a.source_path),
+                bytes.len() / (1024 * 1024),
+                MAX_DETACHED_ATTACHMENT_BYTES / (1024 * 1024),
+            ));
+        }
+        // Keep only the final path component of whatever name we have —
+        // a spool entry must never escape its run directory.
+        let name = a
+            .source_filename
+            .clone()
+            .or_else(|| {
+                std::path::Path::new(&a.source_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| format!("attachment-{i}"));
+        let safe_name = std::path::Path::new(&name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment")
+            .to_string();
+        let staged_path = format!("{spool_dir}/{i}-{safe_name}");
+        ctx.exec
+            .write_file_bytes(machine_id, &staged_path, &bytes)
+            .await
+            .map_err(|e| format!("failed to spool attachment {safe_name} to the runner: {e}"))?;
+        out.push(RunSpecAttachment {
+            staged_path,
+            mime: a.mime,
+            source_filename: a.source_filename,
+        });
+    }
+    Ok(out)
 }
 
 /// Flip the eager placeholder Feature to `failed` when the submit RPC
@@ -68,7 +146,11 @@ pub async fn remote_submit_run(
     description: String,
     agent_kind: Option<String>,
     model: Option<String>,
+    commit_artifacts: Option<bool>,
     loop_iterations: Option<u32>,
+    step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
+    staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
+    target_repo_id: Option<String>,
     unattended: bool,
     max_cost_usd: Option<f64>,
     max_wall_clock_secs: Option<u64>,
@@ -78,9 +160,21 @@ pub async fn remote_submit_run(
         .projects
         .get_repositories_for(&pid)
         .map_err(AppError::from)?;
-    let repo = repos.first().ok_or_else(|| {
-        AppError::from("Project has no repository configured; remote runs need one".to_string())
-    })?;
+    // A detached run clones exactly one repository (RunSpec carries one
+    // `repo_path`). The modal sends the first repo the user selected;
+    // launches that don't pick keep the historical first-repo default.
+    let repo = match &target_repo_id {
+        Some(id) => repos.iter().find(|r| r.id.0 == *id).ok_or_else(|| {
+            AppError::from(format!(
+                "Selected repository {id} is not attached to this project"
+            ))
+        })?,
+        None => repos.first().ok_or_else(|| {
+            AppError::from(
+                "Project has no repository configured; remote runs need one".to_string(),
+            )
+        })?,
+    };
 
     let providers = ctx
         .app_settings
@@ -132,6 +226,12 @@ pub async fn remote_submit_run(
         None
     };
 
+    // Laptop-generated idempotency key (R9/M3.2): safe to retry
+    // `remote_submit_run` with network hiccups mid-call without risking
+    // a duplicate feature on the runner. Generated before the attachment
+    // spool below, which is keyed by it.
+    let run_id = format!("laptop-{}", crate::paths::new_id());
+
     // Eager shadow feature: the laptop chooses the feature id, inserts a
     // placeholder Feature it can navigate to immediately, and ships the
     // id in the spec so the runner's `feature_start` reuses it. From
@@ -140,6 +240,7 @@ pub async fn remote_submit_run(
     // creating a late twin.
     let now = crate::paths::now_ms();
     let feature_id = format!("f-{}", crate::paths::new_id());
+    let step_overrides = step_overrides.unwrap_or_default();
     ctx.features
         .add(Feature {
             id: FeatureId::from(feature_id.clone()),
@@ -155,12 +256,27 @@ pub async fn remote_submit_run(
             model: model.clone(),
             mr_url: None,
             mr_state: Some("none".to_string()),
-            commit_artifacts: None,
+            commit_artifacts,
             loop_iterations,
-            step_overrides: Vec::new(),
+            step_overrides: step_overrides.clone(),
             attachments: Vec::new(),
         })
         .map_err(AppError::from)?;
+
+    let attachments = match spool_attachments(
+        &ctx,
+        &machine_id,
+        &run_id,
+        staged_attachments.unwrap_or_default(),
+    )
+    .await
+    {
+        Ok(list) => list,
+        Err(e) => {
+            mark_placeholder_failed(&ctx, &feature_id);
+            return Err(AppError::from(e));
+        }
+    };
 
     let spec = RunSpec {
         feature_id: Some(feature_id.clone()),
@@ -175,14 +291,12 @@ pub async fn remote_submit_run(
         agent_kind,
         model,
         loop_iterations,
+        step_overrides,
+        commit_artifacts,
+        attachments,
         unattended,
         budget,
     };
-
-    // Laptop-generated idempotency key (R9/M3.2): safe to retry
-    // `remote_submit_run` with network hiccups mid-call without risking
-    // a duplicate feature on the runner.
-    let run_id = format!("laptop-{}", crate::paths::new_id());
 
     let submitted = match ctx
         .exec

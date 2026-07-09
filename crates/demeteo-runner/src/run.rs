@@ -9,6 +9,7 @@
 use crate::git_askpass;
 use crate::services::RunnerServices;
 use demeteo_core::adapters::step_executor::setup::fetch_default_settings;
+use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::application::{bootstrap, projects, workflows};
 use demeteo_core::domain::ids::{FeatureId, ProjectId, ProviderId};
 use demeteo_core::domain::models::{
@@ -239,6 +240,21 @@ pub async fn execute_run(
     let workflow_id = workflows::create_from_json(&svc.ctx.workflows, &spec.workflow_json)
         .map_err(|e| format!("failed to ingest workflow: {}", e))?;
 
+    // Attachments arrive pre-spooled on this host (SFTP'd by the laptop
+    // before submit_run); hand them to feature_start as ordinary
+    // path-based staged attachments. The spool is deleted at run end —
+    // see `cleanup_attachment_spool`.
+    let staged: Vec<StagedAttachmentInput> = spec
+        .attachments
+        .iter()
+        .map(|a| StagedAttachmentInput {
+            source_path: a.staged_path.clone(),
+            mime: a.mime.clone(),
+            source_filename: a.source_filename.clone(),
+            bytes: None,
+        })
+        .collect();
+
     let feature = svc
         .ctx
         .executor
@@ -253,10 +269,10 @@ pub async fn execute_run(
             &spec.description,
             spec.agent_kind.as_deref(),
             spec.model.as_deref(),
-            None,
+            spec.commit_artifacts,
             spec.loop_iterations,
-            vec![],
-            vec![],
+            spec.step_overrides.clone(),
+            staged,
         )
         .await
         .map_err(|e| format!("feature_start failed: {}", e))?;
@@ -397,12 +413,40 @@ pub async fn await_terminal_and_push(
     // Wipe the run's credential the moment we reach any outcome that
     // isn't itself "still waiting on one" — `needs-credentials` means
     // there was nothing to wipe yet (§6.2: wiped at run end — success,
-    // failure, or cancel).
+    // failure, or cancel). The attachment spool shares the credential's
+    // lifetime: staged for the run, deleted with it.
     let still_needs_pat = matches!(&result, Ok(o) if o.status == "needs-credentials");
     if !still_needs_pat {
         svc.creds.remove(run_id);
+        cleanup_attachment_spool(spec, run_id);
     }
     result
+}
+
+/// Delete the per-run attachment spool the laptop SFTP'd before
+/// `submit_run`. The directory is derived from the staged paths in the
+/// spec itself (not from a re-computed data dir, which could disagree
+/// with what the submitting laptop chose), and only removed when its
+/// name is exactly this `run_id` — a mis-addressed spec must never
+/// delete another run's spool or an arbitrary directory.
+fn cleanup_attachment_spool(spec: &RunSpec, run_id: &str) {
+    let mut dirs = std::collections::HashSet::new();
+    for a in &spec.attachments {
+        if let Some(parent) = std::path::Path::new(&a.staged_path).parent() {
+            if parent.file_name().and_then(|n| n.to_str()) == Some(run_id) {
+                dirs.insert(parent.to_path_buf());
+            }
+        }
+    }
+    for dir in dirs {
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            eprintln!(
+                "[demeteo-runner] failed to delete attachment spool {}: {}",
+                dir.display(),
+                e
+            );
+        }
+    }
 }
 
 async fn await_terminal_and_push_inner(

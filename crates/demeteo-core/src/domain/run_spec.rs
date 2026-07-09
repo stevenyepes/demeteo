@@ -8,6 +8,24 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::models::StepOverride;
+
+/// A pre-launch attachment for a detached run. The laptop spools the
+/// bytes onto the runner host over SFTP (`ExecutionPort::write_file_bytes`)
+/// *before* `submit_run`, then references the spooled path here — raw
+/// bytes never ride the line-JSON control RPC. The runner feeds these
+/// into `feature_start` as path-based staged attachments and deletes the
+/// spool directory when the run reaches a terminal state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSpecAttachment {
+    /// Absolute path on the runner host where the bytes were spooled.
+    pub staged_path: String,
+    #[serde(default)]
+    pub mime: Option<String>,
+    #[serde(default)]
+    pub source_filename: Option<String>,
+}
+
 /// Git provider push access needed to clone/push the repo (R5/§6.2). For
 /// M1, the PAT rides in an env var on the runner host and is bridged into
 /// the existing keyring-backed `GitOpsHelper` credential path — M4
@@ -65,6 +83,19 @@ pub struct RunSpec {
     /// Per-run override of the `on_failure` retry-loop budget. `None`
     /// inherits the engine default.
     pub loop_iterations: Option<u32>,
+    /// Per-step agent/model overrides chosen at launch — same rows
+    /// `start_feature` accepts (migration V13). Serde-default so specs
+    /// from older laptops (and to older runners) stay compatible.
+    #[serde(default)]
+    pub step_overrides: Vec<StepOverride>,
+    /// Per-run override of the project's `commit_artifacts` setting
+    /// (migration V12). `None` inherits the runner-side project default.
+    #[serde(default)]
+    pub commit_artifacts: Option<bool>,
+    /// Attachments spooled onto the runner host before submit. See
+    /// [`RunSpecAttachment`].
+    #[serde(default)]
+    pub attachments: Vec<RunSpecAttachment>,
     /// R6/R7 (M5.1): when true, the runner auto-approves gates
     /// classified `safe` (`StepConfig::gate_class`) and parks anything
     /// classified `dangerous` instead of waiting indefinitely for a

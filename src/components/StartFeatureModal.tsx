@@ -171,11 +171,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [maxCostUsd, setMaxCostUsd] = useState<string>('');
   const [maxWallClockMins, setMaxWallClockMins] = useState<string>('');
 
-  // F13 honesty: the detached path (`remote_submit_run`) doesn't carry
-  // attachments, per-step overrides, commit-artifacts, or an explicit
-  // repo selection yet — gray those controls out (and drop their values
-  // at launch) instead of silently discarding what the user staged.
-  const detachedUnsupported = machineId !== '';
+  // Detached — the run executes under `demeteo-runner` on the chosen
+  // machine. The full launch surface (attachments, per-step overrides,
+  // commit-artifacts, repo choice) ships in the RunSpec since M-E; the
+  // one remaining asymmetry is that a detached run clones a single
+  // repository, annotated on the repo picker below.
+  const detached = machineId !== '';
   // Attached-remote is a project-level setting, not a per-run choice:
   // a machine-less launch on such a project executes over SSH with the
   // desktop app orchestrating. Stated in "Where to run" as a fact.
@@ -463,10 +464,19 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Detached attachments are SFTP-spooled through the submit call, so
+  // they're capped tighter than the local path's 100 MB (mirrors
+  // MAX_DETACHED_ATTACHMENT_BYTES in commands/remote_runner.rs).
+  const DETACHED_ATTACHMENT_CAP = 25 * 1024 * 1024;
+  const oversizedForDetached = detached
+    ? attachments.filter((a) => a.size > DETACHED_ATTACHMENT_CAP)
+    : [];
+
   const canLaunch =
     title.trim().length > 0 &&
     description.trim().length > 0 &&
     workflowId !== '' &&
+    oversizedForDetached.length === 0 &&
     (repositories.length === 0 || selectedRepoIds.length > 0);
 
   const launch = () => {
@@ -495,14 +505,10 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       agentKind: agentKind.trim() || undefined,
       model: model.trim() || undefined,
       targetRepos,
-      // The detached path can't carry these yet (F13) — the matching
-      // controls are disabled above, and any values set before the
-      // machine was picked are dropped here rather than silently lost
-      // in the submit command.
-      commitArtifacts: detachedUnsupported ? undefined : commitArtifactsArg,
+      commitArtifacts: commitArtifactsArg,
       loopIterations: Number.isFinite(loopArg as number) ? loopArg : undefined,
-      stepOverrides: !detachedUnsupported && overrides.length > 0 ? overrides : undefined,
-      attachments: !detachedUnsupported && attachments.length > 0 ? attachments : undefined,
+      stepOverrides: overrides.length > 0 ? overrides : undefined,
+      attachments: attachments.length > 0 ? attachments : undefined,
       machineId: machineId || undefined,
       machineName: machineId ? machines.find((m) => m.id === machineId)?.name : undefined,
       unattended: machineId ? unattended : undefined,
@@ -556,18 +562,18 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 optional · referenced as [attachment -- &lt;name&gt;] in prompts
               </span>
             </div>
-            <div className={detachedUnsupported ? 'opacity-40 pointer-events-none' : ''} aria-disabled={detachedUnsupported}>
-              <AttachmentDropzone
-                mode="launch"
-                label="Add files"
-                stageEntries={attachments}
-                onChangeStage={setAttachments}
-                maxChips={6}
-              />
-            </div>
-            {detachedUnsupported && (
-              <p className="text-[10px] font-mono text-amber-300 mt-1.5">
-                Attachments aren't sent on detached runs yet — they'll be ignored for this launch.
+            <AttachmentDropzone
+              mode="launch"
+              label="Add files"
+              stageEntries={attachments}
+              onChangeStage={setAttachments}
+              maxChips={6}
+            />
+            {detached && attachments.length > 0 && (
+              <p className={`text-[10px] font-mono mt-1.5 ${oversizedForDetached.length > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
+                {oversizedForDetached.length > 0
+                  ? `Too large for a detached run (max 25 MB per file): ${oversizedForDetached.map((a) => a.name).join(', ')}`
+                  : 'Copied to the machine before launch — max 25 MB per file on detached runs.'}
               </p>
             )}
           </div>
@@ -735,12 +741,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   {repoOverride === null ? '(auto-detected from description)' : '(custom selection)'}
                 </span>
               </div>
-              {detachedUnsupported && (
+              {detached && (
                 <p className="text-[10px] font-mono text-amber-300 mb-2">
-                  Detached runs use the project's first repository — this selection doesn't apply.
+                  Detached runs clone a single repository — the first selected repo is used.
                 </p>
               )}
-              <div className={`space-y-1 ${detachedUnsupported ? 'opacity-40 pointer-events-none' : ''}`} aria-disabled={detachedUnsupported}>
+              <div className="space-y-1">
                 {repositories.map((r) => {
                   const checked = selectedRepoIds.includes(r.id);
                   const inUse = conflicts.has(r.id);
@@ -828,12 +834,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
                     Per-step overrides (optional)
                   </label>
-                  {detachedUnsupported && (
-                    <p className="text-[10px] font-mono text-amber-300 mb-2">
-                      Per-step overrides aren't sent on detached runs yet — they'll be ignored for this launch.
-                    </p>
-                  )}
-                  <div className={`space-y-2.5 ${detachedUnsupported ? 'opacity-40 pointer-events-none' : ''}`} aria-disabled={detachedUnsupported}>
+                  <div className="space-y-2.5">
                     {steps.map((s, i) => {
                       const ov = stepOverrides[s.id] || { agent_kind: '', model: '' };
                       const setOv = (patch: Partial<{ agent_kind: string; model: string }>) =>
@@ -891,12 +892,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
                   Commit artifacts to PR
                 </label>
-                {detachedUnsupported && (
-                  <p className="text-[10px] font-mono text-amber-300 mb-2">
-                    Not sent on detached runs yet — the project default applies on the runner.
-                  </p>
-                )}
-                <div className={`grid grid-cols-3 gap-1.5 ${detachedUnsupported ? 'opacity-40 pointer-events-none' : ''}`} aria-disabled={detachedUnsupported}>
+                <div className="grid grid-cols-3 gap-1.5">
                   {([
                     { key: 'inherit', label: 'Project default', desc: 'Inherit' },
                     { key: 'yes', label: 'Yes', desc: 'Ship reports in the PR' },
