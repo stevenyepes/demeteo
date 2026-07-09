@@ -25,7 +25,7 @@ import {
 } from '../lib/features';
 import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
-import { RemoteGateActions, RunEventTimeline } from './RunEventTimeline';
+import { RemoteGateActions, ReinjectCredentials, RunEventTimeline } from './RunEventTimeline';
 import { bucketFor } from './RemoteRunInbox';
 import { useNavigation, useProject, useUIState } from '../context';
 import { formatCost, relativeTime } from '../lib/utils';
@@ -1071,6 +1071,9 @@ export function FeatureDetail() {
                       no-gate explanation for it. */}
                   {bucketFor(remoteRun.status) === 'parked' && (
                     <RemoteGateActions run={remoteRun} onResolved={refreshRemoteRun} />
+                  )}
+                  {bucketFor(remoteRun.status) === 'needs_credentials' && (
+                    <ReinjectCredentials run={remoteRun} onResolved={refreshRemoteRun} />
                   )}
                 </div>
               </div>

@@ -169,11 +169,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [visionWarningDismissed, setVisionWarningDismissed] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
 
-  // Remote execution (M6.1): "Where to run" + unattended toggle +
-  // budget cap. `machineId === ''` means "run here" (today's behavior).
+  // Remote execution (M6.1): "Where to run" + optional budget caps.
+  // `machineId === ''` means "run here" (today's behavior); any other
+  // value is a detached run, which is *always* unattended (a detached run
+  // can't block on a human, so there is no attended mode to toggle).
   const [machines, setMachines] = useState<Machine[]>([]);
   const [machineId, setMachineId] = useState<string>('');
-  const [unattended, setUnattended] = useState(false);
   const [maxCostUsd, setMaxCostUsd] = useState<string>('');
   const [maxWallClockMins, setMaxWallClockMins] = useState<string>('');
 
@@ -227,7 +228,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setAttachments([]);
       setVisionWarningDismissed(false);
       setMachineId('');
-      setUnattended(false);
       setMaxCostUsd('');
       setMaxWallClockMins('');
     }
@@ -526,7 +526,9 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       stepOverrides: overrides.length > 0 ? overrides : undefined,
       attachments: attachments.length > 0 ? attachments : undefined,
       machineId: machineId || undefined,
-      unattended: detached ? unattended : undefined,
+      // Detached runs are always unattended — they can't block on a human
+      // (Demeteo may be closed). Never send `false` for a detached run.
+      unattended: detached ? true : undefined,
       maxCostUsd: Number.isFinite(costArg as number) ? costArg : undefined,
       maxWallClockMins: Number.isFinite(wallClockArg as number) ? wallClockArg : undefined,
     });
@@ -677,31 +679,23 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 {machineId && (
                   <div className="mt-2 space-y-2.5 pl-3 border-l border-white/5">
                     <p className="text-[10px] font-mono text-cyan-300/80 leading-relaxed">
-                      Detached — runs unattended on{' '}
+                      Detached — runs on{' '}
                       <span className="font-semibold">
                         {machines.find((m) => m.id === machineId)?.name ?? machineId}
                       </span>
                       ; you can close Demeteo and the run continues.
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => setUnattended((v) => !v)}
-                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] font-semibold uppercase tracking-wider border transition-colors ${
-                        unattended
-                          ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
-                          : 'bg-[#050508] border-white/10 text-slate-400 hover:border-white/20'
-                      }`}
-                    >
-                      <MoonStar className="w-3.5 h-3.5" />
-                      Unattended
-                    </button>
-                    <p className="text-[10px] font-mono text-slate-500 leading-relaxed">
-                      {unattended
-                        ? 'Review gates and merges to the feature branch auto-approve. Merge-to-default and over-budget gates park for you — see Runs.'
-                        : 'Gates wait for you to decide, same as a local run — the run just executes on the chosen machine.'}
-                    </p>
-                    {unattended && (
-                      <div className="grid grid-cols-2 gap-2">
+                    <div className="flex items-start gap-2 rounded-lg bg-cyan-500/[0.07] border border-cyan-500/20 px-3 py-2">
+                      <MoonStar className="w-3.5 h-3.5 text-cyan-300 mt-0.5 shrink-0" />
+                      <p className="text-[10px] font-mono text-slate-400 leading-relaxed">
+                        <span className="text-cyan-200 font-semibold">Always unattended.</span>{' '}
+                        A detached run can't wait on you, so review gates and merges to the
+                        feature branch auto-approve. Merge-to-default and over-budget gates
+                        still park for your decision — you'll find them under Runs. Set optional
+                        caps below to bound spend and runtime.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
                             Max cost (USD)
@@ -729,8 +723,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                             className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
                           />
                         </div>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 )}
               </>

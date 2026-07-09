@@ -457,7 +457,13 @@ async fn await_terminal_and_push_inner(
     spec: &RunSpec,
 ) -> Result<RunOutcome, String> {
     const POLL_INTERVAL: Duration = Duration::from_secs(2);
-    const MAX_WAIT: Duration = Duration::from_secs(60 * 60);
+    // Backstop only — a detached run is "fire and forget" and may legitimately
+    // run for hours, so this must not guillotine a healthy long run before it
+    // reaches a terminal state (the terminal push/PR-open lives *after* this
+    // loop). Callers that want a real bound set a `budget.max_wall_clock_secs`
+    // cap (M5.2), which cancels cleanly above; this only catches a feature
+    // wedged forever with no cap at all.
+    const MAX_WAIT: Duration = Duration::from_secs(24 * 60 * 60);
     let started = Instant::now();
     let mut parked_gates: HashSet<String> = HashSet::new();
 
@@ -533,11 +539,24 @@ async fn await_terminal_and_push_inner(
         }
 
         if started.elapsed() > MAX_WAIT {
+            // The poll window elapsed while the run is still in flight —
+            // this is NOT a terminal state. Return the live (non-terminal)
+            // status directly, mirroring the budget-cap early return above,
+            // so the code below never emits `terminal_state` for a status
+            // like "running" (which the laptop would read as a real
+            // terminal and the away-notifier as a failure). The run keeps
+            // executing on the engine; we've simply stopped waiting on it.
             eprintln!(
-                "[demeteo-runner] timed out waiting for terminal state (last status: {})",
+                "[demeteo-runner] poll timed out — run still in flight (last status: {})",
                 feature.status
             );
-            break feature.status;
+            return Ok(RunOutcome {
+                project_id: Some(project_id.0.clone()),
+                feature_id: Some(feature_id.0.clone()),
+                status: feature.status,
+                pushed_branch: None,
+                pr_url: None,
+            });
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     };

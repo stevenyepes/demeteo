@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import type { Machine, RemoteRunMirror } from '../types';
 import { StatusBadge } from './ui/StatusBadge';
-import { RemoteGateActions } from './RunEventTimeline';
+import { RemoteGateActions, ReinjectCredentials } from './RunEventTimeline';
 import { runStatusMeta, TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
 import { relativeTime } from '../lib/utils';
 import { useNavigation } from '../context';
@@ -332,9 +332,7 @@ const RemoteRunInbox: React.FC = () => {
                           )}
                           {bucket === 'parked' && <RemoteGateActions run={run} onResolved={reconcile} />}
                           {bucket === 'needs_credentials' && (
-                            <span className="text-[11px] text-slate-500 font-mono">
-                              Reconnect to this machine to re-inject credentials.
-                            </span>
+                            <ReinjectCredentials run={run} onResolved={reconcile} />
                           )}
                           {(bucket === 'running' || bucket === 'parked') && (
                             <button

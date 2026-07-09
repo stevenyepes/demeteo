@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronDown, ChevronUp, Loader, Radio, ThumbsDown, ThumbsUp, WifiOff } from 'lucide-react';
+import { ChevronDown, ChevronUp, KeyRound, Loader, Radio, ThumbsDown, ThumbsUp, WifiOff } from 'lucide-react';
 import type { RemoteRunMirror, RunEvent } from '../types';
 import { TERMINAL_STATUSES } from '../lib/runStatus';
 
@@ -110,6 +110,55 @@ export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () 
         className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-ruby-500/10 border border-ruby-500/30 hover:bg-ruby-500/20 text-ruby-300 flex items-center gap-1.5 disabled:opacity-50"
       >
         <ThumbsDown className="w-3 h-3" /> Reject
+      </button>
+      {err && <span className="text-[10px] text-ruby-300 font-mono break-all">{err}</span>}
+    </div>
+  );
+};
+
+/**
+ * Re-inject the git PAT for a run parked at `needs-credentials` (§7.1).
+ * The runner keeps the credential in memory only, so a runner restart —
+ * or an injection that failed right after submit — leaves the run waiting
+ * for the laptop to re-supply it. `remote_reinject_credentials` resolves
+ * the PAT from the run's project and pushes it over the tunnel; the runner
+ * resumes on its own. Shared by the Runs inbox row and FeatureDetail so a
+ * re-inject works wherever the run is shown.
+ */
+export const ReinjectCredentials: React.FC<{ run: RemoteRunMirror; onResolved: () => void }> = ({
+  run,
+  onResolved,
+}) => {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>('');
+
+  const reinject = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      await invoke('remote_reinject_credentials', {
+        machineId: run.machine_id,
+        runId: run.run_id,
+      });
+      onResolved();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={reinject}
+        disabled={busy}
+        title="Re-send this machine's git credentials so the run can resume"
+        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-200 flex items-center gap-1.5 disabled:opacity-50"
+      >
+        {busy ? <Loader className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />}
+        {busy ? 'Re-injecting…' : 'Re-inject credentials'}
       </button>
       {err && <span className="text-[10px] text-ruby-300 font-mono break-all">{err}</span>}
     </div>
