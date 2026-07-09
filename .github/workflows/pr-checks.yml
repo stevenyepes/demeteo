@@ -53,29 +53,17 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: TypeScript type-check
-        run: npx tsc --noEmit
-
-      - name: Rust format check
-        working-directory: src-tauri
-        run: cargo fmt --all -- --check
-
-      - name: Rust clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Rust tests (build)
-        working-directory: src-tauri
-        run: cargo test --no-run
-
-      - name: Rust tests
-        working-directory: src-tauri
-        run: cargo test
-
-      - name: Gate feedback repro test
+      # The build/test gate is a single shared script (scripts/checks.sh) that
+      # developers and agents run locally before pushing, so "green locally"
+      # means "green in CI" — no drift between an ad-hoc local run and this
+      # job. It runs tsc, fmt --check, clippy -D warnings (on the pinned
+      # toolchain, rust-toolchain.toml), the demeteo + core + runner tests, and
+      # the gate-feedback repro. Commitlint is skipped here because the
+      # dedicated `wagoid` step below is the canonical PR-range gate.
+      - name: PR checks (tsc, fmt, clippy, tests, repro)
         env:
-          DEMETEO_REPO_PATH: ${{ github.workspace }}
-        run: node tests/repro/gate-feedback-rerender.mjs
+          CHECKS_SKIP_COMMITLINT: "1"
+        run: ./scripts/checks.sh
 
       - name: Lint commits
         uses: wagoid/commitlint-github-action@v6

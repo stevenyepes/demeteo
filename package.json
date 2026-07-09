@@ -15,7 +15,9 @@
     "tauri": "tauri",
     "dev:tauri": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:tauri:sw": "DEMETEO_DISABLE_GPU=1 tauri dev --config src-tauri/tauri.dev.conf.json",
-    "build:runner": "bash scripts/build-runner.sh"
+    "build:runner": "bash scripts/build-runner.sh",
+    "checks": "bash scripts/checks.sh",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -37,6 +39,8 @@
     "xterm-addon-fit": "^0.8.0"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.2.1",
+    "@commitlint/config-conventional": "^21.2.0",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

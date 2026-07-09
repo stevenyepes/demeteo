@@ -1,0 +1,13 @@
+# Single source of truth for the Rust toolchain, so `cargo`/`clippy`/`rustfmt`
+# behave identically on every laptop, every agent session, and CI. Before this
+# file, CI's `dtolnay/rust-toolchain@stable` floated ahead of stale local
+# toolchains, so clippy lints CI enforced (e.g. useless_borrows_in_formatting,
+# for_kv_map on 1.97) passed locally and failed the PR.
+#
+# rustup honors this file over whatever a machine's default toolchain is, and
+# auto-installs the channel on first use — including in CI, whose dtolnay step
+# still runs but is overridden here. Bump this line deliberately (and expect
+# new clippy lints when you do); never let the version drift silently.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]

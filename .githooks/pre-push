@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#
+# Run the full PR gate before anything leaves the machine, so "passed here,
+# failed in CI" stops happening. Mirrors CI exactly via scripts/checks.sh
+# (tsc, fmt, clippy -D warnings on the pinned toolchain, tests, commitlint).
+#
+# Escape hatch for a deliberate WIP push: `git push --no-verify`.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "$ROOT/scripts/checks.sh"

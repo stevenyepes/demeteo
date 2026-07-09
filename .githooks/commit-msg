@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# Reject a non-conventional commit message the instant it's written, instead of
+# discovering it in CI (commitlint runs there on the whole PR range). This is
+# what catches things like a subject that starts with a capital / acronym
+# ("P0 ...") — the repo's subject-case rule forbids sentence/upper-case, and a
+# failing commit here never gets created in the first place.
+#
+# Uses the repo-local commitlint (a declared devDependency); if node_modules
+# isn't installed yet, it warns and lets the commit through rather than block.
+set -euo pipefail
+
+if [ ! -x node_modules/.bin/commitlint ] && ! npx --no-install commitlint --version >/dev/null 2>&1; then
+  echo "commit-msg hook: commitlint not installed (run 'npm install'); skipping lint" >&2
+  exit 0
+fi
+
+npx --no-install commitlint --edit "$1" --config .commitlintrc.json
