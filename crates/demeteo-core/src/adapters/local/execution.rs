@@ -112,6 +112,15 @@ fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, Stri
     if let Some(cwd) = &opts.cwd {
         command.current_dir(cwd);
     }
+    // An interactive login shell (`bash -l -i -c`, used by the availability /
+    // model probes so mise/asdf/nvm tools resolve) tries to grab the
+    // controlling terminal for job control. When demeteo runs under a terminal
+    // (e.g. `tauri dev`), that suspends the whole process group. Detach the
+    // child into its own session so it has no controlling TTY. Harmless for the
+    // non-interactive paths. See `detach_from_controlling_tty`.
+    if opts.interactive {
+        crate::shared::proc::detach_from_controlling_tty(&mut command);
+    }
     sanitize_child_env(&mut command);
     let output = command
         .output()

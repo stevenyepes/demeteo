@@ -732,6 +732,7 @@ dependencies = [
  "async-trait",
  "futures",
  "keyring",
+ "libc",
  "parking_lot",
  "refinery",
  "reqwest 0.12.28",

@@ -10,7 +10,19 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/demeteo-runner serve
+# Launch under a login + interactive bash so the runner inherits the same
+# PATH an SSH session gets: the login profile *and* `~/.bashrc`, where
+# developer tool-managers (mise/asdf/nvm) activate the toolchain that puts
+# agent binaries (opencode, hermes, …) on PATH. A bare `ExecStart=…/demeteo-
+# runner serve` gets systemd's minimal environment, so the daemon — and every
+# agent it spawns / availability-checks via its own process PATH — reports a
+# correctly-installed agent as "not installed/available" and rejects the run.
+# `-i` is required: the `~/.bashrc` interactive guard returns early otherwise
+# and mise/asdf/nvm never activate. This mirrors `ShellOptions::login_
+# interactive` (`bash -l -i -c`) used by the laptop-side probes so "available",
+# "runnable", and "runner-launched" all resolve the same PATH. `exec` hands the
+# unit's PID straight to the runner so Restart/stop signal it directly.
+ExecStart=/bin/bash -lic 'exec %h/.local/bin/demeteo-runner serve'
 Restart=always
 RestartSec=5
 # journald is the log sink; `journalctl --user -u demeteo-runner -f` tails it.
