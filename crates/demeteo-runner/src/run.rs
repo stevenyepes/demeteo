@@ -209,11 +209,52 @@ pub async fn execute_run(
     eprintln!("[demeteo-runner] project {} created", project.id.as_str());
     emit(&svc.ctx, run_id, "project_created", &project.id.0);
 
-    pre_clone_with_askpass(svc, &project.id, spec, &pat).await?;
+    // Phase-A bootstrap sub-steps for the laptop's inline stepper. Emitted
+    // directly against `run_id` (the feature doesn't exist yet), matching the
+    // `bootstrap_progress` payload the feature-start tail emits later so the
+    // frontend normalizes both into one stepper. `bootstrap_run` is the id the
+    // laptop tails; the feature-start phases carry their own ids.
+    let bstep = |phase: &str, label: &str, status: &str, detail: Option<&str>| {
+        emit(
+            &svc.ctx,
+            run_id,
+            "bootstrap_progress",
+            serde_json::json!({ "phase": phase, "label": label, "status": status, "detail": detail }),
+        );
+    };
 
-    let strategy = bootstrap::bootstrap_project(&svc.ctx, project.id.0.clone())
-        .await
-        .map_err(|e| format!("bootstrap failed: {}", e))?;
+    bstep("cloning", "Cloning repository", "running", None);
+    if let Err(e) = pre_clone_with_askpass(svc, &project.id, spec, &pat).await {
+        bstep("cloning", "Cloning repository", "failed", Some(&e));
+        return Err(e);
+    }
+    bstep("cloning", "Cloning repository", "completed", None);
+
+    bstep(
+        "detecting_strategy",
+        "Detecting project layout",
+        "running",
+        None,
+    );
+    let strategy = match bootstrap::bootstrap_project(&svc.ctx, project.id.0.clone()).await {
+        Ok(s) => s,
+        Err(e) => {
+            let e = format!("bootstrap failed: {}", e);
+            bstep(
+                "detecting_strategy",
+                "Detecting project layout",
+                "failed",
+                Some(&e),
+            );
+            return Err(e);
+        }
+    };
+    bstep(
+        "detecting_strategy",
+        "Detecting project layout",
+        "completed",
+        None,
+    );
 
     // Persist the settings the run will execute under. Two inputs merge
     // here (MC-D4 / P0.5): the bootstrap-*detected* worktree strategy (it

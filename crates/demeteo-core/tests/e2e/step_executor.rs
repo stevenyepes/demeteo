@@ -25,6 +25,20 @@ impl NotificationPort for FakeNotif {
     }
 }
 
+/// A `NotificationPort` that records every emitted event, so a test can
+/// assert on the `BootstrapProgress` / `FeatureStatusChanged` sequence a
+/// bootstrap produces.
+#[derive(Default)]
+struct CapturingNotif {
+    events: std::sync::Mutex<Vec<DomainEvent>>,
+}
+impl NotificationPort for CapturingNotif {
+    fn emit(&self, event: &DomainEvent) -> Result<(), String> {
+        self.events.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+}
+
 struct FakeAgentExec;
 #[async_trait::async_trait]
 impl AgentExecutionPort for FakeAgentExec {
@@ -539,6 +553,13 @@ async fn test_gate_decide_recovers_after_driver_death() {
 async fn build_test_executor(
     label: &str,
 ) -> (DagStepExecutor, Arc<SqliteAdapter>, std::path::PathBuf) {
+    build_test_executor_with_notif(label, Arc::new(FakeNotif)).await
+}
+
+async fn build_test_executor_with_notif(
+    label: &str,
+    notif: Arc<dyn NotificationPort>,
+) -> (DagStepExecutor, Arc<SqliteAdapter>, std::path::PathBuf) {
     let temp_dir = std::env::temp_dir().join(format!(
         "demeteo_test_guard_{}_{}",
         label,
@@ -551,7 +572,6 @@ async fn build_test_executor(
     let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
     let db = Arc::new(SqliteAdapter::new(conn).unwrap());
     let registry = Arc::new(AgentRegistry::new(vec![]));
-    let notif = Arc::new(FakeNotif);
     let agent_exec = Arc::new(FakeAgentExec);
     let exec = Arc::new(FakeExec);
     let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
@@ -1221,5 +1241,104 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         "the refused ensure_driver_running must not have armed a driver"
     );
 
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// `feature_start` inserts the eager row as `bootstrapping` and returns
+/// immediately, then runs the bootstrap on a spawned tail that streams
+/// `BootstrapProgress` events. A bootstrap that fails (here: a project with no
+/// repository, so `resolve_execution_context` bails at the repo check) must
+/// emit a `preparing` "failed" phase and drive the feature to `failed` via a
+/// `FeatureStatusChanged` — rather than the pre-refactor behavior of returning
+/// an error straight from `feature_start`.
+#[tokio::test]
+async fn test_feature_start_bootstrap_failure_emits_events_and_fails() {
+    let notif = Arc::new(CapturingNotif::default());
+    let (executor, db, temp_dir) = build_test_executor_with_notif("boot_fail", notif.clone()).await;
+
+    let now = paths::now_ms();
+    let projects: &dyn ProjectRepository = &*db;
+    projects
+        .add(crate::domain::models::Project {
+            id: ProjectId::from("p-boot"),
+            name: "boot-test".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: now,
+        })
+        .unwrap();
+    // Deliberately no repository for the project → the bootstrap tail's
+    // `resolve_execution_context` fails at the repo check.
+
+    let feature = executor
+        .feature_start(
+            None,
+            "p-boot",
+            "wf-x",
+            "Boot Feature",
+            "a description",
+            None,
+            None,
+            None,
+            None,
+            vec![],
+            vec![],
+        )
+        .await
+        .expect("feature_start returns the eager row, not an error");
+
+    // The returned row is the eager, pre-bootstrap snapshot.
+    assert_eq!(
+        feature.status, "bootstrapping",
+        "feature_start returns immediately with a bootstrapping row"
+    );
+
+    // Wait for the spawned tail to reconcile the feature to a terminal state.
+    let features: &dyn FeatureRepository = &*db;
+    let fid = FeatureId::from(feature.id.0.clone());
+    let mut final_status = String::new();
+    for _ in 0..200 {
+        if let Ok(Some(f)) = features.get(&fid) {
+            if f.status == "failed" {
+                final_status = f.status;
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        final_status, "failed",
+        "the failed bootstrap tail marks the feature failed"
+    );
+
+    let events = notif.events.lock().unwrap();
+    let saw_preparing_failed = events.iter().any(|e| {
+        matches!(
+            e,
+            DomainEvent::BootstrapProgress { phase, status, .. }
+                if phase == "preparing" && status == "failed"
+        )
+    });
+    assert!(
+        saw_preparing_failed,
+        "expected a BootstrapProgress{{preparing, failed}} event; got: {:?}",
+        *events
+    );
+    let saw_status_failed = events.iter().any(|e| {
+        matches!(
+            e,
+            DomainEvent::FeatureStatusChanged { status, .. } if status == "failed"
+        )
+    });
+    assert!(
+        saw_status_failed,
+        "expected a FeatureStatusChanged(failed) event"
+    );
+
+    drop(events);
     let _ = std::fs::remove_dir_all(temp_dir);
 }

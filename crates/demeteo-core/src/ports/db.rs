@@ -75,6 +75,12 @@ pub struct FeaturePatch {
     pub mr_url: Option<Option<String>>,
     /// Set the MR/PR state on the feature (draft/open/merged/closed).
     pub mr_state: Option<Option<String>>,
+    /// Snapshot the resolved per-run `commit_artifacts` flag onto the row
+    /// once the bootstrap tail has resolved the execution context. The
+    /// eager row is inserted with the caller's raw override (which may be
+    /// `None` = inherit); this durably records the effective value so a
+    /// later replay is stable against project-setting drift.
+    pub commit_artifacts: Option<Option<bool>>,
 }
 
 /// Patch for [`FeatureRepository::step_update`].

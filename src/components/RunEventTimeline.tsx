@@ -290,9 +290,17 @@ export const ReinjectCredentials: React.FC<{ run: RemoteRunMirror; onResolved: (
  * (never a modal): the run view owns the run, the panel is one section
  * of it.
  */
-export const RunEventTimeline: React.FC<{ run: RemoteRunMirror; machineName: string }> = ({
+export const RunEventTimeline: React.FC<{
+  run: RemoteRunMirror;
+  machineName: string;
+  /** Notified with each batch of freshly-fetched events, so a parent can
+   *  derive its own view (e.g. the bootstrap stepper) without a second poll
+   *  of `remote_stream_events`. */
+  onEvents?: (events: RunEvent[]) => void;
+}> = ({
   run,
   machineName,
+  onEvents,
 }) => {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [error, setError] = useState<string>('');
@@ -329,6 +337,7 @@ export const RunEventTimeline: React.FC<{ run: RemoteRunMirror; machineName: str
         setConsecutiveFailures(0);
         if (!fresh || fresh.length === 0) return;
         offsetRef.current = Math.max(offsetRef.current, ...fresh.map((e) => e.offset));
+        onEvents?.(fresh);
         setEvents((prev) => [...prev, ...fresh]);
         setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 0);
       } catch (e) {

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
-import { StepExecution, RemoteRunMirror } from '../types';
+import { StepExecution, RemoteRunMirror, RunEvent, BootstrapProgressPayload } from '../types';
+import { BootstrapStepper, orderBootstrapPhases, type BootstrapPhaseView } from './BootstrapStepper';
 import { runStatusMeta, TERMINAL_STATUSES, TONE_CHIP } from '../lib/runStatus';
 import { getAgentModels } from '../lib/agentModels';
 import { useErrorBus } from '../lib/errorBus';
@@ -172,6 +173,30 @@ export function FeatureDetail() {
 
   const { reportError } = useErrorBus();
   const [steps, setSteps] = useState<StepExecution[]>([]);
+  // Bootstrap sub-step phases (feature-start "phase 0"), keyed by phase id.
+  // Fed by the local `bootstrap_progress` Tauri event and, for remote runs,
+  // by `bootstrap_progress` entries in the durable run-event log (see
+  // `handleRunEvents`). Rendered as an inline stepper above the timeline
+  // while the feature is still bootstrapping.
+  const [bootstrapPhases, setBootstrapPhases] = useState<Map<string, BootstrapPhaseView>>(
+    () => new Map(),
+  );
+  const upsertBootstrapPhase = useCallback(
+    (p: { phase: string; label?: string; status?: string; detail?: string | null }) => {
+      if (!p.phase) return;
+      setBootstrapPhases((prev) => {
+        const next = new Map(prev);
+        next.set(p.phase, {
+          id: p.phase,
+          label: p.label ?? p.phase,
+          status: p.status ?? 'running',
+          detail: p.detail ?? null,
+        });
+        return next;
+      });
+    },
+    [],
+  );
   const [featureStatus, setFeatureStatus] = useState('running');  const status = useMemo(() => {
     if (featureStatus === 'cancelled') return 'cancelled';
     if (steps.some(s => s.status === 'awaiting_gate')) return 'gated';
@@ -183,6 +208,21 @@ export function FeatureDetail() {
     return featureStatus;
   }, [steps, featureStatus]);
   const statusMeta = runStatusMeta(status);
+  // The bootstrap stepper is "phase 0": shown until the first real DAG step
+  // leaves `pending` (at which point the status timeline takes over), or while
+  // the feature is still `bootstrapping`. A failed bootstrap keeps it visible
+  // (no step ever started) so the failing phase + error stay on screen.
+  const anyStepStarted = steps.some((s) => s.status !== 'pending');
+  const orderedBootstrapPhases = useMemo<BootstrapPhaseView[]>(() => {
+    const ordered = orderBootstrapPhases(bootstrapPhases);
+    if (ordered.length === 0 && featureStatus === 'bootstrapping') {
+      // Fresh launch, before the first event lands — show a running
+      // placeholder so the panel isn't momentarily blank.
+      return [{ id: 'preparing', label: 'Loading project & workflow', status: 'running', detail: null }];
+    }
+    return ordered;
+  }, [bootstrapPhases, featureStatus]);
+  const showBootstrap = !anyStepStarted && orderedBootstrapPhases.length > 0;
   const [tokens, setTokens] = useState<number>(0);
   const [totalCost, setTotalCost] = useState<number>(0);
   const [cacheReadTokens, setCacheReadTokens] = useState<number>(0);
@@ -399,6 +439,30 @@ export function FeatureDetail() {
     }
     loadFeatureData();
   });
+
+  // Local (attached) path: bootstrap sub-steps arrive as Tauri events.
+  useTauriEvent<BootstrapProgressPayload>('bootstrap_progress', (p) => {
+    if (p.feature_id && p.feature_id !== featureId) return;
+    upsertBootstrapPhase(p);
+  });
+
+  // Remote (detached) path: bootstrap sub-steps live in the run-event log.
+  // `RunEventTimeline` polls it; we tap the same batch via `onEvents` (no
+  // second poll) and lift `bootstrap_progress` entries into the phase map.
+  const handleRunEvents = useCallback(
+    (evts: RunEvent[]) => {
+      for (const e of evts) {
+        if (e.kind !== 'bootstrap_progress' || !e.payload_json) continue;
+        try {
+          const p = JSON.parse(e.payload_json);
+          if (p && typeof p.phase === 'string') upsertBootstrapPhase(p);
+        } catch {
+          /* malformed payload — skip */
+        }
+      }
+    },
+    [upsertBootstrapPhase],
+  );
 
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
     if (feature_id === featureId) {
@@ -1078,6 +1142,7 @@ export function FeatureDetail() {
                 <RunEventTimeline
                   run={remoteRun}
                   machineName={remoteMachineName ?? remoteRun.machine_id}
+                  onEvents={handleRunEvents}
                 />
                 <div className="flex items-center justify-between gap-3 px-1">
                   <p className="text-[10px] font-mono text-slate-500">
@@ -1097,13 +1162,15 @@ export function FeatureDetail() {
                 </div>
               </div>
             )}
+            {showBootstrap && <BootstrapStepper phases={orderedBootstrapPhases} />}
             <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
-              {remoteRun && steps.length === 0 && (
+              {remoteRun && steps.length === 0 && bootstrapPhases.size === 0 && (
                 /* Eager shadow, pre-hydration: the run was submitted a
                    moment ago and the runner hasn't bootstrapped a
                    feature yet, so there are no shadow steps to mirror.
                    The 3s remote_refresh_run poll above fills this in as
-                   soon as the runner reports them. */
+                   soon as the runner reports them. Suppressed once the
+                   richer bootstrap stepper has phases to show. */
                 <div className="glass-panel p-6 border border-cyan-500/20">
                   <div className="flex items-center gap-3">
                     <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin shrink-0" />

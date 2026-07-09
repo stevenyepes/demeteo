@@ -18,6 +18,7 @@ use std::sync::Arc;
 /// profile (`mise`/`asdf`/`nvm` shims) never run through here; they run through
 /// the login-shell paths — the agent spawn (`spawn_interactive`), the harness
 /// gate (`driver::verifier::harness_shell_options`), and remote agent install.
+#[derive(Clone)]
 pub struct GitOpsHelper {
     pub(crate) app_settings: Arc<dyn AppSettingsRepository>,
     pub(crate) exec: Arc<dyn ExecutionPort>,

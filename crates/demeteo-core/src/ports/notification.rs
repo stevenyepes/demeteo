@@ -35,6 +35,27 @@ pub enum DomainEvent {
         status: String,
     },
 
+    /// Emitted for each sub-step of the feature *bootstrap* phase — the
+    /// work between "user clicked Launch" and "the first DAG step runs"
+    /// (resolve context / SSH handshake / sync origin / create branch /
+    /// register steps / start pipeline). Lets the UI animate an inline
+    /// stepper instead of blocking on a spinner while the (possibly
+    /// remote, possibly network-bound) bootstrap runs.
+    ///
+    /// `phase` is a stable machine id (e.g. `"connecting"`,
+    /// `"syncing_origin"`) the frontend orders by; `label` is the
+    /// human-readable text the frontend renders verbatim so the phase
+    /// vocabulary lives in one place (the emitter). `status` is one of
+    /// `"running" | "completed" | "failed" | "skipped"`. `detail`
+    /// carries an optional log line or, for `"failed"`, the error text.
+    BootstrapProgress {
+        feature_id: FeatureId,
+        phase: String,
+        label: String,
+        status: String,
+        detail: Option<String>,
+    },
+
     /// Emitted on every step state transition inside a feature, with
     /// accumulated cost, tokens, cache-savings telemetry, and elapsed
     /// time so the UI can render progress without a poll.

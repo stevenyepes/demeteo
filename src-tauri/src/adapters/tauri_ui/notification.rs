@@ -59,6 +59,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "environment_not_ready",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::BootstrapProgress { .. } => (
+                "bootstrap_progress",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
         };
 
         self.app

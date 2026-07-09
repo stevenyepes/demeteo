@@ -103,6 +103,37 @@ export interface RunEvent {
   created_at: number;
 }
 
+/** A single feature-start sub-step, streamed while a feature is
+ *  `bootstrapping` — mirrors `DomainEvent::BootstrapProgress`. Delivered as
+ *  a Tauri `bootstrap_progress` event (local) or a `bootstrap_progress`
+ *  {@link RunEvent} in the durable log (remote/detached). `phase` is a stable
+ *  id the UI orders by; `label` is rendered verbatim; `status` drives the
+ *  status dot. */
+export interface BootstrapProgressPayload {
+  feature_id?: string;
+  phase: string;
+  label: string;
+  status: 'running' | 'completed' | 'failed' | 'skipped' | string;
+  detail?: string | null;
+}
+
+/** Canonical display order for the bootstrap stepper. Phases not listed
+ *  (e.g. a future addition) sort after these, in first-seen order. Mirrors
+ *  the `bootstrap_phase` vocabulary in `demeteo-core` plus the runner's
+ *  clone phases. */
+export const BOOTSTRAP_PHASE_ORDER: ReadonlyArray<string> = [
+  'cloning',
+  'detecting_strategy',
+  'preparing',
+  'connecting',
+  'verifying_repo',
+  'preparing_context',
+  'syncing_origin',
+  'creating_branch',
+  'registering',
+  'starting_pipeline',
+];
+
 // ── Create-Project Wizard ──────────────────────────────────────────────
 //
 // The create-project wizard is a routed `AppView` that walks the user

@@ -180,6 +180,7 @@ impl FeatureRepository for SqliteAdapter {
         let model: Option<Option<String>> = patch.model.clone();
         let mr_url: Option<Option<String>> = patch.mr_url.clone();
         let mr_state: Option<Option<String>> = patch.mr_state.clone();
+        let commit_artifacts: Option<Option<bool>> = patch.commit_artifacts;
 
         // Build the SET clause dynamically so a `None` field on the patch
         // actually means "leave the column alone". The previous code
@@ -221,6 +222,11 @@ impl FeatureRepository for SqliteAdapter {
         if let Some(state) = mr_state {
             sets.push("mr_state=?");
             binds.push(Box::new(state));
+        }
+        if let Some(ca) = commit_artifacts {
+            sets.push("commit_artifacts=?");
+            // Mirror `add`: bool → 0/1, `None` (inherit) → SQL NULL.
+            binds.push(Box::new(ca.map(|v| if v { 1i64 } else { 0i64 })));
         }
         if sets.is_empty() {
             return Ok(());
