@@ -18,6 +18,7 @@ import {
   ListTree,
 } from 'lucide-react';
 import type { Machine, RemoteRunMirror, RunEvent } from '../types';
+import { Modal } from './ui/Modal';
 import { useNavigation } from '../context';
 
 /**
@@ -308,8 +309,8 @@ const LiveEventView: React.FC<{ run: RemoteRunMirror; machineName: string; onClo
   }, [run.machine_id, run.run_id, isTerminal]);
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
-      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-lg h-[70vh] shadow-2xl overflow-hidden flex flex-col">
+    <Modal onClose={onClose} backdropClassName="p-4" className="w-full max-w-lg">
+      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-h-[70vh] min-h-0 shadow-2xl overflow-hidden flex flex-col">
         <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between bg-[#050508]">
           <div className="flex items-center gap-2 min-w-0">
             <Radio className={`w-4 h-4 shrink-0 ${error ? 'text-slate-600' : isTerminal ? 'text-slate-500' : 'text-cyan-400 animate-pulse'}`} />
@@ -337,7 +338,9 @@ const LiveEventView: React.FC<{ run: RemoteRunMirror; machineName: string; onClo
         <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-2">
           {error && (
             <p className="text-ruby-300 break-all">
-              Lost the connection to {machineName}: {error}. Still retrying every 2s — events shown so far are not lost.
+              {isTerminal
+                ? `Couldn't fetch the log from ${machineName}: ${error}.`
+                : `Lost the connection to ${machineName}: ${error}. Still retrying every 2s — events shown so far are not lost.`}
             </p>
           )}
           {events.length === 0 && !error && (
@@ -357,7 +360,7 @@ const LiveEventView: React.FC<{ run: RemoteRunMirror; machineName: string; onClo
           <div ref={bottomRef} />
         </div>
       </div>
-    </div>
+    </Modal>
   );
 };
 

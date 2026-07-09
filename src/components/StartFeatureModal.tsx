@@ -15,6 +15,13 @@ interface StartFeatureModalProps {
   repositories: Repository[];
   /** Display name for the project (shown in the header). */
   projectName?: string;
+  /** The project's `compute_type` ('local' | 'remote'). When 'remote',
+   * a machine-less launch is attached-remote: the desktop app
+   * orchestrates over SSH against `remoteHost` — a project-level fact
+   * the "Where to run" section states rather than a per-run choice. */
+  computeType?: string;
+  /** The project's `remote_host` machine id (attached-remote only). */
+  remoteHost?: string | null;
   /** Pre-select a specific workflow id (e.g. the one the user clicked). */
   defaultWorkflowId?: string | null;
   onClose: () => void;
@@ -95,6 +102,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   projectId,
   repositories,
   projectName,
+  computeType,
+  remoteHost,
   defaultWorkflowId,
   onClose,
   onLaunch,
@@ -154,13 +163,27 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [visionWarningDismissed, setVisionWarningDismissed] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
 
-  // Remote execution (M6.1): "Run on machine ▾" + unattended toggle +
+  // Remote execution (M6.1): "Where to run" + unattended toggle +
   // budget cap. `machineId === ''` means "run here" (today's behavior).
   const [machines, setMachines] = useState<Machine[]>([]);
   const [machineId, setMachineId] = useState<string>('');
   const [unattended, setUnattended] = useState(false);
   const [maxCostUsd, setMaxCostUsd] = useState<string>('');
   const [maxWallClockMins, setMaxWallClockMins] = useState<string>('');
+
+  // F13 honesty: the detached path (`remote_submit_run`) doesn't carry
+  // attachments, per-step overrides, commit-artifacts, or an explicit
+  // repo selection yet — gray those controls out (and drop their values
+  // at launch) instead of silently discarding what the user staged.
+  const detachedUnsupported = machineId !== '';
+  // Attached-remote is a project-level setting, not a per-run choice:
+  // a machine-less launch on such a project executes over SSH with the
+  // desktop app orchestrating. Stated in "Where to run" as a fact.
+  const attachedRemote = computeType === 'remote';
+  const remoteMachines = useMemo(
+    () => machines.filter((m) => m.auth_type !== 'local'),
+    [machines],
+  );
 
   // Initialize workflow picker to the requested default (or the first
   // workflow if none specified) when the modal opens.
@@ -472,10 +495,14 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       agentKind: agentKind.trim() || undefined,
       model: model.trim() || undefined,
       targetRepos,
-      commitArtifacts: commitArtifactsArg,
+      // The detached path can't carry these yet (F13) — the matching
+      // controls are disabled above, and any values set before the
+      // machine was picked are dropped here rather than silently lost
+      // in the submit command.
+      commitArtifacts: detachedUnsupported ? undefined : commitArtifactsArg,
       loopIterations: Number.isFinite(loopArg as number) ? loopArg : undefined,
-      stepOverrides: overrides.length > 0 ? overrides : undefined,
-      attachments: attachments.length > 0 ? attachments : undefined,
+      stepOverrides: !detachedUnsupported && overrides.length > 0 ? overrides : undefined,
+      attachments: !detachedUnsupported && attachments.length > 0 ? attachments : undefined,
       machineId: machineId || undefined,
       machineName: machineId ? machines.find((m) => m.id === machineId)?.name : undefined,
       unattended: machineId ? unattended : undefined,
@@ -529,13 +556,20 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 optional · referenced as [attachment -- &lt;name&gt;] in prompts
               </span>
             </div>
-            <AttachmentDropzone
-              mode="launch"
-              label="Add files"
-              stageEntries={attachments}
-              onChangeStage={setAttachments}
-              maxChips={6}
-            />
+            <div className={detachedUnsupported ? 'opacity-40 pointer-events-none' : ''} aria-disabled={detachedUnsupported}>
+              <AttachmentDropzone
+                mode="launch"
+                label="Add files"
+                stageEntries={attachments}
+                onChangeStage={setAttachments}
+                maxChips={6}
+              />
+            </div>
+            {detachedUnsupported && (
+              <p className="text-[10px] font-mono text-amber-300 mt-1.5">
+                Attachments aren't sent on detached runs yet — they'll be ignored for this launch.
+              </p>
+            )}
           </div>
 
           {/* Title */}
@@ -585,6 +619,106 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             </select>
           </div>
 
+          {/* Where to run (docs/REMOTE_EXECUTION_PLAN.md M6.1). Surfaced
+              beside the workflow instead of inside Customize: where a run
+              executes is as fundamental as what it runs, and burying the
+              remote/unattended entry point made it invisible. */}
+          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+            <label className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5 uppercase tracking-wider">
+              <Server className="w-3.5 h-3.5 text-cyan-400" />
+              Where to run
+            </label>
+            {remoteMachines.length > 0 ? (
+              <>
+                <select
+                  value={machineId}
+                  onChange={(e) => setMachineId(e.target.value)}
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+                >
+                  <option value="">
+                    {attachedRemote ? `Project machine — ${remoteHost ?? 'remote host'} (SSH)` : 'This machine'}
+                  </option>
+                  {remoteMachines.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} — detached
+                    </option>
+                  ))}
+                </select>
+                {!machineId && attachedRemote && (
+                  <p className="text-[10px] font-mono text-cyan-300/80 mt-1.5 leading-relaxed">
+                    Attached — executes on {remoteHost ?? 'the project machine'} over SSH with Demeteo
+                    orchestrating (project setting). Keep the app open while it runs.
+                  </p>
+                )}
+                {machineId && (
+                  <div className="mt-2 space-y-2.5 pl-3 border-l border-white/5">
+                    <p className="text-[10px] font-mono text-cyan-300/80 leading-relaxed">
+                      Detached — runs unattended on{' '}
+                      <span className="font-semibold">
+                        {machines.find((m) => m.id === machineId)?.name ?? machineId}
+                      </span>
+                      ; you can close Demeteo and the run continues.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setUnattended((v) => !v)}
+                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] font-semibold uppercase tracking-wider border transition-colors ${
+                        unattended
+                          ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
+                          : 'bg-[#050508] border-white/10 text-slate-400 hover:border-white/20'
+                      }`}
+                    >
+                      <MoonStar className="w-3.5 h-3.5" />
+                      Unattended
+                    </button>
+                    <p className="text-[10px] font-mono text-slate-500 leading-relaxed">
+                      {unattended
+                        ? 'Review gates and merges to the feature branch auto-approve. Merge-to-default and over-budget gates park for you — see Runs.'
+                        : 'Gates wait for you to decide, same as a local run — the run just executes on the chosen machine.'}
+                    </p>
+                    {unattended && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                            Max cost (USD)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={maxCostUsd}
+                            onChange={(e) => setMaxCostUsd(e.target.value)}
+                            placeholder="no cap"
+                            className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                            Max wall-clock (min)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={maxWallClockMins}
+                            onChange={(e) => setMaxWallClockMins(e.target.value)}
+                            placeholder="no cap"
+                            className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-[10px] font-mono text-slate-500 leading-relaxed">
+                {attachedRemote
+                  ? `Executes on ${remoteHost ?? 'the project machine'} over SSH (project setting).`
+                  : 'This machine. Add a remote machine under Machines to run detached.'}
+              </p>
+            )}
+          </div>
+
           {/* Target repositories (Q25 — repos inferred from the description
               pre-check; toggling switches to an explicit selection). Kept
               always-visible and interactive: which repos a run touches is
@@ -601,7 +735,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   {repoOverride === null ? '(auto-detected from description)' : '(custom selection)'}
                 </span>
               </div>
-              <div className="space-y-1">
+              {detachedUnsupported && (
+                <p className="text-[10px] font-mono text-amber-300 mb-2">
+                  Detached runs use the project's first repository — this selection doesn't apply.
+                </p>
+              )}
+              <div className={`space-y-1 ${detachedUnsupported ? 'opacity-40 pointer-events-none' : ''}`} aria-disabled={detachedUnsupported}>
                 {repositories.map((r) => {
                   const checked = selectedRepoIds.includes(r.id);
                   const inUse = conflicts.has(r.id);
@@ -652,14 +791,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               {showAdvanced ? 'Hide' : 'Customize…'}
             </button>
-            {/* Surface-level hint that remote/unattended execution exists
-                — otherwise it's invisible unless a user already knows to
-                expand Customize and look for it. */}
-            {!showAdvanced && machines.filter((m) => m.auth_type !== 'local').length > 0 && (
-              <span className="text-[11px] text-slate-500 flex items-center gap-1">
-                <Server className="w-3 h-3" /> Remote machines available
-              </span>
-            )}
           </div>
 
           {showAdvanced && (
@@ -690,90 +821,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 />
               </div>
 
-              {/* Run on machine (docs/REMOTE_EXECUTION_PLAN.md M6.1).
-                  Only remote machines run headless — the built-in local
-                  machine keeps using the existing `start_feature` path,
-                  so it's excluded from this picker. Given a distinct
-                  bordered treatment (not a plain text-input row) so the
-                  remote/unattended entry point doesn't blend into
-                  "Default agent"/"Default model" above it — this is the
-                  whole feature's entry point, easy to miss otherwise. */}
-              {machines.filter((m) => m.auth_type !== 'local').length > 0 && (
-                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
-                  <label className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5 uppercase tracking-wider">
-                    <Server className="w-3.5 h-3.5 text-cyan-400" />
-                    Run on machine
-                  </label>
-                  <select
-                    value={machineId}
-                    onChange={(e) => setMachineId(e.target.value)}
-                    className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
-                  >
-                    <option value="">This machine</option>
-                    {machines
-                      .filter((m) => m.auth_type !== 'local')
-                      .map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                  </select>
-
-                  {machineId && (
-                    <div className="mt-2 space-y-2.5 pl-3 border-l border-white/5">
-                      <button
-                        type="button"
-                        onClick={() => setUnattended((v) => !v)}
-                        className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] font-semibold uppercase tracking-wider border transition-colors ${
-                          unattended
-                            ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
-                            : 'bg-[#050508] border-white/10 text-slate-400 hover:border-white/20'
-                        }`}
-                      >
-                        <MoonStar className="w-3.5 h-3.5" />
-                        Unattended
-                      </button>
-                      <p className="text-[10px] font-mono text-slate-500 leading-relaxed">
-                        {unattended
-                          ? 'Review gates and merges to the feature branch auto-approve. Merge-to-default and over-budget gates park for you — see the return inbox.'
-                          : 'Gates wait for you to decide, same as a local run — the run just executes on the chosen machine.'}
-                      </p>
-                      {unattended && (
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                              Max cost (USD)
-                            </label>
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={maxCostUsd}
-                              onChange={(e) => setMaxCostUsd(e.target.value)}
-                              placeholder="no cap"
-                              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                              Max wall-clock (min)
-                            </label>
-                            <input
-                              type="number"
-                              min={0}
-                              value={maxWallClockMins}
-                              onChange={(e) => setMaxWallClockMins(e.target.value)}
-                              placeholder="no cap"
-                              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* Per-step agent/model overrides. Blank row = inherit the
                   default above → the workflow step → the project default. */}
               {steps.length > 0 && (
@@ -781,7 +828,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
                     Per-step overrides (optional)
                   </label>
-                  <div className="space-y-2.5">
+                  {detachedUnsupported && (
+                    <p className="text-[10px] font-mono text-amber-300 mb-2">
+                      Per-step overrides aren't sent on detached runs yet — they'll be ignored for this launch.
+                    </p>
+                  )}
+                  <div className={`space-y-2.5 ${detachedUnsupported ? 'opacity-40 pointer-events-none' : ''}`} aria-disabled={detachedUnsupported}>
                     {steps.map((s, i) => {
                       const ov = stepOverrides[s.id] || { agent_kind: '', model: '' };
                       const setOv = (patch: Partial<{ agent_kind: string; model: string }>) =>
@@ -839,7 +891,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
                   Commit artifacts to PR
                 </label>
-                <div className="grid grid-cols-3 gap-1.5">
+                {detachedUnsupported && (
+                  <p className="text-[10px] font-mono text-amber-300 mb-2">
+                    Not sent on detached runs yet — the project default applies on the runner.
+                  </p>
+                )}
+                <div className={`grid grid-cols-3 gap-1.5 ${detachedUnsupported ? 'opacity-40 pointer-events-none' : ''}`} aria-disabled={detachedUnsupported}>
                   {([
                     { key: 'inherit', label: 'Project default', desc: 'Inherit' },
                     { key: 'yes', label: 'Yes', desc: 'Ship reports in the PR' },
@@ -863,14 +920,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
                   Each step produces a report (<code>research-report.md</code>, <code>critic-review.md</code>, …). The project's default is configured in project settings.
                 </p>
-                {machineId && (
-                  <p className="text-[10px] font-mono text-cyan-300/80 mt-1.5 leading-relaxed">
-                    Remote run: the reports are mirrored back to this laptop and always
-                    reachable from the <em>Return inbox → View feature</em> — leaving this
-                    <em> No</em> keeps them out of the PR without losing them. Choose
-                    <em> Yes</em> only if you also want them committed to the branch.
-                  </p>
-                )}
                 {workflowId === 'wf-starter-docs-update' && (
                   <p className="text-[10px] font-mono text-amber-300/80 mt-1.5 leading-relaxed">
                     For docs-update: the new doc body lands at the real <code>docs/…​</code> path the survey/gate approved; <code>{'{{report_dir}}'}</code> holds only the short change-summary report. Leave <em>Project default</em> (commit <code>false</code>) so the new doc reaches the PR while the summary stays out of it.
@@ -909,15 +958,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               >
                 <X className="w-3.5 h-3.5" />
               </button>
-            </div>
-          )}
-          {machineId && (
-            <div className="flex items-start gap-2 px-3 py-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 text-[11px] font-mono text-cyan-200/90">
-              <Server className="w-3.5 h-3.5 mt-0.5 shrink-0 text-cyan-400" />
-              <span>
-                Runs on <span className="font-semibold">{machines.find((m) => m.id === machineId)?.name ?? machineId}</span>.
-                {unattended ? ' You can close Demeteo — this run continues in the background.' : ' Gates still wait for you, but the work happens on that machine.'}
-              </span>
             </div>
           )}
           <div className="flex justify-between items-center">
