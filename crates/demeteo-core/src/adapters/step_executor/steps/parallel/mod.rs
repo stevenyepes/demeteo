@@ -158,7 +158,7 @@ impl ExecutionDriver {
                     &format!(
                         "git -C {} reset --hard {}",
                         paths::shell_escape_posix(&self.target_dir),
-                        &base_sha,
+                        base_sha,
                     ),
                 )
                 .await;
@@ -248,7 +248,7 @@ impl ExecutionDriver {
                         &format!(
                             "git -C {} reset --hard {}",
                             paths::shell_escape_posix(&self.target_dir),
-                            &base_sha,
+                            base_sha,
                         ),
                     )
                     .await;

@@ -256,7 +256,7 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Some(state) = window.try_state::<terminal::SessionState>() {
                     if let Ok(sessions) = state.sessions.lock() {
-                        for (_, active) in sessions.iter() {
+                        for active in sessions.values() {
                             match &active.write_sink {
                                 terminal::WriteSink::Ssh(ch) => {
                                     if let Ok(mut chan) = ch.lock() {
