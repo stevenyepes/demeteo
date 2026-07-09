@@ -150,6 +150,10 @@ export const RunEventTimeline: React.FC<{ run: RemoteRunMirror; machineName: str
   const isTerminal = TERMINAL_STATUSES.includes(run.status);
 
   useEffect(() => {
+    // Collapsed panel = nothing to paint; don't keep the 2s poll (and its
+    // SSH round-trips) alive for it. `offsetRef` survives the collapse, so
+    // reopening resumes from the last consumed event instead of refetching.
+    if (!open) return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -188,7 +192,7 @@ export const RunEventTimeline: React.FC<{ run: RemoteRunMirror; machineName: str
       cancelled = true;
       clearInterval(interval);
     };
-  }, [run.machine_id, run.run_id, isTerminal]);
+  }, [run.machine_id, run.run_id, isTerminal, open]);
 
   return (
     <div className="glass-panel border border-white/5 overflow-hidden">

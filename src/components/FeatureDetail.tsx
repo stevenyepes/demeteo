@@ -26,6 +26,7 @@ import {
 import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
 import { RemoteGateActions, RunEventTimeline } from './RunEventTimeline';
+import { bucketFor } from './RemoteRunInbox';
 import { useNavigation, useProject, useUIState } from '../context';
 import { formatCost, relativeTime } from '../lib/utils';
 
@@ -181,6 +182,7 @@ export function FeatureDetail() {
     if (steps.length > 0 && steps.every(s => s.status === 'completed')) return 'completed';
     return featureStatus;
   }, [steps, featureStatus]);
+  const statusMeta = runStatusMeta(status);
   const [tokens, setTokens] = useState<number>(0);
   const [totalCost, setTotalCost] = useState<number>(0);
   const [cacheReadTokens, setCacheReadTokens] = useState<number>(0);
@@ -801,10 +803,10 @@ export function FeatureDetail() {
             <h1 className="text-xl font-bold font-display text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1" title={featureTitle}>{featureTitle}</h1>
             <span
               className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
-                TONE_CHIP[runStatusMeta(status).tone]
-              } ${runStatusMeta(status).active ? 'animate-pulse' : ''}`}
+                TONE_CHIP[statusMeta.tone]
+              } ${statusMeta.active ? 'animate-pulse' : ''}`}
             >
-              {runStatusMeta(status).label}
+              {statusMeta.label}
             </span>
             {/* Transport badge: where this run executes. Detached runs
                 (mirror-listed) pulse while the 3s poll live-tails them;
@@ -1064,7 +1066,10 @@ export function FeatureDetail() {
                       ? `Final state synced ${relativeTime(remoteRun.updated_at)}`
                       : `Last synced ${relativeTime(remoteRun.updated_at)} · polling every 3s`}
                   </p>
-                  {remoteRun.status === 'parked' && (
+                  {/* Same grouping as the Runs inbox: `over-budget` parks
+                      too, and RemoteGateActions already renders its
+                      no-gate explanation for it. */}
+                  {bucketFor(remoteRun.status) === 'parked' && (
                     <RemoteGateActions run={remoteRun} onResolved={refreshRemoteRun} />
                   )}
                 </div>

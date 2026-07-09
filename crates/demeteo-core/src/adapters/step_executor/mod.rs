@@ -102,6 +102,13 @@ pub struct DagStepExecutor {
     /// so [`UsageAccumulator`](crate::domain::usage::UsageAccumulator) can
     /// backfill `cost_usd` when the agent's wire format omits it.
     pricing: Arc<dyn PricingTable>,
+    /// Remote-run mirror (C4.2). A feature listed here is a read-only
+    /// *shadow* of a run a `demeteo-runner` owns and drives on another
+    /// machine — the engine must never interrupt its steps or arm a
+    /// local driver against it (`ensure_driver_running`,
+    /// `startup_watchdog`, `resume_interrupted_features` all consult it).
+    /// Empty on the runner itself (its mirror table never gains rows).
+    remote_run_mirror: Arc<dyn crate::ports::remote_run_mirror::RemoteRunMirrorPort>,
 }
 
 impl DagStepExecutor {
@@ -142,6 +149,7 @@ impl DagStepExecutor {
         attachment_json: Arc<dyn AttachmentJsonPort>,
         workspace_dir: PathBuf,
         pricing: Arc<dyn PricingTable>,
+        remote_run_mirror: Arc<dyn crate::ports::remote_run_mirror::RemoteRunMirrorPort>,
     ) -> Self {
         let git_ops = GitOpsHelper::new(app_settings.clone(), exec.clone());
         Self {
@@ -169,7 +177,21 @@ impl DagStepExecutor {
             driver_registry: DriverRegistry::new(),
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
             pricing,
+            remote_run_mirror,
         }
+    }
+
+    /// The feature ids currently listed in the remote-run mirror — the
+    /// runner-owned shadow set (C4.2) restart reconciliation and driver
+    /// recovery must leave alone. Read fresh on each use: a run can be
+    /// submitted (or its mirror row hydrated) at any point after startup.
+    pub(crate) fn runner_owned_features(&self) -> std::collections::HashSet<String> {
+        self.remote_run_mirror
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|r| r.feature_id)
+            .collect()
     }
 
     /// Read-only view of the live-driver registry, used by `gate_decide`

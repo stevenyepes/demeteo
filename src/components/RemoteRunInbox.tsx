@@ -16,7 +16,7 @@ import {
 import type { Machine, RemoteRunMirror } from '../types';
 import { StatusBadge } from './ui/StatusBadge';
 import { RemoteGateActions } from './RunEventTimeline';
-import { runStatusMeta, TONE_BORDER_L, TONE_TEXT } from '../lib/runStatus';
+import { runStatusMeta, TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
 import { relativeTime } from '../lib/utils';
 import { useNavigation } from '../context';
 
@@ -54,21 +54,21 @@ const BUCKET_ORDER: Bucket[] = [
   'cancelled',
 ];
 
-/** Per-bucket label + icon; colors come from the shared status
- *  vocabulary (`lib/runStatus.ts`, F27) via each bucket's
- *  representative status, so the inbox can't drift from the rest of
- *  the app again. */
+/** Per-bucket label + icon + tone. Tones are the shared status
+ *  vocabulary's (`lib/runStatus.ts`, F27): each bucket carries the tone
+ *  of the statuses it groups, so the inbox speaks the same color
+ *  language as every other run surface. */
 const BUCKET_META: Record<
   Bucket,
-  { label: string; icon: React.ComponentType<{ className?: string }>; status: string }
+  { label: string; icon: React.ComponentType<{ className?: string }>; tone: RunStatusTone }
 > = {
-  pr_ready: { label: 'PR ready', icon: CheckCircle2, status: 'awaiting_mr' },
-  failed: { label: 'Failed', icon: XCircle, status: 'failed' },
-  parked: { label: 'Parked — needs you', icon: PauseCircle, status: 'parked' },
-  needs_credentials: { label: 'Needs credentials', icon: KeyRound, status: 'needs-credentials' },
-  running: { label: 'Running', icon: Loader, status: 'running' },
-  unreachable: { label: 'Unreachable', icon: WifiOff, status: 'unreachable' },
-  cancelled: { label: 'Cancelled', icon: Ban, status: 'cancelled' },
+  pr_ready: { label: 'PR ready', icon: CheckCircle2, tone: 'emerald' },
+  failed: { label: 'Failed', icon: XCircle, tone: 'ruby' },
+  parked: { label: 'Parked — needs you', icon: PauseCircle, tone: 'amber' },
+  needs_credentials: { label: 'Needs credentials', icon: KeyRound, tone: 'amber' },
+  running: { label: 'Running', icon: Loader, tone: 'cyan' },
+  unreachable: { label: 'Unreachable', icon: WifiOff, tone: 'slate' },
+  cancelled: { label: 'Cancelled', icon: Ban, tone: 'slate' },
 };
 
 export function bucketFor(status: string): Bucket {
@@ -259,8 +259,7 @@ const RemoteRunInbox: React.FC = () => {
           <div className="space-y-6">
             {BUCKET_ORDER.filter((b) => grouped[b].length > 0).map((bucket) => {
               const meta = BUCKET_META[bucket];
-              const tone = runStatusMeta(meta.status).tone;
-              const accent = TONE_TEXT[tone];
+              const accent = TONE_TEXT[meta.tone];
               const Icon = meta.icon;
               return (
                 <div key={bucket}>
@@ -274,7 +273,7 @@ const RemoteRunInbox: React.FC = () => {
                       <div
                         key={`${run.machine_id}:${run.run_id}`}
                         onClick={() => openRun(run)}
-                        className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[tone]} ${
+                        className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[meta.tone]} ${
                           run.feature_id ? 'cursor-pointer hover:bg-white/[0.03] transition-colors' : ''
                         }`}
                         title={run.feature_id ? 'Open this run' : undefined}
