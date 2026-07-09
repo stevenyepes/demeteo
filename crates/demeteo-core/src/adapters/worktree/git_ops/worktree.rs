@@ -148,7 +148,7 @@ impl GitOpsHelper {
         );
         match self.exec.run_command(machine_str, &cmd).await {
             Ok(_) => Ok(()),
-            Err(_) => {
+            Err(create_err) => {
                 // Branch may already exist from a prior interrupted run.
                 // Verify the ref is reachable; if so, we can proceed.
                 let check = format!(
@@ -159,7 +159,19 @@ impl GitOpsHelper {
                     .run_command(machine_str, &check)
                     .await
                     .map(|_| ())
-                    .map_err(|_| format!("Failed to create feature branch '{}'", branch_name))
+                    // Surface the real git error from the *create* attempt (not
+                    // the verify probe, whose "unknown revision" just means the
+                    // branch legitimately doesn't exist yet). The create stderr
+                    // carries the actionable cause — e.g. a start-point that
+                    // doesn't exist locally (`not a valid object name: 'main'`
+                    // when the repo's default is really `master`). Swallowing it
+                    // left every failure looking identical.
+                    .map_err(|_| {
+                        format!(
+                            "Failed to create feature branch '{}' off '{}': {}",
+                            branch_name, default_branch, create_err
+                        )
+                    })
             }
         }
     }
