@@ -209,9 +209,27 @@ pub async fn execute_run(
 
     pre_clone_with_askpass(svc, &project.id, spec, &pat).await?;
 
-    bootstrap::bootstrap_project(&svc.ctx, project.id.0.clone())
+    let strategy = bootstrap::bootstrap_project(&svc.ctx, project.id.0.clone())
         .await
         .map_err(|e| format!("bootstrap failed: {}", e))?;
+
+    // Persist the detected worktree strategy into the project's settings.
+    // The desktop flow saves this once the user approves the bootstrap
+    // proposal; the runner is unattended, so it accepts the detection
+    // verbatim. Without this, `get_settings` returns None at feature_start and
+    // `fetch_default_settings` supplies `default_branch = "main"` — so
+    // `create_feature_branch` runs `git branch -f <feature> main` and fails on
+    // any repo whose real default is e.g. `master`. Bootstrap already read the
+    // true default from `origin/HEAD`, so save it (plus the rest of the
+    // detected strategy: test command, PR template, …).
+    let mut settings = fetch_default_settings();
+    settings.project_id = project.id.clone();
+    settings.worktree_strategy = strategy;
+    svc.ctx
+        .projects
+        .save_settings(settings)
+        .map_err(|e| format!("failed to persist detected strategy: {}", e))?;
+
     eprintln!(
         "[demeteo-runner] project bootstrapped (cloned {})",
         spec.repo_path
