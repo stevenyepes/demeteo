@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   RefreshCw,
@@ -10,26 +10,29 @@ import {
   WifiOff,
   ExternalLink,
   Ban,
-  ThumbsUp,
-  ThumbsDown,
   Inbox,
-  Radio,
-  X,
   ListTree,
 } from 'lucide-react';
-import type { Machine, RemoteRunMirror, RunEvent } from '../types';
-import { Modal } from './ui/Modal';
+import type { Machine, RemoteRunMirror } from '../types';
 import { StatusBadge } from './ui/StatusBadge';
-import { runStatusMeta, TERMINAL_STATUSES, TONE_BORDER_L, TONE_TEXT } from '../lib/runStatus';
+import { RemoteGateActions } from './RunEventTimeline';
+import { runStatusMeta, TONE_BORDER_L, TONE_TEXT } from '../lib/runStatus';
+import { relativeTime } from '../lib/utils';
 import { useNavigation } from '../context';
 
 /**
- * Return inbox (docs/REMOTE_EXECUTION_PLAN.md M6.2, design §8). Groups
- * every mirrored remote run into the taxonomy from the design doc's
- * table: PR ready / Failed / Parked / Needs credentials / Running /
- * Unreachable. `cancelled` isn't in that table (it's a deliberate user
- * action, not an outcome to chase) so it gets its own low-priority
- * bucket rather than being crowbarred into "Failed".
+ * Runs — the cross-machine attention hub (docs/REMOTE_EXECUTION_PLAN.md
+ * M6.2, design §8). Groups every mirrored remote run into the taxonomy
+ * from the design doc's table: PR ready / Failed / Parked / Needs
+ * credentials / Running / Unreachable. `cancelled` isn't in that table
+ * (it's a deliberate user action, not an outcome to chase) so it gets
+ * its own low-priority bucket rather than being crowbarred into
+ * "Failed".
+ *
+ * This page triages; the run itself lives in `FeatureDetail` — every
+ * row deep-links there (the eager shadow feature guarantees an id from
+ * submit time), where the step timeline and the Activity event feed
+ * render together.
  */
 
 export type Bucket =
@@ -92,16 +95,6 @@ export function bucketFor(status: string): Bucket {
   }
 }
 
-function relativeTime(ms: number): string {
-  const deltaSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (deltaSec < 60) return 'just now';
-  const deltaMin = Math.floor(deltaSec / 60);
-  if (deltaMin < 60) return `${deltaMin}m ago`;
-  const deltaHr = Math.floor(deltaMin / 60);
-  if (deltaHr < 24) return `${deltaHr}h ago`;
-  return `${Math.floor(deltaHr / 24)}d ago`;
-}
-
 /**
  * "View branch diff" (docs/REMOTE_EXECUTION_PLAN.md M6.2 follow-up): a
  * run that pushed its feature branch but has no PR yet (failed/
@@ -139,242 +132,12 @@ const DiffLinkButton: React.FC<{ run: RemoteRunMirror }> = ({ run }) => {
   );
 };
 
-const ParkedRow: React.FC<{ run: RemoteRunMirror; onResolved: () => void }> = ({ run, onResolved }) => {
-  const [gateId, setGateId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [deciding, setDeciding] = useState(false);
-  const [err, setErr] = useState<string>('');
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const status: any = await invoke('remote_get_status', { machineId: run.machine_id, runId: run.run_id });
-        if (!cancelled) setGateId(status?.parked_gate_id ?? null);
-      } catch (e) {
-        if (!cancelled) setErr(String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [run.machine_id, run.run_id]);
-
-  const decide = async (decision: 'approve' | 'reject') => {
-    if (!gateId) return;
-    setDeciding(true);
-    try {
-      await invoke('remote_decide_gate', {
-        machineId: run.machine_id,
-        runId: run.run_id,
-        gateId,
-        decision,
-        feedback: null,
-      });
-      onResolved();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setDeciding(false);
-    }
-  };
-
-  if (loading) {
-    return <span className="text-[11px] text-slate-500 font-mono">Checking gate…</span>;
-  }
-  if (!gateId) {
-    // `over-budget` parks too but has no gate to decide — just point at the inbox refresh.
-    return <span className="text-[11px] text-slate-500 font-mono">Over budget — clear the cap to resume.</span>;
-  }
-  return (
-    <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => decide('approve')}
-        disabled={deciding}
-        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-300 flex items-center gap-1.5 disabled:opacity-50"
-      >
-        <ThumbsUp className="w-3 h-3" /> Approve
-      </button>
-      <button
-        type="button"
-        onClick={() => decide('reject')}
-        disabled={deciding}
-        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-ruby-500/10 border border-ruby-500/30 hover:bg-ruby-500/20 text-ruby-300 flex items-center gap-1.5 disabled:opacity-50"
-      >
-        <ThumbsDown className="w-3 h-3" /> Reject
-      </button>
-      {err && <span className="text-[10px] text-ruby-300 font-mono break-all">{err}</span>}
-    </div>
-  );
-};
-
-/** Best-effort human-readable rendering of a `RunEvent.payload_json` —
- *  most kinds carry a plain JSON string (title, branch name, url, …);
- *  a few (StepProgress-like) could carry structured JSON in the
- *  future, so this falls back to the raw text for anything that
- *  doesn't parse as a bare string. */
-function formatPayload(payloadJson: string | null): string {
-  if (!payloadJson) return '';
-  try {
-    const parsed = JSON.parse(payloadJson);
-    return typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
-  } catch {
-    return payloadJson;
-  }
-}
-
-const EVENT_KIND_LABEL: Record<string, string> = {
-  submitted: 'Submitted',
-  project_created: 'Project bootstrapped',
-  bootstrapped: 'Repository cloned',
-  feature_started: 'Feature started',
-  gate_auto_approved: 'Gate auto-approved',
-  parked: 'Parked — needs a decision',
-  over_budget: 'Over budget',
-  needs_credentials: 'Needs credentials',
-  cost: 'Total cost',
-  terminal_state: 'Reached terminal state',
-  pushed: 'Branch pushed',
-  pr_opened: 'PR opened',
-  pr_open_failed: 'PR failed to open',
-  cancelled: 'Cancelled',
-};
-
-/**
- * Live view (M6.4): tails a remote run's append-only event log
- * (`stream_events`, M3.3) while open. This is "identical to a local
- * run" for what the control channel actually carries — the run's
- * coarse milestones — not a per-token agent transcript; the runner
- * doesn't stream raw agent stdout over the control channel today.
- */
-const LiveEventView: React.FC<{ run: RemoteRunMirror; machineName: string; onClose: () => void }> = ({
-  run,
-  machineName,
-  onClose,
-}) => {
-  const [events, setEvents] = useState<RunEvent[]>([]);
-  const [error, setError] = useState<string>('');
-  // A single blip (tunnel hiccup, one dropped poll) shouldn't paint a
-  // permanent red banner over an otherwise-live view — only surface an
-  // error once a few consecutive polls have failed, and always clear it
-  // the moment a poll succeeds again. Below that threshold, show a
-  // quieter "Reconnecting…" state instead of nothing/stale silence.
-  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
-  const FAILURE_THRESHOLD = 3;
-  const offsetRef = useRef(0);
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  // A terminal run's log can't change any further — fetch it once
-  // instead of polling every 2s forever, which is what previously made
-  // "View log" on a failed/finished run indistinguishable from tailing
-  // a live one.
-  const isTerminal = TERMINAL_STATUSES.includes(run.status);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const fresh = await invoke<RunEvent[]>('remote_stream_events', {
-          machineId: run.machine_id,
-          runId: run.run_id,
-          fromOffset: offsetRef.current,
-        });
-        if (cancelled) return;
-        setError('');
-        setConsecutiveFailures(0);
-        if (!fresh || fresh.length === 0) return;
-        offsetRef.current = Math.max(offsetRef.current, ...fresh.map((e) => e.offset));
-        setEvents((prev) => [...prev, ...fresh]);
-        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 0);
-      } catch (e) {
-        if (cancelled) return;
-        // A terminal run gets exactly one fetch attempt (no retry loop
-        // to eventually succeed), so don't wait for a streak that will
-        // never accumulate — surface the failure right away.
-        if (isTerminal) {
-          setError(String(e));
-          return;
-        }
-        setConsecutiveFailures((n) => {
-          const next = n + 1;
-          if (next >= FAILURE_THRESHOLD) setError(String(e));
-          return next;
-        });
-      }
-    };
-    poll();
-    if (isTerminal) return () => { cancelled = true; };
-    const interval = setInterval(poll, 2000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [run.machine_id, run.run_id, isTerminal]);
-
-  return (
-    <Modal onClose={onClose} backdropClassName="p-4" className="w-full max-w-lg">
-      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-h-[70vh] min-h-0 shadow-2xl overflow-hidden flex flex-col">
-        <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between bg-[#050508]">
-          <div className="flex items-center gap-2 min-w-0">
-            <Radio className={`w-4 h-4 shrink-0 ${error ? 'text-slate-600' : isTerminal ? 'text-slate-500' : 'text-cyan-400 animate-pulse'}`} />
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-white truncate">{run.title}</h3>
-              <p className="text-[10px] text-slate-500 font-mono">{machineName} · run {run.run_id}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {consecutiveFailures > 0 && !error && (
-              <span className="text-[10px] text-amber-300 flex items-center gap-1">
-                <Loader className="w-3 h-3 animate-spin" /> Reconnecting…
-              </span>
-            )}
-            {error && (
-              <span className="text-[10px] text-slate-500 flex items-center gap-1">
-                <WifiOff className="w-3 h-3" /> Disconnected
-              </span>
-            )}
-            <button type="button" onClick={onClose} className="text-slate-500 hover:text-white transition-colors" aria-label="Close">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-2">
-          {error && (
-            <p className="text-ruby-300 break-all">
-              {isTerminal
-                ? `Couldn't fetch the log from ${machineName}: ${error}.`
-                : `Lost the connection to ${machineName}: ${error}. Still retrying every 2s — events shown so far are not lost.`}
-            </p>
-          )}
-          {events.length === 0 && !error && (
-            <p className="text-slate-500">Waiting for events…</p>
-          )}
-          {events.map((e) => (
-            <div key={e.offset} className="flex items-start gap-2">
-              <span className="text-slate-600 shrink-0">{new Date(e.created_at).toLocaleTimeString()}</span>
-              <div className="min-w-0">
-                <span className="text-cyan-300">{EVENT_KIND_LABEL[e.kind] ?? e.kind}</span>
-                {e.payload_json && (
-                  <span className="text-slate-400 ml-1.5 break-words">{formatPayload(e.payload_json)}</span>
-                )}
-              </div>
-            </div>
-          ))}
-          <div ref={bottomRef} />
-        </div>
-      </div>
-    </Modal>
-  );
-};
-
 const RemoteRunInbox: React.FC = () => {
   const [runs, setRuns] = useState<RemoteRunMirror[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [loading, setLoading] = useState(true);
   const [reconciling, setReconciling] = useState(false);
   const [error, setError] = useState<string>('');
-  const [liveRun, setLiveRun] = useState<RemoteRunMirror | null>(null);
   const { navigate } = useNavigation();
 
   const machineName = useCallback(
@@ -436,6 +199,14 @@ const RemoteRunInbox: React.FC = () => {
     }
   };
 
+  /** Every run is one Feature (eager shadow, M-C) — the run view is
+   * FeatureDetail. `feature_id` can only be null on rows mirrored by a
+   * pre-shadow app version before their first reconcile. */
+  const openRun = (run: RemoteRunMirror) => {
+    if (!run.feature_id) return;
+    navigate({ kind: 'detail', featureId: run.feature_id, featureTitle: run.title });
+  };
+
   const totalActionable = grouped.parked.length + grouped.needs_credentials.length + grouped.failed.length;
 
   return (
@@ -481,7 +252,7 @@ const RemoteRunInbox: React.FC = () => {
             <Inbox className="w-8 h-8 text-slate-500 mb-3" />
             <h3 className="text-base font-outfit font-semibold text-white mb-1">No remote runs yet</h3>
             <p className="text-sm text-slate-400 max-w-md">
-              Launch a feature with "Run on machine" set in the Start Feature modal and it'll show up here.
+              Pick a remote machine under "Where to run" in the Start Feature modal and the run will show up here.
             </p>
           </div>
         ) : (
@@ -502,7 +273,11 @@ const RemoteRunInbox: React.FC = () => {
                     {grouped[bucket].map((run) => (
                       <div
                         key={`${run.machine_id}:${run.run_id}`}
-                        className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[tone]}`}
+                        onClick={() => openRun(run)}
+                        className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[tone]} ${
+                          run.feature_id ? 'cursor-pointer hover:bg-white/[0.03] transition-colors' : ''
+                        }`}
+                        title={run.feature_id ? 'Open this run' : undefined}
                       >
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 text-slate-200 text-sm font-medium">
@@ -523,39 +298,26 @@ const RemoteRunInbox: React.FC = () => {
                             <p className="text-[11px] text-ruby-300/90 font-mono mt-1.5 break-words">{run.error}</p>
                           )}
                         </div>
-                        <div className="shrink-0 flex items-center gap-2">
-                          {run.feature_id && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                navigate({ kind: 'detail', featureId: run.feature_id!, featureTitle: run.title })
-                              }
-                              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
-                              title="Open the full feature view — steps, artifacts, and cost mirrored from the runner (C4.3)"
-                            >
-                              <ListTree className="w-3 h-3" /> View feature
-                            </button>
-                          )}
-                          {(bucket === 'running' || bucket === 'parked') && (
-                            <button
-                              type="button"
-                              onClick={() => setLiveRun(run)}
-                              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20 text-cyan-300 flex items-center gap-1.5"
-                              title="Tail this run's live event log"
-                            >
-                              <Radio className="w-3 h-3" /> Live
-                            </button>
-                          )}
-                          {bucket !== 'running' && bucket !== 'parked' && (
-                            <button
-                              type="button"
-                              onClick={() => setLiveRun(run)}
-                              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
-                              title="View this run's immutable audit trail — every auto-approved gate, budget check, and cost, as the runner recorded it"
-                            >
-                              <ListTree className="w-3 h-3" /> Audit log
-                            </button>
-                          )}
+                        {/* Quick actions act on the run without leaving the
+                            hub — stopPropagation so they don't also trigger
+                            the row's open-run navigation. */}
+                        <div
+                          className="shrink-0 flex items-center gap-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => openRun(run)}
+                            disabled={!run.feature_id}
+                            className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={
+                              run.feature_id
+                                ? 'Open the run — step timeline, activity log, artifacts, and cost'
+                                : 'Mirrored by an older app version — refresh to link it to its feature'
+                            }
+                          >
+                            <ListTree className="w-3 h-3" /> Open run
+                          </button>
                           {bucket === 'pr_ready' && run.pr_url && (
                             <a
                               href={run.pr_url}
@@ -569,7 +331,7 @@ const RemoteRunInbox: React.FC = () => {
                           {bucket !== 'pr_ready' && !run.pr_url && run.pushed_branch && (
                             <DiffLinkButton run={run} />
                           )}
-                          {bucket === 'parked' && <ParkedRow run={run} onResolved={reconcile} />}
+                          {bucket === 'parked' && <RemoteGateActions run={run} onResolved={reconcile} />}
                           {bucket === 'needs_credentials' && (
                             <span className="text-[11px] text-slate-500 font-mono">
                               Reconnect to this machine to re-inject credentials.
@@ -595,9 +357,6 @@ const RemoteRunInbox: React.FC = () => {
           </div>
         )}
       </div>
-      {liveRun && (
-        <LiveEventView run={liveRun} machineName={machineName(liveRun.machine_id)} onClose={() => setLiveRun(null)} />
-      )}
     </div>
   );
 };

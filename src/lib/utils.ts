@@ -17,6 +17,17 @@ export function formatCost(usd: number | null | undefined): string {
   return `$${usd.toFixed(0)}`;
 }
 
+/** Coarse "3m ago"-style age for a millisecond timestamp. */
+export function relativeTime(ms: number): string {
+  const deltaSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (deltaSec < 60) return 'just now';
+  const deltaMin = Math.floor(deltaSec / 60);
+  if (deltaMin < 60) return `${deltaMin}m ago`;
+  const deltaHr = Math.floor(deltaMin / 60);
+  if (deltaHr < 24) return `${deltaHr}h ago`;
+  return `${Math.floor(deltaHr / 24)}d ago`;
+}
+
 export function cacheSavingsUsd(
   cacheReadTokens: number | null | undefined,
   costPerMillionInputUsd: number | null | undefined,
