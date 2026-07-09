@@ -210,9 +210,7 @@ pub async fn remote_submit_run(
             ))
         })?,
         None => repos.first().ok_or_else(|| {
-            AppError::from(
-                "Project has no repository configured; remote runs need one".to_string(),
-            )
+            AppError::from("Project has no repository configured; remote runs need one".to_string())
         })?,
     };
 

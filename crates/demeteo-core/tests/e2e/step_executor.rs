@@ -1149,9 +1149,13 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         updated_at: now,
     };
     features.add(mk_feature("f-shadow")).unwrap();
-    features.step_create(mk_step("se-shadow", "f-shadow")).unwrap();
+    features
+        .step_create(mk_step("se-shadow", "f-shadow"))
+        .unwrap();
     features.add(mk_feature("f-local")).unwrap();
-    features.step_create(mk_step("se-local", "f-local")).unwrap();
+    features
+        .step_create(mk_step("se-local", "f-local"))
+        .unwrap();
 
     // The mirror row is the runner-owned marker (C4.2) — the executor
     // reads it through its own mirror port, exactly like production.
