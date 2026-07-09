@@ -111,8 +111,7 @@ pub fn resolve_local_binary_path(binary: &str) -> Option<String> {
                         let path_str = String::from_utf8_lossy(&output.stdout)
                             .lines()
                             .map(|l| l.trim())
-                            .filter(|l| !l.is_empty())
-                            .next_back()
+                            .rfind(|l| !l.is_empty())
                             .map(|l| l.to_string())
                             .unwrap_or_default();
                         if !path_str.is_empty() {
