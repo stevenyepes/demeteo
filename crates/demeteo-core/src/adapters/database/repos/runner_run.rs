@@ -17,20 +17,31 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunnerRun> {
         updated_at: row.get(7)?,
         resume_count: row.get(8)?,
         pushed_branch: row.get(9)?,
+        owner_client_id: row.get(10)?,
     })
 }
 
 const SELECT_COLS: &str = "run_id, project_id, feature_id, spec_json, status, error, created_at, \
-                            updated_at, resume_count, pushed_branch";
+                            updated_at, resume_count, pushed_branch, owner_client_id";
 
 impl RunnerRunPort for SqliteAdapter {
-    fn get_or_create(&self, run_id: &str, spec_json: &str, now: i64) -> Result<RunnerRun, String> {
+    fn get_or_create(
+        &self,
+        run_id: &str,
+        spec_json: &str,
+        owner_client_id: &str,
+        now: i64,
+    ) -> Result<RunnerRun, String> {
         let conn = self.conn.lock()?;
+        // `INSERT OR IGNORE` keeps this idempotent (R9/M3.2): a re-submit
+        // of an existing `run_id` is a no-op, so the original
+        // `owner_client_id` stamped at first insert is never overwritten
+        // — a run stays owned by whoever created it.
         conn.execute(
             "INSERT OR IGNORE INTO runner_runs
-                (run_id, spec_json, status, created_at, updated_at)
-             VALUES (?1, ?2, 'pending', ?3, ?3)",
-            params![run_id, spec_json, now],
+                (run_id, spec_json, status, owner_client_id, created_at, updated_at)
+             VALUES (?1, ?2, 'pending', ?3, ?4, ?4)",
+            params![run_id, spec_json, owner_client_id, now],
         )
         .map_err(|e| e.to_string())?;
 
@@ -181,7 +192,7 @@ mod tests {
         // also guards the direct `rpc.rs` failure-path writer, which
         // doesn't go through `run::emit`.
         let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
-        adapter.get_or_create("run-1", "{}", 1).unwrap();
+        adapter.get_or_create("run-1", "{}", "", 1).unwrap();
         let leaky = "push rejected: glpat-ABCDEF0123456789wxyz was revoked";
         adapter
             .update_status("run-1", "failed", None, None, Some(leaky), None, 2)
@@ -193,5 +204,29 @@ mod tests {
             "token leaked: {stored}"
         );
         assert!(stored.contains("***"));
+    }
+
+    #[test]
+    fn get_or_create_stamps_owner_and_never_rehomes_on_resubmit() {
+        // MC-D2 (P0.2): the owning client is stamped at creation and an
+        // idempotent re-submit (R9) must NOT re-home the run to a second
+        // client — a run stays owned by whoever created it.
+        let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+        let first = adapter.get_or_create("run-1", "{}", "client-A", 1).unwrap();
+        assert_eq!(first.owner_client_id, "client-A");
+
+        // Re-submit of the same run_id by a different client is a no-op
+        // (INSERT OR IGNORE) — owner is unchanged.
+        let again = adapter.get_or_create("run-1", "{}", "client-B", 2).unwrap();
+        assert_eq!(again.owner_client_id, "client-A");
+    }
+
+    #[test]
+    fn legacy_rows_read_back_empty_owner() {
+        // A run created with no client id (old client) reads back the ""
+        // legacy tenant — the documented single bucket, not a boundary.
+        let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+        let run = adapter.get_or_create("run-legacy", "{}", "", 1).unwrap();
+        assert_eq!(run.owner_client_id, "");
     }
 }

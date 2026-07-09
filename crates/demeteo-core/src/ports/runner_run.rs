@@ -22,6 +22,13 @@ pub struct RunnerRun {
     /// so the laptop can offer a diff/branch deep link before a PR
     /// exists (docs/REMOTE_EXECUTION_PLAN.md M6.2 follow-up).
     pub pushed_branch: Option<String>,
+    /// Owning client's stable `install_id` (docs/MULTI_CLIENT_RUNNER.md
+    /// MC-D2 / P0.2). Stamped at `submit_run` from the request's
+    /// `client_id`; the runner's `require_owner` guard checks it on every
+    /// run-scoped RPC so one client can't touch another's runs. `""` is
+    /// the legacy/unknown tenant (old client that sent no id, or a
+    /// pre-V26 row) — a single documented bucket, not a boundary.
+    pub owner_client_id: String,
 }
 
 pub trait RunnerRunPort: Send + Sync {
@@ -29,7 +36,16 @@ pub trait RunnerRunPort: Send + Sync {
     /// error) if `run_id` already exists — the caller uses this to decide
     /// whether to actually start the feature or just report the
     /// already-in-flight run (idempotent `submit_run`, R9/M3.2).
-    fn get_or_create(&self, run_id: &str, spec_json: &str, now: i64) -> Result<RunnerRun, String>;
+    /// `owner_client_id` stamps the run's owning client at creation
+    /// (MC-D2); it is set only on the *insert* — re-submitting an existing
+    /// `run_id` never re-homes an already-owned run to a new client.
+    fn get_or_create(
+        &self,
+        run_id: &str,
+        spec_json: &str,
+        owner_client_id: &str,
+        now: i64,
+    ) -> Result<RunnerRun, String>;
     #[allow(clippy::too_many_arguments)]
     fn update_status(
         &self,

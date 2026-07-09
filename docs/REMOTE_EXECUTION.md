@@ -56,6 +56,21 @@ already exist.
 | R10 | Terminal "PR ready" | On successful unattended completion the runner **auto-opens the PR/MR** via the existing idempotent `MrPublisher`. Opening a PR is safe/reviewable/reversible, so it is *not* a parked gate — only the *merge to default* is (§5). "PR ready" is the success terminal state; its notification carries the PR URL. See §8. |
 | R11 | Reboot behavior | A machine reboot restarts the runner (systemd lingering, R2), which reconciles from SQLite, treats orphaned mid-step `running` rows as **interrupted**, and **auto-resumes** by re-running the interrupted step from its per-step checkpoint (Decision 14), under a bounded reboot-retry budget. **Laptop-unreachable ≠ run-failed.** See §7.1. |
 
+> **Multi-client authz (extends R4).** R4's "authz inherited from SSH login"
+> assumes *one* trusted laptop. When one shared runner serves **several**
+> clients, SSH login alone puts every client inside the same trust boundary
+> with mutual access to each other's runs. The runner therefore enforces
+> **per-run ownership**: each client stamps a stable `client_id` (a persisted
+> `install_id` UUID) into every control-RPC's `params`; `submit_run` records
+> it as the run's `owner_client_id`; and every run-scoped RPC checks it,
+> returning the *same* "no such run" error on a mismatch as for an absent run
+> (no existence leak). `list_runs` is filtered to the caller. This is **soft**
+> multi-tenancy (`client_id` is not a secret — it protects honest clients from
+> cross-talk and bugs, not a malicious co-tenant) and is fully back-compatible
+> (an old client sends no `client_id` and a new runner reads it as `""`, the
+> single legacy tenant; an old runner ignores the field). Full design + build
+> phases: [`MULTI_CLIENT_RUNNER.md`](MULTI_CLIENT_RUNNER.md).
+
 ---
 
 ## 3. Architecture
