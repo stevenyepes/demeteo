@@ -142,7 +142,7 @@ function AppInner() {
   // `startFeatureWorkflowId` drive the per-overlay render branches
   // below. `isConnectModalOpen` and `editingProvider` are read
   // indirectly via the `ui` object passed to `pickEscapeAction`.
-  const { commandPaletteOpen, docsPanelOpen, startFeatureOpen, startFeatureWorkflowId } = ui;
+  const { commandPaletteOpen, docsPanelOpen, startFeatureOpen, startFeatureWorkflowId, startFeatureSeed } = ui;
 
   const currentProject = useMemo(() => projects.find(p => p.id === currentProjectId) ?? null, [projects, currentProjectId]);
   const currentFeatureId: string | null = view.kind === 'detail' ? view.featureId : null;
@@ -509,6 +509,8 @@ function AppInner() {
               remoteHost={currentProject.remote_host}
               repositories={reposByProject[currentProjectId] || []}
               defaultWorkflowId={startFeatureWorkflowId}
+              seedTitle={startFeatureSeed?.title}
+              seedAttachments={startFeatureSeed?.attachments}
               onClose={() => uiDispatch({ type: 'CLOSE_START_FEATURE' })}
               onLaunch={async (params) => {
                 const feature = await launchRun(params);

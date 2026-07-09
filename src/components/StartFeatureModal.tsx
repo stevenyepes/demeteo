@@ -24,6 +24,13 @@ interface StartFeatureModalProps {
   remoteHost?: string | null;
   /** Pre-select a specific workflow id (e.g. the one the user clicked). */
   defaultWorkflowId?: string | null;
+  /**
+   * Prefill from the inline composer on ProjectHome (Alternative A).
+   * Applied once on open, and only into still-empty fields so a user
+   * mid-edit is never clobbered. The modal owns the launch from here.
+   */
+  seedTitle?: string;
+  seedAttachments?: LaunchStageEntry[];
   onClose: () => void;
   /**
    * Called with the resolved launch parameters when the user clicks
@@ -102,6 +109,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   computeType,
   remoteHost,
   defaultWorkflowId,
+  seedTitle,
+  seedAttachments,
   onClose,
   onLaunch,
 }) => {
@@ -192,6 +201,16 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       } else if (workflows.length > 0 && !workflowId) {
         setWorkflowId(workflows[0].id);
       }
+      // Prefill from the inline composer, but only into still-empty
+      // fields so a user editing in the modal is never clobbered.
+      // Seeding `description` drives the modal's repo-chip inference.
+      if (seedTitle && !title) {
+        setTitle(seedTitle);
+        setDescription(seedTitle);
+      }
+      if (seedAttachments && seedAttachments.length > 0 && attachments.length === 0) {
+        setAttachments(seedAttachments);
+      }
       setTimeout(() => titleRef.current?.focus(), 0);
     } else {
       // reset on close so the next open is clean
@@ -212,7 +231,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setMaxCostUsd('');
       setMaxWallClockMins('');
     }
-  }, [isOpen, workflows, defaultWorkflowId, workflowId]);
+  }, [isOpen, workflows, defaultWorkflowId, workflowId, seedTitle, seedAttachments]);
 
   // Fetch selectable workflows whenever the modal opens. Fetched here
   // rather than threaded through from the parent so the picker is never
