@@ -57,6 +57,24 @@ export function useLaunchRun(options: {
           throw new Error('No active project to launch a feature in.');
         }
 
+        // Convert staged attachments (which carry a browser File handle
+        // or an absolute drag-drop path) into the Rust wire shape. On
+        // the local path the orchestrator persists them BEFORE the
+        // driver is spawned (see `StepExecutor::feature_start`); on the
+        // detached path `remote_submit_run` spools the bytes onto the
+        // runner host over SFTP before submitting. Without this batch,
+        // the agent's first turn races the post-launch
+        // `feature_add_attachment` calls and the user sees "no image
+        // attached" responses from a freshly-attached screenshot.
+        const stagedAttachments = await Promise.all(
+          (params.attachments ?? []).map(async (a) => ({
+            source_path: a.sourcePath ?? '',
+            mime: a.mime ?? null,
+            source_filename: a.source_filename ?? null,
+            bytes: a.file ? Array.from(new Uint8Array(await a.file.arrayBuffer())) : null,
+          })),
+        );
+
         if (params.machineId) {
           // Detached run (docs/REMOTE_EXECUTION_PLAN.md M6.1): the
           // runner drives it; the laptop keeps an eager shadow Feature
@@ -75,7 +93,13 @@ export function useLaunchRun(options: {
             description: params.description,
             agentKind: params.agentKind ?? null,
             model: params.model ?? null,
+            commitArtifacts: params.commitArtifacts ?? null,
             loopIterations: params.loopIterations ?? null,
+            stepOverrides: params.stepOverrides ?? null,
+            stagedAttachments,
+            // A detached run clones exactly one repository — the first
+            // selected repo wins; `null` keeps the project's first.
+            targetRepoId: params.targetRepos?.[0] ?? null,
             unattended: params.unattended ?? false,
             maxCostUsd: params.maxCostUsd ?? null,
             maxWallClockSecs:
@@ -99,22 +123,6 @@ export function useLaunchRun(options: {
           return feature;
         }
 
-        // Convert staged attachments (which carry a browser File handle
-        // or an absolute drag-drop path) into the Rust wire shape. The
-        // orchestrator persists them BEFORE the driver is spawned — see
-        // `commands::attachments::StagedAttachmentInput` and the
-        // matching plumbing in `StepExecutor::feature_start`. Without
-        // this batch, the agent's first turn races the post-launch
-        // `feature_add_attachment` calls and the user sees "no image
-        // attached" responses from a freshly-attached screenshot.
-        const stagedAttachments = await Promise.all(
-          (params.attachments ?? []).map(async (a) => ({
-            source_path: a.sourcePath ?? '',
-            mime: a.mime ?? null,
-            source_filename: a.source_filename ?? null,
-            bytes: a.file ? Array.from(new Uint8Array(await a.file.arrayBuffer())) : null,
-          })),
-        );
         const res: any = await invoke('start_feature', {
           projectId,
           workflowId: params.workflowId,
