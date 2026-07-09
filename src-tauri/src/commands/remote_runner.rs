@@ -418,6 +418,77 @@ pub async fn remote_submit_run(
     })
 }
 
+/// Re-inject the git-provider PAT for a run parked at `needs-credentials`
+/// (§6.2/§7.1). The runner holds the PAT in memory only, so it's lost when
+/// the runner restarts mid-run — and the one-shot injection inside
+/// [`remote_submit_run`] can also fail *after* `submit_run` already
+/// accepted the run, stranding it the same way. Either way the runner's
+/// `wait_for_pat` parks the run and waits for the PAT to be re-supplied
+/// "however much later" (its resume-from-parked path, M4.2); this is the
+/// laptop trigger that supplies it. Resolves the PAT from the run's own
+/// project exactly as the original submit did, pushes it over the control
+/// channel, then re-polls so the caller immediately sees the run leave
+/// `needs-credentials`.
+#[tauri::command]
+pub async fn remote_reinject_credentials(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+) -> Result<Option<RemoteRunMirror>, AppError> {
+    let Some(row) = ctx
+        .remote_run_mirror
+        .get(&machine_id, &run_id)
+        .map_err(AppError::from)?
+    else {
+        return Ok(None);
+    };
+    let project_id = row.project_id.clone().ok_or_else(|| {
+        AppError::from("Run has no project on record; cannot resolve its git provider".to_string())
+    })?;
+    let pid = ProjectId::from(project_id);
+    let repos = ctx
+        .projects
+        .get_repositories_for(&pid)
+        .map_err(AppError::from)?;
+    // Same default as `remote_submit_run`'s no-target case: a detached run
+    // clones one repository, and its PAT comes from that repo's provider.
+    let repo = repos.first().ok_or_else(|| {
+        AppError::from("Project has no repository configured; cannot resolve a PAT".to_string())
+    })?;
+    let provider = ctx
+        .app_settings
+        .get_provider_instances()
+        .map_err(AppError::from)?
+        .into_iter()
+        .find(|p| p.id == repo.provider_id)
+        .ok_or_else(|| {
+            AppError::from("Repository's git provider instance is not configured".to_string())
+        })?;
+    let git_ops = crate::adapters::worktree::git_ops::GitOpsHelper::new(
+        ctx.app_settings.clone(),
+        ctx.exec.clone(),
+    );
+    let pat = git_ops
+        .get_provider_pat(&provider.id.0)
+        .map_err(AppError::from)?;
+
+    ctx.exec
+        .control_rpc(
+            &machine_id,
+            "inject_credentials",
+            serde_json::json!({ "run_id": run_id, "git_pat": pat }),
+        )
+        .await
+        .map_err(AppError::from)?;
+
+    // The runner resumes on injection; re-poll so the returned row already
+    // reflects the run leaving `needs-credentials` rather than lagging a tick.
+    reconcile_one_run(&ctx, &row).await;
+    ctx.remote_run_mirror
+        .get(&machine_id, &run_id)
+        .map_err(AppError::from)
+}
+
 /// Cheap read of the laptop's own mirror — no network I/O. Used to
 /// paint the return inbox (M6.2) instantly on app open; the caller
 /// follows up with [`remote_reconcile_runs`] to refresh it.
@@ -431,10 +502,12 @@ pub fn remote_list_mirrored_runs(
 /// Statuses that can never change again — a mirror row can't regress
 /// out of these on its own account (a *new* run would get a new
 /// `run_id`), so `unreachable` after a failed poll would only ever hide
-/// an already-final outcome. Kept intentionally narrower than "not
-/// running": `unreachable` must never overwrite them (§7.1 — a machine
-/// that's merely off is *paused*, not *failed*).
-const HARD_TERMINAL: &[&str] = &["failed", "cancelled"];
+/// an already-final outcome (§7.1 — a machine that's merely off is
+/// *paused*, not *failed*, and must never overwrite a settled result).
+/// Includes the *success* terminals (`completed`/`awaiting_mr`, i.e. "PR
+/// ready") as well as the failure ones: once a run has finished, a runner
+/// that later goes to sleep must not flip a finished PR to "Unreachable".
+const HARD_TERMINAL: &[&str] = &["failed", "cancelled", "completed", "awaiting_mr"];
 
 /// Statuses worth an OS-level desktop notification on reconcile (design
 /// §8's taxonomy table — "Running"/"Unreachable" are silent, everything
@@ -475,6 +548,7 @@ async fn hydrate_shadow_feature(
     machine_id: &str,
     run_id: &str,
     local_project_id: &str,
+    canonical_id: &str,
 ) -> Result<(), String> {
     let feat_val = ctx
         .exec
@@ -491,10 +565,15 @@ async fn hydrate_shadow_feature(
     }
     let mut feature: Feature =
         serde_json::from_value(feat_val).map_err(|e| format!("shadow feature decode: {e}"))?;
-    // Re-home under the local project so the FK holds; keep the runner's
-    // feature id (== the mirror's `feature_id`) so status/inbox deep-links
-    // resolve to this same shadow.
+    // Re-home under the local project so the FK holds. Pin the id to
+    // `canonical_id` (== the mirror's `feature_id`) rather than the runner's
+    // reported id: under version skew the two differ, and the caller has
+    // chosen the laptop's eager-placeholder id as canonical so the shadow
+    // *is* the row the user already has open (adopt-in-place). With a
+    // feature_id-aware runner the two ids coincide and this is a no-op.
+    let canonical = FeatureId::from(canonical_id.to_string());
     feature.project_id = ProjectId::new(local_project_id);
+    feature.id = canonical.clone();
 
     let steps_val = ctx
         .exec
@@ -535,6 +614,10 @@ async fn hydrate_shadow_feature(
         let single = local_paths.first().cloned();
         if ctx.features.step_get(&step.id)?.is_none() {
             let mut shadow = step.clone();
+            // Keep the step's FK pointing at the pinned feature id, not the
+            // runner's — otherwise `steps_for_feature(canonical)` wouldn't
+            // find them under version skew.
+            shadow.feature_id = fid.clone();
             shadow.artifact_path = single;
             shadow.artifact_paths = local_paths;
             ctx.features.step_create(shadow)?;
@@ -699,33 +782,36 @@ async fn reconcile_one_run(
                 json_str(&v, "status").unwrap_or_else(|| row.status.clone())
             };
             let error = json_str(&v, "error");
-            let feature_id = json_str(&v, "feature_id");
+            let remote_feature_id = json_str(&v, "feature_id");
             let mr_url = json_str(&v, "mr_url");
             let pushed_branch = json_str(&v, "pushed_branch");
             // Version skew: an old runner that ignored `RunSpec::feature_id`
-            // reports its own generated id. The runner's id must win —
-            // hydration keys the shadow off the runner's `get_feature` id,
-            // so keeping the laptop's eager id would strand the shadow
-            // forever. Retire the orphaned placeholder so it doesn't sit
-            // "pending" in the pipeline list for eternity.
-            if let (Some(local), Some(remote)) = (row.feature_id.as_deref(), feature_id.as_deref())
-            {
-                if !remote.is_empty() && local != remote {
-                    eprintln!(
-                        "remote run {}: runner reports feature {remote} but the laptop \
-                         expected {local} (runner predates RunSpec::feature_id?) — \
-                         adopting the runner's id",
-                        row.run_id
-                    );
-                    mark_placeholder_failed(ctx, local);
-                }
-            }
+            // reports its own generated id, different from the laptop's eager
+            // placeholder id. Rather than orphan+fail the placeholder (the
+            // run is healthy, and the user may already have that row open),
+            // keep the laptop's id *canonical* and re-home the runner's
+            // shadow onto it below (adopt-in-place). A feature_id-aware
+            // runner reports the same id, so `canonical` == both and this is
+            // a no-op. When only one side has an id, take whichever exists.
+            let canonical_feature_id =
+                match (row.feature_id.as_deref(), remote_feature_id.as_deref()) {
+                    (Some(local), Some(remote)) if !remote.is_empty() && local != remote => {
+                        eprintln!(
+                            "remote run {}: runner reports feature {remote} but the laptop \
+                             expected {local} (runner predates RunSpec::feature_id?) — \
+                             pinning the laptop's id and re-homing the shadow onto it",
+                            row.run_id
+                        );
+                        Some(local.to_string())
+                    }
+                    _ => remote_feature_id.clone().or_else(|| row.feature_id.clone()),
+                };
             let _ = ctx.remote_run_mirror.update_status(
                 &row.machine_id,
                 &row.run_id,
                 &status,
                 error.as_deref(),
-                feature_id.as_deref(),
+                canonical_feature_id.as_deref(),
                 mr_url.as_deref(),
                 pushed_branch.as_deref(),
                 0,
@@ -737,10 +823,10 @@ async fn reconcile_one_run(
             // of it (feature + steps + cached artifacts) so it renders on the
             // laptop with full fidelity. Best-effort: a hydration failure
             // never regresses the mirror status just applied.
-            if let (Some(fid), Some(pid)) = (&feature_id, &row.project_id) {
+            if let (Some(fid), Some(pid)) = (&canonical_feature_id, &row.project_id) {
                 if !fid.is_empty() {
                     if let Err(e) =
-                        hydrate_shadow_feature(ctx, &row.machine_id, &row.run_id, pid).await
+                        hydrate_shadow_feature(ctx, &row.machine_id, &row.run_id, pid, fid).await
                     {
                         eprintln!(
                             "shadow hydrate failed for run {} (feature {fid}): {e}",
