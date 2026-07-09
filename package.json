@@ -15,7 +15,8 @@
     "tauri": "tauri",
     "dev:tauri": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:tauri:sw": "DEMETEO_DISABLE_GPU=1 tauri dev --config src-tauri/tauri.dev.conf.json",
-    "build:runner": "bash scripts/build-runner.sh"
+    "build:runner": "bash scripts/build-runner.sh",
+    "check:readme": "node tests/repro/readme-coverage.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
