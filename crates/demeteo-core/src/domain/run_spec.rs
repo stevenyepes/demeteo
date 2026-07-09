@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::models::StepOverride;
+use crate::domain::models::{ProjectSettings, StepOverride};
 
 /// A pre-launch attachment for a detached run. The laptop spools the
 /// bytes onto the runner host over SFTP (`ExecutionPort::write_file_bytes`)
@@ -106,4 +106,16 @@ pub struct RunSpec {
     /// M5.2 hard caps. `None` = no cap on that dimension.
     #[serde(default)]
     pub budget: Option<RunBudget>,
+    /// The launching client's project settings, so a detached run honors
+    /// *its* harnesses/prepare-command/test-command/extra-writable-paths/
+    /// lifecycle rather than runner-side re-detected defaults
+    /// (docs/MULTI_CLIENT_RUNNER.md MC-D4 / P0.5, gap **f**). The runner
+    /// overlays these onto the row it persists via `save_settings` *before*
+    /// the shared `feature_start` reads it — keeping the bootstrap-detected
+    /// `default_branch` (ground truth for the actual clone). `None` (an old
+    /// client) reproduces today's behavior exactly: detected strategy +
+    /// engine defaults. `project_id` on the payload is ignored — the runner
+    /// re-homes it onto the run's own project.
+    #[serde(default)]
+    pub project_settings: Option<ProjectSettings>,
 }

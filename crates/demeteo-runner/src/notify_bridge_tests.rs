@@ -52,13 +52,14 @@ impl FakeRunnerRuns {
                 updated_at: 0,
                 resume_count: 0,
                 pushed_branch: None,
+                owner_client_id: String::new(),
             }],
         }
     }
 }
 
 impl RunnerRunPort for FakeRunnerRuns {
-    fn get_or_create(&self, _: &str, _: &str, _: i64) -> Result<RunnerRun, String> {
+    fn get_or_create(&self, _: &str, _: &str, _: &str, _: i64) -> Result<RunnerRun, String> {
         Err("unused".into())
     }
     fn update_status(

@@ -164,6 +164,59 @@ fn json_str(v: &serde_json::Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(|s| s.to_string())
 }
 
+/// App-settings key holding this install's stable `client_id` (MC-D1).
+const INSTALL_ID_KEY: &str = "install_id";
+
+/// This install's stable `client_id` (docs/MULTI_CLIENT_RUNNER.md MC-D1):
+/// a UUID generated once and persisted in app-settings, so every remote
+/// RPC from this machine carries the *same* owner identity across app
+/// restarts. Generated lazily on first remote use and cached in the DB —
+/// a single indexed KV read thereafter.
+fn client_install_id(ctx: &AppContext) -> Result<String, String> {
+    if let Some(id) = ctx.app_settings.app_setting_get(INSTALL_ID_KEY)? {
+        if !id.is_empty() {
+            return Ok(id);
+        }
+    }
+    let id = format!("client-{}", crate::paths::new_id());
+    ctx.app_settings.app_setting_set(INSTALL_ID_KEY, &id)?;
+    Ok(id)
+}
+
+/// MC-D3 single stamping site: the one wrapper every remote control RPC
+/// funnels through, injecting this install's `client_id` into `params`
+/// **without** touching the generic `ExecutionPort::control_rpc`
+/// signature (the local-vs-remote port seam stays transport-agnostic).
+/// Existing param keys are preserved; only `client_id` is added — so
+/// there is no per-call-site drift and no way to forget it. The runner
+/// extracts it in `dispatch` and enforces ownership (`require_owner`).
+async fn remote_rpc(
+    ctx: &AppContext,
+    machine_id: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let client_id = client_install_id(ctx)?;
+    let params = stamp_client_id(params, &client_id);
+    ctx.exec.control_rpc(machine_id, method, params).await
+}
+
+/// The pure param-stamping step of [`remote_rpc`], split out so the
+/// injection is unit-testable: add `client_id` to an object payload while
+/// preserving every existing key. `submit_run`/`get_status`/… all send an
+/// object; a non-object payload is returned unchanged (rather than
+/// corrupted), and the runner defaults such a caller to the `""` legacy
+/// tenant — old-client parity.
+fn stamp_client_id(mut params: serde_json::Value, client_id: &str) -> serde_json::Value {
+    if let Some(obj) = params.as_object_mut() {
+        obj.insert(
+            "client_id".to_string(),
+            serde_json::Value::String(client_id.to_string()),
+        );
+    }
+    params
+}
+
 /// Compose a [`RunSpec`] from the laptop's own DB state (project's first
 /// repository + its provider instance, the chosen workflow's latest
 /// version) and submit it to `machine_id`'s `demeteo-runner` over the
@@ -321,6 +374,13 @@ pub async fn remote_submit_run(
         return Err(AppError::from(e));
     }
 
+    // MC-D4 / P0.5: ship the launching client's project settings so the
+    // detached run honors *this* client's harnesses/prepare-command/
+    // test-command/extra-writable-paths/lifecycle instead of runner-side
+    // re-detected defaults. Best-effort: no settings row (or a read error)
+    // → `None`, which reproduces today's runner-detection behavior exactly.
+    let project_settings = ctx.projects.get_settings(&pid).ok().flatten();
+
     let spec = RunSpec {
         feature_id: Some(feature_id.clone()),
         title: title.clone(),
@@ -339,16 +399,16 @@ pub async fn remote_submit_run(
         attachments,
         unattended,
         budget,
+        project_settings,
     };
 
-    let submitted = match ctx
-        .exec
-        .control_rpc(
-            &machine_id,
-            "submit_run",
-            serde_json::json!({ "run_id": run_id, "spec": spec }),
-        )
-        .await
+    let submitted = match remote_rpc(
+        &ctx,
+        &machine_id,
+        "submit_run",
+        serde_json::json!({ "run_id": run_id, "spec": spec }),
+    )
+    .await
     {
         Ok(v) => v,
         Err(e) => {
@@ -401,14 +461,14 @@ pub async fn remote_submit_run(
         )
         .map_err(AppError::from)?;
 
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "inject_credentials",
-            serde_json::json!({ "run_id": run_id, "git_pat": pat }),
-        )
-        .await
-        .map_err(AppError::from)?;
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "inject_credentials",
+        serde_json::json!({ "run_id": run_id, "git_pat": pat }),
+    )
+    .await
+    .map_err(AppError::from)?;
 
     Ok(RemoteRunHandle {
         run_id,
@@ -472,14 +532,14 @@ pub async fn remote_reinject_credentials(
         .get_provider_pat(&provider.id.0)
         .map_err(AppError::from)?;
 
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "inject_credentials",
-            serde_json::json!({ "run_id": run_id, "git_pat": pat }),
-        )
-        .await
-        .map_err(AppError::from)?;
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "inject_credentials",
+        serde_json::json!({ "run_id": run_id, "git_pat": pat }),
+    )
+    .await
+    .map_err(AppError::from)?;
 
     // The runner resumes on injection; re-poll so the returned row already
     // reflects the run leaving `needs-credentials` rather than lagging a tick.
@@ -550,14 +610,13 @@ async fn hydrate_shadow_feature(
     local_project_id: &str,
     canonical_id: &str,
 ) -> Result<(), String> {
-    let feat_val = ctx
-        .exec
-        .control_rpc(
-            machine_id,
-            "get_feature",
-            serde_json::json!({ "run_id": run_id }),
-        )
-        .await?;
+    let feat_val = remote_rpc(
+        ctx,
+        machine_id,
+        "get_feature",
+        serde_json::json!({ "run_id": run_id }),
+    )
+    .await?;
     // The run may not have bootstrapped a feature yet (early states), in
     // which case `get_feature` reports `null` — nothing to shadow.
     if feat_val.is_null() {
@@ -575,14 +634,13 @@ async fn hydrate_shadow_feature(
     feature.project_id = ProjectId::new(local_project_id);
     feature.id = canonical.clone();
 
-    let steps_val = ctx
-        .exec
-        .control_rpc(
-            machine_id,
-            "list_steps",
-            serde_json::json!({ "run_id": run_id }),
-        )
-        .await?;
+    let steps_val = remote_rpc(
+        ctx,
+        machine_id,
+        "list_steps",
+        serde_json::json!({ "run_id": run_id }),
+    )
+    .await?;
     let steps: Vec<StepExecution> =
         serde_json::from_value(steps_val).map_err(|e| format!("shadow steps decode: {e}"))?;
 
@@ -669,14 +727,13 @@ async fn cache_step_artifacts(
 
     let mut local = Vec::new();
     for path in remote {
-        match ctx
-            .exec
-            .control_rpc(
-                machine_id,
-                "read_artifact",
-                serde_json::json!({ "run_id": run_id, "path": path }),
-            )
-            .await
+        match remote_rpc(
+            ctx,
+            machine_id,
+            "read_artifact",
+            serde_json::json!({ "run_id": run_id, "path": path }),
+        )
+        .await
         {
             Ok(v) => {
                 let body = v.as_str().unwrap_or_default().to_string();
@@ -771,14 +828,13 @@ async fn reconcile_one_run(
     row: &RemoteRunMirror,
 ) -> Option<(String, Option<String>)> {
     let now = crate::paths::now_ms();
-    let result = ctx
-        .exec
-        .control_rpc(
-            &row.machine_id,
-            "get_status",
-            serde_json::json!({ "run_id": row.run_id }),
-        )
-        .await;
+    let result = remote_rpc(
+        ctx,
+        &row.machine_id,
+        "get_status",
+        serde_json::json!({ "run_id": row.run_id }),
+    )
+    .await;
     match result {
         Ok(v) => {
             // A dangerous parked gate (M5.1) doesn't move the runner's own
@@ -993,14 +1049,14 @@ pub async fn remote_get_status(
     machine_id: String,
     run_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "get_status",
-            serde_json::json!({ "run_id": run_id }),
-        )
-        .await
-        .map_err(AppError::from)
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "get_status",
+        serde_json::json!({ "run_id": run_id }),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 /// Builds a browser-facing compare (or, lacking a known default branch,
@@ -1087,14 +1143,14 @@ pub async fn remote_stream_events(
     run_id: String,
     from_offset: i64,
 ) -> Result<serde_json::Value, AppError> {
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "stream_events",
-            serde_json::json!({ "run_id": run_id, "from_offset": from_offset }),
-        )
-        .await
-        .map_err(AppError::from)
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "stream_events",
+        serde_json::json!({ "run_id": run_id, "from_offset": from_offset }),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 /// C4.1 read-model RPCs. These reach the runner's `get_feature`/
@@ -1111,14 +1167,14 @@ pub async fn remote_get_feature(
     machine_id: String,
     run_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "get_feature",
-            serde_json::json!({ "run_id": run_id }),
-        )
-        .await
-        .map_err(AppError::from)
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "get_feature",
+        serde_json::json!({ "run_id": run_id }),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -1127,14 +1183,14 @@ pub async fn remote_list_steps(
     machine_id: String,
     run_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "list_steps",
-            serde_json::json!({ "run_id": run_id }),
-        )
-        .await
-        .map_err(AppError::from)
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "list_steps",
+        serde_json::json!({ "run_id": run_id }),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -1144,14 +1200,14 @@ pub async fn remote_read_artifact(
     run_id: String,
     path: String,
 ) -> Result<serde_json::Value, AppError> {
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "read_artifact",
-            serde_json::json!({ "run_id": run_id, "path": path }),
-        )
-        .await
-        .map_err(AppError::from)
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "read_artifact",
+        serde_json::json!({ "run_id": run_id, "path": path }),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -1161,14 +1217,14 @@ pub async fn remote_list_messages(
     run_id: String,
     thread_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "list_messages",
-            serde_json::json!({ "run_id": run_id, "thread_id": thread_id }),
-        )
-        .await
-        .map_err(AppError::from)
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "list_messages",
+        serde_json::json!({ "run_id": run_id, "thread_id": thread_id }),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 /// Variant A of the detached-run "Browse Code" fix: resolve the *runner's*
@@ -1186,15 +1242,14 @@ pub async fn remote_get_worktree(
     machine_id: String,
     run_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    let mut info = ctx
-        .exec
-        .control_rpc(
-            &machine_id,
-            "get_worktree",
-            serde_json::json!({ "run_id": run_id }),
-        )
-        .await
-        .map_err(AppError::from)?;
+    let mut info = remote_rpc(
+        &ctx,
+        &machine_id,
+        "get_worktree",
+        serde_json::json!({ "run_id": run_id }),
+    )
+    .await
+    .map_err(AppError::from)?;
     if let Some(obj) = info.as_object_mut() {
         obj.insert("machine_id".to_string(), serde_json::json!(machine_id));
     }
@@ -1213,20 +1268,20 @@ pub async fn remote_decide_gate(
     decision: String,
     feedback: Option<String>,
 ) -> Result<(), AppError> {
-    ctx.exec
-        .control_rpc(
-            &machine_id,
-            "decide_gate",
-            serde_json::json!({
-                "run_id": run_id,
-                "gate_id": gate_id,
-                "decision": decision,
-                "feedback": feedback,
-            }),
-        )
-        .await
-        .map(|_| ())
-        .map_err(AppError::from)
+    remote_rpc(
+        &ctx,
+        &machine_id,
+        "decide_gate",
+        serde_json::json!({
+            "run_id": run_id,
+            "gate_id": gate_id,
+            "decision": decision,
+            "feedback": feedback,
+        }),
+    )
+    .await
+    .map(|_| ())
+    .map_err(AppError::from)
 }
 
 /// R8: the only way to stop a remote run — closing the app or losing
@@ -1237,15 +1292,14 @@ pub async fn remote_cancel_run(
     machine_id: String,
     run_id: String,
 ) -> Result<(), AppError> {
-    let result = ctx
-        .exec
-        .control_rpc(
-            &machine_id,
-            "cancel_run",
-            serde_json::json!({ "run_id": run_id }),
-        )
-        .await
-        .map_err(AppError::from)?;
+    let result = remote_rpc(
+        &ctx,
+        &machine_id,
+        "cancel_run",
+        serde_json::json!({ "run_id": run_id }),
+    )
+    .await
+    .map_err(AppError::from)?;
     let status = json_str(&result, "status").unwrap_or_else(|| "cancelled".to_string());
     let now = crate::paths::now_ms();
     ctx.remote_run_mirror
@@ -1266,7 +1320,27 @@ pub async fn remote_cancel_run(
 
 #[cfg(test)]
 mod tests {
-    use super::{declared_remote_paths, mime_for_path};
+    use super::{declared_remote_paths, mime_for_path, stamp_client_id};
+
+    #[test]
+    fn stamp_client_id_injects_and_preserves_keys() {
+        // MC-D3: the single stamping site adds `client_id` without
+        // disturbing the existing params a remote RPC already carries.
+        let params = serde_json::json!({ "run_id": "laptop-1", "spec": { "title": "x" } });
+        let out = stamp_client_id(params, "client-A");
+        assert_eq!(out["client_id"], "client-A");
+        assert_eq!(out["run_id"], "laptop-1");
+        // Nested/other keys are untouched.
+        assert_eq!(out["spec"]["title"], "x");
+    }
+
+    #[test]
+    fn stamp_client_id_leaves_non_object_untouched() {
+        // A non-object payload can't carry a keyed id — return it verbatim
+        // rather than corrupt it; the runner treats the caller as legacy.
+        let out = stamp_client_id(serde_json::json!("bare"), "client-A");
+        assert_eq!(out, serde_json::json!("bare"));
+    }
 
     #[test]
     fn declared_paths_single_first_and_deduped() {

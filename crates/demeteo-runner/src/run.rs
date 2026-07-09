@@ -13,7 +13,8 @@ use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::application::{bootstrap, projects, workflows};
 use demeteo_core::domain::ids::{FeatureId, ProjectId, ProviderId};
 use demeteo_core::domain::models::{
-    Feature, GateDecision, MrInfo, ProviderInstance, PublishOptions, StepConfig,
+    Feature, GateDecision, MrInfo, ProjectSettings, ProviderInstance, PublishOptions, StepConfig,
+    WorktreeStrategy,
 };
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
@@ -214,22 +215,25 @@ pub async fn execute_run(
         .await
         .map_err(|e| format!("bootstrap failed: {}", e))?;
 
-    // Persist the detected worktree strategy into the project's settings.
-    // The desktop flow saves this once the user approves the bootstrap
-    // proposal; the runner is unattended, so it accepts the detection
-    // verbatim. Without this, `get_settings` returns None at feature_start and
-    // `fetch_default_settings` supplies `default_branch = "main"` — so
-    // `create_feature_branch` runs `git branch -f <feature> main` and fails on
-    // any repo whose real default is e.g. `master`. Bootstrap already read the
-    // true default from `origin/HEAD`, so save it (plus the rest of the
-    // detected strategy: test command, PR template, …).
-    let mut settings = fetch_default_settings();
-    settings.project_id = project.id.clone();
-    settings.worktree_strategy = strategy;
+    // Persist the settings the run will execute under. Two inputs merge
+    // here (MC-D4 / P0.5): the bootstrap-*detected* worktree strategy (it
+    // read the true `default_branch` from `origin/HEAD` on this clone —
+    // ground truth) and, when the launching client sent them, that
+    // client's own project settings (harnesses, prepare/test commands,
+    // extra writable paths, lifecycle, …). The client wins on every
+    // tunable; the detected `default_branch` wins over the client's stale
+    // copy. Without persisting *something*, `get_settings` returns None at
+    // feature_start and `fetch_default_settings` would supply
+    // `default_branch = "main"`, so `create_feature_branch` would run
+    // `git branch -f <feature> main` and fail on a `master`-default repo.
+    // `None` client settings reproduce the pre-multi-client behavior
+    // exactly (detected strategy + engine defaults).
+    let settings =
+        merge_project_settings(strategy, spec.project_settings.clone(), project.id.clone());
     svc.ctx
         .projects
         .save_settings(settings)
-        .map_err(|e| format!("failed to persist detected strategy: {}", e))?;
+        .map_err(|e| format!("failed to persist project settings: {}", e))?;
 
     eprintln!(
         "[demeteo-runner] project bootstrapped (cloned {})",
@@ -302,6 +306,45 @@ pub async fn execute_run(
     }
 
     await_terminal_and_push(svc, run_id, &project.id, &feature.id, spec).await
+}
+
+/// MC-D4 merge (P0.5): compose the `ProjectSettings` row the runner
+/// persists for a run's own project from the two sources of truth. The
+/// launching client's settings win on **every tunable** (`branch_prefix`,
+/// `test_command`, `build_command`, `coverage_command`, `conventions_file`,
+/// `pr_template`, `harnesses`, `prepare_command`, `extra_writable_paths`,
+/// `conflict_policy`, `feature_lifecycle`, `default_*`, `artifact_subdir`,
+/// `commit_artifacts`). The bootstrap-*detected* `default_branch` wins over
+/// the client's, because it was read from `origin/HEAD` on the *actual*
+/// clone — ground truth for this checkout — falling back to the client's
+/// value, then `"main"`. `project_id` is always the run's own project (the
+/// client's is meaningless on the runner). `None` client settings
+/// reproduce the pre-multi-client behavior exactly: detected strategy +
+/// engine defaults. Pure over its inputs so the merge is unit-testable.
+fn merge_project_settings(
+    detected: WorktreeStrategy,
+    client: Option<ProjectSettings>,
+    project_id: ProjectId,
+) -> ProjectSettings {
+    match client {
+        None => {
+            let mut settings = fetch_default_settings();
+            settings.project_id = project_id;
+            settings.worktree_strategy = detected;
+            settings
+        }
+        Some(mut settings) => {
+            settings.project_id = project_id;
+            // Detected `default_branch` is ground truth for this clone;
+            // every other strategy tunable stays the client's.
+            if !detected.default_branch.trim().is_empty() {
+                settings.worktree_strategy.default_branch = detected.default_branch;
+            } else if settings.worktree_strategy.default_branch.trim().is_empty() {
+                settings.worktree_strategy.default_branch = "main".to_string();
+            }
+            settings
+        }
+    }
 }
 
 /// Dispatch to [`execute_run`] (nothing created yet) or
@@ -764,4 +807,81 @@ async fn push_feature_branch(
         branch
     );
     Ok(branch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_project_settings;
+    use demeteo_core::adapters::step_executor::setup::fetch_default_settings;
+    use demeteo_core::domain::ids::ProjectId;
+
+    #[test]
+    fn none_client_reproduces_detected_strategy() {
+        // MC-D4: an old client (no settings) → detected strategy verbatim,
+        // exactly the pre-multi-client behavior.
+        let mut detected = fetch_default_settings().worktree_strategy;
+        detected.default_branch = "trunk".to_string();
+        detected.test_command = Some("cargo test".to_string());
+        let out = merge_project_settings(detected, None, ProjectId::from("p1".to_string()));
+        assert_eq!(out.project_id.as_str(), "p1");
+        assert_eq!(out.worktree_strategy.default_branch, "trunk");
+        assert_eq!(
+            out.worktree_strategy.test_command.as_deref(),
+            Some("cargo test")
+        );
+    }
+
+    #[test]
+    fn client_tunables_win_but_detected_default_branch_wins() {
+        let mut client = fetch_default_settings();
+        client.worktree_strategy.default_branch = "stale-main".to_string();
+        client.worktree_strategy.test_command = Some("npm test".to_string());
+        client.worktree_strategy.prepare_command = Some("npm ci".to_string());
+        client.worktree_strategy.extra_writable_paths = vec!["node_modules/".to_string()];
+        client.feature_lifecycle = "manual".to_string();
+
+        let mut detected = fetch_default_settings().worktree_strategy;
+        detected.default_branch = "master".to_string();
+        detected.test_command = Some("SHOULD NOT WIN".to_string());
+
+        let out = merge_project_settings(detected, Some(client), ProjectId::from("p2".to_string()));
+        // Detected default_branch (read from origin/HEAD) wins over the
+        // client's stale copy…
+        assert_eq!(out.worktree_strategy.default_branch, "master");
+        // …but the client wins on every other tunable.
+        assert_eq!(
+            out.worktree_strategy.test_command.as_deref(),
+            Some("npm test")
+        );
+        assert_eq!(
+            out.worktree_strategy.prepare_command.as_deref(),
+            Some("npm ci")
+        );
+        assert_eq!(
+            out.worktree_strategy.extra_writable_paths,
+            vec!["node_modules/".to_string()]
+        );
+        assert_eq!(out.feature_lifecycle, "manual");
+        assert_eq!(out.project_id.as_str(), "p2");
+    }
+
+    #[test]
+    fn empty_detected_branch_falls_back_to_client_then_main() {
+        // Detected blank, client has a value → keep the client's.
+        let mut client = fetch_default_settings();
+        client.worktree_strategy.default_branch = "develop".to_string();
+        let mut detected = fetch_default_settings().worktree_strategy;
+        detected.default_branch = "   ".to_string();
+        let out = merge_project_settings(detected, Some(client), ProjectId::from("p3".to_string()));
+        assert_eq!(out.worktree_strategy.default_branch, "develop");
+
+        // Detected blank AND client blank → "main" (never an empty branch).
+        let mut client2 = fetch_default_settings();
+        client2.worktree_strategy.default_branch = String::new();
+        let mut detected2 = fetch_default_settings().worktree_strategy;
+        detected2.default_branch = String::new();
+        let out2 =
+            merge_project_settings(detected2, Some(client2), ProjectId::from("p4".to_string()));
+        assert_eq!(out2.worktree_strategy.default_branch, "main");
+    }
 }

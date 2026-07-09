@@ -34,6 +34,11 @@
 Ordering is mostly linear. M4/M5 can proceed in parallel once M3 lands. M6
 depends on M3+M5. M2 can be developed in parallel with M3 (both depend on M1).
 
+> **Beyond M7:** multi-client isolation (one shared runner serving several
+> Demeteo installs, each client's runs owned and invisible to the others) is
+> designed separately in [`MULTI_CLIENT_RUNNER.md`](MULTI_CLIENT_RUNNER.md),
+> with a detailed **P0** (per-run ownership + project-settings fidelity) plan.
+
 ---
 
 ## M0 — Engine extraction (the enabling refactor)

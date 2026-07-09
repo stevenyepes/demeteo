@@ -1,0 +1,13 @@
+-- Per-run ownership for the multi-client runner (docs/MULTI_CLIENT_RUNNER.md
+-- MC-D2 / P0.2). One shared `demeteo-runner` can serve several Demeteo
+-- clients concurrently; `owner_client_id` is the durable substrate the
+-- runner's `require_owner` guard checks so a run submitted by Client A is
+-- never readable/cancelable/gate-decidable by Client B.
+--
+-- Stamped at `submit_run` from the request's `client_id` (a stable
+-- per-install UUID). Existing rows — and runs from an old client that
+-- sends no `client_id` — backfill to '' (the single "legacy/unknown"
+-- tenant; NOT a security boundary, see MC-D5 / Risks §7.1). Only relevant
+-- to `demeteo-runner`'s own database; the Tauri app gets the column too
+-- (shared migration set) but never populates the table.
+ALTER TABLE runner_runs ADD COLUMN owner_client_id TEXT NOT NULL DEFAULT '';

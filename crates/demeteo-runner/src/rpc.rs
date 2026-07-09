@@ -13,7 +13,7 @@
 //! socket client, no RPC framework dependency.
 
 use crate::services::RunnerServices;
-use demeteo_core::domain::ids::{FeatureId, ThreadId};
+use demeteo_core::domain::ids::{FeatureId, StepExecutionId, ThreadId};
 use demeteo_core::domain::models::{Feature, Message, StepExecution};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
@@ -167,47 +167,59 @@ async fn handle_connection(svc: Arc<RunnerServices>, stream: UnixStream) -> std:
 }
 
 async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
+    // MC-D3: the owning client's `install_id` rides *inside* `params`
+    // (not the `control_rpc` port signature), so it is extracted here,
+    // generically, once, before method routing — every run-scoped handler
+    // then funnels through `require_owner`. A caller that sends no
+    // `client_id` (an old laptop) reads back as `""`, the single
+    // legacy/unknown tenant, which is exactly how pre-V26 rows are stamped
+    // — so old-client↔new-runner keeps working unchanged (MC-D6 / P0.6).
+    let client_id = req
+        .params
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let cid = client_id.as_str();
     let result = match req.method.as_str() {
         "health" => Ok(serde_json::to_value(HealthInfo {
             version: env!("CARGO_PKG_VERSION"),
             pid: std::process::id(),
         })
         .unwrap()),
-        "submit_run" => submit_run(svc, req.params)
+        "submit_run" => submit_run(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "probe_agent" => probe_agent(svc, req.params)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "inject_credentials" => inject_credentials(svc, req.params)
+        "inject_credentials" => inject_credentials(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "decide_gate" => decide_gate(svc, req.params)
+        "decide_gate" => decide_gate(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "get_status" => get_status(svc, req.params)
+        "get_status" => get_status(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "get_feature" => get_feature(svc, req.params)
+        "get_feature" => get_feature(svc, req.params, cid)
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "list_steps" => list_steps(svc, req.params)
+        "list_steps" => list_steps(svc, req.params, cid)
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "get_worktree" => get_worktree(svc, req.params)
+        "get_worktree" => get_worktree(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "read_artifact" => read_artifact(svc, req.params)
+        "read_artifact" => read_artifact(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "list_messages" => list_messages(svc, req.params)
+        "list_messages" => list_messages(svc, req.params, cid)
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "list_runs" => svc
-            .ctx
-            .runner_runs
-            .list()
+        "list_runs" => {
+            list_runs(svc, cid).and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        }
+        "stream_events" => stream_events(svc, req.params, cid)
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "stream_events" => stream_events(svc, req.params)
-            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
-        "cancel_run" => cancel_run(svc, req.params)
+        "cancel_run" => cancel_run(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         other => Err(format!("unknown method: {}", other)),
@@ -226,6 +238,58 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
     }
 }
 
+/// MC-D2/D3 ownership choke point: load `run_id` and confirm `client_id`
+/// owns it. A run owned by a *different* client is reported as "no such
+/// run" — byte-for-byte the same error a genuinely-absent run yields (see
+/// [`no_such_run`]) — so ownership leaks no existence signal: a client
+/// can't distinguish "that id isn't yours" from "that id doesn't exist".
+///
+/// Every run-scoped RPC funnels through this single helper so no method
+/// can forget the check (P0.4's integration test iterates the whole
+/// surface for a second client to prove it). `""`-vs-`""` (two legacy
+/// clients, or a legacy run) matches — the documented single legacy
+/// tenant (docs/MULTI_CLIENT_RUNNER.md Risk §7.1), not a boundary.
+fn require_owner(
+    svc: &Arc<RunnerServices>,
+    run_id: &str,
+    client_id: &str,
+) -> Result<RunnerRun, String> {
+    check_owner(svc.ctx.runner_runs.get(run_id)?, run_id, client_id)
+}
+
+/// The pure ownership decision behind [`require_owner`], split out so the
+/// leak-nothing property is unit-testable without a full `RunnerServices`:
+/// a wrong-owner run and an absent run **must** yield the byte-identical
+/// error (otherwise a client could probe another's run ids for existence).
+fn check_owner(run: Option<RunnerRun>, run_id: &str, client_id: &str) -> Result<RunnerRun, String> {
+    match run {
+        Some(run) if run.owner_client_id == client_id => Ok(run),
+        _ => Err(no_such_run(run_id)),
+    }
+}
+
+/// The uniform "not here / not yours" error string. Kept as one function
+/// so the absent-run and wrong-owner paths are guaranteed identical (a
+/// drift between the two would re-open the existence-probe leak MC-D2
+/// closes).
+fn no_such_run(run_id: &str) -> String {
+    format!("no such run: {}", run_id)
+}
+
+/// List runs owned by `client_id` only (MC-D2). The unfiltered `list()`
+/// returns *every* client's runs; the multi-client contract is that a
+/// client sees only its own, so filter here. A legacy client (`""`) sees
+/// the legacy tenant's runs, matching pre-multi-client behavior.
+fn list_runs(svc: &Arc<RunnerServices>, client_id: &str) -> Result<Vec<RunnerRun>, String> {
+    Ok(svc
+        .ctx
+        .runner_runs
+        .list()?
+        .into_iter()
+        .filter(|r| r.owner_client_id == client_id)
+        .collect())
+}
+
 /// Idempotent by `run_id` (R9/M3.2): re-submitting the same `run_id`
 /// returns the existing row instead of starting a second feature. A
 /// freshly-created row is handed off to `crate::run::execute_run` on a
@@ -235,15 +299,18 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
 async fn submit_run(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<RunnerRun, String> {
     let params: SubmitRunParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
     let spec_json = serde_json::to_string(&params.spec).map_err(|e| e.to_string())?;
     let now = paths::now_ms();
+    // MC-D2: stamp the owning client at creation. `get_or_create` sets it
+    // only on the insert, so a re-submit never re-homes an existing run.
     let run = svc
         .ctx
         .runner_runs
-        .get_or_create(&params.run_id, &spec_json, now)?;
+        .get_or_create(&params.run_id, &spec_json, client_id, now)?;
 
     if run.status != "pending" {
         // Already submitted (possibly already finished) — no-op.
@@ -363,16 +430,15 @@ async fn probe_agent(
 async fn inject_credentials(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<RunnerRun, String> {
     let params: InjectCredentialsParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    // MC-D2: confirm ownership *before* touching the credential store — a
+    // non-owner must not be able to seed (or overwrite) another client's
+    // run PAT, and gets the uniform "no such run" either way.
+    let run = require_owner(svc, &params.run_id, client_id)?;
     svc.creds.insert(&params.run_id, params.git_pat);
-
-    let run = svc
-        .ctx
-        .runner_runs
-        .get(&params.run_id)?
-        .ok_or_else(|| format!("no such run: {}", params.run_id))?;
 
     if run.status != "needs-credentials" {
         // Common case: this arrives right after `submit_run`, before the
@@ -428,15 +494,54 @@ async fn inject_credentials(
         .ok_or_else(|| "run vanished during credential injection".to_string())
 }
 
+/// Resolve a bare `gate_id` (a step_execution_id, M5.3) to the run that
+/// owns its feature and confirm `client_id` owns *that* run (MC-D2 / P0.4).
+/// Before multi-client, a `gate_id` was a bearer capability — any tunnelled
+/// caller who learned one could clear another client's parked gate. This
+/// closes it: resolve gate → step → feature → run, then owner-check the run.
+/// Every failure to resolve (unknown gate, orphan step, no run behind the
+/// feature, or a non-owner) collapses to the *same* "no such gate" error,
+/// so it leaks neither the gate's existence nor its ownership.
+fn require_owner_of_gate(
+    svc: &Arc<RunnerServices>,
+    gate_id: &str,
+    client_id: &str,
+) -> Result<(), String> {
+    let not_found = || format!("no such gate: {}", gate_id);
+    let step = svc
+        .ctx
+        .features
+        .step_get(&StepExecutionId::from(gate_id.to_string()))?
+        .ok_or_else(not_found)?;
+    let feature_id = step.feature_id.as_str();
+    let owned = svc
+        .ctx
+        .runner_runs
+        .list()?
+        .into_iter()
+        .any(|r| r.feature_id.as_deref() == Some(feature_id) && r.owner_client_id == client_id);
+    if owned {
+        Ok(())
+    } else {
+        Err(not_found())
+    }
+}
+
 /// M5.3: clear a gate the unattended policy parked (`gate_class:
 /// "dangerous"`, M5.1) from the laptop. Delegates straight to
 /// `GatePresenter::gate_decide` — the same application-level call the
 /// desktop app's `gate_decide` Tauri command uses — so there is exactly
 /// one gate-decision code path regardless of which side of the tunnel
-/// the decision came from.
-async fn decide_gate(svc: &Arc<RunnerServices>, params: serde_json::Value) -> Result<(), String> {
+/// the decision came from. Gated by [`require_owner_of_gate`] so a client
+/// can only decide gates on runs it owns (MC-D2).
+async fn decide_gate(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+    client_id: &str,
+) -> Result<(), String> {
     let params: DecideGateParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    require_owner_of_gate(svc, &params.gate_id, client_id)?;
     svc.ctx
         .presenter
         .gate_decide(
@@ -470,14 +575,11 @@ struct RunStatusView {
 async fn get_status(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<RunStatusView, String> {
     let params: RunIdParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    let run = svc
-        .ctx
-        .runner_runs
-        .get(&params.run_id)?
-        .ok_or_else(|| format!("no such run: {}", params.run_id))?;
+    let run = require_owner(svc, &params.run_id, client_id)?;
 
     let mut mr_url = None;
     let mut parked_gate_id = None;
@@ -499,17 +601,20 @@ async fn get_status(
 }
 
 /// Resolve a `run_id` to the `FeatureId` its background execution
-/// bootstrapped. The C4 read-model RPCs (`get_feature`/`list_steps`/
-/// `read_artifact`/`list_messages`) all key on `run_id` — the laptop's
-/// idempotency key — and hop through the run's feature to reach the
-/// engine's own `features`/`threads`/artifact state. `Err` if the run is
-/// unknown or hasn't reached feature-bootstrap yet (nothing to render).
-fn feature_id_for_run(svc: &Arc<RunnerServices>, run_id: &str) -> Result<FeatureId, String> {
-    let run = svc
-        .ctx
-        .runner_runs
-        .get(run_id)?
-        .ok_or_else(|| format!("no such run: {}", run_id))?;
+/// bootstrapped, **gated by ownership** (MC-D2). The C4 read-model RPCs
+/// (`get_feature`/`list_steps`/`read_artifact`/`list_messages`/
+/// `get_worktree`) all key on `run_id` — the laptop's idempotency key —
+/// and hop through the run's feature to reach the engine's own
+/// `features`/`threads`/artifact state; routing them all through this one
+/// resolver means the `require_owner` check is applied uniformly and none
+/// can forget it. `Err` (uniform "no such run") if the run is unknown,
+/// owned by another client, or hasn't reached feature-bootstrap yet.
+fn feature_id_for_run(
+    svc: &Arc<RunnerServices>,
+    run_id: &str,
+    client_id: &str,
+) -> Result<FeatureId, String> {
+    let run = require_owner(svc, run_id, client_id)?;
     let fid = run
         .feature_id
         .ok_or_else(|| format!("run {} has not bootstrapped a feature yet", run_id))?;
@@ -522,10 +627,11 @@ fn feature_id_for_run(svc: &Arc<RunnerServices>, run_id: &str) -> Result<Feature
 fn get_feature(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<Option<Feature>, String> {
     let params: RunIdParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    let fid = feature_id_for_run(svc, &params.run_id)?;
+    let fid = feature_id_for_run(svc, &params.run_id, client_id)?;
     svc.ctx.features.get(&fid)
 }
 
@@ -535,10 +641,11 @@ fn get_feature(
 fn list_steps(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<Vec<StepExecution>, String> {
     let params: RunIdParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    let fid = feature_id_for_run(svc, &params.run_id)?;
+    let fid = feature_id_for_run(svc, &params.run_id, client_id)?;
     svc.ctx.features.steps_for_feature(&fid)
 }
 
@@ -557,10 +664,11 @@ fn list_steps(
 async fn get_worktree(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<demeteo_core::application::worktree::FeatureWorktreeInfo, String> {
     let params: RunIdParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    let fid = feature_id_for_run(svc, &params.run_id)?;
+    let fid = feature_id_for_run(svc, &params.run_id, client_id)?;
     demeteo_core::application::worktree::resolve_feature_worktree(&svc.ctx, &fid).await
 }
 
@@ -576,10 +684,11 @@ async fn get_worktree(
 async fn read_artifact(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<String, String> {
     let params: ReadArtifactParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    let fid = feature_id_for_run(svc, &params.run_id)?;
+    let fid = feature_id_for_run(svc, &params.run_id, client_id)?;
     let steps = svc.ctx.features.steps_for_feature(&fid)?;
     let refs = steps
         .iter()
@@ -624,12 +733,14 @@ fn is_declared_artifact<'a>(
 fn list_messages(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<Vec<Message>, String> {
     let params: ListMessagesParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    // Presence/bootstrap check only — surfaces a clear error for a bad
-    // `run_id` instead of silently returning an empty transcript.
-    feature_id_for_run(svc, &params.run_id)?;
+    // Presence/bootstrap + ownership check (MC-D2) — surfaces the uniform
+    // "no such run" for a bad `run_id` or one owned by another client,
+    // instead of silently returning an empty transcript or a foreign one.
+    feature_id_for_run(svc, &params.run_id, client_id)?;
     svc.ctx
         .threads
         .get_messages(&ThreadId::from(params.thread_id))
@@ -643,9 +754,13 @@ fn list_messages(
 fn stream_events(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<Vec<RunEvent>, String> {
     let params: StreamEventsParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    // MC-D2: the event log is per-run and can carry run detail, so gate it
+    // by ownership before returning any events for `run_id`.
+    require_owner(svc, &params.run_id, client_id)?;
     svc.ctx
         .run_events
         .list_since(&params.run_id, params.from_offset)
@@ -658,14 +773,13 @@ fn stream_events(
 async fn cancel_run(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
+    client_id: &str,
 ) -> Result<RunnerRun, String> {
     let params: RunIdParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    let run = svc
-        .ctx
-        .runner_runs
-        .get(&params.run_id)?
-        .ok_or_else(|| format!("no such run: {}", params.run_id))?;
+    // MC-D2: only the owning client may cancel; a non-owner gets the
+    // uniform "no such run" and the run keeps executing untouched.
+    let run = require_owner(svc, &params.run_id, client_id)?;
 
     if let Some(feature_id) = &run.feature_id {
         svc.ctx
@@ -698,7 +812,50 @@ async fn cancel_run(
 
 #[cfg(test)]
 mod tests {
-    use super::is_declared_artifact;
+    use super::{check_owner, is_declared_artifact, no_such_run};
+    use demeteo_core::ports::runner_run::RunnerRun;
+
+    fn run_owned_by(owner: &str) -> RunnerRun {
+        RunnerRun {
+            run_id: "run-1".to_string(),
+            project_id: None,
+            feature_id: None,
+            spec_json: "{}".to_string(),
+            status: "running".to_string(),
+            error: None,
+            created_at: 0,
+            updated_at: 0,
+            resume_count: 0,
+            pushed_branch: None,
+            owner_client_id: owner.to_string(),
+        }
+    }
+
+    #[test]
+    fn owner_match_returns_the_run() {
+        let ok = check_owner(Some(run_owned_by("client-A")), "run-1", "client-A");
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn wrong_owner_is_indistinguishable_from_absent() {
+        // The load-bearing MC-D2 property: a run owned by *another* client
+        // and a genuinely-absent run return the SAME error, so ownership
+        // leaks no existence signal — a client can't probe foreign run ids.
+        let foreign = check_owner(Some(run_owned_by("client-A")), "run-1", "client-B").unwrap_err();
+        let absent = check_owner(None, "run-1", "client-B").unwrap_err();
+        assert_eq!(foreign, absent);
+        assert_eq!(foreign, no_such_run("run-1"));
+    }
+
+    #[test]
+    fn empty_client_is_the_single_legacy_tenant() {
+        // Two legacy clients (or a pre-V26 run) share `owner_client_id ==
+        // ""` — documented single-tenant behavior (Risk §7.1), not a leak.
+        assert!(check_owner(Some(run_owned_by("")), "run-1", "").is_ok());
+        // …but a real client id still can't reach a legacy-owned run.
+        assert!(check_owner(Some(run_owned_by("")), "run-1", "client-A").is_err());
+    }
 
     fn refs<'a>(
         pairs: &'a [(Option<&'a str>, Vec<String>)],
