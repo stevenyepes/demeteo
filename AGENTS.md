@@ -273,6 +273,14 @@ defaults to **patch** (something clearly changed).
 - ❌ `Fix bug` — wrong case, no scope, vague
 - ❌ `Updated stuff` — no type
 - ❌ `feat: Added a thing.` — past tense + trailing period
+- ❌ `feat(remote): P0 multi-client runner` — subject starts with a capital
+  token (`P0`); commitlint's `subject-case` rejects sentence/upper-case. A
+  leading acronym, ticket id, or `TypeName` trips this too — start the subject
+  with a lower-case word (`feat(remote): multi-client runner P0 …`).
+
+> The `commit-msg` git hook (wired by `npm install` via `core.hooksPath
+> .githooks`) runs commitlint on every commit, so a bad message is rejected
+> locally instead of in CI. Don't rely on the hook alone — write it right.
 
 ### Release automation that depends on this
 
@@ -443,16 +451,27 @@ When editing the runner binary location/arch logic, these four files move togeth
 
 ## 11. Verification Checklist
 
-Run this before marking any task done:
+**Before pushing (and before marking any task done), run the PR gate:**
 
 ```bash
-# Frontend
-npx tsc --noEmit
+npm run checks        # === scripts/checks.sh ===
+```
 
-# Rust
-cd src-tauri && cargo fmt && cargo clippy -- -D warnings && cd ..
+This is the **single source of truth** for the CI PR checks — `pr-checks.yml`
+runs the identical script. It covers tsc, `cargo fmt --check`, `cargo clippy
+--all-targets -D warnings` (on the toolchain pinned in `rust-toolchain.toml`,
+so local clippy == CI clippy — no version drift), the demeteo **+ core +
+runner** test suites, the gate-feedback repro, and commitlint on
+`origin/master..HEAD`. It fails fast on the first red gate.
 
-# App boots
+"`cargo test` passed" is **not** the same as "CI is green": CI also gates on
+clippy, fmt, tsc, and commitlint. Run `npm run checks`, not a subset. The
+`pre-push` hook runs it automatically (bypass a deliberate WIP push with
+`git push --no-verify`).
+
+App-level smoke test when your change has UI/runtime surface:
+
+```bash
 npm run tauri dev   # open the app, confirm no console errors
 ```
 
