@@ -5,7 +5,7 @@ use tokio::sync::watch;
 
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::application::attachments::{commit_staged_attachments, StagedAttachmentInput};
-use crate::domain::ids::{FeatureId, GateDecisionId, StepExecutionId};
+use crate::domain::ids::{FeatureId, GateDecisionId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{Feature, GateDecision, StepExecution};
 use crate::error::AppError;
 use crate::paths;
@@ -20,6 +20,246 @@ use super::DagStepExecutor;
 pub(crate) mod execution_context;
 pub(crate) mod replay;
 
+/// Bootstrap phase vocabulary — `(id, label)`. Emitted as
+/// [`DomainEvent::BootstrapProgress`] during [`StepExecutor::feature_start`]
+/// so the UI can animate an inline stepper. The frontend renders `label`
+/// verbatim and orders rows by `id`, so this list is the single source of
+/// truth for the feature-start sub-steps (the runner adds its own
+/// clone-phase ids in `demeteo-runner`). Phases fire `running` →
+/// `completed`, or `failed` with the error in `detail`.
+pub(crate) mod bootstrap_phase {
+    pub const PREPARING: (&str, &str) = ("preparing", "Loading project & workflow");
+    pub const CONNECTING: (&str, &str) = ("connecting", "Connecting to machine");
+    pub const VERIFYING_REPO: (&str, &str) = ("verifying_repo", "Verifying repository");
+    pub const PREPARING_CONTEXT: (&str, &str) = ("preparing_context", "Preparing context & memory");
+    pub const SYNCING_ORIGIN: (&str, &str) = ("syncing_origin", "Syncing with origin");
+    pub const CREATING_BRANCH: (&str, &str) = ("creating_branch", "Creating feature branch");
+    pub const REGISTERING: (&str, &str) = ("registering", "Registering feature & steps");
+    pub const STARTING_PIPELINE: (&str, &str) = ("starting_pipeline", "Starting pipeline");
+}
+
+impl DagStepExecutor {
+    /// Emit a single [`DomainEvent::BootstrapProgress`]. Best-effort: a
+    /// dropped progress event never blocks the bootstrap itself.
+    pub(crate) fn emit_bootstrap(
+        &self,
+        feature_id: &str,
+        phase: (&str, &str),
+        status: &str,
+        detail: Option<String>,
+    ) {
+        let _ = self.notif.emit(&DomainEvent::BootstrapProgress {
+            feature_id: FeatureId::from(feature_id.to_string()),
+            phase: phase.0.to_string(),
+            label: phase.1.to_string(),
+            status: status.to_string(),
+            detail,
+        });
+    }
+
+    /// The spawned tail of [`StepExecutor::feature_start`]. Runs the whole
+    /// bootstrap and, on any failure, drives the feature to a terminal
+    /// `failed` state. The phase that failed has already emitted a
+    /// `BootstrapProgress { status: "failed" }` (in `resolve_execution_context`
+    /// or the phase below), so here we only reconcile the durable state:
+    /// mark the feature + any seeded steps failed and fire
+    /// `FeatureStatusChanged` so the run list, the remote shadow, and the
+    /// runner's `await_terminal_and_push` loop all observe the terminal state.
+    async fn run_bootstrap_tail(
+        &self,
+        feature_id: FeatureId,
+        project_id: String,
+        workflow_id: String,
+        description: String,
+        staged_attachments: Vec<StagedAttachmentInput>,
+    ) {
+        if let Err(e) = self
+            .run_bootstrap_tail_inner(
+                &feature_id,
+                &project_id,
+                &workflow_id,
+                &description,
+                staged_attachments,
+            )
+            .await
+        {
+            let _ = self.features.update(
+                &feature_id,
+                &FeaturePatch {
+                    status: Some("failed".to_string()),
+                    ..Default::default()
+                },
+            );
+            let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
+                feature_id: feature_id.clone(),
+                status: "failed".to_string(),
+            });
+            for s in self
+                .features
+                .steps_for_feature(&feature_id)
+                .unwrap_or_default()
+            {
+                let _ = self.features.step_update(
+                    &s.id,
+                    &StepExecutionPatch {
+                        status: Some("failed".to_string()),
+                        error_message: Some(Some(e.clone())),
+                        last_failure_fingerprint: None,
+                        iteration_count: None,
+                        cost_usd: None,
+                        tokens: None,
+                        wall_clock_secs: None,
+                        artifact_path: None,
+                        artifact_paths: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
+                    },
+                );
+            }
+            eprintln!(
+                "[feature_start] bootstrap failed for {}: {}",
+                feature_id.as_str(),
+                e
+            );
+        }
+    }
+
+    async fn run_bootstrap_tail_inner(
+        &self,
+        feature_id: &FeatureId,
+        project_id: &str,
+        workflow_id: &str,
+        description: &str,
+        staged_attachments: Vec<StagedAttachmentInput>,
+    ) -> Result<(), String> {
+        let fid = feature_id.as_str();
+        // Local aliases for the phases this fn owns (the first four are
+        // emitted inside `resolve_execution_context`).
+        let (sync, branch, register, start) = (
+            bootstrap_phase::SYNCING_ORIGIN,
+            bootstrap_phase::CREATING_BRANCH,
+            bootstrap_phase::REGISTERING,
+            bootstrap_phase::STARTING_PIPELINE,
+        );
+
+        // Phases 1-4: preparing / connecting / verifying_repo /
+        // preparing_context (emitted from within the resolver).
+        let ctx = self
+            .resolve_execution_context(fid, project_id, workflow_id, description, true)
+            .await?;
+
+        let git_ops = GitOpsHelper::new(self.app_settings.clone(), self.exec.clone());
+        let default_branch = ctx.settings.worktree_strategy.default_branch.clone();
+
+        // Phase 5: refresh origin BEFORE cutting the branch. Awaited (unlike
+        // the old fire-and-forget) but non-fatal — `create_feature_branch`
+        // falls back to the local default if origin can't be reached. This
+        // ordering plus the origin-based start point is the fix for features
+        // starting off a stale `main`.
+        self.emit_bootstrap(fid, sync, "running", None);
+        let sync_detail = match git_ops
+            .ensure_default_branch_updated(
+                ctx.machine_id_opt.as_deref(),
+                &ctx.target_dir,
+                &default_branch,
+            )
+            .await
+        {
+            Ok(()) => None,
+            Err(e) => Some(format!(
+                "origin unavailable — starting from local {}: {}",
+                default_branch, e
+            )),
+        };
+        self.emit_bootstrap(fid, sync, "completed", sync_detail);
+
+        // Phase 6: cut the feature branch (from origin/<default>, else local).
+        self.emit_bootstrap(fid, branch, "running", None);
+        if let Err(e) = git_ops
+            .create_feature_branch(
+                ctx.machine_id_opt.as_deref(),
+                &ctx.target_dir,
+                &default_branch,
+                &ctx.branch_name,
+            )
+            .await
+        {
+            self.emit_bootstrap(fid, branch, "failed", Some(e.clone()));
+            return Err(e);
+        }
+        self.emit_bootstrap(fid, branch, "completed", None);
+
+        // Phase 7: snapshot the resolved commit flag, seed the step rows, and
+        // persist staged attachments before the driver reads them.
+        self.emit_bootstrap(fid, register, "running", None);
+        let _ = self.features.update(
+            feature_id,
+            &FeaturePatch {
+                commit_artifacts: Some(Some(ctx.commit_artifacts)),
+                ..Default::default()
+            },
+        );
+        let now = paths::now_ms();
+        for (i, step) in ctx.steps.iter().enumerate() {
+            let step_exec = StepExecution {
+                id: StepExecutionId::from(format!("se-{}-{}", fid, step.id.0)),
+                feature_id: feature_id.clone(),
+                step_id: step.id.clone(),
+                step_index: i as u32,
+                step_kind: step.kind.clone(),
+                status: "pending".to_string(),
+                cost_usd: Some(0.0),
+                tokens: Some(0),
+                wall_clock_secs: Some(0),
+                artifact_path: None,
+                artifact_paths: Vec::new(),
+                error_message: None,
+                iteration_count: 0,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+                last_failure_fingerprint: None,
+                created_at: now,
+                updated_at: now,
+            };
+            self.features.step_create(step_exec)?;
+        }
+        if !staged_attachments.is_empty() {
+            if let Err(e) = commit_staged_attachments(
+                &self.features,
+                &self.attachment_json,
+                &self.attachments,
+                fid,
+                staged_attachments,
+            ) {
+                self.emit_bootstrap(fid, register, "failed", Some(e.to_string()));
+                return Err(e.to_string());
+            }
+        }
+        self.emit_bootstrap(fid, register, "completed", None);
+
+        // Phase 8: flip the feature to "running" and start the driver. The
+        // status flip + event let the run list / shadow leave "bootstrapping".
+        self.emit_bootstrap(fid, start, "running", None);
+        let _ = self.features.update(
+            feature_id,
+            &FeaturePatch {
+                status: Some("running".to_string()),
+                ..Default::default()
+            },
+        );
+        let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
+            feature_id: feature_id.clone(),
+            status: "running".to_string(),
+        });
+        if let Err(e) = self.start_execution_with_ctx(fid, ctx).await {
+            self.emit_bootstrap(fid, start, "failed", Some(e.clone()));
+            return Err(e);
+        }
+        self.emit_bootstrap(fid, start, "completed", None);
+        Ok(())
+    }
+}
+
 impl DagStepExecutor {
     /// Resolve the execution context and start the driver loop.
     /// Used by [`replay_steps_from`] which does not have a pre-resolved context.
@@ -31,7 +271,7 @@ impl DagStepExecutor {
         description: &str,
     ) -> Result<(), String> {
         let ctx = self
-            .resolve_execution_context(feature_id, project_id, workflow_id, description)
+            .resolve_execution_context(feature_id, project_id, workflow_id, description, false)
             .await?;
         self.start_execution_with_ctx(feature_id, ctx).await
     }
@@ -182,6 +422,7 @@ impl DagStepExecutor {
                 &feature.project_id.0,
                 workflow_id.as_str(),
                 &feature.title,
+                false,
             )
             .await?;
 
@@ -222,58 +463,28 @@ impl StepExecutor for DagStepExecutor {
                 .unwrap_or_else(|| format!("f-{}", now)),
         );
 
-        let ctx = self
-            .resolve_execution_context(feature_id.as_str(), project_id, workflow_id, description)
-            .await?;
-
-        let git_ops = GitOpsHelper::new(self.app_settings.clone(), self.exec.clone());
-
-        // Create the feature branch from whatever the local default_branch
-        // points to. The branch refresh is done asynchronously below so
-        // the user doesn't wait on a network fetch before seeing the
-        // feature start.
-        git_ops
-            .create_feature_branch(
-                ctx.machine_id_opt.as_deref(),
-                &ctx.target_dir,
-                &ctx.settings.worktree_strategy.default_branch,
-                &ctx.branch_name,
-            )
-            .await?;
-
-        // Refresh the local default_branch from origin asynchronously.
-        // Best-effort: if the fetch fails (offline, no remote, auth) we
-        // still proceed with whatever is local — the next sync will
-        // catch up.
-        {
-            let exec = self.exec.clone();
-            let app_settings = self.app_settings.clone();
-            let machine_id = ctx.machine_id_opt.clone();
-            let target_dir = ctx.target_dir.clone();
-            let default_branch = ctx.settings.worktree_strategy.default_branch.clone();
-            tokio::spawn(async move {
-                let bg_git_ops = GitOpsHelper::new(app_settings, exec);
-                let _ = bg_git_ops
-                    .ensure_default_branch_updated(
-                        machine_id.as_deref(),
-                        &target_dir,
-                        &default_branch,
-                    )
-                    .await;
-            });
-        }
-
-        // Per-feature override of the project's commit_artifacts. None
-        // means inherit; Some(true/false) is snapshotted on the Feature
-        // row so project setting changes don't affect in-flight runs.
-        let effective_commit = commit_artifacts.or(Some(ctx.commit_artifacts));
-
+        // Insert the feature row eagerly with status "bootstrapping" and
+        // return right away, so the caller is unblocked and the UI can
+        // navigate straight into the feature detail view. The heavy,
+        // possibly network-bound bootstrap (context resolve + SSH handshake +
+        // origin sync + branch creation + step registration) then runs in the
+        // spawned tail below, streaming `BootstrapProgress` events the UI
+        // animates. On the desktop this replaces the old behavior where
+        // `invoke('start_feature')` blocked on the whole bootstrap before
+        // navigating; the runner's `await_terminal_and_push` already polls the
+        // feature to a terminal status, so a bootstrap failure now surfaces
+        // there as a "failed" feature (see `run_bootstrap_tail`).
+        //
+        // `commit_artifacts` is stored as the caller's *raw* override (which
+        // may be `None` = inherit): `resolve_execution_context` reads it back
+        // as the per-feature override, and the tail then snapshots the
+        // resolved value onto the row so a later replay is stable.
         let feature = Feature {
             id: feature_id.clone(),
-            project_id: ctx.project_id.clone(),
-            workflow_id: Some(ctx.workflow_id.clone()),
+            project_id: ProjectId::from(project_id.to_string()),
+            workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
             title: title.to_string(),
-            status: "running".to_string(),
+            status: "bootstrapping".to_string(),
             total_cost: 0.0,
             duration: "0s".to_string(),
             tokens: 0,
@@ -282,104 +493,29 @@ impl StepExecutor for DagStepExecutor {
             model: model.map(|s| s.to_string()),
             mr_url: None,
             mr_state: Some("none".to_string()),
-            commit_artifacts: effective_commit,
+            commit_artifacts,
             loop_iterations,
             step_overrides,
             attachments: Vec::new(),
         };
         self.features.add(feature.clone())?;
 
-        for (i, step) in ctx.steps.iter().enumerate() {
-            let step_exec = StepExecution {
-                id: StepExecutionId::from(format!("se-{}-{}", feature_id.as_str(), step.id.0)),
-                feature_id: feature_id.clone(),
-                step_id: step.id.clone(),
-                step_index: i as u32,
-                step_kind: step.kind.clone(),
-                status: "pending".to_string(),
-                cost_usd: Some(0.0),
-                tokens: Some(0),
-                wall_clock_secs: Some(0),
-                artifact_path: None,
-                artifact_paths: Vec::new(),
-                error_message: None,
-                iteration_count: 0,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-                last_failure_fingerprint: None,
-                created_at: now,
-                updated_at: now,
-            };
-            self.features.step_create(step_exec)?;
-        }
-
-        // Persist any pre-launch attachments to the freshly-created
-        // feature row BEFORE the driver is spawned. Without this the
-        // agent's first turn races the frontend's post-launch
-        // `feature_add_attachment` calls — the user clicks Launch,
-        // the IPC returns, the agent starts running, and the
-        // attachments arrive after the prompt was already rendered.
-        // Saving here guarantees the manifest is populated by the
-        // time the driver reads `self.features.get(&self.f_id)`.
-        if !staged_attachments.is_empty() {
-            if let Err(e) = commit_staged_attachments(
-                &self.features,
-                &self.attachment_json,
-                &self.attachments,
-                feature_id.as_str(),
+        // Spawn the bootstrap tail on a cheap clone (every field is an `Arc`).
+        let this = self.clone();
+        let fid = feature_id.clone();
+        let project_id = project_id.to_string();
+        let workflow_id = workflow_id.to_string();
+        let description = description.to_string();
+        tokio::spawn(async move {
+            this.run_bootstrap_tail(
+                fid,
+                project_id,
+                workflow_id,
+                description,
                 staged_attachments,
-            ) {
-                // Mark the feature as failed so the UI surfaces the
-                // error rather than seeing a "running" feature with
-                // no prompt attachments.
-                let _ = self.features.update(
-                    &feature_id,
-                    &FeaturePatch {
-                        status: Some("failed".to_string()),
-                        ..Default::default()
-                    },
-                );
-                return Err(e.to_string());
-            }
-        }
-
-        if let Err(e) = self
-            .start_execution_with_ctx(feature_id.as_str(), ctx)
-            .await
-        {
-            let _ = self.features.update(
-                &feature_id,
-                &FeaturePatch {
-                    status: Some("failed".to_string()),
-                    total_cost: None,
-                    duration: None,
-                    ..Default::default()
-                },
-            );
-            let all_steps = self
-                .features
-                .steps_for_feature(&feature_id)
-                .unwrap_or_default();
-            for s in all_steps {
-                let _ = self.features.step_update(
-                    &s.id,
-                    &StepExecutionPatch {
-                        last_failure_fingerprint: None,
-                        iteration_count: None,
-                        status: Some("failed".to_string()),
-                        cost_usd: None,
-                        tokens: None,
-                        wall_clock_secs: None,
-                        artifact_path: None,
-                        artifact_paths: None,
-                        error_message: Some(Some(e.clone())),
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
-                    },
-                );
-            }
-            return Err(e);
-        }
+            )
+            .await;
+        });
 
         Ok(feature)
     }

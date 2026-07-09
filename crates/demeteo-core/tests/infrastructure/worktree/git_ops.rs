@@ -1290,3 +1290,91 @@ async fn test_merge_base_returns_none_for_unrelated_branches() {
         .await;
     assert!(resolved.is_none());
 }
+
+/// Small helper: `git rev-parse <ref>` in `dir`, trimmed to the bare SHA.
+async fn rev_parse(exec: &LocalSubprocessAdapter, dir: &str, rev: &str) -> String {
+    exec.run_command("local", &format!("git -C \"{dir}\" rev-parse {rev}"))
+        .await
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+/// The origin-sync fix (bundled with the bootstrap-progress work): a new
+/// feature branch must be cut from the freshly-fetched `origin/<default>`,
+/// NOT the local `<default>` ref — which lags because the main checkout sits
+/// on it (git refuses to fast-forward a checked-out branch). Reproduces the
+/// tail's ordering: fetch origin, then create the branch.
+#[tokio::test]
+async fn test_create_feature_branch_cuts_from_origin_not_stale_local() {
+    let (local_dir, remote_dir, helper) = make_two_repos("branch_from_origin").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // Advance origin/main by one commit that the local clone has NOT fetched.
+    // The local `main` ref (checked out) still points at the initial commit.
+    exec.write_file("local", &format!("{remote}/README.md"), "origin advanced")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{remote}\" commit -am origin-advance"),
+        )
+        .await;
+
+    let stale_local_main = rev_parse(&exec, &local, "main").await;
+
+    // The tail runs this first (best-effort): it fetches origin/main to the
+    // fresh commit. Its final local-ref fast-forward is *rejected* because
+    // main is checked out — that Err is expected and ignored by the tail.
+    let _ = helper
+        .ensure_default_branch_updated(None, &local, "main")
+        .await;
+
+    helper
+        .create_feature_branch(None, &local, "main", "feature/f-sync")
+        .await
+        .expect("create_feature_branch should succeed");
+
+    let feature_sha = rev_parse(&exec, &local, "feature/f-sync").await;
+    let origin_main_sha = rev_parse(&exec, &local, "origin/main").await;
+
+    assert_eq!(
+        feature_sha, origin_main_sha,
+        "feature branch must be cut from the freshly-fetched origin/main"
+    );
+    assert_ne!(
+        feature_sha, stale_local_main,
+        "feature branch must NOT be cut from the stale local main ref"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// Offline / no-remote fallback: with no `origin/<default>` to resolve,
+/// `create_feature_branch` falls back to the local default branch and still
+/// succeeds (the pre-fix behavior, preserved).
+#[tokio::test]
+async fn test_create_feature_branch_falls_back_to_local_without_origin() {
+    let (dir, helper) = make_repo("branch_no_origin").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    let local_main = rev_parse(&exec, &repo, "main").await;
+
+    helper
+        .create_feature_branch(None, &repo, "main", "feature/f-local")
+        .await
+        .expect("create_feature_branch should fall back to local main");
+
+    let feature_sha = rev_parse(&exec, &repo, "feature/f-local").await;
+    assert_eq!(
+        feature_sha, local_main,
+        "with no origin, the feature branch is cut from local main"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -661,6 +661,9 @@ async fn hydrate_shadow_feature(
                 model: Some(feature.model.clone()),
                 mr_url: Some(feature.mr_url.clone()),
                 mr_state: Some(feature.mr_state.clone()),
+                // The shadow inherits the runner's snapshot on the initial
+                // insert; a re-reconcile doesn't change the commit flag.
+                commit_artifacts: None,
             },
         )?;
     }

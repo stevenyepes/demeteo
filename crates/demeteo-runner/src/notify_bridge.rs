@@ -369,6 +369,30 @@ impl NotificationPort for RunEventBridge {
                     serde_json::json!({ "step_execution_id": step_execution_id.as_str() }),
                 );
             }
+            DomainEvent::BootstrapProgress {
+                feature_id,
+                phase,
+                label,
+                status,
+                detail,
+            } => {
+                // Feature-start sub-steps for the laptop's inline stepper. The
+                // run's own pre-feature clone phases are emitted separately in
+                // `run.rs` (keyed by run_id directly); these are the
+                // feature_start tail phases, resolved feature_id -> run_id like
+                // step progress. The earliest phase(s) may predate the run row
+                // learning its feature_id and are simply dropped then.
+                self.emit_for_feature(
+                    feature_id.as_str(),
+                    "bootstrap_progress",
+                    serde_json::json!({
+                        "phase": phase,
+                        "label": label,
+                        "status": status,
+                        "detail": detail,
+                    }),
+                );
+            }
             // Deliberately not bridged into the durable log:
             //   * CommandExecuted / PermissionRequested — unattended runs
             //     don't gate on per-command permission; high volume, low

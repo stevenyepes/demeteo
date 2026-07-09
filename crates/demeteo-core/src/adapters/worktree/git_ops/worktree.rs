@@ -120,6 +120,19 @@ impl GitOpsHelper {
     }
 
     /// Create a feature branch off the default branch in the main repo.
+    ///
+    /// The start point is the **remote-tracking** ref `origin/<default>`
+    /// when it exists, falling back to the local `<default>` branch. Cutting
+    /// from `origin/<default>` (which the caller refreshes with a
+    /// `git fetch origin <default>` immediately before this) guarantees the
+    /// feature branch is based on the latest upstream — and, crucially, it
+    /// works even though the main checkout sits on `<default>` throughout the
+    /// run, which *blocks* a `git fetch origin +<default>:<default>`
+    /// fast-forward of the local ref (git refuses to fetch into a
+    /// checked-out branch). That rejection is exactly why an earlier
+    /// "sync then branch off local default" scheme left features starting
+    /// from a stale `main`. The local fallback keeps the offline / no-remote
+    /// path working (there `origin/<default>` simply doesn't resolve).
     pub async fn create_feature_branch(
         &self,
         machine_id: Option<&str>,
@@ -130,6 +143,7 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or("local");
         let safe_dir = paths::shell_escape_posix(repo_dir);
         let safe_default = paths::shell_escape_posix(default_branch);
+        let safe_tracking = paths::shell_escape_posix(&format!("origin/{}", default_branch));
         let safe_branch = paths::shell_escape_posix(branch_name);
 
         // Create/update the feature branch ref without checking it out.
@@ -138,10 +152,22 @@ impl GitOpsHelper {
         // the entire pipeline run. All agent work happens in linked worktrees;
         // the main checkout must not be disturbed.
         //
-        // Replaces `git checkout -b` which moved HEAD to the feature branch and
-        // then raced with the background `ensure_default_branch_updated` call
-        // that immediately ran `git checkout <default>`, leaving the repo on
-        // the default branch after every feature start.
+        // Prefer `origin/<default>` as the start point (latest upstream);
+        // fall back to the local `<default>` when there's no remote-tracking
+        // ref (offline, no remote, brand-new repo).
+        let from_origin = format!(
+            "git -C {} branch -f {} {}",
+            safe_dir, safe_branch, safe_tracking,
+        );
+        if self
+            .exec
+            .run_command(machine_str, &from_origin)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+
         let cmd = format!(
             "git -C {} branch -f {} {}",
             safe_dir, safe_branch, safe_default,

@@ -39,6 +39,7 @@ mod tests;
 
 // ── Core struct ────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub struct DagStepExecutor {
     #[allow(dead_code)]
     machines: Arc<dyn MachineRepository>,

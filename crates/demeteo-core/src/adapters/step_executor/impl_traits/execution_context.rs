@@ -111,13 +111,28 @@ impl DagStepExecutor {
         md
     }
 
+    /// Resolve the context for a run. When `emit_bootstrap` is set (only the
+    /// initial [`feature_start`] tail passes `true`; replay / resume / gate
+    /// recovery pass `false`), the network- and DB-bound sub-steps stream
+    /// `DomainEvent::BootstrapProgress` so the UI can animate an inline
+    /// stepper. See [`super::bootstrap_phase`] for the phase vocabulary.
     pub(crate) async fn resolve_execution_context(
         &self,
         feature_id: &str,
         project_id: &str,
         workflow_id: &str,
         description: &str,
+        emit_bootstrap: bool,
     ) -> Result<ExecutionContext, String> {
+        use super::bootstrap_phase as bp;
+        // Convenience: only emit when this is a fresh feature start.
+        let emit = |phase: (&str, &str), status: &str, detail: Option<String>| {
+            if emit_bootstrap {
+                self.emit_bootstrap(feature_id, phase, status, detail);
+            }
+        };
+
+        emit(bp::PREPARING, "running", None);
         let project_id_typed = ProjectId::from(project_id.to_string());
         let mut settings = self
             .projects
@@ -125,10 +140,14 @@ impl DagStepExecutor {
             .unwrap_or_else(fetch_default_settings);
 
         let all = self.projects.get_projects()?;
-        let project = all
-            .into_iter()
-            .find(|p| p.id == project_id_typed)
-            .ok_or_else(|| format!("Project not found: {}", project_id))?;
+        let project = match all.into_iter().find(|p| p.id == project_id_typed) {
+            Some(p) => p,
+            None => {
+                let e = format!("Project not found: {}", project_id);
+                emit(bp::PREPARING, "failed", Some(e.clone()));
+                return Err(e);
+            }
+        };
 
         let machine_id = if project.compute_type.to_lowercase() == "local" {
             None
@@ -137,17 +156,27 @@ impl DagStepExecutor {
         };
 
         let repos = self.projects.get_repositories_for(&project_id_typed)?;
-        let repo = repos
-            .first()
-            .ok_or("No repository associated with this project.")?;
+        let repo = match repos.first() {
+            Some(r) => r,
+            None => {
+                let e = "No repository associated with this project.".to_string();
+                emit(bp::PREPARING, "failed", Some(e.clone()));
+                return Err(e);
+            }
+        };
         let repo_path = repo.repo_path.clone();
+        emit(bp::PREPARING, "completed", None);
 
-        let target_dir = if project.compute_type.to_lowercase() == "local" {
+        let is_remote = project.compute_type.to_lowercase() != "local";
+        let target_dir = if !is_remote {
             paths::repo_target_dir_local(&self.workspace_dir, project_id, &repo_path)
                 .to_string_lossy()
                 .to_string()
         } else {
-            paths::repo_target_dir_str(
+            // First remote contact — the SSH session is established lazily
+            // here, so this is where the handshake latency lands.
+            emit(bp::CONNECTING, "running", None);
+            match paths::repo_target_dir_str(
                 &self.exec,
                 &project.compute_type,
                 project.remote_host.as_ref().map(|m| m.as_str()),
@@ -155,7 +184,17 @@ impl DagStepExecutor {
                 &repo_path,
                 None,
             )
-            .await?
+            .await
+            {
+                Ok(dir) => {
+                    emit(bp::CONNECTING, "completed", None);
+                    dir
+                }
+                Err(e) => {
+                    emit(bp::CONNECTING, "failed", Some(e.clone()));
+                    return Err(e);
+                }
+            }
         };
 
         let wf_id = WorkflowId::from(workflow_id.to_string());
@@ -181,16 +220,32 @@ impl DagStepExecutor {
             }
         }
 
-        let latest_version = self
-            .workflows
-            .latest_version(&wf_id)?
-            .ok_or_else(|| format!("No versions found for workflow: {}", workflow_id))?;
+        let latest_version = match self.workflows.latest_version(&wf_id) {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                let e = format!("No versions found for workflow: {}", workflow_id);
+                emit(bp::PREPARING, "failed", Some(e.clone()));
+                return Err(e);
+            }
+            Err(e) => {
+                emit(bp::PREPARING, "failed", Some(e.clone()));
+                return Err(e);
+            }
+        };
 
-        let mut steps: Vec<StepConfig> = serde_json::from_str(&latest_version.steps_json)
-            .map_err(|e| format!("Invalid workflow steps JSON: {}", e))?;
+        let mut steps: Vec<StepConfig> = match serde_json::from_str(&latest_version.steps_json) {
+            Ok(s) => s,
+            Err(e) => {
+                let e = format!("Invalid workflow steps JSON: {}", e);
+                emit(bp::PREPARING, "failed", Some(e.clone()));
+                return Err(e);
+            }
+        };
 
         if steps.is_empty() {
-            return Err("Workflow has no steps.".to_string());
+            let e = "Workflow has no steps.".to_string();
+            emit(bp::PREPARING, "failed", Some(e.clone()));
+            return Err(e);
         }
 
         // Bake step-level project overrides onto the matching steps. Each field
@@ -231,6 +286,7 @@ impl DagStepExecutor {
             paths::shell_escape_posix(&parent_dir),
             paths::shell_escape_posix(&target_dir),
         );
+        emit(bp::VERIFYING_REPO, "running", None);
         let probe_output = self
             .exec
             .run_command(&machine_id_for_check, &probe)
@@ -238,15 +294,18 @@ impl DagStepExecutor {
             .unwrap_or_else(|e| format!("probe failed: {}", e));
         let path_ok = probe_output.contains("__DEMETEO_DIAG__ exists");
         if !path_ok {
-            return Err(format!(
+            let e = format!(
                 "Repository target dir does not exist on '{}': {}\n\
                  Remote diagnostic probe output:\n{}\n\n\
                  If the parent dir listing is empty, the bootstrap clone \
                  did not actually run for this project — re-save the \
                  workspace settings to trigger a fresh bootstrap.",
                 machine_id_for_check, target_dir, probe_output
-            ));
+            );
+            emit(bp::VERIFYING_REPO, "failed", Some(e.clone()));
+            return Err(e);
         }
+        emit(bp::VERIFYING_REPO, "completed", None);
 
         // Build base context
         let test_cmd = settings
@@ -264,6 +323,7 @@ impl DagStepExecutor {
             .coverage_command
             .clone()
             .unwrap_or_default();
+        emit(bp::PREPARING_CONTEXT, "running", None);
         let conventions_content =
             if let Some(path) = settings.worktree_strategy.conventions_file.as_deref() {
                 let exec = self.exec.clone();
@@ -296,6 +356,8 @@ impl DagStepExecutor {
             // it resets the session.
             "",
         );
+
+        emit(bp::PREPARING_CONTEXT, "completed", None);
 
         // Snapshot the artifact subdir + commit flag from project
         // settings, then honour the Feature row's per-feature override
