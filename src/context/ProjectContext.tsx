@@ -1,12 +1,11 @@
 import { createContext, useContext, useReducer } from 'react';
-import type { Project, Provider, Repository, WorkflowSummary } from '../types';
+import type { Project, Provider, Repository } from '../types';
 
 export interface ProjectState {
   projects: Project[];
   currentProjectId: string | null;
   providers: Provider[];
   reposByProject: Record<string, Repository[]>;
-  workflowsForModal: WorkflowSummary[];
   initialLoadError: string;
 }
 
@@ -17,7 +16,6 @@ export type ProjectAction =
   | { type: 'ADD_PROJECT'; project: Project; repos?: Repository[] }
   | { type: 'UPDATE_PROJECTS'; updater: (prev: Project[]) => Project[] }
   | { type: 'REMOVE_PROJECT'; id: string }
-  | { type: 'SET_WORKFLOWS_FOR_MODAL'; workflows: WorkflowSummary[] }
   | { type: 'SET_ERROR'; error: string };
 
 const initial: ProjectState = {
@@ -25,7 +23,6 @@ const initial: ProjectState = {
   currentProjectId: null,
   providers: [],
   reposByProject: {},
-  workflowsForModal: [],
   initialLoadError: '',
 };
 
@@ -51,8 +48,6 @@ function reducer(state: ProjectState, action: ProjectAction): ProjectState {
       const { [action.id]: _removed, ...rest } = state.reposByProject;
       return { ...state, projects: state.projects.filter(p => p.id !== action.id), reposByProject: rest };
     }
-    case 'SET_WORKFLOWS_FOR_MODAL':
-      return { ...state, workflowsForModal: action.workflows };
     case 'SET_ERROR':
       return { ...state, initialLoadError: action.error };
     default:

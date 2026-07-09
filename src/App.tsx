@@ -137,7 +137,7 @@ function AppInner() {
   const { state: proj, dispatch: projDispatch } = useProject();
   const { ui, uiDispatch } = useUIState();
 
-  const { projects, currentProjectId, providers, reposByProject, workflowsForModal, initialLoadError } = proj;
+  const { projects, currentProjectId, providers, reposByProject, initialLoadError } = proj;
   // `commandPaletteOpen`, `docsPanelOpen`, `startFeatureOpen`, and
   // `startFeatureWorkflowId` drive the per-overlay render branches
   // below. `isConnectModalOpen` and `editingProvider` are read
@@ -473,17 +473,7 @@ function AppInner() {
             <WorkflowList
               onEdit={(id) => navigate({ kind: 'workflow-editor', workflowId: id })}
               onNew={() => navigate({ kind: 'workflow-editor', workflowId: null })}
-              onStartFeature={async (wfId) => {
-                try {
-                  const { invoke } = await import('@tauri-apps/api/core');
-                  const list: any[] = await invoke('workflow_list');
-                  projDispatch({
-                    type: 'SET_WORKFLOWS_FOR_MODAL',
-                    workflows: list.map((w: any) => ({ id: w.id, name: w.name, description: w.description, version: w.version })),
-                  });
-                  uiDispatch({ type: 'OPEN_START_FEATURE', workflowId: wfId });
-                } catch (err) { reportError(err); }
-              }}
+              onStartFeature={(wfId) => uiDispatch({ type: 'OPEN_START_FEATURE', workflowId: wfId })}
             />
           )}
 
@@ -516,7 +506,6 @@ function AppInner() {
               isOpen={startFeatureOpen}
               projectId={currentProjectId}
               projectName={currentProject.name}
-              workflows={workflowsForModal}
               repositories={reposByProject[currentProjectId] || []}
               defaultWorkflowId={startFeatureWorkflowId}
               onClose={() => uiDispatch({ type: 'CLOSE_START_FEATURE' })}
