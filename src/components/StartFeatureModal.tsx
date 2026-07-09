@@ -61,9 +61,6 @@ interface StartFeatureModalProps {
      * is a machine id the parent resolves via `remote_submit_run`.
      */
     machineId?: string;
-    /** Display name for `machineId`, so the caller doesn't need its own
-     * copy of the machines list just to show a confirmation. */
-    machineName?: string;
     /** R6/R7: auto-approve safe gates, park dangerous ones. Only
      * meaningful when `machineId` is set. */
     unattended?: boolean;
@@ -495,9 +492,9 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       }))
       .filter((o) => o.agent_kind || o.model);
     const loopArg = loopIterations.trim() ? parseInt(loopIterations, 10) : undefined;
-    const costArg = machineId && maxCostUsd.trim() ? parseFloat(maxCostUsd) : undefined;
+    const costArg = detached && maxCostUsd.trim() ? parseFloat(maxCostUsd) : undefined;
     const wallClockArg =
-      machineId && maxWallClockMins.trim() ? parseInt(maxWallClockMins, 10) : undefined;
+      detached && maxWallClockMins.trim() ? parseInt(maxWallClockMins, 10) : undefined;
     onLaunch({
       workflowId,
       title: title.trim(),
@@ -510,8 +507,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       stepOverrides: overrides.length > 0 ? overrides : undefined,
       attachments: attachments.length > 0 ? attachments : undefined,
       machineId: machineId || undefined,
-      machineName: machineId ? machines.find((m) => m.id === machineId)?.name : undefined,
-      unattended: machineId ? unattended : undefined,
+      unattended: detached ? unattended : undefined,
       maxCostUsd: Number.isFinite(costArg as number) ? costArg : undefined,
       maxWallClockMins: Number.isFinite(wallClockArg as number) ? wallClockArg : undefined,
     });

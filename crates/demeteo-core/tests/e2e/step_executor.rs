@@ -180,6 +180,7 @@ async fn test_executor_instantiation_and_cancel() {
         db.clone(), // attachment_json — SqliteAdapter implements both ports
         temp_dir.clone(),
         pricing,
+        db.clone(), // remote-run mirror — SqliteAdapter implements the port
     );
 
     let cancel_res = executor.feature_cancel("f-nonexistent").await;
@@ -250,6 +251,7 @@ async fn test_executor_gate_decide() {
         db.clone(), // attachment_json — SqliteAdapter implements both ports
         temp_dir.clone(),
         pricing,
+        db.clone(), // remote-run mirror — SqliteAdapter implements the port
     );
 
     let waiter = crate::adapters::step_executor::gate_waiter::GateWaiter::new();
@@ -424,6 +426,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
         db.clone(), // attachment_json — SqliteAdapter implements both ports
         temp_dir.clone(),
         pricing,
+        db.clone(), // remote-run mirror — SqliteAdapter implements the port
     );
 
     let now = paths::now_ms();
@@ -593,6 +596,7 @@ async fn build_test_executor(
         db.clone(), // attachment_json — SqliteAdapter implements both ports
         temp_dir.clone(),
         pricing,
+        db.clone(), // remote-run mirror — SqliteAdapter implements the port
     );
     (executor, db, temp_dir)
 }
@@ -1081,6 +1085,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         db.clone(), // attachment_json — SqliteAdapter implements both ports
         temp_dir.clone(),
         pricing,
+        db.clone(), // remote-run mirror — SqliteAdapter implements the port
     ));
 
     let now = paths::now_ms();
@@ -1148,21 +1153,14 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
     features.add(mk_feature("f-local")).unwrap();
     features.step_create(mk_step("se-local", "f-local")).unwrap();
 
-    // The mirror row is the runner-owned marker (C4.2).
+    // The mirror row is the runner-owned marker (C4.2) — the executor
+    // reads it through its own mirror port, exactly like production.
     let mirror: &dyn RemoteRunMirrorPort = &*db;
     mirror
         .upsert_submitted("m1", "r1", Some("p-1"), Some("f-shadow"), "f-shadow", now)
         .unwrap();
 
-    // Same set the composition root builds at startup.
-    let runner_owned: std::collections::HashSet<String> = mirror
-        .list()
-        .unwrap()
-        .into_iter()
-        .filter_map(|r| r.feature_id)
-        .collect();
-
-    executor.startup_watchdog(&runner_owned);
+    executor.startup_watchdog();
 
     // The shadow is untouched — still mirroring whatever the runner says.
     let shadow = features.get(&FeatureId::from("f-shadow")).unwrap().unwrap();
@@ -1193,15 +1191,30 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
             },
         )
         .unwrap();
-    executor
-        .clone()
-        .resume_interrupted_features(runner_owned)
-        .await;
+    executor.clone().resume_interrupted_features().await;
     assert!(
         !executor
             .driver_registry()
             .is_live(&FeatureId::from("f-shadow")),
         "a runner-owned shadow must never get a local driver"
+    );
+
+    // The guard lives in `ensure_driver_running` itself, so every
+    // recovery path is covered — including `gate_decide`'s self-healing
+    // respawn, which a shadow step parked in `awaiting_gate` can reach.
+    let err = executor
+        .ensure_driver_running("f-shadow")
+        .await
+        .expect_err("ensure_driver_running must refuse a runner-owned shadow");
+    assert!(
+        err.contains("read-only shadow"),
+        "expected the shadow refusal, got: {err}"
+    );
+    assert!(
+        !executor
+            .driver_registry()
+            .is_live(&FeatureId::from("f-shadow")),
+        "the refused ensure_driver_running must not have armed a driver"
     );
 
     let _ = std::fs::remove_dir_all(temp_dir);

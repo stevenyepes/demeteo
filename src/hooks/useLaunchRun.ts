@@ -22,7 +22,6 @@ export interface LaunchRunParams {
    * means the local `start_feature` path (which is also the
    * attached-remote path — that routing is a project-level setting). */
   machineId?: string;
-  machineName?: string;
   unattended?: boolean;
   maxCostUsd?: number;
   maxWallClockMins?: number;

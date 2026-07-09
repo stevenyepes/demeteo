@@ -153,6 +153,20 @@ impl DagStepExecutor {
             return Ok(());
         }
 
+        // A mirror-listed feature is a read-only shadow of a run a
+        // `demeteo-runner` still owns (C4.2). Guarded here — not just at
+        // the startup call sites — because this is the single recovery
+        // primitive: a gate_decide or retry on a shadow (its mirrored
+        // steps do sit in `awaiting_gate`) would otherwise arm a local
+        // driver against a run another machine is driving.
+        if self.runner_owned_features().contains(feature_id) {
+            return Err(format!(
+                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
+                 this machine never drives it (decide its gates via the remote run instead)",
+                feature_id
+            ));
+        }
+
         let feature = self
             .features
             .get(&f_id)?
@@ -589,14 +603,15 @@ impl DagStepExecutor {
     /// hands control to user-driven tasks. Pair with
     /// [`resume_interrupted_features`] which spawns the actual drivers.
     ///
-    /// `runner_owned` is the set of feature ids present in the
-    /// remote-run mirror (C4.2): those rows are read-only *shadows* of
-    /// features a `demeteo-runner` owns and is still driving on another
-    /// machine. A shadow tracking a live remote run legitimately sits in
-    /// `running`/`gated` across an app restart — no local process was
-    /// ever driving it — so the watchdog must not mark its steps
-    /// interrupted or re-emit gate prompts for it.
-    pub fn startup_watchdog(&self, runner_owned: &std::collections::HashSet<String>) {
+    /// Features present in the remote-run mirror (C4.2) are skipped:
+    /// those rows are read-only *shadows* of features a `demeteo-runner`
+    /// owns and is still driving on another machine. A shadow tracking a
+    /// live remote run legitimately sits in `running`/`gated` across an
+    /// app restart — no local process was ever driving it — so the
+    /// watchdog must not mark its steps interrupted or re-emit gate
+    /// prompts for it.
+    pub fn startup_watchdog(&self) {
+        let runner_owned = self.runner_owned_features();
         let Ok(projects) = self.projects.get_projects() else {
             return;
         };
@@ -711,14 +726,12 @@ impl DagStepExecutor {
     /// that the gate prompts the watchdog re-emitted are actually
     /// backed by a live driver.
     ///
-    /// `runner_owned` (same set as [`startup_watchdog`]): a mirror-listed
-    /// shadow in `awaiting_gate`/`gated` is parked on the *runner*, not
-    /// here — arming a local driver against it would have two engines
-    /// driving one feature.
-    pub async fn resume_interrupted_features(
-        self: Arc<Self>,
-        runner_owned: std::collections::HashSet<String>,
-    ) {
+    /// Mirror-listed shadows are skipped (same rule as
+    /// [`startup_watchdog`]): a shadow in `awaiting_gate`/`gated` is
+    /// parked on the *runner*, not here — arming a local driver against
+    /// it would have two engines driving one feature.
+    pub async fn resume_interrupted_features(self: Arc<Self>) {
+        let runner_owned = self.runner_owned_features();
         let Ok(projects) = self.projects.get_projects() else {
             return;
         };

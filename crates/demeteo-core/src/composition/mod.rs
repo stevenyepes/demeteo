@@ -221,29 +221,17 @@ pub fn build_core_context(
             attachment_json.clone(),
             workspace_dir.clone(),
             pricing.clone(),
+            remote_run_mirror_repo.clone(),
         ));
-        // Features listed in the remote-run mirror are read-only shadows
-        // of runner-owned runs (C4.2) — restart reconciliation must
-        // neither interrupt their steps nor arm a local driver against
-        // them; the runner is still driving the real feature elsewhere.
-        // Empty on the runner itself (its mirror table never gains rows).
-        let runner_owned: std::collections::HashSet<String> = remote_run_mirror_repo
-            .list()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|r| r.feature_id)
-            .collect();
         // Reconcile DB + notifications first (synchronous, fast).
-        exec.startup_watchdog(&runner_owned);
+        exec.startup_watchdog();
         // Then spawn the actual driver resumes on the runtime. Without
         // this, the re-emitted GateRequired events have no live driver
         // behind them and the user's gate_decide is silently dropped —
         // see the watchdog/registry docs.
         let exec_for_resume = exec.clone();
         runtime.spawn(async move {
-            exec_for_resume
-                .resume_interrupted_features(runner_owned)
-                .await;
+            exec_for_resume.resume_interrupted_features().await;
         });
         exec
     };

@@ -35,11 +35,37 @@ pub struct RemoteRunHandle {
 /// deliberately tighter (mirrored in the Start Feature modal copy).
 const MAX_DETACHED_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
 
+/// The runner-side directory a run's attachments are spooled into. Same
+/// data-dir convention `enable_remote_runs` provisions the runner with
+/// (`{home}/.local/share/demeteo-runner`).
+fn attachment_spool_dir(home: &str, run_id: &str) -> String {
+    format!("{home}/.local/share/demeteo-runner/attachment-spool/{run_id}")
+}
+
+/// Best-effort removal of a run's attachment spool for a run the runner
+/// never accepted (spool/submit failure). The runner only cleans up
+/// spools of runs it actually executed; without this, a rejected submit
+/// would orphan the directory on the remote host forever.
+async fn cleanup_attachment_spool(ctx: &AppContext, machine_id: &str, run_id: &str) {
+    let Ok(home) = ctx.exec.resolve_home(machine_id).await else {
+        return;
+    };
+    let spool_dir = attachment_spool_dir(&home, run_id);
+    let _ = ctx
+        .exec
+        .run_command(
+            machine_id,
+            &format!("rm -rf {}", crate::paths::shell_escape_posix(&spool_dir)),
+        )
+        .await;
+}
+
 /// Spool pre-launch attachments onto the runner host over SFTP before
 /// `submit_run`, returning the [`RunSpecAttachment`] references the spec
 /// carries — raw bytes never ride the line-JSON control RPC. Keyed by
 /// `run_id`; the runner deletes the whole spool directory when the run
-/// reaches a terminal state (with the credential teardown).
+/// reaches a terminal state (with the credential teardown). On `Err` the
+/// spool may be partially written — the caller cleans it up.
 async fn spool_attachments(
     ctx: &AppContext,
     machine_id: &str,
@@ -49,10 +75,8 @@ async fn spool_attachments(
     if staged.is_empty() {
         return Ok(Vec::new());
     }
-    // Same data-dir convention `enable_remote_runs` provisions the
-    // runner with (`{home}/.local/share/demeteo-runner`).
     let home = ctx.exec.resolve_home(machine_id).await?;
-    let spool_dir = format!("{home}/.local/share/demeteo-runner/attachment-spool/{run_id}");
+    let spool_dir = attachment_spool_dir(&home, run_id);
     ctx.exec
         .run_command(
             machine_id,
@@ -62,19 +86,35 @@ async fn spool_attachments(
 
     let mut out = Vec::new();
     for (i, a) in staged.into_iter().enumerate() {
+        let display_name = a
+            .source_filename
+            .clone()
+            .unwrap_or_else(|| a.source_path.clone());
+        let too_big = |actual_bytes: u64| {
+            format!(
+                "attachment {display_name} is {} MB — detached runs cap attachments at {} MB",
+                actual_bytes / (1024 * 1024),
+                MAX_DETACHED_ATTACHMENT_BYTES / (1024 * 1024),
+            )
+        };
         let bytes = match a.bytes {
             Some(b) => b,
-            None => tokio::fs::read(&a.source_path)
-                .await
-                .map_err(|e| format!("failed to read attachment {}: {e}", a.source_path))?,
+            None => {
+                // Size check from metadata first, so an oversized file is
+                // rejected without pulling its whole body into memory.
+                let meta = tokio::fs::metadata(&a.source_path)
+                    .await
+                    .map_err(|e| format!("failed to read attachment {}: {e}", a.source_path))?;
+                if meta.len() > MAX_DETACHED_ATTACHMENT_BYTES as u64 {
+                    return Err(too_big(meta.len()));
+                }
+                tokio::fs::read(&a.source_path)
+                    .await
+                    .map_err(|e| format!("failed to read attachment {}: {e}", a.source_path))?
+            }
         };
         if bytes.len() > MAX_DETACHED_ATTACHMENT_BYTES {
-            return Err(format!(
-                "attachment {} is {} MB — detached runs cap attachments at {} MB",
-                a.source_filename.as_deref().unwrap_or(&a.source_path),
-                bytes.len() / (1024 * 1024),
-                MAX_DETACHED_ATTACHMENT_BYTES / (1024 * 1024),
-            ));
+            return Err(too_big(bytes.len() as u64));
         }
         // Keep only the final path component of whatever name we have —
         // a spool entry must never escape its run directory.
@@ -232,6 +272,23 @@ pub async fn remote_submit_run(
     // spool below, which is keyed by it.
     let run_id = format!("laptop-{}", crate::paths::new_id());
 
+    // Spool the attachments before inserting the placeholder Feature:
+    // an oversized/unreadable attachment fails the launch outright, and
+    // failing before the insert means there is no ghost row to retire.
+    // On failure the partially-written spool is removed so a rejected
+    // launch leaves nothing behind on the runner host.
+    let staged = staged_attachments.unwrap_or_default();
+    let had_attachments = !staged.is_empty();
+    let attachments = match spool_attachments(&ctx, &machine_id, &run_id, staged).await {
+        Ok(list) => list,
+        Err(e) => {
+            if had_attachments {
+                cleanup_attachment_spool(&ctx, &machine_id, &run_id).await;
+            }
+            return Err(AppError::from(e));
+        }
+    };
+
     // Eager shadow feature: the laptop chooses the feature id, inserts a
     // placeholder Feature it can navigate to immediately, and ships the
     // id in the spec so the runner's `feature_start` reuses it. From
@@ -241,42 +298,30 @@ pub async fn remote_submit_run(
     let now = crate::paths::now_ms();
     let feature_id = format!("f-{}", crate::paths::new_id());
     let step_overrides = step_overrides.unwrap_or_default();
-    ctx.features
-        .add(Feature {
-            id: FeatureId::from(feature_id.clone()),
-            project_id: pid.clone(),
-            workflow_id: Some(wf_id.clone()),
-            title: title.clone(),
-            status: "pending".to_string(),
-            total_cost: 0.0,
-            duration: "0s".to_string(),
-            tokens: 0,
-            created_at: now,
-            agent_kind: agent_kind.clone(),
-            model: model.clone(),
-            mr_url: None,
-            mr_state: Some("none".to_string()),
-            commit_artifacts,
-            loop_iterations,
-            step_overrides: step_overrides.clone(),
-            attachments: Vec::new(),
-        })
-        .map_err(AppError::from)?;
-
-    let attachments = match spool_attachments(
-        &ctx,
-        &machine_id,
-        &run_id,
-        staged_attachments.unwrap_or_default(),
-    )
-    .await
-    {
-        Ok(list) => list,
-        Err(e) => {
-            mark_placeholder_failed(&ctx, &feature_id);
-            return Err(AppError::from(e));
+    if let Err(e) = ctx.features.add(Feature {
+        id: FeatureId::from(feature_id.clone()),
+        project_id: pid.clone(),
+        workflow_id: Some(wf_id.clone()),
+        title: title.clone(),
+        status: "pending".to_string(),
+        total_cost: 0.0,
+        duration: "0s".to_string(),
+        tokens: 0,
+        created_at: now,
+        agent_kind: agent_kind.clone(),
+        model: model.clone(),
+        mr_url: None,
+        mr_state: Some("none".to_string()),
+        commit_artifacts,
+        loop_iterations,
+        step_overrides: step_overrides.clone(),
+        attachments: Vec::new(),
+    }) {
+        if had_attachments {
+            cleanup_attachment_spool(&ctx, &machine_id, &run_id).await;
         }
-    };
+        return Err(AppError::from(e));
+    }
 
     let spec = RunSpec {
         feature_id: Some(feature_id.clone()),
@@ -309,7 +354,13 @@ pub async fn remote_submit_run(
     {
         Ok(v) => v,
         Err(e) => {
+            // The runner never accepted this run: retire the placeholder
+            // and reclaim the spool it will never read (a run it *did*
+            // accept has its spool torn down by the runner itself).
             mark_placeholder_failed(&ctx, &feature_id);
+            if had_attachments {
+                cleanup_attachment_spool(&ctx, &machine_id, &run_id).await;
+            }
             return Err(AppError::from(e));
         }
     };
@@ -318,6 +369,9 @@ pub async fn remote_submit_run(
         let err = json_str(&submitted, "error")
             .unwrap_or_else(|| "the runner rejected this run".to_string());
         mark_placeholder_failed(&ctx, &feature_id);
+        if had_attachments {
+            cleanup_attachment_spool(&ctx, &machine_id, &run_id).await;
+        }
         return Err(AppError::from(err));
     }
 
