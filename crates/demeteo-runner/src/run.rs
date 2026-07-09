@@ -243,6 +243,10 @@ pub async fn execute_run(
         .ctx
         .executor
         .feature_start(
+            // Reuse the laptop-chosen id (if the submitting app is new
+            // enough to send one) so the eager shadow Feature on the
+            // laptop and this runner-owned row are the same feature.
+            spec.feature_id.clone(),
             project.id.as_str(),
             workflow_id.as_str(),
             &spec.title,

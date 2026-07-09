@@ -44,12 +44,16 @@ pub trait RemoteRunMirrorPort: Send + Sync {
     /// Insert the row created at `submit_run` time. Idempotent by
     /// `(machine_id, run_id)` — a re-submit (same idempotency key) is a
     /// no-op here, matching the runner's own idempotent `submit_run`.
+    /// `feature_id` is the laptop-chosen id shipped in the `RunSpec`
+    /// (the eager shadow Feature), present from submit time so the run
+    /// is navigable before the first reconcile.
     #[allow(clippy::too_many_arguments)]
     fn upsert_submitted(
         &self,
         machine_id: &str,
         run_id: &str,
         project_id: Option<&str>,
+        feature_id: Option<&str>,
         title: &str,
         now: i64,
     ) -> Result<RemoteRunMirror, String>;

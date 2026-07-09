@@ -12,6 +12,7 @@ import { useErrorBus } from '../lib/errorBus';
 import { saveProjectSettings } from '../lib/project';
 import { TerminalWindow } from './TerminalWindow';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
+import { useLaunchRun } from '../hooks/useLaunchRun';
 import { useNavigation, useProject, useUIState } from '../context';
 
 const ProjectHome = () => {
@@ -61,6 +62,13 @@ const ProjectHome = () => {
     // start_feature caller; see AttachmentDropzone.tsx for the
     // launch-stage contract.
     const [attachments, setAttachments] = useState<LaunchStageEntry[]>([]);
+
+    // Shared launch path (F28) — prepends the new feature to the
+    // pipeline list and navigates to FeatureDetail.
+    const launchRun = useLaunchRun({
+        projectId: activeProject.id,
+        onLaunched: (feature) => setFeatures(prev => [feature, ...prev]),
+    });
     const [visionWarningDismissed, setVisionWarningDismissed] = useState(false);
 
     // Fetch models on selected agent change
@@ -284,49 +292,18 @@ const ProjectHome = () => {
         }
         setIsDelegating(true);
         try {
-            // Convert staged attachments into the Rust wire shape
-            // BEFORE calling start_feature — the orchestrator persists
-            // them to the freshly-created feature row before the
-            // driver is spawned, so the agent's first turn sees them.
-            // Drag-and-drop entries carry an absolute `sourcePath`,
-            // click-picked entries ferry bytes through IPC (modern
-            // Chromium strips `File.path` for security).
-            const stagedAttachments = await Promise.all(attachments.map(async (a) => ({
-                source_path: a.sourcePath ?? '',
-                mime: a.mime ?? null,
-                source_filename: a.source_filename ?? null,
-                bytes: a.file
-                    ? Array.from(new Uint8Array(await a.file.arrayBuffer()))
-                    : null,
-            })));
-            const res = await invoke<Feature>('start_feature', {
-                projectId: activeProject.id,
+            // One launch code path (F28): the shared hook converts
+            // staged attachments to the Rust wire shape, invokes
+            // start_feature, and navigates to FeatureDetail.
+            const feature = await launchRun({
                 workflowId: selectedWorkflow.id,
                 title: featureInput,
                 description: featureInput,
-                agentKind: selectedAgentKind || null,
-                model: selectedModel || null,
-                stagedAttachments,
+                agentKind: selectedAgentKind || undefined,
+                model: selectedModel || undefined,
+                attachments: attachments.length > 0 ? attachments : undefined,
             });
-            const newFeature: Feature = {
-                id: res.id,
-                project_id: res.project_id,
-                workflow_id: res.workflow_id ?? undefined,
-                title: res.title,
-                status: res.status,
-                total_cost: res.total_cost,
-                tokens: res.tokens || 0,
-                duration: res.duration,
-                created_at: res.created_at,
-                agent_kind: res.agent_kind,
-                model: res.model,
-            };
-            setFeatures(prev => [newFeature, ...prev]);
-            setAttachments([]);
-            navigate({ kind: 'detail', featureId: res.id, featureTitle: res.title });
-        } catch (err) {
-            console.error("Failed to start feature pipeline:", err);
-            reportError(err);
+            if (feature) setAttachments([]);
         } finally {
             setIsDelegating(false);
         }

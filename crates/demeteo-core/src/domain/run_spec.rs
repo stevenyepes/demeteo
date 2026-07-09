@@ -36,6 +36,14 @@ pub struct RunBudget {
 /// ingest a workflow, and start a feature from a clean database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSpec {
+    /// Laptop-chosen feature id the runner must reuse in `feature_start`,
+    /// so the eager shadow Feature the laptop inserts at submit time and
+    /// the runner's own Feature row share one id — the run is navigable
+    /// on the laptop from second zero and hydration (C4.2) updates the
+    /// placeholder in place. `None` (an old laptop) lets the runner
+    /// generate its own id as before; an old runner ignores this field.
+    #[serde(default)]
+    pub feature_id: Option<String>,
     /// Short human label — becomes the feature title and (via the
     /// project's `WorktreeStrategy`) part of the branch name.
     pub title: String,

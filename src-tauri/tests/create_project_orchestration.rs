@@ -248,6 +248,7 @@ struct StubExecutor {
 impl StepExecutor for StubExecutor {
     async fn feature_start(
         &self,
+        _feature_id: Option<String>,
         project_id: &str,
         workflow_id: &str,
         title: &str,

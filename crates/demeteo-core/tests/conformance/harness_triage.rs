@@ -271,6 +271,7 @@ async fn run_triage_leg(triage_category: &str) -> (String, String, Arc<SignalRec
     let feature = ctx
         .executor
         .feature_start(
+            None,
             project.id.as_str(),
             workflow_id.as_str(),
             "Triage Feature",

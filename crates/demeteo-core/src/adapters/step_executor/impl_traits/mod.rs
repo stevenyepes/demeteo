@@ -179,6 +179,7 @@ impl DagStepExecutor {
 impl StepExecutor for DagStepExecutor {
     async fn feature_start(
         &self,
+        feature_id: Option<String>,
         project_id: &str,
         workflow_id: &str,
         title: &str,
@@ -198,7 +199,14 @@ impl StepExecutor for DagStepExecutor {
         }
 
         let now = paths::now_ms();
-        let feature_id = FeatureId::from(format!("f-{}", now));
+        // A caller-supplied id (the runner reusing `RunSpec::feature_id`)
+        // wins so the laptop's eager shadow and the runner's own row
+        // stay one feature; local launches keep the generated form.
+        let feature_id = FeatureId::from(
+            feature_id
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or_else(|| format!("f-{}", now)),
+        );
 
         let ctx = self
             .resolve_execution_context(feature_id.as_str(), project_id, workflow_id, description)
@@ -580,13 +588,24 @@ impl DagStepExecutor {
     /// it can be called from the Tauri setup hook before the runtime
     /// hands control to user-driven tasks. Pair with
     /// [`resume_interrupted_features`] which spawns the actual drivers.
-    pub fn startup_watchdog(&self) {
+    ///
+    /// `runner_owned` is the set of feature ids present in the
+    /// remote-run mirror (C4.2): those rows are read-only *shadows* of
+    /// features a `demeteo-runner` owns and is still driving on another
+    /// machine. A shadow tracking a live remote run legitimately sits in
+    /// `running`/`gated` across an app restart — no local process was
+    /// ever driving it — so the watchdog must not mark its steps
+    /// interrupted or re-emit gate prompts for it.
+    pub fn startup_watchdog(&self, runner_owned: &std::collections::HashSet<String>) {
         let Ok(projects) = self.projects.get_projects() else {
             return;
         };
         for p in &projects {
             if let Ok(active) = self.features.get_active(&p.id) {
                 for f in active {
+                    if runner_owned.contains(f.id.as_str()) {
+                        continue;
+                    }
                     if f.status == "running" || f.status == "gated" {
                         let _ = self.projects.update_status(&p.id, "idle");
                         if let Ok(steps) = self.features.steps_for_feature(&f.id) {
@@ -656,6 +675,11 @@ impl DagStepExecutor {
         for p in &projects {
             if let Ok(all_features) = self.features.get_active(&p.id) {
                 for f in all_features {
+                    if runner_owned.contains(f.id.as_str()) {
+                        // A shadow's pending steps mirror the runner's own
+                        // rows mid-hydration — not orphans of a local crash.
+                        continue;
+                    }
                     if !matches!(f.status.as_str(), "cancelled" | "failed") {
                         continue;
                     }
@@ -686,7 +710,15 @@ impl DagStepExecutor {
     /// Called once from the Tauri setup hook on a background task so
     /// that the gate prompts the watchdog re-emitted are actually
     /// backed by a live driver.
-    pub async fn resume_interrupted_features(self: Arc<Self>) {
+    ///
+    /// `runner_owned` (same set as [`startup_watchdog`]): a mirror-listed
+    /// shadow in `awaiting_gate`/`gated` is parked on the *runner*, not
+    /// here — arming a local driver against it would have two engines
+    /// driving one feature.
+    pub async fn resume_interrupted_features(
+        self: Arc<Self>,
+        runner_owned: std::collections::HashSet<String>,
+    ) {
         let Ok(projects) = self.projects.get_projects() else {
             return;
         };
@@ -695,6 +727,9 @@ impl DagStepExecutor {
                 continue;
             };
             for f in active {
+                if runner_owned.contains(f.id.as_str()) {
+                    continue;
+                }
                 if f.status == "awaiting_gate" || f.status == "gated" {
                     if let Err(e) = self.ensure_driver_running(&f.id.0).await {
                         eprintln!(

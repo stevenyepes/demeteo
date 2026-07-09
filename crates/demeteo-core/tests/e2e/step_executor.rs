@@ -1013,3 +1013,196 @@ async fn test_assert_no_active_predecessors_helper() {
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+/// Restart reconciliation must leave runner-owned shadow features alone
+/// (C4.2): a feature whose id appears in the remote-run mirror is a
+/// read-only copy of something a `demeteo-runner` is still driving on
+/// another machine. Before the `runner_owned` skip-set existed, an app
+/// restart while a detached run was live would mark the shadow's steps
+/// `interrupted` and re-arm a local driver against it — two engines
+/// driving one feature.
+#[tokio::test]
+async fn watchdog_and_resume_skip_runner_owned_shadows() {
+    use crate::ports::remote_run_mirror::RemoteRunMirrorPort;
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "demeteo_test_watchdog_shadow_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
+    let db = Arc::new(SqliteAdapter::new(conn).unwrap());
+    let registry = Arc::new(AgentRegistry::new(vec![]));
+    let notif = Arc::new(FakeNotif);
+    let agent_exec = Arc::new(FakeAgentExec);
+    let exec = Arc::new(FakeExec);
+    let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
+        crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
+    );
+    let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
+        Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
+
+    let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
+        let git_ops =
+            crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
+        Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
+            db.clone(),
+            git_ops,
+            exec.clone(),
+            temp_dir.clone(),
+        ))
+    };
+
+    let memory_llm: Arc<dyn crate::ports::memory_llm::MemoryLlmPort> =
+        Arc::new(crate::adapters::memory_llm::ReqwestMemoryLlmAdapter::new());
+    let pricing: Arc<dyn crate::ports::pricing::PricingTable> =
+        Arc::new(crate::adapters::pricing::HardcodedPricingTable::new());
+    let executor = Arc::new(DagStepExecutor::new(
+        db.clone(),
+        db.clone(),
+        db.clone(),
+        db.clone(),
+        db.clone(),
+        db.clone(),
+        db.clone(), // memory
+        db.clone(), // signals
+        memory_llm,
+        registry,
+        notif,
+        db.clone(), // notifications
+        agent_exec,
+        exec,
+        merge_executor,
+        artifacts,
+        attachments,
+        db.clone(), // attachment_json — SqliteAdapter implements both ports
+        temp_dir.clone(),
+        pricing,
+    ));
+
+    let now = paths::now_ms();
+    let projects: &dyn ProjectRepository = &*db;
+    let features: &dyn FeatureRepository = &*db;
+
+    projects
+        .add(crate::domain::models::Project {
+            id: ProjectId::from("p-1"),
+            name: "test".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: now,
+        })
+        .unwrap();
+
+    // Two features left "running" across a restart: `f-shadow` is a
+    // mirror-listed shadow of a live detached run; `f-local` is a real
+    // local feature whose process died.
+    let mk_feature = |id: &str| Feature {
+        id: FeatureId::from(id.to_string()),
+        project_id: ProjectId::from("p-1"),
+        workflow_id: Some(WorkflowId::from("w-1")),
+        title: id.to_string(),
+        status: "running".to_string(),
+        total_cost: 0.0,
+        tokens: 0,
+        duration: "0s".to_string(),
+        agent_kind: None,
+        model: None,
+        mr_url: None,
+        mr_state: Some("none".to_string()),
+        created_at: now,
+        commit_artifacts: None,
+        loop_iterations: None,
+        step_overrides: Vec::new(),
+        attachments: Vec::new(),
+    };
+    let mk_step = |se: &str, f: &str| StepExecution {
+        last_failure_fingerprint: None,
+        id: StepExecutionId::from(se.to_string()),
+        feature_id: FeatureId::from(f.to_string()),
+        step_id: StepId::from("step-1"),
+        step_index: 0,
+        step_kind: "agent".to_string(),
+        status: "running".to_string(),
+        cost_usd: Some(0.0),
+        tokens: Some(0),
+        wall_clock_secs: Some(0),
+        artifact_path: None,
+        artifact_paths: Vec::new(),
+        error_message: None,
+        iteration_count: 0,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        created_at: now,
+        updated_at: now,
+    };
+    features.add(mk_feature("f-shadow")).unwrap();
+    features.step_create(mk_step("se-shadow", "f-shadow")).unwrap();
+    features.add(mk_feature("f-local")).unwrap();
+    features.step_create(mk_step("se-local", "f-local")).unwrap();
+
+    // The mirror row is the runner-owned marker (C4.2).
+    let mirror: &dyn RemoteRunMirrorPort = &*db;
+    mirror
+        .upsert_submitted("m1", "r1", Some("p-1"), Some("f-shadow"), "f-shadow", now)
+        .unwrap();
+
+    // Same set the composition root builds at startup.
+    let runner_owned: std::collections::HashSet<String> = mirror
+        .list()
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| r.feature_id)
+        .collect();
+
+    executor.startup_watchdog(&runner_owned);
+
+    // The shadow is untouched — still mirroring whatever the runner says.
+    let shadow = features.get(&FeatureId::from("f-shadow")).unwrap().unwrap();
+    assert_eq!(shadow.status, "running");
+    let shadow_step = features
+        .step_get(&StepExecutionId::from("se-shadow"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(shadow_step.status, "running");
+
+    // The genuinely-local feature got the normal restart treatment.
+    let local = features.get(&FeatureId::from("f-local")).unwrap().unwrap();
+    assert_eq!(local.status, "awaiting_gate");
+    let local_step = features
+        .step_get(&StepExecutionId::from("se-local"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(local_step.status, "interrupted");
+
+    // Resume must not arm a local driver against the shadow, even if the
+    // runner has it parked on a gate (the state resume normally re-arms).
+    features
+        .update(
+            &FeatureId::from("f-shadow"),
+            &crate::ports::db::FeaturePatch {
+                status: Some("awaiting_gate".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    executor
+        .clone()
+        .resume_interrupted_features(runner_owned)
+        .await;
+    assert!(
+        !executor
+            .driver_registry()
+            .is_live(&FeatureId::from("f-shadow")),
+        "a runner-owned shadow must never get a local driver"
+    );
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}

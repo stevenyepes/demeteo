@@ -36,9 +36,15 @@ pub trait StepExecutor: Send + Sync {
     ///   feature row BEFORE the driver is spawned, so the agent's
     ///   first turn sees them on its first `features.get(&self.f_id)`
     ///   read. Empty when the user did not attach anything.
+    /// - `feature_id`: caller-supplied id for the new Feature row.
+    ///   `None` (every local launch) generates one. The runner passes
+    ///   `RunSpec::feature_id` so a detached run's Feature carries the
+    ///   same id as the eager shadow the laptop inserted at submit
+    ///   time — one run, one id, on both databases.
     #[allow(clippy::too_many_arguments)]
     async fn feature_start(
         &self,
+        feature_id: Option<String>,
         project_id: &str,
         workflow_id: &str,
         title: &str,
