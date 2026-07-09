@@ -67,10 +67,24 @@ pub fn resolve_local_binary_path(binary: &str) -> Option<String> {
         }
     }
 
-    // Fallback: try to resolve via bash -l so we get profile additions
-    // (homebrew, nvm, mise, pyenv, etc.). We use bash explicitly rather than
-    // the SHELL env var because SHELL might be set to e.g. /bin/zsh which
-    // doesn't source ~/.bashrc on macOS/Linux when invoked as "zsh -l".
+    // Fallback: resolve via an **interactive login** shell so we get profile
+    // additions (homebrew, nvm, mise, pyenv, etc.). We use bash explicitly
+    // rather than the SHELL env var because SHELL might be set to e.g.
+    // /bin/zsh which doesn't source ~/.bashrc on macOS/Linux when invoked as
+    // "zsh -l".
+    //
+    // `-i` is load-bearing: the common developer tool-managers (`mise`,
+    // `asdf`, `nvm`) put binaries on `PATH` from `~/.bashrc`, behind the
+    // standard non-interactive guard (`case $- in *i*) ;; *) return;; esac`).
+    // A plain `bash -l -c` hits that guard and returns *before* the tool is on
+    // `PATH`, so it reports a correctly-installed agent as "missing" — the
+    // exact mismatch behind a remote run's readiness probe saying "opencode
+    // isn't installed" while an interactive SSH session runs it fine. This
+    // must stay consistent with `ShellOptions::login_interactive()` (the SSH
+    // adapter's probe/spawn) so "available" and "runnable" always agree. Job-
+    // control warnings from an interactive shell without a TTY go to stderr,
+    // so stdout stays clean; we still read the last non-empty line defensively
+    // in case a ~/.bashrc echoes a banner ahead of the `which` result.
     #[cfg(not(target_os = "windows"))]
     {
         let shells = [
@@ -82,11 +96,25 @@ pub fn resolve_local_binary_path(binary: &str) -> Option<String> {
         for shell in shells {
             if std::path::Path::new(shell).exists() {
                 let mut command = std::process::Command::new(shell);
-                command.args(["-l", "-c", &format!("which {}", binary)]);
+                command.args(["-l", "-i", "-c", &format!("which {}", binary)]);
+                // `-i` sources ~/.bashrc (mise/asdf/nvm) but also makes bash
+                // attempt job control on the controlling terminal. Null stdin +
+                // a detached session (own session, no controlling TTY) keep it
+                // from seizing our terminal and suspending the process group;
+                // the interactive flag lives in `$-`, not in stdin being a TTY,
+                // so ~/.bashrc still sources. See `detach_from_controlling_tty`.
+                command.stdin(std::process::Stdio::null());
+                crate::shared::proc::detach_from_controlling_tty(&mut command);
                 crate::shared::proc::sanitize_child_env(&mut command);
                 if let Ok(output) = command.output() {
                     if output.status.success() {
-                        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        let path_str = String::from_utf8_lossy(&output.stdout)
+                            .lines()
+                            .map(|l| l.trim())
+                            .filter(|l| !l.is_empty())
+                            .next_back()
+                            .map(|l| l.to_string())
+                            .unwrap_or_default();
                         if !path_str.is_empty() {
                             let pb = std::path::PathBuf::from(&path_str);
                             if pb.is_file() {

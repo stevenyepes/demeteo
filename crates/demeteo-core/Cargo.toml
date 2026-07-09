@@ -47,3 +47,8 @@ thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tracing = "0.1"
+
+# Unix-only: `setsid(2)` in `shared::proc::detach_from_controlling_tty`, so
+# locally-spawned interactive shells don't seize the controlling terminal.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

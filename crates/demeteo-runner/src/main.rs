@@ -82,6 +82,70 @@ fn print_usage() {
     eprintln!("usage: demeteo-runner serve | demeteo-runner submit <spec.json> | demeteo-runner --version");
 }
 
+/// Enrich the process `PATH` from a login + interactive shell so agent
+/// binaries installed via a developer tool-manager (mise/asdf/nvm) — whose
+/// shims are activated in `~/.bashrc`, behind the interactive guard — are
+/// resolvable both by the daemon's own PATH lookups
+/// (`is_binary_on_local_path`, used by the M4.1 agent-readiness precondition)
+/// and by every agent process it spawns (`Command::new(binary)` in the local
+/// execution adapter).
+///
+/// This makes the runner self-sufficient regardless of how it was launched.
+/// The systemd unit wraps `ExecStart` in `bash -lic` (belt), but a runner
+/// started manually, by an older unit still on disk, or on a distro where an
+/// interactive `ExecStart` misbehaves would otherwise inherit systemd's
+/// minimal PATH and reject every run with "agent 'opencode' is not
+/// installed/available". Mirrors the laptop-side
+/// `ShellOptions::login_interactive` probe so both sides resolve the same
+/// PATH ("available", "runnable", and "runner-launched" agree).
+///
+/// Called once at startup, before the tokio runtime is built, so the env
+/// mutation happens while the process is still single-threaded. Best-effort:
+/// any probe failure leaves `PATH` untouched.
+fn enrich_path_from_login_shell() {
+    let output = std::process::Command::new("bash")
+        .args(["-lic", "printf %s \"$PATH\""])
+        .output();
+    let login_path = match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Ok(o) => {
+            eprintln!(
+                "[demeteo-runner] login-shell PATH probe exited {}; leaving PATH unchanged",
+                o.status
+            );
+            return;
+        }
+        Err(e) => {
+            eprintln!("[demeteo-runner] login-shell PATH probe failed ({e}); leaving PATH unchanged");
+            return;
+        }
+    };
+    if login_path.is_empty() {
+        return;
+    }
+    // Union with the existing PATH: login-shell entries first (they carry the
+    // tool-manager shims), then any pre-existing entries not already present,
+    // so we never drop a path systemd or the environment supplied.
+    let current = std::env::var("PATH").unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    let mut merged: Vec<&str> = Vec::new();
+    for entry in login_path.split(':').chain(current.split(':')) {
+        if !entry.is_empty() && seen.insert(entry) {
+            merged.push(entry);
+        }
+    }
+    let new_path = merged.join(":");
+    if new_path != current {
+        eprintln!(
+            "[demeteo-runner] PATH enriched from login shell ({} entries)",
+            merged.len()
+        );
+        // Safe: still single-threaded here (called before the tokio runtime
+        // and any thread spawns in `main`).
+        std::env::set_var("PATH", new_path);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -96,6 +160,7 @@ fn main() {
                 print_usage();
                 std::process::exit(2);
             };
+            enrich_path_from_login_shell();
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -104,6 +169,7 @@ fn main() {
             std::process::exit(exit_code);
         }
         Some("serve") => {
+            enrich_path_from_login_shell();
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
