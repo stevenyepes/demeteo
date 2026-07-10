@@ -47,14 +47,33 @@ prepare() {
 
 build() {
   cd "${pkgname}-${pkgver}"
-  # Forward the release channel into the Rust compile. Defaults to "stable"
-  # so a plain `makepkg` produces an officially-shipped binary; `test-aur-install.sh
-  # nightly` exports `DEMETEO_RELEASE_CHANNEL=nightly` so the About screen
-  # surfaces a `NIGHTLY` badge without a separate build script.
+  # Forward the release channel into the Rust compile (feeds the legacy
+  # `RELEASE_CHANNEL` const). The user-facing About badge no longer reads
+  # this — `get_app_version` derives NIGHTLY vs STABLE from the version's
+  # `-` pre-release suffix — so the real fix for a correct badge is stamping
+  # the true version below, not this var. Kept for the legacy path; harmless.
   export DEMETEO_RELEASE_CHANNEL="${DEMETEO_RELEASE_CHANNEL:-stable}"
   # Use system sqlite via pkg-config instead of bundling — Arch convention.
   export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
-  npm run tauri -- build -b deb
+
+  # Stamp the real app version into the bundle + binary. The committed
+  # tauri.conf.json carries only the base version (e.g. 1.0.0); nightly RC
+  # tarballs are cut from a tag WITHOUT mutating that manifest — CI injects
+  # the true version at build time via `-c` (see .github/workflows/build.yml).
+  # A plain AUR build would therefore compile the binary as "1.0.0" regardless
+  # of the rc, so `app.package_info().version` — which drives the About screen
+  # AND the version-keyed remote-runner download/upgrade check — would be
+  # wrong, pulling a stale runner to remote hosts. When the caller provides the
+  # true version (test-aur-install.sh exports the hyphenated PKGVER, e.g.
+  # 1.0.0-12), mirror CI's runtime override so the binary self-reports it.
+  # Stable builds leave it unset: the release tag's manifest is already correct.
+  local tauri_args=(build -b deb)
+  if [[ -n "${DEMETEO_APP_VERSION:-}" ]]; then
+    printf '{\n  "version": "%s"\n}\n' "${DEMETEO_APP_VERSION}" \
+      > .tauri-version-override.json
+    tauri_args+=(-c .tauri-version-override.json)
+  fi
+  npm run tauri -- "${tauri_args[@]}"
 
   # Guard against Tailwind emitting a utility-less stylesheet. Tailwind v4
   # auto-detects sources by walking up to the nearest git root and skipping
