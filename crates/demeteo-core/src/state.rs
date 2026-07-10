@@ -178,4 +178,19 @@ pub struct AgentConfigView {
     pub enabled: bool,
     pub available: bool,
     pub install_command: String,
+    /// Human-facing name from the runtime's declared capabilities, so the UI
+    /// never has to derive a label from the kind slug.
+    pub display_label: String,
+}
+
+/// A registered coding agent and the capabilities Demeteo asks of it, exposed
+/// to the frontend so the UI has a single source of truth for "which agents
+/// exist" instead of a hardcoded list per component.
+#[derive(Serialize)]
+pub struct AgentCatalogEntry {
+    pub kind: String,
+    pub display_label: String,
+    pub lists_models: bool,
+    pub default_model: Option<String>,
+    pub install_command: String,
 }

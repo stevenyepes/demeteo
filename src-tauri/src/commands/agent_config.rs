@@ -1,7 +1,7 @@
 use crate::domain::ids::MachineId;
 use crate::domain::models::{AgentConfig, WorkingMemoryEntry};
 use crate::error::AppError;
-use crate::state::{AgentConfigView, AppContext};
+use crate::state::{AgentCatalogEntry, AgentConfigView, AppContext};
 use tauri::State;
 
 #[tauri::command]
@@ -55,23 +55,51 @@ pub async fn get_agent_configs(
             }
             None => false,
         };
-        let install_command = runtime_kinds
-            .iter()
-            .find(|k| **k == cfg.kind)
-            .and_then(|k| {
-                ctx.registry
-                    .runtime_for(k)
-                    .map(|r| r.install_command().to_string())
-            })
+        let runtime = ctx.registry.runtime_for(&cfg.kind);
+        let install_command = runtime
+            .as_ref()
+            .map(|r| r.install_command().to_string())
             .unwrap_or_default();
+        let display_label = runtime
+            .as_ref()
+            .map(|r| r.capabilities().display_label.to_string())
+            .unwrap_or_else(|| cfg.kind.clone());
         views.push(AgentConfigView {
             kind: cfg.kind,
             enabled: cfg.enabled,
             available,
             install_command,
+            display_label,
         });
     }
     Ok(views)
+}
+
+/// The catalog of registered, user-selectable coding agents and the
+/// capabilities Demeteo asks of each. The single source of truth the frontend
+/// uses to populate agent pickers, replacing the hardcoded per-component
+/// `AGENT_KINDS` lists. Internal runtimes (noop / stub) are excluded — only
+/// kinds that are real supported agents are returned.
+#[tauri::command]
+pub fn list_agents(ctx: State<'_, AppContext>) -> Result<Vec<AgentCatalogEntry>, AppError> {
+    use demeteo_core::domain::models::AgentKind;
+    let catalog = ctx
+        .registry
+        .runtimes()
+        .iter()
+        .filter(|r| AgentKind::is_supported(r.kind()))
+        .map(|r| {
+            let caps = r.capabilities();
+            AgentCatalogEntry {
+                kind: r.kind().to_string(),
+                display_label: caps.display_label.to_string(),
+                lists_models: caps.lists_models,
+                default_model: caps.default_model.map(str::to_string),
+                install_command: r.install_command().to_string(),
+            }
+        })
+        .collect();
+    Ok(catalog)
 }
 
 #[tauri::command]

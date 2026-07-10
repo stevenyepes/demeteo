@@ -90,6 +90,14 @@ impl AgentRuntime for StubRuntime {
         STUB_AGENT_KIND
     }
 
+    fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
+        crate::ports::agent_runtime::AgentCapabilities {
+            display_label: "Stub Agent",
+            lists_models: false,
+            default_model: None,
+        }
+    }
+
     async fn is_available(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,

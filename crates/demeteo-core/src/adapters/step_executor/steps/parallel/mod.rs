@@ -470,24 +470,10 @@ impl ExecutionDriver {
             None,
         );
 
-        let is_cli_agent = planner_kind == "opencode"
-            || planner_kind == "hermes"
-            || planner_kind == "claude-code"
-            || planner_kind == "antigravity";
-
-        let mut planner_env =
+        // Every supported agent is a CLI runtime that takes its model via the
+        // `--model` flag in `build_args` from `ctx.model` below.
+        let planner_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
-        if let Some(ref m) = override_model {
-            // CLI agents take the model via a --model flag at spawn; only the
-            // opencode-config-driven agents read OPENCODE_CONFIG_CONTENT.
-            if !is_cli_agent {
-                let config = format!(
-                    r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
-                    m
-                );
-                planner_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
-            }
-        }
 
         // Resolve the actual executable name from the registered runtime
         // (e.g. kind "claude-code" → binary "claude"). Falls back to the
@@ -559,11 +545,8 @@ impl ExecutionDriver {
             }
         };
 
-        if let Some(ref model) = override_model {
-            if !is_cli_agent {
-                let _ = planner_session.set_config_option("model", model);
-            }
-        }
+        // The planner's model is carried by the `--model` flag from
+        // `ctx.model`; no post-spawn `set_config_option` is needed.
 
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
 

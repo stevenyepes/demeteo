@@ -4,6 +4,7 @@ import { Plus, Server, Key, Lock, Cpu, Edit2, Trash2, Wifi, WifiOff, Loader, Ale
 import EnvModal, { blankForm, type EnvFormState } from './EnvModal';
 import { formatError } from '../lib/errors';
 import { useTauriEvent } from '../hooks/useTauriEvent';
+import { useAgentCatalog, agentLabel } from '../lib/agentCatalog';
 
 interface Machine {
   id: string;
@@ -32,6 +33,7 @@ interface MachinesViewProps {
  * Remote SSH machines are listed below it and can be added/edited/deleted.
  */
 const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
+  const { agents: agentCatalog } = useAgentCatalog();
   const [machines, setMachines] = useState<Machine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
@@ -217,16 +219,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
       if (Array.isArray(arr)) {
         agentNames = arr
           .filter((a: any) => a?.enabled !== false)
-          .map((a: any) => {
-            const slug: string = a?.kind ?? '';
-            const display =
-              slug === 'claude-code' ? 'Claude Code' :
-              slug === 'opencode' ? 'OpenCode' :
-              slug === 'hermes' ? 'Hermes' :
-              slug === 'antigravity' ? 'Antigravity' :
-              slug;
-            return display;
-          });
+          .map((a: any) => agentLabel(agentCatalog, a?.kind ?? ''));
       }
     } catch {
       // ignore malformed JSON

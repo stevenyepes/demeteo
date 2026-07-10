@@ -451,6 +451,11 @@ pub fn runtime() -> UnifiedCliRuntime {
         build_args: build_claude_args,
         // claude-code enforces via CLI flags, not env.
         perm_env: crate::ports::agent_runtime::no_permission_env,
+        display_label: "Claude Code",
+        // The `claude` CLI has no `models` subcommand — model aliases come
+        // from the static fallback list in `application::agent_probe`.
+        lists_models: false,
+        default_model: None,
     }
 }
 

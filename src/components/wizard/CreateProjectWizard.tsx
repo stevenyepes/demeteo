@@ -5,6 +5,7 @@ import { useErrorBus } from '../../lib/errorBus';
 import { formatError } from '../../lib/errors';
 import { listProviderNamespaces, type ProviderNamespace } from '../../lib/createProjectWizard';
 import { getAgentModels } from '../../lib/agentModels';
+import { useAgentCatalog } from '../../lib/agentCatalog';
 import type { Machine, Provider } from '../../types';
 import {
   BootstrapStep,
@@ -24,12 +25,6 @@ import { ModelStep, type ModelOption } from './ModelStep';
 import { DescriptionStep } from './DescriptionStep';
 
 // ── Domain constants ──────────────────────────────────────────────────
-
-/** The four seeded coding-agent harnesses. Mirrors the Rust
- *  `AGENT_KINDS` constant (and the `CreateProjectStepPayload::Agent`
- *  validation arm in `commands/create_project.rs`). Adding a new
- *  harness requires touching both sides. */
-const AGENT_KINDS = ['opencode', 'hermes', 'claude-code', 'antigravity'] as const;
 
 /** Maximum number of namespaced to display before falling back to a
  *  simple list — matches the spec's "simple list v1" decision
@@ -108,6 +103,8 @@ export function CreateProjectWizard(): ReactElement {
   const { navigate } = useNavigation();
   const { state: projState, dispatch: projDispatch } = useProject();
   const { reportError } = useErrorBus();
+  const { agents: agentCatalog } = useAgentCatalog();
+  const agentKinds = useMemo(() => agentCatalog.map((a) => a.kind), [agentCatalog]);
 
   // The BootstrapState always reflects what the Rust side returned
   // last. Initialising to a fresh "Name with single-entry history"
@@ -520,7 +517,7 @@ export function CreateProjectWizard(): ReactElement {
       )}
 
       {bootstrap.step === BootstrapStep.Agent && (
-        <AgentStep agentKinds={AGENT_KINDS} value={draft.agentKind} onSubmit={onAgentSubmit} />
+        <AgentStep agentKinds={agentKinds} value={draft.agentKind} onSubmit={onAgentSubmit} />
       )}
 
       {bootstrap.step === BootstrapStep.Model && (

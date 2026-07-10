@@ -1,4 +1,3 @@
-pub mod antigravity;
 pub mod claude_code;
 pub mod cli_runtime;
 pub mod direct_execution;

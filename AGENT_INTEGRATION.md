@@ -20,10 +20,10 @@ trait catalogue), see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 ### v1 ships
 
 - A pluggable `AgentRuntime` trait with one concrete implementation: `UnifiedCliRuntime` (one-shot CLI process + JSON-lines event stream) under `adapters/agent/cli_runtime.rs`.
-- Four agent configurations out of the box: **`opencode`**, **`hermes`**, **`claude-code`**, and **`antigravity`** — all via their CLI's JSON-output mode (`opencode run --format json`, `hermes run --format json`, `claude --print --verbose --output-format stream-json`, `agy --print -`). The `antigravity` adapter is compiled and registered but its install command (`npm install -g @antigravity/cli`) does not currently match the upstream CLI's wire format — see `README.md`'s "Supported agents" footnote.
+- Three agent configurations out of the box: **`opencode`**, **`hermes`**, and **`claude-code`** — all via their CLI's JSON-output mode (`opencode run --format json`, `hermes run --format json`, `claude --print --verbose --output-format stream-json`). Each declares the same [capability contract](#41-the-trait) (`display_label`, `lists_models`, `default_model`), so adding a fourth is filling in one descriptor plus `parse_event` / `build_args` / `perm_env` — see [`docs/adapters/CONTRIBUTING-AN-AGENT.md`](docs/adapters/CONTRIBUTING-AN-AGENT.md).
 - The runtime serves **both** the planner (an agent session that decomposes the feature into a step DAG) and the subtask agents (sessions that execute a single `agent` or `parallel` step's work). Same trait, same plumbing, different prompts.
 - Eager agent session lifecycle scoped to step executions (a process is spawned per `prompt` call, torn down on completion).
-- A four-axis `PermissionProfile` (`read_fs | write_fs | execute | network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None | ArtifactsOnly | All`). Compiled per step from the step's `StepCapability`. Each agent adapter translates the abstract profile to its native dialect at spawn (opencode / hermes / antigravity → `OPENCODE_PERMISSION` env; claude-code → `--disallowedTools`). `external_directory: "deny"` (opencode) is the worktree scope fence; the chmod fence in `adapters/worktree/git_ops/scope.rs` enforces the artifacts-vs-source path-shape uniformly across every agent.
+- A four-axis `PermissionProfile` (`read_fs | write_fs | execute | network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None | ArtifactsOnly | All`). Compiled per step from the step's `StepCapability`. Each agent adapter translates the abstract profile to its native dialect at spawn (opencode / hermes → `OPENCODE_PERMISSION` env; claude-code → `--disallowedTools`). `external_directory: "deny"` (opencode) is the worktree scope fence; the chmod fence in `adapters/worktree/git_ops/scope.rs` enforces the artifacts-vs-source path-shape uniformly across every agent.
 - Cross-step conversation continuity via per-agent session-id flags so a multi-step workflow shares the agent's context.
 - A typed three-layer error model (per-action `ActionError` / per-step `AgentEvent::Error` / per-feature watchdog).
 - Per-step checkpoint persistence (DB-backed, populated on every state transition via `StepExecutionPatch`).
@@ -32,7 +32,7 @@ trait catalogue), see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 ### v1 explicitly does NOT include
 
 - **Secret management for the brain's API keys.** The user pre-configures their agent (provider, API key, model) on the host where the agent runs. Demeteo does not read, store, or inject model API keys. **The planner is just another agent session in this respect.** Phase 8+ candidate.
-- **A demeteo-side LLM for orchestration.** The "brain" of a *run* is a coding agent (opencode, hermes, claude-code, or antigravity) invoked by the `StepExecutor`. Demeteo never calls a model provider directly to drive a feature. **Exception — the Memory Agent:** an opt-in, user-configured OpenAI-compatible endpoint (e.g. Ollama) that Demeteo calls directly, in the background, *only* to distill run signals into project memories and to embed them for semantic retrieval. It never drives a feature run; it is disabled by default and its API key lives in the OS keyring. See `adapters/memory_worker.rs` and `adapters/memory_llm.rs`.
+- **A demeteo-side LLM for orchestration.** The "brain" of a *run* is a coding agent (opencode, hermes, or claude-code) invoked by the `StepExecutor`. Demeteo never calls a model provider directly to drive a feature. **Exception — the Memory Agent:** an opt-in, user-configured OpenAI-compatible endpoint (e.g. Ollama) that Demeteo calls directly, in the background, *only* to distill run signals into project memories and to embed them for semantic retrieval. It never drives a feature run; it is disabled by default and its API key lives in the OS keyring. See `adapters/memory_worker.rs` and `adapters/memory_llm.rs`.
 - **Resume / context replay across restarts.** A Feature Run is a C-strict opaque cursor; the agent session id is internal. The orchestrator *does* re-enter a feature at the last completed step on launch (synthetic gate on mid-step interrupt), but it does not replay prior agent transcripts to the new session. The step's *artifact* is the cross-restart state.
 - **ACP.** The `AcpRuntime`, `JsonRpcClient`, `ToolBridge`, and both transport adapters are deleted in v1. A future `OpencodeServerRuntime` (HTTP client to `opencode serve`) is a v1.1 candidate that would re-introduce a structured protocol for real-time permission approval via the server's `POST /session/:id/permissions/:permissionID` endpoint.
 - **Real-time permission approval UX.** The agent enforces permissions via `OPENCODE_PERMISSION`. Demeteo writes the policy at spawn time; the agent enforces it. The gate-step approval surface (user clicks Approve/Reject on the step timeline) is the only real-time human-in-the-loop affordance demeteo provides.
@@ -106,7 +106,7 @@ The agent *session* identifier is the CLI `--session <uuid>` argument passed to 
 
 ### 3.2 The planner is just an agent session
 
-There's no special "planner port" or "planner runtime." The planner is a coding agent session (opencode, hermes, claude-code, or antigravity) invoked with a *planning prompt* — the same `CliRuntime`, the same CLI invocation, the same JSON-lines event stream. The only special thing is the prompt template, which lives in the workflow step's config (the first `agent` step in the starter pack's Research → Spec → Plan → Tasks → Implement → Validate workflow, for example).
+There's no special "planner port" or "planner runtime." The planner is a coding agent session (opencode, hermes, or claude-code) invoked with a *planning prompt* — the same `CliRuntime`, the same CLI invocation, the same JSON-lines event stream. The only special thing is the prompt template, which lives in the workflow step's config (the first `agent` step in the starter pack's Research → Spec → Plan → Tasks → Implement → Validate workflow, for example).
 
 The planner's selection is per-project
 (`ProjectSettings::default_agent_kind` + `default_model` — see
@@ -322,8 +322,21 @@ pub enum AgentStartError {
     SpawnFailed(String),
 }
 
+/// The capabilities Demeteo asks of a coding agent, declared once per runtime
+/// instead of being inferred from `match kind { ... }` string lists. Adding an
+/// agent means filling this in — no downstream site special-cases the kind.
+pub struct AgentCapabilities {
+    pub display_label: &'static str,       // human-facing name for the UI
+    pub lists_models: bool,                // exposes a `<binary> models` subcommand
+    pub default_model: Option<&'static str>, // seeds cost fallback; None if dynamic
+}
+
 pub trait AgentRuntime: Send + Sync {
-    fn kind(&self) -> &'static str;
+    fn kind(&self) -> &'static str;        // equals AgentKind::as_str
+
+    fn capabilities(&self) -> AgentCapabilities;
+
+    fn binary(&self) -> &'static str;      // defaults to kind()
 
     fn is_available(&self, machine_id: &str) -> bool;
 
@@ -341,7 +354,7 @@ pub trait AgentSession: Send + Sync {
 }
 ```
 
-The `AgentContext` holds the resolved binary, CLI args, env vars (including `OPENCODE_PERMISSION` and `OPENCODE_CONFIG_CONTENT`), and the worktree `cwd`. The `AgentRegistry` is simplified: each call to `CliRuntime::start` spawns a fresh `Command::spawn` and returns an `Arc<dyn AgentSession>`; there is no session deduplication or reuse across step executions. The `StepExecutor` holds the `Arc<AgentSession>` for the duration of one `prompt` call.
+The `AgentContext` holds the resolved binary, CLI args, env vars (e.g. `OPENCODE_PERMISSION` for the opencode-family agents), the model, and the worktree `cwd`. Every supported agent is a one-shot CLI runtime that takes its model via a `--model` flag built from `AgentContext.model`; there is no `OPENCODE_CONFIG_CONTENT`/ACP model path. The `AgentRegistry` is simplified: each call to `CliRuntime::start` spawns a fresh `Command::spawn` and returns an `Arc<dyn AgentSession>`; there is no session deduplication or reuse across step executions. The `StepExecutor` holds the `Arc<AgentSession>` for the duration of one `prompt` call.
 
 ### 4.2 Lifecycle: one-shot per prompt call, scoped to step execution
 
@@ -413,7 +426,6 @@ Each agent emits nd-JSON on stdout when run with the JSON-output flag:
 | opencode     | `opencode run --format json [args...]`                 | `{"type":"text","part":{"text":"..."}}`, `{"type":"step_finish","part":{"reason":"stop","tokens":{...},"cost":...}}`, `{"update":{"sessionUpdate":"agent_message_chunk",...}}` |
 | hermes       | `hermes run --format json [args...]`                    | `{"kind":"text","delta":"..."}`, `{"kind":"usage","inputTokens":...,"outputTokens":...,"costUsd":...,"cacheReadInputTokens":...,"cacheCreationInputTokens":...}`, `{"kind":"end_turn"}` |
 | claude-code  | `claude --print --verbose --output-format stream-json [args...]`  | `{"type":"system","subtype":"init","session_id":"..."}`, `{"type":"assistant","message":{"content":[{"type":"text","text":"..."},{"type":"tool_use","id":"...","name":"Bash","input":{...}}]}}`, `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"...","content":"...","is_error":false}]},"tool_use_result":{...}}`, `{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.187,"usage":{"input_tokens":...,"output_tokens":...,"cache_creation_input_tokens":...,"cache_read_input_tokens":...}}` |
-| antigravity  | `agy --print - [args...]`                              | `{"type":"text_delta","data":{"text":"..."}}`  |
 
 The per-agent parser is registered on `UnifiedCliRuntime.parse_event` and
 maps the agent's wire format onto `AgentEvent` variants. Unknown event
@@ -448,8 +460,7 @@ existing session when one is registered, and only spawns a fresh
 process on the very first turn (or after a watchdog reset, see
 below). The captured session id from the first `system` init event
 is threaded into `--session <id> --continue` (opencode) /
-`--resume <id>` (claude-code, hermes) / `--conversation <id> -c`
-(antigravity) on every subsequent prompt. This unlocks vendor
+`--resume <id>` (claude-code, hermes) on every subsequent prompt. This unlocks vendor
 prompt-cache hits on the static prefix (system prompt + tool
 definitions) across steps, materially reducing token usage on
 multi-step features.
@@ -511,7 +522,7 @@ Each `UnifiedCliRuntime::start` call compiles the abstract
 `PermissionProfile` to the agent's native dialect and injects it as an
 env var or CLI flag:
 
-opencode / hermes / antigravity (`OPENCODE_PERMISSION` env, complete policy — never `ask`):
+opencode / hermes (`OPENCODE_PERMISSION` env, complete policy — never `ask`):
 
 ```
 OPENCODE_PERMISSION={"edit":"allow","read":"allow","bash":"allow","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"allow"}
@@ -577,14 +588,13 @@ The trade-off: without `--bare`, user- and project-level hooks/skills/memory loa
 
 ### 5.6 Adapters
 
-Four agents, all via `UnifiedCliRuntime`:
+Three agents, all via `UnifiedCliRuntime`:
 
 - `adapters/agent/opencode/mod.rs` — `{ kind_str: "opencode", binary: "opencode", install_cmd: "curl -fsSL https://opencode.ai/install | bash", perm_env: opencode_permission_env, … }`.
 - `adapters/agent/hermes/mod.rs` — `{ kind_str: "hermes", binary: "hermes", install_cmd: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash", perm_env: opencode_permission_env, … }`.
 - `adapters/agent/claude_code/mod.rs` — `{ kind_str: "claude-code", binary: "claude", install_cmd: "npm install -g @anthropic-ai/claude-code", perm_env: no_permission_env (claude-code enforces via `--disallowedTools`), … }`.
-- `adapters/agent/antigravity/mod.rs` — `{ kind_str: "antigravity", binary: "agy", install_cmd: "npm install -g @antigravity/cli", perm_env: opencode_permission_env, … }`. **Status: known broken upstream.** The npm-published `@antigravity/cli` does not currently match what `parse_antigravity_event` expects. The adapter is compiled and registered, but the `antigravity` row in `README.md`'s "Supported agents" table is marked "not currently supported." See [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md) §17 for the deferred fix.
 
-The `UnifiedCliRuntime` is generic over the binary — the agent-specific logic is just the `AgentConfig`, the availability check (which binary name to look up), the `parse_event` function, the `build_args` function, and the `perm_env` translator (`opencode_permission_env` or `no_permission_env`).
+The `UnifiedCliRuntime` is generic over the binary — the agent-specific logic is just the declared `AgentCapabilities` (`display_label` / `lists_models` / `default_model`), the availability check (which binary name to look up), the `parse_event` function, the `build_args` function, and the `perm_env` translator (`opencode_permission_env` or `no_permission_env`). See [`docs/adapters/CONTRIBUTING-AN-AGENT.md`](docs/adapters/CONTRIBUTING-AN-AGENT.md) for the full walkthrough of adding one.
 
 ### 5.7 Disclaimer
 
@@ -602,7 +612,7 @@ Without a fence, an agent running with `cwd = <worktree>` can `cd ..` out of the
 
 The scope fence has three layers:
 
-1. **Tool-level.** opencode / hermes / antigravity use the
+1. **Tool-level.** opencode / hermes use the
    `OPENCODE_PERMISSION` env var (§5.5) for tool-level allow / deny.
    claude-code uses `--disallowedTools` with the same intent. The
    `external_directory: "deny"` rule (opencode only) is the worktree
@@ -770,17 +780,15 @@ src-tauri/src/ports/
 
 ```
 src-tauri/src/adapters/agent/
-  mod.rs                          (modified) remove acp submodule; add claude_code, antigravity submodules
+  mod.rs                          (modified) remove acp submodule; add claude_code submodule
   registry.rs                     (simplified) remove session dedup; Arc<AgentSession> per prompt call
-  cli_runtime.rs                  (modified) inject OPENCODE_PERMISSION env var; thread session id; --session/--continue/--resume/--conversation flags per agent
+  cli_runtime.rs                  (modified) inject OPENCODE_PERMISSION env var; thread session id; --session/--continue/--resume flags per agent; declared AgentCapabilities
   opencode/
     mod.rs                        (modified) return UnifiedCliRuntime; add parse_opencode_event
   hermes/
     mod.rs                        (modified) return UnifiedCliRuntime; add parse_hermes_event; --resume <sid> for cross-step continuity
   claude_code/
     mod.rs                        (new) UnifiedCliRuntime + parse_claude_event + disallowed_tools_for; --disallowedTools / --exclude-dynamic-system-prompt-sections / --setting-sources user,project / --strict-mcp-config
-  antigravity/
-    mod.rs                        (new) UnifiedCliRuntime + parse_antigravity_event; install_cmd = `npm install -g @antigravity/cli` (currently broken upstream)
   event_stream/
     mod.rs
     turn.rs                       (new) stream_agent_turn — typed TurnResult { Success(TurnOutcome), Interrupted, Failed(String) }
@@ -951,6 +959,5 @@ Full list with phase placement: [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.m
 3. **WASM provider plugins** → v2+. Third parties shipping provider adapters as WASM modules.
 4. **WASM policy plugins** → v2+. WASM plugin host loaded from `~/.config/demeteo/plugins/`.
 5. **Per-step retry policy with planner-as-advisor** → v1.x. `on_failure -> goto` + `max_iterations` are in place; a planner-as-advisor redirect (the agent drafts the redirect target) is a v1.x candidate.
-6. **Antigravity CLI upstream drift** → v1.x. The npm-published `@antigravity/cli` does not match the bundled `parse_antigravity_event`. Fix or drop the adapter.
 
 The full set of deferred items (Q1 multi-feature concurrency, Q19 YAML editor, Q19 save-run-as-template, Q20 deep dry-run, Q21 cost rollup, Q21 smart project home, Q24 tabs/split view, Q8 `command` step type, Q11 telemetry, Q12 auto-update) is in [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md).

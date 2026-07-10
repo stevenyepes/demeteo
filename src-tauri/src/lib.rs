@@ -291,6 +291,7 @@ pub fn run() {
             commands::agent_exec::reject_intercept,
             commands::agent_config::get_agent_configs,
             commands::agent_config::set_agent_configs,
+            commands::agent_config::list_agents,
             commands::agent_config::get_working_memory,
             commands::agent_config::clear_working_memory,
             commands::agent_lifecycle::agent_start,

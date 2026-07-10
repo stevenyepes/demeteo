@@ -14,7 +14,7 @@ export interface RepoHealthStatus {
   repo_path: string; is_cloned: boolean; head_branch: string | null;
   worktrees: WorktreeInfo[]; has_uncommitted: boolean; has_unpushed: boolean;
 }
-export interface AgentConfigView { kind: string; enabled: boolean; available: boolean; install_command: string; }
+export interface AgentConfigView { kind: string; enabled: boolean; available: boolean; install_command: string; display_label: string; }
 
 export const WF_LEVEL = '';
 export const ovKey = (workflowId: string, stepId: string) => `${workflowId}::${stepId}`;
@@ -210,7 +210,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
 
   const overridesMachineId = computeType === 'remote' ? remoteHost : 'local';
   const overrideAgentKinds = agentConfigs
-    .filter(a => a.enabled && a.available && a.kind !== 'antigravity')
+    .filter(a => a.enabled && a.available)
     .map(a => a.kind);
 
   const inheritedAgent = (workflowId: string, step: StepConfig): string => {
@@ -475,7 +475,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const saveAllSettings = async () => {
     const machineId = computeType === 'remote' ? remoteHost : 'local';
     if (machineId) {
-      try { await invoke('set_agent_configs', { machineId, agents: agentConfigs.filter(a => a.kind !== 'antigravity').map(a => ({ kind: a.kind, enabled: a.enabled })) }); }
+      try { await invoke('set_agent_configs', { machineId, agents: agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled })) }); }
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
@@ -489,7 +489,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     const isCurrentlyFailedOrBootstrapping = activeProject.status === 'error' || activeProject.status === 'bootstrapping';
     const machineId = computeType === 'remote' ? remoteHost : 'local';
     if (machineId) {
-      try { await invoke('set_agent_configs', { machineId, agents: agentConfigs.filter(a => a.kind !== 'antigravity').map(a => ({ kind: a.kind, enabled: a.enabled })) }); }
+      try { await invoke('set_agent_configs', { machineId, agents: agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled })) }); }
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     if (reposChanged || computeChanged || isCurrentlyFailedOrBootstrapping) {

@@ -52,16 +52,12 @@
 - [ ] Handle context-window saturation consistently with the existing watchdog pattern (decision 36: kill session at >80% of `PricingTable::context_window` budget, inject one-shot recap on next spawn) — pi's long session needs the same guard, just applied across steps instead of within one.
 - [ ] Demonstrate and document a multi-step workflow run where the same pi session persists across ≥2 steps — this is the epic's explicit acceptance criterion.
 
-## Story A4.4 — Antigravity re-probe review (M2 checkpoint)
+## Story A4.4 — Antigravity re-probe review (M2 checkpoint) — CANCELLED
 
-**As a** maintainer reviewing the M2 milestone, **I want** to re-run the `agy` headless-surface probe (built in Epic A3) and decide whether to reinstate the antigravity adapter, **so that** the de-scope decision from Epic A2 isn't permanent by default.
-
-**References:** Epic A2's decision record; Epic A3's nightly probe job; roadmap's decision checkpoint table ("End Sep (M2): first Antigravity re-probe... Default: Antigravity stays de-scoped unless structured output + approval policy shipped").
-
-**Status:** Not started.
-
-**Tasks:**
-- [ ] Pull the latest `agy` headless-probe results from Epic A3's nightly job.
-- [ ] Apply the reinstatement bar from Epic A2's decision record: structured output for `-p` mode **and** a usable (non-all-or-nothing) approval policy must both exist.
-- [ ] If the bar is met: scope reinstating the antigravity adapter as a new story (not written here — the current `antigravity/mod.rs` adapter is compiled but its parser doesn't match upstream per `docs/OPEN_QUESTIONS.md` §17, so this would likely be a rewrite, not a re-enable).
-- [ ] If the bar is not met (default per the roadmap): record the decision explicitly (date, what was checked, what's still missing) in `docs/OPEN_QUESTIONS.md` §17 and/or `docs/DECISIONS.md`, and leave the watch-item status as-is for the next monthly probe.
+**Status:** Cancelled (2026-07-10). The `antigravity` adapter was removed
+entirely as part of the coding-agent consistency initiative, and the `agy`
+churn-canary probe (formerly Epic A3.2) was dropped with it. There is no
+adapter to reinstate and no probe to re-run, so this checkpoint no longer
+applies. pi (Epic A2) covers Google/Gemini models; if a native Antigravity
+adapter is ever wanted again it would be scoped fresh against the current
+`AgentRuntime` + `AgentCapabilities` contract, not re-enabled.

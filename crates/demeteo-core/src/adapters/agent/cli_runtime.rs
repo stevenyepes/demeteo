@@ -25,8 +25,7 @@ pub type EventParser = fn(line: &str) -> Option<AgentEvent>;
 /// the prompt the user (or orchestrator) is sending this turn; the
 /// builder is responsible for placing it in whatever slot its
 /// runtime expects — opencode/claude-code/hermes take it as a
-/// trailing positional, antigravity reads it from stdin (its
-/// `agy --print -` form) — rather than the agent runtime
+/// trailing positional — rather than the agent runtime
 /// `handle.write_line`-ing it after spawn, which races the
 /// runtime's own `init` phase ("You must provide a message or a
 /// command" on opencode). The signature makes the contract
@@ -43,7 +42,7 @@ pub type PermEnvBuilder = fn(
     p: &crate::domain::permission::PermissionProfile,
 ) -> std::collections::HashMap<String, String>;
 
-/// Shared runtime for one-shot CLI-based agents (opencode, hermes, claude, agy, etc.)
+/// Shared runtime for one-shot CLI-based agents (opencode, hermes, claude, etc.)
 pub struct UnifiedCliRuntime {
     pub kind_str: &'static str,
     pub binary: &'static str,
@@ -52,12 +51,27 @@ pub struct UnifiedCliRuntime {
     pub build_args: ArgsBuilder,
     /// Maps the abstract permission profile to this agent's native env.
     pub perm_env: PermEnvBuilder,
+    /// Human-facing name for pickers/settings (e.g. "Claude Code").
+    pub display_label: &'static str,
+    /// Whether `<binary> models` lists selectable models.
+    pub lists_models: bool,
+    /// Default model when no override is configured; `None` if not statically
+    /// knowable.
+    pub default_model: Option<&'static str>,
 }
 
 #[async_trait]
 impl AgentRuntime for UnifiedCliRuntime {
     fn kind(&self) -> &'static str {
         self.kind_str
+    }
+
+    fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
+        crate::ports::agent_runtime::AgentCapabilities {
+            display_label: self.display_label,
+            lists_models: self.lists_models,
+            default_model: self.default_model,
+        }
     }
 
     fn binary(&self) -> &'static str {

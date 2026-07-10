@@ -21,7 +21,7 @@ years and nobody wins that category this quarter.
 | 1 | **Codex CLI adapter** (A1) | 🔴 Critical — funnel | Codex is the most-installed, top-benchmarked agent we don't run. "Does it run my agent?" is the first adoption question; competitors answer yes today. | S–M | **v1.1, Sep** |
 | 2 | **pi coding agent adapter** (A2) | 🔴 Critical — provider coverage | pi's unified LLM API covers Anthropic, OpenAI, Google/Gemini, xAI and local models through one clean RPC surface. Codex + pi ≈ the whole model space — and it substitutes for the de-scoped Antigravity adapter (see below). | M | **v1.1, Sep** |
 | 3 | **Demeteo Brain: titles + PR descriptions** (B1) | 🟠 High — cheap, compounding | Small effort, visible on every single pipeline, zero new config. Also a hard dependency of task generation (C2) and Memory v2 distillation (E1) — delay here delays two themes. | S | **v1.1, Sep** |
-| 4 | **Adapter conformance harness** (A3) | 🟠 High — insurance that must precede scale | The Gemini→Antigravity churn proves adapters break within a release cycle. Must exist *before* the board multiplies concurrent agent runs. Includes the Antigravity re-probe. | M | **v1.1, Sep** |
+| 4 | **Adapter conformance harness** (A3) | 🟠 High — insurance that must precede scale | The Gemini→Antigravity churn proves adapters break within a release cycle. Must exist *before* the board multiplies concurrent agent runs. | M | **v1.1, Sep** |
 | 5 | **UX P1 burn-down** (UX1) | 🟠 High — credibility, live defects | The [UX audit](../ux-audit/findings.md) found 9 high-severity defects on core journeys today: "Stop Step" cancels the feature, repo targeting is dropped, review flows need internet (CDN Monaco), Escape double-fires. v1.1 is the credibility release — an honest agent table next to a dishonest UI undercuts it. Also unblocks C1 (board builds on the start-feature surface). | M | **v1.1, Sep** |
 | 6 | **Kanban board MVP + task generation** (C1, C2) | 🟠 High — category window | "Kanban for agents" is being defined now; Vibe Kanban owns the phrase but lacks gates/workflows/memory. A differentiated entry lands in 2026; in 2027 the category is likely settled. | L | **v1.2, Nov** |
 | 7 | **MiniMax adapter + pi session reuse** (A4) | 🟡 Medium-high | Breadth story; session runtime maturation. Cheap after A3. | M | **v1.2, Nov** |
@@ -90,7 +90,7 @@ UX1 P1 fix ████████
 
 | When | Decision | Default |
 |------|----------|---------|
-| End Sep (M2) | C1 board scope freeze; first Antigravity re-probe | Proceed as specced; Antigravity stays de-scoped unless structured output + approval policy shipped |
+| End Sep (M2) | C1 board scope freeze | Proceed as specced (the former Antigravity re-probe checkpoint is cancelled — adapter removed) |
 | End Oct (M3) | UX2 waivers — which audit P2 findings ship in v1.2 vs get a decision record | Ship all; waive only with a per-item record |
 | End Nov (M4) | E2 (Honcho) vs E3 (intelligence slice) — pick one for v1.3 | E3 if E1 telemetry shows recall isn't the bottleneck |
 | End Nov (M4) | UX3 scope selection from audit P3 tier + opportunities | Guardrail trio (status vocabulary, confirm primitive, persisted UI state) is mandatory; rest optional |

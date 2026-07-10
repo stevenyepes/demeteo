@@ -456,6 +456,10 @@ impl OpencodeCliRuntime {
                 parse_event: parse_opencode_event,
                 build_args: build_opencode_args,
                 perm_env: crate::ports::agent_runtime::opencode_permission_env,
+                display_label: "OpenCode",
+                // `opencode models` lists selectable models.
+                lists_models: true,
+                default_model: None,
             },
         }
     }
@@ -471,6 +475,10 @@ impl Default for OpencodeCliRuntime {
 impl AgentRuntime for OpencodeCliRuntime {
     fn kind(&self) -> &'static str {
         "opencode"
+    }
+
+    fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
+        self.inner.capabilities()
     }
 
     async fn is_available(

@@ -284,23 +284,10 @@ impl ExecutionDriver {
 
         let prompt = build_triage_prompt(machine_str, wt_path, cmd, &tail_chars(output, 4000));
 
-        let mut agent_env =
+        // Every supported agent is a CLI runtime that takes its model via the
+        // `--model` flag in `build_args` from `ctx.model` below.
+        let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
-        if let Some(ref m) = model {
-            if agent_kind != "opencode"
-                && agent_kind != "hermes"
-                && agent_kind != "claude-code"
-                && agent_kind != "antigravity"
-            {
-                agent_env.insert(
-                    "OPENCODE_CONFIG_CONTENT".to_string(),
-                    format!(
-                        r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
-                        m
-                    ),
-                );
-            }
-        }
 
         let thread_id = format!("{}-triage", self.f_id_str);
         let binary = self
@@ -475,21 +462,10 @@ impl ExecutionDriver {
             .clone()
             .or_else(|| override_model.clone());
 
-        let mut agent_env =
+        // Every supported agent is a CLI runtime that takes its model via the
+        // `--model` flag in `build_args` from `ctx.model` below.
+        let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
-        if let Some(ref m) = verifier_model {
-            if verifier_agent_kind != "opencode"
-                && verifier_agent_kind != "hermes"
-                && verifier_agent_kind != "claude-code"
-                && verifier_agent_kind != "antigravity"
-            {
-                let config = format!(
-                    r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
-                    m
-                );
-                agent_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
-            }
-        }
 
         let verifier_thread_id = format!("{}-verifier", self.f_id_str);
         let verifier_binary = self

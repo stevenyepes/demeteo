@@ -101,7 +101,7 @@ export function StrategyTab() {
           <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Coding Agent</label>
           <select value={s.defaultAgentKind} onChange={e => { s.setDefaultAgentKind(e.target.value); s.setDefaultModel(''); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 capitalize">
             <option value="">No default (Prompt on feature creation)</option>
-            {s.agentConfigs.filter(a => a.enabled && a.available && a.kind !== 'antigravity').map(a => <option key={a.kind} value={a.kind}>{a.kind.replace(/-/g, ' ')}</option>)}
+            {s.agentConfigs.filter(a => a.enabled && a.available).map(a => <option key={a.kind} value={a.kind}>{a.display_label}</option>)}
           </select>
         </div>
         <div>
@@ -225,9 +225,9 @@ export function StrategyTab() {
         </div>
         <p className="text-xs text-slate-400">Enable or disable specific AI coding agents for this workspace. Demeteo validates if these agents' CLI binaries are available on the selected compute server.</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-          {s.agentConfigs.filter(a => a.kind !== 'antigravity').length === 0 ? (
+          {s.agentConfigs.length === 0 ? (
             <div className="md:col-span-2 text-xs text-slate-500 italic p-2">No agents found on target machine.</div>
-          ) : s.agentConfigs.filter(a => a.kind !== 'antigravity').map(agent => (
+          ) : s.agentConfigs.map(agent => (
             <div key={agent.kind} className={`flex items-start justify-between p-4 rounded-lg border transition-all ${agent.enabled ? 'bg-violet-500/5 border-violet-500/25 shadow-[0_0_15px_rgba(139,92,246,0.05)]' : 'bg-black/20 border-white/5 opacity-60'}`}>
               <div className="flex gap-3 w-full">
                 <div className="pt-0.5">
@@ -237,7 +237,7 @@ export function StrategyTab() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-white font-outfit capitalize">{agent.kind.replace(/-/g, ' ')}</span>
+                    <span className="text-sm font-semibold text-white font-outfit">{agent.display_label}</span>
                     {agent.available ? (
                       <span className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-mono"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />Available</span>
                     ) : (
@@ -248,7 +248,7 @@ export function StrategyTab() {
                     {agent.kind === 'opencode' && 'Local open-source developer agent.'}
                     {agent.kind === 'hermes' && 'Autonomic codebase planner and execution agent.'}
                     {agent.kind === 'claude-code' && 'Claude Code agent for complex tasks.'}
-                    {!['opencode', 'hermes', 'claude-code', 'antigravity'].includes(agent.kind) && 'Additional configured coding agent.'}
+                    {!['opencode', 'hermes', 'claude-code'].includes(agent.kind) && 'Additional configured coding agent.'}
                   </p>
                   {!agent.available && agent.install_command && (
                     <div className="mt-2.5 p-2 bg-black/40 border border-white/5 rounded font-mono text-[9px] text-slate-300 flex items-center justify-between gap-2 select-all overflow-x-auto">

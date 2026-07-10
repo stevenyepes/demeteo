@@ -20,6 +20,14 @@ impl AgentRuntime for NoopRuntime {
         "noop"
     }
 
+    fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
+        crate::ports::agent_runtime::AgentCapabilities {
+            display_label: "Noop",
+            lists_models: false,
+            default_model: None,
+        }
+    }
+
     async fn is_available(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,

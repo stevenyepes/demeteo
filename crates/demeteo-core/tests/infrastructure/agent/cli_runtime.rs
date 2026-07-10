@@ -503,6 +503,9 @@ fn remote_availability_probe_uses_a_login_shell() {
         parse_event: mock_parse_event,
         build_args: probe_build_args,
         perm_env: probe_perm_env,
+        display_label: "OpenCode",
+        lists_models: true,
+        default_model: None,
     };
     let rec = ShellOptsRecorder::new();
 

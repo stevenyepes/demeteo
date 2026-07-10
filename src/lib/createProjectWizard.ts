@@ -73,7 +73,7 @@ export interface CreateZeroWizardInput {
   /** Selected machine id (`localMachineId` or remote `machineId`). May be
    *  null for the bootstrapped local backend default — see wizard code. */
   machineId: string | null;
-  /** `opencode | hermes | claude-code | antigravity`. */
+  /** A registered agent kind (`opencode | hermes | claude-code`). */
   agentKind: string;
   /** Either a value returned by `getAgentModels` or a free-form override. */
   model: string;

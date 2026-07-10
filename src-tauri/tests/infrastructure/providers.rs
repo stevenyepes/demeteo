@@ -270,19 +270,6 @@ fn fallback_claude_code_flags_fable_as_not_vision() {
 }
 
 #[test]
-fn fallback_antigravity_flags_all_gemini_as_vision() {
-    let models = fallback_models("antigravity");
-    assert_eq!(models.len(), 4);
-    for m in &models {
-        assert!(
-            m.supports_images,
-            "{} should be flagged as vision-capable",
-            m.value
-        );
-    }
-}
-
-#[test]
 fn fallback_opencode_flags_known_vision_models() {
     let models = fallback_models("opencode");
     // Three vision-capable models.
@@ -328,6 +315,8 @@ fn fallback_hermes_uses_same_table_as_opencode() {
 #[test]
 fn fallback_unknown_agent_kind_returns_empty() {
     assert!(fallback_models("not-a-real-agent").is_empty());
+    // The removed `antigravity` kind is now just another unregistered kind.
+    assert!(fallback_models("antigravity").is_empty());
 }
 
 // ── substring heuristic for free-form model strings ─────────────────────
