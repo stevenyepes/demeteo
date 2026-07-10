@@ -113,6 +113,22 @@ for d in src pkg src-tauri/target node_modules dist npm-cache cargo-home; do
   fi
 done
 
+# Always refresh the AUR clone's PKGBUILD from the vendored template before
+# building. The clone is a throwaway build environment; its committed
+# PKGBUILD can lag the repo (e.g. missing the version/channel stamping in
+# build()), which would silently produce a binary that self-reports the
+# wrong version. Syncing here makes scripts/aur/demeteo/PKGBUILD the single
+# source of truth for local test builds — pkgver/source/sha256 are patched
+# in below regardless. (The exit trap restores this synced copy, leaving the
+# clone dirty vs its HEAD; that's intended — it nudges an `update-pkgbuild.sh`
+# before any real AUR push.)
+if [[ -f "$PKGBUILD_TEMPLATE" ]]; then
+  cp "$PKGBUILD_TEMPLATE" "$AUR_REPO/PKGBUILD"
+  log "  synced PKGBUILD from vendored template"
+else
+  warn "vendored template missing at $PKGBUILD_TEMPLATE — building with the clone's PKGBUILD as-is"
+fi
+
 work=$(mktemp -d)
 
 cleanup() {
