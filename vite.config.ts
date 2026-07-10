@@ -9,6 +9,31 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  // Split the Monaco editor (and its ~90 bundled languages) into its own
+  // chunk instead of merging it into the single app `index.js`. Without this,
+  // Rollup holds one ~5 MB module graph in memory through render + minify,
+  // pushing peak RSS past 3 GB and forcing the `--max-old-space-size` band-aid
+  // in the `build` script. Isolating monaco lets Rollup emit and minify it as a
+  // separate unit, cutting peak memory (and shrinking the app chunk the webview
+  // parses on boot).
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (
+            id.includes("node_modules/monaco-editor") ||
+            id.includes("node_modules/@monaco-editor")
+          ) {
+            return "monaco";
+          }
+          if (id.includes("node_modules/@xterm")) {
+            return "xterm";
+          }
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
