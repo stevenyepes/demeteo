@@ -342,6 +342,20 @@ pub trait AgentSession: Send + Sync {
     fn cumulative_tokens(&self) -> u64 {
         0
     }
+
+    /// The working directory this session is bound to (the `--dir` /
+    /// cwd it was spawned with). CLI agents resume against the
+    /// directory the session was *created* in, not the `--dir` passed
+    /// on a later turn — so a registry-cached session whose `cwd()`
+    /// differs from the current step's worktree would write the step's
+    /// deliverable into the wrong (earlier, now-ephemeral) worktree.
+    /// `spawn_agent_session` compares this against the step's worktree
+    /// and respawns fresh on a mismatch. Default `""` = "not tracked",
+    /// which suppresses the guard for runtimes without a bound cwd
+    /// (NoopRuntime, stubs).
+    fn cwd(&self) -> &str {
+        ""
+    }
 }
 
 /// Cheaply-cloneable handle that tracks how recently the agent's stderr
