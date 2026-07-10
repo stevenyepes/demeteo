@@ -27,6 +27,8 @@ struct PricingRow {
     context_window: Option<u64>,
 }
 
+const CONTEXT_1M: Option<u64> = Some(1_000_000);
+const CONTEXT_400K: Option<u64> = Some(400_000);
 const CONTEXT_200K: Option<u64> = Some(200_000);
 const CONTEXT_128K: Option<u64> = Some(128_000);
 const CONTEXT_100K: Option<u64> = Some(100_000);
@@ -36,6 +38,30 @@ fn default_prices() -> HashMap<String, PricingRow> {
     let mut m: HashMap<String, PricingRow> = HashMap::new();
 
     // Anthropic Claude (USD per 1M tokens, as of 2026).
+    // Claude Fable 5 — Anthropic's most capable model (GA); 1M context window,
+    // $10/$50 per 1M. Keyed by the full id and the `fable` CLI alias so both
+    // `claude-fable-5` (opencode/hermes routing) and a claude-code `--model
+    // fable` selection resolve. The `claude-fable` prefix catches dated variants.
+    m.insert(
+        "claude-fable-5".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 10.00,
+                output_per_million: 50.00,
+            },
+            context_window: CONTEXT_1M,
+        },
+    );
+    m.insert(
+        "fable".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 10.00,
+                output_per_million: 50.00,
+            },
+            context_window: CONTEXT_1M,
+        },
+    );
     m.insert(
         "claude-opus-4".to_string(),
         PricingRow {
@@ -147,6 +173,31 @@ fn default_prices() -> HashMap<String, PricingRow> {
                 output_per_million: 4.40,
             },
             context_window: CONTEXT_200K,
+        },
+    );
+
+    // OpenAI GPT-5 / Codex family (Codex CLI's default model line, Epic A1).
+    // The `gpt-5` prefix row is the catch-all: `gpt-5.5`, `gpt-5.1-codex`,
+    // `gpt-5-codex`, etc. all resolve to it via the prefix fallback in
+    // `price_for`, so a Codex model bump costs correctly without a new row.
+    m.insert(
+        "gpt-5".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 1.25,
+                output_per_million: 10.00,
+            },
+            context_window: CONTEXT_400K,
+        },
+    );
+    m.insert(
+        "gpt-5-mini".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 0.25,
+                output_per_million: 2.00,
+            },
+            context_window: CONTEXT_400K,
         },
     );
 

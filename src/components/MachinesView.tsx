@@ -212,14 +212,17 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
   }, []);
 
   const machineToForm = (m: Machine): EnvFormState => {
-    // Parse the persisted agents JSON back into the UI's display names.
+    // Parse the persisted agents JSON into the UI's kind list. EnvModal keys
+    // its selectable-agent buttons off the registry catalog by kind and
+    // renders the display label itself, so we store kinds here (not labels).
     let agentNames: string[] = [];
     try {
       const arr = m.agents ? JSON.parse(m.agents) : [];
       if (Array.isArray(arr)) {
         agentNames = arr
           .filter((a: any) => a?.enabled !== false)
-          .map((a: any) => agentLabel(agentCatalog, a?.kind ?? ''));
+          .map((a: any) => a?.kind ?? '')
+          .filter((k: string) => k);
       }
     } catch {
       // ignore malformed JSON
@@ -391,7 +394,11 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
               const agents: string[] = (() => {
                 try {
                   const arr = m.agents ? JSON.parse(m.agents) : [];
-                  return Array.isArray(arr) ? arr.filter((a: any) => a?.enabled !== false).map((a: any) => a?.kind ?? '?') : [];
+                  return Array.isArray(arr)
+                    ? arr
+                        .filter((a: any) => a?.enabled !== false)
+                        .map((a: any) => agentLabel(agentCatalog, a?.kind ?? '?'))
+                    : [];
                 } catch { return []; }
               })();
               const authLabel =

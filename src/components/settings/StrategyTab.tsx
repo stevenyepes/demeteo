@@ -248,7 +248,8 @@ export function StrategyTab() {
                     {agent.kind === 'opencode' && 'Local open-source developer agent.'}
                     {agent.kind === 'hermes' && 'Autonomic codebase planner and execution agent.'}
                     {agent.kind === 'claude-code' && 'Claude Code agent for complex tasks.'}
-                    {!['opencode', 'hermes', 'claude-code'].includes(agent.kind) && 'Additional configured coding agent.'}
+                    {agent.kind === 'codex' && 'OpenAI Codex CLI agent (GPT-5 family).'}
+                    {!['opencode', 'hermes', 'claude-code', 'codex'].includes(agent.kind) && 'Additional configured coding agent.'}
                   </p>
                   {!agent.available && agent.install_command && (
                     <div className="mt-2.5 p-2 bg-black/40 border border-white/5 rounded font-mono text-[9px] text-slate-300 flex items-center justify-between gap-2 select-all overflow-x-auto">

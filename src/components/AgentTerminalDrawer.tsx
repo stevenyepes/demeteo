@@ -14,6 +14,7 @@ const AGENT_CLI: Record<string, { binary: string; label: string }> = {
   'claude-code': { binary: 'claude', label: 'Claude' },
   'opencode':    { binary: 'opencode', label: 'OpenCode' },
   'hermes':      { binary: 'hermes', label: 'Hermes' },
+  'codex':       { binary: 'codex', label: 'Codex' },
 };
 
 export interface AgentTerminalDrawerProps {

@@ -119,9 +119,9 @@ The git mechanics that make the feature-branch model work.
 The layer that talks to coding agents.
 
 - **Aggregates:** `AgentRegistry`, `AgentSession`
-- **Value Objects:** `AgentKind` (`opencode` | `hermes` | `claude-code`) — a real enum (`domain/models/agent_config.rs`) whose `as_str` equals the runtime `kind()` key; `AgentCapabilities` (`display_label`, `lists_models`, `default_model`) declared once per runtime so no downstream site matches on the kind string; `AgentConfig`, `AgentContext`, `AgentEvent`, `StepCapability`, `PermissionProfile`, `WriteScope`, `Access`, `Usage`, `StopReason`
+- **Value Objects:** `AgentKind` (`opencode` | `hermes` | `claude-code` | `codex`) — a real enum (`domain/models/agent_config.rs`) whose `as_str` equals the runtime `kind()` key; `AgentCapabilities` (`display_label`, `lists_models`, `default_model`) declared once per runtime so no downstream site matches on the kind string; `AgentConfig`, `AgentContext`, `AgentEvent`, `StepCapability`, `PermissionProfile`, `WriteScope`, `Access`, `Usage`, `StopReason`
 - **Ports:** `AgentRuntime` (`kind` / `capabilities` / `binary` / `is_available` / `install_command` / `start`), `AgentExecutionPort` (`submit` / `submit_agent` / `approve` / `reject`), `AgentSession`, `ExecutionPort`
-- **Adapters:** `UnifiedCliRuntime` (`adapters/agent/cli_runtime.rs`) — one impl, configured per agent. `opencode` and `hermes` use `OPENCODE_PERMISSION` env; `claude-code` uses `--disallowedTools` + `--exclude-dynamic-system-prompt-sections` + `--setting-sources user,project` + `--strict-mcp-config` and lets Claude own its own credentials.
+- **Adapters:** `UnifiedCliRuntime` (`adapters/agent/cli_runtime.rs`) — one impl, configured per agent. `opencode` and `hermes` use `OPENCODE_PERMISSION` env; `claude-code` uses `--disallowedTools` + `--exclude-dynamic-system-prompt-sections` + `--setting-sources user,project` + `--strict-mcp-config` and lets Claude own its own credentials; `codex` uses `codex exec --json` with `-c sandbox_mode=<read-only|workspace-write>` + `-c approval_policy=never` (flag-based, like claude-code) and resumes via `codex exec resume <thread_id>`.
 - **Key invariants:**
   - Every supported agent is a one-shot CLI runtime that takes its model via a `--model` flag built from `AgentContext.model`; there is no config-env/ACP model path.
   - One `UnifiedCliRuntime` impl serves all agents (binary + args + install_command + parse_event + capabilities differ; everything else is shared).
@@ -134,6 +134,7 @@ The layer that talks to coding agents.
     - `opencode` → `curl -fsSL https://opencode.ai/install | bash`
     - `hermes` → `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`
     - `claude-code` → `npm install -g @anthropic-ai/claude-code`
+    - `codex` → `npm install -g @openai/codex`
 
 ### 7. Memory (Supporting Subdomain)
 

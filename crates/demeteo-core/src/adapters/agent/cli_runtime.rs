@@ -529,6 +529,9 @@ fn drain_lines<R, F>(
                                     .or_else(|| v.get("session_id"))
                                     .or_else(|| v.get("conversationID"))
                                     .or_else(|| v.get("conversation_id"))
+                                    // Codex emits `thread_id` on its first
+                                    // `thread.started` line (`codex exec --json`).
+                                    .or_else(|| v.get("thread_id"))
                                     .or_else(|| {
                                         v.get("data").and_then(|d| d.get("conversation_id"))
                                     })
