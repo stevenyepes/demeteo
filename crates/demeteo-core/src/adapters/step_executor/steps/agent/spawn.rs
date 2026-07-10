@@ -18,23 +18,11 @@ impl ExecutionDriver {
         // resume the same session; a change in either spawns fresh.
         let session_key =
             Self::agent_session_key(self.f_id.as_str(), step_conf, override_model.as_deref());
-        let mut agent_env =
+        // Every supported agent is a CLI runtime that takes its model via a
+        // `--model` flag built into `build_args` from `ctx.model` below; there
+        // is no config-file/env model path to set up here.
+        let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
-        if let Some(ref m) = override_model {
-            if agent_kind == "opencode"
-                || agent_kind == "hermes"
-                || agent_kind == "claude-code"
-                || agent_kind == "antigravity"
-            {
-                // CLI mode: model passed as --model flag at spawn
-            } else {
-                let config = format!(
-                    r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
-                    m
-                );
-                agent_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
-            }
-        }
 
         // Resolve the actual executable name from the registered runtime
         // (e.g. kind "claude-code" → binary "claude"). Falls back to the
@@ -140,45 +128,10 @@ impl ExecutionDriver {
         }
 
         match spawn_res {
-            Some(Ok(session)) => {
-                let is_cli_agent = agent_kind == "opencode"
-                    || agent_kind == "hermes"
-                    || agent_kind == "claude-code"
-                    || agent_kind == "antigravity";
-                if !is_cli_agent {
-                    if let Some(ref model) = override_model {
-                        let info = session.session_info();
-                        let applied = info
-                            .config_options
-                            .as_ref()
-                            .and_then(|opts| opts.iter().find(|o| o.id == "model"))
-                            .map(|o| o.current_value == *model)
-                            .unwrap_or(false);
-                        if !applied {
-                            let mut config_ok = false;
-                            if session.set_config_option("model", model).is_ok() {
-                                let info2 = session.session_info();
-                                let really_applied = info2
-                                    .config_options
-                                    .as_ref()
-                                    .and_then(|opts| opts.iter().find(|o| o.id == "model"))
-                                    .map(|o| o.current_value == *model)
-                                    .unwrap_or(false);
-                                if really_applied {
-                                    config_ok = true;
-                                }
-                            }
-                            if !config_ok {
-                                return Err(format!(
-                                    "Model '{}' could not be applied to the agent session.",
-                                    model
-                                ));
-                            }
-                        }
-                    }
-                }
-                Ok(session)
-            }
+            // Every supported agent is a CLI runtime; the model is carried by
+            // the `--model` flag in `build_args` from `ctx.model`, so there is
+            // no post-spawn `set_config_option` step to apply here.
+            Some(Ok(session)) => Ok(session),
             Some(Err(e)) => Err(e.to_string()),
             None => Err("spawn cancelled".to_string()),
         }

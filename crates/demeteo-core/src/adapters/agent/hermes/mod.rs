@@ -180,6 +180,10 @@ pub fn runtime() -> UnifiedCliRuntime {
         parse_event: parse_hermes_event as EventParser,
         build_args: build_hermes_args,
         perm_env: crate::ports::agent_runtime::opencode_permission_env,
+        display_label: "Hermes",
+        // `hermes models` lists selectable models.
+        lists_models: true,
+        default_model: None,
     }
 }
 

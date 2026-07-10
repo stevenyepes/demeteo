@@ -94,8 +94,7 @@ pub enum CreateProjectStepPayload {
         kind: String,
         machine_id: Option<String>,
     },
-    /// Step 5 — Coding agent (`opencode` / `hermes` / `claude-code` /
-    /// `antigravity`).
+    /// Step 5 — Coding agent (`opencode` / `hermes` / `claude-code`).
     Agent { kind: String },
     /// Step 6 — Model. Either a value returned by `getAgentModels`
     /// or a free-form override.
@@ -242,10 +241,7 @@ pub async fn submit_create_project_step(
         }
 
         CreateProjectStepPayload::Agent { kind } => {
-            if !matches!(
-                kind.as_str(),
-                "opencode" | "hermes" | "claude-code" | "antigravity"
-            ) {
+            if !demeteo_core::domain::models::AgentKind::is_supported(kind.as_str()) {
                 return Err(AppError::validation(format!(
                     "Unsupported agent kind: {}",
                     kind

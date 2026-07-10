@@ -78,11 +78,11 @@ distinguish "leave alone" from "set to NULL".
 ### Carried ports
 
 - **`AgentRuntime`** (`ports/agent_runtime.rs`) — `CliRuntime` (one-shot
-  CLI + JSON-lines) for all agents. `opencode` and `hermes` use
+  CLI + JSON-lines) for all agents, each declaring its `AgentCapabilities`.
+  `opencode` and `hermes` use
   `opencode run --format json` / `hermes run --format json`; `claude-code`
-  uses `claude --print --output-format stream-json`; `antigravity` uses
-  `agy --print -`. ACP is removed. The trait surface stays dyn-safe
-  (`start` returns a boxed `AgentStartFuture`).
+  uses `claude --print --output-format stream-json`. ACP is removed. The
+  trait surface stays dyn-safe (`start` returns a boxed `AgentStartFuture`).
 - **`AgentExecutionPort`** (`ports/agent_execution.rs`) — `submit` /
   `submit_agent` / `approve` / `reject` for hand-rolled and
   agent-originated tool actions. `submit_agent` returns a typed
@@ -153,8 +153,7 @@ turns into concrete writable paths. The scope and per-step
 `StepCapability::{ReadOnly, Artifacts, Verify, Implement}`; the
 runtime translates the abstract profile to its native dialect
 (opencode → `OPENCODE_PERMISSION` env; claude-code →
-`--disallowedTools`; hermes → `OPENCODE_PERMISSION` env; antigravity
-→ `OPENCODE_PERMISSION` env).
+`--disallowedTools`; hermes → `OPENCODE_PERMISSION` env).
 
 ## 3. Directory Layout
 
@@ -219,7 +218,6 @@ src-tauri/src/
 │   │   ├── opencode/mod.rs        # CliRuntime + parse_opencode_event
 │   │   ├── hermes/mod.rs          # CliRuntime + parse_hermes_event
 │   │   ├── claude_code/mod.rs     # CliRuntime + parse_claude_code_event + disallowed_tools_for
-│   │   ├── antigravity/mod.rs     # CliRuntime + parse_antigravity_event
 │   │   ├── install.rs             # agent_install_and_start
 │   │   ├── direct_execution.rs
 │   │   ├── noop.rs

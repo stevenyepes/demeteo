@@ -8,11 +8,10 @@ export interface AgentStepProps {
 }
 
 /**
- * Step 5 — Agent. Pick a coding agent harness. The set of available
- * kinds is locked to the four seeded harnesses (`opencode`, `hermes`,
- * `claude-code`, `antigravity`) — anything outside that set is
- * rejected by the Rust command. Emits the matching `{ step: 'agent',
- * kind }` payload upward.
+ * Step 5 — Agent. Pick a coding agent harness. The available kinds are
+ * supplied by the caller from the backend `list_agents` catalog (the single
+ * source of truth); any kind outside the registered set is rejected by the
+ * Rust command. Emits the matching `{ step: 'agent', kind }` payload upward.
  */
 export function AgentStep({ agentKinds, value, onSubmit }: AgentStepProps) {
   return (

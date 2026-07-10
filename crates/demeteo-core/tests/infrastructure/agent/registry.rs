@@ -9,6 +9,13 @@ impl AgentRuntime for NoopRuntime {
     fn kind(&self) -> &'static str {
         "noop"
     }
+    fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
+        crate::ports::agent_runtime::AgentCapabilities {
+            display_label: "Noop",
+            lists_models: false,
+            default_model: None,
+        }
+    }
     async fn is_available(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,
@@ -244,6 +251,13 @@ impl FlippableRuntime {
 impl AgentRuntime for FlippableRuntime {
     fn kind(&self) -> &'static str {
         "flippable"
+    }
+    fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
+        crate::ports::agent_runtime::AgentCapabilities {
+            display_label: "Flippable",
+            lists_models: false,
+            default_model: None,
+        }
     }
     async fn is_available(
         &self,

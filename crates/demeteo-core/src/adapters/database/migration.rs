@@ -16,9 +16,22 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
 
     add_column_if_missing(conn, "machines", "agents", "TEXT")?;
     conn.execute(
-        "UPDATE machines 
-         SET agents = '[{\"kind\":\"opencode\",\"enabled\":true},{\"kind\":\"hermes\",\"enabled\":true},{\"kind\":\"claude-code\",\"enabled\":true},{\"kind\":\"antigravity\",\"enabled\":true}]'
+        "UPDATE machines
+         SET agents = '[{\"kind\":\"opencode\",\"enabled\":true},{\"kind\":\"hermes\",\"enabled\":true},{\"kind\":\"claude-code\",\"enabled\":true}]'
          WHERE id = 'local' AND (agents IS NULL OR agents = '' OR agents = '[]');",
+        [],
+    )?;
+    // Strip the removed `antigravity` agent from any previously-seeded
+    // `agents` JSON so stale rows don't advertise an agent the registry no
+    // longer resolves. `get_agent_configs`' parser already drops unsupported
+    // kinds on read, but scrubbing the stored value keeps the DB truthful.
+    conn.execute(
+        "UPDATE machines
+         SET agents = replace(replace(replace(agents,
+             '{\"kind\":\"antigravity\",\"enabled\":true},', ''),
+             ',{\"kind\":\"antigravity\",\"enabled\":true}', ''),
+             '{\"kind\":\"antigravity\",\"enabled\":true}', '')
+         WHERE agents LIKE '%antigravity%';",
         [],
     )?;
     add_column_if_missing(conn, "machines", "auto_approved_rules", "TEXT")?;

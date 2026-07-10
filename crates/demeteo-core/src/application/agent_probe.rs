@@ -12,8 +12,13 @@ pub async fn discover_models(
         return Ok(models);
     }
 
-    // 2. CLI model probing for agents that expose a `models` subcommand
-    if agent_kind == "opencode" || agent_kind == "hermes" || agent_kind == "antigravity" {
+    // 2. CLI model probing for agents that declare a `models` subcommand.
+    let lists_models = ctx
+        .registry
+        .runtime_for(&agent_kind)
+        .map(|r| r.capabilities().lists_models)
+        .unwrap_or(false);
+    if lists_models {
         if let Ok(models) = probe_models_via_cli(ctx.exec.as_ref(), &machine_id, &agent_kind).await
         {
             return Ok(models);
@@ -89,10 +94,9 @@ async fn probe_models_via_cli(
     // ("models") and start a session instead of listing anything. claude-code
     // models come from the alias fallback in `fallback_models` instead, and
     // `discover_models` deliberately excludes claude-code from this CLI path.
-    let binary = match agent_kind {
-        "antigravity" => "agy",
-        other => other,
-    };
+    // Every kind reaching this CLI-listing path has a binary name equal to
+    // its kind (opencode, hermes); claude-code is excluded above.
+    let binary = agent_kind;
     // Interactive login shell so a tool-manager-provided binary (mise/asdf/
     // nvm) is on PATH — matching the availability probe and agent spawn.
     // A plain `run_command` runs non-login and can't find e.g. a
@@ -202,32 +206,6 @@ pub fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
                 name: "Claude Fable (latest)".into(),
                 description: None,
                 supports_images: false,
-            },
-        ],
-        "antigravity" => vec![
-            ConfigOptionValue {
-                value: "gemini-2.5-flash".into(),
-                name: "Gemini 2.5 Flash".into(),
-                description: None,
-                supports_images: true,
-            },
-            ConfigOptionValue {
-                value: "gemini-2.5-pro".into(),
-                name: "Gemini 2.5 Pro".into(),
-                description: None,
-                supports_images: true,
-            },
-            ConfigOptionValue {
-                value: "gemini-1.5-pro".into(),
-                name: "Gemini 1.5 Pro".into(),
-                description: None,
-                supports_images: true,
-            },
-            ConfigOptionValue {
-                value: "gemini-1.5-flash".into(),
-                name: "Gemini 1.5 Flash".into(),
-                description: None,
-                supports_images: true,
             },
         ],
         "opencode" | "hermes" => vec![

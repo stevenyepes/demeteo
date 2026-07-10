@@ -9,12 +9,12 @@
 **Epic acceptance:** golden-transcript test green; full feature → gate → merge run on a real repo; README agent table updated.
 
 **Grounding facts (verified in repo, 2026-07-05):**
-- Existing adapters live as a single flat `mod.rs` per agent: `crates/demeteo-core/src/adapters/agent/{claude_code,hermes,opencode,antigravity}/mod.rs`. Each exposes `pub fn runtime() -> UnifiedCliRuntime` (e.g. `claude_code/mod.rs:434`) built from agent-specific `parse_event` / `build_args` / `perm_env` function pointers passed into the shared `UnifiedCliRuntime` (`adapters/agent/cli_runtime.rs:35`, impls `AgentRuntime` at `:46`).
+- Existing adapters live as a single flat `mod.rs` per agent: `crates/demeteo-core/src/adapters/agent/{claude_code,hermes,opencode}/mod.rs`. Each exposes `pub fn runtime() -> UnifiedCliRuntime` built from agent-specific `parse_event` / `build_args` / `perm_env` function pointers plus a declared `AgentCapabilities` descriptor, passed into the shared `UnifiedCliRuntime` (`adapters/agent/cli_runtime.rs`, impls `AgentRuntime`). Codex must also fill in its `AgentCapabilities` (`display_label` / `lists_models` / `default_model`).
 - `AgentRuntime` port trait: `crates/demeteo-core/src/ports/agent_runtime.rs:140`; `AgentSession` trait same file `:186`; `AgentContext` struct `:22`.
 - `AgentRegistry` (`adapters/agent/registry.rs:13`) is a plain `Vec<Arc<dyn AgentRuntime>>` — new adapters are wired **by hand** in `crates/demeteo-core/src/composition/mod.rs:139-143`. There is no enum/derive registration to update elsewhere; you push one more `Arc::new(adapters::agent::codex::runtime()) as Arc<dyn AgentRuntime>` into that vec.
-- `AgentKind` value object (`docs/DDD_MODEL.md` § 6) currently enumerates `opencode | hermes | claude-code | antigravity` — add `codex`.
+- `AgentKind` is a real enum (`crates/demeteo-core/src/domain/models/agent_config.rs`) currently enumerating `opencode | hermes | claude-code` — add `Codex` there and to `AgentKind::ALL`, plus any exhaustive match the compiler flags.
 - Cost pipeline: `PricingTable` trait (`ports/pricing.rs`), `HardcodedPricingTable` impl (`adapters/pricing.rs`, ~263 lines) — add Codex/GPT-5.5 model price rows here.
-- Permission translation precedent (decision 35, `docs/DECISIONS.md`): each adapter translates the abstract `PermissionProfile` into its own dialect (opencode/hermes/antigravity → `OPENCODE_PERMISSION` env; claude-code → `--disallowedTools` + flags). Codex needs its own translation to `--sandbox` modes.
+- Permission translation precedent (decision 35, `docs/DECISIONS.md`): each adapter translates the abstract `PermissionProfile` into its own dialect (opencode/hermes → `OPENCODE_PERMISSION` env; claude-code → `--disallowedTools` + flags). Codex needs its own translation to `--sandbox` modes.
 - Session continuity precedent (decision 36): claude-code uses `--resume <sid>` (`adapters/agent/claude_code/mod.rs:388-394`). Codex's one-shot `exec` mode has no session flag documented in market research — confirm whether Codex needs `AgentSession` continuity at all for v1, or is spawn-per-step like the others.
 
 ---
@@ -71,5 +71,5 @@
 **Tasks:**
 - [ ] Record a golden transcript (raw `codex exec --json` output + expected parsed `AgentEvent` sequence) for at least one representative run — this becomes the first fixture A3 consumes, so agree on a fixture format/location with whoever picks up A3 before inventing one.
 - [ ] Run a full feature → gate → merge pipeline against a real repo using the Codex adapter; capture any parser gaps found and feed them back into Story A1.1.
-- [ ] Update the README's "Supported agents" table to add Codex (see the existing antigravity footnote for the pattern of marking caveats honestly).
+- [ ] Update the README's "Supported agents" table to add Codex (mark any caveats honestly, e.g. a sandbox-mode limitation).
 - [ ] Update `docs/DDD_MODEL.md` § 6 and `docs/DECISIONS.md` decision 34's install-command table.

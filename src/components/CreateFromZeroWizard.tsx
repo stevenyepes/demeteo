@@ -16,8 +16,8 @@ import { useCreateZeroWizardForm } from './ui/useCreateZeroWizardForm';
 import { useCreateZeroWizardActions } from './ui/useCreateZeroWizardActions';
 import { useCreateZeroBootstrap } from './ui/useCreateZeroBootstrap';
 import type { WorktreeStrategy } from '../types';
+import { useAgentCatalog } from '../lib/agentCatalog';
 
-const AGENT_KINDS = ['opencode', 'hermes', 'claude-code', 'antigravity'];
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{0,99}$/;
 
 type StepId =
@@ -87,6 +87,8 @@ const CreateFromZeroWizard: React.FC = () => {
   const { dispatch: projDispatch } = useProject();
   const form = useCreateZeroWizardForm();
   const bootstrap = useCreateZeroBootstrap();
+  const { agents: agentCatalog } = useAgentCatalog();
+  const agentKinds = useMemo(() => agentCatalog.map((a) => a.kind), [agentCatalog]);
   const { approveStrategy, launchFeature, launchState } = useCreateZeroWizardActions(form);
   const [step, setStep] = useState<StepId>('name');
   // Guard against re-entering the bootstrap success path while a
@@ -233,7 +235,7 @@ const CreateFromZeroWizard: React.FC = () => {
 
             {step === 'agent' && (
               <CreateZeroAgentStep
-                agentKinds={AGENT_KINDS}
+                agentKinds={agentKinds}
                 models={form.models}
                 modelsLoading={form.modelsLoading}
                 agentKind={form.agentKind}

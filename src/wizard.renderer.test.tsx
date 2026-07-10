@@ -232,7 +232,7 @@ function findByTestId(root: ReactTestInstance, id: string): ReactTestInstance | 
   const captured: CreateProjectStepPayload[] = [];
   const tree = mount(
     <AgentStep
-      agentKinds={['opencode', 'hermes', 'claude-code', 'antigravity']}
+      agentKinds={['opencode', 'hermes', 'claude-code']}
       value=""
       onSubmit={(p) => { captured.push(p); }}
     />,

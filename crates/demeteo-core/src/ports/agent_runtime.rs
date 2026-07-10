@@ -201,13 +201,42 @@ pub enum AgentStartError {
     SpawnFailed(String),
 }
 
+/// The capabilities Demeteo asks of a coding agent, declared once per runtime
+/// instead of being inferred from `match kind { ... }` string lists scattered
+/// across the executor, the model probe, and the UI.
+///
+/// Adding a new agent means filling this in (plus `parse_event` / `build_args`
+/// / `perm_env`) — no downstream site special-cases the kind. See
+/// `docs/adapters/CONTRIBUTING-AN-AGENT.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCapabilities {
+    /// Human-facing name for pickers and settings (e.g. "Claude Code").
+    /// Replaces the ad-hoc `kind.replace('-', ' ')` / display-name maps in
+    /// the frontend.
+    pub display_label: &'static str,
+    /// Whether the CLI exposes a `<binary> models` subcommand that lists
+    /// selectable models. Drives dynamic model discovery in
+    /// `application::agent_probe`; agents without it fall back to a static
+    /// list.
+    pub lists_models: bool,
+    /// The model this runtime uses when no explicit override is configured,
+    /// used to seed `UsageAccumulator` for pricing-table cost fallback.
+    /// `None` when the default isn't statically knowable.
+    pub default_model: Option<&'static str>,
+}
+
 /// Transport-neutral runtime for a single agent. The runtime takes a binary
 /// and a config and owns the lifecycle of one agent session: spawning,
 /// initialization, prompt streaming, cancel, and clean teardown.
 #[async_trait]
 pub trait AgentRuntime: Send + Sync {
-    /// Stable identifier; matches `AgentConfig.kind`.
+    /// Stable identifier; matches `AgentConfig.kind` and
+    /// [`AgentKind::as_str`](crate::domain::models::AgentKind::as_str).
     fn kind(&self) -> &'static str;
+
+    /// The capabilities Demeteo asks of this agent. Every behavior decision
+    /// that used to `match` on the kind string reads a field here instead.
+    fn capabilities(&self) -> AgentCapabilities;
 
     /// The actual executable name on disk. Defaults to [`Self::kind`], which
     /// is correct when the kind matches the binary (opencode, hermes, …).
@@ -234,11 +263,10 @@ pub trait AgentRuntime: Send + Sync {
     /// Used to seed `UsageAccumulator` so the pricing-table fallback can
     /// compute `cost_usd` even when the agent's wire format omits it.
     ///
-    /// Returns `None` when the runtime selects the model dynamically (e.g.
-    /// from an environment variable or project config) and the default is not
-    /// statically knowable.
+    /// Delegates to [`AgentCapabilities::default_model`]; runtimes declare the
+    /// value there rather than overriding this.
     fn default_model(&self) -> Option<String> {
-        None
+        self.capabilities().default_model.map(str::to_string)
     }
 
     /// Spawn the agent and return a session handle. The session is fully

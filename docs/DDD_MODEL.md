@@ -119,11 +119,12 @@ The git mechanics that make the feature-branch model work.
 The layer that talks to coding agents.
 
 - **Aggregates:** `AgentRegistry`, `AgentSession`
-- **Value Objects:** `AgentKind` (`opencode` | `hermes` | `claude-code` | `antigravity`), `AgentConfig`, `AgentContext`, `AgentEvent`, `StepCapability`, `PermissionProfile`, `WriteScope`, `Access`, `Usage`, `StopReason`
-- **Ports:** `AgentRuntime`, `AgentExecutionPort` (`submit` / `submit_agent` / `approve` / `reject`), `AgentSession`, `ExecutionPort`
-- **Adapters:** `UnifiedCliRuntime` (`adapters/agent/cli_runtime.rs`) — one impl, configured per agent. `opencode` and `hermes` use `OPENCODE_PERMISSION` env; `claude-code` uses `--disallowedTools` + `--exclude-dynamic-system-prompt-sections` + `--setting-sources user,project` + `--strict-mcp-config` and lets Claude own its own credentials; `antigravity` uses `OPENCODE_PERMISSION` env.
+- **Value Objects:** `AgentKind` (`opencode` | `hermes` | `claude-code`) — a real enum (`domain/models/agent_config.rs`) whose `as_str` equals the runtime `kind()` key; `AgentCapabilities` (`display_label`, `lists_models`, `default_model`) declared once per runtime so no downstream site matches on the kind string; `AgentConfig`, `AgentContext`, `AgentEvent`, `StepCapability`, `PermissionProfile`, `WriteScope`, `Access`, `Usage`, `StopReason`
+- **Ports:** `AgentRuntime` (`kind` / `capabilities` / `binary` / `is_available` / `install_command` / `start`), `AgentExecutionPort` (`submit` / `submit_agent` / `approve` / `reject`), `AgentSession`, `ExecutionPort`
+- **Adapters:** `UnifiedCliRuntime` (`adapters/agent/cli_runtime.rs`) — one impl, configured per agent. `opencode` and `hermes` use `OPENCODE_PERMISSION` env; `claude-code` uses `--disallowedTools` + `--exclude-dynamic-system-prompt-sections` + `--setting-sources user,project` + `--strict-mcp-config` and lets Claude own its own credentials.
 - **Key invariants:**
-  - One `UnifiedCliRuntime` impl serves all four agents (binary + args + install_command + parse_event differ; everything else is shared).
+  - Every supported agent is a one-shot CLI runtime that takes its model via a `--model` flag built from `AgentContext.model`; there is no config-env/ACP model path.
+  - One `UnifiedCliRuntime` impl serves all agents (binary + args + install_command + parse_event + capabilities differ; everything else is shared).
   - Agent sessions are scoped to a step execution — no global session reuse.
   - The planner is just an agent session with a planning prompt; no special planner port.
   - `AgentEvent` is an internal contract (consumed by `StepExecutor`), not a UI contract. The UI sees step transitions, not agent transcripts. Variants: `Text`, `ToolCall`, `ToolCallUpdate`, `Plan`, `Usage` (input / output / cache_read / cache_creation / cost_usd), `Error`, `TurnComplete`, `ModeChanged`, `ConfigChanged`, `ArtifactProduced`.
@@ -133,7 +134,6 @@ The layer that talks to coding agents.
     - `opencode` → `curl -fsSL https://opencode.ai/install | bash`
     - `hermes` → `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`
     - `claude-code` → `npm install -g @anthropic-ai/claude-code`
-    - `antigravity` → `npm install -g @antigravity/cli` *(known to be broken upstream; the `antigravity` row in `README.md` is marked not currently supported)*
 
 ### 7. Memory (Supporting Subdomain)
 

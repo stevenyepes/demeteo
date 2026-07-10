@@ -13,7 +13,6 @@
 //! | Claude Code  | One terminal `result` event with `usage` + `cost_usd` |
 //! | opencode     | Multiple `usage_update` + `step_finish` events         |
 //! | hermes       | Multiple `usage_update` events                         |
-//! | antigravity  | (no usage — out of scope)                              |
 //!
 //! Naively overwriting `latest_tokens` on each event loses or duplicates
 //! data; naive summing overcounts. This module applies one rule:

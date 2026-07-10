@@ -5,6 +5,7 @@ import type { Machine, Repository, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 import { getAgentModels } from '../lib/agentModels';
+import { useAgentCatalog } from '../lib/agentCatalog';
 import { HarnessModelPicker, type ModelOption } from './ui/HarnessModelPicker';
 import type { AgentConfigView } from './settings/ProjectSettingsContext';
 
@@ -77,8 +78,6 @@ interface StartFeatureModalProps {
   }) => void;
 }
 
-const AGENT_KINDS = ['opencode', 'hermes', 'claude-code', 'antigravity'];
-
 interface StepRow {
   id: string;
   title: string;
@@ -131,6 +130,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // agent that isn't installed on the chosen machine — the same
   // `get_agent_configs` probe the Strategy settings tab uses.
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigView[]>([]);
+  const { agents: agentCatalog } = useAgentCatalog();
   // Model lists per agent kind, probed lazily from the target machine via
   // `getAgentModels` — the same `get_agent_models` command the Strategy
   // settings tab and Project home use. Keyed by agent kind (not machine)
@@ -364,20 +364,21 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   );
   const showVisionWarning = hasImageAttachment && !modelSupportsImagesNow;
 
-  // Agent choices for the pickers: the machine's enabled agents (antigravity
-  // is excluded from configs app-wide). Falls back to the static kinds if the
-  // probe returned nothing (e.g. an unreachable machine) so the pickers are
-  // never empty. `available` drives the "not installed" hint on each option.
+  // Agent choices for the pickers: the machine's enabled agents. Falls back
+  // to the registered agent catalog if the probe returned nothing (e.g. an
+  // unreachable machine) so the pickers are never empty. `available` drives
+  // the "not installed" hint on each option.
   const agentOptions = useMemo(() => {
-    const enabled = agentConfigs.filter((a) => a.enabled && a.kind !== 'antigravity');
+    const enabled = agentConfigs.filter((a) => a.enabled);
     if (enabled.length > 0) return enabled;
-    return AGENT_KINDS.filter((k) => k !== 'antigravity').map((k) => ({
-      kind: k,
+    return agentCatalog.map((a) => ({
+      kind: a.kind,
       enabled: true,
       available: true,
-      install_command: '',
+      install_command: a.install_command,
+      display_label: a.display_label,
     }));
-  }, [agentConfigs]);
+  }, [agentConfigs, agentCatalog]);
   const agentKinds = useMemo(() => agentOptions.map((a) => a.kind), [agentOptions]);
 
   // The agent kinds any picker currently needs a model list for: the

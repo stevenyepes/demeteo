@@ -61,7 +61,7 @@ Only after completing steps 1–5 may you write or modify code.
 
 ## 1. Project Identity
 
-**Demeteo** is a premium desktop app that lets a developer describe a feature in plain language; the app decomposes it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes — antigravity is compiled but **not currently supported** upstream; see `README.md` "Supported agents" footnote), manages Git worktrees per Step, and presents human-approval Gates before merging.
+**Demeteo** is a premium desktop app that lets a developer describe a feature in plain language; the app decomposes it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes), manages Git worktrees per Step, and presents human-approval Gates before merging.
 
 > **Current phase: V1 — Core fleet-style multi-agent orchestrator** (fully implemented).
 

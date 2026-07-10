@@ -553,7 +553,7 @@ export function FeatureDetail() {
             setAvailableModels(models as Array<{ value: string; name: string }>);
             setAvailableAgents(
               (configs || [])
-                .filter(a => a.enabled && a.available && a.kind !== 'antigravity')
+                .filter(a => a.enabled && a.available)
                 .map(a => a.kind),
             );
           } catch (err) {

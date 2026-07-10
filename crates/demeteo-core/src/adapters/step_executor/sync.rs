@@ -112,21 +112,9 @@ pub(crate) async fn resolve_sync_conflicts_shared(
 
     // Spawn a fresh agent session.
     let resolver_thread_id = format!("{}-{}", thread_id_prefix, paths::now_ms());
-    let mut agent_env =
-        crate::ports::agent_runtime::agent_base_env(exec.as_ref(), machine_str).await;
-    if let Some(ref m) = override_model {
-        if agent_kind != "opencode"
-            && agent_kind != "hermes"
-            && agent_kind != "claude-code"
-            && agent_kind != "antigravity"
-        {
-            let config = format!(
-                r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
-                m
-            );
-            agent_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
-        }
-    }
+    // Every supported agent is a CLI runtime that takes its model via the
+    // `--model` flag in `build_args` from `ctx.model` below.
+    let agent_env = crate::ports::agent_runtime::agent_base_env(exec.as_ref(), machine_str).await;
 
     let binary = registry
         .runtime_for(agent_kind)

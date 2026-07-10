@@ -77,10 +77,7 @@ impl SqliteAdapter {
                 .filter_map(|v| {
                     if let Some(s) = v.as_str() {
                         let kind = s.to_lowercase();
-                        if matches!(
-                            kind.as_str(),
-                            "opencode" | "hermes" | "claude-code" | "antigravity"
-                        ) {
+                        if crate::domain::models::AgentKind::is_supported(&kind) {
                             Some(AgentConfig {
                                 kind,
                                 enabled: true,
@@ -94,10 +91,7 @@ impl SqliteAdapter {
                             .and_then(|k| k.as_str())
                             .unwrap_or("")
                             .to_lowercase();
-                        if !matches!(
-                            raw_kind.as_str(),
-                            "opencode" | "hermes" | "claude-code" | "antigravity"
-                        ) {
+                        if !crate::domain::models::AgentKind::is_supported(&raw_kind) {
                             return None;
                         }
                         Some(AgentConfig {
@@ -119,9 +113,11 @@ impl SqliteAdapter {
                 .filter(|c| seen_kinds.insert(c.kind.clone()))
                 .collect();
 
-            // Self-healing: ensure all 4 default agents are present in the configuration list.
-            for default_kind in &["opencode", "hermes", "claude-code", "antigravity"] {
-                if !seen_kinds.contains(*default_kind) {
+            // Self-healing: ensure every supported agent is present in the
+            // configuration list.
+            for default_kind in crate::domain::models::AgentKind::ALL {
+                let default_kind = default_kind.as_str();
+                if !seen_kinds.contains(default_kind) {
                     migrated.push(AgentConfig {
                         kind: default_kind.to_string(),
                         enabled: true,

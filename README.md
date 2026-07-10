@@ -17,7 +17,8 @@ Agents are invoked as one-shot CLI processes — no server, no handshake. They m
 | [opencode](https://github.com/anomalyco/opencode) | `opencode run --format json` |
 | [claude-code](https://claude.ai/code) | `claude --print --verbose --output-format stream-json` |
 | [hermes](https://github.com/NousResearch/hermes-agent) | `hermes run --format json` |
-| antigravity | `agy --print -` — adapter is compiled but **not currently supported**; the npm-published `@antigravity/cli` does not match what the bundled parser expects. See [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md) §17. |
+
+Want to add another agent? Every agent declares the same [capability contract](AGENT_INTEGRATION.md); see [`docs/adapters/CONTRIBUTING-AN-AGENT.md`](docs/adapters/CONTRIBUTING-AN-AGENT.md) for the step-by-step.
 
 ## Installation
 
@@ -106,7 +107,7 @@ React Webview ──IPC──► Tauri Commands ──► StepExecutor
                      (UnifiedCliRuntime)  + Merge / Conflict
                            │               + MrPublisher
                    opencode / hermes     Git worktrees
-                   claude-code / ag      SSH/SFTP repos
+                   claude-code           SSH/SFTP repos
 ```
 
 The codebase follows a hexagonal (ports & adapters) layout. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full port catalogue and [`AGENTS.md`](AGENTS.md) for the project constitution and code conventions.

@@ -49,7 +49,7 @@ pub enum BootstrapStep {
     Group,
     /// Local vs remote machine that owns the worktree.
     Machine,
-    /// Coding agent kind (opencode / hermes / claude-code / antigravity).
+    /// Coding agent kind (opencode / hermes / claude-code).
     Agent,
     /// Model identifier. Picker disabled until both `Machine` and `Agent` are set.
     Model,

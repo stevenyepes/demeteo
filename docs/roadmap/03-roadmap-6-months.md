@@ -90,8 +90,7 @@ README agent table updated.
 external contributors can add an agent from a doc.
 **Scope:** Golden transcript corpus per (agent, version); replay tests for every
 adapter (including the shipped three); nightly CI job that probes installed
-agent versions against recorded ones and opens an issue on drift; an `agy`
-headless-surface probe for the Antigravity watch item; a
+agent versions against recorded ones and opens an issue on drift; a
 `docs/adapters/CONTRIBUTING-AN-AGENT.md` guide.
 **Acceptance:** all 5 working adapters covered; one simulated breaking change
 caught by CI in a drill.
@@ -156,8 +155,8 @@ with a "5 agents, every model provider, governed pipelines" story
 **Outcome:** breadth story reaches 6 working agents; session runtime matures.
 **Scope:** MiniMax via Mini-Agent/M2 non-interactive mode (MMX-CLI is **not**
 an agent — optionally expose as a step tool later); pi long-session reuse
-across steps on the `SessionCliRuntime` shipped in A2; Antigravity re-probe
-review (reinstate only if the watch criteria in A2's decision record are met).
+across steps on the `SessionCliRuntime` shipped in A2. (The former Antigravity
+re-probe review is cancelled — the adapter was removed; see A2's decision record.)
 **Acceptance:** MiniMax in the conformance harness; pi session reuse
 demonstrated across a multi-step workflow.
 
@@ -223,8 +222,8 @@ tier.
 - *Truthful state & copy:* real status chips in the Project Home pipeline list
   instead of everything reading "RUNNING FLEET" (F9); real provider/workflow
   header copy (F10); correct data paths in About (F11); remove the fabricated
-  "nodes" metric (F42); one consistent agent-kind list — `antigravity` banned
-  everywhere while de-scoped (F21, ties to the A2 decision record);
+  "nodes" metric (F42); one consistent agent-kind list — `antigravity` removed
+  everywhere (F21, ties to the A2 decision record);
   empty-state tiles renamed to what they do (F22); wizard-created projects
   show the project name, not the feature title (F41).
 - *Silent failures become visible:* error surfacing on every save path (F29,
@@ -353,7 +352,7 @@ beyond current CI.
 
 - **Monthly:** milestone review — demo against acceptance criteria, re-score
   "Next" items, update this doc in the same PR as the release notes.
-- **M2 (end Sep):** go/no-go on C1 scope; first Antigravity watch-item re-probe.
+- **M2 (end Sep):** go/no-go on C1 scope.
 - **M3 (end Oct):** UX2 waiver review — any audit P2 finding not shipping in
   v1.2 gets a per-item decision record.
 - **M4 (end Nov):** E2 vs E3 priority call (kill criterion above); C3 go/no-go;

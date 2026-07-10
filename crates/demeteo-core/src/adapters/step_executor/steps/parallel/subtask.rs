@@ -599,24 +599,10 @@ impl ExecutionDriver {
 
         let agent_kind = planner_kind.to_string();
         let worker_machine = self.machine_id_opt.as_deref().unwrap_or("local");
-        let mut worker_env =
+        // Every supported agent is a CLI runtime that takes its model via the
+        // `--model` flag in `build_args` from `ctx.model` below.
+        let worker_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), worker_machine).await;
-        // CLI agents: pass model via --model flag, not OPENCODE_CONFIG_CONTENT.
-        if let Some(ref m) = override_model {
-            if agent_kind == "opencode"
-                || agent_kind == "hermes"
-                || agent_kind == "claude-code"
-                || agent_kind == "antigravity"
-            {
-                // CLI mode: model passed as --model flag at spawn
-            } else {
-                let config = format!(
-                    r#"{{"$schema":"https://opencode.ai/config.json","model":"{}"}}"#,
-                    m
-                );
-                worker_env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config);
-            }
-        }
         let binary = self
             .registry
             .runtime_for(&agent_kind)
@@ -660,24 +646,9 @@ impl ExecutionDriver {
         };
         run.session = Some(session.clone());
 
-        let is_cli_agent = agent_kind == "opencode"
-            || agent_kind == "hermes"
-            || agent_kind == "claude-code"
-            || agent_kind == "antigravity";
-        if !is_cli_agent {
-            if let Some(ref model) = override_model {
-                let info = session.session_info();
-                let applied = info
-                    .config_options
-                    .as_ref()
-                    .and_then(|opts| opts.iter().find(|o| o.id == "model"))
-                    .map(|o| o.current_value == *model)
-                    .unwrap_or(false);
-                if !applied {
-                    let _ = session.set_config_option("model", model);
-                }
-            }
-        }
+        // The worker's model is carried by the `--model` flag from `ctx.model`;
+        // every supported agent is a CLI runtime, so there is no post-spawn
+        // `set_config_option` step.
 
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
 

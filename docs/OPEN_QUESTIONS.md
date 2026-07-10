@@ -178,9 +178,9 @@
 
 ## 14. Second non-CLI runtime (Anthropic → v1.1)
 
-**The question:** What if the planner's host doesn't have any of the four CLI agents?
+**The question:** What if the planner's host doesn't have any of the CLI agents?
 
-**The v1.0 answer:** The planner is one of the four CLI coding agents (opencode, hermes, claude-code, antigravity). All four speak CLI mode with `--format json` / `--print --output-format stream-json`. The runtime trait (`AgentRuntime` + `AgentSession`) is transport-neutral; the `UnifiedCliRuntime` impl handles all four.
+**The v1.0 answer:** The planner is one of the CLI coding agents (opencode, hermes, claude-code). All speak CLI mode with `--format json` / `--print --output-format stream-json`. The runtime trait (`AgentRuntime` + `AgentSession`) is transport-neutral; the `UnifiedCliRuntime` impl handles them all.
 
 **The deferred work:** A non-CLI adapter for an agent that doesn't ship a CLI. Candidates: the `opencode serve` HTTP API (real-time permission approval via `POST /session/:id/permissions/:permissionID`), or a raw Anthropic API for a custom planner. The runtime trait surface already supports these (the per-adapter `perm_env` and `build_args` are the only knobs).
 
@@ -223,7 +223,6 @@ These came up briefly but weren't deep-dived in the interview. Captured here for
 - **Pluggable UI themes beyond the dark neon system** — defer; the design system is the product identity.
 - **Mobile / web companion** — explicitly out of scope; demeteo is a desktop control plane.
 - **WebKitGTK + NVIDIA + Wayland Error 71** — not a deferred feature, but a documented platform quirk with an auto-detected workaround and `DEMETEO_DISABLE_GPU=1` escape hatch. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
-- **Antigravity CLI upstream drift** — the npm-published `@antigravity/cli` does not currently match what the bundled `parse_antigravity_event` expects. The adapter is compiled and registered but the `antigravity` row in `README.md`'s "Supported agents" table is marked "not currently supported." A v1.x fix is to either re-pin against the upstream API or drop the adapter entirely.
 
 ---
 
