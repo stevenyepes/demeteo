@@ -257,15 +257,15 @@ fn fallback_claude_code_flags_vision_aliases() {
 }
 
 #[test]
-fn fallback_claude_code_flags_fable_as_not_vision() {
+fn fallback_claude_code_flags_fable_as_vision() {
     let models = fallback_models("claude-code");
     let fable = models
         .iter()
         .find(|m| m.value == "fable")
         .expect("fable alias should exist");
     assert!(
-        !fable.supports_images,
-        "fable is a research preview without vision support — must NOT be flagged"
+        fable.supports_images,
+        "fable now maps to Claude Fable 5 (GA, vision-capable) — must be flagged"
     );
 }
 
@@ -336,6 +336,8 @@ fn heuristic_positive_substrings() {
         "opus-2025-01-01",
         "sonnet-4-5",
         "haiku-3",
+        // fable now resolves to Claude Fable 5 (GA, vision-capable).
+        "fable-2025",
         // minimax vendor models — image-aware per the bundled
         // capabilities table. The substring is present in both the
         // bare model id ("MiniMax-M3") and the routing prefix
@@ -387,7 +389,6 @@ fn heuristic_unknown_model_returns_false() {
         "llama-3-70b",
         "mistral-7b",
         "command-r-plus",
-        "fable-2025",
     ];
     for m in unknowns {
         assert!(
