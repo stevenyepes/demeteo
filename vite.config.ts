@@ -50,6 +50,7 @@ export default defineConfig(async () => ({
       "@xterm/xterm",
       "@xterm/addon-fit",
       "@monaco-editor/react",
+      "monaco-editor",
     ],
   },
 }));
