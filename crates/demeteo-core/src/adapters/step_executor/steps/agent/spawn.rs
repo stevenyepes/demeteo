@@ -2,6 +2,27 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::ports::agent_runtime::{AgentContext, AgentSession};
 
+/// Decide whether a registry-cached agent session can be reused for a step
+/// running in `wt_path`, or must be torn down and respawned fresh.
+///
+/// Returns `true` (respawn) when either:
+///   * the session is not alive — its agent process exited, so a
+///     `--continue` / `--resume` against the captured id would fail; or
+///   * the session is bound to a different worktree (`session_cwd` is
+///     non-empty and differs from `wt_path`). Each step runs in its own
+///     ephemeral subtask worktree, but `agent_session_key` is only
+///     feature+profile+model scoped, so a later step with a matching
+///     profile reuses an earlier step's session. A resumed CLI agent
+///     writes against the directory it was originally spawned in, not the
+///     `--dir` passed this turn — reusing it would strand this step's
+///     declared deliverable in the previous step's worktree.
+///
+/// A `""` `session_cwd` means the runtime doesn't bind a cwd (stubs, noop);
+/// that never forces a respawn on the worktree axis.
+pub(crate) fn cached_session_needs_respawn(alive: bool, session_cwd: &str, wt_path: &str) -> bool {
+    !alive || (!session_cwd.is_empty() && session_cwd != wt_path)
+}
+
 impl ExecutionDriver {
     pub(crate) async fn spawn_agent_session(
         &self,
@@ -89,15 +110,31 @@ impl ExecutionDriver {
             _ = cancel_watch_spawn.changed() => None,
         };
 
-        // Dead-session fallback: if `get_or_spawn` returned the
-        // cached Arc but the underlying agent process has already
-        // exited (network blip, crash between steps), the next
-        // `--continue` / `--resume` would fail because the captured
-        // session id is dead. Kill the registry entry and re-spawn
-        // fresh. Only triggered when the step is past the first
-        // turn (the watchdog will have set `session_dirty` in that
-        // case anyway; this is the on-demand recovery path).
-        let needs_respawn = matches!(&spawn_res, Some(Ok(s)) if !s.is_alive());
+        // Respawn fallback. Kill the registry entry and re-spawn fresh
+        // when the cached session can't be safely reused for this step:
+        //
+        //   * Dead session — the underlying agent process exited
+        //     (network blip, crash between steps), so the next
+        //     `--continue` / `--resume` would fail against a dead id.
+        //
+        //   * Worktree mismatch — the cached session was created in a
+        //     different worktree (each step runs in its own ephemeral
+        //     subtask worktree, but `agent_session_key` is only
+        //     feature+profile+model scoped, so a later step with the
+        //     same profile reuses an earlier step's session). A resumed
+        //     CLI agent (`opencode --session`, `claude --resume`) writes
+        //     against the directory it was *originally* spawned in, not
+        //     the `--dir` we pass this turn — so it would drop this
+        //     step's declared deliverable into the previous step's
+        //     worktree and the artifact check would (correctly) fail the
+        //     step as "declared artifact never produced". Respawning
+        //     fresh roots the session in this step's worktree. `cwd()`
+        //     is `""` for runtimes that don't bind a cwd (stubs/noop),
+        //     which never triggers the guard.
+        let needs_respawn = matches!(
+            &spawn_res,
+            Some(Ok(s)) if cached_session_needs_respawn(s.is_alive(), s.cwd(), wt_path)
+        );
         if needs_respawn {
             self.registry.kill(&session_key).await;
             let respawn_ctx = AgentContext {
@@ -135,5 +172,39 @@ impl ExecutionDriver {
             Some(Err(e)) => Err(e.to_string()),
             None => Err("spawn cancelled".to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cached_session_needs_respawn;
+
+    const WT: &str = "/repos/demeteo_wt_f-1_step-s-spec";
+
+    #[test]
+    fn reuses_live_session_in_matching_worktree() {
+        // The normal same-worktree case (retry, parallel subtask): keep it.
+        assert!(!cached_session_needs_respawn(true, WT, WT));
+    }
+
+    #[test]
+    fn respawns_on_worktree_mismatch() {
+        // The bug this guards: a live session created in the research
+        // worktree, reused by the spec step in a *different* worktree —
+        // opencode would write the spec into the research worktree.
+        let research_wt = "/repos/demeteo_wt_f-1_step-s-research";
+        assert!(cached_session_needs_respawn(true, research_wt, WT));
+    }
+
+    #[test]
+    fn respawns_when_dead_even_if_worktree_matches() {
+        assert!(cached_session_needs_respawn(false, WT, WT));
+    }
+
+    #[test]
+    fn untracked_cwd_never_forces_respawn_on_worktree_axis() {
+        // Stubs/noop report `""` — only liveness governs them.
+        assert!(!cached_session_needs_respawn(true, "", WT));
+        assert!(cached_session_needs_respawn(false, "", WT));
     }
 }

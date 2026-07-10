@@ -430,6 +430,16 @@ impl AgentSession for UnifiedCliSession {
     fn cumulative_tokens(&self) -> u64 {
         self.cumulative_tokens.load(Ordering::Relaxed)
     }
+
+    fn cwd(&self) -> &str {
+        // The directory this session was spawned in. `prompt` always
+        // spawns the child with `current_dir(&self.ctx.cwd)` and passes
+        // `--dir <cwd>`, but a resumed CLI session (`--session` /
+        // `--resume`) writes against the directory it was *originally*
+        // created in, so this is the cwd the caller must match to reuse
+        // the session safely.
+        &self.ctx.cwd
+    }
 }
 
 impl Drop for UnifiedCliSession {
