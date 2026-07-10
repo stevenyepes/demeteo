@@ -202,6 +202,15 @@ if [[ "$PKGVER" != "$MAK_PKGVER" ]]; then
   warn "pkgver '$PKGVER' has a hyphen — using '$MAK_PKGVER' for local build (AUR pushes must use AUR-valid versions)"
 fi
 
+# Stamp the *hyphenated* version into the compiled binary via the PKGBUILD's
+# DEMETEO_APP_VERSION hook. makepkg's pkgver must be the dotted form
+# (1.0.0.12), but the binary must self-report the real release version
+# (1.0.0-12) so `app.package_info().version` matches this release's GitHub
+# tag + demeteo-runner asset — otherwise the app pulls a stale/mismatched
+# runner to remote hosts. Unset → PKGBUILD falls back to tauri.conf.json.
+export DEMETEO_APP_VERSION="$PKGVER"
+log "stamping binary app version = $DEMETEO_APP_VERSION (channel=${DEMETEO_RELEASE_CHANNEL:-stable})"
+
 cp "$AUR_REPO/PKGBUILD" "$work/PKGBUILD.orig"
 cp "$AUR_REPO/.SRCINFO" "$work/SRCINFO.orig" 2>/dev/null || : # SRCINFO may be missing on first run
 # pkgver is rewritten to the makepkg-valid form (hyphens → dots) so the
