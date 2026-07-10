@@ -139,6 +139,7 @@ pub fn build_core_context(
         Arc::new(adapters::agent::opencode::runtime()) as Arc<dyn AgentRuntime>,
         Arc::new(adapters::agent::hermes::runtime()) as Arc<dyn AgentRuntime>,
         Arc::new(adapters::agent::claude_code::runtime()) as Arc<dyn AgentRuntime>,
+        Arc::new(adapters::agent::codex::runtime()) as Arc<dyn AgentRuntime>,
         Arc::new(adapters::agent::noop::NoopRuntime) as Arc<dyn AgentRuntime>,
     ];
     // C5 topology gate only: the deterministic no-LLM `"stub"` agent is

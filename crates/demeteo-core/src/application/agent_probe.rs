@@ -7,6 +7,16 @@ pub async fn discover_models(
     machine_id: String,
     agent_kind: String,
 ) -> Result<Vec<ConfigOptionValue>, String> {
+    // codex exposes neither ACP nor a `models` subcommand; its active provider
+    // and model live in ~/.codex/config.toml. Resolve it up front so (a) we
+    // don't spawn a pointless ACP probe, and (b) a user who repointed codex at
+    // a custom provider (MiniMax, a local gateway, ...) is offered *that*
+    // provider's model rather than OpenAI slugs the endpoint rejects
+    // (MiniMax answers `gpt-5.3-codex` with `unknown model`, code 2013).
+    if agent_kind == "codex" {
+        return Ok(discover_codex_models(ctx.exec.as_ref(), &machine_id).await);
+    }
+
     // 1. Try ACP session/new probe
     if let Ok(models) = probe_models_via_acp(ctx, &machine_id, &agent_kind).await {
         return Ok(models);
@@ -161,9 +171,94 @@ pub fn model_supports_images_by_name(_agent_kind: &str, model: &str) -> bool {
         return false;
     }
     const POSITIVES: &[&str] = &[
-        "gpt-4", "gemini", "claude", "vision", "opus", "sonnet", "haiku", "minimax",
+        "gpt-4", "gpt-5", "gemini", "claude", "vision", "opus", "sonnet", "haiku", "fable",
+        "minimax",
     ];
     POSITIVES.iter().any(|needle| m.contains(needle))
+}
+
+/// Resolve codex's model list from the user's `~/.codex/config.toml`.
+///
+/// codex has no `models` subcommand and no ACP session to probe, so its model
+/// menu is driven by the configured provider. When a *custom* provider is
+/// active (anything other than the built-in `openai`), the bundled OpenAI slug
+/// list in [`fallback_models`] would be sent to an endpoint that doesn't know
+/// those slugs and hard-fails the turn — so instead we surface the configured
+/// default model, and rely on the picker's custom-override field for anything
+/// else the provider exposes. With no custom provider (OpenAI, or no config at
+/// all) we return the bundled catalog-backed slug list unchanged.
+async fn discover_codex_models(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+) -> Vec<ConfigOptionValue> {
+    // `cat` (not `read_file`) so the shell expands `~` uniformly on local and
+    // remote machines; a missing file yields empty output → OpenAI defaults.
+    let toml = exec
+        .run_command(machine_id, "cat ~/.codex/config.toml 2>/dev/null")
+        .await
+        .unwrap_or_default();
+    let (provider, model) = parse_codex_config(&toml);
+
+    let is_custom_provider = provider
+        .as_deref()
+        .is_some_and(|p| !p.is_empty() && p != "openai");
+    if !is_custom_provider {
+        return fallback_models("codex");
+    }
+
+    // Custom provider: OpenAI slugs 404. Offer the configured default model if
+    // there is one; otherwise leave the menu empty so the user types their
+    // provider's slug into the custom-override field.
+    match model.filter(|m| !m.is_empty()) {
+        Some(m) => vec![ConfigOptionValue {
+            supports_images: model_supports_images_by_name("codex", &m),
+            description: provider.map(|p| format!("~/.codex/config.toml ({p})")),
+            value: m.clone(),
+            name: m,
+        }],
+        None => vec![],
+    }
+}
+
+/// Extract the top-level `model_provider` and `model` string values from a
+/// codex `config.toml`. Only keys *before the first `[section]` header* are
+/// read: codex's process-level defaults live at the top, while `[section]`
+/// bodies carry provider-scoped keys (e.g. `[model_providers.minimax]`) that
+/// must not be mistaken for the active selection. Returns
+/// `(model_provider, model)`.
+fn parse_codex_config(toml: &str) -> (Option<String>, Option<String>) {
+    let mut provider = None;
+    let mut model = None;
+    for raw in toml.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') {
+            break; // top-level keys only.
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        // `model_provider` must be tried before `model`: the latter's key is a
+        // prefix of the former, but `toml_str_value` anchors on the `=` so a
+        // `model_provider = ...` line never matches the `model` key.
+        if let Some(v) = toml_str_value(line, "model_provider") {
+            provider = Some(v);
+        } else if let Some(v) = toml_str_value(line, "model") {
+            model = Some(v);
+        }
+    }
+    (provider, model)
+}
+
+/// Parse a single `key = "value"` TOML line for an exact `key`, tolerating
+/// single or double quotes and surrounding whitespace. Returns `None` if the
+/// line isn't that key or isn't a quoted string.
+fn toml_str_value(line: &str, key: &str) -> Option<String> {
+    let rest = line.strip_prefix(key)?.trim_start();
+    let rest = rest.strip_prefix('=')?.trim();
+    rest.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| rest.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .map(str::to_string)
 }
 
 pub fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
@@ -177,11 +272,11 @@ pub fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
         // never goes stale. Users wanting a pinned build can type a full id in
         // the custom-override field of the model picker.
         //
-        // Vision-capability flags: opus / sonnet / haiku resolve to current
-        // vision-capable Claude generations. `fable` is a research preview
-        // model that does NOT ship with vision support, so it is flagged
-        // false (so the UI shows the soft warning rather than silently
-        // dropping an attached image).
+        // Vision-capability flags: opus / sonnet / haiku / fable all resolve
+        // to current vision-capable Claude generations. `fable` now maps to
+        // Claude Fable 5 (GA — Anthropic's most capable model, with
+        // high-resolution vision like Opus 4.7+), so it is flagged true; the
+        // earlier research-preview build had no vision and was flagged false.
         "claude-code" => vec![
             ConfigOptionValue {
                 value: "opus".into(),
@@ -205,7 +300,44 @@ pub fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
                 value: "fable".into(),
                 name: "Claude Fable (latest)".into(),
                 description: None,
-                supports_images: false,
+                supports_images: true,
+            },
+        ],
+        // `codex` has no `models` subcommand to probe (like claude-code), so
+        // we list the current known model ids passed straight to `codex exec
+        // --model`. Slugs must match codex's bundled model-metadata registry,
+        // or the CLI emits a per-turn "Model metadata for `<slug>` not found.
+        // Defaulting to fallback metadata" warning and mis-accounts tokens.
+        // The whole `gpt-5.1` family was retired from that registry by
+        // codex-cli 0.142.3; these slugs are the current metadata-backed set
+        // (coding-tuned `-codex` variants first). A user pointing Codex at a
+        // custom provider (e.g. a MiniMax endpoint in ~/.codex/config.toml)
+        // types their model id in the custom-override field instead. All
+        // GPT-5 Codex models are vision-capable.
+        "codex" => vec![
+            ConfigOptionValue {
+                value: "gpt-5.3-codex".into(),
+                name: "GPT-5.3 Codex".into(),
+                description: None,
+                supports_images: true,
+            },
+            ConfigOptionValue {
+                value: "gpt-5.2-codex".into(),
+                name: "GPT-5.2 Codex".into(),
+                description: None,
+                supports_images: true,
+            },
+            ConfigOptionValue {
+                value: "gpt-5.4".into(),
+                name: "GPT-5.4".into(),
+                description: None,
+                supports_images: true,
+            },
+            ConfigOptionValue {
+                value: "gpt-5.4-mini".into(),
+                name: "GPT-5.4 Mini".into(),
+                description: None,
+                supports_images: true,
             },
         ],
         "opencode" | "hermes" => vec![
@@ -235,5 +367,48 @@ pub fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
             },
         ],
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_custom_provider_and_model() {
+        let toml = r#"
+model = "MiniMax-M3"
+model_provider = "minimax"
+model_context_window = 1000000
+
+[model_providers.minimax]
+name = "MiniMax"
+model = "should-be-ignored-in-section"
+"#;
+        let (provider, model) = parse_codex_config(toml);
+        assert_eq!(provider.as_deref(), Some("minimax"));
+        // Section-scoped `model` must not leak past the first `[header]`.
+        assert_eq!(model.as_deref(), Some("MiniMax-M3"));
+    }
+
+    #[test]
+    fn model_provider_line_does_not_populate_model() {
+        // `model` is a prefix of `model_provider`; the `=` anchor must keep
+        // the provider line from being read as the model.
+        let (provider, model) = parse_codex_config("model_provider = \"minimax\"\n");
+        assert_eq!(provider.as_deref(), Some("minimax"));
+        assert_eq!(model, None);
+    }
+
+    #[test]
+    fn tolerates_single_quotes_and_tight_spacing() {
+        let (provider, model) = parse_codex_config("model='M3'\nmodel_provider='p'\n");
+        assert_eq!(model.as_deref(), Some("M3"));
+        assert_eq!(provider.as_deref(), Some("p"));
+    }
+
+    #[test]
+    fn empty_config_yields_nothing() {
+        assert_eq!(parse_codex_config(""), (None, None));
     }
 }

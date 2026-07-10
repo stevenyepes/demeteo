@@ -1,5 +1,6 @@
 pub mod claude_code;
 pub mod cli_runtime;
+pub mod codex;
 pub mod direct_execution;
 pub mod event_stream;
 pub mod hermes;

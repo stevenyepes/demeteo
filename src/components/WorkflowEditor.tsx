@@ -10,7 +10,7 @@ interface WorkflowEditorProps {
   onSaved: () => void;
 }
 
-const AGENT_KINDS = ['opencode', 'hermes', 'claude-code'];
+const AGENT_KINDS = ['opencode', 'hermes', 'claude-code', 'codex'];
 
 export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBack, onSaved }) => {
   const { reportError } = useErrorBus();

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Server, X, Key, AlertCircle, Cpu, Wifi, WifiOff, Loader } from "lucide-react";
+import { useAgentCatalog } from "../lib/agentCatalog";
 
 
 interface EnvFormState {
@@ -53,6 +54,10 @@ const EnvModal: React.FC<EnvModalProps> = ({
   onDeleted,
 }) => {
   const [form, setForm] = useState<EnvFormState>(initialData);
+  // Registry-backed list of selectable agents (list_agents), so a newly added
+  // adapter (e.g. codex) appears here automatically instead of via a hardcoded
+  // array kept in sync by hand. `form.agents` stores kinds.
+  const { agents: agentCatalog } = useAgentCatalog();
   const [connStatus, setConnStatus] = useState<"idle" | "testing" | "ok" | "err">("idle");
   const [connError, setConnError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -142,10 +147,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
   const buildMachine = (id: string) => {
     const parsed = parseConnection(form.connection) ?? { host: "", port: 22, username: "" };
     const agentsJson = JSON.stringify(
-      (form.agents || []).map((name) => {
-        const slug = name.toLowerCase().replace(/\s+/g, "-");
-        return { kind: slug, enabled: true };
-      }),
+      (form.agents || []).map((kind) => ({ kind, enabled: true })),
     );
     const setupJson = form.setupCommands.trim()
       ? JSON.stringify(form.setupCommands.split('\n').map(s => s.trim()).filter(Boolean))
@@ -367,18 +369,18 @@ const EnvModal: React.FC<EnvModalProps> = ({
                 <Cpu size={10} className="mr-1" /> Enabled Agents
               </label>
               <div className="flex flex-wrap gap-2">
-                {["Claude Code", "OpenCode", "Hermes"].map((agent) => (
+                {agentCatalog.map((agent) => (
                   <button
-                    key={agent}
+                    key={agent.kind}
                     type="button"
-                    onClick={() => toggleAgent(agent)}
+                    onClick={() => toggleAgent(agent.kind)}
                     className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition-all ${
-                      form.agents?.includes(agent)
+                      form.agents?.includes(agent.kind)
                         ? "bg-cyan-500/10 border-cyan-500/50 text-cyan-400"
                         : "bg-[#050508] border-white/5 text-slate-500 hover:border-white/10"
                     }`}
                   >
-                    {agent}
+                    {agent.display_label}
                   </button>
                 ))}
               </div>

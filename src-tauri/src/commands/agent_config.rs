@@ -39,11 +39,37 @@ pub async fn get_agent_configs(
                 kind: "claude-code".to_string(),
                 enabled: true,
             },
+            AgentConfig {
+                kind: "codex".to_string(),
+                enabled: true,
+            },
         ];
     }
 
     let runtime_kinds: Vec<&'static str> =
         ctx.registry.runtimes().iter().map(|r| r.kind()).collect();
+
+    // Merge in every registered, *supported* agent the stored config doesn't
+    // know about yet. The DB persists only the enable/disable delta; the
+    // registry is the source of truth for *which* agents exist. Without this,
+    // an adapter added after a machine's config was last saved (e.g. codex on
+    // a machine whose row predates it) would never appear in the settings
+    // panel — the config list, not the registry, drove the view. New agents
+    // default to enabled, matching the fresh-machine seed above. Internal
+    // runtimes (noop / stub) are filtered out by `is_supported`.
+    for kind in &runtime_kinds {
+        if !demeteo_core::domain::models::AgentKind::is_supported(kind) {
+            continue;
+        }
+        if configured.iter().any(|c| c.kind == *kind) {
+            continue;
+        }
+        configured.push(AgentConfig {
+            kind: kind.to_string(),
+            enabled: true,
+        });
+    }
+
     let mut views: Vec<AgentConfigView> = Vec::new();
     let force = refresh.unwrap_or(false);
     for cfg in configured {

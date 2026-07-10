@@ -34,12 +34,14 @@ export function modelSupportsImagesByName(
   if (m.includes("embedding") || m.includes("whisper")) return false;
   const positives = [
     "gpt-4",
+    "gpt-5",
     "gemini",
     "claude",
     "vision",
     "opus",
     "sonnet",
     "haiku",
+    "fable",
     "minimax",
   ];
   return positives.some((needle) => m.includes(needle));
