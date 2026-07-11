@@ -1,0 +1,53 @@
+site_name: Demeteo
+site_description: Fleet-style multi-agent orchestrator for software features
+site_url: https://stevenyepes.github.io/demeteo
+repo_url: https://github.com/stevenyepes/demeteo
+repo_name: stevenyepes/demeteo
+copyright: Steven Yepes
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: '(prefers-color-scheme: light)'
+      scheme: default
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: '(prefers-color-scheme: dark)'
+      scheme: slate
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+docs_dir: docs-site
+site_dir: site
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - User journeys:
+    - Starting a feature: journeys/start-a-feature.md
+    - Creating a workspace: journeys/create-a-workspace.md
+  - Concepts:
+    - Workflows: workflows.md
+    - Settings: settings.md

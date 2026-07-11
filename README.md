@@ -1,12 +1,14 @@
 # Demeteo
 
-![Demeteo](resources/images/demeto_1.png)
+![Demeteo — Workspace home view with a feature in flight](docs-site/assets/screenshots/home.png)
 
 Desktop control plane for orchestrating local and remote AI coding agents.
 
 Describe a feature in plain language. Demeteo decomposes it into a versioned **Workflow** of **Steps**, runs each step in an isolated Git worktree via a coding agent, and presents **Gates** — human-approval checkpoints — before merging results back.
 
 Built with Tauri v2 (Rust) + React 19 (TypeScript).
+
+> 📖 Looking for usage docs? See the **[public wiki](https://stevenyepes.github.io/demeteo)** — covers starting a feature, creating a workspace, the settings surface, and the seven starter workflows.
 
 ## Supported agents
 
@@ -112,6 +114,13 @@ React Webview ──IPC──► Tauri Commands ──► StepExecutor
 ```
 
 The codebase follows a hexagonal (ports & adapters) layout. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full port catalogue and [`AGENTS.md`](AGENTS.md) for the project constitution and code conventions.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Start a feature modal](docs-site/assets/screenshots/feature-pipeline.png) | ![Workspace sidebar](docs-site/assets/screenshots/workspace-sidebar.png) |
+| **Feature pipeline** — the Standard pipeline's seven steps, with live telemetry (elapsed duration, cost, tokens) and the *Code with Agent*, *Browse Code*, and *Cancel Feature* controls. | **Workspaces sidebar** — the `+` button creates a new workspace (with a guided wizard that auto-launches the Standard pipeline). |
 
 ## Project memory (Memory Agent)
 

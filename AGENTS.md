@@ -189,6 +189,8 @@ demeteo/
 │   └── aur/
 │       └── demeteo/
 │           └── PKGBUILD        # Canonical AUR PKGBUILD template (single source of truth)
+├── mkdocs.yml                  # Public wiki config (MkDocs Material)
+├── docs-site/                  # Public wiki source (MkDocs docs_dir)
 └── docs/                       # Architecture & design docs (read-only for agents)
 ```
 
