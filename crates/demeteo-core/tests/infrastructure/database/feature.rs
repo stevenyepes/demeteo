@@ -36,6 +36,7 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
             project_id: pid,
             workflow_id: None,
             title: "Test Feature".to_string(),
+            description: String::new(),
             status: "running".to_string(),
             total_cost: 0.0,
             tokens: 0,
@@ -53,6 +54,59 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
     )
     .unwrap();
     fid
+}
+
+#[test]
+fn feature_description_round_trips_through_get_and_get_active() {
+    let adapter = setup();
+    let pid = ProjectId::from("p_desc".to_string());
+    let fid = FeatureId::from("f_desc".to_string());
+    let _ = ProjectRepository::add(
+        &adapter,
+        Project {
+            id: pid.clone(),
+            name: "desc project".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 1,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        },
+    );
+    let body = "Implement OAuth\n\nWith PKCE and refresh tokens.";
+    FeatureRepository::add(
+        &adapter,
+        Feature {
+            id: fid.clone(),
+            project_id: pid.clone(),
+            workflow_id: None,
+            title: "Add OAuth".to_string(),
+            description: body.to_string(),
+            status: "running".to_string(),
+            total_cost: 0.0,
+            tokens: 0,
+            duration: "0s".to_string(),
+            created_at: 1000,
+            agent_kind: None,
+            model: None,
+            mr_url: None,
+            mr_state: Some("none".to_string()),
+            commit_artifacts: None,
+            loop_iterations: None,
+            step_overrides: Vec::new(),
+            attachments: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    // Persisted, and returned by the single-feature read the pipeline view uses.
+    assert_eq!(adapter.get(&fid).unwrap().unwrap().description, body);
+    // ...and by the active-list read the project home renders.
+    let active = adapter.get_active(&pid).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].description, body);
 }
 
 #[test]

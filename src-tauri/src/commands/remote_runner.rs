@@ -354,6 +354,7 @@ pub async fn remote_submit_run(
         project_id: pid.clone(),
         workflow_id: Some(wf_id.clone()),
         title: title.clone(),
+        description: description.clone(),
         status: "pending".to_string(),
         total_cost: 0.0,
         duration: "0s".to_string(),

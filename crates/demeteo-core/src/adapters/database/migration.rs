@@ -61,6 +61,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "project_settings", "prepare_command", "TEXT")?;
     // Per-feature user attachments (V19). Defensive add for pre-existing databases.
     add_column_if_missing(conn, "features", "attachments_json", "TEXT")?;
+    // Persisted feature description / prompt body (V27). Defensive for
+    // pre-existing databases; previously the description lived only in the
+    // agent prompt and was never stored on the row.
+    add_column_if_missing(conn, "features", "description", "TEXT NOT NULL DEFAULT ''")?;
     // Memory v2 enrichment (V17) — defensive for pre-existing databases.
     add_column_if_missing(conn, "project_memory", "memory_type", "TEXT")?;
     add_column_if_missing(conn, "project_memory", "statement", "TEXT")?;

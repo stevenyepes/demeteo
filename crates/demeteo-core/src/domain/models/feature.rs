@@ -10,6 +10,13 @@ pub struct Feature {
     pub project_id: ProjectId,
     pub workflow_id: Option<WorkflowId>,
     pub title: String,
+    /// The rich prompt body the user typed at launch (rendered into the
+    /// agent's `{{feature_description}}`). Persisted on the row (migration
+    /// V27) so the pipeline view and home cards can show what the run does,
+    /// not only its short `title`. Serde-defaults to `""` for specs/rows
+    /// written before V27.
+    #[serde(default)]
+    pub description: String,
     pub status: String,
     pub total_cost: f64,
     pub duration: String,

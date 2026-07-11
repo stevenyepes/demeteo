@@ -58,6 +58,7 @@ fn seed_parent_rows(
             project_id: ProjectId::from("p-1".to_string()),
             workflow_id: Some(WorkflowId::from("w-1".to_string())),
             title: "test feature".to_string(),
+            description: String::new(),
             status: "running".to_string(),
             total_cost: 0.0,
             tokens: 0,

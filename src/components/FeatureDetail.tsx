@@ -254,6 +254,9 @@ export function FeatureDetail() {
   const [featureMachineId, setFeatureMachineId] = useState<string>('local');
   const [replayTarget, setReplayTarget] = useState<{ id: string; name: string; downstreamCount: number } | null>(null);
   const [featureTitle, setFeatureTitle] = useState<string>(view.featureTitle || 'Feature Pipeline');
+  // The persisted prompt body (migration V27), surfaced in the Initial Prompt
+  // panel below. `''` for runs started before the column existed.
+  const [featureDescription, setFeatureDescription] = useState<string>('');
 
   // Stream buffering: accumulate chunks in a ref, flush to state once per animation frame
   const streamBufferRef = useRef<Record<string, string>>({});
@@ -500,6 +503,9 @@ export function FeatureDetail() {
           }
           if (f.title) {
             setFeatureTitle(f.title);
+          }
+          if (typeof f.description === 'string') {
+            setFeatureDescription(f.description);
           }
         }
       } catch (err) {
@@ -1089,8 +1095,10 @@ export function FeatureDetail() {
           <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
             Initial Prompt
           </div>
-          <div className="p-4 bg-white/[0.02] rounded-xl border border-white/5 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed shadow-inner max-h-48 overflow-y-auto" title={featureTitle}>
-            {featureTitle}
+          <div className="p-4 bg-white/[0.02] rounded-xl border border-white/5 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed shadow-inner max-h-48 overflow-y-auto" title={featureDescription || undefined}>
+            {featureDescription
+              ? featureDescription
+              : <span className="text-slate-500 italic">No initial prompt was recorded for this run.</span>}
           </div>
         </div>
       </div>
