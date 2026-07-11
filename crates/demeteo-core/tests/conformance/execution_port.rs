@@ -34,6 +34,18 @@ use crate::ports::execution::{ExecutionPort, ShellOptions};
 /// run the byte-identical assertions.
 pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workdir: &str) {
     let base = workdir.trim_end_matches('/');
+    // Canonicalize `base` when it exists locally so the local leg's
+    // `pwd` assertion doesn't trip over macOS symlinked prefixes
+    // (`/var/folders/...` resolves to `/private/var/folders/...` once
+    // a subprocess `current_dir`'s into it). Falls back to the literal
+    // when canonicalization fails — the SSH workdir doesn't exist on
+    // the local FS, so a remote `pwd` returning the same literal path
+    // (the typical Linux-container case has no symlinks) still
+    // round-trips. Mirrors the same fix already used in
+    // `tests/infrastructure/worktree/git_ops.rs::test_list_worktrees_with_one_extra_worktree`.
+    let base = std::fs::canonicalize(base)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| base.to_string());
 
     // --- write → read round-trip -----------------------------------------
     let file_path = format!("{base}/conformance-roundtrip.txt");
@@ -83,7 +95,7 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
 
     // --- list_dir entry shape -------------------------------------------
     let entries = port
-        .list_dir(machine_id, base)
+        .list_dir(machine_id, &base)
         .await
         .expect("list_dir on the workdir should succeed");
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
