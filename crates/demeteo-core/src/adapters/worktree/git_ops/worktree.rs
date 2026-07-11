@@ -123,16 +123,15 @@ impl GitOpsHelper {
     ///
     /// The start point is the **remote-tracking** ref `origin/<default>`
     /// when it exists, falling back to the local `<default>` branch. Cutting
-    /// from `origin/<default>` (which the caller refreshes with a
-    /// `git fetch origin <default>` immediately before this) guarantees the
-    /// feature branch is based on the latest upstream — and, crucially, it
-    /// works even though the main checkout sits on `<default>` throughout the
-    /// run, which *blocks* a `git fetch origin +<default>:<default>`
-    /// fast-forward of the local ref (git refuses to fetch into a
-    /// checked-out branch). That rejection is exactly why an earlier
-    /// "sync then branch off local default" scheme left features starting
-    /// from a stale `main`. The local fallback keeps the offline / no-remote
-    /// path working (there `origin/<default>` simply doesn't resolve).
+    /// from `origin/<default>` (which the caller refreshes with
+    /// `ensure_default_branch_updated` immediately before this) guarantees
+    /// the feature branch is based on the latest upstream. `ensure_default_branch_updated`
+    /// also tries to keep the local `<default>` ref itself in sync — via
+    /// `update-ref` when HEAD is on another branch, or via `merge --ff-only`
+    /// when HEAD is on `<default>` with a clean working tree — so the
+    /// validate step doesn't see "extra changes not in main" later. The
+    /// local fallback here keeps the offline / no-remote path working
+    /// (where `origin/<default>` simply doesn't resolve).
     pub async fn create_feature_branch(
         &self,
         machine_id: Option<&str>,

@@ -153,24 +153,23 @@ impl DagStepExecutor {
 
         // Phase 5: refresh origin BEFORE cutting the branch. Awaited (unlike
         // the old fire-and-forget) but non-fatal — `create_feature_branch`
-        // falls back to the local default if origin can't be reached. This
-        // ordering plus the origin-based start point is the fix for features
-        // starting off a stale `main`.
+        // falls back to the local default if origin can't be reached, AND
+        // the feature branch is always cut from `origin/<default>` when
+        // available, so the pipeline proceeds either way. The error string
+        // from `ensure_default_branch_updated` is already self-describing
+        // (e.g. "local master is 71 commits behind origin/master but the
+        // working tree has uncommitted changes; please `git pull` manually");
+        // we surface it verbatim so the UI bootstrap detail tells the user
+        // exactly what to do.
         self.emit_bootstrap(fid, sync, "running", None);
-        let sync_detail = match git_ops
+        let sync_detail = git_ops
             .ensure_default_branch_updated(
                 ctx.machine_id_opt.as_deref(),
                 &ctx.target_dir,
                 &default_branch,
             )
             .await
-        {
-            Ok(()) => None,
-            Err(e) => Some(format!(
-                "origin unavailable — starting from local {}: {}",
-                default_branch, e
-            )),
-        };
+            .err();
         self.emit_bootstrap(fid, sync, "completed", sync_detail);
 
         // Phase 6: cut the feature branch (from origin/<default>, else local).

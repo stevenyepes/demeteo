@@ -1378,3 +1378,187 @@ async fn test_create_feature_branch_falls_back_to_local_without_origin() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The validate-step "extra changes not in main" bug: when the user
+/// starts a feature while checked out on a feature branch (e.g. they
+/// manually switched to inspect the last run), `git fetch origin
+/// +master:master` succeeds because HEAD isn't on master — but a
+/// previous version of `ensure_default_branch_updated` only ran the
+/// fetch and stopped, leaving the local `master` ref stale by every
+/// commit merged upstream since the user's last manual pull. The new
+/// behaviour keeps the local `master` ref in sync via `update-ref`.
+#[tokio::test]
+async fn test_ensure_default_branch_updates_local_ref_when_head_on_feature() {
+    let (local_dir, remote_dir, helper) = make_two_repos("ff_on_feature").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // Move HEAD off `main` onto a feature branch — the state the user
+    // was in when they reported the bug.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{local}\" checkout -b feature/watching"),
+        )
+        .await;
+
+    // Advance origin/main by one commit the local clone has NOT fetched.
+    exec.write_file("local", &format!("{remote}/README.md"), "origin advanced")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{remote}\" commit -am advance"))
+        .await;
+
+    let stale_local_main = rev_parse(&exec, &local, "main").await;
+
+    helper
+        .ensure_default_branch_updated(None, &local, "main")
+        .await
+        .expect("HEAD is on a feature branch, so update-ref should succeed");
+
+    let new_local_main = rev_parse(&exec, &local, "main").await;
+    let origin_main = rev_parse(&exec, &local, "origin/main").await;
+
+    assert_eq!(
+        new_local_main, origin_main,
+        "local main must be fast-forwarded to origin/main when HEAD is on another branch"
+    );
+    assert_ne!(
+        new_local_main, stale_local_main,
+        "local main ref must advance from the stale commit"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// The "user is on master, working tree clean" case (the typical
+/// bootstrap state). `git fetch origin +master:master` is rejected
+/// because master is checked out; the fallback does
+/// `git merge --ff-only origin/master` which moves HEAD, the index,
+/// and the working tree together.
+#[tokio::test]
+async fn test_ensure_default_branch_fast_forwards_when_clean_tree() {
+    let (local_dir, remote_dir, helper) = make_two_repos("ff_clean_tree").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // HEAD stays on `main` (default) — the most common bootstrap state.
+
+    // Advance origin/main by one commit the local clone has NOT fetched.
+    exec.write_file("local", &format!("{remote}/README.md"), "origin advanced")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{remote}\" commit -am advance"))
+        .await;
+
+    let stale_local_main = rev_parse(&exec, &local, "main").await;
+
+    helper
+        .ensure_default_branch_updated(None, &local, "main")
+        .await
+        .expect("clean working tree + fast-forward possible should succeed");
+
+    let new_local_main = rev_parse(&exec, &local, "main").await;
+    let origin_main = rev_parse(&exec, &local, "origin/main").await;
+
+    assert_eq!(
+        new_local_main, origin_main,
+        "local main must be fast-forwarded via merge --ff-only"
+    );
+    assert_ne!(
+        new_local_main, stale_local_main,
+        "local main ref must advance from the stale commit"
+    );
+
+    // The working tree must also be in sync — `merge --ff-only` updates
+    // the index and the files, so the file we wrote on origin must be
+    // present locally too.
+    let readme = exec
+        .read_file("local", &format!("{local}/README.md"))
+        .await
+        .unwrap();
+    assert_eq!(
+        readme.trim(),
+        "origin advanced",
+        "fast-forward merge must update the working tree, not just the ref"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// The "user is on master with uncommitted edits" case. The fallback
+/// returns Err with a clear, actionable message. The feature branch is
+/// still cut correctly from origin/main in the next phase (verified by
+/// the pre-existing origin-cut test, which still passes after this
+/// change), so the pipeline proceeds; the bootstrap detail tells the
+/// user what to do.
+#[tokio::test]
+async fn test_ensure_default_branch_warns_when_dirty_tree() {
+    let (local_dir, remote_dir, helper) = make_two_repos("ff_dirty_tree").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // HEAD stays on `main`.
+
+    // Make the working tree dirty by editing a TRACKED file. Untracked
+    // files don't count for `--untracked-files=no` (which is the right
+    // semantic — `.env` / IDE scratch files shouldn't block a sync) but
+    // a staged or modified tracked file is the real foot-gun `merge
+    // --ff-only` would clobber, and that's the case this test pins.
+    exec.write_file(
+        "local",
+        &format!("{local}/README.md"),
+        "user edit in progress",
+    )
+    .await
+    .unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{local}\" add README.md"))
+        .await;
+
+    // Advance origin/main by one commit the local clone has NOT fetched.
+    exec.write_file("local", &format!("{remote}/README.md"), "origin advanced")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{remote}\" commit -am advance"))
+        .await;
+
+    let stale_local_main = rev_parse(&exec, &local, "main").await;
+
+    let err = helper
+        .ensure_default_branch_updated(None, &local, "main")
+        .await
+        .expect_err("dirty working tree should surface a soft error");
+
+    assert!(
+        err.contains("uncommitted changes"),
+        "error must mention uncommitted changes; got: {err}"
+    );
+    assert!(
+        err.contains("git pull"),
+        "error must point the user at `git pull`; got: {err}"
+    );
+    assert!(
+        err.contains("1 commit"),
+        "error must include the behind-count so the user sees the gap; got: {err}"
+    );
+
+    // The local main ref must NOT have been mutated — the user's dirty
+    // checkout and the local ref both stay as they were.
+    let new_local_main = rev_parse(&exec, &local, "main").await;
+    assert_eq!(
+        new_local_main, stale_local_main,
+        "local main ref must stay stale when working tree is dirty"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
