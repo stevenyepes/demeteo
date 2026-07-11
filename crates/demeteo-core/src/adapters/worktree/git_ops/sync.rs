@@ -4,14 +4,23 @@ use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::{SyncFailure, SyncOutcome};
 
 impl GitOpsHelper {
-    /// Fetch the latest state of `default_branch` from `origin` and
-    /// hard-reset the local copy of that branch to match. This is the
-    /// one-time "snapshot" call used at feature start to make sure the
-    /// local default_branch doesn't fall behind after other PRs have
-    /// been merged upstream.
+    /// Fetch the latest state of `default_branch` from `origin` and update
+    /// the local copy of that branch to match. This is the one-time
+    /// "snapshot" call used at feature start so the user's local
+    /// `<default>` ref doesn't lag behind upstream — which the validate
+    /// step would otherwise read as "extra changes not in main" when
+    /// comparing the freshly-cut feature branch (which IS based on
+    /// `origin/<default>`) against a stale local ref.
     ///
     /// Idempotent and safe to re-invoke: it does not touch any feature
-    /// branches, only the local `default_branch` ref.
+    /// branches, only the local `<default>` ref.
+    ///
+    /// On success, the local `<default>` ref matches `origin/<default>`.
+    /// On a non-fatal fallback (HEAD on `<default>` with a dirty working
+    /// tree), the function returns `Err` with a clear message that the
+    /// caller surfaces as a soft bootstrap detail. The feature branch is
+    /// still cut correctly in the next phase regardless, so the pipeline
+    /// always proceeds.
     pub async fn ensure_default_branch_updated(
         &self,
         machine_id: Option<&str>,
@@ -57,14 +66,23 @@ impl GitOpsHelper {
                 )
             })?;
 
-        // 3. Update the local default-branch ref to match origin without
-        //    touching HEAD or the working tree. `git fetch origin +src:dst`
-        //    is a ref-only operation — it never runs `git checkout`, so the
-        //    main repo stays on whatever branch the user (or create_feature_branch)
-        //    left it on. This eliminates the race where the background refresh
-        //    ran `git checkout master` immediately after `create_feature_branch`
-        //    set HEAD to the feature branch.
-        self.exec
+        // 3. Update the local default-branch ref to match origin.
+        //    Prefer the ref-only fast-forward (`git fetch origin +src:dst`),
+        //    which never moves HEAD or the working tree. This works when
+        //    HEAD is on any branch other than `<default>` — and the
+        //    previous code relied on this path even when HEAD *was* on
+        //    `<default>`, swallowing the inevitable Err ("refusing to
+        //    fetch into current branch") and leaving the local ref stale.
+        //
+        //    The stale local ref was harmless to `create_feature_branch`
+        //    (which cuts from `origin/<default>`), but the validate step
+        //    in a subtask worktree would see `git log master..HEAD` as
+        //    containing every commit upstream has merged since the user's
+        //    last manual pull — "extra changes not in main". So when the
+        //    ref-only fast-forward is rejected we fall back to a path
+        //    that keeps the local ref in sync.
+        let fetch_outcome = self
+            .exec
             .run_command(
                 machine_str,
                 &format!(
@@ -72,8 +90,144 @@ impl GitOpsHelper {
                     safe_dir, safe_branch, safe_branch
                 ),
             )
-            .await?;
-        Ok(())
+            .await;
+        if fetch_outcome.is_ok() {
+            return Ok(());
+        }
+
+        // Ref-only fast-forward was rejected (HEAD is on `<default>`,
+        // or origin is unreachable — step 1 is best-effort). Try the
+        // safe fallback that updates the local ref together with HEAD
+        // and the working tree when the checkout state allows it.
+        self.fast_forward_local_default_safe(machine_str, &safe_dir, default_branch, &tracking)
+            .await
+    }
+
+    /// Fallback fast-forward of the local `<default>` ref when the
+    /// ref-only `git fetch origin +src:dst` is rejected (git refuses to
+    /// fetch into a checked-out branch). Branches on the local checkout
+    /// state:
+    ///
+    /// - **HEAD on a different branch**: `git update-ref refs/heads/<default>
+    ///   refs/remotes/origin/<default>`. Ref-only, safe because the
+    ///   working tree belongs to a different branch — no HEAD, index, or
+    ///   working-tree file gets out of sync.
+    /// - **HEAD on `<default>` with a clean working tree**: `git merge
+    ///   --ff-only origin/<default>`. Fast-forwards HEAD, the index, and
+    ///   the working tree in one atomic step.
+    /// - **HEAD on `<default>` with a dirty working tree**: return `Err`
+    ///   with a clear message — the caller surfaces it as a soft
+    ///   bootstrap detail ("local main is N commits behind; please
+    ///   `git pull` manually"). The feature branch is still cut
+    ///   correctly from `origin/<default>` in the next phase, so the
+    ///   pipeline always proceeds.
+    /// - **HEAD on `<default>` but local is ahead of origin** (or
+    ///   diverged): `git merge --ff-only` rejects non-fast-forwards, so
+    ///   the underlying git error is surfaced verbatim.
+    async fn fast_forward_local_default_safe(
+        &self,
+        machine_str: &str,
+        safe_dir: &str,
+        default_branch: &str,
+        tracking: &str,
+    ) -> Result<(), String> {
+        let head_branch = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!("git -C {} rev-parse --abbrev-ref HEAD", safe_dir),
+            )
+            .await
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        let safe_default = paths::shell_escape_posix(default_branch);
+        let safe_tracking = paths::shell_escape_posix(tracking);
+
+        if head_branch != default_branch {
+            // HEAD is on a non-default branch (a feature branch the
+            // user checked out to inspect, or a previously-cut feature
+            // branch the previous run left behind). The working tree
+            // doesn't claim to match `<default>`, so a ref-only update
+            // is safe.
+            return self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "git -C {} update-ref refs/heads/{} {}",
+                        safe_dir, safe_default, safe_tracking
+                    ),
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| {
+                    format!(
+                        "Could not fast-forward local '{}' via update-ref: {}",
+                        default_branch, e
+                    )
+                });
+        }
+
+        // HEAD is on `<default>`. A ref-only update would leave the
+        // working tree and index out of sync with the new HEAD, which
+        // is a real foot-gun (the user could `git add` + `git commit`
+        // files that don't match the parent). Use the proper merge path
+        // so HEAD, the index, and the working tree move together.
+        let status_porcelain = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} status --porcelain --untracked-files=no",
+                    safe_dir
+                ),
+            )
+            .await
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+
+        if !status_porcelain.is_empty() {
+            let behind = self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "git -C {} rev-list --count HEAD..{}",
+                        safe_dir, safe_tracking
+                    ),
+                )
+                .await
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            return Err(format!(
+                "Local '{}' is {} commit(s) behind origin/{} but the \
+                 working tree has uncommitted changes; please `git pull` \
+                 manually to keep the local default ref in sync.",
+                default_branch, behind, default_branch
+            ));
+        }
+
+        // Clean working tree, HEAD on `<default>` — fast-forward the
+        // whole repo in one step. If the local branch has unpushed
+        // commits (so origin isn't strictly ahead), `--ff-only` rejects
+        // it and we surface the underlying error verbatim.
+        self.exec
+            .run_command(
+                machine_str,
+                &format!("git -C {} merge --ff-only {}", safe_dir, safe_tracking),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| {
+                format!(
+                    "Local '{}' could not be fast-forwarded to origin/{}: {}. \
+                     If the local branch has unpushed commits, pull with \
+                     `--rebase` or merge manually.",
+                    default_branch, default_branch, e
+                )
+            })
     }
 
     /// Merge `origin/<default_branch>` into `feature_branch`. This is
