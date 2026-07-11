@@ -198,17 +198,8 @@ async fn resolve_home(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn repo_name_from_path_handles_typical_inputs() {
-        assert_eq!(repo_name_from_path("prototype/spectacular"), "spectacular");
-        assert_eq!(repo_name_from_path("spectacular"), "spectacular");
-        assert_eq!(repo_name_from_path("a/b/c/d"), "d");
-        assert_eq!(repo_name_from_path("a/b/"), "b");
-    }
-}
+#[path = "../tests/unit/paths/tests.rs"]
+mod tests;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared primitives (shell escaping, time, IDs)
@@ -312,24 +303,5 @@ pub fn new_id() -> String {
 }
 
 #[cfg(test)]
-mod primitive_tests {
-    use super::*;
-
-    #[test]
-    fn now_ms_is_monotonic_and_positive() {
-        let a = now_ms();
-        let b = now_ms();
-        assert!(a > 0);
-        assert!(b >= a);
-    }
-
-    #[test]
-    fn new_id_is_16_hex_chars_and_unique_enough() {
-        let a = new_id();
-        let b = new_id();
-        assert_eq!(a.len(), 16);
-        assert_eq!(b.len(), 16);
-        assert_ne!(a, b);
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-}
+#[path = "../tests/unit/paths/primitive_tests.rs"]
+mod primitive_tests;
