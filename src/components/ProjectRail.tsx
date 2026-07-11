@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles } from 'lucide-react';
-import { StatusBadge } from './ui/StatusBadge';
+import { StatusBadge, LivenessDot } from './ui/StatusBadge';
 import { useNavigation, useProject, useUIState } from '../context';
 
 function fuzzyMatch(text: string, query: string): boolean {
@@ -69,7 +69,7 @@ function ProjectRail() {
           <button
             key={p.id}
             onClick={() => { setCurrentProject(p.id); setView('home'); }}
-            className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold font-mono transition-all ${
+            className={`relative w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold font-mono transition-all ${
               currentProject === p.id
                 ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
                 : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
@@ -77,6 +77,7 @@ function ProjectRail() {
             title={p.name}
           >
             {p.name.charAt(0).toUpperCase()}
+            <LivenessDot liveness={p.liveness} className="absolute -bottom-0.5 -right-0.5 ring-2 ring-[#0d0f14]" />
           </button>
         ))}
       </aside>
@@ -137,7 +138,10 @@ function ProjectRail() {
               <div className="flex items-center gap-2.5 min-w-0">
                 <StatusBadge status={p.status} variant="dot" />
                 <div className="min-w-0">
-                  <div className="text-xs font-medium truncate max-w-[120px]">{p.name}</div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="text-xs font-medium truncate max-w-[120px]">{p.name}</div>
+                    <LivenessDot liveness={p.liveness} />
+                  </div>
                   <div className="text-[9px] text-slate-500 font-mono">
                     {statusLabel[p.status] || p.status}
                   </div>

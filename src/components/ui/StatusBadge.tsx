@@ -1,4 +1,5 @@
 import { runStatusMeta, TONE_CHIP, type RunStatusTone } from '../../lib/runStatus';
+import type { Project } from '../../types';
 
 /** Statuses StatusBadge renders that aren't run statuses (machine /
  *  step vocabulary), mapped straight to a tone. Everything else defers
@@ -46,5 +47,41 @@ export function StatusBadge({ status, variant = 'dot', label, className = '' }: 
     >
       {display}
     </span>
+  );
+}
+
+/** Machine reachability, not run/pipeline state — kept as its own small
+ *  dot and tone map so it never gets confused with (or overwritten by)
+ *  the workflow-status dot above, which is driven by `p.status`. */
+type Liveness = NonNullable<Project['liveness']>;
+
+const LIVENESS_LABEL: Record<Liveness, string> = {
+  unknown: 'Connectivity unknown',
+  checking: 'Checking connection…',
+  online: 'Online',
+  offline: 'Offline',
+};
+
+const LIVENESS_DOT: Record<Exclude<Liveness, 'unknown'>, string> = {
+  checking: 'bg-slate-400 animate-pulse',
+  online: 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.9)]',
+  offline: 'bg-ruby-500/80',
+};
+
+interface LivenessDotProps {
+  liveness?: Liveness;
+  className?: string;
+}
+
+/** Renders nothing for `'unknown'`/absent — a workspace that hasn't been
+ *  checked this session shouldn't show a placeholder dot next to the
+ *  ones that have a real reading. */
+export function LivenessDot({ liveness = 'unknown', className = '' }: LivenessDotProps) {
+  if (liveness === 'unknown') return null;
+  return (
+    <div
+      className={`w-1.5 h-1.5 rounded-full shrink-0 ${LIVENESS_DOT[liveness]} ${className}`}
+      title={LIVENESS_LABEL[liveness]}
+    />
   );
 }

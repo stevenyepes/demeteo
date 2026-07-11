@@ -31,9 +31,10 @@ import {
   ProjectProvider,
   UIStateProvider,
   useNavigation,
+  useProject,
   useUIState,
 } from '../context';
-import type { AppView } from '../types';
+import type { AppView, Project } from '../types';
 
 function mount(element: ReactElement): ReactTestRenderer {
   let renderer: ReactTestRenderer | null = null;
@@ -56,6 +57,62 @@ function clickButton(btn: ReactTestInstance): void {
     throw new Error(`ProjectRail: expected button to expose an onClick handler`);
   }
   act(() => { handler(); });
+}
+
+// `LivenessDot` (StatusBadge.tsx) always renders as a `w-1.5 h-1.5
+// rounded-full` div — distinct from the `w-2 h-2` workflow-status dot
+// StatusBadge renders for `p.status` right next to it — so it can be
+// found by className regardless of where in the row/avatar it sits.
+function findLivenessDots(root: ReactTestInstance): ReactTestInstance[] {
+  return root.findAll((node) => {
+    if (typeof node.type !== 'string' || node.type !== 'div') return false;
+    const className = (node.props as { className?: string }).className;
+    return typeof className === 'string' && className.includes('w-1.5 h-1.5 rounded-full');
+  });
+}
+
+function makeProject(id: string, overrides: Partial<Project> = {}): Project {
+  return {
+    id,
+    name: id,
+    status: 'idle',
+    repos: 0,
+    nodes: 0,
+    spend: 0,
+    tokens: 0,
+    ...overrides,
+  };
+}
+
+// Fixture covering all four liveness states, in a fixed order so the
+// found dots below can be matched by index.
+const livenessFixture: Project[] = [
+  makeProject('p-unknown', { name: 'Unknown Co' }),
+  makeProject('p-checking', { name: 'Checking Co', liveness: 'checking' }),
+  makeProject('p-online', { name: 'Online Co', liveness: 'online' }),
+  makeProject('p-offline', { name: 'Offline Co', liveness: 'offline' }),
+];
+
+// Loads `livenessFixture` into ProjectContext on mount, then renders
+// ProjectRail (expanded by default).
+function LoadLivenessFixture(): ReactElement {
+  const { dispatch } = useProject();
+  useEffect(() => {
+    dispatch({ type: 'LOAD_PROJECTS', projects: livenessFixture, reposByProject: {} });
+  }, [dispatch]);
+  return <ProjectRail />;
+}
+
+// Same, but also collapses the sidebar so ProjectRail renders the
+// collapsed avatar branch.
+function LoadLivenessFixtureCollapsed(): ReactElement {
+  const { dispatch } = useProject();
+  const { uiDispatch } = useUIState();
+  useEffect(() => {
+    dispatch({ type: 'LOAD_PROJECTS', projects: livenessFixture, reposByProject: {} });
+    uiDispatch({ type: 'TOGGLE_SIDEBAR' });
+  }, [dispatch, uiDispatch]);
+  return <ProjectRail />;
 }
 
 // Capture component reads the active view out of NavigationContext
@@ -183,6 +240,91 @@ if (collapsedHolder.current?.kind !== 'create-project') {
 
 collapsedClickTree.unmount();
 
+// ── (d) Liveness dot: expanded row list ────────────────────────────────
+//
+// 'unknown'/absent renders no dot; 'checking'/'online'/'offline' each
+// render exactly one, with a tone distinct from the others and from the
+// existing workflow-status dot.
+
+const livenessTree = mount(
+  <NavigationProvider>
+    <ProjectProvider>
+      <UIStateProvider>
+        <LoadLivenessFixture />
+      </UIStateProvider>
+    </ProjectProvider>
+  </NavigationProvider>,
+);
+
+const livenessDots = findLivenessDots(livenessTree.root);
+if (livenessDots.length !== 3) {
+  throw new Error(
+    `ProjectRail (expanded): expected 3 liveness dots (unknown renders none) across 4 fixture projects, got ${livenessDots.length}`,
+  );
+}
+
+const [checkingDot, onlineDot, offlineDot] = livenessDots;
+const checkingClass = (checkingDot.props as { className: string }).className;
+const onlineClass = (onlineDot.props as { className: string }).className;
+const offlineClass = (offlineDot.props as { className: string }).className;
+
+if (!checkingClass.includes('animate-pulse')) {
+  throw new Error(`ProjectRail: liveness='checking' dot must pulse, got className='${checkingClass}'`);
+}
+if (!onlineClass.includes('emerald')) {
+  throw new Error(`ProjectRail: liveness='online' dot must use an emerald tone, got className='${onlineClass}'`);
+}
+if (!offlineClass.includes('ruby')) {
+  throw new Error(`ProjectRail: liveness='offline' dot must use a ruby/muted tone, got className='${offlineClass}'`);
+}
+if (onlineClass.includes('animate-pulse') || offlineClass.includes('animate-pulse')) {
+  throw new Error('ProjectRail: only the checking dot may pulse');
+}
+
+// The workflow-status dot (StatusBadge on p.status) must still be
+// present alongside the liveness dot, and use a distinct sizing (w-2
+// h-2, not w-1.5 h-1.5) so the two never collapse into one element.
+const workflowDots = livenessTree.root.findAll((node) => {
+  if (typeof node.type !== 'string' || node.type !== 'div') return false;
+  const className = (node.props as { className?: string }).className;
+  return typeof className === 'string' && className.includes('w-2 h-2 rounded-full');
+});
+if (workflowDots.length !== livenessFixture.length) {
+  throw new Error(
+    `ProjectRail: expected one workflow-status dot per project (${livenessFixture.length}), got ${workflowDots.length}`,
+  );
+}
+
+livenessTree.unmount();
+
+// ── (e) Liveness dot: collapsed rail avatars ────────────────────────────
+
+const livenessCollapsedTree = mount(
+  <NavigationProvider>
+    <ProjectProvider>
+      <UIStateProvider>
+        <LoadLivenessFixtureCollapsed />
+      </UIStateProvider>
+    </ProjectProvider>
+  </NavigationProvider>,
+);
+
+const collapsedLivenessDots = findLivenessDots(livenessCollapsedTree.root);
+if (collapsedLivenessDots.length !== 3) {
+  throw new Error(
+    `ProjectRail (collapsed): expected 3 liveness dots on avatars (unknown renders none), got ${collapsedLivenessDots.length}`,
+  );
+}
+
+const collapsedOnlineClass = (collapsedLivenessDots[1].props as { className: string }).className;
+if (!collapsedOnlineClass.includes('emerald')) {
+  throw new Error(
+    `ProjectRail (collapsed): liveness='online' avatar dot must use an emerald tone, got className='${collapsedOnlineClass}'`,
+  );
+}
+
+livenessCollapsedTree.unmount();
+
 export const projectRailTestResults = {
   expanded: {
     hasBootstrapButton: true,
@@ -192,5 +334,11 @@ export const projectRailTestResults = {
   collapsed: {
     hasSparklesButton: true,
     sparklesRoutesTo: 'create-project',
+  },
+  liveness: {
+    expandedRowsRenderDotPerKnownState: true,
+    collapsedAvatarsRenderDotPerKnownState: true,
+    unknownRendersNoDot: true,
+    workflowDotUnaffected: true,
   },
 } as const;
