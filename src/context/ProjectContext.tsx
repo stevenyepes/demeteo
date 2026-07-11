@@ -16,7 +16,13 @@ export type ProjectAction =
   | { type: 'ADD_PROJECT'; project: Project; repos?: Repository[] }
   | { type: 'UPDATE_PROJECTS'; updater: (prev: Project[]) => Project[] }
   | { type: 'REMOVE_PROJECT'; id: string }
-  | { type: 'SET_ERROR'; error: string };
+  | { type: 'SET_ERROR'; error: string }
+  | {
+      type: 'SET_LIVENESS';
+      id: string;
+      liveness: 'unknown' | 'checking' | 'online' | 'offline';
+      checkedAt?: string | null;
+    };
 
 const initial: ProjectState = {
   projects: [],
@@ -50,6 +56,19 @@ function reducer(state: ProjectState, action: ProjectAction): ProjectState {
     }
     case 'SET_ERROR':
       return { ...state, initialLoadError: action.error };
+    case 'SET_LIVENESS':
+      return {
+        ...state,
+        projects: state.projects.map(p =>
+          p.id === action.id
+            ? {
+                ...p,
+                liveness: action.liveness,
+                ...(action.checkedAt !== undefined ? { livenessCheckedAt: action.checkedAt } : {}),
+              }
+            : p,
+        ),
+      };
     default:
       return state;
   }

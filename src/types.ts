@@ -20,6 +20,15 @@ export interface Project {
   tokens: number;
   compute_type?: string;
   remote_host?: string | null;
+  /**
+   * Frontend-only workspace connectivity state, populated by
+   * `check_workspace_liveness`. Absent/`undefined` means `'unknown'` —
+   * never fetched yet this session. Not persisted; resets on every
+   * app launch.
+   */
+  liveness?: 'unknown' | 'checking' | 'online' | 'offline';
+  /** ISO8601 timestamp of the most recent liveness check, if any. */
+  livenessCheckedAt?: string | null;
 }
 
 export interface Provider {

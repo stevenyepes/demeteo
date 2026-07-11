@@ -5,6 +5,18 @@ import type {
   MemoryAgentTestResult,
 } from "../types";
 
+/**
+ * Probe whether the machine backing a project's workspace is currently
+ * reachable. Mirrors the Rust `LivenessResult` returned by the
+ * `check_workspace_liveness` Tauri command — `liveness` is the literal
+ * string `'online'` or `'offline'`.
+ */
+export async function checkWorkspaceLiveness(
+  projectId: string,
+): Promise<{ project_id: string; liveness: string; checked_at: string }> {
+  return invoke("check_workspace_liveness", { projectId });
+}
+
 export async function listProjectMemory(projectId: string): Promise<ProjectMemoryEntry[]> {
   return invoke<ProjectMemoryEntry[]>("project_memory_list", { projectId });
 }
