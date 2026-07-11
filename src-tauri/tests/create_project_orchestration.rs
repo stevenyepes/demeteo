@@ -273,6 +273,7 @@ impl StepExecutor for StubExecutor {
             project_id: ProjectId::from(project_id.to_string()),
             workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
             title: title.to_string(),
+            description: String::new(),
             status: "running".to_string(),
             created_at: 0,
             total_cost: 0.0,

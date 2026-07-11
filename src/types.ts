@@ -378,6 +378,9 @@ export interface Feature {
   project_id: string;
   workflow_id?: string;
   title: string;
+  /** Persisted prompt body typed at launch (migration V27). `''` for runs
+   *  started before the column existed. */
+  description?: string;
   status: string;
   total_cost: number;
   tokens?: number | null;

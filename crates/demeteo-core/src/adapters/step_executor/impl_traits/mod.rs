@@ -483,6 +483,7 @@ impl StepExecutor for DagStepExecutor {
             project_id: ProjectId::from(project_id.to_string()),
             workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
             title: title.to_string(),
+            description: description.to_string(),
             status: "bootstrapping".to_string(),
             total_cost: 0.0,
             duration: "0s".to_string(),

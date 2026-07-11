@@ -22,6 +22,10 @@ const ProjectHome = () => {
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
     const [activeRepoPath, setActiveRepoPath] = useState<string>('');
     const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
+    // Feature ids that have a remote-run mirror → they execute detached under
+    // the runner rather than on this machine. Drives the per-card transport
+    // badge. Empty when nothing detached is (or was) tracked in this project.
+    const [detachedIds, setDetachedIds] = useState<Set<string>>(new Set());
 
     useEffect(() => {
         setActiveTab('pipelines');
@@ -121,11 +125,25 @@ const ProjectHome = () => {
         const fetchWorkspaceData = async () => {
             setIsLoadingFeatures(true);
 
-            const [featuresRes, reposRes, workflowsRes] = await Promise.allSettled([
+            const [featuresRes, reposRes, workflowsRes, mirrorsRes] = await Promise.allSettled([
                 invoke<Feature[]>('fetch_active_features', { projectId: activeProject.id }),
                 invoke<any[]>('get_repositories_for_project', { projectId: activeProject.id }),
                 invoke<any[]>('workflow_list'),
+                invoke<{ feature_id: string | null }[]>('remote_list_mirrored_runs'),
             ]);
+
+            // Detached runs: any active feature that has a remote-run mirror.
+            if (mirrorsRes.status === 'fulfilled' && Array.isArray(mirrorsRes.value)) {
+                setDetachedIds(
+                    new Set(
+                        mirrorsRes.value
+                            .map((m) => m.feature_id)
+                            .filter((id): id is string => !!id),
+                    ),
+                );
+            } else {
+                setDetachedIds(new Set());
+            }
 
             // Handle active features
             if (featuresRes.status === 'fulfilled' && featuresRes.value) {
@@ -136,6 +154,7 @@ const ProjectHome = () => {
                         project_id: f.project_id,
                         workflow_id: f.workflow_id ?? undefined,
                         title: f.title,
+                        description: f.description ?? '',
                         status: f.status,
                         total_cost: f.total_cost,
                         tokens: f.tokens || 0,
@@ -533,9 +552,44 @@ const ProjectHome = () => {
                                                         </span>
                                                     );
                                                 })()}
+                                                {(() => {
+                                                    const detached = detachedIds.has(feature.id);
+                                                    const remote = detached || activeProject.compute_type === 'remote';
+                                                    const label = detached
+                                                        ? 'Detached'
+                                                        : activeProject.compute_type === 'remote'
+                                                        ? 'Remote · SSH'
+                                                        : 'Local';
+                                                    return (
+                                                        <span
+                                                            className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase border inline-flex items-center gap-1 ${
+                                                                remote
+                                                                    ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                                                                    : 'bg-white/5 text-slate-500 border-white/10'
+                                                            }`}
+                                                            title={
+                                                                detached
+                                                                    ? 'Runs detached under the runner — continues even if this app is closed'
+                                                                    : activeProject.compute_type === 'remote'
+                                                                    ? `Executes on ${activeProject.remote_host ?? 'the project machine'} over SSH`
+                                                                    : 'Executes on this machine'
+                                                            }
+                                                        >
+                                                            <Cpu className="w-3 h-3" /> {label}
+                                                        </span>
+                                                    );
+                                                })()}
                                                 <span className="text-xs text-slate-500 font-mono truncate">{feature.id}</span>
                                             </div>
                                             <h3 className="text-lg font-outfit text-white line-clamp-2 break-words" title={feature.title}>{feature.title}</h3>
+                                            {feature.description?.trim() && (
+                                                <p
+                                                    className="mt-1 text-xs text-slate-400 leading-relaxed line-clamp-2 break-words"
+                                                    title={feature.description}
+                                                >
+                                                    {feature.description}
+                                                </p>
+                                            )}
                                         </div>
 
                                         <div className="flex gap-6 text-right shrink-0 pt-1">
