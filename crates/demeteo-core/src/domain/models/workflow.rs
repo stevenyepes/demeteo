@@ -208,6 +208,32 @@ pub fn lint_workflow_steps(steps: &[StepConfig]) -> Vec<String> {
                 step.id.0
             ));
         }
+
+        // 4. A step that both judges pass/fail (`verifier`) and retries on
+        // a bad verdict (`on_failure`) is only as good as the context it is
+        // given. If its prompt template references NO upstream artifact
+        // (`[attached — <step>]`), the judge has to reconstruct the
+        // acceptance criteria / spec / plan it is grading against from git
+        // archaeology (`git log`), which fails outright when artifacts are
+        // not committed to the branch (the default). That silently
+        // degrades the loop into a harness-only pass/fail with no
+        // spec-compliance check — the exact "validate couldn't read the
+        // spec" failure mode. Require at least one attachment so a looping
+        // judge is never grading blind.
+        if step.verifier.is_some()
+            && !step
+                .prompt_template
+                .as_deref()
+                .unwrap_or("")
+                .contains("[attached")
+        {
+            errors.push(format!(
+                "step '{}' has a verifier + on_failure retry loop but its prompt_template \
+                 attaches no upstream artifact (`[attached — <step>]`) — the judge would grade \
+                 against a spec/plan it was never given",
+                step.id.0
+            ));
+        }
     }
 
     errors

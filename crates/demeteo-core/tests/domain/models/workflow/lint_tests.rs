@@ -31,6 +31,12 @@ fn with_verifier(mut s: StepConfig) -> StepConfig {
         harness_name: None,
         verdict_key: "verdict".into(),
     });
+    // A properly-authored looping judge attaches the artifact it grades
+    // against; give it one by default so invariant #4 (judge must not
+    // grade blind) is satisfied unless a test deliberately clears it.
+    if s.prompt_template.is_none() {
+        s.prompt_template = Some("Grade against [attached — previous step artifact].".into());
+    }
     s
 }
 
@@ -159,6 +165,46 @@ fn on_failure_targeting_a_gate_step_is_fine() {
             StepCapability::Implement,
             Some("s-gate-review"),
         ),
+    ];
+    assert!(lint_workflow_steps(&steps).is_empty());
+}
+
+#[test]
+fn flags_looping_judge_that_attaches_no_artifact() {
+    // A verifier + on_failure retry loop whose prompt references no
+    // `[attached — <step>]` grades against a spec it was never given —
+    // the "validate couldn't read the implementation spec" bug.
+    let mut validate = with_verifier(step(
+        "s-validate",
+        StepCapability::Verify,
+        Some("s-implement"),
+    ));
+    validate.prompt_template = Some("Run the harness and report pass/fail.".into());
+    let steps = vec![
+        step("s-implement", StepCapability::Implement, None),
+        validate,
+    ];
+    let errors = lint_workflow_steps(&steps);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("attaches no upstream artifact")),
+        "{:?}",
+        errors
+    );
+}
+
+#[test]
+fn looping_judge_with_an_attachment_is_fine() {
+    let mut validate = with_verifier(step(
+        "s-validate",
+        StepCapability::Verify,
+        Some("s-implement"),
+    ));
+    validate.prompt_template = Some("Spec: [attached — s-plan]. Grade the diff against it.".into());
+    let steps = vec![
+        step("s-implement", StepCapability::Implement, None),
+        validate,
     ];
     assert!(lint_workflow_steps(&steps).is_empty());
 }
