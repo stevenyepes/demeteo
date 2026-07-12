@@ -120,6 +120,30 @@ async function run() {
     }
   }
 
+  // ── (4) checking -> offline transition (the other resolution
+  //        ProjectRail's auto-check effect dispatches when a probe
+  //        resolves/rejects) ──
+  act(() => {
+    holder.current!.dispatch({
+      type: 'SET_LIVENESS',
+      id: 'a',
+      liveness: 'offline',
+      checkedAt: '2026-07-12T00:00:00Z',
+    });
+  });
+  {
+    const [a, b] = holder.current!.state.projects;
+    if (a.liveness !== 'offline') {
+      throw new Error(`expected project a liveness === 'offline', got '${a.liveness}'`);
+    }
+    if (a.livenessCheckedAt !== '2026-07-12T00:00:00Z') {
+      throw new Error(`expected project a livenessCheckedAt to be updated, got '${a.livenessCheckedAt}'`);
+    }
+    if (b !== projectB) {
+      throw new Error('SET_LIVENESS must leave the non-matching project referentially unchanged');
+    }
+  }
+
   act(() => {
     renderer.unmount();
   });

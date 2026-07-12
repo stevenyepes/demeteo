@@ -1,7 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles } from 'lucide-react';
 import { StatusBadge, LivenessDot } from './ui/StatusBadge';
 import { useNavigation, useProject, useUIState } from '../context';
+import { checkWorkspaceLiveness } from '../lib/project';
+import { formatError } from '../lib/errors';
 
 function fuzzyMatch(text: string, query: string): boolean {
   const lower = text.toLowerCase();
@@ -34,6 +36,36 @@ function ProjectRail() {
   const setView = (v: string) => navigate({ kind: v as any });
 
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Probe machine reachability for any workspace that hasn't been checked
+  // yet this session. `liveness` is never persisted (see `types.ts`), so
+  // every project starts `undefined` on each app launch/list load; that's
+  // exactly what marks it as needing a fresh probe. Dispatching 'checking'
+  // synchronously moves it out of the `undefined` bucket, so the effect
+  // can't loop as SET_LIVENESS results flow back through `projects`.
+  useEffect(() => {
+    const unchecked = projects.filter(p => p.liveness === undefined);
+    if (unchecked.length === 0) return;
+
+    for (const p of unchecked) {
+      dispatch({ type: 'SET_LIVENESS', id: p.id, liveness: 'checking' });
+    }
+    for (const p of unchecked) {
+      checkWorkspaceLiveness(p.id)
+        .then(result => {
+          dispatch({
+            type: 'SET_LIVENESS',
+            id: p.id,
+            liveness: result.liveness === 'online' ? 'online' : 'offline',
+            checkedAt: result.checked_at,
+          });
+        })
+        .catch(err => {
+          console.warn('Liveness check failed for project', p.id, formatError(err));
+          dispatch({ type: 'SET_LIVENESS', id: p.id, liveness: 'offline' });
+        });
+    }
+  }, [projects, dispatch]);
 
   const filtered = useMemo(() => {
     if (!searchQuery.trim()) return projects;
