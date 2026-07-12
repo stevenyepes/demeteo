@@ -190,10 +190,13 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         .run_command(
             machine_str,
             &format!(
-                "git -C {} add -A && git -C {} commit -m \"Resolve sync conflicts with origin/{}\"",
+                "git -C {} add -A && {} commit -m {}",
                 paths::shell_escape_posix(resolved_cwd),
-                paths::shell_escape_posix(resolved_cwd),
-                default_branch
+                paths::git_no_hooks(resolved_cwd),
+                paths::shell_escape_posix(&format!(
+                    "chore: resolve sync conflicts with origin/{}",
+                    default_branch
+                )),
             ),
         )
         .await;

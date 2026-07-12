@@ -112,17 +112,21 @@ impl GitOpsHelper {
             }
         }
 
+        // Conventional-commit form: a target repo that lints the whole PR
+        // range in CI rejects a bare "Merge subtask sub-2" even though the
+        // local hook is bypassed.
+        let message = paths::shell_escape_posix(&format!("chore: merge subtask {}", subtask_id));
+
         if let Some(ref active_wt) = checked_out_path {
             // The feature branch is already checked out in a worktree (e.g. main repo).
             // Merge the subtask branch directly into that worktree.
-            let safe_active_wt = paths::shell_escape_posix(active_wt);
-            self.abort_inflight_merge(machine_str, &safe_active_wt)
+            self.abort_inflight_merge(machine_str, &paths::shell_escape_posix(active_wt))
                 .await;
             let cmd = format!(
-                "git -C {} merge {} -m \"Merge subtask {}\"",
-                safe_active_wt,
+                "{} merge {} -m {}",
+                paths::git_no_hooks(active_wt),
                 safe_sb,
-                paths::shell_escape_posix(subtask_id),
+                message,
             );
             self.exec.run_command(machine_str, &cmd).await?;
         } else {
@@ -137,10 +141,10 @@ impl GitOpsHelper {
                 .await?;
 
             let cmd = format!(
-                "git -C {} merge {} -m \"Merge subtask {}\"",
-                safe_wt,
+                "{} merge {} -m {}",
+                paths::git_no_hooks(wt_path),
                 safe_sb,
-                paths::shell_escape_posix(subtask_id),
+                message,
             );
             self.exec.run_command(machine_str, &cmd).await?;
         }
