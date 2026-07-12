@@ -10,6 +10,21 @@ import { saveProjectSettings } from '../lib/project';
 import { TerminalWindow } from './TerminalWindow';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { useNavigation, useProject, useUIState } from '../context';
+import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
+
+/**
+ * Left accent bar per tone. Local to this component (the way StatusBadge
+ * keeps its own TONE_DOT) because the glow is specific to these cards —
+ * the shared registry only carries the flat `TONE_BORDER_L` border.
+ */
+const TONE_ACCENT: Record<RunStatusTone, string> = {
+    emerald: 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]',
+    cyan:    'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]',
+    violet:  'bg-violet-500 shadow-[0_0_10px_rgba(139,92,246,0.8)]',
+    amber:   'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.8)]',
+    ruby:    'bg-ruby-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]',
+    slate:   'bg-slate-600 shadow-[0_0_10px_rgba(100,116,139,0.6)]',
+};
 
 const ProjectHome = () => {
     const { navigate } = useNavigation();
@@ -162,6 +177,10 @@ const ProjectHome = () => {
                         created_at: f.created_at,
                         agent_kind: f.agent_kind,
                         model: f.model,
+                        // Carried so the card can tell a published run from a
+                        // bare completed one — see `featureRunStatus`.
+                        mr_url: f.mr_url ?? null,
+                        mr_state: f.mr_state ?? null,
                     }));
                     setFeatures(mapped);
                 } else {
@@ -483,9 +502,11 @@ const ProjectHome = () => {
                   <Terminal className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors ml-auto shrink-0" />
                 </button>
 
-                {/* Active Features Tracking List */}
+                {/* Feature pipeline list. Not running-only — `fetch_active_features`
+                    returns everything that isn't archived/deleted, so completed,
+                    failed and gated runs are here too, each wearing its own chip. */}
                 <div>
-                    <h2 className="font-outfit text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Active Running Pipelines</h2>
+                    <h2 className="font-outfit text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Feature Pipelines</h2>
                     <div className="space-y-4">
                         {isLoadingFeatures ? (
                             <div className="flex items-center justify-center p-8">
@@ -498,13 +519,15 @@ const ProjectHome = () => {
                                 <div className="w-12 h-12 rounded-full bg-violet-500/10 border border-violet-500/25 flex items-center justify-center text-violet-400 mb-2">
                                     <Cpu className="w-6 h-6 animate-pulse" />
                                 </div>
-                                <h3 className="font-outfit text-white font-medium text-base">No active feature pipelines</h3>
+                                <h3 className="font-outfit text-white font-medium text-base">No feature pipelines yet</h3>
                                 <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
                                     There are no agent orchestration workflows running in this workspace right now. Use the tool above to start a new pipeline.
                                 </p>
                             </div>
                         ) : (
-                            features.map((feature: any) => (
+                            features.map((feature: any) => {
+                                const meta = runStatusMeta(featureRunStatus(feature));
+                                return (
                                 <div
                                     key={feature.id}
                                     onClick={() => {
@@ -512,19 +535,17 @@ const ProjectHome = () => {
                                     }}
                                     className="glass-panel glass-panel-hover rounded-xl p-5 cursor-pointer relative overflow-hidden group"
                                 >
-                                    <div className={`absolute left-0 top-0 bottom-0 w-1 ${feature.status === 'gated' ? 'bg-violet-500 shadow-[0_0_10px_rgba(139,92,246,0.8)]' : 'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]'
-                                        }`}></div>
+                                    <div className={`absolute left-0 top-0 bottom-0 w-1 ${TONE_ACCENT[meta.tone]}`}></div>
 
                                     <div className="flex justify-between items-start gap-4">
                                         <div className="min-w-0 flex-1">
                                             <div className="flex items-center gap-3 mb-1 flex-wrap">
-                                                {feature.status === 'gated' ? (
-                                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/20 text-violet-400 uppercase">GATED APPROVAL</span>
-                                                ) : (
-                                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 uppercase flex items-center gap-1">
-                                                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span> RUNNING FLEET
-                                                    </span>
-                                                )}
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono border uppercase flex items-center gap-1 ${TONE_CHIP[meta.tone]}`}>
+                                                    {meta.active && (
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
+                                                    )}
+                                                    {meta.label}
+                                                </span>
                                                 {(() => {
                                                     const wfMeta = feature.workflow_id
                                                         ? workflowById.get(feature.workflow_id)
@@ -605,7 +626,8 @@ const ProjectHome = () => {
                                         </div>
                                     </div>
                                 </div>
-                            ))
+                                );
+                            })
                         )}
                     </div>
                 </div>

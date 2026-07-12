@@ -37,6 +37,7 @@ const META: Record<string, RunStatusMeta> = {
   'over-budget':        { label: 'Over budget',       tone: 'ruby',    active: false },
   awaiting_mr:          { label: 'PR ready',          tone: 'emerald', active: false },
   pr_ready:             { label: 'PR ready',          tone: 'emerald', active: false },
+  published:            { label: 'Published',         tone: 'emerald', active: false },
   completed:            { label: 'Completed',         tone: 'emerald', active: false },
   failed:               { label: 'Failed',            tone: 'ruby',    active: false },
   error:                { label: 'Failed',            tone: 'ruby',    active: false },
@@ -53,6 +54,35 @@ export function runStatusMeta(status: string): RunStatusMeta {
       active: false,
     }
   );
+}
+
+/** The fields a run surface needs to resolve a display status. */
+export interface FeatureRunStatusFields {
+  status: string;
+  mr_url?: string | null;
+  mr_state?: string | null;
+}
+
+/** MR states that mean the run's work actually reached a provider. */
+const PUBLISHED_MR_STATES = ['draft', 'open', 'merged'];
+
+/**
+ * Display status for a feature, which is not always `Feature.status`.
+ *
+ * `MrPublisher` collapses a published run to `status = 'completed'` and
+ * records the PR on `mr_url`/`mr_state` in the same write, so `status`
+ * alone cannot tell "finished, nothing shipped" from "finished, PR is
+ * up". Fold that back into one status string here so every surface
+ * applies the published-beats-completed rule the same way.
+ *
+ * `mr_state = 'closed'` (PR closed without merge) deliberately falls
+ * through to the feature's own status — nothing was published.
+ */
+export function featureRunStatus(feature: FeatureRunStatusFields): string {
+  if (feature.mr_url && PUBLISHED_MR_STATES.includes((feature.mr_state ?? '').toLowerCase())) {
+    return 'published';
+  }
+  return feature.status;
 }
 
 /** `bg/text/border` classes for a pill/chip in the given tone. */
