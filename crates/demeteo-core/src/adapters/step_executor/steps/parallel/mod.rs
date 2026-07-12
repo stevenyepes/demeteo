@@ -151,13 +151,21 @@ impl ExecutionDriver {
             // Roll back any partial subtask merges so the next retry starts
             // from a clean state. Without this, subtasks that already merged
             // would be re-implemented on top of their own prior work.
+            //
+            // Reset the FEATURE branch ref (a ref-only `branch -f`), not the
+            // working tree of `target_dir`: the main repo stays checked out on
+            // the project's default branch for the whole run, so a
+            // `reset --hard` there would shove the *default* branch to the
+            // feature tip. The feature branch is not checked out in the main
+            // repo, so `branch -f` moves only its ref.
             let _ = self
                 .exec
                 .run_command(
                     &machine_str,
                     &format!(
-                        "git -C {} reset --hard {}",
+                        "git -C {} branch -f {} {}",
                         paths::shell_escape_posix(&self.target_dir),
+                        paths::shell_escape_posix(&self.branch_name),
                         base_sha,
                     ),
                 )
@@ -241,13 +249,17 @@ impl ExecutionDriver {
                     .await;
                 // Roll back subtask merges so the next retry starts from a
                 // clean base — same guarantee as the subtask-loop failure path.
+                // Ref-only reset of the feature branch (see the note there):
+                // never `reset --hard` in `target_dir`, which sits on the
+                // default branch.
                 let _ = self
                     .exec
                     .run_command(
                         &machine_str,
                         &format!(
-                            "git -C {} reset --hard {}",
+                            "git -C {} branch -f {} {}",
                             paths::shell_escape_posix(&self.target_dir),
+                            paths::shell_escape_posix(&self.branch_name),
                             base_sha,
                         ),
                     )
