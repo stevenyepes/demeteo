@@ -1562,3 +1562,77 @@ async fn test_ensure_default_branch_warns_when_dirty_tree() {
     let _ = std::fs::remove_dir_all(&local_dir);
     let _ = std::fs::remove_dir_all(&remote_dir);
 }
+
+/// Regression: `branch_delete` must remove subtask worktrees BEFORE it
+/// deletes their branches. `git branch -D` refuses to delete a branch
+/// still checked out in a worktree, so if the branch delete runs first
+/// the subtask ref survives (the delete failure was swallowed by
+/// `2>/dev/null`). After the reorder, the worktree is gone by the time
+/// the branch delete runs, so no `_subtask_*` ref is left behind.
+#[tokio::test]
+async fn test_branch_delete_removes_subtask_worktree_and_branch() {
+    let (dir, helper) = make_repo("branch_delete_order").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // A ref-only feature branch, as the pipeline creates it.
+    let feature_branch = "feature/f-del";
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" branch {feature_branch}"),
+        )
+        .await;
+
+    // Provision a real subtask worktree checked out on the subtask
+    // branch — this is what makes the naive branch-delete-first order
+    // fail.
+    let wt_path = helper
+        .provision_subtask_worktree(None, &repo, feature_branch, "sub-1")
+        .await
+        .unwrap();
+    assert!(
+        std::path::Path::new(&wt_path).exists(),
+        "subtask worktree should exist before cleanup"
+    );
+
+    helper
+        .branch_delete(None, &repo, feature_branch)
+        .await
+        .expect("branch_delete should succeed");
+
+    // The worktree directory is gone.
+    assert!(
+        !std::path::Path::new(&wt_path).exists(),
+        "subtask worktree dir should be removed by branch_delete"
+    );
+
+    // The regression assertion: NO subtask branch is left dangling.
+    let branches = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" branch --list '{feature_branch}_subtask_*'"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        branches.trim().is_empty(),
+        "no _subtask_* ref should survive branch_delete; got: {branches:?}"
+    );
+
+    // The feature branch itself is gone too.
+    let feature = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" branch --list {feature_branch}"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        feature.trim().is_empty(),
+        "feature branch should be deleted; got: {feature:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
