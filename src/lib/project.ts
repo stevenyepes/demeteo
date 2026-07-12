@@ -6,15 +6,40 @@ import type {
 } from "../types";
 
 /**
- * Probe whether the machine backing a project's workspace is currently
- * reachable. Mirrors the Rust `LivenessResult` returned by the
- * `check_workspace_liveness` Tauri command — `liveness` is the literal
- * string `'online'` or `'offline'`.
+ * Resolve the machine id used to probe a project's workspace connectivity.
+ * Mirrors the resolution logic previously duplicated server-side in the
+ * (now-removed) `check_liveness` command: a `local` (or missing)
+ * `compute_type` always resolves to `'local'`; anything else resolves to
+ * the project's `remote_host` (falling back to `'local'` if unset).
  */
-export async function checkWorkspaceLiveness(
-  projectId: string,
-): Promise<{ project_id: string; liveness: string; checked_at: string }> {
-  return invoke("check_workspace_liveness", { projectId });
+export function deriveMachineId(project: {
+  compute_type?: string;
+  remote_host?: string | null;
+}): string {
+  if (!project.compute_type || project.compute_type.toLowerCase() === "local") {
+    return "local";
+  }
+  return project.remote_host ?? "local";
+}
+
+/**
+ * Probe whether the machine backing a project's workspace is currently
+ * reachable, by reusing the `test_machine_connection` IPC (the same probe
+ * `MachinesView.tsx` and `useCreateZeroWizardForm.ts` use). Never rejects —
+ * a failed probe resolves with `liveness: 'offline'` so callers don't need
+ * a catch branch.
+ */
+export async function checkWorkspaceLiveness(project: {
+  id: string;
+  compute_type?: string;
+  remote_host?: string | null;
+}): Promise<{ project_id: string; liveness: "online" | "offline"; checked_at: string }> {
+  try {
+    await invoke("test_machine_connection", { machineId: deriveMachineId(project) });
+    return { project_id: project.id, liveness: "online", checked_at: new Date().toISOString() };
+  } catch {
+    return { project_id: project.id, liveness: "offline", checked_at: new Date().toISOString() };
+  }
 }
 
 export async function listProjectMemory(projectId: string): Promise<ProjectMemoryEntry[]> {
