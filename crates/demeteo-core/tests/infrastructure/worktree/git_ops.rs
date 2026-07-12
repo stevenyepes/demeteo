@@ -1636,3 +1636,112 @@ async fn test_branch_delete_removes_subtask_worktree_and_branch() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&wt_path);
 }
+
+/// Regression: a prior attempt interrupted mid-merge leaves `MERGE_HEAD`
+/// set on the feature-branch checkout. On retry `merge_subtask` must clear
+/// that stale in-progress merge instead of aborting with
+/// "fatal: You have not concluded your merge (MERGE_HEAD exists)".
+#[tokio::test]
+async fn test_merge_subtask_recovers_from_stale_merge_head() {
+    let (dir, helper) = make_repo("merge_stale_head").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // Ref-only feature branch, as the pipeline creates it.
+    let feature_branch = "feature/f-m";
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" branch {feature_branch}"),
+        )
+        .await;
+
+    // A subtask worktree with one clean commit adding a new file — merging
+    // it into the feature branch does NOT conflict; the only thing that can
+    // block it is a leftover in-progress merge.
+    let wt_path = helper
+        .provision_subtask_worktree(None, &repo, feature_branch, "sub-1")
+        .await
+        .unwrap();
+    exec.write_file("local", &format!("{wt_path}/newfile.txt"), "from subtask")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{wt_path}\" add ."))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{wt_path}\" commit -m \"subtask work\""),
+        )
+        .await;
+
+    // A worktree on the feature branch, left with a half-finished merge
+    // (`--no-commit` leaves MERGE_HEAD set even on a clean merge) — exactly
+    // the state an interrupted retry leaves behind.
+    let feat_wt = format!("{repo}_feat_wt");
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree add \"{feat_wt}\" {feature_branch}"),
+        )
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{feat_wt}\" merge --no-commit --no-ff {feature_branch}_subtask_sub-1"
+            ),
+        )
+        .await;
+    // Sanity: the stale MERGE_HEAD is really present.
+    assert!(
+        exec.run_command(
+            "local",
+            &format!("git -C \"{feat_wt}\" rev-parse -q --verify MERGE_HEAD"),
+        )
+        .await
+        .is_ok(),
+        "test setup should have left a stale MERGE_HEAD"
+    );
+
+    // The retry: merge_subtask targets the feature-branch checkout, which
+    // still carries the stale MERGE_HEAD. It must recover and succeed.
+    let result = helper
+        .merge_subtask(None, &feat_wt, feature_branch, "sub-1")
+        .await;
+    assert!(
+        result.is_ok(),
+        "merge_subtask should clear the stale MERGE_HEAD and merge; got {result:?}"
+    );
+
+    // The stale merge is gone and the subtask's file is now on the branch.
+    assert!(
+        exec.run_command(
+            "local",
+            &format!("git -C \"{feat_wt}\" rev-parse -q --verify MERGE_HEAD"),
+        )
+        .await
+        .is_err(),
+        "no MERGE_HEAD should remain after merge_subtask"
+    );
+    assert!(
+        exec.run_command(
+            "local",
+            &format!("git -C \"{feat_wt}\" cat-file -e HEAD:newfile.txt"),
+        )
+        .await
+        .is_ok(),
+        "subtask's file should be present on the feature branch after merge"
+    );
+
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{feat_wt}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+    let _ = std::fs::remove_dir_all(&feat_wt);
+}

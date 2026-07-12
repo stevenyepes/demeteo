@@ -116,6 +116,7 @@ impl GitOpsHelper {
             // The feature branch is already checked out in a worktree (e.g. main repo).
             // Merge the subtask branch directly into that worktree.
             let safe_active_wt = paths::shell_escape_posix(active_wt);
+            self.abort_inflight_merge(machine_str, &safe_active_wt).await;
             let cmd = format!(
                 "git -C {} merge {} -m \"Merge subtask {}\"",
                 safe_active_wt,
@@ -126,6 +127,7 @@ impl GitOpsHelper {
         } else {
             // The feature branch is not checked out in any worktree.
             // Checkout the feature branch in the subtask worktree, then merge.
+            self.abort_inflight_merge(machine_str, &safe_wt).await;
             self.exec
                 .run_command(
                     machine_str,
@@ -142,5 +144,31 @@ impl GitOpsHelper {
             self.exec.run_command(machine_str, &cmd).await?;
         }
         Ok(())
+    }
+
+    /// Clear any half-finished merge left in `safe_dir` (an already
+    /// shell-escaped worktree path) by a prior attempt that was interrupted
+    /// or failed mid-merge. Without this, the next `git merge` aborts with
+    /// "fatal: You have not concluded your merge (MERGE_HEAD exists)" and the
+    /// retry can never make progress.
+    ///
+    /// Best-effort: `git merge --abort` fails harmlessly when there is no
+    /// in-progress merge, so its error is ignored. `git reset --hard HEAD`
+    /// then clears any lingering conflicted index / working-tree state
+    /// (e.g. a half-resolved merge with no MERGE_HEAD). Both are safe here
+    /// because the subtask work lives committed on the subtask branch — the
+    /// feature-branch checkout carries no changes worth preserving.
+    async fn abort_inflight_merge(&self, machine_str: &str, safe_dir: &str) {
+        let _ = self
+            .exec
+            .run_command(machine_str, &format!("git -C {} merge --abort", safe_dir))
+            .await;
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!("git -C {} reset --hard HEAD", safe_dir),
+            )
+            .await;
     }
 }
