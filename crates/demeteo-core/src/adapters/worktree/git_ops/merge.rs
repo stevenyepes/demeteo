@@ -116,7 +116,8 @@ impl GitOpsHelper {
             // The feature branch is already checked out in a worktree (e.g. main repo).
             // Merge the subtask branch directly into that worktree.
             let safe_active_wt = paths::shell_escape_posix(active_wt);
-            self.abort_inflight_merge(machine_str, &safe_active_wt).await;
+            self.abort_inflight_merge(machine_str, &safe_active_wt)
+                .await;
             let cmd = format!(
                 "git -C {} merge {} -m \"Merge subtask {}\"",
                 safe_active_wt,
