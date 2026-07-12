@@ -100,6 +100,14 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // gates the regression-vs-environment triage agent.
     add_column_if_missing(conn, "step_executions", "last_failure_fingerprint", "TEXT")?;
 
+    // The PR title/body the `finalize` step's agent wrote. Persisted on the
+    // feature rather than passed in memory because the step that authors them
+    // and the code that opens the PR are deliberately separated: the headless
+    // runner holds no git credential during a run at all (§6.2), so it cannot
+    // publish until the very end, long after the finalize step is done.
+    add_column_if_missing(conn, "features", "pr_title", "TEXT")?;
+    add_column_if_missing(conn, "features", "pr_body", "TEXT")?;
+
     Ok(())
 }
 

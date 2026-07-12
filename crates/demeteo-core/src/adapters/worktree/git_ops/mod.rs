@@ -1,7 +1,9 @@
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
-use crate::ports::worktree_ops::{MergePreCheck, SyncFailure, SyncOutcome, WorktreeOpsPort};
+use crate::ports::worktree_ops::{
+    CommitMessageRejected, MergePreCheck, SquashOutcome, SyncFailure, SyncOutcome, WorktreeOpsPort,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -34,6 +36,7 @@ pub(crate) mod clone;
 pub(crate) mod health;
 pub(crate) mod merge;
 pub(crate) mod scope;
+pub(crate) mod squash;
 pub(crate) mod strategy;
 pub(crate) mod sync;
 pub(crate) mod worktree;
@@ -155,6 +158,44 @@ impl WorktreeOpsPort for GitOpsHelper {
         default_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure> {
         self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, default_branch)
+            .await
+    }
+
+    async fn validate_commit_message(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        message: &str,
+    ) -> Result<(), CommitMessageRejected> {
+        self.validate_commit_message(machine_id, repo_dir, message)
+            .await
+    }
+
+    async fn squash_feature_branch(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+        default_branch: &str,
+        message: &str,
+    ) -> Result<SquashOutcome, String> {
+        self.squash_feature_branch(
+            machine_id,
+            repo_dir,
+            feature_branch,
+            default_branch,
+            message,
+        )
+        .await
+    }
+
+    async fn restore_pre_squash(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+    ) -> Result<(), String> {
+        self.restore_pre_squash(machine_id, repo_dir, feature_branch)
             .await
     }
 }

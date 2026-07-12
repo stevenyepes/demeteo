@@ -17,7 +17,6 @@ import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { ArtifactViewer } from './ArtifactViewer';
 import { AttachmentChip } from './AttachmentChip';
 import { listAttachments, readAttachment, type AttachedFile } from '../lib/attachments';
-import PromptDialog from './PromptDialog';
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
 import {
   retryStep,
@@ -129,18 +128,6 @@ const formatDuration = (secs: number): string => {
   const h = Math.floor(m / 60);
   const remM = m % 60;
   return remM > 0 ? `${h}h ${remM}m` : `${h}h`;
-};
-
-/**
- * Suggest an MR title from a longer description: take the first 5
- * words, capped at ~40 characters. Trailing whitespace is trimmed
- * and an ellipsis is added when truncation occurs.
- */
-const suggestMrTitle = (raw: string): string => {
-  const cleaned = (raw || '').trim().replace(/\s+/g, ' ');
-  if (!cleaned) return '';
-  const first5 = cleaned.split(' ').slice(0, 5).join(' ');
-  return first5.length > 40 ? first5.slice(0, 40).trimEnd() + '…' : first5;
 };
 
 /**
@@ -712,7 +699,6 @@ export function FeatureDetail() {
   }, [remoteRun, featureId]);
 
   const [publishing, setPublishing] = useState(false);
-  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [syncBanner, setSyncBanner] = useState<SyncOutcomeView | null>(null);
@@ -804,41 +790,30 @@ export function FeatureDetail() {
     };
   }, [featureId, status]);
 
-  /** Pre-filled MR title: first 5 words of the feature description,
-   *  truncated at ~40 chars. The user can edit it in the prompt. */
-  const suggestedMrTitle = useMemo(
-    () => suggestMrTitle(featureTitle),
-    [featureTitle],
-  );
-
-  const handlePublishClick = () => {
+  /** Publish, without asking for a title.
+   *
+   *  The `finalize` step normally does all of this by itself at the end of the
+   *  run: it squashes the branch, writes the commit message and PR title/body
+   *  in the repo's own style, and the PR opens automatically. This button is
+   *  the fallback for the cases where that didn't happen — a feature on an
+   *  older workflow with no finalize step, or a publish that failed (the
+   *  provider was down, credentials were missing). Either way there is nothing
+   *  to type: the backend uses the summary the agent authored when there is
+   *  one, and its own default title when there isn't. */
+  const handlePublishClick = async () => {
     if (!projectId) {
-      messageDialog('No project is associated with this feature.', {
+      await messageDialog('No project is associated with this feature.', {
         title: 'Cannot publish',
         kind: 'error',
       });
       return;
     }
-    setPublishDialogOpen(true);
-  };
-
-  const handlePublishConfirm = async (title: string) => {
-    const finalTitle = title.trim();
-    if (!finalTitle) {
-      await messageDialog('Please enter a title for the MR/PR.', {
-        title: 'Title required',
-        kind: 'error',
-      });
-      return;
-    }
-    setPublishDialogOpen(false);
     setPublishing(true);
     try {
       const result: any = await invoke('publish_mr', {
         projectId,
         featureId,
         draft: false,
-        title: finalTitle,
       });
       const url = result?.url ?? '(unknown)';
       const state = result?.state ?? 'open';
@@ -1002,15 +977,32 @@ export function FeatureDetail() {
                   {syncing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
                   Sync with main
                 </button>
-                <button
-                  onClick={handlePublishClick}
-                  disabled={publishing}
-                  className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
-                  title="Open a PR/MR for review"
-                >
-                  {publishing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitPullRequest className="w-3.5 h-3.5" />}
-                  Publish MR
-                </button>
+                {/* The finalize step opens the PR itself at the end of a run,
+                    so once there is a URL the only useful action is to go
+                    look at it. Publishing by hand stays available for features
+                    whose run never produced one. */}
+                {mrUrl ? (
+                  <a
+                    href={mrUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
+                    title="Open the pull request in your browser"
+                  >
+                    <GitPullRequest className="w-3.5 h-3.5" />
+                    View PR
+                  </a>
+                ) : (
+                  <button
+                    onClick={handlePublishClick}
+                    disabled={publishing}
+                    className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
+                    title="Open a PR/MR for review. The title and description are written by the agent; there is nothing to fill in."
+                  >
+                    {publishing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitPullRequest className="w-3.5 h-3.5" />}
+                    Publish MR
+                  </button>
+                )}
                 <button
                   onClick={() => handleCleanup()}
                   className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-bold transition duration-300"
@@ -1039,8 +1031,10 @@ export function FeatureDetail() {
           <div className="flex items-center gap-2 text-amber-400 text-xs">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
             <span>
-              <strong className="font-bold">All steps complete.</strong>{' '}
-              Publish an MR to mark this feature done. Cleanup remains available below.
+              <strong className="font-bold">All steps complete, but no PR was opened.</strong>{' '}
+              This feature's workflow has no finalize step, or the publish didn't
+              go through. Publish above to open one — the agent's summary is used
+              if it wrote one.
             </span>
           </div>
         </div>
@@ -1673,17 +1667,6 @@ export function FeatureDetail() {
             </div>
           </Modal>
       )}
-
-      <PromptDialog
-        isOpen={publishDialogOpen}
-        title="Publish MR"
-        message="Choose a title for the merge request. Defaults to the first 5 words of the feature description, truncated at 40 characters."
-        defaultValue={suggestedMrTitle}
-        placeholder="MR title"
-        okLabel="Publish"
-        onConfirm={handlePublishConfirm}
-        onCancel={() => setPublishDialogOpen(false)}
-      />
 
       {agentDrawerCtx && (
         <AgentTerminalDrawer

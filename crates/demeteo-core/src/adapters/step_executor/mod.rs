@@ -110,6 +110,10 @@ pub struct DagStepExecutor {
     /// `startup_watchdog`, `resume_interrupted_features` all consult it).
     /// Empty on the runner itself (its mirror table never gains rows).
     remote_run_mirror: Arc<dyn crate::ports::remote_run_mirror::RemoteRunMirrorPort>,
+    /// Opens the PR when a run finishes, from the summary the `finalize` step
+    /// authored. Wired only by the desktop composition — see
+    /// [`with_mr_publisher`](Self::with_mr_publisher).
+    mr_publisher: Option<Arc<dyn crate::ports::mr_publisher::MrPublisher>>,
 }
 
 impl DagStepExecutor {
@@ -179,7 +183,25 @@ impl DagStepExecutor {
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
             pricing,
             remote_run_mirror,
+            mr_publisher: None,
         }
+    }
+
+    /// Give the executor a publisher, so a finished run opens its own PR from
+    /// the summary the `finalize` step authored.
+    ///
+    /// Desktop only. The headless runner deliberately does **not** call this:
+    /// it holds no keyring credential a publisher could resolve a PAT from,
+    /// and opens its PR at the end of `run.rs` with a memory-only, run-scoped
+    /// PAT instead (docs/REMOTE_EXECUTION.md §6.2). A runner that wired one up
+    /// here would fail the publish and force a credential to be resident for
+    /// the whole run — the exact thing that design avoids.
+    pub fn with_mr_publisher(
+        mut self,
+        publisher: Arc<dyn crate::ports::mr_publisher::MrPublisher>,
+    ) -> Self {
+        self.mr_publisher = Some(publisher);
+        self
     }
 
     /// The feature ids currently listed in the remote-run mirror — the

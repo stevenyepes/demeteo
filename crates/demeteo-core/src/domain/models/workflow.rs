@@ -157,6 +157,36 @@ pub fn lint_workflow_steps(steps: &[StepConfig]) -> Vec<String> {
         }
     }
 
+    // 1b. `finalize` squashes the branch and hands the PR summary to the
+    // publisher. Anything scheduled after it would be committing on top of a
+    // branch that has already been rewritten and published — its work would
+    // land outside the squashed commit the reviewer sees. And two finalize
+    // steps would squash twice, the second one collapsing the first squash's
+    // commit and overwriting the summary. So: at most one, and it goes last.
+    let finalize_positions: Vec<usize> = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.kind == "finalize")
+        .map(|(i, _)| i)
+        .collect();
+    if finalize_positions.len() > 1 {
+        errors.push(format!(
+            "workflow has {} `finalize` steps; at most one is allowed",
+            finalize_positions.len()
+        ));
+    }
+    if let Some(&pos) = finalize_positions.first() {
+        if pos != steps.len() - 1 {
+            errors.push(format!(
+                "step '{}' is a `finalize` step at index {} but is not last (the workflow has {} \
+                 steps) — nothing may run after the branch has been squashed and published",
+                steps[pos].id.0,
+                pos,
+                steps.len()
+            ));
+        }
+    }
+
     let index_of: std::collections::HashMap<&str, usize> = steps
         .iter()
         .enumerate()

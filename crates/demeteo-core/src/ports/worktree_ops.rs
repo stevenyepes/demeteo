@@ -39,6 +39,30 @@ pub enum MergePreCheck {
     WouldConflict,
 }
 
+/// Result of collapsing a feature branch's commits into one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SquashOutcome {
+    /// The branch now points at a single new commit.
+    Squashed {
+        sha: String,
+        /// How many commits were collapsed.
+        collapsed: u32,
+        /// Ref holding the pre-squash tip, so the rewrite is undoable.
+        backup_ref: String,
+    },
+    /// The branch adds nothing to the default branch (no net change), so
+    /// there is nothing to squash and nothing worth opening a PR for.
+    NothingToSquash,
+}
+
+/// The repo's `commit-msg` hook rejected a proposed message.
+#[derive(Debug, Clone)]
+pub struct CommitMessageRejected {
+    /// The hook's own output (e.g. commitlint's rule list) — fed back to
+    /// the agent so it can repair the message.
+    pub hook_output: String,
+}
+
 #[async_trait]
 pub trait WorktreeOpsPort: Send + Sync {
     /// Check if the repository is dirty.
@@ -135,4 +159,38 @@ pub trait WorktreeOpsPort: Send + Sync {
         feature_branch: &str,
         default_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure>;
+
+    /// Run the repo's own `commit-msg` hook against a proposed message,
+    /// without committing anything.
+    ///
+    /// This is how the finalize step lets a target repo's commitlint judge
+    /// the squashed commit message *before* the message is used, so a
+    /// rejection becomes feedback for the authoring agent instead of a
+    /// failed commit. `Ok(())` when the repo installs no `commit-msg` hook.
+    async fn validate_commit_message(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        message: &str,
+    ) -> Result<(), CommitMessageRejected>;
+
+    /// Collapse every commit the feature branch adds on top of the default
+    /// branch into a single commit carrying `message`.
+    async fn squash_feature_branch(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+        default_branch: &str,
+        message: &str,
+    ) -> Result<SquashOutcome, String>;
+
+    /// Restore a branch to its pre-squash tip from the backup ref written
+    /// by [`squash_feature_branch`](Self::squash_feature_branch).
+    async fn restore_pre_squash(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+    ) -> Result<(), String>;
 }

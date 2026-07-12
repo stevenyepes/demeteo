@@ -67,6 +67,8 @@ fn seed_parent_rows(
             model: None,
             mr_url: None,
             mr_state: Some("none".to_string()),
+            pr_title: None,
+            pr_body: None,
             created_at: now,
             commit_artifacts: None,
             loop_iterations: None,

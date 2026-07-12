@@ -732,6 +732,13 @@ async fn await_terminal_and_push_inner(
     // in-memory PAT (never a keyring lookup) via `publish_mr_with_pat` —
     // opening the PR is an HTTP API call, not a git-credential-store
     // operation, but it must still never touch a standing secret.
+    //
+    // `title`/`body` stay `None`: the publisher picks up whatever the
+    // `finalize` step's agent authored onto the feature row after squashing
+    // the branch, and falls back to its own defaults for a workflow that has
+    // no finalize step. This is why finalize does not publish for itself — at
+    // the time it runs, no PAT is resident (§6.2); the credential only arrives
+    // here, at the push.
     let pr_url = match svc
         .ctx
         .mr_publisher

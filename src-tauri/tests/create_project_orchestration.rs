@@ -283,6 +283,8 @@ impl StepExecutor for StubExecutor {
             model: model.map(|s| s.to_string()),
             mr_url: None,
             mr_state: Some("none".to_string()),
+            pr_title: None,
+            pr_body: None,
             commit_artifacts: None,
             loop_iterations: None,
             step_overrides: Vec::new(),

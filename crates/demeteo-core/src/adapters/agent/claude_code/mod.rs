@@ -428,7 +428,9 @@ fn build_claude_args(
 /// denied — they're how a non-shell step still inspects the codebase
 /// (`cat`→Read, `grep`→Grep). The chmod fence handles the
 /// artifacts-vs-source path distinction that tool names can't express.
-fn disallowed_tools_for(p: &crate::domain::permission::PermissionProfile) -> Vec<&'static str> {
+pub(crate) fn disallowed_tools_for(
+    p: &crate::domain::permission::PermissionProfile,
+) -> Vec<&'static str> {
     let mut out = Vec::new();
     if !p.execute.is_allow() {
         out.push("Bash");

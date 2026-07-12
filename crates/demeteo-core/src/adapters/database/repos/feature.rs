@@ -53,7 +53,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -81,6 +81,8 @@ impl FeatureRepository for SqliteAdapter {
                     model: row.get(10)?,
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
+                    pr_title: row.get(18)?,
+                    pr_body: row.get(19)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
                     loop_iterations: loop_iterations.map(|v| v as u32),
                     step_overrides: step_overrides_json
@@ -101,7 +103,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body
                  FROM features WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -129,6 +131,8 @@ impl FeatureRepository for SqliteAdapter {
                     model: row.get(10)?,
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
+                    pr_title: row.get(18)?,
+                    pr_body: row.get(19)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
                     loop_iterations: loop_iterations.map(|v| v as u32),
                     step_overrides: step_overrides_json
@@ -230,6 +234,14 @@ impl FeatureRepository for SqliteAdapter {
             // Mirror `add`: bool → 0/1, `None` (inherit) → SQL NULL.
             binds.push(Box::new(ca.map(|v| if v { 1i64 } else { 0i64 })));
         }
+        if let Some(t) = patch.pr_title.clone() {
+            sets.push("pr_title=?");
+            binds.push(Box::new(t));
+        }
+        if let Some(b) = patch.pr_body.clone() {
+            sets.push("pr_body=?");
+            binds.push(Box::new(b));
+        }
         if sets.is_empty() {
             return Ok(());
         }
@@ -255,7 +267,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body
                  FROM features WHERE mr_state = 'open' AND mr_url IS NOT NULL ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -283,6 +295,8 @@ impl FeatureRepository for SqliteAdapter {
                     model: row.get(10)?,
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
+                    pr_title: row.get(18)?,
+                    pr_body: row.get(19)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
                     loop_iterations: loop_iterations.map(|v| v as u32),
                     step_overrides: step_overrides_json

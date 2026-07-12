@@ -31,6 +31,14 @@ pub struct Feature {
     pub mr_url: Option<String>,
     #[serde(default)]
     pub mr_state: Option<String>,
+    /// PR title/body authored by the `finalize` step's agent, read back by
+    /// whoever opens the PR (the driver on the desktop, `demeteo-runner` when
+    /// headless). `None` on features whose workflow has no finalize step —
+    /// those fall back to the publisher's own default title/body.
+    #[serde(default)]
+    pub pr_title: Option<String>,
+    #[serde(default)]
+    pub pr_body: Option<String>,
     /// Per-feature override for the project's `commit_artifacts`
     /// setting. `None` = inherit from `ProjectSettings::commit_artifacts`.
     /// The StartFeatureModal exposes this as a toggle in the advanced
