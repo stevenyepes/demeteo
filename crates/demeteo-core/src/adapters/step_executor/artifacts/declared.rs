@@ -420,8 +420,8 @@ pub async fn commit_worktree_changes(
     }
 
     let commit_cmd = format!(
-        "git -C {} -c user.email=demeteo@local -c user.name=demeteo commit -m {} --allow-empty",
-        paths::shell_escape_posix(worktree_root),
+        "{} -c user.email=demeteo@local -c user.name=demeteo commit -m {} --allow-empty",
+        paths::git_no_hooks(worktree_root),
         paths::shell_escape_posix(message),
     );
     let out = exec

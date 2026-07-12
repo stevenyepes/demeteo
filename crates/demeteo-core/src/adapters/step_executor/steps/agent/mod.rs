@@ -835,9 +835,12 @@ impl ExecutionDriver {
                             .run_command(
                                 &machine_str,
                                 &format!(
-                                    "git -C {} commit -am \"Resolve merge conflicts with {}\"",
-                                    crate::paths::shell_escape_posix(&wt_path),
-                                    crate::paths::shell_escape_posix(&self.branch_name)
+                                    "{} commit -am {}",
+                                    crate::paths::git_no_hooks(&wt_path),
+                                    crate::paths::shell_escape_posix(&format!(
+                                        "chore: resolve merge conflicts with {}",
+                                        self.branch_name
+                                    )),
                                 ),
                             )
                             .await;

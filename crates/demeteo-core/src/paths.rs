@@ -230,6 +230,35 @@ pub fn shell_escape_posix(s: &str) -> String {
     crate::shared::shell::escape_posix(s)
 }
 
+/// A `git -C <dir>` prefix for the commits Demeteo makes on its own behalf,
+/// with the target repo's hooks disabled.
+///
+/// Demeteo commits for its own bookkeeping — subtask merges, conflict
+/// resolutions, artifact snapshots — with machine-generated messages on
+/// pipeline-owned branches. Target repos routinely install a `commit-msg`
+/// hook (husky + commitlint) or a `pre-commit` hook that runs the full test
+/// suite, and those reject our messages outright:
+///
+/// ```text
+/// ✖ subject may not be empty [subject-empty]
+/// Not committing merge; use 'git commit' to complete the merge.
+/// ```
+///
+/// A rejected merge commit is deterministic, so the retry hits the identical
+/// hook and the pipeline can never make progress. Hooks still run for the
+/// agent's own code commits inside the worktree, which is where a repo's
+/// lint/test gates actually belong.
+///
+/// Pointing `core.hooksPath` at a directory that cannot contain hooks
+/// disables every hook on every git version — unlike `--no-verify`, which
+/// git only honours for `merge` as of 2.36 and which skips only some hooks.
+pub fn git_no_hooks(dir: &str) -> String {
+    format!(
+        "git -c core.hooksPath=/dev/null -C {}",
+        shell_escape_posix(dir)
+    )
+}
+
 /// Well-known gitignored dependency-cache directories that a fresh
 /// `git worktree add` doesn't carry over — they're gitignored, so no
 /// commit brings their contents along, and a bare worktree checkout
