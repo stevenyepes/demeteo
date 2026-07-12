@@ -214,3 +214,58 @@ fn empty_on_failure_string_is_treated_as_unset() {
     let steps = vec![step("s-validate", StepCapability::Verify, Some(""))];
     assert!(lint_workflow_steps(&steps).is_empty());
 }
+
+// ── finalize placement ───────────────────────────────────────────────────
+
+fn finalize_step(id: &str) -> StepConfig {
+    let mut s = step(id, StepCapability::ReadOnly, None);
+    s.kind = "finalize".into();
+    s
+}
+
+#[test]
+fn a_finalize_step_last_is_fine() {
+    let steps = vec![
+        step("s-implement", StepCapability::Implement, None),
+        finalize_step("s-finalize"),
+    ];
+    assert!(lint_workflow_steps(&steps).is_empty());
+}
+
+#[test]
+fn a_workflow_with_no_finalize_step_is_fine() {
+    let steps = vec![step("s-implement", StepCapability::Implement, None)];
+    assert!(lint_workflow_steps(&steps).is_empty());
+}
+
+/// Anything after the squash commits onto a branch that has already been
+/// rewritten and published — its work would land outside the single commit
+/// the reviewer actually sees.
+#[test]
+fn a_finalize_step_that_is_not_last_is_rejected() {
+    let steps = vec![
+        finalize_step("s-finalize"),
+        step("s-implement", StepCapability::Implement, None),
+    ];
+    let errors = lint_workflow_steps(&steps);
+    assert!(
+        errors.iter().any(|e| e.contains("is not last")),
+        "expected a not-last complaint, got: {errors:?}"
+    );
+}
+
+/// The second squash would collapse the first one's commit and overwrite the
+/// PR summary the first one authored.
+#[test]
+fn two_finalize_steps_are_rejected() {
+    let steps = vec![
+        step("s-implement", StepCapability::Implement, None),
+        finalize_step("s-finalize-1"),
+        finalize_step("s-finalize-2"),
+    ];
+    let errors = lint_workflow_steps(&steps);
+    assert!(
+        errors.iter().any(|e| e.contains("at most one is allowed")),
+        "expected a duplicate-finalize complaint, got: {errors:?}"
+    );
+}

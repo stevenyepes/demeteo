@@ -75,6 +75,10 @@ pub struct FeaturePatch {
     pub mr_url: Option<Option<String>>,
     /// Set the MR/PR state on the feature (draft/open/merged/closed).
     pub mr_state: Option<Option<String>>,
+    /// Store the PR title/body the `finalize` step's agent authored, for the
+    /// publisher to pick up at the end of the run.
+    pub pr_title: Option<Option<String>>,
+    pub pr_body: Option<Option<String>>,
     /// Snapshot the resolved per-run `commit_artifacts` flag onto the row
     /// once the bootstrap tail has resolved the execution context. The
     /// eager row is inserted with the caller's raw override (which may be

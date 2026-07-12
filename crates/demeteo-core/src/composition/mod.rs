@@ -200,7 +200,7 @@ pub fn build_core_context(
         let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> = Arc::new(
             adapters::artifact_store::fs::FsArtifactStore::new(app_data_dir.clone()),
         );
-        let exec = Arc::new(adapters::step_executor::DagStepExecutor::new(
+        let exec = adapters::step_executor::DagStepExecutor::new(
             machines_repo.clone(),
             projects_repo.clone(),
             features_repo.clone(),
@@ -222,7 +222,16 @@ pub fn build_core_context(
             workspace_dir.clone(),
             pricing.clone(),
             remote_run_mirror_repo.clone(),
-        ));
+        );
+        // Only the desktop lets a finished run open its own PR. The headless
+        // runner (`LocalOnly`) publishes at the end of `run.rs` instead, with
+        // a memory-only PAT — it has no keyring for this publisher to resolve
+        // one from, and holding a credential for the whole run is precisely
+        // what its design avoids (docs/REMOTE_EXECUTION.md §6.2).
+        let exec = Arc::new(match execution_mode {
+            ExecutionMode::Router => exec.with_mr_publisher(mr_publisher.clone()),
+            ExecutionMode::LocalOnly => exec,
+        });
         // Reconcile DB + notifications first (synchronous, fast).
         exec.startup_watchdog();
         // Then spawn the actual driver resumes on the runtime. Without

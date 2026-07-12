@@ -675,43 +675,8 @@ pub(crate) enum ParsedVerdict {
 /// harness-first single-turn validate path (agent steps), so both parse
 /// the wire contract identically.
 pub(crate) fn parse_verdict_text(raw_text: &str, verdict_key: &str) -> ParsedVerdict {
-    // Strip extended-thinking tags before JSON parsing — agents using
-    // thinking mode emit <think>…</think> as raw text and the parser
-    // would otherwise trip over them or include them in the JSON search.
     let text_buffer = crate::domain::text::strip_think_tags(raw_text);
-
-    // Walk forward through every {…} span. For each balanced span:
-    //   - Valid JSON with the verdict key → record it, skip past the span.
-    //   - Valid JSON without the verdict key → step forward by 1 so inner
-    //     nested objects are independently evaluated (handles models that
-    //     wrap the verdict in an outer object like {"result": {"verdict":"pass"}}).
-    //   - Malformed JSON → skip past the span to avoid O(n²) re-parsing.
-    let mut parsed_val: Option<serde_json::Value> = None;
-    let bytes = text_buffer.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{' {
-            if let Some(close) = find_matching_close_brace(bytes, i) {
-                match serde_json::from_str::<serde_json::Value>(&text_buffer[i..=close]) {
-                    Ok(val) if val.is_object() && val.get(verdict_key).is_some() => {
-                        parsed_val = Some(val);
-                        i = close + 1;
-                        continue;
-                    }
-                    Ok(_) => {
-                        // Valid JSON but no verdict key at top level; step
-                        // forward by 1 so inner objects get evaluated.
-                    }
-                    Err(_) => {
-                        // Balanced braces but not valid JSON; skip the span.
-                        i = close + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
+    let parsed_val = crate::domain::text::find_json_object_with_key(raw_text, verdict_key);
 
     let val = match parsed_val {
         Some(v) => v,
@@ -837,41 +802,6 @@ fn tail_chars(s: &str, max: usize) -> String {
     s.chars().skip(skip).collect()
 }
 
-/// Find the index of the `}` that closes the `{` at `start` in `bytes`,
-/// correctly skipping over string literals (including escaped characters).
-/// Returns `None` if the braces are unbalanced.
-fn find_matching_close_brace(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut depth: i32 = 0;
-    let mut in_str = false;
-    let mut escaped = false;
-    for (offset, &b) in bytes[start..].iter().enumerate() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if in_str {
-            match b {
-                b'\\' => escaped = true,
-                b'"' => in_str = false,
-                _ => {}
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(start + offset);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 /// Outcome of the harness-failure triage classifier (C6/D7).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TriageVerdict {
@@ -979,26 +909,7 @@ fn build_triage_prompt(machine: &str, wt_path: &str, cmd: &str, output_tail: &st
 /// [`parse_verdict_text`]'s tolerance. Any failure to find a usable
 /// `"category"` defaults to [`TriageVerdict::Regression`] (fail-safe).
 pub(crate) fn parse_triage_text(raw_text: &str) -> TriageVerdict {
-    let text = crate::domain::text::strip_think_tags(raw_text);
-    let bytes = text.as_bytes();
-    let mut found: Option<serde_json::Value> = None;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{' {
-            if let Some(close) = find_matching_close_brace(bytes, i) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text[i..=close]) {
-                    if val.is_object() && val.get("category").is_some() {
-                        found = Some(val);
-                        i = close + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-
-    let Some(val) = found else {
+    let Some(val) = crate::domain::text::find_json_object_with_key(raw_text, "category") else {
         return TriageVerdict::Regression;
     };
     let category = val

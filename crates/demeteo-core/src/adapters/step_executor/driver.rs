@@ -98,6 +98,12 @@ pub(crate) struct ExecutionDriver {
     pub app_settings: Arc<dyn AppSettingsRepository>,
     pub git_ops: GitOpsHelper,
     pub merge_executor: Arc<dyn MergeExecutor>,
+    /// Opens the PR once the last step finishes. The same publisher the
+    /// Publish button has always used — an HTTP call to the provider's API,
+    /// never the `gh` CLI. `None` under the headless runner, which opens its
+    /// own PR at the end of `run.rs` with a memory-only PAT instead (it holds
+    /// no keyring credential this could resolve).
+    pub mr_publisher: Option<Arc<dyn crate::ports::mr_publisher::MrPublisher>>,
     pub gate_waiters: Arc<Mutex<HashMap<String, Arc<GateWaiter>>>>,
     pub driver_registry: Arc<DriverRegistry>,
 
@@ -687,6 +693,16 @@ impl ExecutionDriver {
                     self.handle_sync_step(step_exec, &step_conf, &mut accumulated_cost, step_start)
                         .await
                 }
+                "finalize" => {
+                    self.handle_finalize_step(
+                        step_exec,
+                        &step_conf,
+                        &mut accumulated_cost,
+                        &mut accumulated_tokens,
+                        step_start,
+                    )
+                    .await
+                }
                 other => {
                     let msg = format!("Unknown step kind: {}", other);
                     self.fail_step_and_feature(
@@ -935,7 +951,13 @@ impl ExecutionDriver {
 
         let target_status = match self.features.get(&self.f_id) {
             Ok(Some(f)) if f.mr_url.as_ref().is_some_and(|u| !u.is_empty()) => "completed",
-            _ => "awaiting_mr",
+            _ => {
+                // Every step is done. If the `finalize` step left a PR summary
+                // on the row, open the PR now — that is what replaces the old
+                // "park in awaiting_mr and wait for a human to click Publish
+                // and type a title" flow.
+                self.auto_publish_pr().await
+            }
         };
 
         super::updates::finish_feature(
@@ -965,6 +987,73 @@ impl ExecutionDriver {
         // feature knows to start a fresh driver instead of trusting a
         // (now-completed) registry entry.
         self.driver_registry.deregister(&self.f_id);
+    }
+
+    /// Open the PR for a finished feature, and return the status the feature
+    /// should land in.
+    ///
+    /// Returns `"awaiting_mr"` — the historical terminal state, where a human
+    /// clicks Publish — in every case where we can't or shouldn't publish:
+    ///
+    /// * the workflow has no `finalize` step, so nothing authored a title;
+    /// * finalize ran but found nothing to squash (the branch is a no-op);
+    /// * we're the headless runner, which publishes at the end of `run.rs`
+    ///   with its own memory-only PAT (it has no keyring to resolve one from);
+    /// * the publish itself failed — the branch and its summary are intact, so
+    ///   the Publish button is still there to retry with.
+    ///
+    /// Never fails the feature: the work is complete and pushed either way,
+    /// and a provider outage is not a reason to mark a good run as failed.
+    async fn auto_publish_pr(&self) -> &'static str {
+        let Some(publisher) = self.mr_publisher.as_ref() else {
+            return "awaiting_mr";
+        };
+        let Ok(Some(feature)) = self.features.get(&self.f_id) else {
+            return "awaiting_mr";
+        };
+        // No summary on the row means no finalize step ran (or it found nothing
+        // to squash). Publishing here would open a PR the user never asked for,
+        // with a mechanical title — exactly the behaviour finalize replaces.
+        if feature
+            .pr_title
+            .as_ref()
+            .is_none_or(|t| t.trim().is_empty())
+        {
+            return "awaiting_mr";
+        }
+
+        // `title`/`body` stay `None`: the publisher reads the authored summary
+        // off the feature row itself.
+        match publisher
+            .publish_mr(
+                feature.project_id.as_str(),
+                &self.f_id,
+                crate::domain::models::PublishOptions {
+                    draft: false,
+                    title: None,
+                    body: None,
+                    target_branch: None,
+                },
+            )
+            .await
+        {
+            Ok(mr) => {
+                tracing::info!(
+                    feature_id = %self.f_id,
+                    url = %mr.url,
+                    "run finished: opened the PR automatically",
+                );
+                "completed"
+            }
+            Err(e) => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    error = %e,
+                    "run finished but the PR could not be opened; leaving it for the Publish button",
+                );
+                "awaiting_mr"
+            }
+        }
     }
 }
 

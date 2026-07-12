@@ -63,3 +63,60 @@ fn real_world_hermes_pattern() {
         "Research report written to `artifacts/research-report.md`"
     );
 }
+
+// ── find_json_object_with_key ────────────────────────────────────────────
+// The tolerance every structured agent answer depends on: the verifier's
+// verdict, the harness triage classifier, and the finalize step's commit /
+// PR authoring all read their JSON through this one scan.
+
+#[test]
+fn finds_a_bare_json_object() {
+    let val = find_json_object_with_key(r#"{"pr_title": "feat: x"}"#, "pr_title").unwrap();
+    assert_eq!(val["pr_title"], "feat: x");
+}
+
+#[test]
+fn finds_json_wrapped_in_prose_and_a_code_fence() {
+    let raw = "Sure! Here's the summary:\n\n```json\n{\"pr_title\": \"feat: x\", \
+               \"pr_body\": \"why\"}\n```\n\nLet me know if you'd like changes.";
+    let val = find_json_object_with_key(raw, "pr_title").unwrap();
+    assert_eq!(val["pr_body"], "why");
+}
+
+#[test]
+fn finds_json_after_a_thinking_block() {
+    let raw = "<think>I should use a feat: prefix here.</think>{\"pr_title\": \"feat: x\"}";
+    let val = find_json_object_with_key(raw, "pr_title").unwrap();
+    assert_eq!(val["pr_title"], "feat: x");
+}
+
+#[test]
+fn steps_into_a_nested_object_when_the_model_wraps_its_answer() {
+    let raw = r#"{"result": {"pr_title": "feat: x"}}"#;
+    let val = find_json_object_with_key(raw, "pr_title").unwrap();
+    assert_eq!(val["pr_title"], "feat: x");
+}
+
+/// Braces inside string values must not end the span early — a commit body
+/// quoting code (`fn main() { … }`) is the common case.
+#[test]
+fn tolerates_braces_and_escaped_quotes_inside_string_values() {
+    let raw = r#"{"pr_title": "fix: handle {} in body", "pr_body": "he said \"hi\" { nested }"}"#;
+    let val = find_json_object_with_key(raw, "pr_title").unwrap();
+    assert_eq!(val["pr_title"], "fix: handle {} in body");
+    assert_eq!(val["pr_body"], r#"he said "hi" { nested }"#);
+}
+
+/// A malformed object earlier in the text must not shadow the real one.
+#[test]
+fn skips_a_malformed_object_and_finds_the_valid_one() {
+    let raw = "{not json at all} then {\"pr_title\": \"feat: x\"}";
+    let val = find_json_object_with_key(raw, "pr_title").unwrap();
+    assert_eq!(val["pr_title"], "feat: x");
+}
+
+#[test]
+fn returns_none_when_the_key_is_absent() {
+    assert!(find_json_object_with_key(r#"{"other": 1}"#, "pr_title").is_none());
+    assert!(find_json_object_with_key("no json here", "pr_title").is_none());
+}

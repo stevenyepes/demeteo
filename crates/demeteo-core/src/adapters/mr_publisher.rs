@@ -198,9 +198,22 @@ impl HttpMrPublisher {
             .features
             .get(feature_id)?
             .ok_or_else(|| format!("Feature not found: {}", feature_id.0))?;
+        // Title/body resolution, most specific first:
+        //   1. What the caller explicitly asked for.
+        //   2. What the `finalize` step's agent authored onto the feature row
+        //      after squashing the branch — the normal path for any feature on
+        //      a workflow that ends in `finalize`. Resolving it *here* means
+        //      every publish route (the driver's auto-publish, the headless
+        //      runner, the manual Publish button) gets the agent's summary
+        //      without any of them having to know it exists.
+        //   3. The old mechanical defaults, for features whose workflow has no
+        //      finalize step.
+        let non_empty = |s: &String| !s.trim().is_empty();
         let title = options
             .title
             .clone()
+            .filter(non_empty)
+            .or_else(|| feature.pr_title.clone().filter(non_empty))
             .unwrap_or_else(|| feature.title.clone());
         let settings = self
             .projects
@@ -209,6 +222,8 @@ impl HttpMrPublisher {
         let body = options
             .body
             .clone()
+            .filter(non_empty)
+            .or_else(|| feature.pr_body.clone().filter(non_empty))
             .unwrap_or_else(|| {
                 settings
                     .worktree_strategy

@@ -364,6 +364,8 @@ pub async fn remote_submit_run(
         model: model.clone(),
         mr_url: None,
         mr_state: Some("none".to_string()),
+        pr_title: None,
+        pr_body: None,
         commit_artifacts,
         loop_iterations,
         step_overrides: step_overrides.clone(),
@@ -662,6 +664,11 @@ async fn hydrate_shadow_feature(
                 model: Some(feature.model.clone()),
                 mr_url: Some(feature.mr_url.clone()),
                 mr_state: Some(feature.mr_state.clone()),
+                // Mirror the summary the runner's finalize step authored, so
+                // the desktop shadow shows the same PR title/body the runner
+                // published with.
+                pr_title: Some(feature.pr_title.clone()),
+                pr_body: Some(feature.pr_body.clone()),
                 // The shadow inherits the runner's snapshot on the initial
                 // insert; a re-reconcile doesn't change the commit flag.
                 commit_artifacts: None,
