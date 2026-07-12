@@ -416,23 +416,12 @@ impl GitOpsHelper {
             return Ok(());
         }
 
-        // 1. Delete the feature branch.
-        let delete_cmd = format!("git -C {} branch -D {}", safe_dir, safe_branch);
-        self.exec
-            .run_command(machine_str, &delete_cmd)
-            .await
-            .map_err(|e| format!("Failed to delete branch '{}': {}", branch, e))?;
+        // Order matters: a branch checked out in a worktree cannot be
+        // deleted (`git branch -D` refuses with "checked out at …"), so we
+        // must remove the worktrees *before* deleting their branches. This
+        // mirrors `cleanup_subtask_worktree`'s worktree→branch ordering.
 
-        // 2. Delete all subtask branches for this feature.
-        let subtask_cmd = format!(
-            "git -C {} branch --list '{}_subtask_*' | while IFS= read -r b; do git -C {} branch -D \"$b\" 2>/dev/null; done",
-            safe_dir,
-            safe_branch,
-            safe_dir
-        );
-        let _ = self.exec.run_command(machine_str, &subtask_cmd).await;
-
-        // 3. Remove worktree directories for subtasks of this feature.
+        // 1. Remove worktree directories for subtasks of this feature.
         let prefix = format!("{}_subtask_", branch);
         if let Ok(worktrees) = self.list_worktrees(machine_id, repo_dir).await {
             for wt in &worktrees {
@@ -460,9 +449,31 @@ impl GitOpsHelper {
             }
         }
 
-        // 4. Prune orphaned worktrees.
+        // 2. Prune orphaned worktree metadata so the refs are no longer
+        //    considered "checked out" by the branch deletes below.
         let prune_cmd = format!("git -C {} worktree prune", safe_dir);
         let _ = self.exec.run_command(machine_str, &prune_cmd).await;
+
+        // 3. Delete all subtask branches for this feature (now that their
+        //    worktrees are gone). Use `--format=%(refname:short)` so the
+        //    listing emits clean branch names — `git branch --list` prefixes
+        //    each line with two spaces (or `* `), and `IFS= read` preserves
+        //    that leading whitespace, so `git branch -D "  <name>"` would
+        //    never match a real ref.
+        let subtask_cmd = format!(
+            "git -C {} branch --list '{}_subtask_*' --format='%(refname:short)' | while IFS= read -r b; do git -C {} branch -D \"$b\" 2>/dev/null; done",
+            safe_dir,
+            safe_branch,
+            safe_dir
+        );
+        let _ = self.exec.run_command(machine_str, &subtask_cmd).await;
+
+        // 4. Delete the feature branch itself.
+        let delete_cmd = format!("git -C {} branch -D {}", safe_dir, safe_branch);
+        self.exec
+            .run_command(machine_str, &delete_cmd)
+            .await
+            .map_err(|e| format!("Failed to delete branch '{}': {}", branch, e))?;
 
         Ok(())
     }
