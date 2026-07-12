@@ -42,7 +42,7 @@ export function MachineStep({
     onSubmit({
       step: 'machine',
       kind: next.kind ?? kind,
-      machineId: next.machineId !== undefined ? next.machineId : (machineId || null),
+      machine_id: next.machineId !== undefined ? next.machineId : (machineId || null),
     });
   };
 

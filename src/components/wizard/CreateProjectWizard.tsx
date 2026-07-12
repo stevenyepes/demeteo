@@ -275,10 +275,10 @@ export function CreateProjectWizard(): ReactElement {
   );
   const onProviderSubmit = useCallback(
     (payload: Extract<CreateProjectStepPayload, { step: 'provider' }>) => {
-      const provider = providers.find((p) => p.id === payload.providerId);
+      const provider = providers.find((p) => p.id === payload.provider_id);
       setDraft((d) => ({
         ...d,
-        providerId: payload.providerId,
+        providerId: payload.provider_id,
         providerKind: payload.kind,
         providerHost: provider?.host ?? '',
       }));
@@ -289,7 +289,7 @@ export function CreateProjectWizard(): ReactElement {
     (payload: Extract<CreateProjectStepPayload, { step: 'group' }>) => {
       setDraft((d) => ({
         ...d,
-        namespaceId: payload.namespaceId,
+        namespaceId: payload.namespace_id,
         namespaceKind: payload.kind as WizardDraft['namespaceKind'],
         namespaceName: payload.name,
       }));
@@ -301,7 +301,7 @@ export function CreateProjectWizard(): ReactElement {
       setDraft((d) => ({
         ...d,
         machineKind: payload.kind,
-        machineId: payload.machineId,
+        machineId: payload.machine_id,
       }));
     },
     [],
@@ -343,7 +343,7 @@ export function CreateProjectWizard(): ReactElement {
         if (!draft.providerId) return;
         await submitStep({
           step: 'provider',
-          providerId: draft.providerId,
+          provider_id: draft.providerId,
           kind: draft.providerKind,
         });
         return;
@@ -351,7 +351,7 @@ export function CreateProjectWizard(): ReactElement {
         if (!draft.namespaceId) return;
         await submitStep({
           step: 'group',
-          namespaceId: draft.namespaceId,
+          namespace_id: draft.namespaceId,
           kind: draft.namespaceKind || 'org',
           name: draft.namespaceName,
         });
@@ -376,7 +376,7 @@ export function CreateProjectWizard(): ReactElement {
         await submitStep({
           step: 'machine',
           kind: draft.machineKind,
-          machineId: draft.machineId,
+          machine_id: draft.machineId,
         });
         return;
       case BootstrapStep.Agent:
@@ -402,15 +402,15 @@ export function CreateProjectWizard(): ReactElement {
             description: draft.description.trim(),
             visibility: draft.visibility,
             name: draft.name.trim(),
-            providerId: draft.providerId,
-            providerKind: draft.providerKind,
-            providerHost: draft.providerHost,
-            namespaceId: draft.namespaceId,
-            namespaceKind: draft.namespaceKind || 'org',
-            namespaceName: draft.namespaceName,
-            machineKind: draft.machineKind,
-            machineId: draft.machineId,
-            agentKind: draft.agentKind,
+            provider_id: draft.providerId,
+            provider_kind: draft.providerKind,
+            provider_host: draft.providerHost,
+            namespace_id: draft.namespaceId,
+            namespace_kind: draft.namespaceKind || 'org',
+            namespace_name: draft.namespaceName,
+            machine_kind: draft.machineKind,
+            machine_id: draft.machineId,
+            agent_kind: draft.agentKind,
             model: draft.model.trim(),
           });
         } catch (err) {
@@ -561,15 +561,15 @@ export function buildCommitPayload(draft: WizardDraft): Extract<CreateProjectSte
     description: draft.description.trim(),
     visibility: draft.visibility,
     name: draft.name.trim(),
-    providerId: draft.providerId,
-    providerKind: draft.providerKind,
-    providerHost: draft.providerHost,
-    namespaceId: draft.namespaceId,
-    namespaceKind: draft.namespaceKind || 'org',
-    namespaceName: draft.namespaceName,
-    machineKind: draft.machineKind,
-    machineId: draft.machineId,
-    agentKind: draft.agentKind,
+    provider_id: draft.providerId,
+    provider_kind: draft.providerKind,
+    provider_host: draft.providerHost,
+    namespace_id: draft.namespaceId,
+    namespace_kind: draft.namespaceKind || 'org',
+    namespace_name: draft.namespaceName,
+    machine_kind: draft.machineKind,
+    machine_id: draft.machineId,
+    agent_kind: draft.agentKind,
     model: draft.model.trim(),
   };
 }
