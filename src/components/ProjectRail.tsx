@@ -1,9 +1,18 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles } from 'lucide-react';
 import { StatusBadge, LivenessDot } from './ui/StatusBadge';
 import { useNavigation, useProject, useUIState } from '../context';
 import { checkWorkspaceLiveness } from '../lib/project';
 import { formatError } from '../lib/errors';
+
+// Statuses that mean "this workspace has a pipeline actively running/gated
+// right now" — the only ones probed for machine reachability at app start.
+// Idle/error/failed workspaces stay 'unknown' until the user opens them
+// (the currentProjectId effect below probes on-demand, unconditionally).
+const ACTIVE_PIPELINE_STATUSES = new Set(['running', 'bootstrapping', 'gated', 'active']);
+function hasActivePipeline(status: string): boolean {
+  return ACTIVE_PIPELINE_STATUSES.has(status);
+}
 
 function fuzzyMatch(text: string, query: string): boolean {
   const lower = text.toLowerCase();
@@ -37,35 +46,53 @@ function ProjectRail() {
 
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Probe machine reachability for any workspace that hasn't been checked
-  // yet this session. `liveness` is never persisted (see `types.ts`), so
-  // every project starts `undefined` on each app launch/list load; that's
-  // exactly what marks it as needing a fresh probe. Dispatching 'checking'
-  // synchronously moves it out of the `undefined` bucket, so the effect
-  // can't loop as SET_LIVENESS results flow back through `projects`.
-  useEffect(() => {
-    const unchecked = projects.filter(p => p.liveness === undefined);
-    if (unchecked.length === 0) return;
+  // Per-project generation counter: each call bumps the counter for that
+  // project id before dispatching 'checking'. When a probe's promise
+  // settles, it only applies its result if it's still the latest probe
+  // fired for that id — otherwise a stale, slow-to-resolve probe (e.g. from
+  // an A -> B -> A switch where A's first probe is still in flight) can't
+  // clobber the result of a probe started after it.
+  const probeGenerations = useRef<Map<string, number>>(new Map());
 
-    for (const p of unchecked) {
-      dispatch({ type: 'SET_LIVENESS', id: p.id, liveness: 'checking' });
-    }
-    for (const p of unchecked) {
-      checkWorkspaceLiveness(p.id)
-        .then(result => {
-          dispatch({
-            type: 'SET_LIVENESS',
-            id: p.id,
-            liveness: result.liveness === 'online' ? 'online' : 'offline',
-            checkedAt: result.checked_at,
-          });
-        })
-        .catch(err => {
-          console.warn('Liveness check failed for project', p.id, formatError(err));
-          dispatch({ type: 'SET_LIVENESS', id: p.id, liveness: 'offline' });
+  const probeProject = useCallback((id: string) => {
+    const generation = (probeGenerations.current.get(id) ?? 0) + 1;
+    probeGenerations.current.set(id, generation);
+    dispatch({ type: 'SET_LIVENESS', id, liveness: 'checking' });
+    checkWorkspaceLiveness(id)
+      .then(result => {
+        if (probeGenerations.current.get(id) !== generation) return;
+        dispatch({
+          type: 'SET_LIVENESS',
+          id,
+          liveness: result.liveness === 'online' ? 'online' : 'offline',
+          checkedAt: result.checked_at,
         });
-    }
-  }, [projects, dispatch]);
+      })
+      .catch(err => {
+        if (probeGenerations.current.get(id) !== generation) return;
+        console.warn('Liveness check failed for project', id, formatError(err));
+        dispatch({ type: 'SET_LIVENESS', id, liveness: 'offline' });
+      });
+  }, [dispatch]);
+
+  // Startup sweep: probe machine reachability only for workspaces with an
+  // active pipeline that haven't been checked yet this session. `liveness`
+  // is never persisted (see `types.ts`), so every project starts
+  // `undefined` on each app launch/list load; dispatching 'checking'
+  // synchronously moves a project out of the `undefined` bucket, so this
+  // effect can't loop as SET_LIVENESS results flow back through `projects`.
+  useEffect(() => {
+    const unchecked = projects.filter(p => p.liveness === undefined && hasActivePipeline(p.status));
+    for (const p of unchecked) probeProject(p.id);
+  }, [projects, probeProject]);
+
+  // On-demand: whenever the selected workspace changes, fire a fresh probe
+  // for it unconditionally — regardless of its prior liveness or pipeline
+  // status. The active-pipeline filter above only scopes the startup sweep.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    probeProject(currentProjectId);
+  }, [currentProjectId, probeProject]);
 
   const filtered = useMemo(() => {
     if (!searchQuery.trim()) return projects;
