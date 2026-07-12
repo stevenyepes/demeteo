@@ -83,12 +83,12 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
     }
   };
 
-  const handleAddStep = (type: 'agent' | 'parallel' | 'gate') => {
+  const handleAddStep = (type: 'agent' | 'sequence' | 'gate') => {
     const newId = `step-${Date.now()}`;
     const newStep: StepConfig = {
       id: newId,
       kind: type,
-      title: type === 'agent' ? 'Run Coding Agent' : type === 'parallel' ? 'Decompose & Implement' : 'User Approval Gate',
+      title: type === 'agent' ? 'Run Coding Agent' : type === 'sequence' ? 'Implement Tasks' : 'User Approval Gate',
       agent_kind: type === 'gate' ? null : 'opencode',
       prompt_template: type === 'gate' ? null : 'Implement task based on requirements',
       on_failure: null,
@@ -338,10 +338,10 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleAddStep('parallel')}
+                  onClick={() => handleAddStep('sequence')}
                   className="flex items-center gap-1.5 px-3 py-1 bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 border border-violet-500/20 rounded text-xs font-bold transition"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Parallel
+                  <Plus className="w-3.5 h-3.5" /> Sequence
                 </button>
                 <button
                   type="button"
@@ -361,7 +361,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
               <div className="space-y-4">
                 {steps.map((step, idx) => {
                   let leftBorder = 'border-l-cyan-500/80';
-                  if (step.kind === 'parallel') leftBorder = 'border-l-violet-500/80';
+                  if (step.kind === 'sequence' || step.kind === 'parallel') leftBorder = 'border-l-violet-500/80';
                   if (step.kind === 'gate') leftBorder = 'border-l-amber-500/80';
 
                   return (
@@ -421,8 +421,11 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                               onChange={(e) => handleUpdateStep(idx, { kind: e.target.value })}
                               className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500"
                             >
-                              <option value="agent">Agent (Sequential Dispatch)</option>
-                              <option value="parallel">Parallel (Worktree Split & Merge)</option>
+                              <option value="agent">Agent (Single Session)</option>
+                              <option value="sequence">Sequence (Task List, One Agent per Task)</option>
+                              {step.kind === 'parallel' && (
+                                <option value="parallel">Parallel (deprecated — runs sequentially)</option>
+                              )}
                               <option value="gate">Gate (Manual Decisional Stop)</option>
                             </select>
                           </div>
@@ -537,7 +540,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                                       capability: (e.target.value || null) as StepConfig['capability'],
                                     })
                                   }
-                                  disabled={step.kind === 'parallel'}
+                                  disabled={step.kind === 'sequence' || step.kind === 'parallel'}
                                   className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500 disabled:opacity-50"
                                 >
                                   <option value="">Auto (safe default)</option>

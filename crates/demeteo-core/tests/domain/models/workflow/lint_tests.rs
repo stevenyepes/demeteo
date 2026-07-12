@@ -20,6 +20,7 @@ fn step(id: &str, capability: StepCapability, on_failure: Option<&str>) -> StepC
         allow_network: false,
         allow_shell: false,
         gate_class: None,
+        task_list_from: None,
     }
 }
 
@@ -267,5 +268,121 @@ fn two_finalize_steps_are_rejected() {
     assert!(
         errors.iter().any(|e| e.contains("at most one is allowed")),
         "expected a duplicate-finalize complaint, got: {errors:?}"
+    );
+}
+
+// --- `sequence` steps and their `task_list_from` source ---------------------
+//
+// A sequence step executes a task list some earlier step wrote. Getting the
+// wiring wrong is invisible at authoring time and only surfaces at run time as
+// "there is no task list to execute" — after the feature has already paid for a
+// research and a spec step. The lint is what makes that a save-time error.
+
+fn task_list_producer(id: &str) -> StepConfig {
+    let mut s = step(id, StepCapability::Artifacts, None);
+    s.artifacts = Some(vec![ArtifactDecl {
+        name: "task-list".into(),
+        capture: ArtifactCapture::LastWriteTo {
+            path: "artifacts/task-list.json".into(),
+        },
+        mode: Default::default(),
+        inline: Default::default(),
+    }]);
+    s
+}
+
+fn sequence_step(id: &str, from: &str) -> StepConfig {
+    let mut s = step(id, StepCapability::Implement, None);
+    s.kind = "sequence".into();
+    s.task_list_from = Some(StepId::from(from.to_string()));
+    s
+}
+
+#[test]
+fn sequence_step_reading_a_task_list_from_an_earlier_producer_is_clean() {
+    let steps = vec![
+        task_list_producer("s-spec"),
+        sequence_step("s-impl", "s-spec"),
+    ];
+    assert!(
+        lint_workflow_steps(&steps).is_empty(),
+        "{:?}",
+        lint_workflow_steps(&steps)
+    );
+}
+
+#[test]
+fn sequence_step_pointing_at_a_missing_step_is_flagged() {
+    let steps = vec![sequence_step("s-impl", "s-nope")];
+    let errs = lint_workflow_steps(&steps);
+    assert!(
+        errs.iter().any(|e| e.contains("does not exist")),
+        "{:?}",
+        errs
+    );
+}
+
+/// The source must be *earlier*: the artifact has to exist by the time the
+/// sequence step runs.
+#[test]
+fn sequence_step_pointing_at_a_later_step_is_flagged() {
+    let steps = vec![
+        sequence_step("s-impl", "s-spec"),
+        task_list_producer("s-spec"),
+    ];
+    let errs = lint_workflow_steps(&steps);
+    assert!(
+        errs.iter().any(|e| e.contains("not earlier in the DAG")),
+        "{:?}",
+        errs
+    );
+}
+
+/// The source existing is not enough — it has to actually declare the
+/// `task-list` artifact, or the step will find nothing to read at run time.
+#[test]
+fn sequence_step_whose_source_declares_no_task_list_is_flagged() {
+    let steps = vec![
+        step("s-spec", StepCapability::Artifacts, None),
+        sequence_step("s-impl", "s-spec"),
+    ];
+    let errs = lint_workflow_steps(&steps);
+    assert!(
+        errs.iter().any(|e| e.contains("declares no `task-list`")),
+        "{:?}",
+        errs
+    );
+}
+
+/// Only a sequence step executes a task list; the field is dead config anywhere
+/// else, which misrepresents what the workflow does.
+#[test]
+fn task_list_from_on_a_non_sequence_step_is_flagged() {
+    let mut agent = step("s-impl", StepCapability::Implement, None);
+    agent.task_list_from = Some(StepId::from("s-spec".to_string()));
+    let steps = vec![task_list_producer("s-spec"), agent];
+    let errs = lint_workflow_steps(&steps);
+    assert!(
+        errs.iter().any(|e| e.contains("only `sequence` steps")),
+        "{:?}",
+        errs
+    );
+}
+
+/// `parallel` is the superseded spelling of `sequence` and is still dispatched
+/// to the same handler, so it must satisfy the same wiring rules rather than
+/// being treated as a foreign kind.
+#[test]
+fn legacy_parallel_kind_is_treated_as_a_sequence_step() {
+    let mut legacy = sequence_step("s-impl", "s-spec");
+    legacy.kind = "parallel".into();
+    assert!(legacy.is_sequence());
+    assert_eq!(legacy.effective_capability(), StepCapability::Implement);
+
+    let steps = vec![task_list_producer("s-spec"), legacy];
+    assert!(
+        lint_workflow_steps(&steps).is_empty(),
+        "{:?}",
+        lint_workflow_steps(&steps)
     );
 }

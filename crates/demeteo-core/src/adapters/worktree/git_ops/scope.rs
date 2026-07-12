@@ -25,7 +25,7 @@
 //! - `LastWriteTo { path }` → the explicit path
 //! - `ByName { .. }`, `AllWrites`, `ChangedFiles`, `Diff` → whole worktree
 //!   (declaration doesn't constrain where the artifact ends up, so we
-//!   allow full write). Today this means `AllWrites` (the parallel
+//!   allow full write). Today this means `AllWrites` (the sequence
 //!   implement step's capture) opts out of scope enforcement — by design.
 
 use std::path::{Path, PathBuf};
@@ -183,7 +183,7 @@ pub(crate) fn derive_writable_paths(
             | ArtifactCapture::Diff { .. } => {
                 // Unconstrained capture shape → caller must treat the
                 // whole worktree as writable (e.g. `s-implement`
-                // parallel workers fanning out across the source tree).
+                // implement steps writing across the source tree).
                 // Returning a sentinel that means "no scope" — the
                 // apply function interprets an empty `writable_paths`
                 // AND a "all_writes" present as full-write.
@@ -229,7 +229,7 @@ impl GitOpsHelper {
     ///
     /// No-op when `writable_paths` is empty (caller is signaling "no
     /// scope, allow everything") or when the step declares a
-    /// full-write capture (e.g. `s-implement` parallel workers).
+    /// full-write capture (e.g. the `s-implement` sequence step).
     pub(crate) async fn apply_artifact_scope(
         &self,
         machine_id: Option<&str>,
@@ -240,7 +240,7 @@ impl GitOpsHelper {
         let wt = Path::new(worktree_path);
 
         // Full-write opt-out: do nothing. Used by `Implement` steps and
-        // `s-implement` parallel workers whose capability scope is `All`.
+        // the `s-implement` sequence step, whose capability scope is `All`.
         if writable_paths
             .iter()
             .any(|p| p == &PathBuf::from(ALL_WRITES))

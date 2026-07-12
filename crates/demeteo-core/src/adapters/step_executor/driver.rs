@@ -43,10 +43,10 @@ pub(crate) struct RetryContext {
     pub max: u32,
     /// Failing test identifiers from a structured verdict (empty for
     /// plain failures). Lets the retried step's prompt name the exact
-    /// tests to fix and the parallel step target the owning subtasks.
+    /// tests to fix and the sequence step target the owning tasks.
     pub failing_tests: Vec<String>,
     /// Repo-relative files a structured verdict implicated (empty for
-    /// plain failures). The parallel step re-runs only the subtasks
+    /// plain failures). The sequence step re-runs only the tasks
     /// whose ownership intersects these.
     pub implicated_files: Vec<String>,
     /// Step id of the step whose failure opened this loop iteration.
@@ -218,13 +218,13 @@ pub(crate) struct ExecutionDriver {
     pub last_cache_read: Option<u64>,
     pub last_cache_creation: Option<u64>,
 
-    /// The last *full* subtask DAG the planner produced for this run's
-    /// parallel step. On retry attempt 1 the parallel step reuses it to
-    /// re-run only the subtasks owning the verdict's implicated files —
-    /// skipping the planner turn and the untouched workers entirely.
-    /// Attempt 2+ re-plans from scratch (the targeted fix didn't stick).
-    /// In-memory only: an app restart just means one extra planner turn.
-    pub cached_dag: Option<crate::adapters::step_executor::steps::parallel::planner::SubtaskDag>,
+    /// The last *full* task list this run's `sequence` step resolved. On
+    /// retry attempt 1 the step reuses it to re-run only the tasks owning
+    /// the verdict's implicated files — skipping the untouched ones, whose
+    /// commits are already on the branch. Attempt 2+ re-resolves the full
+    /// plan (the targeted fix didn't stick). In-memory only: an app restart
+    /// just means re-reading the task list.
+    pub cached_plan: Option<crate::adapters::step_executor::steps::sequence::tasks::TaskPlan>,
 
     /// Step-execution ids that already consumed their single free
     /// in-place retry after an environmental failure (agent blocked,
@@ -461,7 +461,7 @@ impl ExecutionDriver {
     /// independent of how many `on_failure` retries have merged work back
     /// into `branch_name` since.
     ///
-    /// Steps that compute a *review* diff (the parallel step's `code-diff`
+    /// Steps that compute a *review* diff (the sequence step's `code-diff`
     /// artifact, `process_agent_artifacts`'s diff) use this instead of a
     /// per-attempt base SHA. Without it: on a retry, the per-attempt base
     /// is recaptured as `branch_name`'s current tip, which by then already
@@ -677,8 +677,13 @@ impl ExecutionDriver {
                     )
                     .await
                 }
-                "parallel" => {
-                    self.handle_parallel_step(
+                // `parallel` is the superseded name for this step. Its
+                // concurrent fan-out was removed; such steps now run their
+                // tasks sequentially. Kept as an alias so workflows the user
+                // cloned or overrode keep running instead of failing with
+                // "Unknown step kind". See `steps/sequence`.
+                "sequence" | "parallel" => {
+                    self.handle_sequence_step(
                         step_exec,
                         &step_conf,
                         &mut accumulated_cost,

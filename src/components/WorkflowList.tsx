@@ -266,7 +266,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                 {selectedWorkflow.steps.map((step, idx) => {
                   let badgeColor = 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
                   let icon = <Cpu className="w-4 h-4" />;
-                  if (step.kind === 'parallel') {
+                  if (step.kind === 'sequence' || step.kind === 'parallel') {
                     badgeColor = 'bg-violet-500/10 text-violet-400 border-violet-500/20';
                     icon = <GitBranch className="w-4 h-4" />;
                   } else if (step.kind === 'gate') {

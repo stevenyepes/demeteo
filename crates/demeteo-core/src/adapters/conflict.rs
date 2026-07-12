@@ -7,7 +7,7 @@
 //!   a constrained prompt, which depends on the full
 //!   `AgentRuntime + StepExecutor` plumbing. We return
 //!   "auto-agent resolution not implemented yet; cascade to manual"
-//!   so the existing `steps/parallel.rs` cascade can already route
+//!   so the existing `steps/sequence` cascade can already route
 //!   to the manual path today. The auto-agent path is wired in R6E.
 //!
 //! - [`ConflictResolver::request_manual_resolution`] emits the
@@ -47,7 +47,7 @@ impl ConflictResolver for CascadeConflictResolver {
         // The auto-agent path spawns a fresh ACP session with a
         // constrained prompt ("resolve these N files; do not modify
         // unrelated code; produce a resolution commit"). Implementing
-        // it here would duplicate the worktree plumbing the parallel
+        // it here would duplicate the worktree plumbing the sequence
         // step already owns, so we delegate to the manual path instead for v1.
         //
         // A future phase will replace this stub with a proper

@@ -20,6 +20,7 @@ fn step(kind: &str, capability: Option<StepCapability>) -> StepConfig {
         allow_network: false,
         allow_shell: false,
         gate_class: None,
+        task_list_from: None,
     }
 }
 

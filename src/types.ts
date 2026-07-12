@@ -284,7 +284,7 @@ export interface Workflow {
  * What a step is allowed to do. Drives the agent permission profile (tool
  * policy) and the chmod write-scope fence on the Rust side. When omitted,
  * the backend infers a safe default (`artifacts` for ordinary agent steps,
- * `implement` for parallel / unconstrained-write steps).
+ * `implement` for sequence / unconstrained-write steps).
  * - `read_only`: inspect/review only — no writes, no shell, no network.
  * - `artifacts`: read + write only under `artifacts/` — no shell, no network.
  * - `verify`: read + run build/test/lint + write only under `artifacts/`.
@@ -294,10 +294,21 @@ export type StepCapability = 'read_only' | 'artifacts' | 'verify' | 'implement';
 
 export type StepConfig = {
   id: string;
-  kind: 'agent' | 'parallel' | 'gate' | string;
+  /**
+   * `parallel` is the superseded name for `sequence`. Its concurrent fan-out
+   * was removed; steps still carrying the old kind are executed sequentially.
+   * Kept in the union so existing saved workflows still type-check.
+   */
+  kind: 'agent' | 'sequence' | 'parallel' | 'gate' | string;
   title: string;
   agent_kind?: string | null;
   model?: string | null;
+  /**
+   * `sequence` steps only: the earlier step whose `task-list` artifact holds
+   * the ordered task list to execute. Unset falls back to the step planning
+   * the work itself.
+   */
+  task_list_from?: string | null;
   prompt_template?: string | null;
   on_failure?: string | null;
   max_iterations?: number | null;
