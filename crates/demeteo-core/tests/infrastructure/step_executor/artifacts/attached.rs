@@ -29,6 +29,7 @@ fn step_conf_inline(step_id: &str) -> crate::domain::models::StepConfig {
         allow_network: false,
         allow_shell: false,
         gate_class: None,
+        task_list_from: None,
     }
 }
 

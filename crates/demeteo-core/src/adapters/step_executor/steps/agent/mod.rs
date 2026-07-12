@@ -744,7 +744,12 @@ impl ExecutionDriver {
             let _ = self.exec.run_command(&machine_str, &merge_back_cmd).await;
 
             let unmerged =
-                crate::adapters::step_executor::steps::parallel::list_unmerged::list_unmerged_files(&*self.exec, &machine_str, &wt_path).await;
+                crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files(
+                    &*self.exec,
+                    &machine_str,
+                    &wt_path,
+                )
+                .await;
             if !unmerged.is_empty() {
                 let files_list = unmerged
                     .iter()
@@ -828,7 +833,12 @@ impl ExecutionDriver {
                 } else {
                     // Verify conflicts are resolved.
                     let still_unmerged =
-                        crate::adapters::step_executor::steps::parallel::list_unmerged::list_unmerged_files(&*self.exec, &machine_str, &wt_path).await;
+                        crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files(
+                            &*self.exec,
+                            &machine_str,
+                            &wt_path,
+                        )
+                        .await;
                     if still_unmerged.is_empty() {
                         let commit_resolved = self
                             .exec

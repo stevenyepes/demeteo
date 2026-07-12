@@ -76,6 +76,17 @@ pub struct StepConfig {
     /// auto-approves. Ignored on non-gate steps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_class: Option<String>,
+    /// For a `sequence` step: the earlier step whose `task-list` artifact
+    /// holds the ordered task list to execute. Putting the decomposition in
+    /// an upstream artifact means a human gate can review it *before* any
+    /// code is written, and saves the implement step a planner turn.
+    ///
+    /// Unset selects the legacy planner fallback (the step decomposes the
+    /// work itself), which is what a workflow authored against the old
+    /// `parallel` kind looks like. Stored inside `steps_json`, so no DB
+    /// migration is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_list_from: Option<StepId>,
 }
 
 impl StepConfig {
@@ -94,11 +105,11 @@ impl StepConfig {
     /// as JSON blobs, so there's no SQL migration — the inference *is*
     /// the migration):
     ///
-    /// - `parallel` steps and steps whose artifact capture is
-    ///   unconstrained (`AllWrites` / `ByName` / `Diff` / `ChangedFiles`)
-    ///   → [`StepCapability::Implement`] (they legitimately fan out
-    ///   across the source tree; preserve their old unconstrained
-    ///   behavior).
+    /// - `sequence` steps (and the `parallel` steps they superseded) and
+    ///   steps whose artifact capture is unconstrained (`AllWrites` /
+    ///   `ByName` / `Diff` / `ChangedFiles`) → [`StepCapability::Implement`]
+    ///   (they legitimately write across the source tree; preserve their old
+    ///   unconstrained behavior).
     /// - every other undeclared agent step → [`StepCapability::Artifacts`]
     ///   (safe default: read + write only `artifacts/`, no shell). This
     ///   is what closes the historical "no artifacts declared ⇒ totally
@@ -107,12 +118,34 @@ impl StepConfig {
         if let Some(cap) = self.capability {
             return cap;
         }
-        if self.kind == "parallel" || declares_unconstrained_write(self.artifacts.as_deref()) {
+        if self.is_sequence() || declares_unconstrained_write(self.artifacts.as_deref()) {
             StepCapability::Implement
         } else {
             StepCapability::Artifacts
         }
     }
+
+    /// True for a step the sequence handler runs.
+    ///
+    /// `parallel` is the superseded name: the concurrent fan-out it used to
+    /// mean was removed (it let concurrent features delete each other's
+    /// worktrees, and forced a fictional disjoint-file partition on the
+    /// planner), and such steps are now executed sequentially. Workflows the
+    /// user has cloned or overridden still carry the old kind, so it stays an
+    /// accepted alias rather than becoming an unknown-kind failure.
+    pub fn is_sequence(&self) -> bool {
+        self.kind == "sequence" || self.kind == "parallel"
+    }
+}
+
+/// True when `step` declares an artifact named `task-list` — the contract a
+/// `sequence` step's `task_list_from` source has to satisfy.
+fn declares_task_list(step: &StepConfig) -> bool {
+    step.artifacts
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .any(|d| d.name == "task-list")
 }
 
 /// True when any declared artifact uses a capture shape that doesn't pin
@@ -192,6 +225,46 @@ pub fn lint_workflow_steps(steps: &[StepConfig]) -> Vec<String> {
         .enumerate()
         .map(|(i, s)| (s.id.0.as_str(), i))
         .collect();
+
+    // 1c. A `sequence` step's `task_list_from` must name a step that exists,
+    // sits strictly earlier, and actually declares a `task-list` artifact.
+    // Getting this wrong is silent at authoring time and only surfaces at
+    // run time as "there is no task list to execute", after the feature has
+    // already spent a research and a spec step.
+    for (i, step) in steps.iter().enumerate() {
+        let Some(source) = step.task_list_from.as_ref().filter(|s| !s.0.is_empty()) else {
+            continue;
+        };
+        if !step.is_sequence() {
+            errors.push(format!(
+                "step '{}' sets `task_list_from` but is kind `{}` — only `sequence` steps \
+                 execute a task list",
+                step.id.0, step.kind
+            ));
+            continue;
+        }
+        match index_of.get(source.0.as_str()) {
+            None => errors.push(format!(
+                "step '{}' has task_list_from '{}' which does not exist",
+                step.id.0, source.0
+            )),
+            Some(&src_idx) => {
+                if src_idx >= i {
+                    errors.push(format!(
+                        "step '{}' (index {}) has task_list_from '{}' (index {}), which is not \
+                         earlier in the DAG — the task list must already exist when the step runs",
+                        step.id.0, i, source.0, src_idx
+                    ));
+                } else if !declares_task_list(&steps[src_idx]) {
+                    errors.push(format!(
+                        "step '{}' takes its task list from '{}', but '{}' declares no \
+                         `task-list` artifact",
+                        step.id.0, source.0, source.0
+                    ));
+                }
+            }
+        }
+    }
 
     for (i, step) in steps.iter().enumerate() {
         let Some(target) = step.on_failure.as_ref().filter(|t| !t.0.is_empty()) else {

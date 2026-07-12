@@ -122,7 +122,7 @@ export function OverridesTab() {
                               <div className="flex items-center gap-2 mb-3">
                                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/5 text-slate-400 shrink-0">{idx + 1}</span>
                                 <span className="text-xs font-semibold text-slate-200 truncate">{step.title}</span>
-                                <span className={`px-1.5 py-0.5 text-[9px] font-mono rounded uppercase tracking-wider shrink-0 ${step.kind === 'parallel' ? 'bg-violet-500/10 text-violet-300' : 'bg-cyan-500/10 text-cyan-300'}`}>{step.kind}</span>
+                                <span className={`px-1.5 py-0.5 text-[9px] font-mono rounded uppercase tracking-wider shrink-0 ${step.kind === 'sequence' || step.kind === 'parallel' ? 'bg-violet-500/10 text-violet-300' : 'bg-cyan-500/10 text-cyan-300'}`}>{step.kind}</span>
                               </div>
                               <OverrideRow wf={wf} step={step} />
                             </div>
