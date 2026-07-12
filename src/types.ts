@@ -22,9 +22,9 @@ export interface Project {
   remote_host?: string | null;
   /**
    * Frontend-only workspace connectivity state, populated by
-   * `check_workspace_liveness`. Absent/`undefined` means `'unknown'` —
-   * never fetched yet this session. Not persisted; resets on every
-   * app launch.
+   * `checkWorkspaceLiveness` (client-side, via the `test_machine_connection`
+   * IPC). Absent/`undefined` means `'unknown'` — never fetched yet this
+   * session. Not persisted; resets on every app launch.
    */
   liveness?: 'unknown' | 'checking' | 'online' | 'offline';
   /** ISO8601 timestamp of the most recent liveness check, if any. */
