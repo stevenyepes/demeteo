@@ -196,14 +196,14 @@ onLaunched: (f) => {
   };
 
   await submit({ step: "name", value: "billing-service" });
-  await submit({ step: "provider", providerId: "prov-1", kind: "github" });
+  await submit({ step: "provider", provider_id: "prov-1", kind: "github" });
   await submit({
     step: "group",
-    namespaceId: "octocat",
+    namespace_id: "octocat",
     kind: "personal",
     name: "octocat",
   });
-  await submit({ step: "machine", kind: "local", machineId: null });
+  await submit({ step: "machine", kind: "local", machine_id: null });
   await submit({ step: "agent", kind: "opencode" });
   await submit({ step: "model", model: "anthropic/claude-sonnet-4" });
   await submit({
@@ -212,15 +212,15 @@ onLaunched: (f) => {
     description: "Implement the billing service.",
     visibility: "private",
     name: "billing-service",
-    providerId: "prov-1",
-    providerKind: "github",
-    providerHost: "github.com",
-    namespaceId: "octocat",
-    namespaceKind: "personal",
-    namespaceName: "octocat",
-    machineKind: "local",
-    machineId: null,
-    agentKind: "opencode",
+    provider_id: "prov-1",
+    provider_kind: "github",
+    provider_host: "github.com",
+    namespace_id: "octocat",
+    namespace_kind: "personal",
+    namespace_name: "octocat",
+    machine_kind: "local",
+    machine_id: null,
+    agent_kind: "opencode",
     model: "anthropic/claude-sonnet-4",
   });
 
@@ -339,16 +339,16 @@ onLaunched: (f) => {
 
   // Advance to Machine (auto-progressing past Provider + Group).
   await submit({ step: "name", value: "my-repo" });
-  await submit({ step: "provider", providerId: "prov-1", kind: "github" });
+  await submit({ step: "provider", provider_id: "prov-1", kind: "github" });
   await submit({
     step: "group",
-    namespaceId: "octocat",
+    namespace_id: "octocat",
     kind: "personal",
     name: "octocat",
   });
   // No submit for Machine — simulate the wizard auto-progressing past
   // it as well. We do that by calling submit + advancing state by hand.
-  await submit({ step: "machine", kind: "local", machineId: null });
+  await submit({ step: "machine", kind: "local", machine_id: null });
 
   if (readHook(holder).state.step !== "machine") {
     throw new Error("setup: expected wizard to be parked on machine");

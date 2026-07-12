@@ -46,7 +46,7 @@ export function ProviderStep({ providers, value, onSubmit }: ProviderStepProps) 
               key={kind}
               type="button"
               disabled={!connected}
-              onClick={() => provider && onSubmit({ step: 'provider', providerId: provider.id, kind })}
+              onClick={() => provider && onSubmit({ step: 'provider', provider_id: provider.id, kind })}
               data-testid={`wizard-provider-${kind}`}
               className={`relative flex items-start gap-3 p-4 rounded-xl border text-left transition-all ${
                 selected

@@ -43,7 +43,7 @@ export function GroupStep({ namespaces, loading, value, onSubmit }: GroupStepPro
             <button
               key={n.id}
               type="button"
-              onClick={() => onSubmit({ step: 'group', namespaceId: n.id, kind: n.kind, name: n.name })}
+              onClick={() => onSubmit({ step: 'group', namespace_id: n.id, kind: n.kind, name: n.name })}
               data-testid={`wizard-namespace-${n.id}`}
               className={`flex items-center gap-3 p-2.5 rounded-lg border text-left text-sm transition-all ${
                 value === n.id
@@ -83,7 +83,7 @@ export function GroupStep({ namespaces, loading, value, onSubmit }: GroupStepPro
             const match = namespaces.find((n) => n.id === v);
             onSubmit({
               step: 'group',
-              namespaceId: v,
+              namespace_id: v,
               kind: match?.kind ?? 'org',
               name: match?.name ?? v,
             });

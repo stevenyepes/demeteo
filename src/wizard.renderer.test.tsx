@@ -316,20 +316,20 @@ function findByTestId(root: ReactTestInstance, id: string): ReactTestInstance | 
     description: 'd',
     visibility: 'private',
     name: 'n',
-    providerId: 'pid',
-    providerKind: 'github',
-    providerHost: 'gh.corp.example.com',
-    namespaceId: 'me',
-    namespaceKind: 'personal',
-    namespaceName: 'me',
-    machineKind: 'remote',
-    machineId: 'm1',
-    agentKind: 'opencode',
+    provider_id: 'pid',
+    provider_kind: 'github',
+    provider_host: 'gh.corp.example.com',
+    namespace_id: 'me',
+    namespace_kind: 'personal',
+    namespace_name: 'me',
+    machine_kind: 'remote',
+    machine_id: 'm1',
+    agent_kind: 'opencode',
     model: 'anthropic/claude-sonnet-4',
   };
-  if (sample.providerHost !== 'gh.corp.example.com') {
+  if (sample.provider_host !== 'gh.corp.example.com') {
     throw new Error(
-      `CreateProjectStepPayload::Commit must carry providerHost; got ${JSON.stringify(sample.providerHost)}`,
+      `CreateProjectStepPayload::Commit must carry provider_host; got ${JSON.stringify(sample.provider_host)}`,
     );
   }
 }

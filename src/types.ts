@@ -183,14 +183,17 @@ export interface BootstrapState {
 
 /** Step-specific payload sent to `submit_create_project_step`. Mirrors
  *  the Rust `CreateProjectStepPayload` discriminated union exactly
- *  (kebab-case `step` tag). The variant order matters: the wizard UI
- *  must emit the variant matching the current `BootstrapState.step`,
- *  otherwise the Rust command rejects the call with a Validation error. */
+ *  (kebab-case `step` tag, **snake_case** fields — the enum has no
+ *  `rename_all_fields`, so serde matches the field names literally, the
+ *  same convention as the sibling `CreateProjectConfig` IPC struct).
+ *  The variant order matters: the wizard UI must emit the variant
+ *  matching the current `BootstrapState.step`, otherwise the Rust
+ *  command rejects the call with a Validation error. */
 export type CreateProjectStepPayload =
   | { step: 'name'; value: string }
-  | { step: 'provider'; providerId: string; kind: string }
-  | { step: 'group'; namespaceId: string; kind: string; name: string }
-  | { step: 'machine'; kind: 'local' | 'remote'; machineId: string | null }
+  | { step: 'provider'; provider_id: string; kind: string }
+  | { step: 'group'; namespace_id: string; kind: string; name: string }
+  | { step: 'machine'; kind: 'local' | 'remote'; machine_id: string | null }
   | { step: 'agent'; kind: string }
   | { step: 'model'; model: string }
   | {
@@ -199,15 +202,15 @@ export type CreateProjectStepPayload =
       description: string;
       visibility: 'private' | 'public';
       name: string;
-      providerId: string;
-      providerKind: string;
-      providerHost: string;
-      namespaceId: string;
-      namespaceKind: string;
-      namespaceName: string;
-      machineKind: 'local' | 'remote';
-      machineId: string | null;
-      agentKind: string;
+      provider_id: string;
+      provider_kind: string;
+      provider_host: string;
+      namespace_id: string;
+      namespace_kind: string;
+      namespace_name: string;
+      machine_kind: 'local' | 'remote';
+      machine_id: string | null;
+      agent_kind: string;
       model: string;
     };
 

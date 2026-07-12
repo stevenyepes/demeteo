@@ -511,6 +511,38 @@ fn commit_payload_discriminant_matches_description_step() {
 }
 
 #[test]
+fn payload_deserialises_from_frontend_json() {
+    // Wire-format contract with the TS wizard (`src/types.ts`): the
+    // `CreateProjectStepPayload` union mirrors this enum's serde field
+    // names exactly — snake_case multi-word fields (`provider_id`,
+    // `namespace_id`, `machine_id`), matching the sibling nested IPC
+    // struct `CreateProjectConfig`. A drift to camelCase on either side
+    // resurfaces the `missing field 'provider_id'` IPC error on the
+    // Provider step.
+    let provider: CreateProjectStepPayload =
+        serde_json::from_str(r#"{"step":"provider","provider_id":"prov-1","kind":"github"}"#)
+            .expect("provider payload should deserialise");
+    match provider {
+        CreateProjectStepPayload::Provider { provider_id, kind } => {
+            assert_eq!(provider_id, "prov-1");
+            assert_eq!(kind, "github");
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+
+    let group: CreateProjectStepPayload = serde_json::from_str(
+        r#"{"step":"group","namespace_id":"octocat","kind":"personal","name":"octocat"}"#,
+    )
+    .expect("group payload should deserialise");
+    assert_eq!(group.expected_step(), BootstrapStep::Group);
+
+    let machine: CreateProjectStepPayload =
+        serde_json::from_str(r#"{"step":"machine","kind":"local","machine_id":null}"#)
+            .expect("machine payload should deserialise");
+    assert_eq!(machine.expected_step(), BootstrapStep::Machine);
+}
+
+#[test]
 fn commit_payload_validation_rejects_empty_name_title_description() {
     // The Command handler re-validates the slug at the Commit boundary
     // (the user could have walked forward, gone back, edited the name,
