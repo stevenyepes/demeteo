@@ -342,7 +342,6 @@ pub fn run() {
             commands::project::check_repos_dirty,
             commands::project::get_repositories_for_project,
             commands::project::get_workspace_health,
-            commands::project::check_workspace_liveness,
             commands::project::get_project_by_id,
             commands::project::resolve_repo_dir,
             commands::project::project_memory_list,

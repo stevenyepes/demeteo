@@ -1,4 +1,4 @@
-use crate::application::projects::{LivenessResult, ProjectConfig, RepoDirtyStatus};
+use crate::application::projects::{ProjectConfig, RepoDirtyStatus};
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{Project, RepoHealthStatus, Repository};
 use crate::error::AppError;
@@ -96,21 +96,6 @@ pub async fn get_workspace_health(
     project_id: String,
 ) -> Result<Vec<RepoHealthStatus>, AppError> {
     crate::application::projects::health_check(&ctx, project_id)
-        .await
-        .map_err(AppError::from)
-}
-
-/// Probe whether the machine backing a project's workspace is currently
-/// reachable (`ExecutionPort::test_connection`, resolved via the same
-/// `compute_type`/`remote_host` lookup `get_workspace_health` uses). Cheap
-/// enough to call on demand — e.g. to drive a connectivity indicator —
-/// without walking every repo the way `get_workspace_health` does.
-#[tauri::command]
-pub async fn check_workspace_liveness(
-    ctx: State<'_, AppContext>,
-    project_id: String,
-) -> Result<LivenessResult, AppError> {
-    crate::application::projects::check_liveness(&ctx, project_id)
         .await
         .map_err(AppError::from)
 }
