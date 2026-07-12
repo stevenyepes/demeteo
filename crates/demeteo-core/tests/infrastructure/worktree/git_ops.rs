@@ -402,6 +402,83 @@ async fn test_provision_subtask_worktree_distinct_per_feature() {
     }
 }
 
+/// Regression: two features running concurrently against the **same**
+/// repo must not share a subtask worktree directory.
+///
+/// This is the case `test_provision_subtask_worktree_distinct_per_feature`
+/// only asserts by hand-wave (it uses two separate repos, where a
+/// collision is impossible by construction). The real deployment has many
+/// features on one project — hence one `repo_dir` — and the parallel step
+/// used to derive its worktree from the bare planner id (`sub-1`), so
+/// every feature resolved to the *same* `{repo}_wt_sub-1`.
+///
+/// The damage is not a name clash but data loss: `provision_subtask_worktree`
+/// opens by force-removing and `rm -rf`ing its target. A sibling feature
+/// starting its implement step therefore deleted the live worktree of a
+/// feature whose agent was still running — and since a worker's writes are
+/// only committed later (phase B), everything it had written was gone. The
+/// owning feature then failed with "cannot change to '<path>': No such file
+/// or directory", the branch was rolled back, and `s-validate` correctly
+/// reported the feature as unimplemented while `s-implement` had reported
+/// success.
+///
+/// So this asserts the property that actually matters: provisioning for
+/// feature B leaves feature A's uncommitted work untouched.
+#[tokio::test]
+async fn test_provision_subtask_worktree_same_repo_two_features_do_not_collide() {
+    let (dir, helper) = make_repo("wt_same_repo_two_features").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // Both features run the same planner-assigned subtask id (`sub-1`) —
+    // planner ids are per-feature and always start at `sub-1`, so this is
+    // the common case, not an edge case. The call site scopes them by
+    // feature id before they reach the provisioner.
+    let wt_a = helper
+        .provision_subtask_worktree(None, &repo, "main", "f-AAA-sub-1")
+        .await
+        .expect("feature A should provision");
+    let wt_b = helper
+        .provision_subtask_worktree(None, &repo, "main", "f-BBB-sub-1")
+        .await
+        .expect("feature B should provision");
+
+    assert_ne!(
+        wt_a, wt_b,
+        "two features on the same repo must not share a worktree directory"
+    );
+
+    // Feature A's agent writes a file and, as in phase A, does NOT commit it.
+    let a_work = format!("{wt_a}/feature_a_work.rs");
+    std::fs::write(&a_work, "// feature A's uncommitted implementation").unwrap();
+
+    // Feature B now re-provisions — the retry path, which force-removes and
+    // `rm -rf`s its own worktree. Under the old unscoped naming this is the
+    // call that destroyed feature A's work.
+    helper
+        .provision_subtask_worktree(None, &repo, "main", "f-BBB-sub-1")
+        .await
+        .expect("feature B should re-provision");
+
+    assert!(
+        std::path::Path::new(&a_work).exists(),
+        "feature B's provisioning destroyed feature A's uncommitted work at {a_work} — \
+         the worktree directories are colliding"
+    );
+
+    // Cleanup.
+    for wt in [&wt_a, &wt_b] {
+        let _ = exec
+            .run_command(
+                "local",
+                &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+            )
+            .await;
+        let _ = std::fs::remove_dir_all(wt);
+    }
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 /// Regression: a previous run that applied the artifact-scope fence
 /// (`chmod -R a-w` on protected paths) leaves the worktree in a state
 /// where `rm -rf` cannot traverse it — `unlink()` needs write on the

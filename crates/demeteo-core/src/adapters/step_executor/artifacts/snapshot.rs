@@ -31,6 +31,23 @@ impl WorktreeSnapshot {
         Self { dirty }
     }
 
+    /// True when `worktree_root` no longer exists on the target machine.
+    ///
+    /// Distinguishes "the agent changed nothing" from "the directory the
+    /// agent was working in is gone" — two states `git status` reports
+    /// identically once its error is swallowed (see
+    /// [`git_status_porcelain`]). A vanished worktree means the writes
+    /// are unrecoverable, so the caller must fail the step rather than
+    /// capture an empty delta and report success.
+    pub async fn worktree_is_missing(
+        exec: &dyn ExecutionPort,
+        machine_id: &str,
+        worktree_root: &str,
+    ) -> bool {
+        let cmd = format!("test -d {}", paths::shell_escape_posix(worktree_root),);
+        exec.run_command(machine_id, &cmd).await.is_err()
+    }
+
     /// Compute the file-level delta between this snapshot and the
     /// worktree's current state. Returns `Vec<rel_path>` for files
     /// that became dirty *during* this step (newly created, newly
@@ -91,6 +108,15 @@ async fn git_status_porcelain(
     // behind "nothing is dirty", which silently zeroes out the step's
     // captured delta. Keep the empty-string fallback but make the failure
     // observable.
+    //
+    // The most damaging instance of this is a worktree that has been
+    // deleted out from under a running step: `git status` fails with
+    // "cannot change to '<path>': No such file or directory", we report
+    // clean, artifact capture records no changes, and the step goes on to
+    // claim success having lost every write. Callers that can act on it
+    // must probe [`WorktreeSnapshot::worktree_is_missing`] and fail the
+    // step; this function stays lenient because the bootstrap path
+    // legitimately runs against a not-yet-git directory.
     match exec.run_command(machine_id, &cmd).await {
         Ok(out) => out,
         Err(e) => {

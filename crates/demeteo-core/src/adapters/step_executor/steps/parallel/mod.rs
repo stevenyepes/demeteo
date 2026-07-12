@@ -336,7 +336,7 @@ impl ExecutionDriver {
         }
         refs.extend(all_artifact_refs);
 
-        // On a no-op retry (the agent did nothing because the
+        // On a no-op *retry* (the agent did nothing because the
         // implementation is already merged into the feature branch),
         // `refs` ends up empty: the worktree snapshot is clean, no
         // `git diff --name-only` paths come back, and the code-diff
@@ -346,7 +346,40 @@ impl ExecutionDriver {
         // "Artifact 'all s-implement summaries' not found" in their
         // prompt. Preserve the previous attempt's artifacts so the
         // implementation summary stays in scope across retries.
-        if refs.is_empty() && !step_exec.artifact_paths.is_empty() {
+        //
+        // On the FIRST attempt the same empty state means something very
+        // different: every worker reported success and yet the feature
+        // branch carries no change at all. There is no prior attempt to
+        // inherit artifacts from, and reporting `completed` here is what
+        // let a step that had silently lost its work still hand a green
+        // status to `s-validate` — which then correctly reported the
+        // feature as unimplemented, producing the implement-says-done /
+        // validate-says-missing standoff. Fail instead.
+        if refs.is_empty() {
+            if retry_iteration == 0 {
+                let wall = step_start.elapsed().as_secs();
+                let msg = "parallel step: every subtask reported success but the feature \
+                           branch carries no changes — the implementation produced nothing. \
+                           Check the subtask worktrees and the merge log."
+                    .to_string();
+                let _ = self.features.step_update(
+                    &step_exec.id,
+                    &StepExecutionPatch {
+                        last_failure_fingerprint: None,
+                        iteration_count: None,
+                        status: Some("failed".to_string()),
+                        cost_usd: Some(Some(*accumulated_cost)),
+                        tokens: Some(Some(*accumulated_tokens)),
+                        wall_clock_secs: Some(Some(wall)),
+                        artifact_path: None,
+                        artifact_paths: None,
+                        error_message: Some(Some(msg.clone())),
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
+                    },
+                );
+                return StepOutcome::Failed(msg);
+            }
             refs = step_exec.artifact_paths.clone();
         }
         let primary = refs.first().cloned();

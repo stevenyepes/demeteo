@@ -40,6 +40,27 @@ struct WorkerRun<'a> {
 }
 
 impl ExecutionDriver {
+    /// Worktree/branch identity for one parallel subtask.
+    ///
+    /// Must be feature-scoped. `provision_subtask_worktree` derives the
+    /// worktree directory as `{repo_dir}_wt_{id}`, and every feature
+    /// running against a given project shares that repo_dir — so a bare
+    /// `sub-1` resolves to the *same* directory for every concurrent
+    /// feature. Provisioning opens by `git worktree remove --force` +
+    /// `rm -rf` on that path, which deletes a sibling feature's live
+    /// worktree; because a worker's writes are only committed later (in
+    /// phase B), the destroyed work is uncommitted and unrecoverable, and
+    /// the owning feature then fails its merge with "cannot change to
+    /// '<path>': No such file or directory".
+    ///
+    /// The subtask *branch* (`{feature_branch}_subtask_{id}`) was already
+    /// feature-scoped via the branch name; only the directory was not.
+    /// Agent steps have always scoped by feature id (see `steps/agent`);
+    /// this brings parallel subtasks in line.
+    pub(crate) fn scoped_subtask_id(&self, sub_id: &str) -> String {
+        format!("{}-{}", self.f_id_str, sub_id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_subtasks_loop(
         &self,
@@ -162,6 +183,7 @@ impl ExecutionDriver {
         for run in &mut runs {
             let sub = run.sub;
             let sub_thread_id = run.thread_id.clone();
+            let wt_id = self.scoped_subtask_id(&sub.id);
 
             // A prior worker already failed or the run was cancelled:
             // just release this worker's resources.
@@ -183,7 +205,7 @@ impl ExecutionDriver {
                         self.machine_id_opt.as_deref(),
                         &self.target_dir,
                         &self.branch_name,
-                        &sub.id,
+                        &wt_id,
                         &sub_thread_id,
                     )
                     .await;
@@ -195,6 +217,28 @@ impl ExecutionDriver {
                 .wt_path
                 .clone()
                 .expect("successful worker always has a worktree");
+
+            // The worker succeeded, so its worktree must still be there.
+            // If it isn't, something outside this feature deleted it while
+            // the agent was running (historically: a sibling feature's
+            // `provision_subtask_worktree` colliding on an unscoped
+            // directory name). The agent's writes were never committed —
+            // phase B does that, below — so they are gone. Fail loudly
+            // instead of capturing an empty delta and merging nothing,
+            // which is what made this look like "implement did nothing"
+            // rather than "implement's work was destroyed".
+            if WorktreeSnapshot::worktree_is_missing(&*self.exec, machine_str, &wt_path).await {
+                step_failed = true;
+                step_err_msg = format!(
+                    "parallel subtask {}: worktree '{}' disappeared while the agent was \
+                     running — its uncommitted changes are unrecoverable. This usually means \
+                     another feature provisioned a worktree with a colliding directory name.",
+                    sub.id, wt_path
+                );
+                let _ = self.registry.kill(&sub_thread_id).await;
+                continue;
+            }
+
             let mut produced_artifacts = std::mem::take(&mut run.produced_artifacts);
 
             // Artifact capture: snapshot delta, falling back to git diff
@@ -285,7 +329,7 @@ impl ExecutionDriver {
                         self.machine_id_opt.as_deref(),
                         &self.target_dir,
                         &self.branch_name,
-                        &sub.id,
+                        &wt_id,
                         &sub_thread_id,
                     )
                     .await;
@@ -293,7 +337,14 @@ impl ExecutionDriver {
                 }
             }
 
-            let _ = commit_worktree_changes(
+            // The commit is what moves the agent's writes from the
+            // worktree onto the subtask branch — the merge below carries
+            // nothing without it. A discarded error here meant a failed
+            // commit (a rejecting hook, a missing git identity, a
+            // conflicted index) produced an empty branch, a no-op merge,
+            // and a step that still reported success while the feature
+            // branch stayed untouched.
+            if let Err(e) = commit_worktree_changes(
                 &*self.exec,
                 machine_str,
                 &wt_path,
@@ -308,7 +359,26 @@ impl ExecutionDriver {
                 // of the check.
                 &[],
             )
-            .await;
+            .await
+            {
+                step_failed = true;
+                step_err_msg = format!(
+                    "parallel subtask {}: could not commit the agent's changes onto its \
+                     branch, so there is nothing to merge: {}",
+                    sub.id, e
+                );
+                crate::adapters::agent::event_stream::cleanup_subtask(
+                    &self.registry,
+                    &self.git_ops,
+                    self.machine_id_opt.as_deref(),
+                    &self.target_dir,
+                    &self.branch_name,
+                    &wt_id,
+                    &sub_thread_id,
+                )
+                .await;
+                continue;
+            }
 
             // Parallel implement subtasks capture via `AllWrites`
             // (`ChangedFiles`), which never populates `missing` (only
@@ -330,7 +400,7 @@ impl ExecutionDriver {
                     self.machine_id_opt.as_deref(),
                     &wt_path,
                     &self.branch_name,
-                    &sub.id,
+                    &wt_id,
                 )
                 .await;
 
@@ -358,7 +428,7 @@ impl ExecutionDriver {
                                     self.machine_id_opt.as_deref(),
                                     &wt_path,
                                     &self.branch_name,
-                                    &sub.id,
+                                    &wt_id,
                                 )
                                 .await;
                         }
@@ -372,7 +442,7 @@ impl ExecutionDriver {
             if let Err(err) = merge_result {
                 let _ = self.notif.emit(&DomainEvent::ConflictDetected {
                     feature_id: self.f_id.clone(),
-                    subtask_id: format!("{}_subtask_{}", self.branch_name, sub.id),
+                    subtask_id: format!("{}_subtask_{}", self.branch_name, wt_id),
                 });
                 step_failed = true;
                 step_err_msg = format!("parallel subtask merge failed ({}): {}", sub.id, err);
@@ -384,7 +454,7 @@ impl ExecutionDriver {
                 self.machine_id_opt.as_deref(),
                 &self.target_dir,
                 &self.branch_name,
-                &sub.id,
+                &wt_id,
                 &sub_thread_id,
             )
             .await;
@@ -447,14 +517,16 @@ impl ExecutionDriver {
             return run;
         }
 
-        // Provision subtask worktree
+        // Provision subtask worktree. The id is feature-scoped — see
+        // `scoped_subtask_id` for why a bare `sub.id` lets one feature
+        // delete another's live worktree.
         let wt_path = match self
             .git_ops
             .provision_subtask_worktree(
                 self.machine_id_opt.as_deref(),
                 &self.target_dir,
                 &self.branch_name,
-                &sub.id,
+                &self.scoped_subtask_id(&sub.id),
             )
             .await
         {
