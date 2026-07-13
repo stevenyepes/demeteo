@@ -317,7 +317,9 @@ async fn test_provision_subtask_worktree_fallback_discards_stale_branch_commits(
          abandoned attempt's tip"
     );
     assert!(
-        !std::path::Path::new(&wt_path).join("abandoned.txt").exists(),
+        !std::path::Path::new(&wt_path)
+            .join("abandoned.txt")
+            .exists(),
         "the failed attempt's file must not reappear in the retry's worktree"
     );
 

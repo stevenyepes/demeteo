@@ -11,8 +11,7 @@
 //! so we keep the old planner turn for them rather than breaking them.
 
 use super::tasks::{
-    apply_landed_checkpoint, extract_task_plan, select_targeted_tasks, validate_task_plan,
-    TaskPlan,
+    apply_landed_checkpoint, extract_task_plan, select_targeted_tasks, validate_task_plan, TaskPlan,
 };
 use crate::adapters::step_executor::artifacts::{
     resolve_attached_artifacts, resolve_attached_user_attachments,

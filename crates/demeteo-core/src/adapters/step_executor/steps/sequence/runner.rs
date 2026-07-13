@@ -115,11 +115,14 @@ impl ExecutionDriver {
             // close below runs on *every* exit, or the dashboard's live
             // "nodes" count (which counts `running` rows) would over-report
             // forever.
-            let run_id = format!("sr-{}-{}-{}", self.f_id_str, task.id, crate::paths::now_ms());
-            let subtask_branch = crate::adapters::worktree::git_ops::subtask_branch_name(
-                &self.branch_name,
-                wt_id,
+            let run_id = format!(
+                "sr-{}-{}-{}",
+                self.f_id_str,
+                task.id,
+                crate::paths::now_ms()
             );
+            let subtask_branch =
+                crate::adapters::worktree::git_ops::subtask_branch_name(&self.branch_name, wt_id);
             if let Err(e) = self.subtask_runs.subtask_run_start(
                 &run_id,
                 &self.f_id,
@@ -298,7 +301,10 @@ impl ExecutionDriver {
             )
             .await
             .map_err(|(msg, environmental)| {
-                (format!("sequence task '{}': {}", task.id, msg), environmental)
+                (
+                    format!("sequence task '{}': {}", task.id, msg),
+                    environmental,
+                )
             })?;
 
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());

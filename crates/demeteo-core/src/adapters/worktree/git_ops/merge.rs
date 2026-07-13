@@ -2,7 +2,6 @@ use super::GitOpsHelper;
 use crate::paths;
 
 impl GitOpsHelper {
-
     /// Merge a subtask branch back into the parent feature branch.
     ///
     /// Operates in the **worktree** (`wt_path`) instead of the main repo
