@@ -59,7 +59,10 @@ fn seeds_the_feature_cache_by_copy_preferring_copy_on_write() {
         "seeding must never hardlink: {cmd}"
     );
     // Seed once — a feature's later steps reuse the cache they already have.
-    assert!(cmd.contains("[ ! -e /repo_cache_feature-a/\"$d\" ]"), "{cmd}");
+    assert!(
+        cmd.contains("[ ! -e /repo_cache_feature-a/\"$d\" ]"),
+        "{cmd}"
+    );
 }
 
 #[test]

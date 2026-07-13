@@ -12,7 +12,9 @@ use async_trait::async_trait;
 
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{ConflictReport, RepoContext, UpstreamSyncFailure, UpstreamSyncOutcome};
+use crate::domain::models::{
+    ConflictReport, RepoContext, UpstreamSyncFailure, UpstreamSyncOutcome,
+};
 use crate::paths;
 use crate::ports::db::MergeAuditRepository;
 use crate::ports::execution::ExecutionPort;

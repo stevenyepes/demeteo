@@ -278,12 +278,7 @@ impl ExecutionDriver {
             // the user asked to stop, so the branch rolls back as before.
             if !*self.cancel_watch.borrow() && !landed_this_attempt.is_empty() {
                 match self
-                    .checkpoint_landed_prefix(
-                        &wt_id,
-                        &wt_path,
-                        &machine_str,
-                        &landed_this_attempt,
-                    )
+                    .checkpoint_landed_prefix(&wt_id, &wt_path, &machine_str, &landed_this_attempt)
                     .await
                 {
                     Ok(()) => {

@@ -194,14 +194,7 @@ fn interrupt_stale_closes_only_this_steps_running_rows() {
         .unwrap();
     // Another step's live row — not this sweep's to touch.
     db.subtask_run_start(
-        "sr-other",
-        &fid,
-        &other_sid,
-        "task-1",
-        "a-2",
-        "/tmp/wt2",
-        "b2",
-        100,
+        "sr-other", &fid, &other_sid, "task-1", "a-2", "/tmp/wt2", "b2", 100,
     )
     .unwrap();
 
@@ -260,5 +253,9 @@ fn interrupt_stale_is_idempotent_and_repeatable() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(ended, Some(200), "the second sweep must not re-stamp the row");
+    assert_eq!(
+        ended,
+        Some(200),
+        "the second sweep must not re-stamp the row"
+    );
 }
