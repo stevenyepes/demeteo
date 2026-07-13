@@ -309,6 +309,13 @@ export type StepConfig = {
    * the work itself.
    */
   task_list_from?: string | null;
+  /**
+   * Declared outputs. The editor does not author these — they live in the
+   * workflow JSON — but it reads their names to offer the `task_list_from`
+   * sources the backend lint will accept, and they round-trip untouched
+   * through a save.
+   */
+  artifacts?: { name: string }[] | null;
   prompt_template?: string | null;
   on_failure?: string | null;
   max_iterations?: number | null;

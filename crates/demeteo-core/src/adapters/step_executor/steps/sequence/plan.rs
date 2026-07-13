@@ -10,7 +10,7 @@
 //! looks like (its steps predate the field, and we now dispatch them here),
 //! so we keep the old planner turn for them rather than breaking them.
 
-use super::tasks::{extract_task_plan, select_targeted_tasks, TaskPlan};
+use super::tasks::{extract_task_plan, select_targeted_tasks, validate_task_plan, TaskPlan};
 use crate::adapters::step_executor::artifacts::{
     resolve_attached_artifacts, resolve_attached_user_attachments,
 };
@@ -47,13 +47,33 @@ impl ExecutionDriver {
         step_execs: &[StepExecution],
         step_index: usize,
     ) -> Result<TaskPlan, StepOutcome> {
-        if retry_iteration == 1 {
-            if let (Some(cached), Some(rc)) = (&self.cached_plan, &self.retry_ctx) {
+        // Is the *previous* attempt's implementation still on the feature
+        // branch? It is exactly when this step's last attempt merged — i.e.
+        // the failure that sent us back here was raised by a *later* step (a
+        // validate or a critic redirecting to us). A sequence step that failed
+        // on its own rolled every task's commits back on the way out, leaving
+        // the branch at its pre-step tip.
+        //
+        // Two things hang off this. A targeted retry may only skip tasks whose
+        // work survived, or it silently drops them. And the tasks that do run
+        // have to be *told* the tree is not empty, or a fresh session
+        // reimplements code it is looking at.
+        let previous_attempt_landed = retry_iteration > 0
+            && self
+                .retry_ctx
+                .as_ref()
+                .is_some_and(|rc| rc.failing_step_id != step_exec.step_id.0);
+
+        if retry_iteration == 1 && previous_attempt_landed {
+            // This step's own cached plan, never a sibling sequence step's.
+            let cached_for_this_step = self.cached_plans.get(step_exec.step_id.0.as_str());
+            if let (Some(cached), Some(rc)) = (cached_for_this_step, &self.retry_ctx) {
                 let targeted = select_targeted_tasks(cached, &rc.feedback, &rc.implicated_files);
                 tracing::info!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
                     selected = targeted.tasks.len(),
+                    skipped = targeted.already_landed.len(),
                     total = cached.tasks.len(),
                     "sequence step: targeted retry"
                 );
@@ -61,7 +81,7 @@ impl ExecutionDriver {
             }
         }
 
-        let plan = match step_conf
+        let mut plan = match step_conf
             .task_list_from
             .as_ref()
             .filter(|s| !s.0.is_empty())
@@ -83,9 +103,25 @@ impl ExecutionDriver {
             }
         };
 
+        // The plan is agent-authored whichever source it came from, so gate it
+        // before it becomes N agent sessions. Non-retryable: re-running the
+        // sequence step cannot fix a malformed task list — the step that wrote
+        // it has to.
+        if let Some(reason) = validate_task_plan(&plan) {
+            return Err(StepOutcome::NonRetryable(format!(
+                "sequence step: the task list is not executable — {}",
+                reason
+            )));
+        }
+
         // Cache only full plans — a targeted subset must never shadow the
         // complete decomposition, or attempt 2 would re-plan from a fragment.
-        self.cached_plan = Some(plan.clone());
+        self.cached_plans
+            .insert(step_exec.step_id.0.clone(), plan.clone());
+
+        // A full re-plan still runs against whatever the last attempt left on
+        // the branch, so it carries the same warning a targeted retry does.
+        plan.resumes_landed_work = previous_attempt_landed;
         Ok(plan)
     }
 
@@ -407,15 +443,15 @@ impl ExecutionDriver {
     }
 
     async fn cleanup_planner(&self, thread_id: &str, wt_id: &str) {
-        let _ = self.registry.kill(thread_id).await;
-        let _ = self
-            .git_ops
-            .cleanup_subtask_worktree(
-                self.machine_id_opt.as_deref(),
-                &self.target_dir,
-                &self.branch_name,
-                wt_id,
-            )
-            .await;
+        crate::adapters::agent::event_stream::cleanup_subtask(
+            &self.registry,
+            &self.git_ops,
+            self.machine_id_opt.as_deref(),
+            &self.target_dir,
+            &self.branch_name,
+            wt_id,
+            thread_id,
+        )
+        .await;
     }
 }

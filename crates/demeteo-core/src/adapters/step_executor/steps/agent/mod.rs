@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
+use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::{StepConfig, StepExecution};
@@ -734,149 +735,49 @@ impl ExecutionDriver {
             )
             .await;
 
-        // Resolve conflicts if merge failed
+        // A failed merge-back is usually the feature branch having moved
+        // beneath us (a `sync` step pulled upstream), not broken work — so
+        // hand the conflict to the agent and retry rather than discarding a
+        // finished step.
         if let Err(ref e) = merge_result {
-            let merge_back_cmd = format!(
-                "git -C {} merge {}",
-                crate::paths::shell_escape_posix(&wt_path),
-                crate::paths::shell_escape_posix(&self.branch_name)
-            );
-            let _ = self.exec.run_command(&machine_str, &merge_back_cmd).await;
-
-            let unmerged =
-                crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files(
-                    &*self.exec,
+            match self
+                .resolve_merge_conflicts_via_agent(
+                    step_exec,
+                    &*session,
                     &machine_str,
                     &wt_path,
+                    &override_model,
+                    accumulated_cost,
+                    accumulated_tokens,
+                    step_start,
                 )
-                .await;
-            if !unmerged.is_empty() {
-                let files_list = unmerged
-                    .iter()
-                    .map(|f| format!("- {} ({})", f.path, f.kind))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let conflict_prompt = format!(
-                    "We encountered a merge conflict while merging the latest changes from the feature branch '{}' into your workspace.\n\
-                     Please resolve the conflicts in the following files:\n\
-                     {}\n\n\
-                     Ensure you edit these files to remove conflict markers (<<<<<<<, =======, >>>>>>>) and integrate the changes correctly. \
-                     Make sure all code builds and passes tests. Once done, let me know.",
-                    self.branch_name, files_list
-                );
-
-                let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
-                    &*session,
-                    &conflict_prompt,
-                    timeouts,
-                    Some(self.cancel_watch.clone()),
-                    &machine_str,
-                    &*self.exec,
-                    override_model.clone(),
-                    self.pricing.clone(),
-                    |event| {
-                        if let AgentEvent::Text { delta } = event {
-                            let _ = self.notif.emit(&DomainEvent::AgentStream {
-                                feature_id: self.f_id.clone(),
-                                step_execution_id: step_exec.id.clone(),
-                                content: delta.clone(),
-                            });
-                            let _ = self.notif.emit(&DomainEvent::StepProgress {
-                                feature_id: self.f_id.clone(),
-                                step_id: step_exec.step_id.0.clone(),
-                                status: "running".into(),
-                                cost_usd: Some(*accumulated_cost),
-                                tokens: Some(*accumulated_tokens),
-                                wall_clock_secs: Some(step_start.elapsed().as_secs()),
-                                cache_read_input_tokens: None,
-                                cache_creation_input_tokens: None,
-                            });
-                        }
-                    },
-                )
-                .await;
-
-                let mut conflict_failed = None;
-                let mut conflict_cancelled = false;
-
-                match turn_res {
-                    crate::adapters::agent::event_stream::TurnResult::Interrupted => {
-                        conflict_cancelled = true;
-                    }
-                    crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
-                        conflict_failed = Some(StepOutcome::Failed(descriptive));
-                    }
-                    crate::adapters::agent::event_stream::TurnResult::Environmental(
-                        descriptive,
-                    ) => {
-                        conflict_failed = Some(StepOutcome::Environmental(descriptive));
-                    }
-                    crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
-                        *accumulated_cost += outcome.cost_usd;
-                        *accumulated_tokens += outcome.tokens;
-                        // Conflict-resolution turn also bills cache
-                        // tokens; accumulate them into the out-params
-                        // (additive — these params record the LAST
-                        // turn's cache counts, but since conflict
-                        // resolution is always the last turn of an
-                        // agent step, that matches user-visible
-                        // expectations).
-                        *out_cache_read = Some(outcome.cache_read_input_tokens);
-                        *out_cache_creation = Some(outcome.cache_creation_input_tokens);
-                    }
+                .await
+            {
+                Ok(ConflictPass::NothingToResolve) => {
+                    merge_result = Err(format!("agent step merge failed: {}", e));
                 }
-
-                if conflict_cancelled || *self.cancel_watch.borrow() {
-                    run_cancelled = true;
-                } else if let Some(failed_outcome) = conflict_failed {
-                    run_failed = Some(failed_outcome);
-                } else {
-                    // Verify conflicts are resolved.
-                    let still_unmerged =
-                        crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files(
-                            &*self.exec,
-                            &machine_str,
+                Ok(ConflictPass::Resolved(billing)) => {
+                    // Conflict resolution is always an agent step's last turn,
+                    // so its cache counts are the ones the UI should show.
+                    *out_cache_read = Some(billing.cache_read_input_tokens);
+                    *out_cache_creation = Some(billing.cache_creation_input_tokens);
+                    merge_result = self
+                        .git_ops
+                        .merge_subtask(
+                            self.machine_id_opt.as_deref(),
                             &wt_path,
+                            &self.branch_name,
+                            &subtask_id,
                         )
                         .await;
-                    if still_unmerged.is_empty() {
-                        let commit_resolved = self
-                            .exec
-                            .run_command(
-                                &machine_str,
-                                &format!(
-                                    "{} commit -am {}",
-                                    crate::paths::git_no_hooks(&wt_path),
-                                    crate::paths::shell_escape_posix(&format!(
-                                        "chore: resolve merge conflicts with {}",
-                                        self.branch_name
-                                    )),
-                                ),
-                            )
-                            .await;
-                        if commit_resolved.is_ok() {
-                            merge_result = self
-                                .git_ops
-                                .merge_subtask(
-                                    self.machine_id_opt.as_deref(),
-                                    &wt_path,
-                                    &self.branch_name,
-                                    &subtask_id,
-                                )
-                                .await;
-                        } else {
-                            merge_result =
-                                Err("Failed to commit merge conflict resolution".to_string());
-                        }
-                    } else {
-                        merge_result = Err(format!(
-                            "Agent failed to resolve merge conflicts in: {:?}",
-                            still_unmerged.iter().map(|f| &f.path).collect::<Vec<_>>()
-                        ));
-                    }
                 }
-            } else {
-                merge_result = Err(format!("agent step merge failed: {}", e));
+                Err(ConflictPassError::Cancelled) => run_cancelled = true,
+                Err(ConflictPassError::Failed(msg)) => {
+                    run_failed = Some(StepOutcome::Failed(msg));
+                }
+                Err(ConflictPassError::Environmental(msg)) => {
+                    run_failed = Some(StepOutcome::Environmental(msg));
+                }
             }
         }
 

@@ -263,6 +263,74 @@ async fn test_provision_subtask_worktree_fallback_when_branch_exists() {
     let _ = std::fs::remove_dir_all(&wt_path);
 }
 
+/// Regression: the `-b` fallback must not resurrect a failed attempt's work.
+///
+/// When a step fails, the driver resets the feature branch back to the tip it
+/// started from and deletes the subtask branch. If that cleanup does not run
+/// (a crash, a locked worktree), the subtask branch survives *pointing at the
+/// abandoned commits*. The next attempt's `worktree add -b` then fails
+/// (branch exists) and falls back to checking the stale branch out — so the
+/// retry would build on the very work the rollback threw away and merge all of
+/// it back, silently undoing the rollback.
+///
+/// Provisioning must hand back a worktree at the feature branch either way.
+#[tokio::test]
+async fn test_provision_subtask_worktree_fallback_discards_stale_branch_commits() {
+    let (dir, helper) = make_repo("wt_fallback_stale").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    let feature_tip = exec
+        .run_command("local", &format!("git -C \"{repo}\" rev-parse main"))
+        .await
+        .unwrap()
+        .trim()
+        .to_string();
+
+    // A previous attempt left its subtask branch behind, carrying a commit the
+    // rollback was supposed to discard.
+    for cmd in [
+        format!("git -C \"{repo}\" branch main_subtask_sub-1"),
+        format!("git -C \"{repo}\" worktree add --force \"{repo}_stale\" main_subtask_sub-1"),
+        format!("echo abandoned > \"{repo}_stale/abandoned.txt\""),
+        format!("git -C \"{repo}_stale\" add -A"),
+        format!("git -C \"{repo}_stale\" commit -m abandoned"),
+        format!("git -C \"{repo}\" worktree remove --force \"{repo}_stale\""),
+    ] {
+        exec.run_command("local", &cmd).await.unwrap();
+    }
+
+    let wt_path = helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-1")
+        .await
+        .unwrap();
+
+    let head = exec
+        .run_command("local", &format!("git -C \"{wt_path}\" rev-parse HEAD"))
+        .await
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(
+        head, feature_tip,
+        "the reused subtask branch must be reset to the feature branch, not left on the \
+         abandoned attempt's tip"
+    );
+    assert!(
+        !std::path::Path::new(&wt_path).join("abandoned.txt").exists(),
+        "the failed attempt's file must not reappear in the retry's worktree"
+    );
+
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt_path}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
+
 /// Regression: an orphan worktree directory left behind by an
 /// interrupted run must not cause the next provision to fail with
 /// "'<path>' already exists". Before the fix the cleanup was just
@@ -1164,6 +1232,96 @@ async fn test_provision_subtask_worktree_symlinks_dependency_caches() {
         .await;
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&wt_path);
+}
+
+/// A project runs N features concurrently (decision 18), so two features on one
+/// repo must never share a dependency cache.
+///
+/// They used to: every worktree symlinked straight at `{repo}/node_modules`, so
+/// feature B's install silently overwrote feature A's. The real damage was not
+/// the corrupted tree — it was that a `verify` step's harness verdict could be
+/// decided by *another feature's* build output, and that verdict drives
+/// Demeteo's retry and critic loops. A feature would chase a failure that was
+/// never its own.
+#[tokio::test]
+async fn test_concurrent_features_do_not_share_a_dependency_cache() {
+    let (dir, helper) = make_repo("wt_dep_isolation").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    // An already-installed primary checkout.
+    std::fs::write(format!("{repo}/.gitignore"), "node_modules/\n").unwrap();
+    std::fs::create_dir_all(format!("{repo}/node_modules")).unwrap();
+    std::fs::write(format!("{repo}/node_modules/left-pad"), "v1.0.0").unwrap();
+    for cmd in [
+        format!("git -C \"{repo}\" add .gitignore"),
+        format!("git -C \"{repo}\" commit -m gitignore"),
+        format!("git -C \"{repo}\" branch feature/alpha"),
+        format!("git -C \"{repo}\" branch feature/beta"),
+    ] {
+        exec.run_command("local", &cmd).await.unwrap();
+    }
+
+    // Two features, running at the same time on the same repo.
+    let wt_a = helper
+        .provision_subtask_worktree(None, &repo, "feature/alpha", "f-alpha-step-impl")
+        .await
+        .expect("alpha provision");
+    let wt_b = helper
+        .provision_subtask_worktree(None, &repo, "feature/beta", "f-beta-step-impl")
+        .await
+        .expect("beta provision");
+
+    // Both were seeded from the primary install.
+    assert_eq!(
+        std::fs::read_to_string(format!("{wt_a}/node_modules/left-pad")).unwrap(),
+        "v1.0.0"
+    );
+    assert_eq!(
+        std::fs::read_to_string(format!("{wt_b}/node_modules/left-pad")).unwrap(),
+        "v1.0.0"
+    );
+
+    // Feature beta installs an incompatible version of a shared dep.
+    std::fs::write(format!("{wt_b}/node_modules/left-pad"), "v2.0.0").unwrap();
+
+    // Feature alpha must be untouched — this is the whole property.
+    assert_eq!(
+        std::fs::read_to_string(format!("{wt_a}/node_modules/left-pad")).unwrap(),
+        "v1.0.0",
+        "feature beta's install leaked into feature alpha's worktree"
+    );
+    // And neither may have corrupted the primary checkout they were seeded from.
+    assert_eq!(
+        std::fs::read_to_string(format!("{repo}/node_modules/left-pad")).unwrap(),
+        "v1.0.0",
+        "a feature's install leaked back into the primary checkout"
+    );
+
+    // Deleting a feature's branch reclaims its cache — otherwise every feature
+    // ever run leaks a whole node_modules.
+    let cache_b = crate::paths::feature_cache_dir(&repo, "feature/beta");
+    assert!(std::path::Path::new(&cache_b).exists());
+    helper
+        .branch_delete(None, &repo, "feature/beta")
+        .await
+        .expect("branch delete");
+    assert!(
+        !std::path::Path::new(&cache_b).exists(),
+        "feature beta's dependency cache leaked after its branch was deleted"
+    );
+
+    for wt in [&wt_a, &wt_b] {
+        let _ = exec
+            .run_command(
+                "local",
+                &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+            )
+            .await;
+        let _ = std::fs::remove_dir_all(wt);
+    }
+    let _ = std::fs::remove_dir_all(crate::paths::feature_cache_dir(&repo, "feature/alpha"));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Regression: git does not recognize a symlink standing in for a

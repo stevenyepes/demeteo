@@ -418,7 +418,17 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                             <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">Step Type</label>
                             <select
                               value={step.kind}
-                              onChange={(e) => handleUpdateStep(idx, { kind: e.target.value })}
+                              onChange={(e) => {
+                                const kind = e.target.value;
+                                // Only a `sequence` step executes a task list;
+                                // the backend lint rejects `task_list_from` on
+                                // any other kind, so don't leave one behind.
+                                const keepsTaskList = kind === 'sequence' || kind === 'parallel';
+                                handleUpdateStep(idx, {
+                                  kind,
+                                  ...(keepsTaskList ? {} : { task_list_from: null }),
+                                });
+                              }}
                               className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500"
                             >
                               <option value="agent">Agent (Single Session)</option>
@@ -467,6 +477,51 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                             </div>
                           )}
                         </div>
+
+                        {/* Task list source. Only `sequence` steps execute one,
+                            and the backend lint (`lint_workflow_steps`) requires
+                            the source to be an earlier step that actually
+                            declares a `task-list` artifact — so offer exactly
+                            those, and nothing a save would reject. */}
+                        {(step.kind === 'sequence' || step.kind === 'parallel') && (() => {
+                          const sources = steps
+                            .slice(0, idx)
+                            .filter((s) => (s.artifacts ?? []).some((a) => a.name === 'task-list'));
+                          const dangling =
+                            !!step.task_list_from &&
+                            !sources.some((s) => s.id === step.task_list_from);
+                          return (
+                            <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">
+                                Task List Source
+                              </label>
+                              <select
+                                value={step.task_list_from || ''}
+                                onChange={(e) =>
+                                  handleUpdateStep(idx, { task_list_from: e.target.value || null })
+                                }
+                                className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                              >
+                                <option value="">Plan in-step (costs an extra agent turn)</option>
+                                {sources.map((s) => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.title} ({s.id})
+                                  </option>
+                                ))}
+                                {dangling && (
+                                  <option value={step.task_list_from!}>
+                                    {step.task_list_from} — no longer declares a task-list artifact
+                                  </option>
+                                )}
+                              </select>
+                              <p className="mt-1 text-[10px] text-slate-500 leading-relaxed">
+                                {sources.length === 0
+                                  ? 'No earlier step declares a `task-list` artifact, so this step must plan the work itself. Have an earlier step write `artifacts/task-list.json` to put the task breakdown in front of the gate instead.'
+                                  : 'The step whose `task-list` artifact holds the ordered tasks to implement. Reading it here means the breakdown is reviewable at the gate before any code is written.'}
+                              </p>
+                            </div>
+                          );
+                        })()}
 
                         {/* Prompt Template */}
                         {step.kind !== 'gate' && (

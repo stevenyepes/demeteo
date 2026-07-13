@@ -218,13 +218,20 @@ pub(crate) struct ExecutionDriver {
     pub last_cache_read: Option<u64>,
     pub last_cache_creation: Option<u64>,
 
-    /// The last *full* task list this run's `sequence` step resolved. On
-    /// retry attempt 1 the step reuses it to re-run only the tasks owning
-    /// the verdict's implicated files — skipping the untouched ones, whose
-    /// commits are already on the branch. Attempt 2+ re-resolves the full
-    /// plan (the targeted fix didn't stick). In-memory only: an app restart
-    /// just means re-reading the task list.
-    pub cached_plan: Option<crate::adapters::step_executor::steps::sequence::tasks::TaskPlan>,
+    /// The last *full* task list each `sequence` step resolved, keyed by that
+    /// step's id. On retry attempt 1 the step reuses its own entry to re-run
+    /// only the tasks owning the verdict's implicated files — skipping the
+    /// untouched ones, whose commits are already on the branch. Attempt 2+
+    /// re-resolves the full plan (the targeted fix didn't stick). In-memory
+    /// only: an app restart just means re-reading the task list.
+    ///
+    /// Keyed, not a single slot: a workflow may contain more than one
+    /// `sequence` step. A bare `Option` would hand the second step's plan to
+    /// the first one on retry, and it would run the wrong task list entirely.
+    pub cached_plans: std::collections::HashMap<
+        String,
+        crate::adapters::step_executor::steps::sequence::tasks::TaskPlan,
+    >,
 
     /// Step-execution ids that already consumed their single free
     /// in-place retry after an environmental failure (agent blocked,

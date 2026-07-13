@@ -32,6 +32,7 @@ use std::time::Instant;
 
 use crate::adapters::step_executor::artifacts::compute_git_diff;
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::artifact::Artifact;
 use crate::domain::models::{StepConfig, StepExecution};
@@ -168,6 +169,8 @@ impl ExecutionDriver {
 
         // 3. Run the tasks in order.
         let mut all_artifact_refs = Vec::new();
+        let mut satisfied_decls: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let tasks_res = self
             .run_tasks_loop(
                 step_exec,
@@ -177,18 +180,20 @@ impl ExecutionDriver {
                 step_start,
                 step_index,
                 step_execs,
-                &plan.tasks,
+                &plan,
                 &machine_str,
                 &wt_path,
                 &agent_kind,
                 &override_model,
                 &mut all_artifact_refs,
+                &mut satisfied_decls,
             )
             .await;
 
         if let Err((msg, environmental)) = tasks_res {
-            self.cleanup_sequence_worktree(&wt_id).await;
-            self.rollback_feature_branch(&machine_str, &base_sha).await;
+            let rolled_back = self
+                .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                .await;
             return self
                 .fail_sequence_step(
                     step_exec,
@@ -197,6 +202,51 @@ impl ExecutionDriver {
                     *accumulated_tokens,
                     msg,
                     environmental,
+                    rolled_back,
+                )
+                .await;
+        }
+
+        // 3b. Declared deliverables must exist. A `ByName` / `LastWriteTo`
+        //     artifact that no task ever produced means the step ran and wrote
+        //     nothing downstream can consume — the same misconfiguration class
+        //     the agent step fails on (wrong model, blocked writes, agent wrote
+        //     to the wrong path). Judged here, across the whole task list,
+        //     rather than per task: only one task in the list may be the one
+        //     that writes the report, so a per-task check would fail every
+        //     other task spuriously.
+        //
+        //     `AllWrites` / `ChangedFiles` / `Diff` captures can never be
+        //     missing (they describe whatever the agent touched), so an
+        //     ordinary implement step never trips this.
+        let never_produced: Vec<&str> = step_conf
+            .artifacts
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .filter(|d| !satisfied_decls.contains(&d.name))
+            .map(|d| d.name.as_str())
+            .collect();
+        if !never_produced.is_empty() {
+            let rolled_back = self
+                .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                .await;
+            let names = never_produced.join(", ");
+            return self
+                .fail_sequence_step(
+                    step_exec,
+                    step_start,
+                    *accumulated_cost,
+                    *accumulated_tokens,
+                    format!(
+                        "sequence step: every task ran, but the declared artifact(s) {} were \
+                         never produced by any task. Nothing downstream can consume this step — \
+                         the agent may have written to a different path, or been blocked by its \
+                         model/config.",
+                        names
+                    ),
+                    false,
+                    rolled_back,
                 )
                 .await;
         }
@@ -226,8 +276,8 @@ impl ExecutionDriver {
                     .registry
                     .kill(&format!("{}-verifier", self.f_id.as_str()))
                     .await;
-                self.cleanup_sequence_worktree(&wt_id).await;
-                self.rollback_feature_branch(&machine_str, &base_sha).await;
+                self.cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                    .await;
                 return match verifier_err {
                     crate::domain::verifier::VerifierError::Verdict(failure) => {
                         StepOutcome::VerdictFailed(failure)
@@ -251,33 +301,46 @@ impl ExecutionDriver {
         //    each other (same worktree, sequential, each committed), so the
         //    only way this conflicts is the feature branch having moved
         //    beneath us — e.g. a `sync` step pulled upstream in a prior step.
-        if let Err(e) = self
-            .git_ops
-            .merge_subtask(
-                self.machine_id_opt.as_deref(),
-                &wt_path,
-                &self.branch_name,
+        //
+        //    That is worth recovering from rather than failing on: the
+        //    worktree holds a complete, verified implementation of every
+        //    task, and throwing it away over conflict markers would mean
+        //    re-running the whole task list. So we spend one agent turn
+        //    resolving the conflict and retry the merge.
+        let merge_res = self
+            .merge_with_conflict_recovery(
+                step_exec,
                 &wt_id,
+                &wt_path,
+                &machine_str,
+                &agent_kind,
+                &override_model,
+                accumulated_cost,
+                accumulated_tokens,
+                step_start,
             )
-            .await
-        {
+            .await;
+
+        if let Err((msg, environmental)) = merge_res {
             let _ = self.notif.emit(&DomainEvent::ConflictDetected {
                 feature_id: self.f_id.clone(),
-                subtask_id: format!("{}_subtask_{}", self.branch_name, wt_id),
+                subtask_id: crate::adapters::worktree::git_ops::subtask_branch_name(
+                    &self.branch_name,
+                    &wt_id,
+                ),
             });
-            self.cleanup_sequence_worktree(&wt_id).await;
-            self.rollback_feature_branch(&machine_str, &base_sha).await;
+            let rolled_back = self
+                .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                .await;
             return self
                 .fail_sequence_step(
                     step_exec,
                     step_start,
                     *accumulated_cost,
                     *accumulated_tokens,
-                    format!(
-                        "sequence step: merging the completed task branch into '{}' failed: {}",
-                        self.branch_name, e
-                    ),
-                    false,
+                    msg,
+                    environmental,
+                    rolled_back,
                 )
                 .await;
         }
@@ -320,8 +383,6 @@ impl ExecutionDriver {
         }
         refs.extend(all_artifact_refs);
 
-        self.cleanup_sequence_worktree(&wt_id).await;
-
         // Every task ran and committed, yet the branch carries nothing.
         //
         // On a retry that is legitimate: a targeted re-run whose fix was
@@ -333,6 +394,12 @@ impl ExecutionDriver {
         // Fail instead.
         if refs.is_empty() {
             if retry_iteration == 0 {
+                // The merge has already landed by this point, so this path has
+                // to undo it — otherwise a retry starts from a branch carrying
+                // an empty merge commit.
+                let rolled_back = self
+                    .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                    .await;
                 return self
                     .fail_sequence_step(
                         step_exec,
@@ -343,11 +410,14 @@ impl ExecutionDriver {
                          changes — the implementation produced nothing."
                             .to_string(),
                         false,
+                        rolled_back,
                     )
                     .await;
             }
             refs = step_exec.artifact_paths.clone();
         }
+
+        self.cleanup_sequence_worktree(&wt_id).await;
 
         let wall = step_start.elapsed().as_secs();
         let primary = refs.first().cloned();
@@ -380,15 +450,138 @@ impl ExecutionDriver {
         StepOutcome::Completed
     }
 
-    /// Reset the feature branch ref back to `base_sha`.
+    /// Merge the step's task branch into the feature branch, spending one
+    /// agent turn on conflict resolution if the merge conflicts.
     ///
-    /// A ref-only `branch -f`, never a `reset --hard` in `target_dir`: the
-    /// main repo stays checked out on the project's default branch for the
-    /// whole run, so a hard reset there would shove the *default* branch to
-    /// the feature tip. The feature branch is not checked out in the main
-    /// repo, so `branch -f` moves only its ref.
-    async fn rollback_feature_branch(&self, machine_str: &str, base_sha: &str) {
-        let _ = self
+    /// Unlike the agent step, there is no live session to reuse here — each
+    /// task's session is killed as soon as its task commits, deliberately, so
+    /// no context carries across tasks. So the resolution pass gets its own
+    /// fresh session in the step's worktree. It only ever sees the conflicted
+    /// files, which is all it needs.
+    ///
+    /// `Err((message, environmental))` when the merge could not be made to
+    /// land; the caller rolls the feature branch back.
+    #[allow(clippy::too_many_arguments)]
+    async fn merge_with_conflict_recovery(
+        &self,
+        step_exec: &StepExecution,
+        wt_id: &str,
+        wt_path: &str,
+        machine_str: &str,
+        agent_kind: &str,
+        override_model: &Option<String>,
+        accumulated_cost: &mut f64,
+        accumulated_tokens: &mut i64,
+        step_start: Instant,
+    ) -> Result<(), (String, bool)> {
+        let merge_err = match self
+            .git_ops
+            .merge_subtask(
+                self.machine_id_opt.as_deref(),
+                wt_path,
+                &self.branch_name,
+                wt_id,
+            )
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+
+        let conflict_thread_id = format!("{}-{}-merge", self.f_id_str, step_exec.step_id.0);
+        let session = self
+            .spawn_sequence_session(
+                &conflict_thread_id,
+                "resolve merge conflicts",
+                machine_str,
+                wt_path,
+                agent_kind,
+                override_model,
+            )
+            .await?;
+
+        let pass = self
+            .resolve_merge_conflicts_via_agent(
+                step_exec,
+                &*session,
+                machine_str,
+                wt_path,
+                override_model,
+                accumulated_cost,
+                accumulated_tokens,
+                step_start,
+            )
+            .await;
+        let _ = self.registry.kill(&conflict_thread_id).await;
+
+        match pass {
+            // Not a content conflict — an agent cannot help. Report the
+            // original merge error, which says what actually went wrong.
+            Ok(ConflictPass::NothingToResolve) => Err((
+                format!(
+                    "sequence step: merging the completed task branch into '{}' failed: {}",
+                    self.branch_name, merge_err
+                ),
+                false,
+            )),
+            Ok(ConflictPass::Resolved(_)) => self
+                .git_ops
+                .merge_subtask(
+                    self.machine_id_opt.as_deref(),
+                    wt_path,
+                    &self.branch_name,
+                    wt_id,
+                )
+                .await
+                .map_err(|e| {
+                    (
+                        format!(
+                            "sequence step: merging into '{}' still failed after the agent \
+                             resolved the conflicts: {}",
+                            self.branch_name, e
+                        ),
+                        false,
+                    )
+                }),
+            Err(ConflictPassError::Cancelled) => {
+                Err(("Execution cancelled by user".to_string(), false))
+            }
+            Err(ConflictPassError::Failed(msg)) => Err((
+                format!(
+                    "sequence step: could not resolve the conflicts merging into '{}': {}",
+                    self.branch_name, msg
+                ),
+                false,
+            )),
+            Err(ConflictPassError::Environmental(msg)) => Err((
+                format!(
+                    "sequence step: agent error while resolving the merge conflicts: {}",
+                    msg
+                ),
+                true,
+            )),
+        }
+    }
+
+    /// Tear the step's worktree down and reset the feature branch to
+    /// `base_sha`, so a retry starts from the tip the step began at.
+    ///
+    /// **The order is load-bearing.** `merge_subtask` checks the feature
+    /// branch *out inside this worktree* when it is not checked out anywhere
+    /// else (which is the normal case — the feature branch is otherwise just a
+    /// ref). Git refuses to `branch -f` a branch that a worktree holds, so
+    /// rolling back before removing the worktree fails with "cannot force
+    /// update the branch ... used by worktree at ...". Remove first, then
+    /// reset.
+    ///
+    /// Returns whether the branch actually moved back. Callers must not claim
+    /// a rollback they did not get: if the worktree could not be removed (a
+    /// locked file — the case `provision_subtask_worktree` explicitly warns
+    /// about), the reset fails and the step's commits are still on the branch.
+    async fn cleanup_and_rollback(&self, wt_id: &str, machine_str: &str, base_sha: &str) -> bool {
+        self.cleanup_sequence_worktree(wt_id).await;
+
+        let reset = self
             .exec
             .run_command(
                 machine_str,
@@ -400,6 +593,21 @@ impl ExecutionDriver {
                 ),
             )
             .await;
+
+        match reset {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::error!(
+                    feature_id = %self.f_id,
+                    branch = %self.branch_name,
+                    base_sha = %base_sha,
+                    error = %e,
+                    "sequence step: could not roll the feature branch back; the failed step's \
+                     commits are still on it"
+                );
+                false
+            }
+        }
     }
 
     async fn cleanup_sequence_worktree(&self, wt_id: &str) {
@@ -416,6 +624,7 @@ impl ExecutionDriver {
 
     /// Persist the failure and translate it into the right outcome. Honors
     /// cancellation: a step the user interrupted is not a failure.
+    #[allow(clippy::too_many_arguments)]
     async fn fail_sequence_step(
         &self,
         step_exec: &StepExecution,
@@ -424,6 +633,7 @@ impl ExecutionDriver {
         tokens: i64,
         msg: String,
         environmental: bool,
+        rolled_back: bool,
     ) -> StepOutcome {
         let is_cancelled = *self.cancel_watch.borrow();
         let status_str = if is_cancelled {
@@ -432,13 +642,22 @@ impl ExecutionDriver {
             "failed"
         };
         let wall = step_start.elapsed().as_secs();
-        let stored = if is_cancelled {
+        // Say which of the two it was. A rollback that did not happen leaves
+        // the failed attempt's commits on the feature branch, and the user has
+        // to know that before they retry or ship — claiming a clean slate we
+        // did not deliver is worse than the failure itself.
+        let stored = if rolled_back {
             format!(
                 "{} (the step's task commits have been rolled back for a clean retry)",
                 msg
             )
         } else {
-            msg.clone()
+            format!(
+                "{} (WARNING: the step's task commits could NOT be rolled back and are still on \
+                 branch '{}' — its worktree could not be removed. Inspect the branch before \
+                 retrying.)",
+                msg, self.branch_name
+            )
         };
         let _ = self.features.step_update(
             &step_exec.id,

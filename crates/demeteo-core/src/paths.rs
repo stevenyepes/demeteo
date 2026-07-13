@@ -259,16 +259,36 @@ pub fn git_no_hooks(dir: &str) -> String {
     )
 }
 
-/// Well-known gitignored dependency-cache directories that a fresh
+/// Well-known gitignored dependency directories that a fresh
 /// `git worktree add` doesn't carry over — they're gitignored, so no
 /// commit brings their contents along, and a bare worktree checkout
 /// leaves them empty. Build/test harnesses (`npm test`, `cargo test`,
 /// `pytest`) fail immediately without them.
 ///
-/// `provision_subtask_worktree` symlinks each of these from the primary
-/// checkout into every subtask worktree when present and gitignored
-/// there, so steps get a working install without re-installing per
-/// worktree.
+/// # These are build output, and build output is per-feature
+///
+/// Every entry here is **mutable, per-branch state** — the result of
+/// installing or compiling *this* branch's code. None of them is a
+/// content-addressed download cache. (Those — the Cargo registry, npm's
+/// `_cacache`, the pip wheel cache — live outside the repo in `~/.cargo`,
+/// `~/.npm`, and are immutable-by-content, so sharing them across features is
+/// both safe and where the real time saving is. Nothing here touches them.)
+///
+/// A project runs N features concurrently ([`DECISIONS.md`] decision 18), so
+/// these must never be shared *between* features. They used to be: every
+/// worktree symlinked straight to `{repo}/node_modules`, so feature B's
+/// install silently overwrote feature A's. The damage was not merely a
+/// corrupted tree — a `verify` step's harness verdict could be decided by
+/// another feature's build output, and that verdict drives Demeteo's retry and
+/// critic loops. A feature would chase a failure that belonged to someone else.
+///
+/// So each *feature* gets its own cache root ([`feature_cache_dir`]), seeded
+/// once from the primary checkout, and every worktree of that feature symlinks
+/// into it. Steps within one feature are sequential, so sharing across a
+/// feature's own worktrees is safe.
+///
+/// Anything added to this list must be classified against that rule first:
+/// **share content-addressed download caches; never share build output.**
 ///
 /// Important: a symlink standing in for a directory is NOT recognized
 /// by git as matching a trailing-slash `.gitignore` pattern (e.g.
@@ -278,6 +298,8 @@ pub fn git_no_hooks(dir: &str) -> String {
 /// pathspec-exclude these names explicitly — otherwise the symlink
 /// itself (an absolute host path) gets committed into the feature
 /// branch.
+///
+/// [`DECISIONS.md`]: https://github.com/stevenyepes/demeteo/blob/master/docs/DECISIONS.md
 pub const DEPENDENCY_CACHE_DIRS: &[&str] = &[
     "node_modules",
     "target",
@@ -288,6 +310,29 @@ pub const DEPENDENCY_CACHE_DIRS: &[&str] = &[
     ".tox",
     "__pycache__",
 ];
+
+/// The dependency-cache root owned by one feature: `{repo_dir}_cache_{branch}`.
+///
+/// Keyed by the feature branch because that is the one identifier
+/// `provision_subtask_worktree` already has that is unique per feature *and*
+/// stable across the feature's steps — each step gets a fresh worktree, but
+/// they all belong to one feature and may share its cache.
+///
+/// Sits alongside the repo rather than inside it, exactly as the worktree dirs
+/// (`{repo_dir}_wt_{subtask_id}`) do, so it is never a candidate for `git add`
+/// and never collides with a path the agent can write.
+pub fn feature_cache_dir(repo_dir: &str, feature_branch: &str) -> String {
+    // `feature/foo` → `feature-foo`: the branch is a path component here, and a
+    // slash would silently nest the cache under a `feature/` directory.
+    let slug: String = feature_branch
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => c,
+            _ => '-',
+        })
+        .collect();
+    format!("{}_cache_{}", repo_dir, slug)
+}
 
 /// Current wall-clock time in milliseconds since the UNIX epoch.
 ///
