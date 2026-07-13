@@ -28,6 +28,17 @@ struct CompletedTask {
     files: Vec<String>,
 }
 
+/// A task this attempt finished *and committed*, with the worktree HEAD its
+/// commit produced. When a later task fails, the caller resets the worktree
+/// to the last entry's `sha` (discarding the failed task's debris, including
+/// any commits its agent made itself) and merges the prefix to the feature
+/// branch, so the completed tasks' work — already paid for — survives the
+/// failure and the retry runs only the remainder.
+pub(crate) struct LandedTask {
+    pub id: String,
+    pub sha: String,
+}
+
 impl ExecutionDriver {
     /// Run `tasks` strictly in order inside the single worktree `wt_path`.
     ///
@@ -37,8 +48,10 @@ impl ExecutionDriver {
     /// task commits before the next one starts; the caller merges the whole
     /// branch back once, after this returns.
     ///
-    /// `Err((message, environmental))` on the first task that fails — the
-    /// caller rolls the feature branch back to its pre-step tip.
+    /// `Err((message, environmental))` on the first task that fails. `landed`
+    /// then holds the tasks this attempt completed and committed before the
+    /// failure — the caller merges that prefix to the feature branch and
+    /// fails the step, or rolls the branch back when nothing landed.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_tasks_loop(
         &self,
@@ -51,11 +64,13 @@ impl ExecutionDriver {
         step_execs: &[StepExecution],
         plan: &TaskPlan,
         machine_str: &str,
+        wt_id: &str,
         wt_path: &str,
         agent_kind: &str,
         override_model: &Option<String>,
         all_artifact_refs: &mut Vec<String>,
         satisfied_decls: &mut std::collections::HashSet<String>,
+        landed: &mut Vec<LandedTask>,
     ) -> Result<(), (String, bool)> {
         let tasks = &plan.tasks;
 
@@ -89,27 +104,116 @@ impl ExecutionDriver {
             );
 
             let files = task.files.clone();
-            self.run_one_task(
-                step_exec,
-                step_conf,
-                accumulated_cost,
-                accumulated_tokens,
-                step_start,
-                step_index,
-                step_execs,
-                task,
-                idx,
-                tasks.len(),
-                &completed,
-                plan.resumes_landed_work,
-                machine_str,
+
+            // A session per task, not per step: the thread id carries the
+            // task id so the runtime can never hand us a cached session
+            // still holding the previous task's conversation.
+            let thread_id = format!("{}-{}-{}", self.f_id_str, step_exec.step_id.0, task.id);
+
+            // Telemetry row for this (task, attempt). Best-effort — a DB
+            // hiccup must not fail a task whose agent work is fine — but the
+            // close below runs on *every* exit, or the dashboard's live
+            // "nodes" count (which counts `running` rows) would over-report
+            // forever.
+            let run_id = format!("sr-{}-{}-{}", self.f_id_str, task.id, crate::paths::now_ms());
+            let subtask_branch = crate::adapters::worktree::git_ops::subtask_branch_name(
+                &self.branch_name,
+                wt_id,
+            );
+            if let Err(e) = self.subtask_runs.subtask_run_start(
+                &run_id,
+                &self.f_id,
+                &step_exec.id,
+                &task.id,
+                &thread_id,
                 wt_path,
-                agent_kind,
-                override_model,
-                all_artifact_refs,
-                satisfied_decls,
-            )
-            .await?;
+                &subtask_branch,
+                crate::paths::now_ms(),
+            ) {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    task_id = %task.id,
+                    error = %e,
+                    "sequence task: could not open its subtask_runs row"
+                );
+            }
+
+            let cost_before = *accumulated_cost;
+            let tokens_before = *accumulated_tokens;
+            let task_res = self
+                .run_one_task(
+                    step_exec,
+                    step_conf,
+                    accumulated_cost,
+                    accumulated_tokens,
+                    step_start,
+                    step_index,
+                    step_execs,
+                    task,
+                    idx,
+                    tasks.len(),
+                    &completed,
+                    plan.resumes_landed_work,
+                    &thread_id,
+                    machine_str,
+                    wt_path,
+                    agent_kind,
+                    override_model,
+                    all_artifact_refs,
+                    satisfied_decls,
+                )
+                .await;
+
+            let (status, err_msg) = match &task_res {
+                Ok(()) => ("completed", None),
+                Err((msg, _)) => ("failed", Some(msg.as_str())),
+            };
+            if let Err(e) = self.subtask_runs.subtask_run_finish(
+                &run_id,
+                status,
+                *accumulated_cost - cost_before,
+                *accumulated_tokens - tokens_before,
+                err_msg,
+                crate::paths::now_ms(),
+            ) {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    task_id = %task.id,
+                    error = %e,
+                    "sequence task: could not close its subtask_runs row"
+                );
+            }
+            task_res?;
+
+            // The task committed (run_one_task fails otherwise), so the
+            // worktree HEAD is that commit — the checkpoint anchor a later
+            // failure resets to. If even rev-parse fails, leave the task out
+            // of `landed`: a retry re-running a finished task is wasteful
+            // but safe, checkpointing to a wrong SHA is not.
+            match self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "git -C {} rev-parse HEAD",
+                        paths::shell_escape_posix(wt_path)
+                    ),
+                )
+                .await
+            {
+                Ok(sha) if !sha.trim().is_empty() => landed.push(LandedTask {
+                    id: task.id.clone(),
+                    sha: sha.trim().to_string(),
+                }),
+                _ => {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        task_id = %task.id,
+                        "sequence task: committed but its HEAD could not be read; \
+                         it will not be checkpointable"
+                    );
+                }
+            }
 
             completed.push(CompletedTask {
                 id: task.id.clone(),
@@ -138,6 +242,7 @@ impl ExecutionDriver {
         task_total: usize,
         completed: &[CompletedTask],
         resumes_landed_work: bool,
+        thread_id: &str,
         machine_str: &str,
         wt_path: &str,
         agent_kind: &str,
@@ -145,11 +250,6 @@ impl ExecutionDriver {
         all_artifact_refs: &mut Vec<String>,
         satisfied_decls: &mut std::collections::HashSet<String>,
     ) -> Result<(), (String, bool)> {
-        // A session per task, not per step: the thread id carries the task
-        // id so the runtime can never hand us a cached session still
-        // holding the previous task's conversation.
-        let thread_id = format!("{}-{}-{}", self.f_id_str, step_exec.step_id.0, task.id);
-
         let snapshot = WorktreeSnapshot::capture(&*self.exec, machine_str, wt_path).await;
         // The worktree's HEAD *before* the agent runs. The snapshot delta
         // misses work the agent committed itself, and diffing against the
@@ -189,7 +289,7 @@ impl ExecutionDriver {
 
         let session = self
             .spawn_sequence_session(
-                &thread_id,
+                thread_id,
                 &task.title,
                 machine_str,
                 wt_path,
@@ -260,7 +360,7 @@ impl ExecutionDriver {
         // The session's work is done either way — a task never needs its
         // conversation again, and leaving it alive would keep the model's
         // context (and the runtime process) around for the whole step.
-        let _ = self.registry.kill(&thread_id).await;
+        let _ = self.registry.kill(thread_id).await;
 
         if let Some(err) = turn_err {
             return Err(err);

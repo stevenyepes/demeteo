@@ -10,7 +10,10 @@
 //! looks like (its steps predate the field, and we now dispatch them here),
 //! so we keep the old planner turn for them rather than breaking them.
 
-use super::tasks::{extract_task_plan, select_targeted_tasks, validate_task_plan, TaskPlan};
+use super::tasks::{
+    apply_landed_checkpoint, extract_task_plan, select_targeted_tasks, validate_task_plan,
+    TaskPlan,
+};
 use crate::adapters::step_executor::artifacts::{
     resolve_attached_artifacts, resolve_attached_user_attachments,
 };
@@ -77,7 +80,7 @@ impl ExecutionDriver {
                     total = cached.tasks.len(),
                     "sequence step: targeted retry"
                 );
-                return Ok(targeted);
+                return Ok(self.skip_checkpointed_tasks(&step_exec.step_id.0, targeted));
             }
         }
 
@@ -122,7 +125,34 @@ impl ExecutionDriver {
         // A full re-plan still runs against whatever the last attempt left on
         // the branch, so it carries the same warning a targeted retry does.
         plan.resumes_landed_work = previous_attempt_landed;
-        Ok(plan)
+        Ok(self.skip_checkpointed_tasks(&step_exec.step_id.0, plan))
+    }
+
+    /// Drop the tasks a mid-list checkpoint already merged to the feature
+    /// branch (see `handle_sequence_step`'s failure path), so no attempt —
+    /// targeted retry, full re-plan, or an environmental in-place re-run at
+    /// iteration 0 — re-runs and re-pays for work that already landed. A
+    /// no-op unless this step checkpointed.
+    fn skip_checkpointed_tasks(&self, step_id: &str, plan: TaskPlan) -> TaskPlan {
+        match self.sequence_checkpoints.get(step_id) {
+            Some(landed) if !landed.is_empty() => {
+                let mut filtered = apply_landed_checkpoint(plan, landed);
+                // The checkpoint exists exactly because a prefix *merged* —
+                // so even when none of its ids match this plan (a legacy
+                // planner re-decomposed with fresh ids), the branch is not
+                // pristine and the tasks must be told so.
+                filtered.resumes_landed_work = true;
+                tracing::info!(
+                    feature_id = %self.f_id,
+                    step_id = %step_id,
+                    remaining = filtered.tasks.len(),
+                    landed = landed.len(),
+                    "sequence step: resuming after a mid-list checkpoint"
+                );
+                filtered
+            }
+            _ => plan,
+        }
     }
 
     /// Read the `task-list` artifact produced by step `source_step_id`.

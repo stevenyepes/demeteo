@@ -98,6 +98,11 @@ pub(crate) struct ExecutionDriver {
     pub app_settings: Arc<dyn AppSettingsRepository>,
     pub git_ops: GitOpsHelper,
     pub merge_executor: Arc<dyn MergeExecutor>,
+    /// Per-task run telemetry for `sequence` steps. The task loop opens a
+    /// `subtask_runs` row when a task's agent spawns and closes it when the
+    /// task commits or fails, so the dashboard's live "nodes" count and the
+    /// post-hoc audit of which tasks ran are both real.
+    pub subtask_runs: Arc<dyn crate::ports::db::SubtaskRunRepository>,
     /// Opens the PR once the last step finishes. The same publisher the
     /// Publish button has always used — an HTTP call to the provider's API,
     /// never the `gh` CLI. `None` under the headless runner, which opens its
@@ -232,6 +237,17 @@ pub(crate) struct ExecutionDriver {
         String,
         crate::adapters::step_executor::steps::sequence::tasks::TaskPlan,
     >,
+
+    /// Task ids a `sequence` step already merged to the feature branch via a
+    /// mid-list checkpoint, keyed by step id. Written when a task fails
+    /// partway through the list and the completed prefix is merged before the
+    /// step reports failure; read by `resolve_task_plan` so the next attempt
+    /// runs only the remainder. Cleared when the step finally completes —
+    /// from then on the ordinary "previous attempt landed" retry logic
+    /// applies. In-memory like `cached_plans`: an app restart loses the
+    /// skip-list, and the retry re-runs tasks whose agents will find (and be
+    /// told about) the committed work.
+    pub sequence_checkpoints: std::collections::HashMap<String, Vec<String>>,
 
     /// Step-execution ids that already consumed their single free
     /// in-place retry after an environmental failure (agent blocked,

@@ -44,6 +44,31 @@ pub(crate) mod plan;
 pub(crate) mod runner;
 pub(crate) mod tasks;
 
+/// What happened to the feature branch on the way out of a failed sequence
+/// step. Folded into the stored error message, because the user has to know
+/// the branch's state before they retry or ship — each variant leaves it
+/// somewhere different.
+enum FailureDisposition {
+    /// The branch was reset to its pre-attempt tip; a retry starts clean.
+    RolledBack,
+    /// The reset failed (usually an unremovable worktree) and the failed
+    /// attempt's commits are still on the branch.
+    RollbackFailed,
+    /// The tasks that completed before the failure were merged to the
+    /// feature branch; the retry resumes from the failed task.
+    PrefixLanded { landed: usize, total: usize },
+}
+
+impl FailureDisposition {
+    fn from_rollback(rolled_back: bool) -> Self {
+        if rolled_back {
+            Self::RolledBack
+        } else {
+            Self::RollbackFailed
+        }
+    }
+}
+
 impl ExecutionDriver {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_sequence_step(
@@ -171,6 +196,7 @@ impl ExecutionDriver {
         let mut all_artifact_refs = Vec::new();
         let mut satisfied_decls: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        let mut landed_this_attempt: Vec<runner::LandedTask> = Vec::new();
         let tasks_res = self
             .run_tasks_loop(
                 step_exec,
@@ -182,15 +208,74 @@ impl ExecutionDriver {
                 step_execs,
                 &plan,
                 &machine_str,
+                &wt_id,
                 &wt_path,
                 &agent_kind,
                 &override_model,
                 &mut all_artifact_refs,
                 &mut satisfied_decls,
+                &mut landed_this_attempt,
             )
             .await;
 
         if let Err((msg, environmental)) = tasks_res {
+            // A mid-list failure does not forfeit the tasks that already
+            // finished: their work is committed in the worktree and paid
+            // for. Merge that prefix to the feature branch and record it, so
+            // the retry runs only the remainder (decision 13's
+            // continue-and-report intent, adapted to ordered tasks — the
+            // tail may depend on the failed task, so it is not run, but the
+            // completed prefix is kept). Cancellation is not a failure:
+            // the user asked to stop, so the branch rolls back as before.
+            if !*self.cancel_watch.borrow() && !landed_this_attempt.is_empty() {
+                match self
+                    .checkpoint_landed_prefix(
+                        &wt_id,
+                        &wt_path,
+                        &machine_str,
+                        &landed_this_attempt,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let entry = self
+                            .sequence_checkpoints
+                            .entry(step_exec.step_id.0.clone())
+                            .or_default();
+                        for t in &landed_this_attempt {
+                            if !entry.contains(&t.id) {
+                                entry.push(t.id.clone());
+                            }
+                        }
+                        let landed_total = entry.len();
+                        self.cleanup_sequence_worktree(&wt_id).await;
+                        return self
+                            .fail_sequence_step(
+                                step_exec,
+                                step_start,
+                                *accumulated_cost,
+                                *accumulated_tokens,
+                                msg,
+                                environmental,
+                                FailureDisposition::PrefixLanded {
+                                    landed: landed_total,
+                                    total: landed_total + plan.tasks.len()
+                                        - landed_this_attempt.len(),
+                                },
+                            )
+                            .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            feature_id = %self.f_id,
+                            step_id = %step_exec.step_id.0,
+                            error = %e,
+                            "sequence step: could not merge the completed task prefix; \
+                             falling back to a full rollback"
+                        );
+                    }
+                }
+            }
             let rolled_back = self
                 .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
                 .await;
@@ -202,7 +287,7 @@ impl ExecutionDriver {
                     *accumulated_tokens,
                     msg,
                     environmental,
-                    rolled_back,
+                    FailureDisposition::from_rollback(rolled_back),
                 )
                 .await;
         }
@@ -246,7 +331,7 @@ impl ExecutionDriver {
                         names
                     ),
                     false,
-                    rolled_back,
+                    FailureDisposition::from_rollback(rolled_back),
                 )
                 .await;
         }
@@ -340,7 +425,7 @@ impl ExecutionDriver {
                     *accumulated_tokens,
                     msg,
                     environmental,
-                    rolled_back,
+                    FailureDisposition::from_rollback(rolled_back),
                 )
                 .await;
         }
@@ -410,7 +495,7 @@ impl ExecutionDriver {
                          changes — the implementation produced nothing."
                             .to_string(),
                         false,
-                        rolled_back,
+                        FailureDisposition::from_rollback(rolled_back),
                     )
                     .await;
             }
@@ -418,6 +503,12 @@ impl ExecutionDriver {
         }
 
         self.cleanup_sequence_worktree(&wt_id).await;
+
+        // The step is done, so any mid-list checkpoint is spent: from here on
+        // the ordinary "previous attempt landed" retry logic covers the
+        // branch's contents, and a stale skip-list would silently exempt
+        // tasks from a future full re-run.
+        self.sequence_checkpoints.remove(&step_exec.step_id.0);
 
         let wall = step_start.elapsed().as_secs();
         let primary = refs.first().cloned();
@@ -563,6 +654,61 @@ impl ExecutionDriver {
         }
     }
 
+    /// Preserve the completed task prefix after a mid-list failure: reset the
+    /// worktree to the last completed task's commit — discarding the failed
+    /// task's debris, both uncommitted writes and any commits its agent made
+    /// itself — and merge the step's task branch into the feature branch.
+    ///
+    /// Only the *merge conflict* recovery is deliberately absent here. On the
+    /// success path a conflicting merge is worth an agent turn, because the
+    /// worktree holds a complete verified implementation. Here the step is
+    /// already failing; spending more agent budget to salvage a partial
+    /// prefix inverts that trade, so a conflict falls back to the ordinary
+    /// full rollback in the caller.
+    async fn checkpoint_landed_prefix(
+        &self,
+        wt_id: &str,
+        wt_path: &str,
+        machine_str: &str,
+        landed: &[runner::LandedTask],
+    ) -> Result<(), String> {
+        let last = landed
+            .last()
+            .ok_or_else(|| "no completed tasks to checkpoint".to_string())?;
+
+        self.exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} reset --hard {}",
+                    paths::shell_escape_posix(wt_path),
+                    paths::shell_escape_posix(&last.sha),
+                ),
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "could not reset the worktree to the last completed task's commit {}: {}",
+                    last.sha, e
+                )
+            })?;
+
+        self.git_ops
+            .merge_subtask(
+                self.machine_id_opt.as_deref(),
+                wt_path,
+                &self.branch_name,
+                wt_id,
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "merging the completed task prefix into '{}' failed: {}",
+                    self.branch_name, e
+                )
+            })
+    }
+
     /// Tear the step's worktree down and reset the feature branch to
     /// `base_sha`, so a retry starts from the tip the step began at.
     ///
@@ -633,7 +779,7 @@ impl ExecutionDriver {
         tokens: i64,
         msg: String,
         environmental: bool,
-        rolled_back: bool,
+        disposition: FailureDisposition,
     ) -> StepOutcome {
         let is_cancelled = *self.cancel_watch.borrow();
         let status_str = if is_cancelled {
@@ -642,22 +788,29 @@ impl ExecutionDriver {
             "failed"
         };
         let wall = step_start.elapsed().as_secs();
-        // Say which of the two it was. A rollback that did not happen leaves
-        // the failed attempt's commits on the feature branch, and the user has
-        // to know that before they retry or ship — claiming a clean slate we
-        // did not deliver is worse than the failure itself.
-        let stored = if rolled_back {
-            format!(
+        // Say which it was. A rollback that did not happen leaves the failed
+        // attempt's commits on the feature branch, and the user has to know
+        // that before they retry or ship — claiming a clean slate we did not
+        // deliver is worse than the failure itself. A checkpointed prefix is
+        // the deliberate version of the same situation: commits on the
+        // branch, but kept on purpose and resumed from on retry.
+        let stored = match disposition {
+            FailureDisposition::RolledBack => format!(
                 "{} (the step's task commits have been rolled back for a clean retry)",
                 msg
-            )
-        } else {
-            format!(
+            ),
+            FailureDisposition::RollbackFailed => format!(
                 "{} (WARNING: the step's task commits could NOT be rolled back and are still on \
                  branch '{}' — its worktree could not be removed. Inspect the branch before \
                  retrying.)",
                 msg, self.branch_name
-            )
+            ),
+            FailureDisposition::PrefixLanded { landed, total } => format!(
+                "{} ({} of {} tasks completed before the failure; their commits were kept and \
+                 merged to branch '{}', and a retry will resume from the failed task instead of \
+                 starting over)",
+                msg, landed, total, self.branch_name
+            ),
         };
         let _ = self.features.step_update(
             &step_exec.id,

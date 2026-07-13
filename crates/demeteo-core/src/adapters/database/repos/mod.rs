@@ -11,5 +11,6 @@ pub mod project;
 pub mod remote_run_mirror;
 pub mod run_events;
 pub mod runner_run;
+pub mod subtask_run;
 pub mod thread;
 pub mod workflow;

@@ -62,6 +62,10 @@ pub struct DagStepExecutor {
     /// and feature→upstream flows with structured conflict
     /// detection and an audit trail.
     pub merge_executor: Arc<dyn MergeExecutor>,
+    /// Per-task run telemetry for `sequence` steps — one `subtask_runs`
+    /// row per (task, attempt). See
+    /// [`SubtaskRunRepository`](crate::ports::db::SubtaskRunRepository).
+    subtask_runs: Arc<dyn crate::ports::db::SubtaskRunRepository>,
     /// Git operations helper for the resolver / sync flows. The
     /// step handlers (agent.rs, parallel.rs) own their own
     /// `GitOpsHelper` instances; this one is dedicated to the
@@ -149,6 +153,11 @@ impl DagStepExecutor {
         agent_exec: Arc<dyn AgentExecutionPort>,
         exec: Arc<dyn ExecutionPort>,
         merge_executor: Arc<dyn MergeExecutor>,
+        // Per-task run telemetry for `sequence` steps. Same
+        // `SqliteAdapter` as `features` / `gates`; threaded as its own
+        // sub-port so the driver's task loop can open/close
+        // `subtask_runs` rows without seeing the rest of the schema.
+        subtask_runs: Arc<dyn crate::ports::db::SubtaskRunRepository>,
         artifacts: Arc<dyn ArtifactStore>,
         attachments: Arc<dyn AttachmentStore>,
         attachment_json: Arc<dyn AttachmentJsonPort>,
@@ -173,6 +182,7 @@ impl DagStepExecutor {
             agent_exec,
             exec,
             merge_executor,
+            subtask_runs,
             git_ops,
             artifacts,
             attachments,

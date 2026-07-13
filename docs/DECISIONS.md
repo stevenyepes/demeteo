@@ -21,7 +21,7 @@
 | 10 | Workflow versioning                | Local + versioned + importable, JSON format, starter pack in binary             | Interview Q11    |
 | 11 | Project bootstrap depth            | Clone + detect (B) + propose worktree strategy (C); no repo writes (D deferred)| Interview Q12    |
 | 12 | Gate UX                            | Planner summary card + artifact/diff list + Approve/Redirect/Cancel            | Interview Q13    |
-| 13 | `parallel` failure semantics       | Continue-and-report (D) + opt-in retry with cost cap (C layered)               | Interview Q14    |
+| 13 | Implement-step failure semantics   | **Keep the prefix.** A failing task stops the `sequence` list (later tasks may depend on it, so they do not run), but the tasks that already completed are merged to the feature branch before the step reports failure, and the retry resumes from the failed task instead of re-running the whole list. ⚠️ **Supersedes the `parallel`-era "continue-and-report (D)" answer** — see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q14) |
 | 14 | Workflow re-entry / resume         | Per-step checkpoints; synthetic gate on mid-step interrupt                     | Interview Q15    |
 | 15 | Workflow telemetry                 | Per-step cost + duration; **no pre-launch cost estimate**                      | Interview Q16    |
 | 16 | Repo merge model                   | `feature/<slug>` branch from canonical; subtasks merge into it; optional MR    | Interview Q17    |
@@ -52,6 +52,45 @@ A decision you silently overwrite stops being a decision *record*. When a
 locked answer changes, the row above is updated **and** the original is kept
 here with the reason it moved, so the next reader can tell "we thought hard and
 changed our minds" from "nobody ever considered this".
+
+### 13 — Implement-step failure semantics
+
+| | |
+|---|---|
+| **Was** | Continue-and-report (D) + opt-in retry with cost cap (C layered) — when one `parallel` subtask failed, the others kept running, every result was reported at the end, and a capped retry could re-run the failures. |
+| **Now** | Keep the prefix — a failing task stops the `sequence` list, the completed tasks' commits are merged to the feature branch, and the retry resumes from the failed task. |
+| **Changed** | 2026-07-12 |
+
+**Why it changed.** The original answer was written for the `parallel` step,
+whose subtasks were independent by construction (disjoint file ownership,
+separate worktrees), so "keep going past a failure" was safe: the surviving
+subtasks could not have depended on the failed one. The `sequence` step that
+replaced it (see decision 8's history) inverts that premise — tasks run in
+order precisely *because* later tasks may build on earlier ones. Running the
+tail past a failed task would hand each agent a worktree missing work its
+task assumes, which produces confused agents and spend with no expected value.
+
+**What survives, and how.** The part of the original decision worth keeping
+was never the literal "continue" — it was *don't discard paid-for work, and
+make the retry pay only for what actually failed*. That is exactly what the
+checkpoint preserves: when task k of n fails, tasks 1..k-1 are already
+committed in the step's worktree, so the worktree is reset to the last
+completed task's commit (discarding the failed task's debris) and merged to
+the feature branch before the step fails. The step records the landed task
+ids (`ExecutionDriver::sequence_checkpoints`), and every subsequent attempt's
+plan resolution filters them out, so the retry resumes from the failed task
+with its prompt naming the work already on the branch. The rewrite that
+introduced the sequence step initially shipped the opposite (roll back
+everything, re-run everything) — that was fallout, not a decision, which is
+why this row exists.
+
+**Boundaries.** Cancellation still rolls back — the user asked to stop, not
+to bank partial work. A verifier verdict against the *complete* list still
+rolls back too: every task "completed", so there is no failed-task boundary
+to checkpoint at, and the verdict impugns the content rather than the
+execution. And if the prefix merge itself fails (the feature branch moved and
+conflicts), the step falls back to the old full rollback rather than spending
+agent budget salvaging a partial prefix.
 
 ### 18 — Multi-feature concurrency
 

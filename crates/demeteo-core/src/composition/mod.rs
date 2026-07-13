@@ -216,6 +216,7 @@ pub fn build_core_context(
             agent_exec.clone(),
             exec_inner.clone(),
             merge_executor.clone(),
+            db_adapter.clone(),
             artifact_store,
             attachment_store.clone(),
             attachment_json.clone(),
