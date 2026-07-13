@@ -28,7 +28,7 @@
                     |  - StepExecutor driver (adapters/step_executor/driver)|
                     |  - AgentSession lifecycle (one-shot CLI + JSON-lines) |
                     |  - Worktree ops (clone / branch / merge / sync)       |
-                    |  - ConflictPolicy cascade                             |
+                    |  - Inline conflict resolution (steps/conflict_pass)   |
                     |  - StepCapability -> PermissionProfile + WriteScope   |
                     |  - Pricing (model -> cost)                            |
                     +-------------------------------------------------------+
@@ -93,15 +93,13 @@ distinguish "leave alone" from "set to NULL".
 - **`WorktreeOpsPort`** (`ports/worktree_ops.rs`) — worktree primitives
   (`clone_repository`, `create_feature_branch`,
   `provision_subtask_worktree`, `cleanup_subtask_worktree`,
-  `branch_delete`, `merge_subtask`, `sync_feature_with_upstream`,
-  `precheck_merge`). The precheck returns `MergePreCheck::{AlreadyMerged,
-  CleanMerge, WouldConflict}` — no separate `MergeStrategy` enum.
-- **`MergePort`** (`ports/merge.rs`) — per-subtask merge outcomes,
-  rebase ordering, audit recording (`SubtaskMerge`, `MergeOutcome`).
-- **`ConflictPort`** (`ports/conflict.rs`) — conflict detection and the
-  cascade entry points; the per-project `ConflictPolicy` enum
-  (`AlwaysGate | AutoAgent | AutoHuman`) lives in
-  `domain/models/merge.rs`.
+  `branch_delete`, `merge_subtask`, `sync_feature_with_upstream`).
+- **`MergePort`** (`ports/merge.rs`) — the feature ↔ upstream sync flow
+  (`sync_feature_with_upstream`, `feature_syncs` audit rows). Task-branch
+  merges are *not* a port: the steps that own the worktree merge inline
+  via `GitOpsHelper::merge_subtask` and resolve conflicts with
+  `steps/conflict_pass` (see decision 20's history in `DECISIONS.md` —
+  the R6 cascade port was deleted as never-called).
 - **`MrPublisher`** (`ports/mr_publisher.rs`) — publish a draft MR/PR
   via the project's provider instance; returns `MrInfo`.
 - **`ProviderHttpPort`** (`ports/provider_http.rs`) — typed wrapper
@@ -170,7 +168,7 @@ src-tauri/src/
 │   │   ├── agent_config.rs
 │   │   ├── feature.rs             # Feature, StepExecution, SubtaskRun, GateDecision, StepOverride
 │   │   ├── machine.rs             # Machine, AgentProfile
-│   │   ├── merge.rs               # SubtaskMerge, ConflictReport, ConflictPolicy, MergeOutcome
+│   │   ├── merge.rs               # FeatureSync, ConflictReport, UpstreamSyncOutcome/Failure
 │   │   ├── notification.rs
 │   │   ├── project.rs             # Project, Repository, WorktreeStrategy, ProjectSettings, ProjectWorkflowOverride
 │   │   ├── provider.rs

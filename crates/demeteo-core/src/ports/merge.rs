@@ -1,59 +1,35 @@
-//! Merge executor port.
+//! Merge executor port — the **feature ↔ upstream sync** flow.
 //!
-//! Wraps `git merge` for both subtask→feature and feature→upstream
-//! flows with structured conflict detection and an audit trail.
+//! Wraps `git merge` of `origin/<default>` into a feature branch with
+//! structured conflict detection and a `feature_syncs` audit trail. Serves
+//! the "Sync with main" button, the `sync` workflow step, and the
+//! "Resolve with agent" recovery flow.
+//!
+//! This port used to also own the subtask→feature merge (`
+//! merge_subtask_into_feature`, the R6 cascade). That half was never called:
+//! the steps that merge task branches back — `steps::agent` and
+//! `steps::sequence` — do it inline via `GitOpsHelper::merge_subtask` and
+//! resolve conflicts with `steps::conflict_pass`, using the worktree and
+//! session they already hold. It was deleted rather than maintained as
+//! fiction; see `docs/DECISIONS.md` decision 20's history.
 //!
 //! **All methods are async.** Tauri v2 supports async commands natively.
 
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{
-    ConflictReport, MergeOutcome, UpstreamSyncFailure, UpstreamSyncOutcome,
-};
+use crate::domain::models::{UpstreamSyncFailure, UpstreamSyncOutcome};
 use async_trait::async_trait;
 
 #[async_trait]
 pub trait MergeExecutor: Send + Sync {
-    /// Merge `source_branch` into `target_branch` (the feature branch).
-    ///
-    /// - `Ok(MergeOutcome)` on a clean merge (caller can mark the
-    ///   subtask complete).
-    /// - `Err(ConflictReport)` if git reports a conflict. The caller
-    ///   is responsible for routing this through the project's
-    ///   `conflict_policy` (cascade).
-    #[allow(clippy::result_large_err)]
-    async fn merge_subtask_into_feature(
-        &self,
-        feature_id: &FeatureId,
-        source_branch: &str,
-        target_branch: &str,
-        subtask_run_id: &str,
-    ) -> Result<MergeOutcome, ConflictReport>;
-
-    /// Skip the merge entirely (user picked "Skip" in the cascade).
-    /// Recorded as a `subtask_merges` row with `status = 'skipped'`.
-    async fn skip_merge(&self, subtask_run_id: &str, reason: &str) -> Result<(), String>;
-
-    /// Abort any in-progress git merge state on the target branch
-    /// (e.g. after a hard failure mid-merge). Does not record a
-    /// `subtask_merges` row — the existing pending row stays
-    /// pending until the next attempt resolves it.
-    async fn abort_in_progress(&self, target_branch: &str) -> Result<(), String>;
-
     /// Sync a feature branch with the latest `origin/<default_branch>`.
-    ///
-    /// This is the **upstream** counterpart of `merge_subtask_into_feature`:
-    /// the source is `origin/<default>` and the target is the user's
-    /// feature branch. The result has the same shape as the subtask
-    /// merge result so the same conflict-resolver cascade can be
-    /// reused.
     ///
     /// - `Ok(UpstreamSyncOutcome)` when the feature branch was
     ///   fast-forwarded or a merge commit was created cleanly. The
     ///   `changed` flag is `false` when there was nothing to pull.
     /// - `Err(UpstreamSyncFailure)` when the merge produced
     ///   conflicts. The `ConflictReport` embedded inside carries
-    ///   the same `ConflictFile` list that the subtask merge
-    ///   produces, so the resolver sees a uniform data shape.
+    ///   the `ConflictFile` list the resolution agent and the UI
+    ///   render.
     #[allow(clippy::result_large_err)]
     async fn sync_feature_with_upstream(
         &self,

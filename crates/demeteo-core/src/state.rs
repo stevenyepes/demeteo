@@ -22,11 +22,9 @@ use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
-    MergeAuditRepository, NotificationRepository, ProjectRepository, ThreadRepository,
-    WorkflowRepository,
+    NotificationRepository, ProjectRepository, ThreadRepository, WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
-use crate::ports::merge::MergeExecutor;
 use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::NotificationPort;
 use crate::ports::pricing::PricingTable;
@@ -66,8 +64,6 @@ pub struct AppContext {
     pub memory: Arc<dyn crate::ports::memory::ProjectMemoryPort>,
     /// Memory signal queue (run observations awaiting distillation).
     pub signals: Arc<dyn crate::ports::memory_signals::MemorySignalsPort>,
-    /// Merge audit persistence.
-    pub merge_audit: Arc<dyn MergeAuditRepository>,
     /// In-app notification bell persistence. Written by the
     /// background MR-state monitor and read by `commands::notifications`.
     pub notifications: Arc<dyn NotificationRepository>,
@@ -98,11 +94,6 @@ pub struct AppContext {
     /// so the orchestrator can publish from any code path without
     /// threading the port through every layer.
     pub mr_publisher: Arc<dyn MrPublisher>,
-
-    /// Merge executor — wraps `git merge` for both subtask→feature
-    /// and feature→upstream flows with structured conflict detection
-    /// and an audit trail.
-    pub merge_executor: Arc<dyn MergeExecutor>,
 
     /// Worktree operations (cloning, provisioning, status, branch delete, etc.).
     pub worktree_ops: Arc<dyn WorktreeOpsPort>,

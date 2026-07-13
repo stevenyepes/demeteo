@@ -1,0 +1,14 @@
+-- Drop the `subtask_merges` audit table (created in V4, phase R6).
+--
+-- Nothing ever wrote a row to it outside its own unit test: the
+-- MergeExecutor method that recorded merge outcomes was never called —
+-- the steps that merge a task branch back (`steps::agent`,
+-- `steps::sequence`) merge inline via `GitOpsHelper::merge_subtask` and
+-- resolve conflicts with `steps::conflict_pass`. The dead half of the
+-- R6 layer was deleted with this migration; see `docs/DECISIONS.md`
+-- decision 20's history. The sync-side audit (`feature_syncs`, V9)
+-- stays — that flow is live.
+--
+-- Safe on any DB: the table exists on every schema at V4+ and has
+-- never held data.
+DROP TABLE IF EXISTS subtask_merges;

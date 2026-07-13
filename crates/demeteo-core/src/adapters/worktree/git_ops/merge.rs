@@ -1,72 +1,7 @@
 use super::GitOpsHelper;
 use crate::paths;
-use crate::ports::worktree_ops::MergePreCheck;
 
 impl GitOpsHelper {
-    /// Check if a subtask is already merged or would conflict, without
-    /// touching any working tree. Uses `git fetch` + `git merge-base` +
-    /// `git merge-tree` — all pure ref/object operations.
-    ///
-    /// `repo_dir` is the main clone (used only for its `.git` refs/objects).
-    pub async fn precheck_merge(
-        &self,
-        machine_id: Option<&str>,
-        repo_dir: &str,
-        feature_branch: &str,
-        subtask_branch: &str,
-    ) -> Result<MergePreCheck, String> {
-        let machine_str = machine_id.unwrap_or("local");
-        let safe_dir = paths::shell_escape_posix(repo_dir);
-
-        // Fetch latest feature branch from origin into shared refs.
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} fetch origin {}",
-                    safe_dir,
-                    paths::shell_escape_posix(feature_branch),
-                ),
-            )
-            .await;
-
-        // Already merged?  subtask is an ancestor of origin/feature_branch.
-        if self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} merge-base --is-ancestor {} refs/remotes/origin/{}",
-                    safe_dir,
-                    paths::shell_escape_posix(subtask_branch),
-                    paths::shell_escape_posix(feature_branch),
-                ),
-            )
-            .await
-            .is_ok()
-        {
-            return Ok(MergePreCheck::AlreadyMerged);
-        }
-
-        // Would conflict?  In-memory merge (no working tree touched).
-        match self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} merge-tree --write-tree refs/remotes/origin/{} {}",
-                    safe_dir,
-                    paths::shell_escape_posix(feature_branch),
-                    paths::shell_escape_posix(subtask_branch),
-                ),
-            )
-            .await
-        {
-            Ok(_) => Ok(MergePreCheck::CleanMerge),
-            Err(_) => Ok(MergePreCheck::WouldConflict),
-        }
-    }
 
     /// Merge a subtask branch back into the parent feature branch.
     ///

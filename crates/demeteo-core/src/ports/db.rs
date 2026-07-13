@@ -37,7 +37,6 @@ use crate::domain::models::{
     AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Notification, Project,
     ProjectSettings, ProjectWorkflowOverride, ProviderInstance, RepoContext, Repository,
     StepExecution, ThreadSession, Workflow, WorkflowSchedule, WorkflowVersion, WorkingMemoryEntry,
-    WorktreeContext,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -355,20 +354,11 @@ pub trait AppSettingsRepository: Send + Sync {
 // 8. MergeAuditRepository
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Audit trail for the feature ↔ upstream sync flow (`feature_syncs` rows)
+/// plus the repo-context lookup the sync executor needs. The subtask-merge
+/// half (`subtask_merges`) was deleted with the R6 cascade — see
+/// `docs/DECISIONS.md` decision 20's history.
 pub trait MergeAuditRepository: Send + Sync {
-    #[allow(clippy::too_many_arguments)]
-    fn record_merge_outcome(
-        &self,
-        subtask_run_id: &str,
-        feature_id: &FeatureId,
-        source_branch: &str,
-        target_branch: &str,
-        status: &str,
-        merge_sha: Option<&str>,
-        conflict_json: Option<&str>,
-        now: i64,
-    ) -> Result<(), String>;
-
     #[allow(clippy::too_many_arguments)]
     fn record_sync_outcome(
         &self,
@@ -381,18 +371,10 @@ pub trait MergeAuditRepository: Send + Sync {
         now: i64,
     ) -> Result<(), String>;
 
-    fn lookup_worktree_context(
-        &self,
-        feature_id: &FeatureId,
-        subtask_run_id: &str,
-    ) -> Result<WorktreeContext, String>;
-
     fn lookup_repo_context(&self, feature_id: &FeatureId) -> Result<RepoContext, String>;
 
     fn get_last_sync_worktree_path(&self, feature_id: &FeatureId)
         -> Result<Option<String>, String>;
-
-    fn skip_merge(&self, subtask_run_id: &str, reason: &str) -> Result<(), String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

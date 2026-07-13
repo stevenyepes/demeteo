@@ -129,7 +129,7 @@ Plus the budget and scheduling machinery that was always part of this: per-proje
 
 **The question:** Can third parties ship custom approval logic, telemetry integrations, or cross-cutting policy as WASM plugins?
 
-**The v1.0 answer:** No. The four-axis `PermissionProfile` (`read_fs | write_fs | execute | network`) plus the `WriteScope`-driven chmod fence plus the per-project `ConflictPolicy` cover all v1 needs.
+**The v1.0 answer:** No. The four-axis `PermissionProfile` (`read_fs | write_fs | execute | network`) plus the `WriteScope`-driven chmod fence cover all v1 needs.
 
 **The deferred work:** A WASM plugin host loaded from `~/.config/demeteo/plugins/`, evaluated inside a `wasmtime` sandbox. Plugins can hook the approval / telemetry / policy points exposed by the host.
 
