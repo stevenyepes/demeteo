@@ -226,7 +226,7 @@ impl GitOpsHelper {
     ) -> Result<String, String> {
         let machine_str = machine_id.unwrap_or("local");
         let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
-        let subtask_branch = format!("{}_subtask_{}", feature_branch, subtask_id);
+        let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
         // 1. If a previous run registered this worktree with git,
         //    `git worktree remove --force` is the only reliable way
@@ -311,8 +311,8 @@ impl GitOpsHelper {
         match self.exec.run_command(machine_str, &cmd).await {
             Ok(_) => {}
             Err(_) => {
-                // Fallback: branch may already exist from a prior
-                // interrupted run. Checkout without -b.
+                // Fallback: the branch already exists from a prior interrupted
+                // run, so `-b` refused. Check it out without `-b`.
                 let fallback_cmd = format!(
                     "git -C {} worktree add --force {} {}",
                     paths::shell_escape_posix(repo_dir),
@@ -320,6 +320,24 @@ impl GitOpsHelper {
                     paths::shell_escape_posix(&subtask_branch)
                 );
                 self.exec.run_command(machine_str, &fallback_cmd).await?;
+
+                // That branch still points at the *previous* attempt's tip —
+                // it carries commits the failed attempt made, and the caller
+                // has since reset the feature branch away from them. Left as
+                // is, the new attempt would build on abandoned work and merge
+                // all of it back, silently defeating the rollback. Provisioning
+                // must hand back a worktree at the feature branch, exactly as
+                // the `-b` path does.
+                self.exec
+                    .run_command(
+                        machine_str,
+                        &format!(
+                            "git -C {} reset --hard {}",
+                            paths::shell_escape_posix(&wt_dir),
+                            paths::shell_escape_posix(feature_branch)
+                        ),
+                    )
+                    .await?;
             }
         }
 
@@ -335,7 +353,14 @@ impl GitOpsHelper {
         //    dependency and the harness fails as before.
         let _ = self
             .exec
-            .run_command(machine_str, &link_dependency_caches_cmd(repo_dir, &wt_dir))
+            .run_command(
+                machine_str,
+                &link_dependency_caches_cmd(
+                    repo_dir,
+                    &wt_dir,
+                    &paths::feature_cache_dir(repo_dir, feature_branch),
+                ),
+            )
             .await;
 
         Ok(wt_dir)
@@ -351,7 +376,7 @@ impl GitOpsHelper {
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or("local");
         let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
-        let subtask_branch = format!("{}_subtask_{}", feature_branch, subtask_id);
+        let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
         let _ = self
             .exec
@@ -468,7 +493,22 @@ impl GitOpsHelper {
         );
         let _ = self.exec.run_command(machine_str, &subtask_cmd).await;
 
-        // 4. Delete the feature branch itself.
+        // 4. Drop this feature's dependency-cache root. It is per-feature (see
+        //    `paths::feature_cache_dir`), so nothing else can be using it once
+        //    the feature is gone — and it holds a whole `node_modules` /
+        //    `target`, which would otherwise leak once per feature, forever.
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "rm -rf {}",
+                    paths::shell_escape_posix(&paths::feature_cache_dir(repo_dir, branch))
+                ),
+            )
+            .await;
+
+        // 5. Delete the feature branch itself.
         let delete_cmd = format!("git -C {} branch -D {}", safe_dir, safe_branch);
         self.exec
             .run_command(machine_str, &delete_cmd)
@@ -551,19 +591,45 @@ impl GitOpsHelper {
 /// one of these names (unusual, but possible), it will not be ignored,
 /// so we leave the worktree's own (correct) checkout of it alone rather
 /// than shadowing it with a symlink to a different branch's copy.
-fn link_dependency_caches_cmd(repo_dir: &str, wt_dir: &str) -> String {
-    let repo_q = paths::shell_escape_posix(repo_dir);
-    let wt_q = paths::shell_escape_posix(wt_dir);
+/// Give `wt_dir` a working dependency install, without letting it share one
+/// with any *other* feature.
+///
+/// For each well-known cache dir present and gitignored in the primary
+/// checkout: seed this feature's own cache root from the primary (once — the
+/// feature's later steps reuse it), then symlink the worktree at it.
+///
+/// The seeding copy tries the cheap options first. On APFS (`cp -c`) and on
+/// btrfs/xfs (`--reflink=auto`) this is a copy-on-write clone: near-instant and
+/// near-free in disk. Elsewhere it degrades to a real copy, which is slower but
+/// still correct. Deliberately *not* hardlinks: a tool that rewrites a file in
+/// place would write straight through a hardlink into every other feature's
+/// tree, which is the exact bug this replaces.
+///
+/// When the primary has no copy of a dir, nothing is linked and the harness
+/// installs into the worktree directly — already isolated, so that is fine.
+fn link_dependency_caches_cmd(repo_dir: &str, wt_dir: &str, cache_dir: &str) -> String {
+    let repo = paths::shell_escape_posix(repo_dir);
+    let wt = paths::shell_escape_posix(wt_dir);
+    let cache = paths::shell_escape_posix(cache_dir);
     let dirs = paths::DEPENDENCY_CACHE_DIRS.join(" ");
     format!(
-        "for d in {dirs}; do \
-         if [ -e {repo}/\"$d\" ] && [ ! -e {wt}/\"$d\" ] && git -C {repo} check-ignore -q \"$d\" 2>/dev/null; then \
-         ln -sfn {repo}/\"$d\" {wt}/\"$d\"; \
+        "mkdir -p {cache} 2>/dev/null; \
+         for d in {dirs}; do \
+         if [ -e {repo}/\"$d\" ] && git -C {repo} check-ignore -q \"$d\" 2>/dev/null; then \
+         if [ ! -e {cache}/\"$d\" ]; then \
+         cp -cR {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null \
+         || cp -R --reflink=auto {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null \
+         || cp -R {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null; \
+         fi; \
+         if [ -e {cache}/\"$d\" ] && [ ! -e {wt}/\"$d\" ]; then \
+         ln -sfn {cache}/\"$d\" {wt}/\"$d\"; \
+         fi; \
          fi; \
          done",
         dirs = dirs,
-        repo = repo_q,
-        wt = wt_q,
+        repo = repo,
+        wt = wt,
+        cache = cache,
     )
 }
 

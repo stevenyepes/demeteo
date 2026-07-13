@@ -362,7 +362,7 @@ impl DagStepExecutor {
             session_dirty: false,
             session_resume_summary: String::new(),
             env_retried: std::collections::HashSet::new(),
-            cached_plan: None,
+            cached_plans: std::collections::HashMap::new(),
             session_cumulative_tokens: 0,
             last_cache_read: None,
             last_cache_creation: None,

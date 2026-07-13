@@ -32,6 +32,16 @@ impl GitOpsHelper {
     }
 }
 
+/// The branch a subtask worktree is checked out on.
+///
+/// Provisioning, merge-back, cleanup, the `ConflictDetected` payload, and
+/// `MergeExecutor` all have to agree on this name — a mismatch in any one of
+/// them silently targets a branch that does not exist. `extract_subtask_id`
+/// (in `adapters::merge`) is the inverse and parses the same shape.
+pub fn subtask_branch_name(feature_branch: &str, subtask_id: &str) -> String {
+    format!("{}_subtask_{}", feature_branch, subtask_id)
+}
+
 pub(crate) mod clone;
 pub(crate) mod health;
 pub(crate) mod merge;

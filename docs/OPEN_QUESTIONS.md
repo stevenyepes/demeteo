@@ -17,15 +17,24 @@
 
 ---
 
-## 1. Multi-feature concurrency (Q18 → v1.x)
+## 1. Multi-feature concurrency (Q18 → **answered 2026-07-12**)
 
 **The question:** Can a project run 2+ features in parallel? With what resource limits?
 
-**The v1.0 answer:** Strict serial — one feature per project at a time. The project view shows a single "Current feature" slot + a queued list.
+**The answer:** Yes — N features per project, concurrently. See [decision 18](DECISIONS.md#2-superseded-decisions), which supersedes the original "strict serial" answer and records why.
 
-**The deferred work:** Per-project `max_concurrent_features` setting (default 2); per-project `max_concurrent_llm_spend_usd_per_hour` budget; a "feature queue" panel with promote/demote controls; resource contention monitoring (worktree disk, agent sessions) with auto-pause on exhaustion.
+> The old answer was *strict serial — one feature per project at a time, with a single "Current feature" slot + a queued list*. It was never actually enforced in code, so features already ran concurrently; the change makes the intent honest and the code safe.
 
-**Why deferred:** Strict serial simplifies the orchestrator and matches the user's review attention. Multi-feature concurrency is a real need (long bugfix queued behind a 6-hour refactor) but adds substantial scheduler + budget machinery. Worth the cost once the basic orchestrator is stable.
+**What "correctness" means here.** Concurrent features are safe exactly as long as they share nothing mutable. Git already satisfies this (it locks per-ref, and features touch disjoint refs), and worktree directories are feature-scoped. The one rule to keep upholding:
+
+> **Share content-addressed *download* caches; never share *build* output.** Download caches (Cargo registry, npm `_cacache`, pip wheels) are immutable-by-content. Build/install outputs (`node_modules`, `target`, `.venv`, `.next`) are per-branch state and must be per-feature — a shared one lets feature B's install decide feature A's harness verdict, which then drives A's retry and critic loops.
+
+**Still open — the resource ceiling.** Correctness is settled; *volume* is not. N features × M sequence tasks × one agent process each is unbounded. Two independent axes:
+
+- **Per project** (how many features on one repo) — `max_concurrent_features`, default 2.
+- **Cross project** (how many anywhere) — bounded by CPU / RAM / agent processes, not by correctness. A global cap.
+
+Plus the budget and scheduling machinery that was always part of this: per-project `max_concurrent_llm_spend_usd_per_hour`; a feature-queue panel with promote/demote; resource-contention monitoring (worktree disk, agent sessions) with auto-pause on exhaustion.
 
 ---
 

@@ -19,8 +19,13 @@
 
 ## 0. Invariants this plan must preserve
 
-1. **Strict serial per project** — at most one running feature per
-   project at a time (see [`DECISIONS.md`](DECISIONS.md) decision 18).
+1. **Features on one project run concurrently** — a project may have N
+   features in flight at once (see [`DECISIONS.md`](DECISIONS.md) decision 18,
+   which supersedes the original strict-serial answer). Nothing in a run may
+   assume it is alone on the repo. Concretely: worktree paths must be
+   feature-scoped, branch refs are already disjoint per feature, and **build
+   output (`node_modules`, `target`, `.venv`) must never be shared across
+   features** — only content-addressed download caches may be.
 2. **Per-step checkpoints are atomic** — a step is "complete" only when
    its artifact is written and (if it's a gate) its decision is recorded
    (see [`DDD_MODEL.md`](DDD_MODEL.md) §4 Feature Orchestration).

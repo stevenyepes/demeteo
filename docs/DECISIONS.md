@@ -26,10 +26,10 @@
 | 15 | Workflow telemetry                 | Per-step cost + duration; **no pre-launch cost estimate**                      | Interview Q16    |
 | 16 | Repo merge model                   | `feature/<slug>` branch from canonical; subtasks merge into it; optional MR    | Interview Q17    |
 | 17 | PAT scope                          | Per-provider global, keyed by `(kind, host)` for multi-instance support        | Interview Q17a   |
-| 18 | Multi-feature concurrency          | Strict serial (A) — one feature per project                                    | Interview Q18    |
+| 18 | Multi-feature concurrency          | **Concurrent — N features per project.** Features on one project run at the same time, each on its own `feature/<slug>` branch and its own feature-scoped worktree. ⚠️ **Supersedes the original "strict serial (A)" answer** — see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q18) |
 | 19 | Workflow authoring UX              | Form-first (v1.0); YAML view (v1.1); "save run as template" (v1.2)             | Interview Q19    |
 | 20 | Conflict resolution UX             | Smart cascade: auto-agent → manual → skip/abort; no dedicated Monaco 3-way UI component (conflict resolution reuses `GateView` plus `feature_resolve_sync_conflicts` to spawn a resolution agent and revalidate the step). | Interview Q20    |
-| 21 | Project overview                   | Current feature + queue + lazy-loaded repo map                                 | Interview Q21    |
+| 21 | Project overview                   | Running features (plural) + queue + lazy-loaded repo map. Revised with [decision 18](#2-superseded-decisions): there is no single "current feature" slot, because a project may have several features in flight. | 2026-07-12 (was Interview Q21) |
 | 22 | "Start a feature" entry point      | Slim modal with description + inferred chips; "Customize…" expands              | Interview Q22    |
 | 23 | Workflow pre-flight                | Static: step list + risks + repo fit (no cost)                                 | Interview Q23    |
 | 24 | Cross-project navigation           | Left rail, main pane = current project; command palette for power users        | Interview Q24    |
@@ -46,7 +46,67 @@
 | 35 | Agent permission enforcement       | Each `StepCapability` compiles to a four-axis `PermissionProfile` (`read_fs`, `write_fs`, `execute`, `network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None` \| `ArtifactsOnly` \| `All`). The compiled policy only ever uses `allow` / `deny`, never `ask`. The abstract profile is translated to the agent's native dialect at spawn: opencode / hermes → `OPENCODE_PERMISSION` env (`{"edit":…,"read":…,"bash":…,"webfetch":…,"websearch":…,"external_directory":"deny","doom_loop":"allow"}`); claude-code → `--disallowedTools` (`Bash` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` / `WebSearch` / `WebFetch` as applicable) + `--exclude-dynamic-system-prompt-sections` + `--setting-sources user,project` + `--strict-mcp-config` for prompt-cache determinism. The `artifacts/` vs source path-shape is enforced uniformly by the OS-level chmod fence in `adapters/worktree/git_ops/scope.rs`. Gate-step approval is the only real-time human-in-the-loop surface. | 2026-06-19   |
 | 36 | Cross-step session continuity      | One captured `session_id` per feature; threaded through every subsequent agent invocation. opencode: `--session <uuid> --continue` (`adapters/agent/opencode/mod.rs:404-408`). hermes: `--resume <sid>` (`adapters/agent/hermes/mod.rs:155-156`). claude-code: `--resume <sid>` (`adapters/agent/claude_code/mod.rs:388-394`), plus `--exclude-dynamic-system-prompt-sections` / `--setting-sources user,project` / `--strict-mcp-config` for byte-identical prompt-cache prefix. Parallel subtasks each get their own session id so they don't pollute each other's context. On context-window saturation (>80% of budget from `PricingTable::context_window`) the driver's watchdog kills the session and the next step's spawn injects a one-shot recap. | 2026-06-19   |
 
-## 2. Cross-References
+## 2. Superseded decisions
+
+A decision you silently overwrite stops being a decision *record*. When a
+locked answer changes, the row above is updated **and** the original is kept
+here with the reason it moved, so the next reader can tell "we thought hard and
+changed our minds" from "nobody ever considered this".
+
+### 18 — Multi-feature concurrency
+
+| | |
+|---|---|
+| **Was** | Strict serial (A) — one feature per project at a time. The project view shows a single "Current feature" slot plus a queued list. |
+| **Now** | Concurrent — N features per project run at the same time. |
+| **Changed** | 2026-07-12 |
+
+**Why it changed.** Serial-per-project was the conservative default, chosen to
+sidestep shared-state hazards rather than because a user wanted to wait. In
+practice a project is a repo, and there is no reason two independent features
+on one repo cannot be in flight at once — they touch different branches and
+different worktrees. Waiting is a cost with no corresponding benefit.
+
+**What made it safe to change.** The invariant was never actually enforced in
+code (`feature_start` validated only the title and description), so features
+*were* already running concurrently — just without anything guaranteeing they
+would not collide. Two facts closed the gap:
+
+* **Git is concurrency-safe here.** Git locks per-ref, and features touch
+  disjoint refs (`feature/<slug>` and `feature/<slug>_subtask_*`). Eight
+  concurrent features provisioning worktrees, committing, force-moving their
+  own branch refs, and running `worktree prune` against one shared `.git`
+  complete without a single failure.
+* **Worktree paths are feature-scoped.** Worktree directories derive from
+  `{repo_dir}_wt_{subtask_id}`, and `subtask_id` now carries the feature id.
+  Before that, two features on one project derived the *same* directory, and
+  provisioning force-removes its target — so starting feature B deleted feature
+  A's live worktree and its uncommitted work. That was the concrete bug behind
+  the old `parallel` step's removal.
+
+**What this decision *requires* to hold.** Concurrency is only correct if
+features share nothing mutable. The one place they still did was the
+**dependency cache**: every worktree symlinked to the *same physical*
+`{repo}/node_modules`, `{repo}/target`, `{repo}/.venv`. Feature B's install
+overwrote feature A's, and — worse — a `verify` step's harness verdict could be
+decided by another feature's build output, which then drove Demeteo's retry and
+critic loops. The rule that replaces it:
+
+> **Share content-addressed *download* caches; never share *build* output.**
+> Download caches (the Cargo registry, npm's `_cacache`, the pip wheel cache)
+> are immutable-by-content and safe to share across features. Build and install
+> outputs (`node_modules`, `target`, `.venv`, `.next`) are per-branch state and
+> must be per-feature.
+
+Anything else added to a "cache" list must be classified against that rule
+before it is shared.
+
+**Still open:** a concurrency ceiling. N features × M tasks × one agent process
+each is unbounded resource use. The per-project axis (how many features on one
+repo) and the cross-project axis (how many anywhere — bounded by CPU/RAM, not
+correctness) both want a limit.
+
+## 3. Cross-References
 
 - **Domain model** (entities, value objects, aggregates, ports): [`DDD_MODEL.md`](DDD_MODEL.md)
 - **Architecture** (hexagon, port surface, file layout, Tauri commands, frontend state): [`ARCHITECTURE.md`](ARCHITECTURE.md)

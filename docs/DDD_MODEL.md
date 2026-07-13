@@ -61,7 +61,7 @@ The user's "workspace" — what they're working on and where it lives.
   - A Project's repos are bound to a Provider Instance at creation; PAT lookup is by `(kind, host)`.
   - `WorktreeStrategy` is detected at bootstrap and stored; user can edit.
   - `WorktreeStrategy::extra_writable_paths` adds repo-relative paths to the chmod fence for tool side-effects (`target/`, `node_modules/`, `.venv/`); each entry must be relative and `..` is rejected.
-  - Strict serial per project: at most one running feature per project at a time.
+  - Concurrent features per project: a project may have N features running at once ([decision 18](DECISIONS.md#2-superseded-decisions); supersedes the original strict-serial answer). Each feature owns its own `feature/<slug>` branch and its own feature-scoped worktree directory, so they share no mutable state — with one rule that must be upheld: **share content-addressed download caches, never share build output.** `node_modules` / `target` / `.venv` are per-branch state and must be per-feature; a shared one lets feature B decide feature A's harness verdict.
 
 ### 3. Workflow Catalog (Core Subdomain)
 
@@ -87,7 +87,7 @@ The runtime — features in motion, steps executing, gates waiting.
 - **Ports:** `StepExecutor` (the only orchestrator port — `feature_start` / `_pause` / `_resume` / `_cancel` / `_sync` / `_resolve_sync_conflicts`, `step_get` / `step_retry` / `replay_from_step` / `step_list_for_run`), `GatePresenter` (`gate_pending_for_run`, `gate_decide`)
 - **Adapters:** `StepExecutorAdapter` (`adapters/step_executor/`), `DagDriver` (`adapters/step_executor/driver.rs`)
 - **Key invariants:**
-  - A Feature has exactly one active run at a time (strict serial per project).
+  - A Feature has exactly one active run at a time. Its *project*, however, may be running several other features concurrently ([decision 18](DECISIONS.md#2-superseded-decisions)) — so nothing in a run may assume it is alone on the repo.
   - The current step is the source of truth for the orchestrator's state; everything else is derived.
   - Per-step checkpoints are atomic: a step is "complete" only when its artifact is written and (if it's a gate) its decision is recorded.
   - On re-entry (launch), mid-step interruptions surface a synthetic gate; completed steps are not re-run.

@@ -22,6 +22,8 @@ fn plan() -> TaskPlan {
                 retry_note: None,
             },
         ],
+        already_landed: vec![],
+        resumes_landed_work: false,
     }
 }
 
@@ -33,6 +35,18 @@ fn selects_only_tasks_owning_implicated_files() {
     assert_eq!(out.tasks[0].retry_note.as_deref(), Some("fix the route"));
 }
 
+/// The tasks a targeted retry skips are still in the worktree it opens — the
+/// branch carries them from the previous attempt. If they don't come back in
+/// `already_landed`, the running task's prompt claims an empty branch and the
+/// agent reimplements work it is sitting on.
+#[test]
+fn skipped_tasks_are_reported_as_already_landed() {
+    let out = select_targeted_tasks(&plan(), "fix the route", &["src/api/routes.rs".into()]);
+    assert_eq!(out.already_landed.len(), 1);
+    assert_eq!(out.already_landed[0].id, "task-2");
+    assert!(out.resumes_landed_work);
+}
+
 #[test]
 fn empty_implicated_files_falls_back_to_all_tasks() {
     let out = select_targeted_tasks(&plan(), "fb", &[]);
@@ -41,6 +55,10 @@ fn empty_implicated_files_falls_back_to_all_tasks() {
         .tasks
         .iter()
         .all(|t| t.retry_note.as_deref() == Some("fb")));
+    // Nothing is skipped, so nothing is "already landed" — but the branch
+    // still holds the previous attempt, which is what this flag says.
+    assert!(out.already_landed.is_empty());
+    assert!(out.resumes_landed_work);
 }
 
 #[test]
@@ -54,6 +72,18 @@ fn dot_slash_prefix_is_normalized() {
     let out = select_targeted_tasks(&plan(), "fb", &["./ui/App.tsx".into()]);
     assert_eq!(out.tasks.len(), 1);
     assert_eq!(out.tasks[0].id, "task-2");
+    assert_eq!(out.already_landed.len(), 1);
+    assert_eq!(out.already_landed[0].id, "task-1");
+}
+
+/// A plan read off the task-list artifact is a fresh, full plan — it must not
+/// come back claiming the branch already holds an implementation.
+#[test]
+fn a_parsed_plan_does_not_claim_landed_work() {
+    let body = r#"{"tasks":[{"id":"task-1","title":"t","description":"d","files":["a.rs"]}]}"#;
+    let plan = extract_task_plan(body).expect("bare JSON should parse");
+    assert!(!plan.resumes_landed_work);
+    assert!(plan.already_landed.is_empty());
 }
 
 /// The task-list artifact is written by the spec agent as a plain JSON file,
@@ -129,4 +159,60 @@ fn parses_multiple_tasks_preserving_order() {
 #[test]
 fn rejects_text_with_no_task_list() {
     assert!(extract_task_plan("I could not decompose this.").is_none());
+}
+
+fn plan_of(ids: &[&str]) -> TaskPlan {
+    TaskPlan {
+        tasks: ids
+            .iter()
+            .map(|id| PlannedTask {
+                id: (*id).into(),
+                title: "t".into(),
+                description: "d".into(),
+                files: vec![],
+                test_command: None,
+                retry_note: None,
+            })
+            .collect(),
+        already_landed: vec![],
+        resumes_landed_work: false,
+    }
+}
+
+#[test]
+fn a_well_formed_plan_validates() {
+    assert!(validate_task_plan(&plan_of(&["task-1", "task-2"])).is_none());
+}
+
+/// Task ids key the agent session (`{feature}-{step}-{task}`) and the
+/// completed-task record. Two tasks sharing one id collide on both, and
+/// `select_targeted_tasks` would collapse them into a single entry.
+#[test]
+fn rejects_duplicate_task_ids() {
+    let reason = validate_task_plan(&plan_of(&["task-1", "task-1"])).expect("should reject");
+    assert!(reason.contains("task-1"), "{reason}");
+}
+
+#[test]
+fn rejects_an_empty_task_id() {
+    let reason = validate_task_plan(&plan_of(&["task-1", "   "])).expect("should reject");
+    assert!(reason.contains("empty `id`"), "{reason}");
+}
+
+/// The task list is now an agent-written artifact and each task costs a fresh
+/// agent session, so an over-eager decomposition is a cost incident. Nothing
+/// else bounds it.
+#[test]
+fn rejects_a_task_list_longer_than_the_cap() {
+    let ids: Vec<String> = (0..=MAX_TASKS).map(|i| format!("task-{i}")).collect();
+    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+    let reason = validate_task_plan(&plan_of(&refs)).expect("should reject");
+    assert!(reason.contains(&MAX_TASKS.to_string()), "{reason}");
+
+    let ids: Vec<String> = (0..MAX_TASKS).map(|i| format!("task-{i}")).collect();
+    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+    assert!(
+        validate_task_plan(&plan_of(&refs)).is_none(),
+        "exactly the cap must still be allowed"
+    );
 }

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use super::tasks::PlannedTask;
+use super::tasks::{PlannedTask, TaskPlan};
 use crate::adapters::step_executor::artifacts::{
     commit_worktree_changes, inject_artifact_contract, read_worktree_file,
     resolve_attached_artifacts, resolve_declared_artifacts, WorktreeSnapshot,
@@ -49,14 +49,30 @@ impl ExecutionDriver {
         step_start: Instant,
         step_index: usize,
         step_execs: &[StepExecution],
-        tasks: &[PlannedTask],
+        plan: &TaskPlan,
         machine_str: &str,
         wt_path: &str,
         agent_kind: &str,
         override_model: &Option<String>,
         all_artifact_refs: &mut Vec<String>,
+        satisfied_decls: &mut std::collections::HashSet<String>,
     ) -> Result<(), (String, bool)> {
-        let mut completed: Vec<CompletedTask> = Vec::new();
+        let tasks = &plan.tasks;
+
+        // A targeted retry runs a subset, but the worktree it opens is cut
+        // from the feature branch, which carries *every* task from the
+        // previous attempt. Seed the completed record with the tasks this
+        // attempt is skipping so the first running task's prompt describes
+        // the tree it actually gets, rather than claiming an empty branch.
+        let mut completed: Vec<CompletedTask> = plan
+            .already_landed
+            .iter()
+            .map(|t| CompletedTask {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                files: t.files.clone(),
+            })
+            .collect();
 
         for (idx, task) in tasks.iter().enumerate() {
             if *self.cancel_watch.borrow() {
@@ -85,11 +101,13 @@ impl ExecutionDriver {
                 idx,
                 tasks.len(),
                 &completed,
+                plan.resumes_landed_work,
                 machine_str,
                 wt_path,
                 agent_kind,
                 override_model,
                 all_artifact_refs,
+                satisfied_decls,
             )
             .await?;
 
@@ -119,11 +137,13 @@ impl ExecutionDriver {
         task_idx: usize,
         task_total: usize,
         completed: &[CompletedTask],
+        resumes_landed_work: bool,
         machine_str: &str,
         wt_path: &str,
         agent_kind: &str,
         override_model: &Option<String>,
         all_artifact_refs: &mut Vec<String>,
+        satisfied_decls: &mut std::collections::HashSet<String>,
     ) -> Result<(), (String, bool)> {
         // A session per task, not per step: the thread id carries the task
         // id so the runtime can never hand us a cached session still
@@ -131,6 +151,26 @@ impl ExecutionDriver {
         let thread_id = format!("{}-{}-{}", self.f_id_str, step_exec.step_id.0, task.id);
 
         let snapshot = WorktreeSnapshot::capture(&*self.exec, machine_str, wt_path).await;
+        // The worktree's HEAD *before* the agent runs. The snapshot delta
+        // misses work the agent committed itself, and diffing against the
+        // worktree's own HEAD afterwards would miss it too — the commit moved
+        // HEAD. Pinning the pre-turn commit is what lets the fallback below
+        // see it. Diffing against the feature branch instead would over-report
+        // here in a way it could not in the old parallel step: this worktree
+        // already carries every earlier task's commits.
+        let pre_head = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} rev-parse HEAD",
+                    paths::shell_escape_posix(wt_path)
+                ),
+            )
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         let prompt = self
             .build_task_prompt(
@@ -141,48 +181,25 @@ impl ExecutionDriver {
                 task_idx,
                 task_total,
                 completed,
+                resumes_landed_work,
                 machine_str,
                 wt_path,
             )
             .await;
 
-        let env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
-        let binary = self
-            .registry
-            .runtime_for(agent_kind)
-            .map(|r| r.binary().to_string())
-            .unwrap_or_else(|| agent_kind.to_string());
-        let ctx = AgentContext {
-            thread_id: thread_id.clone(),
-            machine_id: machine_str.to_string(),
-            binary,
-            args: vec![],
-            env,
-            cwd: wt_path.to_string(),
-            model: override_model.clone(),
-            title: Some(task.title.clone()),
-            agent_exec: self.agent_exec.clone(),
-            exec: self.exec.clone(),
-            permissions: crate::domain::permission::PermissionProfile::all_allow(),
-            bare_mode: agent_kind == "claude-code",
-        };
-
-        let mut cancel_watch = self.cancel_watch.clone();
-        let spawn_res = tokio::select! {
-            res = self.registry.get_or_spawn(&thread_id, agent_kind, ctx) => Some(res),
-            _ = cancel_watch.changed() => None,
-        };
-        let session = match spawn_res {
-            Some(Ok(s)) => s,
-            Some(Err(e)) => {
-                return Err((
-                    format!("sequence task '{}': agent spawn failed: {:?}", task.id, e),
-                    true,
-                ))
-            }
-            None => return Err(("Execution cancelled by user".to_string(), false)),
-        };
+        let session = self
+            .spawn_sequence_session(
+                &thread_id,
+                &task.title,
+                machine_str,
+                wt_path,
+                agent_kind,
+                override_model,
+            )
+            .await
+            .map_err(|(msg, environmental)| {
+                (format!("sequence task '{}': {}", task.id, msg), environmental)
+            })?;
 
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
         let base_cost = *accumulated_cost;
@@ -265,8 +282,8 @@ impl ExecutionDriver {
         }
 
         // Artifact capture: snapshot delta, falling back to a diff against
-        // the branch tip when the snapshot saw nothing (e.g. the agent
-        // committed its own work).
+        // the pre-turn HEAD when the snapshot saw nothing — which is exactly
+        // what happens when the agent committed its own work.
         let decls: &[crate::domain::artifact::ArtifactDecl] =
             step_conf.artifacts.as_deref().unwrap_or(&[]);
         let always: Vec<&str> = decls
@@ -282,22 +299,25 @@ impl ExecutionDriver {
             .delta(&*self.exec, machine_str, wt_path, &always, &[])
             .await;
         if changed.is_empty() {
-            if let Ok(diff_files) = self
-                .exec
-                .run_command(
-                    machine_str,
-                    &format!(
-                        "git -C {} diff --name-only HEAD",
-                        paths::shell_escape_posix(wt_path),
-                    ),
-                )
-                .await
-            {
-                changed = diff_files
-                    .lines()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+            if let Some(ref base) = pre_head {
+                if let Ok(diff_files) = self
+                    .exec
+                    .run_command(
+                        machine_str,
+                        &format!(
+                            "git -C {} diff --name-only {}",
+                            paths::shell_escape_posix(wt_path),
+                            paths::shell_escape_posix(base),
+                        ),
+                    )
+                    .await
+                {
+                    changed = diff_files
+                        .lines()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
             }
         }
         for rel_path in changed {
@@ -377,16 +397,79 @@ impl ExecutionDriver {
             )
         })?;
 
-        let (refs, _missing) = resolve_declared_artifacts(
+        // A declared deliverable missing from *this* task is not a failure —
+        // only one task in the list may be the one that writes the report. So
+        // record which declarations this task satisfied and let the caller
+        // judge the step as a whole, once every task has run.
+        let (refs, missing) = resolve_declared_artifacts(
             decls,
             &produced_artifacts,
             &self.artifacts,
             &self.f_id_str,
             &step_exec.step_id.0,
         );
+        let missing_names: std::collections::HashSet<&str> =
+            missing.iter().map(|m| m.name.as_str()).collect();
+        for decl in decls {
+            if !missing_names.contains(decl.name.as_str()) {
+                satisfied_decls.insert(decl.name.clone());
+            }
+        }
         all_artifact_refs.extend(refs);
 
         Ok(())
+    }
+
+    /// Spawn a session in the step's worktree.
+    ///
+    /// Every session a sequence step opens — one per task, plus the one that
+    /// resolves a conflicting final merge — is short-lived, keyed to a unique
+    /// `thread_id` so the runtime can never hand back a cached session still
+    /// carrying an earlier task's conversation, and killed by its caller.
+    ///
+    /// `Err((message, environmental))`; a spawn failure is always
+    /// environmental, a cancellation never is.
+    pub(crate) async fn spawn_sequence_session(
+        &self,
+        thread_id: &str,
+        title: &str,
+        machine_str: &str,
+        wt_path: &str,
+        agent_kind: &str,
+        override_model: &Option<String>,
+    ) -> Result<std::sync::Arc<dyn crate::ports::agent_runtime::AgentSession>, (String, bool)> {
+        let env =
+            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let binary = self
+            .registry
+            .runtime_for(agent_kind)
+            .map(|r| r.binary().to_string())
+            .unwrap_or_else(|| agent_kind.to_string());
+        let ctx = AgentContext {
+            thread_id: thread_id.to_string(),
+            machine_id: machine_str.to_string(),
+            binary,
+            args: vec![],
+            env,
+            cwd: wt_path.to_string(),
+            model: override_model.clone(),
+            title: Some(title.to_string()),
+            agent_exec: self.agent_exec.clone(),
+            exec: self.exec.clone(),
+            permissions: crate::domain::permission::PermissionProfile::all_allow(),
+            bare_mode: agent_kind == "claude-code",
+        };
+
+        let mut cancel_watch = self.cancel_watch.clone();
+        let spawn_res = tokio::select! {
+            res = self.registry.get_or_spawn(thread_id, agent_kind, ctx) => Some(res),
+            _ = cancel_watch.changed() => None,
+        };
+        match spawn_res {
+            Some(Ok(s)) => Ok(s),
+            Some(Err(e)) => Err((format!("agent spawn failed: {:?}", e), true)),
+            None => Err(("Execution cancelled by user".to_string(), false)),
+        }
     }
 
     /// Writable-path set for a sequence step. `Implement` capability yields
@@ -417,6 +500,7 @@ impl ExecutionDriver {
         task_idx: usize,
         task_total: usize,
         completed: &[CompletedTask],
+        resumes_landed_work: bool,
         machine_str: &str,
         wt_path: &str,
     ) -> String {
@@ -427,9 +511,20 @@ impl ExecutionDriver {
         // agent that builds on the previous task and one that reimplements
         // it (or reports "already done" and writes nothing).
         let completed_str = if completed.is_empty() {
-            "None — this is the first task.".to_string()
+            if resumes_landed_work {
+                // A retry: nothing has been re-run yet, but the worktree was
+                // cut from a feature branch that already carries the previous
+                // attempt. Saying "this is the first task" here would send the
+                // agent to reimplement code it is looking at.
+                "None yet in this attempt — but the code from the previous attempt is already \
+                 committed on this branch. Read it first and revise it in place; do not start \
+                 over."
+                    .to_string()
+            } else {
+                "None — this is the first task.".to_string()
+            }
         } else {
-            completed
+            let mut lines: Vec<String> = completed
                 .iter()
                 .map(|c| {
                     if c.files.is_empty() {
@@ -443,8 +538,15 @@ impl ExecutionDriver {
                         )
                     }
                 })
-                .collect::<Vec<_>>()
-                .join("\n")
+                .collect();
+            if resumes_landed_work {
+                lines.push(
+                    "\nThis is a retry: the tasks above are on the branch from the previous \
+                     attempt, and so is an earlier version of the task below. Revise it in place."
+                        .to_string(),
+                );
+            }
+            lines.join("\n")
         };
 
         // A task's `retry_note` (stamped by the targeted-retry selection)

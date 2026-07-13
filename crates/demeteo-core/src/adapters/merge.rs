@@ -116,7 +116,8 @@ impl MergeExecutor for SqliteMergeExecutor {
         };
         let subtask_id = extract_subtask_id(source_branch).unwrap_or_else(|| "sub".to_string());
         let machine_str = machine_id_opt.as_deref().unwrap_or("local");
-        let subtask_branch = format!("{}_subtask_{}", target_branch, subtask_id);
+        let subtask_branch =
+            crate::adapters::worktree::git_ops::subtask_branch_name(target_branch, &subtask_id);
         let now = paths::now_ms();
 
         // 2. Pre-check: already merged?  Uses `merge-base` on remote

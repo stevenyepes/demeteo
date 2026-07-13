@@ -1,23 +1,22 @@
-//! [`ConflictResolver`] implementation.
+//! [`ConflictResolver`] implementation — the cascade driver sketched in
+//! `docs/DECISIONS.md` decision 20.
 //!
-//! Cascade driver per `docs/DECISIONS.md` decision 20:
+//! **Nothing calls this today.** The two steps that merge a subtask branch
+//! back — `steps::agent` and `steps::sequence` — resolve conflicts inline
+//! (`steps::conflict_pass`), using the worktree and session they already
+//! hold. The cascade this module describes was never wired to them, and the
+//! manual-resolution leg has no UI on the other end.
 //!
-//! - [`ConflictResolver::resolve_via_agent`] is a stub for v1: the
-//!   auto-agent resolution needs to spawn a fresh ACP session with
-//!   a constrained prompt, which depends on the full
-//!   `AgentRuntime + StepExecutor` plumbing. We return
-//!   "auto-agent resolution not implemented yet; cascade to manual"
-//!   so the existing `steps/sequence` cascade can already route
-//!   to the manual path today. The auto-agent path is wired in R6E.
+//! It is kept as the shape a future resolution flow would take, not as live
+//! code. If you are looking for what actually happens when a merge conflicts,
+//! read `steps::conflict_pass`.
 //!
-//! - [`ConflictResolver::request_manual_resolution`] emits the
-//!   existing `GateRequired` event with the conflict details
-//!   stuffed into the gate's feedback field, so the user's existing
-//!   `GateView` UI surfaces the conflict list. A future R7 revision
-//!   will replace this with a dedicated `ConflictResolver` Monaco
-//!   3-way merge widget, but the contract is the same:
-//!   `request_manual_resolution → emit gate → user resolves →
-//!    step re-runs the merge`.
+//! - [`ConflictResolver::resolve_via_agent`] is a stub: it returns
+//!   "not implemented; cascade to manual".
+//!
+//! - [`ConflictResolver::request_manual_resolution`] emits a
+//!   `ConflictDetected` event plus a `conflict:` status, which the UI
+//!   currently renders as a notification rather than a resolution surface.
 
 use std::sync::Arc;
 
@@ -44,18 +43,12 @@ impl ConflictResolver for CascadeConflictResolver {
         report: &ConflictReport,
         _subtask_run_id: &str,
     ) -> Result<MergeOutcome, String> {
-        // The auto-agent path spawns a fresh ACP session with a
-        // constrained prompt ("resolve these N files; do not modify
-        // unrelated code; produce a resolution commit"). Implementing
-        // it here would duplicate the worktree plumbing the sequence
-        // step already owns, so we delegate to the manual path instead for v1.
-        //
-        // A future phase will replace this stub with a proper
-        // resolution-subtask spawn that respects `max_auto_attempts`
-        // and `max_attempt_cost_usd`. Until then, the caller can
-        // inspect this error string and decide to surface the
-        // conflict manually.
-        let _ = report; // silence unused warning until the auto-agent path lands
+        // Resolving here would duplicate the worktree and session plumbing the
+        // steps already own — which is why `steps::conflict_pass` does it
+        // there instead, and why this stays a stub. A resolver that took over
+        // would have to respect `max_auto_attempts` and `max_attempt_cost_usd`
+        // the way the inline pass does not.
+        let _ = report; // silence unused warning while the auto-agent path is a stub
         Err("auto-agent conflict resolution not yet implemented; use manual".to_string())
     }
 

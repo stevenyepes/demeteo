@@ -43,6 +43,88 @@ pub struct TaskPlan {
     /// parses.
     #[serde(alias = "subtasks")]
     pub tasks: Vec<PlannedTask>,
+    /// Tasks a targeted retry is deliberately *not* re-running because their
+    /// work is already committed on the feature branch (see
+    /// [`select_targeted_tasks`]).
+    ///
+    /// They are not executed, but they must still be named in each running
+    /// task's `{{completed_tasks}}`: the worktree the agent opens contains
+    /// their work, and a prompt that says "None — this is the first task"
+    /// while the tree holds three tasks' worth of code is precisely the lie
+    /// the completed-task record exists to prevent.
+    ///
+    /// Never serialized — this is execution state, not part of the task-list
+    /// contract an upstream step writes.
+    #[serde(skip)]
+    pub already_landed: Vec<PlannedTask>,
+    /// True when this plan is a retry of an attempt whose work is still on the
+    /// feature branch, so the worktree the tasks open is *not* empty.
+    ///
+    /// `already_landed` covers the tasks this attempt skips, but a retry that
+    /// re-runs every task (the verdict implicated no files, or none matched)
+    /// leaves it empty while the tree still holds the whole previous attempt.
+    /// The prompt has to say so either way, or the first task is told it is
+    /// starting from nothing.
+    #[serde(skip)]
+    pub resumes_landed_work: bool,
+}
+
+/// The most tasks a `sequence` step will execute from one plan.
+///
+/// Each task is a fresh agent session, so the task count *is* the step's cost
+/// multiplier. The planner prompt asks for 2–5, but the plan's primary source
+/// is now an agent-written `task-list.json` artifact that nothing else bounds:
+/// a spec agent that decomposes a feature into 60 tasks would spend 60
+/// sessions before anyone noticed. Fail loudly instead — a task list this long
+/// is a decomposition bug, not a big feature.
+pub(crate) const MAX_TASKS: usize = 20;
+
+/// Reject a task list that would misbehave at execution time.
+///
+/// The task list crossed a trust boundary when it moved out of the step and
+/// into an artifact an agent writes: `serde` proves it is shaped like a plan,
+/// not that it is a *sane* one. Each rule below maps to a concrete failure:
+///
+/// * **empty / blank ids** — the id keys the agent session (`{feature}-{step}-
+///   {task}`) and names the task in `completed_tasks`; blank makes both
+///   ambiguous.
+/// * **duplicate ids** — two tasks sharing an id collide on that session key,
+///   and [`select_targeted_tasks`] would treat them as one task when deciding
+///   what to re-run and what to report as already landed.
+/// * **too many tasks** — see [`MAX_TASKS`].
+///
+/// Returns a human-readable reason, or `None` when the plan is executable.
+pub(crate) fn validate_task_plan(plan: &TaskPlan) -> Option<String> {
+    if plan.tasks.len() > MAX_TASKS {
+        return Some(format!(
+            "the task list has {} tasks, more than the {} a sequence step will run. Each task is \
+             a separate agent session, so this would cost {} of them. Decompose the feature into \
+             fewer, larger tasks.",
+            plan.tasks.len(),
+            MAX_TASKS,
+            plan.tasks.len()
+        ));
+    }
+
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (i, task) in plan.tasks.iter().enumerate() {
+        let id = task.id.trim();
+        if id.is_empty() {
+            return Some(format!(
+                "task at position {} has an empty `id`. Every task needs a unique, stable, \
+                 kebab-case id.",
+                i + 1
+            ));
+        }
+        if !seen.insert(id) {
+            return Some(format!(
+                "task id '{}' appears more than once. Task ids key the agent session and the \
+                 completed-task record, so they must be unique.",
+                id
+            ));
+        }
+    }
+    None
 }
 
 /// Build the attempt-1 targeted retry plan from the cached full plan.
@@ -55,8 +137,14 @@ pub struct TaskPlan {
 ///
 /// Re-running a subset is safe here in a way it was not under the parallel
 /// design: the tasks that are *not* re-run already have their commits on
-/// the step's branch, so skipping them preserves their work instead of
-/// dropping it.
+/// the feature branch, so skipping them preserves their work instead of
+/// dropping it. They come back in [`TaskPlan::already_landed`], because the
+/// running tasks' prompts have to say so — the worktree contains their work
+/// whether or not this attempt re-runs them.
+///
+/// This only holds when the previous attempt's merge actually landed, which
+/// is why the caller restricts it to failures raised by a *later* step; a
+/// sequence step that failed on its own rolls its commits back.
 pub(crate) fn select_targeted_tasks(
     cached: &TaskPlan,
     feedback: &str,
@@ -80,20 +168,35 @@ pub(crate) fn select_targeted_tasks(
         })
     };
 
-    let mut selected: Vec<PlannedTask> = if implicated.is_empty() {
-        cached.tasks.clone()
+    let hits: Vec<&PlannedTask> = if implicated.is_empty() {
+        cached.tasks.iter().collect()
     } else {
-        let hits: Vec<PlannedTask> = cached.tasks.iter().filter(|t| owns(t)).cloned().collect();
-        if hits.is_empty() {
-            cached.tasks.clone()
+        let owned: Vec<&PlannedTask> = cached.tasks.iter().filter(|t| owns(t)).collect();
+        if owned.is_empty() {
+            cached.tasks.iter().collect()
         } else {
-            hits
+            owned
         }
     };
+
+    let selected_ids: std::collections::HashSet<&str> =
+        hits.iter().map(|t| t.id.as_str()).collect();
+    let already_landed: Vec<PlannedTask> = cached
+        .tasks
+        .iter()
+        .filter(|t| !selected_ids.contains(t.id.as_str()))
+        .cloned()
+        .collect();
+
+    let mut selected: Vec<PlannedTask> = hits.into_iter().cloned().collect();
     for task in &mut selected {
         task.retry_note = Some(feedback.to_string());
     }
-    TaskPlan { tasks: selected }
+    TaskPlan {
+        tasks: selected,
+        already_landed,
+        resumes_landed_work: true,
+    }
 }
 
 /// Best-effort extractor for a task plan.
