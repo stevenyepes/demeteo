@@ -396,6 +396,49 @@ pub trait MergeAuditRepository: Send + Sync {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 8b. SubtaskRunRepository
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Persistence for per-task agent runs inside a `sequence` step.
+///
+/// One row per (task, attempt): opened `running` when the task's agent
+/// session spawns, closed `completed` / `failed` when the task commits or
+/// errors. Two consumers depend on the rows being honest:
+///
+/// * the project dashboard counts `status = 'running'` rows into its live
+///   "nodes" figure (`repos/project.rs`), so a row that never closes
+///   over-reports forever;
+/// * the mid-list checkpoint record (which tasks already landed on the
+///   feature branch) is auditable from these rows after the fact.
+pub trait SubtaskRunRepository: Send + Sync {
+    /// Open a `running` row as the task's agent session spawns.
+    #[allow(clippy::too_many_arguments)]
+    fn subtask_run_start(
+        &self,
+        id: &str,
+        feature_id: &FeatureId,
+        step_execution_id: &StepExecutionId,
+        subtask_id: &str,
+        agent_id: &str,
+        worktree_path: &str,
+        branch: &str,
+        now: i64,
+    ) -> Result<(), String>;
+
+    /// Close the row: `status` is `completed` or `failed`, `cost_usd` /
+    /// `tokens` are this task's own spend (not the step's running total).
+    fn subtask_run_finish(
+        &self,
+        id: &str,
+        status: &str,
+        cost_usd: f64,
+        tokens: i64,
+        error_message: Option<&str>,
+        now: i64,
+    ) -> Result<(), String>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 9. NotificationRepository
 // ─────────────────────────────────────────────────────────────────────────────
 

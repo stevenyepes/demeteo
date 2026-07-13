@@ -179,6 +179,68 @@ fn plan_of(ids: &[&str]) -> TaskPlan {
     }
 }
 
+// --- apply_landed_checkpoint -------------------------------------------------
+//
+// After a mid-list failure, the completed prefix is merged to the feature
+// branch and its task ids recorded as a checkpoint. Every subsequent plan for
+// that step runs through this filter, so a retry pays only for the remainder.
+
+#[test]
+fn checkpointed_tasks_are_skipped_and_reported_as_landed() {
+    let out = apply_landed_checkpoint(plan_of(&["a", "b", "c"]), &["a".into(), "b".into()]);
+    assert_eq!(out.tasks.len(), 1);
+    assert_eq!(out.tasks[0].id, "c");
+    // The skipped tasks must still be named in the running task's prompt —
+    // the worktree it opens contains their merged work.
+    let landed: Vec<&str> = out.already_landed.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(landed, ["a", "b"]);
+    assert!(out.resumes_landed_work);
+}
+
+#[test]
+fn a_plan_with_no_checkpointed_tasks_is_untouched() {
+    let out = apply_landed_checkpoint(plan_of(&["a", "b"]), &["z".into()]);
+    assert_eq!(out.tasks.len(), 2);
+    assert!(out.already_landed.is_empty());
+    assert!(!out.resumes_landed_work);
+}
+
+/// A re-planned list whose ids all match the checkpoint means the skip-list
+/// is stale relative to the plan (e.g. a gate redirect rewrote the spec but
+/// kept the ids). Running nothing would complete the step without doing the
+/// work the retry was for — so the full plan runs, told to revise in place.
+#[test]
+fn a_checkpoint_covering_every_task_is_ignored_but_still_marks_landed_work() {
+    let out = apply_landed_checkpoint(plan_of(&["a", "b"]), &["a".into(), "b".into()]);
+    assert_eq!(out.tasks.len(), 2);
+    assert!(out.already_landed.is_empty());
+    assert!(out.resumes_landed_work);
+}
+
+/// Checkpoint filtering composes with a targeted retry's own skip-list: the
+/// landed tasks join `already_landed` rather than replacing what selection
+/// already put there.
+#[test]
+fn checkpoint_extends_an_existing_already_landed_list() {
+    let mut plan = plan_of(&["b", "c"]);
+    plan.already_landed = plan_of(&["a"]).tasks;
+    plan.resumes_landed_work = true;
+    let out = apply_landed_checkpoint(plan, &["b".into()]);
+    assert_eq!(out.tasks.len(), 1);
+    assert_eq!(out.tasks[0].id, "c");
+    let landed: Vec<&str> = out.already_landed.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(landed, ["a", "b"]);
+}
+
+/// Order is the sequence step's contract; the filter must not reshuffle the
+/// tasks that remain.
+#[test]
+fn checkpoint_filter_preserves_task_order() {
+    let out = apply_landed_checkpoint(plan_of(&["a", "b", "c", "d"]), &["b".into()]);
+    let ids: Vec<&str> = out.tasks.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids, ["a", "c", "d"]);
+}
+
 #[test]
 fn a_well_formed_plan_validates() {
     assert!(validate_task_plan(&plan_of(&["task-1", "task-2"])).is_none());

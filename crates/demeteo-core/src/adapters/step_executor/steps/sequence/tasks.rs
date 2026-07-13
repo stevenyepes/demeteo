@@ -199,6 +199,47 @@ pub(crate) fn select_targeted_tasks(
     }
 }
 
+/// Drop the tasks a mid-list checkpoint already landed on the feature branch.
+///
+/// When a task fails partway through the list, the step merges the completed
+/// prefix before failing (see `handle_sequence_step`), so the next attempt
+/// must not re-run — and re-pay for — tasks whose commits are already on the
+/// branch. The landed tasks move into [`TaskPlan::already_landed`] so the
+/// running tasks' prompts still describe the tree they open.
+///
+/// Applied to *every* resolved plan, whatever attempt produced it: a
+/// checkpoint only exists while its work is on the branch, and the caller
+/// clears it the moment the step completes or the branch is rolled back.
+///
+/// If the filter would leave nothing to run — a re-planned list whose ids all
+/// match landed tasks — the checkpoint is stale and the full plan runs
+/// instead, marked as resuming landed work so each agent is told to revise in
+/// place rather than reimplement.
+pub(crate) fn apply_landed_checkpoint(mut plan: TaskPlan, landed_ids: &[String]) -> TaskPlan {
+    let landed_set: std::collections::HashSet<&str> =
+        landed_ids.iter().map(|s| s.as_str()).collect();
+
+    let (landed, remaining): (Vec<PlannedTask>, Vec<PlannedTask>) = plan
+        .tasks
+        .into_iter()
+        .partition(|t| landed_set.contains(t.id.as_str()));
+
+    if landed.is_empty() {
+        plan.tasks = remaining;
+        return plan;
+    }
+    if remaining.is_empty() {
+        plan.tasks = landed;
+        plan.resumes_landed_work = true;
+        return plan;
+    }
+
+    plan.tasks = remaining;
+    plan.already_landed.extend(landed);
+    plan.resumes_landed_work = true;
+    plan
+}
+
 /// Best-effort extractor for a task plan.
 ///
 /// Serves two callers with the same tolerance, deliberately: the artifact
