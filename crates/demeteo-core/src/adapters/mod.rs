@@ -1,7 +1,6 @@
 pub mod agent;
 pub mod artifact_store;
 pub mod attachment_store;
-pub mod conflict;
 pub mod create_project_adapter;
 pub mod database;
 pub mod local;

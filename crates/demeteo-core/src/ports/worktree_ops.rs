@@ -28,17 +28,6 @@ pub struct SyncFailure {
     pub worktree_path: Option<String>,
 }
 
-/// Result of a pre-merge check (no working tree touched).
-#[derive(Debug, Clone, PartialEq)]
-pub enum MergePreCheck {
-    /// Subtask is already an ancestor of origin/feature_branch — skip.
-    AlreadyMerged,
-    /// Merge would be clean — proceed safely.
-    CleanMerge,
-    /// Merge would produce conflicts — use the resolver cascade.
-    WouldConflict,
-}
-
 /// Result of collapsing a feature branch's commits into one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SquashOutcome {
@@ -132,15 +121,6 @@ pub trait WorktreeOpsPort: Send + Sync {
         repo_dir: &str,
         branch: &str,
     ) -> Result<(), String>;
-
-    /// Precheck if merging would succeed or fail.
-    async fn precheck_merge(
-        &self,
-        machine_id: Option<&str>,
-        repo_dir: &str,
-        target_branch: &str,
-        source_branch: &str,
-    ) -> Result<MergePreCheck, String>;
 
     /// Merge a subtask branch.
     async fn merge_subtask(

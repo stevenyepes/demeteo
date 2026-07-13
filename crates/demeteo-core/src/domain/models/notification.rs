@@ -20,8 +20,8 @@ pub enum NotificationKind {
     StepFailed,
     /// `Feature.status` transitioned to `completed`.
     FeatureCompleted,
-    /// `MergeExecutor` reported a conflict between two subtask
-    /// branches (or a feature-upstream sync).
+    /// A step's task-branch merge or a feature-upstream sync hit a
+    /// conflict the agent could not resolve.
     MergeConflict,
     /// A step's `on_failure` retry loop exhausted its budget.
     /// The user must intervene — the agent can't fix whatever

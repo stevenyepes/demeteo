@@ -102,19 +102,20 @@
 - [x] Surface the predecessor-running guard: the Approve / Redirect buttons are disabled when an earlier step is in `pending | running | verifying | awaiting_gate`, with a rose-bordered banner naming the blocker.
 
 ## Story 7: Resolving Merge Conflicts
-**Description:** As a user, I want to handle merge conflicts using a smart cascade (agent first, then manual 3-way merge) to ensure branch integrity.
+**Description:** As a user, I want merge conflicts handled where they happen — an agent turn for step merges, a "Resolve with agent" action for sync conflicts — to ensure branch integrity. (The original "smart cascade" framing was superseded 2026-07-12; see decision 20's history in [DECISIONS.md](DECISIONS.md#2-superseded-decisions).)
 **References:**
 - **UX Journey:** [Journey 9](UX_JOURNEYS.md#journey-9-resolving-merge-conflicts)
-- **Architecture:** [docs/ARCHITECTURE.md](ARCHITECTURE.md) (`feature_sync`, `feature_resolve_sync_conflicts`, `ConflictPolicy`)
-- **DDD Domain:** [docs/DDD_MODEL.md](DDD_MODEL.md) (Worktree & Git: `ConflictReport`, `ConflictPolicy`)
+- **Architecture:** [docs/ARCHITECTURE.md](ARCHITECTURE.md) (`feature_sync`, `feature_resolve_sync_conflicts`)
+- **DDD Domain:** [docs/DDD_MODEL.md](DDD_MODEL.md) (Worktree & Git: `ConflictReport`)
 
 **Status:** Partially implemented.
 
 **Tasks:**
 - [x] Surface a structured `ConflictReport` (conflicting files with `kind`, raw stderr, `detected_at`) from `feature_sync`.
-- [x] Implement the auto-agent cascade: when `ConflictPolicy::AutoAgent`, `feature_resolve_sync_conflicts` spawns a fresh resolution agent in a temporary worktree, commits the resolution, and merges back into the feature branch; on success it replays the validation step.
-- [x] Surface the conflict UI inside the existing `GateView` — there is **no dedicated `ConflictResolver` Monaco 3-way component** in v1. The gate shows the file list, lets the user retry, abort, or hand-roll a manual edit via the in-app terminal.
-- [ ] **Retired.** A dedicated Monaco 3-way merge component is not in v1; conflict UX reuses `GateView` + `feature_resolve_sync_conflicts`. A first-class merge editor (decision 20 phase 2) is a v1.x candidate.
+- [x] Resolve a conflicting step merge inline: `steps/conflict_pass` spends one agent turn in the step's own worktree, then retries the merge.
+- [x] Resolve a sync conflict on demand: `feature_resolve_sync_conflicts` spawns a fresh resolution agent, commits the resolution, and (optionally) replays the named step so validation re-runs on the merged tree.
+- [x] Surface the conflict UI inside the existing `GateView` — there is **no dedicated Monaco 3-way component** in v1. The gate shows the file list, lets the user retry, abort, or hand-roll a manual edit via the in-app terminal.
+- [ ] Make the "Conflict Resolution Policy" project setting real or remove it: the dropdown is stored but nothing reads it (see decision 20's "known loose end").
 
 ## Story 8: Workflow Authoring
 **Description:** As a user, I want to create and edit workflow templates to define custom execution steps, conditions, and agent assignments.

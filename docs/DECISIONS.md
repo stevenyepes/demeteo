@@ -28,7 +28,7 @@
 | 17 | PAT scope                          | Per-provider global, keyed by `(kind, host)` for multi-instance support        | Interview Q17a   |
 | 18 | Multi-feature concurrency          | **Concurrent — N features per project.** Features on one project run at the same time, each on its own `feature/<slug>` branch and its own feature-scoped worktree. ⚠️ **Supersedes the original "strict serial (A)" answer** — see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q18) |
 | 19 | Workflow authoring UX              | Form-first (v1.0); YAML view (v1.1); "save run as template" (v1.2)             | Interview Q19    |
-| 20 | Conflict resolution UX             | Smart cascade: auto-agent → manual → skip/abort; no dedicated Monaco 3-way UI component (conflict resolution reuses `GateView` plus `feature_resolve_sync_conflicts` to spawn a resolution agent and revalidate the step). | Interview Q20    |
+| 20 | Conflict resolution UX             | **Inline, at the point of conflict — no cascade layer.** A step's task-branch merge that conflicts costs one agent turn in the step's own worktree and session (`steps/conflict_pass`); an upstream-sync conflict is surfaced to the user, who triggers `feature_resolve_sync_conflicts` ("Resolve with agent") from the UI. No dedicated Monaco 3-way component. ⚠️ **Supersedes the original "smart cascade" answer** — the `ConflictResolver` port, its stub adapter, and the `subtask_merges` audit table were deleted as never-called; see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q20) |
 | 21 | Project overview                   | Running features (plural) + queue + lazy-loaded repo map. Revised with [decision 18](#2-superseded-decisions): there is no single "current feature" slot, because a project may have several features in flight. | 2026-07-12 (was Interview Q21) |
 | 22 | "Start a feature" entry point      | Slim modal with description + inferred chips; "Customize…" expands              | Interview Q22    |
 | 23 | Workflow pre-flight                | Static: step list + risks + repo fit (no cost)                                 | Interview Q23    |
@@ -144,6 +144,42 @@ before it is shared.
 each is unbounded resource use. The per-project axis (how many features on one
 repo) and the cross-project axis (how many anywhere — bounded by CPU/RAM, not
 correctness) both want a limit.
+
+### 20 — Conflict resolution UX
+
+| | |
+|---|---|
+| **Was** | Smart cascade: auto-agent → manual → skip/abort, driven by a per-project `ConflictPolicy` (`always_gate` / `auto_agent` / `auto_human`), with a `ConflictResolver` port orchestrating it and a `subtask_merges` audit table recording every merge and conflict report. |
+| **Now** | Inline resolution at the point of conflict: `steps/conflict_pass` for task-branch merges, the user-triggered "Resolve with agent" flow for upstream-sync conflicts. |
+| **Changed** | 2026-07-12 |
+
+**Why it changed.** The cascade was designed for the `parallel` step's world:
+N independent subtask branches merging back separately, each merge a fresh
+chance to conflict, needing an orchestrated policy for who resolves what. Two
+things made it fiction rather than architecture. First, the `sequence` step
+(decision 8's history) collapsed N merges into one, so the volume of
+conflicts the cascade was sized for never materialized. Second, the steps
+that do merge already hold everything a resolver needs — the worktree, the
+conflict markers, and a way to spawn a session — so resolution grew up
+*inside* the steps (`steps/conflict_pass`) instead of behind a port.
+
+**What was deleted.** The `ConflictResolver` port and its
+`CascadeConflictResolver` adapter (whose `resolve_via_agent` was a stub
+returning "not implemented" and which was never even constructed in
+composition); `MergeExecutor::merge_subtask_into_feature` / `skip_merge` /
+`abort_in_progress` and the `subtask_merges` table they wrote (dropped in
+migration V28 — it never held a row); the `precheck_merge` /
+`MergePreCheck` preflight only that path called; and the `MergeOutcome` /
+`SubtaskMerge` / `ConflictPolicy` domain types. The sync half of
+`MergeExecutor` (`sync_feature_with_upstream`, `feature_syncs` audit) is
+live and stays.
+
+**Known loose end.** `ProjectSettings.conflict_policy` still exists as a
+stored string and the project settings UI still renders a "Conflict
+Resolution Policy" dropdown — but nothing has ever read the value to make a
+decision. Either the dropdown should drive the inline flows (e.g.
+`always_gate` skipping the automatic `conflict_pass` turn) or it should be
+removed from the UI; today it is decorative.
 
 ## 3. Cross-References
 

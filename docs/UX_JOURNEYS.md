@@ -117,7 +117,7 @@ The application functions within a single unified shell (no multi-window popouts
 ### Journey 9: Resolving Merge Conflicts
 *Handling overlapping changes smartly.*
 - **Trigger:** A subtask merge back into `feature/<slug>` fails, or `feature_sync` against `origin/<default>` leaves conflicts.
-- **System Flow:** Per `ConflictPolicy` (per-project setting): `auto_agent` (default) → `feature_resolve_sync_conflicts` spawns a resolution agent in a temp worktree, commits the fix, merges back, and replays the validation step. `auto_human` opens a Gate immediately with the file list. `always_gate` opens a Gate on every conflict.
+- **System Flow:** A conflicting *step* merge costs one automatic agent turn in the step's own worktree (`steps/conflict_pass`); only if that fails does the step fail. A conflicting *sync* surfaces the file list to the user, who triggers `feature_resolve_sync_conflicts` ("Resolve with agent") — it spawns a resolution agent, commits the fix, and replays the validation step. (The "Conflict Resolution Policy" project setting is currently decorative — nothing reads it; see decision 20's history.)
 - **UI State:** Conflict UX lives inside the existing `GateView` (no dedicated Monaco 3-way merge component ships in v1) — the file list is shown, the user can retry, abort, or hand-roll a manual edit via the in-app terminal.
 - **Actions:** Approve (re-run after manual edit), Retry (re-spawn the auto-agent), Abort feature.
 

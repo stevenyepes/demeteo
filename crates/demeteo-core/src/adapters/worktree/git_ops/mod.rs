@@ -2,7 +2,7 @@ use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::{
-    CommitMessageRejected, MergePreCheck, SquashOutcome, SyncFailure, SyncOutcome, WorktreeOpsPort,
+    CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, WorktreeOpsPort,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -34,10 +34,9 @@ impl GitOpsHelper {
 
 /// The branch a subtask worktree is checked out on.
 ///
-/// Provisioning, merge-back, cleanup, the `ConflictDetected` payload, and
-/// `MergeExecutor` all have to agree on this name — a mismatch in any one of
-/// them silently targets a branch that does not exist. `extract_subtask_id`
-/// (in `adapters::merge`) is the inverse and parses the same shape.
+/// Provisioning, merge-back, cleanup, and the `ConflictDetected` payload all
+/// have to agree on this name — a mismatch in any one of them silently
+/// targets a branch that does not exist.
 pub fn subtask_branch_name(feature_branch: &str, subtask_id: &str) -> String {
     format!("{}_subtask_{}", feature_branch, subtask_id)
 }
@@ -136,17 +135,6 @@ impl WorktreeOpsPort for GitOpsHelper {
         branch: &str,
     ) -> Result<(), String> {
         self.branch_delete(machine_id, repo_dir, branch).await
-    }
-
-    async fn precheck_merge(
-        &self,
-        machine_id: Option<&str>,
-        repo_dir: &str,
-        target_branch: &str,
-        source_branch: &str,
-    ) -> Result<MergePreCheck, String> {
-        self.precheck_merge(machine_id, repo_dir, target_branch, source_branch)
-            .await
     }
 
     async fn merge_subtask(

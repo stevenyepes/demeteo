@@ -101,17 +101,14 @@ The runtime — features in motion, steps executing, gates waiting.
 
 The git mechanics that make the feature-branch model work.
 
-- **Aggregates:** `SubtaskRun`, `SubtaskMerge`, `FeatureSync`
-- **Value Objects:** `MergePreCheck` (`AlreadyMerged` | `CleanMerge` | `WouldConflict`), `MergeOutcome`, `ConflictReport`, `ConflictFile`, `ConflictPolicy` (`AlwaysGate` | `AutoAgent` | `AutoHuman`), `WorktreeBranchName`, `CommitSha`, `UpstreamSyncOutcome`, `UpstreamSyncFailure`
-- **Ports:** `WorktreeOpsPort`, `MergePort`, `ConflictPort`, `MrPublisher`
-- **Adapters:** `GitOpsHelper` (`adapters/worktree/git_ops/`), `TopologicalMergeExecutor`, `ProviderMrPublisher`, `AgentConflictResolver`
+- **Aggregates:** `SubtaskRun`, `FeatureSync`
+- **Value Objects:** `ConflictReport`, `ConflictFile`, `WorktreeBranchName`, `CommitSha`, `UpstreamSyncOutcome`, `UpstreamSyncFailure`
+- **Ports:** `WorktreeOpsPort`, `MergePort` (upstream sync only), `MrPublisher`
+- **Adapters:** `GitOpsHelper` (`adapters/worktree/git_ops/`), `SqliteMergeExecutor` (sync flow), `ProviderMrPublisher`
 - **Key invariants:**
-  - Each `SubtaskRun` has exactly one worktree branch.
-  - Subtask branches are rebased onto the latest feature branch before merge, in topological order from the DAG.
-  - Conflicts surface as a structured `ConflictReport` (source/target branch, `ConflictFile`s with `kind`, raw stderr, `detected_at`); the per-project `ConflictPolicy` decides the next step.
+  - Each `sequence` step has exactly one worktree branch; its tasks commit to it in order and it merges into the feature branch once, at the end of the step (`GitOpsHelper::merge_subtask`, called inline by the step that owns the worktree — task-branch merging is deliberately *not* a port; see decision 20's history).
+  - Conflicts surface as a structured `ConflictReport` (source/target branch, `ConflictFile`s with `kind`, raw stderr, `detected_at`); a merge conflict costs one inline agent turn (`steps/conflict_pass`), and a sync conflict is surfaced to the user with a "Resolve with agent" action.
   - `MrPublisher` is the only port that calls the provider instance's PAT for write operations (clone uses the same PAT but via a different code path; the boundary is "read vs write").
-  - Merge preflight runs `precheck_merge` and returns `MergePreCheck` before any working tree is touched.
-  - `MergeStrategy` (legacy) is gone; the per-project `ConflictPolicy` replaces it.
   - `WriteScope` (`None | ArtifactsOnly | All`) drives the chmod fence in `adapters/worktree/git_ops/scope.rs`; the path-shaped artifacts-vs-source line is enforced uniformly across every agent.
 
 ### 6. Agent Runtime (Supporting Subdomain)
