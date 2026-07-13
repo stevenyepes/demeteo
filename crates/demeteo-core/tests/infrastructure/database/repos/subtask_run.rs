@@ -152,3 +152,113 @@ fn a_failed_task_records_its_error() {
         .unwrap();
     assert_eq!(err.as_deref(), Some("agent error: timeout"));
 }
+
+/// A crash or kill mid-task leaves a `running` row that no graceful exit will
+/// ever close, and the dashboard's "nodes" figure counts `running` rows — so
+/// the sweep at step (re)start / startup reconciliation must close exactly
+/// this step's stale rows: not rows that already finished, and not another
+/// step's live rows.
+#[test]
+fn interrupt_stale_closes_only_this_steps_running_rows() {
+    let (db, fid, sid) = seed();
+    let other_sid = StepExecutionId::from("se-2".to_string());
+    db.step_create(StepExecution {
+        last_failure_fingerprint: None,
+        id: other_sid.clone(),
+        feature_id: fid.clone(),
+        step_id: StepId::from("s-impl-2".to_string()),
+        step_index: 1,
+        step_kind: "sequence".to_string(),
+        status: "running".to_string(),
+        cost_usd: None,
+        tokens: None,
+        wall_clock_secs: None,
+        artifact_path: None,
+        artifact_paths: vec![],
+        error_message: None,
+        iteration_count: 0,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        created_at: 1000,
+        updated_at: 1000,
+    })
+    .unwrap();
+
+    // The crash victim: opened, never closed.
+    db.subtask_run_start("sr-stale", &fid, &sid, "task-1", "a-1", "/tmp/wt", "b", 100)
+        .unwrap();
+    // A row the same step already closed — its record must survive the sweep.
+    db.subtask_run_start("sr-done", &fid, &sid, "task-0", "a-0", "/tmp/wt", "b", 90)
+        .unwrap();
+    db.subtask_run_finish("sr-done", "completed", 0.2, 500, None, 95)
+        .unwrap();
+    // Another step's live row — not this sweep's to touch.
+    db.subtask_run_start(
+        "sr-other",
+        &fid,
+        &other_sid,
+        "task-1",
+        "a-2",
+        "/tmp/wt2",
+        "b2",
+        100,
+    )
+    .unwrap();
+
+    db.subtask_runs_interrupt_stale(&sid, 400).unwrap();
+
+    let conn = db.conn.lock().unwrap();
+    let (status, ended, err): (String, Option<i64>, Option<String>) = conn
+        .query_row(
+            "SELECT status, ended_at, error_message FROM subtask_runs WHERE id = 'sr-stale'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "interrupted");
+    assert_eq!(ended, Some(400));
+    assert_eq!(err.as_deref(), Some("interrupted by restart"));
+
+    let done_status: String = conn
+        .query_row(
+            "SELECT status FROM subtask_runs WHERE id = 'sr-done'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(done_status, "completed");
+
+    let other_status: String = conn
+        .query_row(
+            "SELECT status FROM subtask_runs WHERE id = 'sr-other'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        other_status, "running",
+        "the sweep must be scoped to its own step execution"
+    );
+}
+
+/// A stale row that failed with a real error must keep it — the COALESCE
+/// only fills the message in when the crash left none.
+#[test]
+fn interrupt_stale_is_idempotent_and_repeatable() {
+    let (db, fid, sid) = seed();
+    db.subtask_run_start("sr-1", &fid, &sid, "task-1", "a-1", "/tmp/wt", "b", 100)
+        .unwrap();
+    db.subtask_runs_interrupt_stale(&sid, 200).unwrap();
+    // Nothing running any more: a second sweep is a no-op, not an error.
+    db.subtask_runs_interrupt_stale(&sid, 300).unwrap();
+
+    let conn = db.conn.lock().unwrap();
+    let ended: Option<i64> = conn
+        .query_row(
+            "SELECT ended_at FROM subtask_runs WHERE id = 'sr-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(ended, Some(200), "the second sweep must not re-stamp the row");
+}

@@ -768,6 +768,21 @@ impl DagStepExecutor {
                             for s in steps {
                                 if s.status == "running" || s.status == "awaiting_gate" {
                                     let was_awaiting = s.status == "awaiting_gate";
+                                    // The step is being marked interrupted, so any
+                                    // `running` subtask_runs row of its sequence
+                                    // task loop is stale — close it, or the
+                                    // dashboard's "nodes" count (which counts
+                                    // running rows) over-reports forever.
+                                    if let Err(e) = self
+                                        .subtask_runs
+                                        .subtask_runs_interrupt_stale(&s.id, paths::now_ms())
+                                    {
+                                        tracing::warn!(
+                                            step_execution_id = %s.id.0,
+                                            error = %e,
+                                            "startup watchdog: could not close stale subtask_runs rows"
+                                        );
+                                    }
                                     let _ = self.features.step_update(
                                         &s.id,
                                         &StepExecutionPatch {
