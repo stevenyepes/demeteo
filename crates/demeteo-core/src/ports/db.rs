@@ -418,6 +418,17 @@ pub trait SubtaskRunRepository: Send + Sync {
         error_message: Option<&str>,
         now: i64,
     ) -> Result<(), String>;
+
+    /// Close any rows a crashed or killed process left `running` for this
+    /// step, marking them `interrupted`. A step execution runs at most one
+    /// task at a time, so at step (re)start or step interruption every
+    /// `running` row of that step is stale by definition — the graceful
+    /// paths in the task loop close their own row on every exit.
+    fn subtask_runs_interrupt_stale(
+        &self,
+        step_execution_id: &StepExecutionId,
+        now: i64,
+    ) -> Result<(), String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

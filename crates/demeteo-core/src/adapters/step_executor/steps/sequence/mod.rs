@@ -44,6 +44,10 @@ pub(crate) mod plan;
 pub(crate) mod runner;
 pub(crate) mod tasks;
 
+#[cfg(test)]
+#[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/disposition.rs"]
+mod disposition_tests;
+
 /// What happened to the feature branch on the way out of a failed sequence
 /// step. Folded into the stored error message, because the user has to know
 /// the branch's state before they retry or ship — each variant leaves it
@@ -67,6 +71,33 @@ impl FailureDisposition {
             Self::RollbackFailed
         }
     }
+
+    /// Fold the branch's state into the failure message. A rollback that did
+    /// not happen leaves the failed attempt's commits on the feature branch,
+    /// and the user has to know that before they retry or ship — claiming a
+    /// clean slate we did not deliver is worse than the failure itself. A
+    /// checkpointed prefix is the deliberate version of the same situation:
+    /// commits on the branch, but kept on purpose and resumed from on retry.
+    fn decorate(&self, msg: &str, branch: &str) -> String {
+        match self {
+            Self::RolledBack => format!(
+                "{} (the step's task commits have been rolled back for a clean retry)",
+                msg
+            ),
+            Self::RollbackFailed => format!(
+                "{} (WARNING: the step's task commits could NOT be rolled back and are still on \
+                 branch '{}' — its worktree could not be removed. Inspect the branch before \
+                 retrying.)",
+                msg, branch
+            ),
+            Self::PrefixLanded { landed, total } => format!(
+                "{} ({} of {} tasks completed before the failure; their commits were kept and \
+                 merged to branch '{}', and a retry will resume from the failed task instead of \
+                 starting over)",
+                msg, landed, total, branch
+            ),
+        }
+    }
 }
 
 impl ExecutionDriver {
@@ -83,6 +114,24 @@ impl ExecutionDriver {
     ) -> StepOutcome {
         if *self.cancel_watch.borrow() {
             return StepOutcome::Cancelled;
+        }
+
+        // A fresh attempt cannot have live task rows of its own, so any
+        // `running` subtask_runs row for this step is a leftover from a
+        // crashed or killed process. The startup watchdog closes these for
+        // features it reconciles, but resume paths it skips (runner-owned
+        // features, a driver re-running the step) land here — close them, or
+        // the dashboard's "nodes" count over-reports forever.
+        if let Err(e) = self
+            .subtask_runs
+            .subtask_runs_interrupt_stale(&step_exec.id, crate::paths::now_ms())
+        {
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                error = %e,
+                "sequence step: could not close stale subtask_runs rows"
+            );
         }
 
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
@@ -361,22 +410,39 @@ impl ExecutionDriver {
                     .registry
                     .kill(&format!("{}-verifier", self.f_id.as_str()))
                     .await;
-                self.cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                let rolled_back = self
+                    .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
                     .await;
+                // A failed rollback leaves the rejected attempt's commits on
+                // the feature branch. Fold the warning into the verdict so it
+                // reaches both the stored error and the retry feedback —
+                // `resolve_task_plan` treats a step's own failure as rolled
+                // back and would otherwise tell the next attempt's agents the
+                // branch is clean. Only the failure case is decorated: a
+                // clean rollback is the normal path and needs no note in the
+                // verdict the retry prompts render.
+                let decorate = |m: &str| -> String {
+                    if rolled_back {
+                        m.to_string()
+                    } else {
+                        FailureDisposition::RollbackFailed.decorate(m, &self.branch_name)
+                    }
+                };
                 return match verifier_err {
-                    crate::domain::verifier::VerifierError::Verdict(failure) => {
+                    crate::domain::verifier::VerifierError::Verdict(mut failure) => {
+                        failure.reason = decorate(&failure.reason);
                         StepOutcome::VerdictFailed(failure)
                     }
                     crate::domain::verifier::VerifierError::Infrastructure(msg) => {
-                        StepOutcome::NonRetryable(format!(
+                        StepOutcome::NonRetryable(decorate(&format!(
                             "[verifier infrastructure error — check verifier config] {}",
                             msg
-                        ))
+                        )))
                     }
                     // Triaged as an environment problem: the box is not
                     // provisioned, editing source cannot fix it.
                     crate::domain::verifier::VerifierError::Environment(msg) => {
-                        StepOutcome::NonRetryable(msg)
+                        StepOutcome::NonRetryable(decorate(&msg))
                     }
                 };
             }
@@ -788,30 +854,7 @@ impl ExecutionDriver {
             "failed"
         };
         let wall = step_start.elapsed().as_secs();
-        // Say which it was. A rollback that did not happen leaves the failed
-        // attempt's commits on the feature branch, and the user has to know
-        // that before they retry or ship — claiming a clean slate we did not
-        // deliver is worse than the failure itself. A checkpointed prefix is
-        // the deliberate version of the same situation: commits on the
-        // branch, but kept on purpose and resumed from on retry.
-        let stored = match disposition {
-            FailureDisposition::RolledBack => format!(
-                "{} (the step's task commits have been rolled back for a clean retry)",
-                msg
-            ),
-            FailureDisposition::RollbackFailed => format!(
-                "{} (WARNING: the step's task commits could NOT be rolled back and are still on \
-                 branch '{}' — its worktree could not be removed. Inspect the branch before \
-                 retrying.)",
-                msg, self.branch_name
-            ),
-            FailureDisposition::PrefixLanded { landed, total } => format!(
-                "{} ({} of {} tasks completed before the failure; their commits were kept and \
-                 merged to branch '{}', and a retry will resume from the failed task instead of \
-                 starting over)",
-                msg, landed, total, self.branch_name
-            ),
-        };
+        let stored = disposition.decorate(&msg, &self.branch_name);
         let _ = self.features.step_update(
             &step_exec.id,
             &StepExecutionPatch {

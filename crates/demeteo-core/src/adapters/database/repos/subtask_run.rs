@@ -58,6 +58,23 @@ impl SubtaskRunRepository for SqliteAdapter {
         .map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    fn subtask_runs_interrupt_stale(
+        &self,
+        step_execution_id: &StepExecutionId,
+        now: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        conn.execute(
+            "UPDATE subtask_runs
+             SET status = 'interrupted', ended_at = ?2,
+                 error_message = COALESCE(error_message, 'interrupted by restart')
+             WHERE step_execution_id = ?1 AND status = 'running'",
+            params![step_execution_id.0, now],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
