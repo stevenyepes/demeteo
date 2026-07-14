@@ -57,6 +57,7 @@ fn parse_codex_event(line: &str) -> Option<AgentEvent> {
             code: "cli_error".to_string(),
             message: codex_error_message(&v),
             recoverable: false,
+            usage: None,
         }),
         _ => None,
     }
@@ -116,6 +117,7 @@ fn parse_codex_item(item: &serde_json::Value, started: bool) -> Option<AgentEven
                     code: "item_error".to_string(),
                     message: message.to_string(),
                     recoverable: true,
+                    usage: None,
                 })
             }
         }

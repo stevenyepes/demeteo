@@ -598,6 +598,8 @@ impl ExecutionDriver {
                     fast_sleep.as_mut().reset(next_fast);
                     normal_sleep.as_mut().reset(next_normal);
 
+                    usage_acc.ingest_event(&event);
+
                     match &event {
                         AgentEvent::Text { delta } => {
                             let _ = self.notif.emit(&DomainEvent::AgentStream {
@@ -614,8 +616,6 @@ impl ExecutionDriver {
                         }
                         _ => {}
                     }
-
-                    usage_acc.ingest_event(&event);
                 }
                 _ = &mut fast_sleep => {
                     if !first_event_seen {

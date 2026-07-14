@@ -223,6 +223,36 @@ fn result_error_emits_error_event() {
 }
 
 #[test]
+fn result_error_attaches_usage_when_present() {
+    // Regression: per Anthropic SDK cost-tracking docs, error result events
+    // STILL carry `usage` and `total_cost_usd`. The parser must surface
+    // them so the UsageAccumulator can credit tokens spent up to the
+    // failure point — otherwise detached --print runs that exit with
+    // `error_max_turns` / `error_during_execution` burn quota and report 0.
+    let line = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit max turns","stop_reason":"max_turns","total_cost_usd":0.42,"usage":{"input_tokens":1500,"output_tokens":900,"cache_creation_input_tokens":200,"cache_read_input_tokens":4000}}"#;
+    match parse_claude_event(line) {
+        Some(AgentEvent::Error { usage, .. }) => {
+            let u = usage.expect("error result event must carry parsed usage");
+            assert_eq!(u.input_tokens, 1500);
+            assert_eq!(u.output_tokens, 900);
+            assert_eq!(u.cache_creation_input_tokens, 200);
+            assert_eq!(u.cache_read_input_tokens, 4000);
+            assert_eq!(u.cost_usd, Some(0.42));
+        }
+        other => panic!("expected Error with usage, got {other:?}"),
+    }
+}
+
+#[test]
+fn result_error_without_usage_emits_error_with_none_usage() {
+    let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"api timeout","stop_reason":"error"}"#;
+    match parse_claude_event(line) {
+        Some(AgentEvent::Error { usage, .. }) => assert!(usage.is_none()),
+        other => panic!("expected Error with None usage, got {other:?}"),
+    }
+}
+
+#[test]
 fn unknown_type_is_dropped() {
     let line = r#"{"type":"stream_event","event":{"type":"message_start"}}"#;
     assert!(parse_claude_event(line).is_none());

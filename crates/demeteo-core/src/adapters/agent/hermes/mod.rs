@@ -81,6 +81,7 @@ fn parse_hermes_event(line: &str) -> Option<AgentEvent> {
                     code: "cli_error".to_string(),
                     message,
                     recoverable: false,
+                    usage: None,
                 })
             }
             _ => None,

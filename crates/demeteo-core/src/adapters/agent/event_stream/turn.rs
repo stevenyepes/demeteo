@@ -103,6 +103,8 @@ where
 
                 on_event(&event);
 
+                acc.ingest_event(&event);
+
                 match &event {
                     AgentEvent::Text { delta } => {
                         let is_tool_breadcrumb = delta.starts_with("[tool ") || delta.starts_with("[tool:");
@@ -150,8 +152,6 @@ where
                     }
                     _ => {}
                 }
-
-                acc.ingest_event(&event);
             }
             _ = &mut fast_sleep => {
                 if !first_event_seen || !pending_tool_calls.is_empty() {

@@ -246,6 +246,7 @@ fn parse_top_level_kind(kind: &str, v: &serde_json::Value) -> Option<AgentEvent>
                 code: "cli_error".to_string(),
                 message,
                 recoverable: false,
+                usage: None,
             })
         }
         _ => None,
