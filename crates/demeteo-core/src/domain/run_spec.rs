@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::models::{ProjectSettings, StepOverride};
+use crate::domain::models::{EffortLevel, ProjectSettings, StepOverride};
 
 /// A pre-launch attachment for a detached run. The laptop spools the
 /// bytes onto the runner host over SFTP (`ExecutionPort::write_file_bytes`)
@@ -80,6 +80,11 @@ pub struct RunSpec {
     pub workflow_json: serde_json::Value,
     pub agent_kind: Option<String>,
     pub model: Option<String>,
+    /// Feature-wide effort for the run. Serde-defaults to `None` so specs
+    /// from an older laptop still deserialize (and an older runner ignores
+    /// the field, falling back to the agent's own default).
+    #[serde(default)]
+    pub effort: Option<EffortLevel>,
     /// Per-run override of the `on_failure` retry-loop budget. `None`
     /// inherits the engine default.
     pub loop_iterations: Option<u32>,

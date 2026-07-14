@@ -5,7 +5,8 @@ import { useErrorBus } from '../../lib/errorBus';
 import { formatError } from '../../lib/errors';
 import { listProviderNamespaces, type ProviderNamespace } from '../../lib/createProjectWizard';
 import { getAgentModels } from '../../lib/agentModels';
-import { useAgentCatalog } from '../../lib/agentCatalog';
+import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
+import type { EffortLevel } from '../../lib/effortLevels';
 import type { Machine, Provider } from '../../types';
 import {
   BootstrapStep,
@@ -51,6 +52,7 @@ interface WizardDraft {
   keyPassphrase: string;
   agentKind: string;
   model: string;
+  effort: EffortLevel | '';
   title: string;
   description: string;
   visibility: 'private' | 'public';
@@ -69,6 +71,7 @@ const EMPTY_DRAFT: WizardDraft = {
   keyPassphrase: '',
   agentKind: '',
   model: '',
+  effort: '',
   title: '',
   description: '',
   visibility: 'private',
@@ -314,7 +317,7 @@ export function CreateProjectWizard(): ReactElement {
   );
   const onModelSubmit = useCallback(
     (payload: Extract<CreateProjectStepPayload, { step: 'model' }>) => {
-      setDraft((d) => ({ ...d, model: payload.model }));
+      setDraft((d) => ({ ...d, model: payload.model, effort: payload.effort ?? '' }));
     },
     [],
   );
@@ -385,7 +388,7 @@ export function CreateProjectWizard(): ReactElement {
         return;
       case BootstrapStep.Model:
         if (!draft.model.trim()) return;
-        await submitStep({ step: 'model', model: draft.model.trim() });
+        await submitStep({ step: 'model', model: draft.model.trim(), effort: draft.effort || null });
         return;
       case BootstrapStep.Description: {
         // Final step — emit the Commit payload with the full
@@ -412,6 +415,7 @@ export function CreateProjectWizard(): ReactElement {
             machine_id: draft.machineId,
             agent_kind: draft.agentKind,
             model: draft.model.trim(),
+            effort: draft.effort || null,
           });
         } catch (err) {
           setCommitError(formatError(err));
@@ -526,6 +530,8 @@ export function CreateProjectWizard(): ReactElement {
           loading={modelsLoading}
           models={models}
           value={draft.model}
+          effort={draft.effort}
+          effortLevels={effortLevelsFor(agentCatalog, draft.agentKind)}
           onSubmit={onModelSubmit}
         />
       )}
@@ -571,6 +577,7 @@ export function buildCommitPayload(draft: WizardDraft): Extract<CreateProjectSte
     machine_id: draft.machineId,
     agent_kind: draft.agentKind,
     model: draft.model.trim(),
+    effort: draft.effort || null,
   };
 }
 

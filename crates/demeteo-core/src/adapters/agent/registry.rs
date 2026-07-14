@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use crate::domain::models::EffortLevel;
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 /// Thread-id-keyed registry of live agent sessions. Owns the lazy lifecycle:
@@ -76,6 +77,17 @@ impl AgentRegistry {
     /// `UsageAccumulator` for pricing-table fallback cost calculation.
     pub fn default_model_for(&self, kind: &str) -> Option<String> {
         self.runtime_for(kind)?.default_model()
+    }
+
+    /// The effort levels `kind` accepts per invocation, in ladder order.
+    /// Empty for an agent with no effort control (hermes) *and* for an
+    /// unknown kind — in both cases there is no level a caller could
+    /// legitimately offer. Drives the UI picker so it can't offer one the
+    /// agent would ignore.
+    pub fn effort_levels_for(&self, kind: &str) -> &'static [EffortLevel] {
+        self.runtime_for(kind)
+            .map(|r| r.capabilities().effort_levels)
+            .unwrap_or(&[])
     }
 
     pub fn runtimes(&self) -> &[Arc<dyn AgentRuntime>] {

@@ -298,6 +298,7 @@ impl ExecutionDriver {
                 wt_path,
                 agent_kind,
                 override_model,
+                self.resolve_step_effort(step_conf),
             )
             .await
             .map_err(|(msg, environmental)| {
@@ -535,6 +536,7 @@ impl ExecutionDriver {
     ///
     /// `Err((message, environmental))`; a spawn failure is always
     /// environmental, a cancellation never is.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_sequence_session(
         &self,
         thread_id: &str,
@@ -543,6 +545,7 @@ impl ExecutionDriver {
         wt_path: &str,
         agent_kind: &str,
         override_model: &Option<String>,
+        effort: crate::domain::models::EffortLevel,
     ) -> Result<std::sync::Arc<dyn crate::ports::agent_runtime::AgentSession>, (String, bool)> {
         let env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
@@ -559,6 +562,8 @@ impl ExecutionDriver {
             env,
             cwd: wt_path.to_string(),
             model: override_model.clone(),
+            // A task turn is real agent work: it inherits the step's effort.
+            effort: Some(effort),
             title: Some(title.to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),

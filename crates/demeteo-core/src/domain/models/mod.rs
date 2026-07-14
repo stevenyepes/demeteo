@@ -1,4 +1,5 @@
 pub mod agent_config;
+pub mod effort;
 pub mod feature;
 pub mod machine;
 pub mod merge;
@@ -10,6 +11,7 @@ pub mod timeouts;
 pub mod workflow;
 
 pub use agent_config::*;
+pub use effort::*;
 pub use feature::*;
 pub use machine::*;
 pub use merge::*;

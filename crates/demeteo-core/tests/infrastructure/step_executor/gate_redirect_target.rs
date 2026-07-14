@@ -7,6 +7,7 @@ use crate::domain::ids::StepId;
 
 fn step(id: &str) -> StepConfig {
     StepConfig {
+        effort: None,
         id: StepId::from(id.to_string()),
         kind: "agent".to_string(),
         title: id.to_string(),

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { WorkflowWithSteps, StepConfig } from '../types';
 import { ArrowLeft, Plus, Trash, ChevronUp, ChevronDown, Save, Zap } from 'lucide-react';
+import { EFFORT_LABELS, EFFORT_LEVELS, type EffortLevel } from '../lib/effortLevels';
 import { useErrorBus } from '../lib/errorBus';
 
 interface WorkflowEditorProps {
@@ -474,6 +475,28 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                                 placeholder="Project default"
                                 className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500 font-mono placeholder-slate-600"
                               />
+                            </div>
+                          )}
+
+                          {/* Effort Override. The workflow is shared across
+                              projects, so this offers the canonical ladder
+                              rather than one agent's subset — the adapter
+                              clamps whatever the step ends up running on. */}
+                          {step.kind !== 'gate' && (
+                            <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase font-semibold">
+                                Effort Override
+                              </label>
+                              <select
+                                value={step.effort || ''}
+                                onChange={(e) => handleUpdateStep(idx, { effort: (e.target.value || null) as EffortLevel | null })}
+                                className="w-full bg-[#0d0f14] border border-white/10 rounded-md p-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                              >
+                                <option value="">Project Default</option>
+                                {EFFORT_LEVELS.map((l) => (
+                                  <option key={l} value={l}>{EFFORT_LABELS[l]}</option>
+                                ))}
+                              </select>
                             </div>
                           )}
                         </div>

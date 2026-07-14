@@ -68,6 +68,14 @@ impl ExecutionDriver {
             env: agent_env,
             cwd: repo_dir.to_string(),
             model: override_model.clone(),
+            // Authoring a PR title/body is a medium job; pinned rather than
+            // inherited so a `max`-effort run doesn't pay for it. NOTE: the
+            // `agent_kind` / `override_model` above resolve as
+            // `step_conf ?? feature`, which inverts the model chain's tiers 2
+            // and 3 and ignores `step_overrides` / `default_model`. That is a
+            // pre-existing bug, deliberately not copied here and out of scope
+            // to fix.
+            effort: Some(crate::domain::models::EffortLevel::FINALIZE),
             title: Some("Finalize: summarize the work".to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),

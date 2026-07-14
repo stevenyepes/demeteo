@@ -2,11 +2,18 @@ use rusqlite::params;
 
 use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
-use crate::domain::models::{Feature, StepExecution};
+use crate::domain::models::{EffortLevel, Feature, StepExecution};
 use crate::ports::attachment_store::AttachmentJsonPort;
 use crate::ports::db::{FeaturePatch, FeatureRepository, StepExecutionPatch};
 
 use super::super::SqliteAdapter;
+
+/// Read the `effort` column. An unknown/stale string degrades to `None`
+/// (inherit) rather than failing the whole row — see [`EffortLevel::parse`].
+fn effort_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<EffortLevel>> {
+    let raw: Option<String> = row.get(idx)?;
+    Ok(raw.as_deref().and_then(EffortLevel::parse))
+}
 
 impl AttachmentJsonPort for SqliteAdapter {
     fn get_attachments(&self, feature_id: &FeatureId) -> Result<Vec<AttachedFile>, String> {
@@ -53,7 +60,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -79,6 +86,7 @@ impl FeatureRepository for SqliteAdapter {
                     created_at: row.get(8)?,
                     agent_kind: row.get(9)?,
                     model: row.get(10)?,
+                    effort: effort_from_row(row, 20)?,
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
                     pr_title: row.get(18)?,
@@ -103,7 +111,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort
                  FROM features WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -129,6 +137,7 @@ impl FeatureRepository for SqliteAdapter {
                     created_at: row.get(8)?,
                     agent_kind: row.get(9)?,
                     model: row.get(10)?,
+                    effort: effort_from_row(row, 20)?,
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
                     pr_title: row.get(18)?,
@@ -164,13 +173,13 @@ impl FeatureRepository for SqliteAdapter {
             Some(serde_json::to_string(&f.attachments).map_err(|e| e.to_string())?)
         };
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
                 f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
                 f.mr_url, f.mr_state, commit_artifacts, loop_iterations, step_overrides_json,
-                attachments_json, f.description
+                attachments_json, f.description, f.effort.map(|e| e.as_str())
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -221,6 +230,11 @@ impl FeatureRepository for SqliteAdapter {
             sets.push("model=?");
             binds.push(Box::new(m));
         }
+        if let Some(e) = patch.effort {
+            sets.push("effort=?");
+            // `Some(None)` clears the pin back to "inherit" (SQL NULL).
+            binds.push(Box::new(e.map(|v| v.as_str())));
+        }
         if let Some(url) = mr_url {
             sets.push("mr_url=?");
             binds.push(Box::new(url));
@@ -267,7 +281,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort
                  FROM features WHERE mr_state = 'open' AND mr_url IS NOT NULL ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -293,6 +307,7 @@ impl FeatureRepository for SqliteAdapter {
                     created_at: row.get(8)?,
                     agent_kind: row.get(9)?,
                     model: row.get(10)?,
+                    effort: effort_from_row(row, 20)?,
                     mr_url: row.get(11)?,
                     mr_state: row.get(12)?,
                     pr_title: row.get(18)?,

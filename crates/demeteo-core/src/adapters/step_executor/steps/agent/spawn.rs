@@ -1,6 +1,15 @@
 use crate::adapters::step_executor::driver::ExecutionDriver;
-use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::models::{AgentKind, EffortLevel, StepConfig, StepExecution};
 use crate::ports::agent_runtime::{AgentContext, AgentSession};
+use crate::ports::notification::DomainEvent;
+
+/// The effort the agent will *actually* be launched with: the resolved level
+/// run through that agent's own clamp, exactly as its `ArgsBuilder` will do.
+/// `None` means no effort is injected — either the agent has no effort control
+/// (hermes) or the kind is unregistered.
+pub(crate) fn effective_effort(agent_kind: &str, effort: EffortLevel) -> Option<EffortLevel> {
+    AgentKind::parse(agent_kind).and_then(|kind| EffortLevel::clamp_for(kind, effort))
+}
 
 /// Decide whether a registry-cached agent session can be reused for a step
 /// running in `wt_path`, or must be torn down and respawned fresh.
@@ -24,21 +33,30 @@ pub(crate) fn cached_session_needs_respawn(alive: bool, session_cwd: &str, wt_pa
 }
 
 impl ExecutionDriver {
+    // The agent's full launch identity (kind + model + effort + worktree +
+    // machine) has to arrive together; bundling it into a struct would only
+    // move the same fields behind one more name.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_agent_session(
         &self,
-        _step_exec: &StepExecution,
+        step_exec: &StepExecution,
         step_conf: &StepConfig,
         agent_kind: &str,
         override_model: &Option<String>,
+        effort: EffortLevel,
         machine_str: &str,
         wt_path: &str,
     ) -> Result<std::sync::Arc<dyn AgentSession>, String> {
         // Fingerprint-scoped, not just the feature id — see
         // `ExecutionDriver::agent_session_key` for why. Steps whose
-        // permission profile + model match the previous step still
-        // resume the same session; a change in either spawns fresh.
-        let session_key =
-            Self::agent_session_key(self.f_id.as_str(), step_conf, override_model.as_deref());
+        // permission profile + model + effort match the previous step
+        // still resume the same session; a change in any spawns fresh.
+        let session_key = Self::agent_session_key(
+            self.f_id.as_str(),
+            step_conf,
+            override_model.as_deref(),
+            effort,
+        );
         // Every supported agent is a CLI runtime that takes its model via a
         // `--model` flag built into `build_args` from `ctx.model` below; there
         // is no config-file/env model path to set up here.
@@ -72,12 +90,26 @@ impl ExecutionDriver {
             env: agent_env.clone(),
             cwd: wt_path.to_string(),
             model: override_model.clone(),
+            effort: Some(effort),
             title: Some(step_conf.title.clone()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions,
             bare_mode: agent_kind == "claude-code",
         };
+
+        // Telemetry: report the EFFECTIVE effort — what the adapter will
+        // really emit after its own `clamp_for` — never the requested level.
+        // A user reading the run log has no other way to see that codex
+        // clamped `max` to `xhigh`, that hermes injected nothing, or that an
+        // old `demeteo-runner` dropped the field entirely.
+        let _ = self.notif.emit(&DomainEvent::AgentSpawned {
+            feature_id: self.f_id.clone(),
+            step_execution_id: step_exec.id.clone(),
+            agent_kind: agent_kind.to_string(),
+            model: override_model.clone(),
+            effort: effective_effort(agent_kind, effort),
+        });
 
         // Copy any user attachments into the per-step worktree so the
         // agent's `external_directory: deny` fence accepts the file
@@ -145,6 +177,7 @@ impl ExecutionDriver {
                 env: agent_env,
                 cwd: wt_path.to_string(),
                 model: override_model.clone(),
+                effort: Some(effort),
                 title: Some(step_conf.title.clone()),
                 agent_exec: self.agent_exec.clone(),
                 exec: self.exec.clone(),

@@ -1,5 +1,6 @@
 use crate::domain::artifact::{ArtifactCapture, ArtifactDecl};
 use crate::domain::ids::{ProjectId, StepId, WorkflowId, WorkflowVersionId};
+use crate::domain::models::EffortLevel;
 use crate::domain::permission::StepCapability;
 use crate::domain::verifier::VerifierConfig;
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,11 @@ pub struct StepConfig {
     /// inside `steps_json`, so no DB migration is required.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Per-step effort override. Peer of `model`: resolves below the run-time
+    /// per-step override and above the project default. `None` = inherit.
+    /// Stored inside `steps_json`, so no DB migration is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<EffortLevel>,
     pub prompt_template: Option<String>,
     pub on_failure: Option<StepId>,
     pub max_iterations: Option<u32>,

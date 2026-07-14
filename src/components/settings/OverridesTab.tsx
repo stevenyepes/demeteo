@@ -1,51 +1,50 @@
-import { Workflow as WorkflowIcon, ShieldAlert, AlertTriangle, RotateCw, ChevronDown, ChevronUp, Cpu, Zap, Check, RotateCcw } from 'lucide-react';
+import { Workflow as WorkflowIcon, ShieldAlert, AlertTriangle, RotateCw, ChevronDown, ChevronUp } from 'lucide-react';
 import type { StepConfig } from '../../types';
-import { useSettings, ovKey, WF_LEVEL } from './ProjectSettingsContext';
+import { EFFORT_LABELS } from '../../lib/effortLevels';
+import { HarnessModelPicker } from '../ui/HarnessModelPicker';
+import { useSettings, ovKey, EMPTY_ROW, isOverrideActive, WF_LEVEL } from './ProjectSettingsContext';
 
+/**
+ * One override row — the workflow-level row (`step === null`) or a per-step
+ * one. The harness / model / effort markup is the shared
+ * {@link HarnessModelPicker}, so all three controls stay identical to the
+ * launch modal and the wizards.
+ */
 function OverrideRow({ wf, step }: { wf: { id: string; steps: StepConfig[] }; step: StepConfig | null }) {
   const s = useSettings();
   const stepId = step ? step.id : WF_LEVEL;
   const key = ovKey(wf.id, stepId);
-  const ov = s.overrides[key] ?? { agent_kind: null, model: null };
+  const ov = s.overrides[key] ?? EMPTY_ROW;
   const models = s.rowModels[key] ?? [];
   const modelsLoading = Boolean(s.rowModelsLoading[key]);
   const effectiveAgent = s.effectiveAgentForRow(wf.id, step);
-  const rowActive = Boolean(ov.agent_kind || ov.model);
   const inhA = step ? s.inheritedAgent(wf.id, step) : (s.defaultAgentKind || '');
   const inhM = step ? s.inheritedModel(wf.id, step) : (s.defaultModel || '');
+  // The workflow-level row inherits from the project default; a step row also
+  // inherits through the workflow-level row and the workflow author's setting.
+  const inhE = step ? s.inheritedEffort(wf.id, step) : (s.defaultEffort || 'high');
   const agentPlaceholder = step ? `Inherit${inhA ? ` · ${inhA.replace(/-/g, ' ')}` : ' · built-in'}` : 'Project default';
-  const modelEnabled = Boolean(effectiveAgent);
-  const modelPlaceholder = !modelEnabled ? 'Pick a harness first' : inhM ? `Inherit · ${inhM}` : 'Agent default model';
+  const modelPlaceholder = inhM ? `Inherit · ${inhM}` : 'Agent default model';
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
-      <div>
-        <label className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"><Cpu className="w-3 h-3" /> Harness</label>
-        <select value={ov.agent_kind ?? ''} onChange={e => s.handleAgentChange(wf.id, stepId, step, e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 capitalize">
-          <option value="">{agentPlaceholder}</option>
-          {s.overrideAgentKinds.map(k => <option key={k} value={k}>{k.replace(/-/g, ' ')}</option>)}
-          {ov.agent_kind && !s.overrideAgentKinds.includes(ov.agent_kind) && <option value={ov.agent_kind}>{ov.agent_kind.replace(/-/g, ' ')} (unavailable)</option>}
-        </select>
-      </div>
-      <div>
-        <label className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"><Zap className="w-3 h-3" /> Model</label>
-        {modelsLoading ? (
-          <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-slate-400 flex items-center gap-2"><RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" /><span>Probing models…</span></div>
-        ) : (
-          <select value={ov.model ?? ''} onChange={e => s.handleModelChange(wf.id, stepId, e.target.value)} disabled={!modelEnabled} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed">
-            <option value="">{modelPlaceholder}</option>
-            {models.map(m => <option key={m.value} value={m.value}>{m.name}</option>)}
-            {ov.model && !models.some(m => m.value === ov.model) && <option value={ov.model}>{ov.model} (custom)</option>}
-          </select>
-        )}
-      </div>
-      <div className="flex items-center gap-2 pb-0.5">
-        {s.savedPulse[key] && <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-medium shrink-0 animate-fadeIn"><Check className="w-3 h-3" /> Saved</span>}
-        <button type="button" onClick={() => s.handleClearRow(wf.id, stepId)} disabled={!rowActive} title="Reset to inherited" className="p-2 rounded-lg text-slate-500 hover:text-white bg-white/5 border border-white/10 hover:bg-white/10 transition-all disabled:opacity-25 disabled:cursor-not-allowed shrink-0">
-          <RotateCcw className="w-3.5 h-3.5" />
-        </button>
-      </div>
-    </div>
+    <HarnessModelPicker
+      agentKinds={s.overrideAgentKinds}
+      models={models}
+      modelsLoading={modelsLoading}
+      agentKind={ov.agent_kind ?? ''}
+      model={ov.model ?? ''}
+      effort={ov.effort ?? ''}
+      inheritedAgentKind={effectiveAgent}
+      effortLevels={s.effortLevelsFor(effectiveAgent)}
+      onAgentKindChange={k => s.handleAgentChange(wf.id, stepId, step, k)}
+      onModelChange={m => s.handleModelChange(wf.id, stepId, m)}
+      onEffortChange={e => s.handleEffortChange(wf.id, stepId, e)}
+      onClear={() => s.handleClearRow(wf.id, stepId)}
+      agentPlaceholder={agentPlaceholder}
+      modelPlaceholder={modelPlaceholder}
+      effortPlaceholder={`Inherit · ${EFFORT_LABELS[inhE]}`}
+      saved={Boolean(s.savedPulse[key])}
+    />
   );
 }
 
@@ -55,8 +54,8 @@ export function OverridesTab() {
   return (
     <div className="space-y-4 animate-fadeIn">
       <div className="glass-panel p-6 rounded-xl space-y-2">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2"><WorkflowIcon className="w-4 h-4 text-violet-400" /> Workflow &amp; Step Harness &amp; Model</h3>
-        <p className="text-xs text-slate-400 leading-relaxed">Workflows are shared across projects. Pin a coding agent (<span className="text-slate-300">harness</span>) and model for a whole workflow — or a single step — <span className="text-white font-medium">when it runs in {s.activeProject.name}</span>. Models are probed live from your {s.computeType === 'remote' ? 'remote machine' : 'local machine'}, so you only pick what's actually available.</p>
+        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2"><WorkflowIcon className="w-4 h-4 text-violet-400" /> Workflow &amp; Step Harness, Model &amp; Effort</h3>
+        <p className="text-xs text-slate-400 leading-relaxed">Workflows are shared across projects. Pin a coding agent (<span className="text-slate-300">harness</span>), a model and a reasoning <span className="text-slate-300">effort</span> for a whole workflow — or a single step — <span className="text-white font-medium">when it runs in {s.activeProject.name}</span>. Models are probed live from your {s.computeType === 'remote' ? 'remote machine' : 'local machine'}, so you only pick what's actually available; effort levels come from what each agent declares.</p>
         <p className="text-[11px] text-slate-500 leading-relaxed">Precedence, most specific first: a choice made at launch → a step override here → the workflow author's step setting → a workflow override here → the project default. Expand a workflow to override individual steps. Changes save instantly.</p>
       </div>
 
@@ -99,8 +98,8 @@ export function OverridesTab() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-semibold text-white truncate">{wf.name}</span>
-                      {(wfLevel?.agent_kind || wfLevel?.model) && <span className="px-2 py-0.5 text-[9px] font-mono rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 uppercase tracking-wider shrink-0">All steps</span>}
-                      {(() => { const sc = count - (wfLevel?.agent_kind || wfLevel?.model ? 1 : 0); return sc > 0 ? <span className="px-2 py-0.5 text-[9px] font-mono rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 uppercase tracking-wider shrink-0">{sc} step{sc !== 1 ? 's' : ''}</span> : null; })()}
+                      {isOverrideActive(wfLevel) && <span className="px-2 py-0.5 text-[9px] font-mono rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 uppercase tracking-wider shrink-0">All steps</span>}
+                      {(() => { const sc = count - (isOverrideActive(wfLevel) ? 1 : 0); return sc > 0 ? <span className="px-2 py-0.5 text-[9px] font-mono rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 uppercase tracking-wider shrink-0">{sc} step{sc !== 1 ? 's' : ''}</span> : null; })()}
                     </div>
                     {wf.description && <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{wf.description}</p>}
                   </div>

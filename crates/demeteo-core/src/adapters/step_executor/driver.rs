@@ -8,7 +8,7 @@ use crate::adapters::agent::registry::AgentRegistry;
 use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::FeatureId;
-use crate::domain::models::StepConfig;
+use crate::domain::models::{EffortLevel, StepConfig};
 use crate::domain::prompt_context::PromptContext;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
@@ -158,12 +158,19 @@ pub(crate) struct ExecutionDriver {
     /// Feature-wide run override of the model. Same precedence as
     /// `feature_agent_kind`.
     pub feature_model: Option<String>,
-    /// Per-step agent/model overrides chosen at launch (highest precedence).
+    /// Feature-wide run override of the reasoning effort. Same precedence as
+    /// `feature_model`. `None` = inherit (never "default").
+    pub feature_effort: Option<EffortLevel>,
+    /// Per-step agent/model/effort overrides chosen at launch (highest
+    /// precedence).
     pub step_overrides: Vec<crate::domain::models::StepOverride>,
     /// Project default agent kind (`ProjectSettings::default_agent_kind`).
     pub default_agent_kind: Option<String>,
     /// Project default model (`ProjectSettings::default_model`).
     pub default_model: Option<String>,
+    /// Project default effort (`ProjectSettings::default_effort`). Last tier
+    /// before the built-in [`EffortLevel::DEFAULT`].
+    pub default_effort: Option<EffortLevel>,
 
     // --- Loop budget inputs ---
     /// Per-run override of the loop budget (`Feature::loop_iterations`).
@@ -367,21 +374,33 @@ impl ExecutionDriver {
     /// worse than starting fresh, since a fresh session can still hit
     /// Anthropic's cross-session prefix-hash cache for the same
     /// role's byte-identical tools+system prefix (see `bare_mode`).
-    /// Steps whose profile+model match the previous step still share
-    /// one key (and its `--resume`d cache, e.g. `s-implement` →
-    /// `s-validate`); a change in either forces a fresh session
+    /// Steps whose profile+model+effort match the previous step still
+    /// share one key (and its `--resume`d cache, e.g. `s-implement` →
+    /// `s-validate`); a change in any of them forces a fresh session
     /// instead of paying that double tax.
+    ///
+    /// Effort is part of the fingerprint for a harder reason than cost:
+    /// [`UnifiedCliSession`](crate::adapters::agent::cli_runtime) freezes
+    /// its `AgentContext` at spawn and rebuilds argv from that frozen copy
+    /// on every turn. Two steps differing *only* in effort would otherwise
+    /// share one session, and the second step's effort would be silently
+    /// dropped — the run would claim `max` and execute at `low`.
     pub(crate) fn agent_session_key(
         f_id: &str,
         step_conf: &StepConfig,
         model: Option<&str>,
+        effort: EffortLevel,
     ) -> String {
         let permissions = crate::domain::permission::resolve_profile(
             step_conf.effective_capability(),
             step_conf.allow_network,
             step_conf.allow_shell,
         );
-        format!("{f_id}::{permissions:?}::{}", model.unwrap_or("default"))
+        format!(
+            "{f_id}::{permissions:?}::{}::{}",
+            model.unwrap_or("default"),
+            effort.as_str()
+        )
     }
 
     /// Called after a step completes successfully. Reads the live
@@ -433,10 +452,16 @@ impl ExecutionDriver {
     /// effect immediately, and so `maybe_watchdog_reset` (which runs
     /// *after* the step) targets the same session `spawn_agent_session`
     /// just used.
-    pub(crate) fn refresh_watchdog_budget(&mut self, step_conf: &StepConfig, model: Option<&str>) {
+    pub(crate) fn refresh_watchdog_budget(
+        &mut self,
+        step_conf: &StepConfig,
+        model: Option<&str>,
+        effort: EffortLevel,
+    ) {
         self.current_model = model.map(str::to_string);
         self.context_budget_tokens = model.and_then(|m| self.pricing.context_window(m));
-        self.current_session_key = Self::agent_session_key(&self.f_id_str, step_conf, model);
+        self.current_session_key =
+            Self::agent_session_key(&self.f_id_str, step_conf, model, effort);
     }
 
     /// Capture a raw run observation for the memory agent's queue. Best-effort:
@@ -532,6 +557,18 @@ impl ExecutionDriver {
         )
     }
 
+    /// Resolve the effective reasoning effort for a given step. Same
+    /// precedence chain as [`resolve_step_agent`](Self::resolve_step_agent),
+    /// with `EffortLevel::DEFAULT` (high) as the terminal fallback instead of
+    /// "no opinion".
+    pub(crate) fn resolve_step_effort(&self, step_conf: &StepConfig) -> EffortLevel {
+        let ov = self
+            .step_overrides
+            .iter()
+            .find(|o| o.step_id == step_conf.id.0);
+        resolve_effort(ov, self.feature_effort, step_conf, self.default_effort)
+    }
+
     /// Effective loop-iteration budget for a step with `on_failure` set.
     /// Precedence: run override → project default → step `max_iterations`
     /// → engine default (3).
@@ -569,6 +606,30 @@ pub(crate) fn resolve_agent_model(
         .or_else(|| default_model.map(str::to_string));
 
     (agent, model)
+}
+
+/// Pure effort resolution — the peer of [`resolve_agent_model`], with the
+/// same tiers (first non-`None` wins):
+/// per-step run override → feature-wide run override → workflow step →
+/// project default → [`EffortLevel::DEFAULT`] (high).
+///
+/// Unlike the model chain there is no "no opinion" outcome: every step runs
+/// at *some* effort, and an unconfigured run runs at high. Project-workflow
+/// overrides are not a tier of their own — they are folded into the workflow
+/// step / project default tiers before the driver ever sees them (see
+/// `impl_traits::execution_context`).
+pub(crate) fn resolve_effort(
+    step_override: Option<&crate::domain::models::StepOverride>,
+    feature_effort: Option<EffortLevel>,
+    step_conf: &StepConfig,
+    default_effort: Option<EffortLevel>,
+) -> EffortLevel {
+    step_override
+        .and_then(|o| o.effort)
+        .or(feature_effort)
+        .or(step_conf.effort)
+        .or(default_effort)
+        .unwrap_or(EffortLevel::DEFAULT)
 }
 
 /// Pure loop-budget resolution: run override → project default → step
@@ -630,7 +691,8 @@ impl ExecutionDriver {
             // ceiling.
             {
                 let (_agent, model) = self.resolve_step_agent(&step_conf);
-                self.refresh_watchdog_budget(&step_conf, model.as_deref());
+                let effort = self.resolve_step_effort(&step_conf);
+                self.refresh_watchdog_budget(&step_conf, model.as_deref(), effort);
             }
 
             tracing::info!(

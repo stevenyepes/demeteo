@@ -32,6 +32,7 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
     FeatureRepository::add(
         adapter,
         Feature {
+            effort: None,
             id: fid.clone(),
             project_id: pid,
             workflow_id: None,

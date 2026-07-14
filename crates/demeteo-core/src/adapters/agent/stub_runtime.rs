@@ -82,6 +82,17 @@ pub fn stub_agent_enabled() -> bool {
     matches!(std::env::var(STUB_AGENT_ENV), Ok(v) if !v.is_empty() && v != "0")
 }
 
+/// Test-only record of what the driver actually resolved for each spawned
+/// session: `(AgentContext::title, AgentContext::effort)`, in spawn order.
+///
+/// The stub is the only agent an in-crate e2e can drive end-to-end, and the
+/// resolved effort is otherwise invisible from outside the runtime (it lands
+/// on argv/env inside a real CLI). Compiled out of the shipped binary.
+#[cfg(test)]
+pub(crate) static SPAWN_LOG: std::sync::Mutex<
+    Vec<(Option<String>, Option<crate::domain::models::EffortLevel>)>,
+> = std::sync::Mutex::new(Vec::new());
+
 pub struct StubRuntime;
 
 #[async_trait]
@@ -95,6 +106,7 @@ impl AgentRuntime for StubRuntime {
             display_label: "Stub Agent",
             lists_models: false,
             default_model: None,
+            effort_levels: &[],
         }
     }
 
@@ -120,6 +132,10 @@ impl AgentRuntime for StubRuntime {
     }
 
     fn start(&self, ctx: AgentContext) -> AgentStartFuture<'_> {
+        #[cfg(test)]
+        if let Ok(mut log) = SPAWN_LOG.lock() {
+            log.push((ctx.title.clone(), ctx.effort));
+        }
         Box::pin(async move { Ok(Arc::new(StubSession { ctx }) as Arc<dyn AgentSession>) })
     }
 }

@@ -1,11 +1,11 @@
 # Demeteo: Locked Decisions Reference
 
-> **Standalone reference for the 36 locked design decisions** that emerged
+> **Standalone reference for the 37 locked design decisions** that emerged
 > from the multi-agent orchestrator design. This is the same
 > table that guides the project. If any conflicts ever arise, this
 > doc should be considered a source of truth; flag the conflict and re-align.
 
-## 1. The 36 Decisions
+## 1. The 37 Decisions
 
 | #  | Decision                           | Locked answer                                                                  | Source           |
 |----|------------------------------------|--------------------------------------------------------------------------------|------------------|
@@ -45,6 +45,60 @@
 | 34 | Agent protocol                     | `UnifiedCliRuntime` (one-shot CLI + JSON-lines); ACP removed — no JSON-RPC, no tool-call bridge, no capability negotiation. `opencode run --format json` for opencode; `hermes run --format json` for hermes; `claude --print --verbose --output-format stream-json` for claude-code; `codex exec --json` for codex. Install commands: opencode = `curl -fsSL https://opencode.ai/install \| bash`; hermes = `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash`; claude-code = `npm install -g @anthropic-ai/claude-code`; codex = `npm install -g @openai/codex`. | 2026-06-19   |
 | 35 | Agent permission enforcement       | Each `StepCapability` compiles to a four-axis `PermissionProfile` (`read_fs`, `write_fs`, `execute`, `network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None` \| `ArtifactsOnly` \| `All`). The compiled policy only ever uses `allow` / `deny`, never `ask`. The abstract profile is translated to the agent's native dialect at spawn: opencode / hermes → `OPENCODE_PERMISSION` env (`{"edit":…,"read":…,"bash":…,"webfetch":…,"websearch":…,"external_directory":"deny","doom_loop":"allow"}`); claude-code → `--disallowedTools` (`Bash` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` / `WebSearch` / `WebFetch` as applicable) + `--exclude-dynamic-system-prompt-sections` + `--setting-sources user,project` + `--strict-mcp-config` for prompt-cache determinism. The `artifacts/` vs source path-shape is enforced uniformly by the OS-level chmod fence in `adapters/worktree/git_ops/scope.rs`. Gate-step approval is the only real-time human-in-the-loop surface. | 2026-06-19   |
 | 36 | Cross-step session continuity      | One captured `session_id` per feature; threaded through every subsequent agent invocation. opencode: `--session <uuid> --continue` (`adapters/agent/opencode/mod.rs:404-408`). hermes: `--resume <sid>` (`adapters/agent/hermes/mod.rs:155-156`). claude-code: `--resume <sid>` (`adapters/agent/claude_code/mod.rs:388-394`), plus `--exclude-dynamic-system-prompt-sections` / `--setting-sources user,project` / `--strict-mcp-config` for byte-identical prompt-cache prefix. Parallel subtasks each get their own session id so they don't pollute each other's context. On context-window saturation (>80% of budget from `PricingTable::context_window`) the driver's watchdog kills the session and the next step's spawn injects a one-shot recap. | 2026-06-19   |
+| 37 | Reasoning effort                   | A **peer of the model**, not a property of it. One canonical ladder — `low` < `medium` < `high` < `xhigh` < `max` (`EffortLevel`, lowercase on every wire) — resolved by the same 5-tier chain as `model` (per-step run override → feature-wide run override → workflow `StepConfig.effort` → project `default_effort` → **`high`**). Each adapter **clamps down** to what its agent declares (`AgentCapabilities.effort_levels`) before emitting: claude-code `--effort` + `CLAUDE_CODE_EFFORT_LEVEL`, codex `-c model_reasoning_effort=`, opencode `--variant`, hermes nothing. See the detail block below. | 2026-07-14 |
+
+### 37 — Effort level (detail)
+
+Four things about this one are load-bearing and were easy to get wrong, so they
+are recorded rather than left to be re-derived from the code:
+
+**The ladder is canonical and the clamp only goes down.** `EffortLevel` is one
+five-rung ladder shared by every agent, and `clamp_for(kind, level)` projects a
+requested level onto what that agent actually declares: the level itself if
+supported, else the **highest supported level strictly below it**, else the
+lowest supported level. So `max` on codex runs as `xhigh` (codex only exposes
+`max` on some `gpt-5.6-*` models) — it never rounds *up* into a costlier tier
+the user didn't ask for, and it can never emit a level outside the declared set.
+The clamp lives in the adapter, not the caller, so no calling site needs
+per-agent knowledge. That is deliberate defence-in-depth alongside the
+capability-driven picker: the UI shouldn't offer an unsupported level, and if it
+somehow does, the adapter still can't emit one. Neither codex nor opencode would
+catch it for us — codex wraps an unknown effort as `Custom(String)` and sends it,
+opencode silently no-ops an unsupported `--variant`.
+
+**The default is `high`.** The terminal fallback of the resolution chain is
+`EffortLevel::DEFAULT = High`, not "whatever the agent does on its own". This is
+the literal product requirement, and it is worth being explicit about the cost
+consequence: features that ran at each agent's own default (typically medium)
+now run at high effort with no user action.
+
+**Hermes shipped effort-unsupported, on purpose.** Hermes exposes effort only
+through `agent.reasoning_effort` in `$HERMES_HOME/config.yaml`; there is no
+per-invocation flag. The tempting workaround — generate a per-run config under an
+isolated `HERMES_HOME` — was rejected: `HERMES_HOME` also relocates hermes's
+credentials and its session `state.db`, so doing it blind risks breaking both
+authentication and the cross-step `--resume` continuity the adapter depends on,
+trading a missing feature for a broken agent. Hermes therefore declares
+`effort_levels: &[]`, emits nothing, and the frontend greys its effort control
+out with a tooltip. Honest degradation; revisit only against a real hermes
+install.
+
+**Internal turns are pinned, not inherited.** The verifier, env-triage,
+finalize, sequence and conflict-resolution turns each build their own
+`AgentContext`. Letting them inherit a blanket `high` would apply high effort to
+*every verifier retry* — a job `VerifierConfig`'s own doc comment calls a
+small-model task — and would interact badly with the `max_cost_usd` cap. So:
+triage → `Low`; verifier → `VerifierConfig.effort ?? Low`; finalize → `Medium`;
+sequence + sync → the resolved step/feature effort (real agent work, inherits).
+The constants live in one place (`domain/models/effort.rs`) and are trivially
+tunable.
+
+**Known, unfixed:** `steps/finalize/turn.rs:42` resolves the model as
+`step_conf.model.or(feature.model)`, which **inverts tiers 2 and 3** and ignores
+`step_overrides` + `default_model` entirely. That is a pre-existing model bug,
+not an effort one. Effort deliberately does **not** copy that shape, and the bug
+was left unfixed here as out of scope — recorded so the next reader doesn't
+mistake the inconsistency for intent.
 
 ## 2. Superseded decisions
 

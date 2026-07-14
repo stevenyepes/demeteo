@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::domain::models::EffortLevel;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VerifierConfig {
     /// Agent kind for the verifier. `None` = same as the step's agent_kind.
@@ -10,6 +12,11 @@ pub struct VerifierConfig {
     /// cuts the per-attempt cost of every retry loop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Effort for the verifier turn. `None` = [`EffortLevel::VERIFIER_DEFAULT`]
+    /// (low) — deliberately *not* the step's inherited effort, since this turn
+    /// runs on every retry and only has to read harness output into a verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<EffortLevel>,
     /// Instructions injected as the verifier's prompt preamble.
     pub instructions: String,
     /// Name of the harness to run (e.g. "lint", "integration"). If `None`, falls back to the project's default `test_command`.

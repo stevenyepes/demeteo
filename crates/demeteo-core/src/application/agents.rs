@@ -54,6 +54,7 @@ pub async fn build_agent_context(
         env,
         cwd,
         model: None,
+        effort: None,
         title: None,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),

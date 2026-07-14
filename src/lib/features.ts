@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { asAppError } from "./errors";
-import type { StepExecution } from "../types";
+import type { EffortLevel, StepExecution } from "../types";
 
 /**
  * Subset of `StepExecution` the gate-modal block-banner actually needs.
@@ -44,18 +44,62 @@ export async function decideGate(input: {
 
 /**
  * Retry a failed / interrupted / pending step. Re-pins the
- * feature-wide model / harness overrides before the rerun
+ * feature-wide model / harness / effort overrides before the rerun
  * (`null` keeps the existing override).
  */
 export async function retryStep(input: {
   stepExecutionId: string;
   newModel: string | null;
   newAgent: string | null;
+  newEffort: EffortLevel | null;
 }): Promise<void> {
   await invoke<void>("step_retry", {
     stepExecutionId: input.stepExecutionId,
     newModel: input.newModel,
     newAgent: input.newAgent,
+    newEffort: input.newEffort,
+  });
+}
+
+/**
+ * Rewind to a step and re-execute it plus everything downstream. Same rewind
+ * as {@link retryStep} under the hood (`replay_steps_from(.., include_target:
+ * true)`), and it re-pins the same three overrides.
+ */
+export async function replayFromStep(input: {
+  stepExecutionId: string;
+  newModel: string | null;
+  newAgent: string | null;
+  newEffort: EffortLevel | null;
+}): Promise<void> {
+  await invoke<void>("replay_from_step", {
+    stepExecutionId: input.stepExecutionId,
+    newModel: input.newModel,
+    newAgent: input.newAgent,
+    newEffort: input.newEffort,
+  });
+}
+
+/**
+ * The detached twin of {@link retryStep} / {@link replayFromStep}: a run the
+ * runner owns is retried *on the runner* (this machine has neither its driver
+ * nor its worktree). One RPC serves both, since they are the same rewind.
+ */
+export async function remoteRetryStep(input: {
+  machineId: string;
+  runId: string;
+  stepExecutionId: string;
+  model: string | null;
+  agentKind: string | null;
+  effort: EffortLevel | null;
+}): Promise<void> {
+  await invoke<void>("remote_retry_step", {
+    machineId: input.machineId,
+    runId: input.runId,
+    stepExecutionId: input.stepExecutionId,
+    model: input.model,
+    agentKind: input.agentKind,
+    effort: input.effort,
   });
 }
 

@@ -20,10 +20,14 @@ import { listAttachments, readAttachment, type AttachedFile } from '../lib/attac
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
 import {
   retryStep,
+  replayFromStep,
+  remoteRetryStep,
   isBlockingError,
   isEnvironmentError,
   findActivePredecessor,
 } from '../lib/features';
+import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
+import { EFFORT_LABELS, type EffortLevel } from '../lib/effortLevels';
 import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
 import { RemoteGateActions, ReinjectCredentials, RunEventTimeline } from './RunEventTimeline';
@@ -275,6 +279,10 @@ export function FeatureDetail() {
   // `featureMachineId` are captured so a harness switch can re-probe models.
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string>('');
+  // Re-pin the feature-wide effort on a retry/replay, exactly as the model and
+  // harness selects do. `''` keeps whatever the feature already carries.
+  const [selectedEffort, setSelectedEffort] = useState<EffortLevel | ''>('');
+  const { agents: agentCatalog } = useAgentCatalog();
   const [featureAgentKind, setFeatureAgentKind] = useState<string>('opencode');
   const [featureMachineId, setFeatureMachineId] = useState<string>('local');
   const [replayTarget, setReplayTarget] = useState<{ id: string; name: string; downstreamCount: number } | null>(null);
@@ -647,6 +655,11 @@ export function FeatureDetail() {
     await cancelRun('Stop Failed');
   };
 
+  // The effort levels the harness the rerun will actually use accepts. Empty
+  // (hermes) disables the control rather than offering a level the adapter
+  // would drop on the floor.
+  const retryEffortLevels = effortLevelsFor(agentCatalog, selectedAgent || featureAgentKind);
+
   // Switching the harness invalidates the probed model list (models are
   // harness-specific), so clear the model selection and re-probe for the
   // chosen harness. An empty choice falls back to the feature's current harness.
@@ -670,22 +683,24 @@ export function FeatureDetail() {
     try {
       const modelParam = selectedModel || null;
       const agentParam = selectedAgent || null;
+      const effortParam = selectedEffort || null;
       if (remoteRun) {
         // A detached run is retried on the runner: this machine has no
         // driver for it and no worktree to replay into. The shadow mirrors
         // the runner's step ids verbatim, so the local id is the right one
         // to name. The command re-injects the PAT and re-opens the run, so
         // the retried pipeline still pushes and opens its PR at the end.
-        await invoke('remote_retry_step', {
+        await remoteRetryStep({
           machineId: remoteRun.machine_id,
           runId: remoteRun.run_id,
           stepExecutionId,
           model: modelParam,
           agentKind: agentParam,
+          effort: effortParam,
         });
         refreshRemoteRun();
       } else {
-        await retryStep({ stepExecutionId, newModel: modelParam, newAgent: agentParam });
+        await retryStep({ stepExecutionId, newModel: modelParam, newAgent: agentParam, newEffort: effortParam });
       }
       loadFeatureData();
     } catch (err) {
@@ -704,20 +719,22 @@ export function FeatureDetail() {
     try {
       const modelParam = selectedModel || null;
       const agentParam = selectedAgent || null;
+      const effortParam = selectedEffort || null;
       if (remoteRun) {
         // `replay_from_step` and `step_retry` are the same rewind under the
         // hood (`replay_steps_from(.., include_target: true)`), so the one
         // runner-side retry RPC serves both — see `handleRetryStep`.
-        await invoke('remote_retry_step', {
+        await remoteRetryStep({
           machineId: remoteRun.machine_id,
           runId: remoteRun.run_id,
           stepExecutionId: replayTarget.id,
           model: modelParam,
           agentKind: agentParam,
+          effort: effortParam,
         });
         refreshRemoteRun();
       } else {
-        await invoke('replay_from_step', { stepExecutionId: replayTarget.id, newModel: modelParam, newAgent: agentParam });
+        await replayFromStep({ stepExecutionId: replayTarget.id, newModel: modelParam, newAgent: agentParam, newEffort: effortParam });
       }
       setReplayTarget(null);
       loadFeatureData();
@@ -1450,6 +1467,23 @@ export function FeatureDetail() {
                               </select>
                             </div>
                           ) : null}
+
+                          <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
+                            <label htmlFor={`retry-effort-${step.id}`} className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Effort:</label>
+                            <select
+                              id={`retry-effort-${step.id}`}
+                              value={selectedEffort}
+                              onChange={(e) => setSelectedEffort(e.target.value as EffortLevel | '')}
+                              disabled={retryEffortLevels.length === 0}
+                              title={retryEffortLevels.length === 0 ? `${(selectedAgent || featureAgentKind).replace(/-/g, ' ')} does not support effort selection` : undefined}
+                              className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <option value="">{retryEffortLevels.length === 0 ? 'Not supported' : 'Keep current effort'}</option>
+                              {retryEffortLevels.map((l) => (
+                                <option key={l} value={l}>{EFFORT_LABELS[l]}</option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
                       )}
 
@@ -1734,6 +1768,23 @@ export function FeatureDetail() {
                 </select>
               </div>
             )}
+
+            <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5 mb-5">
+              <label htmlFor="replay-effort" className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Effort:</label>
+              <select
+                id="replay-effort"
+                value={selectedEffort}
+                onChange={(e) => setSelectedEffort(e.target.value as EffortLevel | '')}
+                disabled={retryEffortLevels.length === 0}
+                title={retryEffortLevels.length === 0 ? `${(selectedAgent || featureAgentKind).replace(/-/g, ' ')} does not support effort selection` : undefined}
+                className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <option value="">{retryEffortLevels.length === 0 ? 'Not supported' : 'Keep current effort'}</option>
+                {retryEffortLevels.map((l) => (
+                  <option key={l} value={l}>{EFFORT_LABELS[l]}</option>
+                ))}
+              </select>
+            </div>
 
             <div className="flex justify-end gap-2">
               <button

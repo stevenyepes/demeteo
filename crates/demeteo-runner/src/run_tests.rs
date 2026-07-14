@@ -72,3 +72,52 @@ fn empty_detected_branch_falls_back_to_client_then_main() {
     let out2 = merge_project_settings(detected2, Some(client2), ProjectId::from("p4".to_string()));
     assert_eq!(out2.worktree_strategy.default_branch, "main");
 }
+
+// ── RunSpec wire format (effort) ────────────────────────────────────
+//
+// `RunSpec` is the contract between the desktop app and this runner. The
+// spec's version-skew rule (AGENTS.md §9.1) only holds if `effort` is
+// genuinely optional in both directions.
+
+#[test]
+fn a_spec_without_effort_deserializes_to_none() {
+    // An older desktop app sends no `effort` key at all. The runner must
+    // accept the spec and inherit (project default, else High) — not fail.
+    let spec: demeteo_core::domain::run_spec::RunSpec = serde_json::from_value(serde_json::json!({
+        "title": "t",
+        "description": "d",
+        "provider": { "kind": "github", "host": "github.com" },
+        "repo_path": "/tmp/repo",
+        "workflow_json": { "steps": [] },
+        "agent_kind": "claude-code",
+        "model": "sonnet",
+    }))
+    .expect("a pre-effort spec must still parse");
+    assert_eq!(spec.effort, None);
+}
+
+#[test]
+fn a_spec_with_effort_round_trips_through_the_wire() {
+    let spec: demeteo_core::domain::run_spec::RunSpec = serde_json::from_value(serde_json::json!({
+        "title": "t",
+        "description": "d",
+        "provider": { "kind": "github", "host": "github.com" },
+        "repo_path": "/tmp/repo",
+        "workflow_json": { "steps": [] },
+        "agent_kind": "codex",
+        "model": "gpt-5",
+        "effort": "max",
+    }))
+    .expect("a spec carrying effort must parse");
+    assert_eq!(
+        spec.effort,
+        Some(demeteo_core::domain::models::EffortLevel::Max)
+    );
+
+    let json = serde_json::to_string(&spec).expect("RunSpec serializes");
+    let back: demeteo_core::domain::run_spec::RunSpec =
+        serde_json::from_str(&json).expect("RunSpec round-trips");
+    assert_eq!(back.effort, spec.effort);
+    // The canonical spelling is the lowercase one, on the wire as in the DB.
+    assert!(json.contains("\"effort\":\"max\""));
+}

@@ -11,7 +11,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::{AgentEvent, StopReason};
-use crate::domain::models::SessionInfo;
+use crate::domain::models::{EffortLevel, SessionInfo};
 use crate::ports::agent_runtime::{
     AgentContext, AgentRuntime, AgentSession, AgentStartError, StderrHeartbeat,
 };
@@ -42,6 +42,21 @@ pub type PermEnvBuilder = fn(
     p: &crate::domain::permission::PermissionProfile,
 ) -> std::collections::HashMap<String, String>;
 
+/// Translate the resolved effort into agent-native environment variables
+/// (e.g. claude-code's `CLAUDE_CODE_EFFORT_LEVEL`). Agents that carry effort
+/// on argv only — or not at all — use [`no_effort_env`] and read
+/// `ctx.effort` in their [`ArgsBuilder`].
+pub type EffortEnvBuilder =
+    fn(effort: Option<EffortLevel>) -> std::collections::HashMap<String, String>;
+
+/// No agent-native effort env (codex, opencode: argv-only; hermes: no
+/// per-invocation effort control at all). The `effort_env` translator for
+/// such runtimes — mirrors
+/// [`no_permission_env`](crate::ports::agent_runtime::no_permission_env).
+pub fn no_effort_env(_effort: Option<EffortLevel>) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::new()
+}
+
 /// Shared runtime for one-shot CLI-based agents (opencode, hermes, claude, etc.)
 pub struct UnifiedCliRuntime {
     pub kind_str: &'static str,
@@ -51,6 +66,9 @@ pub struct UnifiedCliRuntime {
     pub build_args: ArgsBuilder,
     /// Maps the abstract permission profile to this agent's native env.
     pub perm_env: PermEnvBuilder,
+    /// Maps the resolved effort to this agent's native env. Empty for the
+    /// three agents that carry effort on argv (or not at all).
+    pub effort_env: EffortEnvBuilder,
     /// Human-facing name for pickers/settings (e.g. "Claude Code").
     pub display_label: &'static str,
     /// Whether `<binary> models` lists selectable models.
@@ -58,6 +76,10 @@ pub struct UnifiedCliRuntime {
     /// Default model when no override is configured; `None` if not statically
     /// knowable.
     pub default_model: Option<&'static str>,
+    /// The effort levels this agent accepts per invocation; `&[]` when it has
+    /// no effort control. Surfaced through `capabilities()` to drive the UI
+    /// picker.
+    pub effort_levels: &'static [EffortLevel],
 }
 
 #[async_trait]
@@ -71,6 +93,7 @@ impl AgentRuntime for UnifiedCliRuntime {
             display_label: self.display_label,
             lists_models: self.lists_models,
             default_model: self.default_model,
+            effort_levels: self.effort_levels,
         }
     }
 
@@ -119,6 +142,7 @@ impl AgentRuntime for UnifiedCliRuntime {
         let parse_event = self.parse_event;
         let build_args = self.build_args;
         let perm_env = self.perm_env;
+        let effort_env = self.effort_env;
 
         Box::pin(async move {
             // Translate the abstract permission profile into this agent's
@@ -128,6 +152,13 @@ impl AgentRuntime for UnifiedCliRuntime {
             // reading the same `ctx.permissions`.
             let mut ctx = ctx;
             ctx.env.extend((perm_env)(&ctx.permissions));
+            // Same shape for effort. claude-code needs this even though it
+            // also takes `--effort`: `CLAUDE_CODE_EFFORT_LEVEL` outranks the
+            // flag and the child inherits the host env (`sanitize_child_env`
+            // strips only LD_LIBRARY_PATH / LD_PRELOAD), so a developer who
+            // exported the variable would otherwise silently override every
+            // Demeteo run.
+            ctx.env.extend((effort_env)(ctx.effort));
 
             let resolved_binary = if ctx.machine_id.is_empty() || ctx.machine_id == "local" {
                 super::resolve_local_binary_path(&ctx.binary)

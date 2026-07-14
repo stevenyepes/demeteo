@@ -2,6 +2,7 @@ use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{
     FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId,
 };
+use crate::domain::models::EffortLevel;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -27,6 +28,11 @@ pub struct Feature {
     pub agent_kind: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Feature-wide effort override chosen at launch. `None` = inherit
+    /// (workflow step value → project default → [`EffortLevel::DEFAULT`]).
+    /// See migration V29.
+    #[serde(default)]
+    pub effort: Option<EffortLevel>,
     #[serde(default)]
     pub mr_url: Option<String>,
     #[serde(default)]
@@ -69,8 +75,8 @@ pub struct Feature {
     pub attachments: Vec<AttachedFile>,
 }
 
-/// A per-step agent/model override selected when launching a feature.
-/// Either field may be `None`, meaning "inherit" for that dimension.
+/// A per-step agent/model/effort override selected when launching a feature.
+/// Any field may be `None`, meaning "inherit" for that dimension.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct StepOverride {
     pub step_id: String,
@@ -78,6 +84,8 @@ pub struct StepOverride {
     pub agent_kind: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<EffortLevel>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

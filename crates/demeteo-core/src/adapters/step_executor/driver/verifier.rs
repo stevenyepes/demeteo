@@ -341,6 +341,9 @@ impl ExecutionDriver {
             env: agent_env,
             cwd: wt_path.to_string(),
             model,
+            // Classification, not reasoning work — pinned low rather than
+            // inheriting the run's effort (which may be `max`).
+            effort: Some(crate::domain::models::EffortLevel::TRIAGE),
             title: Some("Triage harness failure".to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
@@ -519,6 +522,15 @@ impl ExecutionDriver {
             env: agent_env,
             cwd: wt_path.to_string(),
             model: verifier_model.clone(),
+            // Same reasoning as `verifier_model`: turning harness output into
+            // one verdict object is a small job that runs on every retry, so
+            // it defaults low instead of inheriting the run's effort. A
+            // `VerifierConfig` may still ask for more.
+            effort: Some(
+                verifier_cfg
+                    .effort
+                    .unwrap_or(crate::domain::models::EffortLevel::VERIFIER_DEFAULT),
+            ),
             title: Some(format!("Verify: {}", harness_name)),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),

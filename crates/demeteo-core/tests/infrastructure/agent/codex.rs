@@ -220,6 +220,7 @@ fn ctx_with(model: Option<&str>, perms: PermissionProfile) -> AgentContext {
         env: HashMap::new(),
         cwd: ".".into(),
         model: model.map(|s| s.to_string()),
+        effort: None,
         title: None,
         agent_exec: Arc::new(StubAgentExec),
         exec: Arc::new(StubExec),
@@ -305,5 +306,53 @@ fn output_schema_args_are_reusable() {
             .into_iter()
             .map(String::from)
             .collect::<Vec<_>>()
+    );
+}
+
+// ── Effort ───────────────────────────────────────────────────────────────
+
+use crate::domain::models::EffortLevel;
+
+fn ctx_with_effort(effort: Option<EffortLevel>) -> AgentContext {
+    AgentContext {
+        effort,
+        ..ctx_with(None, PermissionProfile::all_allow())
+    }
+}
+
+/// The value of the `-c <key>=<value>` pair for `key`, asserting the `-c`
+/// immediately precedes it. Codex emits several `-c` pairs (sandbox_mode,
+/// approval_policy, …), so "an `-c` exists somewhere" proves nothing.
+fn config_pair<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
+    let prefix = format!("{key}=");
+    let i = args.iter().position(|a| a.starts_with(&prefix))?;
+    assert_eq!(
+        args.get(i - 1).map(String::as_str),
+        Some("-c"),
+        "`{key}` must be preceded by its own -c: got {args:?}"
+    );
+    args[i].strip_prefix(&prefix)
+}
+
+#[test]
+fn args_effort_emitted_as_adjacent_config_pair() {
+    let args = build_codex_args(&ctx_with_effort(Some(EffortLevel::High)), None, "");
+    assert_eq!(config_pair(&args, "model_reasoning_effort"), Some("high"));
+}
+
+#[test]
+fn args_effort_clamped_to_what_codex_supports() {
+    // Codex has no `max`, and it does not validate — an unknown value is
+    // wrapped as Custom(String) and sent. So the clamp is ours to do.
+    let args = build_codex_args(&ctx_with_effort(Some(EffortLevel::Max)), None, "");
+    assert_eq!(config_pair(&args, "model_reasoning_effort"), Some("xhigh"));
+}
+
+#[test]
+fn args_no_effort_when_unset() {
+    let args = build_codex_args(&ctx_with_effort(None), None, "");
+    assert!(
+        !args.iter().any(|a| a.starts_with("model_reasoning_effort")),
+        "got {args:?}"
     );
 }

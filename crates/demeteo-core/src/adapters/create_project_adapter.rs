@@ -271,6 +271,8 @@ impl CreateProjectPort for CreateProjectAdapter {
                 description,
                 agent_kind,
                 model,
+                // Effort: inherit (project default, else the built-in high).
+                None,
                 None,
                 None,
                 Vec::new(),

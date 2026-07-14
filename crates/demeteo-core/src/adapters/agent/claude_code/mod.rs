@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
+use crate::domain::models::{AgentKind, EffortLevel};
 use crate::ports::agent_runtime::AgentContext;
 
 /// Parse a Claude Code JSON-lines event into an `AgentEvent`.
@@ -413,6 +416,10 @@ fn build_claude_args(
         args.push("--model".to_string());
         args.push(m.clone());
     }
+    if let Some(effort) = claude_effort(ctx.effort) {
+        args.push("--effort".to_string());
+        args.push(effort.as_str().to_string());
+    }
     // Trailing positional = the prompt for this turn. `--print` mode
     // requires the prompt positionally; passing it via stdin is the
     // racy pattern this signature replaces. See `build_opencode_args`
@@ -421,6 +428,31 @@ fn build_claude_args(
         args.push(prompt.to_string());
     }
     args
+}
+
+/// The effort claude-code should actually be told to use, clamped to what it
+/// supports. `None` = the step expressed no effort, so inject nothing and let
+/// the CLI pick its own default.
+fn claude_effort(effort: Option<EffortLevel>) -> Option<EffortLevel> {
+    EffortLevel::clamp_for(AgentKind::ClaudeCode, effort?)
+}
+
+/// `CLAUDE_CODE_EFFORT_LEVEL` for this session — the `effort_env` translator
+/// for claude-code.
+///
+/// This is not belt-and-braces alongside `--effort`: the environment variable
+/// **outranks** the flag, and the child inherits the host environment. Without
+/// setting it explicitly, a developer with `CLAUDE_CODE_EFFORT_LEVEL` exported
+/// in their shell would silently override the effort of every Demeteo run.
+pub fn claude_effort_env(effort: Option<EffortLevel>) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    if let Some(level) = claude_effort(effort) {
+        env.insert(
+            "CLAUDE_CODE_EFFORT_LEVEL".to_string(),
+            level.as_str().to_string(),
+        );
+    }
+    env
 }
 
 /// Map an abstract [`PermissionProfile`] to the Claude Code tools that must
@@ -453,11 +485,15 @@ pub fn runtime() -> UnifiedCliRuntime {
         build_args: build_claude_args,
         // claude-code enforces via CLI flags, not env.
         perm_env: crate::ports::agent_runtime::no_permission_env,
+        // Effort is the exception: the flag alone is not enough (see
+        // `claude_effort_env`).
+        effort_env: claude_effort_env,
         display_label: "Claude Code",
         // The `claude` CLI has no `models` subcommand — model aliases come
         // from the static fallback list in `application::agent_probe`.
         lists_models: false,
         default_model: None,
+        effort_levels: EffortLevel::supported_for(AgentKind::ClaudeCode),
     }
 }
 

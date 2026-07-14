@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BootstrapStep, STEP_ORDER, type CreateProjectStepPayload } from './types';
+import { EFFORT_LEVELS } from './lib/effortLevels';
 import { WizardShell } from './components/wizard/WizardShell';
 import { NameStep } from './components/wizard/NameStep';
 import { ProviderStep } from './components/wizard/ProviderStep';
@@ -189,7 +190,15 @@ describe('the wizard steps', () => {
   it('ModelStep hides the picker and emits nothing while disabled', () => {
     const onSubmit = vi.fn();
     render(
-      <ModelStep enabled={false} loading={false} models={[]} value="" onSubmit={onSubmit} />,
+      <ModelStep
+        enabled={false}
+        loading={false}
+        models={[]}
+        value=""
+        effort=""
+        effortLevels={EFFORT_LEVELS}
+        onSubmit={onSubmit}
+      />,
     );
 
     expect(screen.getByTestId('wizard-step-model')).toBeInTheDocument();

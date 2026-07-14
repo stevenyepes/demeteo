@@ -277,6 +277,8 @@ async fn run_triage_leg(triage_category: &str) -> (String, String, Arc<SignalRec
             "Triage Feature",
             "Exercise the C6 harness-failure triage path.",
             Some("stub"),
+            // model / effort / commit_artifacts: inherit.
+            None,
             None,
             None,
             Some(2),

@@ -108,9 +108,17 @@ pub async fn get_agent_configs(
 /// kinds that are real supported agents are returned.
 #[tauri::command]
 pub fn list_agents(ctx: State<'_, AppContext>) -> Result<Vec<AgentCatalogEntry>, AppError> {
+    Ok(agent_catalog(&ctx.registry))
+}
+
+/// The pure half of [`list_agents`] — registry in, catalog out — so the
+/// mapping (notably the capability-driven `effort_levels`) is unit-testable
+/// without an `AppContext`.
+fn agent_catalog(
+    registry: &demeteo_core::adapters::agent::registry::AgentRegistry,
+) -> Vec<AgentCatalogEntry> {
     use demeteo_core::domain::models::AgentKind;
-    let catalog = ctx
-        .registry
+    registry
         .runtimes()
         .iter()
         .filter(|r| AgentKind::is_supported(r.kind()))
@@ -122,10 +130,13 @@ pub fn list_agents(ctx: State<'_, AppContext>) -> Result<Vec<AgentCatalogEntry>,
                 lists_models: caps.lists_models,
                 default_model: caps.default_model.map(str::to_string),
                 install_command: r.install_command().to_string(),
+                // Straight from the runtime's own capabilities, so the picker
+                // can never offer a level the agent would silently ignore.
+                // Empty for hermes, which has no per-invocation effort control.
+                effort_levels: caps.effort_levels.to_vec(),
             }
         })
-        .collect();
-    Ok(catalog)
+        .collect()
 }
 
 #[tauri::command]
@@ -162,3 +173,7 @@ pub fn clear_working_memory(ctx: State<'_, AppContext>, thread_id: String) -> Re
         .clear_working_memory(&crate::domain::ids::ThreadId::from(thread_id))
         .map_err(AppError::from)
 }
+
+#[cfg(test)]
+#[path = "../../tests/infrastructure/agent_config.rs"]
+mod tests;

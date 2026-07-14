@@ -184,4 +184,8 @@ pub struct AgentCatalogEntry {
     pub lists_models: bool,
     pub default_model: Option<String>,
     pub install_command: String,
+    /// The effort levels this agent actually accepts, straight from its
+    /// declared `AgentCapabilities`. Empty (hermes) means the agent has no
+    /// per-invocation effort control at all, and the UI must not offer one.
+    pub effort_levels: Vec<crate::domain::models::EffortLevel>,
 }

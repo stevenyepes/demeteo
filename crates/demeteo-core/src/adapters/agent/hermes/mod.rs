@@ -2,6 +2,7 @@
 
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
+use crate::domain::models::{AgentKind, EffortLevel};
 use crate::ports::agent_runtime::AgentContext;
 
 pub const HERMES_INSTALL: &str =
@@ -180,10 +181,18 @@ pub fn runtime() -> UnifiedCliRuntime {
         parse_event: parse_hermes_event as EventParser,
         build_args: build_hermes_args,
         perm_env: crate::ports::agent_runtime::opencode_permission_env,
+        // Hermes has no per-invocation effort control: `agent.reasoning_effort`
+        // lives in `$HERMES_HOME/config.yaml` and there is no flag. Rather than
+        // relocate HERMES_HOME (which also moves hermes's credentials and the
+        // `state.db` that `--resume` continuation depends on), it ships
+        // effort-unsupported — empty capability set, nothing emitted, control
+        // greyed out in the UI.
+        effort_env: crate::adapters::agent::cli_runtime::no_effort_env,
         display_label: "Hermes",
         // `hermes models` lists selectable models.
         lists_models: true,
         default_model: None,
+        effort_levels: EffortLevel::supported_for(AgentKind::Hermes),
     }
 }
 

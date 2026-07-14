@@ -1,5 +1,5 @@
 use crate::domain::ids::{FeatureId, StepExecutionId};
-use crate::domain::models::{Feature, GateDecision, StepExecution};
+use crate::domain::models::{EffortLevel, Feature, GateDecision, StepExecution};
 use crate::error::AppError;
 use crate::ports::step_executor::SyncOutcomeView;
 use crate::state::AppContext;
@@ -43,6 +43,10 @@ pub async fn start_feature(
     description: String,
     agent_kind: Option<String>,
     model: Option<String>,
+    // Feature-wide effort. Omitted (an older frontend) = `None` = inherit the
+    // project default, which bottoms out at `EffortLevel::DEFAULT`. Per-step
+    // efforts ride inside `step_overrides`, not here.
+    effort: Option<EffortLevel>,
     commit_artifacts: Option<bool>,
     loop_iterations: Option<u32>,
     step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
@@ -57,6 +61,7 @@ pub async fn start_feature(
             &description,
             agent_kind.as_deref(),
             model.as_deref(),
+            effort,
             commit_artifacts,
             loop_iterations,
             step_overrides.unwrap_or_default(),
@@ -152,12 +157,17 @@ pub async fn step_retry(
     step_execution_id: String,
     new_model: Option<String>,
     new_agent: Option<String>,
+    // Re-pin the feature-wide effort for the rerun, exactly as `new_model`
+    // re-pins the model. `None` (or an older frontend that omits it) keeps
+    // whatever the feature already carries.
+    new_effort: Option<EffortLevel>,
 ) -> Result<(), AppError> {
     ctx.executor
         .step_retry(
             &step_execution_id,
             new_model.as_deref(),
             new_agent.as_deref(),
+            new_effort,
         )
         .await
 }
@@ -168,12 +178,14 @@ pub async fn replay_from_step(
     step_execution_id: String,
     new_model: Option<String>,
     new_agent: Option<String>,
+    new_effort: Option<EffortLevel>,
 ) -> Result<(), AppError> {
     ctx.executor
         .replay_from_step(
             &step_execution_id,
             new_model.as_deref(),
             new_agent.as_deref(),
+            new_effort,
         )
         .await
         .map_err(AppError::from)

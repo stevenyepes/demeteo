@@ -298,6 +298,7 @@ async fn test_executor_gate_decide() {
 
     features
         .add(Feature {
+            effort: None,
             id: FeatureId::from("f-1"),
             project_id: ProjectId::from("p-1"),
             workflow_id: Some(WorkflowId::from("w-1")),
@@ -470,6 +471,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
 
     features
         .add(Feature {
+            effort: None,
             id: FeatureId::from("f-recov"),
             project_id: ProjectId::from("p-recov"),
             workflow_id: Some(WorkflowId::from("w-recov")),
@@ -660,6 +662,7 @@ async fn test_step_retry_blocked_by_active_predecessor() {
 
     features
         .add(Feature {
+            effort: None,
             id: FeatureId::from("f-guard"),
             project_id: ProjectId::from("p-guard"),
             workflow_id: Some(WorkflowId::from("w-guard")),
@@ -713,7 +716,7 @@ async fn test_step_retry_blocked_by_active_predecessor() {
     }
 
     let err = executor
-        .step_retry("se-guard-2", None, None)
+        .step_retry("se-guard-2", None, None, None)
         .await
         .expect_err("retry must be blocked by a running predecessor");
     match err {
@@ -762,6 +765,7 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
 
     features
         .add(Feature {
+            effort: None,
             id: FeatureId::from("f-gg"),
             project_id: ProjectId::from("p-gg"),
             workflow_id: Some(WorkflowId::from("w-gg")),
@@ -874,6 +878,7 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
 
     features
         .add(Feature {
+            effort: None,
             id: FeatureId::from("f-unb"),
             project_id: ProjectId::from("p-unb"),
             workflow_id: Some(WorkflowId::from("w-unb")),
@@ -932,7 +937,7 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
     // returns empty / stub data, so the call will error downstream —
     // but it MUST NOT be an AppError::Validation with the "still"
     // phrase (that would mean the guard fired when it shouldn't).
-    let result = executor.step_retry("se-unb-2", None, None).await;
+    let result = executor.step_retry("se-unb-2", None, None, None).await;
     if let Err(AppError::Validation { ref message }) = result {
         panic!("guard fired despite all predecessors being terminal: {message}");
     }
@@ -972,6 +977,7 @@ async fn test_assert_no_active_predecessors_helper() {
 
     features
         .add(Feature {
+            effort: None,
             id: FeatureId::from("f-h"),
             project_id: ProjectId::from("p-h"),
             workflow_id: Some(WorkflowId::from("w-h")),
@@ -1153,6 +1159,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
     // mirror-listed shadow of a live detached run; `f-local` is a real
     // local feature whose process died.
     let mk_feature = |id: &str| Feature {
+        effort: None,
         id: FeatureId::from(id.to_string()),
         project_id: ProjectId::from("p-1"),
         workflow_id: Some(WorkflowId::from("w-1")),
@@ -1312,7 +1319,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
             },
         )
         .unwrap();
-    let err = StepExecutor::step_retry(&*executor, "se-shadow", None, None)
+    let err = StepExecutor::step_retry(&*executor, "se-shadow", None, None, None)
         .await
         .expect_err("step_retry must refuse a runner-owned shadow");
     assert!(
@@ -1329,7 +1336,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
     // `replay_from_step` reaches the same primitive by a different door and
     // skips `step_retry`'s status checks entirely, so it needs the guard in
     // `replay_steps_from` itself to be refused.
-    let err = StepExecutor::replay_from_step(&*executor, "se-shadow", None, None)
+    let err = StepExecutor::replay_from_step(&*executor, "se-shadow", None, None, None)
         .await
         .expect_err("replay_from_step must refuse a runner-owned shadow");
     assert!(
@@ -1383,6 +1390,8 @@ async fn test_feature_start_bootstrap_failure_emits_events_and_fails() {
             "wf-x",
             "Boot Feature",
             "a description",
+            None,
+            // model / effort / commit_artifacts / loop_iterations: all inherit.
             None,
             None,
             None,
@@ -1443,4 +1452,223 @@ async fn test_feature_start_bootstrap_failure_emits_events_and_fails() {
 
     drop(events);
     let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Effort resolution, end to end: a project default of `medium` and a
+// per-step launch override of `max` must reach the agent as exactly that.
+//
+// Driven through the real engine (`build_core_context`) with the
+// deterministic `StubRuntime`, whose test-only `SPAWN_LOG` records the
+// `AgentContext` the driver handed it per spawn — the only place outside a
+// real CLI where the resolved effort is observable.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Both steps are unique to this test, so the shared `SPAWN_LOG` can be
+/// filtered by title even when other stub-driven tests run concurrently.
+const EFFORT_STEP_ONE: &str = "effort-e2e: inherit the project default";
+const EFFORT_STEP_TWO: &str = "effort-e2e: per-step override";
+
+fn effort_workflow() -> serde_json::Value {
+    let step = |id: &str, title: &str, artifact: &str| {
+        serde_json::json!({
+            "id": id,
+            "kind": "agent",
+            "title": title,
+            "agent_kind": "stub",
+            "prompt_template": format!("Write the report.\n\n@stub-write {artifact}\n"),
+            "capability": "artifacts",
+            "allow_shell": true,
+            "artifacts": [{
+                "name": id,
+                "capture": { "kind": "last_write_to", "path": artifact },
+                "mode": "full"
+            }],
+            "on_failure": null,
+            "max_iterations": 1
+        })
+    };
+    serde_json::json!({
+        "name": "Effort Resolution",
+        "description": "Two agent steps that differ only in their resolved effort.",
+        "steps": [
+            step("s-one", EFFORT_STEP_ONE, "artifacts/one.md"),
+            step("s-two", EFFORT_STEP_TWO, "artifacts/two.md"),
+        ]
+    })
+}
+
+fn init_effort_repo(workspace_dir: &std::path::Path, project_id: &str, repo_path: &str) {
+    let dir = paths::repo_target_dir_local(workspace_dir, project_id, repo_path);
+    std::fs::create_dir_all(&dir).expect("create repo dir");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("run git");
+        assert!(out.status.success(), "git {:?} failed", args);
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "demeteo@local"]);
+    git(&["config", "user.name", "demeteo"]);
+    std::fs::write(dir.join("README.md"), "# effort fixture\n").expect("seed README");
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "seed"]);
+}
+
+#[tokio::test]
+async fn effort_resolution_reaches_the_agent_per_step() {
+    use crate::adapters::agent::stub_runtime::{SPAWN_LOG, STUB_AGENT_ENV};
+    use crate::application::{bootstrap, projects, workflows};
+    use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+    use crate::domain::ids::ProviderId;
+    use crate::domain::models::{EffortLevel, ProviderInstance, StepOverride};
+
+    std::env::set_var(STUB_AGENT_ENV, "1");
+    const REPO_PATH: &str = "demeteo/effort";
+    let tmp = std::env::temp_dir().join(format!("demeteo-effort-e2e-{}", paths::now_ms()));
+    std::fs::create_dir_all(&tmp).expect("app data dir");
+
+    let ctx = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(FakeNotif),
+        tokio::runtime::Handle::current(),
+    );
+
+    ctx.app_settings
+        .add_provider_instance(ProviderInstance {
+            id: ProviderId::from("effort-provider"),
+            kind: "github".to_string(),
+            host: "github.com".to_string(),
+            username: String::new(),
+            avatar_url: String::new(),
+            created_at: paths::now_ms(),
+        })
+        .expect("register provider");
+
+    let project = projects::create(
+        &ctx,
+        projects::ProjectConfig {
+            name: "effort".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            repos: vec![projects::RepositoryConfig {
+                repo_path: REPO_PATH.to_string(),
+                provider_id: "effort-provider".to_string(),
+            }],
+        },
+    )
+    .expect("create project");
+
+    init_effort_repo(&ctx.workspace_dir, project.id.as_str(), REPO_PATH);
+    bootstrap::bootstrap_project(&ctx, project.id.0.clone())
+        .await
+        .expect("bootstrap project");
+
+    // Tier 4: the project-wide default. `bootstrap_project` detects a
+    // strategy but persists no settings row, so seed one from the same
+    // defaults the executor would otherwise fall back to.
+    let mut settings = ctx
+        .projects
+        .get_settings(&project.id)
+        .expect("settings read")
+        .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+    settings.project_id = project.id.clone();
+    settings.default_effort = Some(EffortLevel::Medium);
+    ctx.projects.save_settings(settings).expect("save settings");
+
+    let workflow_id =
+        workflows::create_from_json(&ctx.workflows, &effort_workflow()).expect("ingest workflow");
+
+    // Tier 1: a per-step launch override on the second step only.
+    let feature = ctx
+        .executor
+        .feature_start(
+            None,
+            project.id.as_str(),
+            workflow_id.as_str(),
+            "Effort Feature",
+            "Exercise the effort resolution chain.",
+            Some("stub"),
+            None,
+            None,
+            None,
+            None,
+            vec![StepOverride {
+                step_id: "s-two".to_string(),
+                agent_kind: None,
+                model: None,
+                effort: Some(EffortLevel::Max),
+            }],
+            vec![],
+        )
+        .await
+        .expect("feature_start");
+
+    // Drive to terminal.
+    let started = std::time::Instant::now();
+    loop {
+        let f = ctx
+            .features
+            .get(&feature.id)
+            .expect("feature read")
+            .expect("feature exists");
+        if matches!(
+            f.status.as_str(),
+            "completed" | "awaiting_mr" | "failed" | "interrupted"
+        ) {
+            let steps = ctx
+                .features
+                .steps_for_feature(&feature.id)
+                .unwrap_or_default();
+            assert!(
+                steps.iter().all(|s| s.status == "completed"),
+                "both steps must complete; got {:?}",
+                steps
+                    .iter()
+                    .map(|s| (
+                        s.step_id.0.clone(),
+                        s.status.clone(),
+                        s.error_message.clone()
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "feature did not settle; status {}",
+            f.status
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    let spawned: Vec<(String, Option<EffortLevel>)> = SPAWN_LOG
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(title, effort)| {
+            let t = title.clone()?;
+            (t == EFFORT_STEP_ONE || t == EFFORT_STEP_TWO).then_some((t, *effort))
+        })
+        .collect();
+
+    assert_eq!(
+        spawned,
+        vec![
+            // No workflow/feature/step override → the project default.
+            (EFFORT_STEP_ONE.to_string(), Some(EffortLevel::Medium)),
+            // The per-step launch override beats it — and reaches the agent
+            // rather than being swallowed by a reused session (the effort is
+            // part of the session key).
+            (EFFORT_STEP_TWO.to_string(), Some(EffortLevel::Max)),
+        ],
+        "each step's AgentContext must carry its own resolved effort",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }

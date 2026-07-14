@@ -1,6 +1,6 @@
 use crate::application::projects::{ProjectConfig, RepoDirtyStatus};
 use crate::domain::ids::ProjectId;
-use crate::domain::models::{Project, RepoHealthStatus, Repository};
+use crate::domain::models::{EffortLevel, Project, RepoHealthStatus, Repository};
 use crate::error::AppError;
 use crate::paths;
 use crate::state::AppContext;
@@ -204,10 +204,26 @@ pub fn get_workflow_overrides(
         .map_err(AppError::from)
 }
 
+/// Parse the effort an override row was sent with. The UI clears a select by
+/// sending `""`, which means "inherit" — the same thing an omitted field
+/// means — so a blank is `None`, never a parse error. An unrecognised value
+/// *is* an error: it can only come from a frontend bug, and silently
+/// downgrading it to "inherit" would hide the bug behind a run that quietly
+/// used the wrong effort.
+fn parse_effort_param(raw: Option<String>) -> Result<Option<EffortLevel>, AppError> {
+    match raw.filter(|s| !s.trim().is_empty()) {
+        None => Ok(None),
+        Some(s) => EffortLevel::parse(s.trim())
+            .map(Some)
+            .ok_or_else(|| AppError::validation(format!("Unknown effort level: {s}"))),
+    }
+}
+
 /// Upsert a single override. Scope is set by `step_id`: omit it (or pass an
 /// empty string) for the workflow-level override; pass a step id to override
-/// just that step. Passing `null` for both `agent_kind` and `model` clears the
-/// override (the repo deletes the row), so it falls back to the inherited value.
+/// just that step. Passing `null` for `agent_kind`, `model` and `effort` alike
+/// clears the override (the repo deletes the row), so it falls back to the
+/// inherited value.
 #[tauri::command]
 pub fn set_workflow_override(
     ctx: State<'_, AppContext>,
@@ -216,14 +232,17 @@ pub fn set_workflow_override(
     step_id: Option<String>,
     agent_kind: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
 ) -> Result<(), AppError> {
     // Normalise empty strings (the UI may send "") to None so they don't
     // masquerade as a real override / a real step target.
     let step_id = step_id.filter(|s| !s.trim().is_empty());
     let agent_kind = agent_kind.filter(|s| !s.trim().is_empty());
     let model = model.filter(|s| !s.trim().is_empty());
+    let effort = parse_effort_param(effort)?;
     ctx.projects
         .upsert_workflow_override(crate::domain::models::ProjectWorkflowOverride {
+            effort,
             project_id: ProjectId::from(project_id),
             workflow_id: crate::domain::ids::WorkflowId::from(workflow_id),
             step_id,
@@ -232,3 +251,7 @@ pub fn set_workflow_override(
         })
         .map_err(AppError::from)
 }
+
+#[cfg(test)]
+#[path = "../../tests/infrastructure/project.rs"]
+mod tests;

@@ -14,7 +14,7 @@
 
 use crate::services::RunnerServices;
 use demeteo_core::domain::ids::{FeatureId, ProjectId, StepExecutionId, ThreadId};
-use demeteo_core::domain::models::{Feature, Message, StepExecution};
+use demeteo_core::domain::models::{EffortLevel, Feature, Message, StepExecution};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use demeteo_core::ports::run_events::RunEvent;
@@ -99,11 +99,15 @@ struct DecideGateParams {
     feedback: Option<String>,
 }
 
-/// `retry_step(run_id, step_execution_id, model?, agent_kind?)` — the
+/// `retry_step(run_id, step_execution_id, model?, agent_kind?, effort?)` — the
 /// remote twin of the desktop app's `step_retry` command. Unlike
 /// `decide_gate`, `run_id` is load-bearing here: a retry has to re-open
 /// the run (the step's failure already drove it terminal, so its
 /// `await_terminal_and_push` tail has exited), and that is keyed by run.
+///
+/// `effort` is `#[serde(default)]` like the rest: a desktop app older than
+/// this runner simply omits it, and the retry keeps the feature's existing
+/// effort override.
 #[derive(Debug, Deserialize)]
 struct RetryStepParams {
     run_id: String,
@@ -112,6 +116,8 @@ struct RetryStepParams {
     model: Option<String>,
     #[serde(default)]
     agent_kind: Option<String>,
+    #[serde(default)]
+    effort: Option<EffortLevel>,
 }
 
 #[derive(Debug, Serialize)]
@@ -587,6 +593,7 @@ async fn retry_step(
             &params.step_execution_id,
             params.model.as_deref(),
             params.agent_kind.as_deref(),
+            params.effort,
         )
         .await
         .map_err(|e| e.to_string())?;

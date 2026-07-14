@@ -100,6 +100,7 @@ describe('buildCommitPayload', () => {
     keyPassphrase: 'should-not-leak',
     agentKind: 'opencode',
     model: 'anthropic/claude-sonnet-4',
+    effort: 'xhigh' as const,
     title: 'Implement billing service',
     description: 'A billing service written in Rust.',
     visibility: 'private' as const,
@@ -122,6 +123,7 @@ describe('buildCommitPayload', () => {
       machine_id: 'machine-1',
       agent_kind: 'opencode',
       model: 'anthropic/claude-sonnet-4',
+      effort: 'xhigh',
     };
 
     expect(buildCommitPayload(draft)).toEqual(expected);

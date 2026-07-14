@@ -11,6 +11,7 @@ impl DagStepExecutor {
         execution_id: &str,
         new_model: Option<&str>,
         new_agent: Option<&str>,
+        new_effort: Option<crate::domain::models::EffortLevel>,
         include_target: bool,
     ) -> Result<(), String> {
         let se_id = StepExecutionId::from(execution_id.to_string());
@@ -64,18 +65,24 @@ impl DagStepExecutor {
         //     override, so the new harness resolves its own default model
         //     rather than inheriting a stale model that may not exist for it.
         //   - nothing given                   → leave the override untouched.
+        //
+        // Effort is re-pinned only when explicitly given. Unlike the model it
+        // is harness-agnostic — the canonical ladder is clamped per agent in
+        // the adapter — so switching harness is no reason to drop it.
         let agent_patch = new_agent.map(|a| Some(a.to_string()));
         let model_patch = match (new_agent, new_model) {
             (_, Some(m)) => Some(Some(m.to_string())),
             (Some(_), None) => Some(None),
             (None, None) => None,
         };
-        if agent_patch.is_some() || model_patch.is_some() {
+        let effort_patch = new_effort.map(Some);
+        if agent_patch.is_some() || model_patch.is_some() || effort_patch.is_some() {
             self.features.update(
                 feature_id,
                 &FeaturePatch {
                     agent_kind: agent_patch,
                     model: model_patch,
+                    effort: effort_patch,
                     ..Default::default()
                 },
             )?;

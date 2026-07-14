@@ -11,6 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
+use crate::domain::models::{AgentKind, EffortLevel};
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 pub const OPENCODE_INSTALL: &str = "curl -fsSL https://opencode.ai/install | bash";
@@ -421,6 +422,18 @@ pub fn build_opencode_args(
         args.push("--model".to_string());
         args.push(m.clone());
     }
+    // `--variant` is opencode's provider-specific reasoning effort. Its real
+    // domain is per-model (Anthropic exposes high/max, Google low/high), so a
+    // level the selected model doesn't offer is a silent no-op — opencode
+    // neither validates nor complains. Clamping to the declared ladder is
+    // therefore the only guard we have; see `EffortLevel::supported_for`.
+    if let Some(effort) = ctx
+        .effort
+        .and_then(|e| EffortLevel::clamp_for(AgentKind::Opencode, e))
+    {
+        args.push("--variant".to_string());
+        args.push(effort.as_str().to_string());
+    }
     if let Some(ref title) = ctx.title {
         args.push("--title".to_string());
         args.push(title.clone());
@@ -456,10 +469,13 @@ impl OpencodeCliRuntime {
                 parse_event: parse_opencode_event,
                 build_args: build_opencode_args,
                 perm_env: crate::ports::agent_runtime::opencode_permission_env,
+                // Effort rides on argv (`--variant`), not env.
+                effort_env: super::cli_runtime::no_effort_env,
                 display_label: "OpenCode",
                 // `opencode models` lists selectable models.
                 lists_models: true,
                 default_model: None,
+                effort_levels: EffortLevel::supported_for(AgentKind::Opencode),
             },
         }
     }

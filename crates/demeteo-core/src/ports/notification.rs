@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::intercept::{ExecutionResult, InterceptPayload};
+use crate::domain::models::EffortLevel;
 
 /// The set of events the orchestrator emits to the UI.
 ///
@@ -88,6 +89,26 @@ pub enum DomainEvent {
     ConflictDetected {
         feature_id: FeatureId,
         subtask_id: String,
+    },
+
+    /// Emitted just before a step's agent session is spawned, recording what
+    /// the agent was *actually* launched with.
+    ///
+    /// `effort` is the **effective** (post-clamp) level — what the adapter
+    /// will really put on argv/env — not the level the user asked for. That
+    /// distinction is the whole point of the event: it is the only way a user
+    /// can tell that codex clamped `max` down to `xhigh`, that hermes injected
+    /// no effort at all (`None`), or that a `demeteo-runner` older than the
+    /// desktop app dropped the unknown `RunSpec::effort` field and ran at the
+    /// agent's own default while the UI claimed `high` (AGENTS.md §9.1 —
+    /// version skew is mitigated by observability, not prevention).
+    AgentSpawned {
+        feature_id: FeatureId,
+        step_execution_id: StepExecutionId,
+        agent_kind: String,
+        model: Option<String>,
+        /// `None` = no effort was injected on this spawn at all.
+        effort: Option<EffortLevel>,
     },
 
     /// Emitted when an agent generates stdout stream text.

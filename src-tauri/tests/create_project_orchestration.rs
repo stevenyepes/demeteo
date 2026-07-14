@@ -255,6 +255,7 @@ impl StepExecutor for StubExecutor {
         description: &str,
         agent_kind: Option<&str>,
         model: Option<&str>,
+        _effort: Option<demeteo_lib::domain::models::EffortLevel>,
         _commit_artifacts: Option<bool>,
         _loop_iterations: Option<u32>,
         _step_overrides: Vec<StepOverride>,
@@ -269,6 +270,7 @@ impl StepExecutor for StubExecutor {
             model.map(|s| s.to_string()),
         ));
         Ok(Feature {
+            effort: None,
             id: demeteo_lib::domain::ids::FeatureId(format!("feat-{}", project_id)),
             project_id: ProjectId::from(project_id.to_string()),
             workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
@@ -308,6 +310,7 @@ impl StepExecutor for StubExecutor {
         _execution_id: &str,
         _new_model: Option<&str>,
         _new_agent: Option<&str>,
+        _new_effort: Option<demeteo_lib::domain::models::EffortLevel>,
     ) -> Result<(), AppError> {
         Ok(())
     }
@@ -316,6 +319,7 @@ impl StepExecutor for StubExecutor {
         _execution_id: &str,
         _new_model: Option<&str>,
         _new_agent: Option<&str>,
+        _new_effort: Option<demeteo_lib::domain::models::EffortLevel>,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -508,6 +512,7 @@ fn commit_payload_discriminant_matches_description_step() {
         machine_id: Box::new(None),
         agent_kind: Box::new("opencode".into()),
         model: Box::new("anthropic/claude-sonnet-4".into()),
+        effort: None,
     };
     assert_eq!(commit.expected_step(), BootstrapStep::Description);
 }
@@ -830,7 +835,10 @@ fn full_step_chain_drive_uses_seven_distinct_submits() {
         CreateProjectStepPayload::Agent {
             kind: "opencode".into(),
         },
-        CreateProjectStepPayload::Model { model: "m".into() },
+        CreateProjectStepPayload::Model {
+            model: "m".into(),
+            effort: None,
+        },
         CreateProjectStepPayload::Commit {
             title: Box::new("t".into()),
             description: Box::new("d".into()),
@@ -846,6 +854,7 @@ fn full_step_chain_drive_uses_seven_distinct_submits() {
             machine_id: Box::new(None),
             agent_kind: Box::new("opencode".into()),
             model: Box::new("anthropic/claude-sonnet-4".into()),
+            effort: None,
         },
     ];
     let expected_steps = [

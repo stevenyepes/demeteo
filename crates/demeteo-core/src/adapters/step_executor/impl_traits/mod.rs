@@ -303,10 +303,12 @@ impl DagStepExecutor {
         // (feature-wide + per-step + loop budget) come off the Feature row.
         let default_agent_kind = ctx.settings.default_agent_kind.clone();
         let default_model = ctx.settings.default_model.clone();
+        let default_effort = ctx.settings.default_effort;
         let project_default_loop_iterations = ctx.settings.default_loop_iterations;
         let feature_row = self.features.get(&f_id).ok().flatten();
         let feature_agent_kind = feature_row.as_ref().and_then(|f| f.agent_kind.clone());
         let feature_model = feature_row.as_ref().and_then(|f| f.model.clone());
+        let feature_effort = feature_row.as_ref().and_then(|f| f.effort);
         let feature_model_for_budget = feature_model.clone();
         let loop_iterations_override = feature_row.as_ref().and_then(|f| f.loop_iterations);
         let step_overrides = feature_row
@@ -349,9 +351,11 @@ impl DagStepExecutor {
             extra_writable_paths: ctx.settings.worktree_strategy.extra_writable_paths.clone(),
             feature_agent_kind,
             feature_model,
+            feature_effort,
             step_overrides,
             default_agent_kind,
             default_model,
+            default_effort,
             loop_iterations_override,
             project_default_loop_iterations,
             retry_ctx: None,
@@ -448,6 +452,7 @@ impl StepExecutor for DagStepExecutor {
         description: &str,
         agent_kind: Option<&str>,
         model: Option<&str>,
+        effort: Option<crate::domain::models::EffortLevel>,
         commit_artifacts: Option<bool>,
         loop_iterations: Option<u32>,
         step_overrides: Vec<crate::domain::models::StepOverride>,
@@ -487,6 +492,10 @@ impl StepExecutor for DagStepExecutor {
         // as the per-feature override, and the tail then snapshots the
         // resolved value onto the row so a later replay is stable.
         let feature = Feature {
+            // The feature-wide run override (resolution tier 2). `None` =
+            // inherit; the driver's chain bottoms out at `EffortLevel::DEFAULT`.
+            // Per-step efforts ride inside `step_overrides`.
+            effort,
             id: feature_id.clone(),
             project_id: ProjectId::from(project_id.to_string()),
             workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
@@ -568,6 +577,7 @@ impl StepExecutor for DagStepExecutor {
         execution_id: &str,
         new_model: Option<&str>,
         new_agent: Option<&str>,
+        new_effort: Option<crate::domain::models::EffortLevel>,
     ) -> Result<(), AppError> {
         let se_id = StepExecutionId::from(execution_id.to_string());
         let step_exec = self
@@ -608,7 +618,7 @@ impl StepExecutor for DagStepExecutor {
             )));
         }
 
-        self.replay_steps_from(execution_id, new_model, new_agent, true)
+        self.replay_steps_from(execution_id, new_model, new_agent, new_effort, true)
             .await
             .map_err(AppError::from)
     }
@@ -618,8 +628,9 @@ impl StepExecutor for DagStepExecutor {
         execution_id: &str,
         new_model: Option<&str>,
         new_agent: Option<&str>,
+        new_effort: Option<crate::domain::models::EffortLevel>,
     ) -> Result<(), String> {
-        self.replay_steps_from(execution_id, new_model, new_agent, true)
+        self.replay_steps_from(execution_id, new_model, new_agent, new_effort, true)
             .await
     }
 

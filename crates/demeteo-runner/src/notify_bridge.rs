@@ -328,6 +328,29 @@ impl NotificationPort for RunEventBridge {
             } => {
                 self.buffer_stream(feature_id.as_str(), step_execution_id.as_str(), content);
             }
+            DomainEvent::AgentSpawned {
+                feature_id,
+                step_execution_id,
+                agent_kind,
+                model,
+                effort,
+            } => {
+                // The effective (post-clamp) effort belongs in the durable log
+                // precisely *because* this is the detached path: a runner older
+                // than the submitting app silently drops `RunSpec::effort`, and
+                // this event is the only place the laptop can see what the run
+                // really used.
+                self.emit_for_feature(
+                    feature_id.as_str(),
+                    "agent_spawned",
+                    serde_json::json!({
+                        "step_execution_id": step_execution_id.as_str(),
+                        "agent_kind": agent_kind,
+                        "model": model,
+                        "effort": effort,
+                    }),
+                );
+            }
             DomainEvent::RetryBudgetExhausted {
                 feature_id,
                 step_id,

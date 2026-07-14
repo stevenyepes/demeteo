@@ -65,6 +65,10 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub thread_id_prefix: &'a str,
     pub agent_kind: &'a str,
     pub override_model: &'a Option<String>,
+    /// The run's resolved effort. Resolving a merge conflict is real
+    /// reasoning work, so it inherits rather than being pinned like the
+    /// verifier / triage / finalize turns.
+    pub effort: crate::domain::models::EffortLevel,
     pub pricing: &'a Arc<dyn PricingTable>,
 }
 
@@ -88,6 +92,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         thread_id_prefix,
         agent_kind,
         override_model,
+        effort,
         pricing,
     } = sync_ctx;
 
@@ -128,6 +133,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         env: agent_env,
         cwd: resolved_cwd.to_string(),
         model: override_model.clone(),
+        effort: Some(effort),
         title: Some("Sync conflict resolver".to_string()),
         agent_exec: agent_exec.clone(),
         exec: exec.clone(),
@@ -363,6 +369,13 @@ impl DagStepExecutor {
             .clone()
             .unwrap_or_else(|| "opencode".to_string());
         let override_model = feature.model.clone();
+        // No driver is running here (this is the "Resolve with agent" button),
+        // so walk what the feature row + project settings know: the run
+        // override, then the project default, then the built-in high.
+        let effort = feature
+            .effort
+            .or(settings.default_effort)
+            .unwrap_or(crate::domain::models::EffortLevel::DEFAULT);
 
         let step_exec_id = StepExecutionId::from(format!("se-sync-{}", paths::now_ms()));
         match resolve_sync_conflicts_shared(ResolveSyncContext {
@@ -382,6 +395,7 @@ impl DagStepExecutor {
             thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
             agent_kind: &agent_kind,
             override_model: &override_model,
+            effort,
             pricing: &self.pricing,
         })
         .await
@@ -421,7 +435,7 @@ impl DagStepExecutor {
 
                 // After a successful resolution, replay the validation step
                 if let Some(se_id) = revalidate_step_execution_id {
-                    if let Err(e) = self.replay_from_step(se_id, None, None).await {
+                    if let Err(e) = self.replay_from_step(se_id, None, None, None).await {
                         return Err(format!(
                             "Resolution succeeded but re-validate failed: {}",
                             e

@@ -2,11 +2,18 @@ use rusqlite::params;
 
 use crate::domain::ids::{ProjectId, WorkflowId};
 use crate::domain::models::{
-    Project, ProjectSettings, ProjectWorkflowOverride, Repository, WorktreeStrategy,
+    EffortLevel, Project, ProjectSettings, ProjectWorkflowOverride, Repository, WorktreeStrategy,
 };
 use crate::ports::db::ProjectRepository;
 
 use super::super::SqliteAdapter;
+
+/// Read an `effort` / `default_effort` column. An unknown/stale string
+/// degrades to `None` (inherit) rather than failing the row.
+fn effort_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<EffortLevel>> {
+    let raw: Option<String> = row.get(idx)?;
+    Ok(raw.as_deref().and_then(EffortLevel::parse))
+}
 
 impl ProjectRepository for SqliteAdapter {
     fn get_projects(&self) -> Result<Vec<Project>, String> {
@@ -172,7 +179,7 @@ impl ProjectRepository for SqliteAdapter {
                         conflict_policy, feature_lifecycle, build_command, coverage_command,
                         conventions_file, default_agent_kind, default_model, harnesses,
                         artifact_subdir, commit_artifacts, default_loop_iterations,
-                        extra_writable_paths, prepare_command
+                        extra_writable_paths, prepare_command, default_effort
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -203,6 +210,7 @@ impl ProjectRepository for SqliteAdapter {
                     feature_lifecycle: row.get(6)?,
                     default_agent_kind: row.get(10)?,
                     default_model: row.get(11)?,
+                    default_effort: effort_from_row(row, 18)?,
                     artifact_subdir: row.get(13)?,
                     commit_artifacts: commit_artifacts != 0,
                     default_loop_iterations: default_loop_iterations.map(|v| v as u32),
@@ -236,8 +244,8 @@ impl ProjectRepository for SqliteAdapter {
              (project_id, default_branch, branch_prefix, test_command, build_command,
               coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
               default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts,
-              default_loop_iterations, extra_writable_paths, prepare_command)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+              default_loop_iterations, extra_writable_paths, prepare_command, default_effort)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -257,6 +265,7 @@ impl ProjectRepository for SqliteAdapter {
                 s.default_loop_iterations.map(|v| v as i64),
                 extra_writable_paths_json,
                 s.worktree_strategy.prepare_command,
+                s.default_effort.map(|e| e.as_str()),
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -270,7 +279,7 @@ impl ProjectRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT project_id, workflow_id, step_id, agent_kind, model
+                "SELECT project_id, workflow_id, step_id, agent_kind, model, effort
                  FROM project_workflow_overrides WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -289,7 +298,7 @@ impl ProjectRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT project_id, workflow_id, step_id, agent_kind, model
+                "SELECT project_id, workflow_id, step_id, agent_kind, model, effort
                  FROM project_workflow_overrides
                  WHERE project_id = ?1 AND workflow_id = ?2",
             )
@@ -305,10 +314,12 @@ impl ProjectRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         // Persisted discriminator: workflow-level rows store step_id = ''.
         let step_key = ov.step_id.clone().unwrap_or_default();
-        // A row that overrides neither field is a no-op overlay — store it as
+        // A row that overrides no field at all is a no-op overlay — store it as
         // "no override" by deleting any existing row instead of persisting an
-        // all-NULL row the resolver would have to special-case anyway.
-        if ov.agent_kind.is_none() && ov.model.is_none() {
+        // all-NULL row the resolver would have to special-case anyway. Every
+        // overridable dimension must be in this predicate: an effort-only row
+        // is a real override, not an empty one.
+        if ov.agent_kind.is_none() && ov.model.is_none() && ov.effort.is_none() {
             conn.execute(
                 "DELETE FROM project_workflow_overrides
                  WHERE project_id = ?1 AND workflow_id = ?2 AND step_id = ?3",
@@ -319,14 +330,15 @@ impl ProjectRepository for SqliteAdapter {
         }
         conn.execute(
             "INSERT OR REPLACE INTO project_workflow_overrides
-             (project_id, workflow_id, step_id, agent_kind, model)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             (project_id, workflow_id, step_id, agent_kind, model, effort)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 ov.project_id.0,
                 ov.workflow_id.0,
                 step_key,
                 ov.agent_kind,
-                ov.model
+                ov.model,
+                ov.effort.map(|e| e.as_str())
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -334,8 +346,8 @@ impl ProjectRepository for SqliteAdapter {
     }
 }
 
-/// Map a `(project_id, workflow_id, step_id, agent_kind, model)` row to a
-/// `ProjectWorkflowOverride`, normalising the empty-string step discriminator
+/// Map a `(project_id, workflow_id, step_id, agent_kind, model, effort)` row to
+/// a `ProjectWorkflowOverride`, normalising the empty-string step discriminator
 /// back to `None` (workflow-level).
 fn row_to_override(row: &rusqlite::Row) -> rusqlite::Result<ProjectWorkflowOverride> {
     let step_id: String = row.get(2)?;
@@ -349,5 +361,6 @@ fn row_to_override(row: &rusqlite::Row) -> rusqlite::Result<ProjectWorkflowOverr
         },
         agent_kind: row.get(3)?,
         model: row.get(4)?,
+        effort: effort_from_row(row, 5)?,
     })
 }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 fn step_conf_inline(step_id: &str) -> crate::domain::models::StepConfig {
     crate::domain::models::StepConfig {
+        effort: None,
         id: crate::domain::ids::StepId::from(step_id.to_string()),
         kind: "agent".into(),
         title: step_id.into(),

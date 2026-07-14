@@ -6,7 +6,7 @@ import {
 } from '../../lib/createProjectWizard';
 import { saveProjectSettings } from '../../lib/project';
 import { formatError } from '../../lib/errors';
-import type { WorktreeStrategy } from '../../types';
+import type { EffortLevel, WorktreeStrategy } from '../../types';
 import type { BootstrapPhase, BootstrapPhaseState } from './CreateZeroBootstrapPanel';
 
 /** Initial phase list — every phase starts in `pending`. The hook
@@ -44,6 +44,9 @@ export interface BootstrapInput {
   keyPassphrase: string;
   agentKind: string;
   model: string;
+  /** Project-wide default reasoning effort. `null` = no project default,
+   *  which resolves to the engine default (`high`) at run time. */
+  effort?: EffortLevel | null;
 }
 
 export interface BootstrapSuccess {
@@ -154,6 +157,7 @@ export function useCreateZeroBootstrap(): UseCreateZeroBootstrapApi {
         feature_lifecycle: 'archive',
         default_agent_kind: input.agentKind || null,
         default_model: input.model || null,
+        default_effort: input.effort ?? null,
       });
       appendLog('✓ settings persisted');
       setPhaseStatus('save_settings', 'done');
