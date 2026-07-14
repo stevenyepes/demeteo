@@ -222,6 +222,7 @@ impl UnifiedCliSession {
                     code: "spawn_failed".to_string(),
                     message: msg,
                     recoverable: false,
+                    usage: None,
                 });
                 return;
             }
@@ -303,6 +304,7 @@ impl UnifiedCliSession {
                     code: "spawn_failed".to_string(),
                     message: format!("failed to spawn {} over SSH: {}", self.ctx.binary, e),
                     recoverable: false,
+                    usage: None,
                 });
                 return;
             }
@@ -654,6 +656,7 @@ fn drain_lines<R, F>(
                         err, suffix
                     ),
                     recoverable: false,
+                    usage: None,
                 });
             }
             // Clean EOF with a zero/unknown exit is the normal "agent
@@ -677,6 +680,7 @@ fn drain_lines<R, F>(
                     code: "agent_exit_nonzero".to_string(),
                     message: format!("agent exited with code {}{}", code, suffix),
                     recoverable: false,
+                    usage: None,
                 });
             }
         }

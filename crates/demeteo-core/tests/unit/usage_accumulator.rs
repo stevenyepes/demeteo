@@ -270,7 +270,37 @@ fn non_usage_events_are_ignored() {
         code: "x".into(),
         message: "y".into(),
         recoverable: false,
+        usage: None,
     });
     assert_eq!(acc.tokens(), 0);
     assert!(!acc.finished());
+}
+
+#[test]
+fn error_event_with_usage_credits_tokens() {
+    // Regression: claude-code emits `is_error: true` result events that
+    // still bundle `usage` (per Anthropic SDK cost-tracking docs). The
+    // accumulator must credit the tokens so detached `--print` runs that
+    // exit on `error_max_turns` report the spent budget.
+    let mut acc = UsageAccumulator::new(None);
+    acc.ingest_event(&AgentEvent::Error {
+        code: "cli_error".into(),
+        message: "hit max turns".into(),
+        recoverable: false,
+        usage: Some(Usage {
+            input_tokens: 1500,
+            output_tokens: 900,
+            cost_usd: Some(0.42),
+            cache_read_input_tokens: 4000,
+            cache_creation_input_tokens: 200,
+        }),
+    });
+    assert_eq!(acc.tokens(), 2400);
+    assert_eq!(acc.cost_usd(), 0.42);
+    assert_eq!(acc.cache_read_input_tokens(), 4000);
+    assert_eq!(acc.cache_creation_input_tokens(), 200);
+    assert!(
+        !acc.finished(),
+        "Error must not lock the accumulator — a later TurnComplete can still update it"
+    );
 }

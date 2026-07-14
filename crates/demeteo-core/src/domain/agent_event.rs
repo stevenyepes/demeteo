@@ -48,11 +48,21 @@ pub enum AgentEvent {
     /// numeric fields as monotonically cumulative per turn.
     Usage(Usage),
 
-    /// Soft error from the agent
+    /// Soft error from the agent.
+    ///
+    /// `usage` carries the partial-failure token/cost snapshot when the
+    /// agent's wire format emits one alongside the failure signal
+    /// (Claude Code's `result` event with `is_error: true` still bundles
+    /// `usage` and `total_cost_usd`). Carrying it here lets the
+    /// [`UsageAccumulator`](crate::domain::usage::UsageAccumulator) credit
+    /// tokens spent up to the failure point instead of silently dropping
+    /// them — important on `--print` runs that exit with `error_max_turns`
+    /// or `error_during_execution` after burning real tokens.
     Error {
         code: String,
         message: String,
         recoverable: bool,
+        usage: Option<Usage>,
     },
 
     /// Agent finished the turn. The channel closes after this.

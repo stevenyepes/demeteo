@@ -270,6 +270,7 @@ impl AgentSession for StubSession {
                             code: "stub_write_failed".to_string(),
                             message: format!("stub failed to write {}: {}", d.path, e),
                             recoverable: false,
+                            usage: None,
                         })
                         .await;
                     continue;

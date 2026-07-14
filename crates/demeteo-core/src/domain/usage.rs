@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use crate::domain::agent_event::AgentEvent;
+use crate::domain::agent_event::{AgentEvent, Usage};
 use crate::ports::pricing::PricingTable;
 
 /// Accumulates token + cost telemetry from a single agent turn.
@@ -71,32 +71,33 @@ impl UsageAccumulator {
                 if self.finished {
                     return;
                 }
-                self.running_input_tokens = self.running_input_tokens.max(u.input_tokens);
-                self.running_output_tokens = self.running_output_tokens.max(u.output_tokens);
-                self.running_cache_read = self.running_cache_read.max(u.cache_read_input_tokens);
-                self.running_cache_creation = self
-                    .running_cache_creation
-                    .max(u.cache_creation_input_tokens);
-                if let Some(c) = u.cost_usd {
-                    self.running_cost = Some(c);
-                }
+                self.apply_usage(u);
             }
             AgentEvent::TurnComplete { usage, .. } => {
                 if let Some(u) = usage {
-                    self.running_input_tokens = self.running_input_tokens.max(u.input_tokens);
-                    self.running_output_tokens = self.running_output_tokens.max(u.output_tokens);
-                    self.running_cache_read =
-                        self.running_cache_read.max(u.cache_read_input_tokens);
-                    self.running_cache_creation = self
-                        .running_cache_creation
-                        .max(u.cache_creation_input_tokens);
-                    if let Some(c) = u.cost_usd {
-                        self.running_cost = Some(c);
-                    }
+                    self.apply_usage(u);
                 }
                 self.finished = true;
             }
+            AgentEvent::Error { usage: Some(u), .. } => {
+                if self.finished {
+                    return;
+                }
+                self.apply_usage(u);
+            }
             _ => {}
+        }
+    }
+
+    fn apply_usage(&mut self, u: &Usage) {
+        self.running_input_tokens = self.running_input_tokens.max(u.input_tokens);
+        self.running_output_tokens = self.running_output_tokens.max(u.output_tokens);
+        self.running_cache_read = self.running_cache_read.max(u.cache_read_input_tokens);
+        self.running_cache_creation = self
+            .running_cache_creation
+            .max(u.cache_creation_input_tokens);
+        if let Some(c) = u.cost_usd {
+            self.running_cost = Some(c);
         }
     }
 

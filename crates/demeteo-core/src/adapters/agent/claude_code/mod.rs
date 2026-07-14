@@ -179,13 +179,12 @@ fn parse_claude_result_event(v: &serde_json::Value) -> Option<AgentEvent> {
     let is_error = v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false);
     if is_error {
         // Per Anthropic SDK cost-tracking docs, error result events STILL
-        // carry `total_cost_usd` and `usage`. We parse usage here so it
-        // is folded into the accumulator via the partial-failure path —
-        // the error branch below short-circuits the turn loop, but the
-        // accumulator still gets credit for the tokens spent up to the
-        // failure point. (A future change could attach usage directly to
-        // the Error variant, but that's not needed yet.)
-        let _ = parse_claude_result_usage(v);
+        // carry `total_cost_usd` and `usage`. Attach the parsed usage to
+        // the Error variant so the UsageAccumulator credits tokens spent
+        // up to the failure point — detached `--print` runs that exit
+        // with `error_max_turns` or `error_during_execution` would
+        // otherwise burn quota and report 0.
+        let usage = parse_claude_result_usage(v);
         let msg = v
             .get("result")
             .and_then(|s| s.as_str())
@@ -195,6 +194,7 @@ fn parse_claude_result_event(v: &serde_json::Value) -> Option<AgentEvent> {
             code: "cli_error".to_string(),
             message: msg,
             recoverable: false,
+            usage,
         });
     }
 
