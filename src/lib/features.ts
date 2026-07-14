@@ -75,6 +75,24 @@ export function isBlockingError(err: unknown): boolean {
 }
 
 /**
+ * Prefix the backend puts on every terminal "the machine is not provisioned"
+ * failure (`build_environment_message`). Kept as a constant so the UI's
+ * environment hint and the message stay wired to the same string.
+ */
+export const ENVIRONMENT_ERROR_PREFIX = "Environment not ready";
+
+/**
+ * Returns `true` when a step's `error_message` is the backend's terminal
+ * environment failure rather than a code failure — i.e. the step did not fail
+ * because the change is wrong, it failed because the machine could not run the
+ * command at all. The UI uses this to swap "retry the step" framing for "fix
+ * the machine" framing, since retrying an unprovisioned box just fails again.
+ */
+export function isEnvironmentError(errorMessage: string | null | undefined): boolean {
+  return (errorMessage ?? "").trimStart().startsWith(ENVIRONMENT_ERROR_PREFIX);
+}
+
+/**
  * Pure helper: find the first non-terminal predecessor of `target`
  * in `steps`, ordered by `step_index`. Returns `null` when no
  * predecessor is blocking — used by the UI to decide whether to
