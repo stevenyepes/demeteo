@@ -76,14 +76,6 @@ pub(crate) struct ExecutionDriver {
     pub registry: Arc<AgentRegistry>,
     pub agent_exec: Arc<dyn AgentExecutionPort>,
     pub exec: Arc<dyn ExecutionPort>,
-    /// Machine catalogue. Read only to resolve a target machine's
-    /// `use_login_shell` preference so the verifier can run the project's
-    /// prepare/test harness in the *same* shell mode the coding agent ran
-    /// in (`spawn_interactive` reads the same flag). Without this the
-    /// harness gate would run under a bare non-login shell and miss any
-    /// `mise`/`asdf`/`nvm`-shimmed toolchain the agent used — the exact
-    /// "works local, silently red on remote" divergence C1 targets.
-    pub machines: Arc<dyn crate::ports::db::MachineRepository>,
     pub artifacts: Arc<dyn ArtifactStore>,
     /// Per-feature user attachment store. Read by `spawn.rs` to copy
     /// attachments into the per-step worktree before each agent turn

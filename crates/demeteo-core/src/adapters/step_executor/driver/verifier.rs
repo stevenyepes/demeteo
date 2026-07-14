@@ -74,14 +74,12 @@ impl ExecutionDriver {
                 .await;
         }
 
-        // Run the prepare/harness commands in the *same* shell mode the coding
-        // agent ran in, with the worktree as an explicit cwd (D2 — never rely on
-        // ambient state). On a machine flagged `use_login_shell`, the agent was
-        // spawned under an interactive login shell so `mise`/`asdf`/`nvm`-shimmed
-        // toolchains are on `PATH`; the harness gate must see the identical
-        // environment, or a project whose `npm test`/`pytest` the agent ran fine
-        // would fail here with "command not found" only on remote.
-        let opts = self.harness_shell_options(machine_str, wt_path);
+        // Run the prepare/harness commands under an interactive login shell with
+        // the worktree as an explicit cwd, so the user's `PATH` (and any
+        // `mise`/`asdf`/`nvm` shims) is established exactly as it is for the
+        // agent — otherwise a project whose `npm test`/`pytest`/`cargo test` the
+        // agent ran fine fails here with "command not found" on remote only.
+        let opts = self.harness_shell_options(wt_path);
 
         if let Some(ref cmd) = prepare_command {
             if let Err(out) = self
@@ -151,33 +149,34 @@ impl ExecutionDriver {
     }
 
     /// Build the [`ShellOptions`](crate::ports::execution::ShellOptions) the
-    /// prepare/test harness runs under: the worktree as an explicit cwd, and
-    /// login mode mirroring the coding agent's spawn. Resolving the machine's
-    /// `use_login_shell` here (not baking a `cd … &&` string) is the D2
-    /// "explicit context" move — the harness gate and the agent see the same
-    /// `PATH`, so a toolchain the agent used never silently vanishes for the
-    /// gate on a remote box. A missing/unknown machine (or `local`) resolves to
-    /// a plain non-login shell, matching the historical default.
-    fn harness_shell_options(
-        &self,
-        machine_str: &str,
-        wt_path: &str,
-    ) -> crate::ports::execution::ShellOptions {
-        let use_login = crate::infrastructure::worktree::machine_resolver::resolve_machine(
-            &*self.machines,
-            machine_str,
-        )
-        .ok()
-        .and_then(|m| m.use_login_shell)
-        .unwrap_or(false);
+    /// prepare/test harness runs under: the worktree as an explicit cwd (D2 —
+    /// never rely on ambient state) under an **interactive login shell**,
+    /// unconditionally.
+    ///
+    /// A prepare/test command is user-authored shell (`cargo test`, `npm test`,
+    /// `pytest`) whose binaries live on the *user's* `PATH`, which only a login
+    /// shell's profile establishes — and only an *interactive* one activates
+    /// `mise`/`asdf`/`nvm` shims, which hide behind the standard `~/.bashrc`
+    /// non-interactive guard. So the harness always needs the same shell the
+    /// agent probe already hardcodes (`ShellOptions::login_interactive`).
+    ///
+    /// This deliberately does **not** consult the machine's `use_login_shell`
+    /// flag. That flag is only reachable through the SSH adapter — i.e. an
+    /// *attached* run, where the desktop app drives commands over the wire. A
+    /// **detached** run executes inside `demeteo-runner` on the target box
+    /// itself, which registers its project as `compute_type: "local"`; `"local"`
+    /// is a sentinel that short-circuits the DB lookup and yields a synthetic
+    /// machine whose `use_login_shell` is hardcoded `None` (see
+    /// `machine_resolver::local_machine`). Gating on the flag therefore forced
+    /// every detached harness through a bare non-login `sh -c` no matter what
+    /// the user had ticked in the UI, and a bare `cargo` in the harness command
+    /// died with "cargo: not found" — while the *implement* step sailed through,
+    /// because the agent binary is resolved to an absolute path up front and so
+    /// never needed `PATH` at all.
+    fn harness_shell_options(&self, wt_path: &str) -> crate::ports::execution::ShellOptions {
         crate::ports::execution::ShellOptions {
-            login_shell: use_login,
-            // Interactive matches `spawn_interactive`: mise/asdf/nvm activate in
-            // `~/.bashrc` behind the non-interactive guard, so only `-i` puts
-            // their shims on PATH. Off when not a login shell.
-            interactive: use_login,
             cwd: Some(wt_path.to_string()),
-            env: Default::default(),
+            ..crate::ports::execution::ShellOptions::login_interactive()
         }
     }
 
@@ -205,6 +204,42 @@ impl ExecutionDriver {
         cmd: &str,
         output: &str,
     ) -> crate::domain::verifier::VerifierError {
+        // Fast path: the shell could not find a binary the harness command
+        // itself invokes (exit 127). That is objectively an environment gap —
+        // the code never ran, so no amount of editing it can help. Escalate
+        // straight to the terminal `Environment` error rather than spending a
+        // `Verdict` retry (which re-runs the agent against a gate that cannot
+        // pass) plus a triage agent turn to reach the same conclusion on the
+        // *next* attempt. This skips `should_triage`'s reproduce-unchanged
+        // requirement on purpose: a 127 is deterministic, not flaky.
+        if let Some(missing) = detect_missing_command(cmd, output) {
+            let msg = build_environment_message(
+                machine_str,
+                wt_path,
+                cmd,
+                &format!(
+                    "The shell could not find `{}` on PATH (exit 127), so the command never ran.",
+                    missing
+                ),
+                &format!(
+                    "Install `{}` on this machine, or make it available on the login shell's PATH \
+                     (e.g. add it to ~/.profile / ~/.bashrc, or expose it via mise/asdf/nvm). \
+                     The harness runs under an interactive login shell, so anything an \
+                     interactive `ssh` session can run, it can run too.",
+                    missing
+                ),
+            );
+            self.notify_environment_not_ready(step_exec, &msg);
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                cmd = %cmd,
+                missing = %missing,
+                "harness command not found on PATH — terminating without retries"
+            );
+            return crate::domain::verifier::VerifierError::Environment(msg);
+        }
+
         let current_fp = normalize_failure_fingerprint(output, wt_path);
         let persistent = should_triage(step_exec.last_failure_fingerprint.as_deref(), &current_fp);
 
@@ -786,6 +821,59 @@ fn is_transport_failure(err: &str) -> bool {
     err.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX)
 }
 
+/// Detect "the shell could not find a binary the harness command invokes"
+/// (exit 127) and return the missing command's name.
+///
+/// Recognizes the three shell diagnostics we can actually receive — dash/`sh`
+/// (`sh: 1: cargo: not found`), bash (`bash: line 1: cargo: command not found`),
+/// and zsh (`zsh: command not found: cargo`) — because the exit code itself is
+/// not reliably in the error string: the local adapter formats
+/// `Command failed (exit code: Some(127)): …` but the SSH adapter substitutes
+/// the remote stderr for the code whenever stderr is non-empty.
+///
+/// Guarded against false positives by requiring the missing name to appear as a
+/// token of `cmd`. A test that merely *prints* "command not found" in its output
+/// therefore stays a normal `Verdict`, and only a binary the harness genuinely
+/// tries to run escalates. The cost of that guard is an indirect invocation
+/// (`make test` shelling out to a missing `cargo`) not matching — that falls
+/// through to the existing triage path, which reaches the same verdict one
+/// attempt later.
+fn detect_missing_command(cmd: &str, output: &str) -> Option<String> {
+    let invoked = |name: &str| -> bool {
+        !name.is_empty()
+            && !name.contains(char::is_whitespace)
+            && cmd
+                .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
+                .any(|tok| tok == name)
+    };
+
+    output.lines().map(str::trim).find_map(|line| {
+        // Scan *within* the line rather than anchoring to its end: the SSH
+        // adapter embeds the remote stderr mid-string (`Command failed (sh: 1:
+        // cargo: not found): bash -l -i -c …`), so the diagnostic is not the
+        // line's suffix.
+        //
+        // zsh (`command not found: npm`) is matched first because it names the
+        // binary *after* the marker while carrying the bash marker's text as a
+        // prefix — checking bash first would mis-extract the shell's own name.
+        let raw = if let Some((_, rest)) = line.split_once("command not found: ") {
+            rest.split_whitespace().next()?
+        } else if let Some(i) = line.find(": command not found") {
+            line[..i].rsplit(':').next()?
+        } else {
+            let i = line.find(": not found")?;
+            line[..i].rsplit(':').next()?
+        };
+
+        // Strip the punctuation an adapter's own wrapper can leave glued to the
+        // name (`… command not found: npm): bash -l …`); no real binary ends in
+        // one of these.
+        let name = raw.trim().trim_end_matches([')', ':', ',', '.', '\'', '"']);
+
+        invoked(name).then(|| name.to_string())
+    })
+}
+
 /// Truncate `s` to at most `max` characters, keeping the *tail* rather
 /// than the head. Build/test failures are almost always at the end of
 /// the output (the failing assertion, the panic message, the compiler
@@ -988,3 +1076,7 @@ mod is_transport_failure_tests;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/verifier/parse_verdict_text_tests.rs"]
 mod parse_verdict_text_tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/step_executor/verifier/detect_missing_command_tests.rs"]
+mod detect_missing_command_tests;
