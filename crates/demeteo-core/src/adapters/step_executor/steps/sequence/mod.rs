@@ -461,6 +461,7 @@ impl ExecutionDriver {
                 &machine_str,
                 &agent_kind,
                 &override_model,
+                self.resolve_step_effort(step_conf),
                 accumulated_cost,
                 accumulated_tokens,
                 step_start,
@@ -622,6 +623,7 @@ impl ExecutionDriver {
         machine_str: &str,
         agent_kind: &str,
         override_model: &Option<String>,
+        effort: crate::domain::models::EffortLevel,
         accumulated_cost: &mut f64,
         accumulated_tokens: &mut i64,
         step_start: Instant,
@@ -649,6 +651,7 @@ impl ExecutionDriver {
                 wt_path,
                 agent_kind,
                 override_model,
+                effort,
             )
             .await?;
 

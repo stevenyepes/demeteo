@@ -1,11 +1,20 @@
 // Tests extracted from `crates/demeteo-core/src/adapters/step_executor/driver.rs` (mirrored-tests convention). `super` = that module.
 
-use super::{resolve_agent_model, resolve_loop_iterations};
+use super::{resolve_agent_model, resolve_effort, resolve_loop_iterations, ExecutionDriver};
 use crate::domain::ids::StepId;
-use crate::domain::models::{StepConfig, StepOverride};
+use crate::domain::models::{EffortLevel, StepConfig, StepOverride};
 
 fn step(agent: Option<&str>, model: Option<&str>) -> StepConfig {
+    step_with_effort(agent, model, None)
+}
+
+fn step_with_effort(
+    agent: Option<&str>,
+    model: Option<&str>,
+    effort: Option<EffortLevel>,
+) -> StepConfig {
     StepConfig {
+        effort,
         id: StepId::from("s-impl".to_string()),
         kind: "agent".to_string(),
         title: "Implement".to_string(),
@@ -27,6 +36,7 @@ fn step(agent: Option<&str>, model: Option<&str>) -> StepConfig {
 #[test]
 fn per_step_override_wins() {
     let ov = StepOverride {
+        effort: None,
         step_id: "s-impl".to_string(),
         agent_kind: Some("claude-code".to_string()),
         model: Some("claude-opus-4-8".to_string()),
@@ -75,6 +85,115 @@ fn feature_wide_beats_workflow_but_loses_to_per_step() {
         None,
     );
     assert_eq!(a, "hermes");
+}
+
+/// A per-step launch override carrying only an effort.
+fn effort_override(effort: EffortLevel) -> StepOverride {
+    StepOverride {
+        effort: Some(effort),
+        step_id: "s-impl".to_string(),
+        agent_kind: None,
+        model: None,
+    }
+}
+
+/// AC1 — nothing configured anywhere runs at high. This is the whole of the
+/// "default is high" requirement.
+#[test]
+fn empty_effort_chain_is_high() {
+    assert_eq!(
+        resolve_effort(None, None, &step(None, None), None),
+        EffortLevel::High
+    );
+    assert_eq!(EffortLevel::DEFAULT, EffortLevel::High);
+}
+
+/// AC2, tier 4: the project default beats only the built-in fallback.
+#[test]
+fn project_default_effort_beats_the_builtin() {
+    assert_eq!(
+        resolve_effort(None, None, &step(None, None), Some(EffortLevel::Low)),
+        EffortLevel::Low
+    );
+}
+
+/// AC2, tier 3: the workflow step's own effort beats the project default.
+#[test]
+fn workflow_step_effort_beats_project_default() {
+    let step = step_with_effort(None, None, Some(EffortLevel::Medium));
+    assert_eq!(
+        resolve_effort(None, None, &step, Some(EffortLevel::Low)),
+        EffortLevel::Medium
+    );
+}
+
+/// AC2, tier 2: the feature-wide run override beats the workflow step and
+/// everything below it.
+#[test]
+fn feature_wide_effort_beats_workflow_and_project() {
+    let step = step_with_effort(None, None, Some(EffortLevel::Medium));
+    assert_eq!(
+        resolve_effort(
+            None,
+            Some(EffortLevel::XHigh),
+            &step,
+            Some(EffortLevel::Low)
+        ),
+        EffortLevel::XHigh
+    );
+}
+
+/// AC2, tier 1: the per-step launch override beats every tier below it.
+#[test]
+fn per_step_effort_override_beats_everything() {
+    let step = step_with_effort(None, None, Some(EffortLevel::Medium));
+    assert_eq!(
+        resolve_effort(
+            Some(&effort_override(EffortLevel::Max)),
+            Some(EffortLevel::XHigh),
+            &step,
+            Some(EffortLevel::Low),
+        ),
+        EffortLevel::Max
+    );
+}
+
+/// A `None` at a tier is "inherit", not "no effort": the chain keeps walking
+/// past an override that only pins the model.
+#[test]
+fn a_none_tier_does_not_clobber_a_lower_one() {
+    let ov = StepOverride {
+        effort: None,
+        step_id: "s-impl".to_string(),
+        agent_kind: None,
+        model: Some("some-model".to_string()),
+    };
+    assert_eq!(
+        resolve_effort(Some(&ov), None, &step(None, None), Some(EffortLevel::Max)),
+        EffortLevel::Max
+    );
+}
+
+/// AC6 — regression guard. `UnifiedCliSession` freezes its `AgentContext` at
+/// spawn and rebuilds argv from that frozen copy every turn, so two steps that
+/// shared a session key would run at whichever effort spawned first: the
+/// second step's effort would be silently dropped. Two efforts must therefore
+/// produce two keys.
+#[test]
+fn session_key_distinguishes_two_efforts() {
+    let step = step(None, None);
+    let low = ExecutionDriver::agent_session_key("f-1", &step, Some("m"), EffortLevel::Low);
+    let max = ExecutionDriver::agent_session_key("f-1", &step, Some("m"), EffortLevel::Max);
+    assert_ne!(
+        low, max,
+        "a change in effort alone must force a fresh session"
+    );
+    // ...and the same effort still shares one (the `--resume` cache hit the
+    // fingerprint scoping exists to preserve).
+    assert_eq!(
+        low,
+        ExecutionDriver::agent_session_key("f-1", &step, Some("m"), EffortLevel::Low)
+    );
 }
 
 #[test]

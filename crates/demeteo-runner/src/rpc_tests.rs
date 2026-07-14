@@ -81,3 +81,44 @@ fn rejects_when_no_steps_declare_anything() {
     let steps: [(Option<&str>, Vec<String>); 0] = [];
     assert!(!is_declared_artifact(refs(&steps), "/w/report.md"));
 }
+
+// ── retry_step params (effort re-pin) ───────────────────────────────
+//
+// Every field on the wire is optional-by-default so a desktop app older
+// than this runner keeps working. These pin that contract for `effort`.
+
+#[test]
+fn retry_params_without_effort_deserialize_to_none() {
+    let params: super::RetryStepParams = serde_json::from_value(serde_json::json!({
+        "run_id": "run-1",
+        "step_execution_id": "se-1",
+    }))
+    .expect("an old client omits model/agent_kind/effort entirely");
+    assert_eq!(params.effort, None);
+    assert_eq!(params.model, None);
+}
+
+#[test]
+fn retry_params_carry_the_effort_re_pin() {
+    let params: super::RetryStepParams = serde_json::from_value(serde_json::json!({
+        "run_id": "run-1",
+        "step_execution_id": "se-1",
+        "model": "sonnet",
+        "effort": "xhigh",
+    }))
+    .expect("the canonical lowercase spelling is the wire format");
+    assert_eq!(
+        params.effort,
+        Some(demeteo_core::domain::models::EffortLevel::XHigh)
+    );
+}
+
+#[test]
+fn an_unknown_effort_on_the_wire_is_rejected_not_silently_dropped() {
+    let res: Result<super::RetryStepParams, _> = serde_json::from_value(serde_json::json!({
+        "run_id": "run-1",
+        "step_execution_id": "se-1",
+        "effort": "turbo",
+    }));
+    assert!(res.is_err());
+}

@@ -1,4 +1,5 @@
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
+use crate::domain::models::EffortLevel;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -72,6 +73,12 @@ pub struct ProjectSettings {
     pub default_agent_kind: Option<String>,
     #[serde(default)]
     pub default_model: Option<String>,
+    /// Project-wide default effort for every step of every run. `None` = fall
+    /// through to [`EffortLevel::DEFAULT`] (high). The lowest tier of the
+    /// effort resolution chain; a workflow, a launch override, or a project
+    /// workflow override all beat it. See migration V29.
+    #[serde(default)]
+    pub default_effort: Option<EffortLevel>,
     /// Project-level default loop iteration budget for `on_failure` retry
     /// loops. `None` = use the engine default (3). Overridable per run via
     /// `Feature::loop_iterations`. See migration V13.
@@ -156,6 +163,8 @@ pub struct ProjectWorkflowOverride {
     pub agent_kind: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<EffortLevel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

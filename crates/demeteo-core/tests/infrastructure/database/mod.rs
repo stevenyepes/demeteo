@@ -1,6 +1,8 @@
 use super::SqliteAdapter;
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
-use crate::domain::models::{Project, ProjectWorkflowOverride, Repository};
+use crate::domain::models::{
+    EffortLevel, Project, ProjectSettings, ProjectWorkflowOverride, Repository, WorktreeStrategy,
+};
 use crate::ports::db::ProjectRepository;
 use rusqlite::Connection;
 
@@ -98,6 +100,7 @@ fn ov(
     model: Option<&str>,
 ) -> ProjectWorkflowOverride {
     ProjectWorkflowOverride {
+        effort: None,
         project_id: pid.clone(),
         workflow_id: wid.clone(),
         step_id: step.map(str::to_string),
@@ -180,4 +183,94 @@ fn workflow_override_roundtrip_and_clear() {
         .unwrap();
     assert!(wf_level().is_none());
     assert!(adapter.list_workflow_overrides(&pid).unwrap().is_empty());
+}
+
+/// The "all fields None → delete the row" rule must account for `effort` too:
+/// an override that pins only an effort is a real override, and clearing the
+/// agent/model of such a row must not take the effort down with it.
+#[test]
+fn workflow_override_with_only_an_effort_survives() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let pid = ProjectId::from("p_eff_ov".to_string());
+    let wid = WorkflowId::from("wf_eff_ov".to_string());
+
+    let row = |o: &ProjectWorkflowOverride| ProjectWorkflowOverride {
+        effort: o.effort,
+        ..o.clone()
+    };
+    let mut only_effort = ov(&pid, &wid, None, None, None);
+    only_effort.effort = Some(EffortLevel::Max);
+    adapter.upsert_workflow_override(row(&only_effort)).unwrap();
+
+    let rows = adapter.list_overrides_for_workflow(&pid, &wid).unwrap();
+    assert_eq!(rows.len(), 1, "an effort-only override must not be deleted");
+    assert_eq!(rows[0].effort, Some(EffortLevel::Max));
+    assert_eq!(rows[0].agent_kind, None);
+
+    // Genuinely empty (no agent, no model, no effort) still deletes.
+    adapter
+        .upsert_workflow_override(ov(&pid, &wid, None, None, None))
+        .unwrap();
+    assert!(adapter.list_workflow_overrides(&pid).unwrap().is_empty());
+}
+
+/// The project-wide default effort survives the settings upsert/select pair,
+/// and an unset one reads back as `None` (inherit → `EffortLevel::DEFAULT`).
+#[test]
+fn project_settings_default_effort_round_trips() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let pid = ProjectId::from("p_settings_effort".to_string());
+    adapter
+        .add(Project {
+            id: pid.clone(),
+            name: "effort settings".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        })
+        .unwrap();
+
+    let settings = |effort: Option<EffortLevel>| ProjectSettings {
+        project_id: pid.clone(),
+        worktree_strategy: WorktreeStrategy {
+            default_branch: "main".to_string(),
+            branch_prefix: "feat/".to_string(),
+            test_command: None,
+            build_command: None,
+            coverage_command: None,
+            conventions_file: None,
+            pr_template: None,
+            harnesses: None,
+            prepare_command: None,
+            extra_writable_paths: Vec::new(),
+        },
+        conflict_policy: "manual".to_string(),
+        feature_lifecycle: "keep".to_string(),
+        default_agent_kind: None,
+        default_model: None,
+        default_effort: effort,
+        default_loop_iterations: None,
+        artifact_subdir: "artifacts/".to_string(),
+        commit_artifacts: false,
+    };
+
+    adapter
+        .save_settings(settings(Some(EffortLevel::Medium)))
+        .unwrap();
+    assert_eq!(
+        adapter.get_settings(&pid).unwrap().unwrap().default_effort,
+        Some(EffortLevel::Medium)
+    );
+
+    adapter.save_settings(settings(None)).unwrap();
+    assert_eq!(
+        adapter.get_settings(&pid).unwrap().unwrap().default_effort,
+        None
+    );
 }

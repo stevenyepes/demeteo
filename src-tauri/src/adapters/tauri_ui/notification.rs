@@ -43,6 +43,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "conflict_detected",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::AgentSpawned { .. } => (
+                "agent_spawned",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
             DomainEvent::AgentStream { .. } => (
                 "agent_stream",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,

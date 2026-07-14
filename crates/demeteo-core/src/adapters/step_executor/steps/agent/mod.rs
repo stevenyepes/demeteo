@@ -33,14 +33,22 @@ impl ExecutionDriver {
         // is set, so UsageAccumulator can use the pricing table and compute cost_usd.
         let override_model =
             override_model.or_else(|| self.registry.default_model_for(&agent_kind));
+        // The step's reasoning effort, resolved through the same 5-tier chain
+        // as the model. Real agent work, so it inherits the run's effort
+        // rather than being pinned like the internal turns.
+        let effort = self.resolve_step_effort(step_conf);
         // Same fingerprint-scoped key `spawn_agent_session` used to
         // create/resume this step's session — see
         // `ExecutionDriver::agent_session_key`. Every `registry.kill`
         // below targets exactly this session, not the bare feature id
         // (which no longer identifies a single session once sessions
-        // are permission-profile/model scoped).
-        let session_key =
-            Self::agent_session_key(self.f_id.as_str(), step_conf, override_model.as_deref());
+        // are permission-profile/model/effort scoped).
+        let session_key = Self::agent_session_key(
+            self.f_id.as_str(),
+            step_conf,
+            override_model.as_deref(),
+            effort,
+        );
 
         let (gate_decision, gate_feedback) =
             crate::adapters::step_executor::artifacts::get_latest_gate_decision(
@@ -351,6 +359,7 @@ impl ExecutionDriver {
                 step_conf,
                 &agent_kind,
                 &override_model,
+                effort,
                 &machine_str,
                 &wt_path,
             )

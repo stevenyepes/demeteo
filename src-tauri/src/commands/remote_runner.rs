@@ -239,6 +239,10 @@ pub async fn remote_submit_run(
     description: String,
     agent_kind: Option<String>,
     model: Option<String>,
+    // Feature-wide effort, shipped in the `RunSpec` (`#[serde(default)]`, so a
+    // runner older than this app ignores it and runs at the agent's own
+    // default — the accepted version-skew risk, AGENTS.md §9.1).
+    effort: Option<crate::domain::models::EffortLevel>,
     commit_artifacts: Option<bool>,
     loop_iterations: Option<u32>,
     step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
@@ -350,6 +354,9 @@ pub async fn remote_submit_run(
     let feature_id = format!("f-{}", crate::paths::new_id());
     let step_overrides = step_overrides.unwrap_or_default();
     if let Err(e) = ctx.features.add(Feature {
+        // The shadow row carries the same effort the runner is about to run
+        // with, so the laptop's Feature view isn't lying about the run.
+        effort,
         id: FeatureId::from(feature_id.clone()),
         project_id: pid.clone(),
         workflow_id: Some(wf_id.clone()),
@@ -385,6 +392,7 @@ pub async fn remote_submit_run(
     let project_settings = ctx.projects.get_settings(&pid).ok().flatten();
 
     let spec = RunSpec {
+        effort,
         feature_id: Some(feature_id.clone()),
         title: title.clone(),
         description,
@@ -674,6 +682,7 @@ async fn hydrate_shadow_feature(
         ctx.features.update(
             &fid,
             &FeaturePatch {
+                effort: None,
                 status: Some(feature.status.clone()),
                 total_cost: Some(Some(feature.total_cost)),
                 duration: Some(Some(feature.duration.clone())),
@@ -1368,6 +1377,9 @@ pub async fn remote_retry_step(
     step_execution_id: String,
     model: Option<String>,
     agent_kind: Option<String>,
+    // Re-pin the effort on the retry, the remote twin of `step_retry`'s
+    // `new_effort`. A runner too old to know the field ignores it.
+    effort: Option<crate::domain::models::EffortLevel>,
 ) -> Result<(), AppError> {
     let Some(row) = ctx
         .remote_run_mirror
@@ -1390,6 +1402,7 @@ pub async fn remote_retry_step(
             "step_execution_id": step_execution_id,
             "model": model,
             "agent_kind": agent_kind,
+            "effort": effort,
         }),
     )
     .await

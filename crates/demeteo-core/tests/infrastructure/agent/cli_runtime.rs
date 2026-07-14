@@ -503,9 +503,11 @@ fn remote_availability_probe_uses_a_login_shell() {
         parse_event: mock_parse_event,
         build_args: probe_build_args,
         perm_env: probe_perm_env,
+        effort_env: no_effort_env,
         display_label: "OpenCode",
         lists_models: true,
         default_model: None,
+        effort_levels: &[],
     };
     let rec = ShellOptsRecorder::new();
 
@@ -568,4 +570,14 @@ fn handle_reader_reassembles_split_line_via_try_read() {
         e => panic!("expected Text, got {:?}", e),
     }
     assert!(matches!(&events[1], AgentEvent::TurnComplete { .. }));
+}
+
+#[test]
+fn no_effort_env_injects_nothing_at_any_level() {
+    // The `effort_env` translator for every agent that carries effort on
+    // argv (codex, opencode) or not at all (hermes).
+    assert!(no_effort_env(None).is_empty());
+    for level in EffortLevel::ALL {
+        assert!(no_effort_env(Some(level)).is_empty());
+    }
 }

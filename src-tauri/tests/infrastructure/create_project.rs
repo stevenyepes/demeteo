@@ -166,7 +166,10 @@ fn expected_step_returns_matching_variant_for_each_payload() {
             BootstrapStep::Agent,
         ),
         (
-            CreateProjectStepPayload::Model { model: "m".into() },
+            CreateProjectStepPayload::Model {
+                model: "m".into(),
+                effort: None,
+            },
             BootstrapStep::Model,
         ),
         (
@@ -185,6 +188,7 @@ fn expected_step_returns_matching_variant_for_each_payload() {
                 machine_id: Box::new(None),
                 agent_kind: Box::new("opencode".to_string()),
                 model: Box::new("m".to_string()),
+                effort: None,
             },
             BootstrapStep::Description,
         ),
@@ -216,6 +220,7 @@ fn commit_payload_validation_rejects_empty_title_and_description() {
             machine_id: Box::new(None),
             agent_kind: Box::new("opencode".to_string()),
             model: Box::new("m".to_string()),
+            effort: None,
         };
         match p {
             CreateProjectStepPayload::Commit { description, .. } => *description,

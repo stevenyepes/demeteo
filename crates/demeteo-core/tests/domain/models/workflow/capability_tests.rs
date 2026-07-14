@@ -6,6 +6,7 @@ use crate::domain::artifact::ArtifactMode;
 
 fn step(kind: &str, capability: Option<StepCapability>) -> StepConfig {
     StepConfig {
+        effort: None,
         id: StepId::from("s-x"),
         kind: kind.into(),
         title: "x".into(),

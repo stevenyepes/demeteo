@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useNavigation } from '../context';
 import { useErrorBus } from '../lib/errorBus';
 import type { LaunchStageEntry } from '../components/AttachmentDropzone';
-import type { Feature } from '../types';
+import type { EffortLevel, Feature } from '../types';
 
 /** Launch parameters — the union of what `StartFeatureModal` and the
  * ProjectHome composer collect. Matches the modal's `onLaunch` shape. */
@@ -13,10 +13,13 @@ export interface LaunchRunParams {
   description: string;
   agentKind?: string;
   model?: string;
+  /** Feature-wide reasoning effort. Unset = inherit the project default,
+   *  which bottoms out at the engine default (`high`). */
+  effort?: EffortLevel;
   targetRepos?: string[];
   commitArtifacts?: boolean;
   loopIterations?: number;
-  stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null }[];
+  stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null; effort?: EffortLevel | null }[];
   attachments?: LaunchStageEntry[];
   /** Run detached on this machine via `remote_submit_run`; unset/empty
    * means the local `start_feature` path (which is also the
@@ -92,6 +95,7 @@ export function useLaunchRun(options: {
             description: params.description,
             agentKind: params.agentKind ?? null,
             model: params.model ?? null,
+            effort: params.effort ?? null,
             commitArtifacts: params.commitArtifacts ?? null,
             loopIterations: params.loopIterations ?? null,
             stepOverrides: params.stepOverrides ?? null,
@@ -129,6 +133,7 @@ export function useLaunchRun(options: {
           description: params.description,
           agentKind: params.agentKind ?? null,
           model: params.model ?? null,
+          effort: params.effort ?? null,
           commitArtifacts: params.commitArtifacts ?? null,
           loopIterations: params.loopIterations ?? null,
           stepOverrides: params.stepOverrides ?? null,

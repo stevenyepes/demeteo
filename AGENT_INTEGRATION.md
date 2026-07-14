@@ -594,7 +594,20 @@ Three agents, all via `UnifiedCliRuntime`:
 - `adapters/agent/hermes/mod.rs` — `{ kind_str: "hermes", binary: "hermes", install_cmd: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash", perm_env: opencode_permission_env, … }`.
 - `adapters/agent/claude_code/mod.rs` — `{ kind_str: "claude-code", binary: "claude", install_cmd: "npm install -g @anthropic-ai/claude-code", perm_env: no_permission_env (claude-code enforces via `--disallowedTools`), … }`.
 
-The `UnifiedCliRuntime` is generic over the binary — the agent-specific logic is just the declared `AgentCapabilities` (`display_label` / `lists_models` / `default_model`), the availability check (which binary name to look up), the `parse_event` function, the `build_args` function, and the `perm_env` translator (`opencode_permission_env` or `no_permission_env`). See [`docs/adapters/CONTRIBUTING-AN-AGENT.md`](docs/adapters/CONTRIBUTING-AN-AGENT.md) for the full walkthrough of adding one.
+The `UnifiedCliRuntime` is generic over the binary — the agent-specific logic is just the declared `AgentCapabilities` (`display_label` / `lists_models` / `default_model` / `effort_levels`), the availability check (which binary name to look up), the `parse_event` function, the `build_args` function, the `perm_env` translator (`opencode_permission_env` or `no_permission_env`), and the `effort_env` translator. See [`docs/adapters/CONTRIBUTING-AN-AGENT.md`](docs/adapters/CONTRIBUTING-AN-AGENT.md) for the full walkthrough of adding one.
+
+#### The `effort_levels` capability
+
+`AgentCapabilities.effort_levels: &'static [EffortLevel]` declares which levels of the canonical ladder (`low` < `medium` < `high` < `xhigh` < `max`) an agent accepts **per invocation**. It is part of the capability contract, not a UI nicety: `list_agents` ships it to the frontend, which uses it to populate every effort picker, and `EffortLevel::clamp_for` uses the same table to project a requested level onto what the agent can actually take *before* argv is built. So the UI cannot offer an unsupported level, and if it somehow did, the adapter still could not emit one.
+
+| Agent | `effort_levels` | Carried on the wire as |
+|---|---|---|
+| `claude-code` | all five | `--effort <v>` **and** `CLAUDE_CODE_EFFORT_LEVEL=<v>` (the env var outranks the flag, so it must be set explicitly — a developer with it exported would otherwise silently override every run) |
+| `codex` | `low, medium, high, xhigh` | `-c model_reasoning_effort=<v>` |
+| `opencode` | all five | `--variant <v>` |
+| `hermes` | `&[]` (none) | nothing — see below |
+
+An **empty** list is a first-class answer, not a gap: hermes exposes effort only through `agent.reasoning_effort` in `$HERMES_HOME/config.yaml` and has no per-invocation control, so it declares nothing, emits nothing, and the frontend greys its effort control out with a tooltip. Neither codex nor opencode *validates* an effort it doesn't know (codex wraps an unknown value as `Custom(String)` and sends it; opencode treats an unsupported `--variant` as a silent no-op), which is precisely why Demeteo owns the clamp rather than trusting the CLI to reject a bad value.
 
 ### 5.7 Disclaimer
 

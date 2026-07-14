@@ -70,6 +70,9 @@ pub struct FeaturePatch {
     pub tokens: Option<Option<i64>>,
     pub agent_kind: Option<Option<String>>,
     pub model: Option<Option<String>>,
+    /// Pin/clear the feature-wide effort. `Some(None)` clears it back to
+    /// "inherit"; the row never stores a resolved default.
+    pub effort: Option<Option<crate::domain::models::EffortLevel>>,
     /// Set/clear the MR/PR URL after [`MrPublisher::publish_mr`].
     pub mr_url: Option<Option<String>>,
     /// Set the MR/PR state on the feature (draft/open/merged/closed).

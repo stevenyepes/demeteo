@@ -54,6 +54,7 @@ fn seed_parent_rows(
         .unwrap();
     features
         .add(Feature {
+            effort: None,
             id: FeatureId::from("f-1".to_string()),
             project_id: ProjectId::from("p-1".to_string()),
             workflow_id: Some(WorkflowId::from("w-1".to_string())),

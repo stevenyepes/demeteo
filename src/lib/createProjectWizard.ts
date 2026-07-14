@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { asAppError } from "./errors";
-import type { AppError, Feature, WorktreeStrategy } from "../types";
+import type { AppError, EffortLevel, Feature, WorktreeStrategy } from "../types";
 
 // ── Wire types ──────────────────────────────────────────────────────────
 //
@@ -179,6 +179,8 @@ export interface StartFeatureInput {
   description: string;
   agentKind: string | null;
   model: string | null;
+  /** Feature-wide effort. `null` = inherit the project default. */
+  effort?: EffortLevel | null;
   commitArtifacts?: boolean | null;
   loopIterations?: number | null;
   /** Per-step overrides. The wizard does not currently produce any. */
@@ -199,6 +201,7 @@ export async function startFeature(input: StartFeatureInput): Promise<Feature> {
     description: input.description,
     agentKind: input.agentKind,
     model: input.model,
+    effort: input.effort ?? null,
     commitArtifacts: input.commitArtifacts ?? null,
     loopIterations: input.loopIterations ?? null,
     stepOverrides: input.stepOverrides ?? null,

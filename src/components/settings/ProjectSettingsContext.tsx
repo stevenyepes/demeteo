@@ -1,10 +1,12 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { ConfigOptionValue, ProjectMemoryEntry, WorkflowOverride, StepConfig, Machine, Project, WorktreeStrategy, ProjectSettingsData } from '../../types';
+import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, WorkflowOverride, StepConfig, Machine, Project, WorktreeStrategy, ProjectSettingsData } from '../../types';
 import { getAgentModels } from '../../lib/agentModels';
+import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
+import { DEFAULT_EFFORT } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
-import { saveProjectSettings } from '../../lib/project';
+import { saveProjectSettings, setWorkflowOverride } from '../../lib/project';
 import { useNavigation, useProject } from '../../context';
 
 export interface AvailableRepo { path: string; providerId: string; }
@@ -18,6 +20,22 @@ export interface AgentConfigView { kind: string; enabled: boolean; available: bo
 
 export const WF_LEVEL = '';
 export const ovKey = (workflowId: string, stepId: string) => `${workflowId}::${stepId}`;
+
+/** One row of the project's workflow/step override table. Every field is
+ *  independently `null` = "inherit that one field". */
+export interface OverrideRowValue {
+  agent_kind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+}
+
+/** A row that overrides nothing. Sending this clears the row server-side (the
+ *  repo deletes an all-`null` override). */
+export const EMPTY_ROW: OverrideRowValue = { agent_kind: null, model: null, effort: null };
+
+/** True when the row pins at least one field. */
+export const isOverrideActive = (o: OverrideRowValue | undefined): boolean =>
+  Boolean(o?.agent_kind || o?.model || o?.effort);
 
 interface SettingsCtx {
   // project context
@@ -65,6 +83,9 @@ interface SettingsCtx {
   featureLifecycle: string; setFeatureLifecycle: (v: string) => void;
   defaultAgentKind: string; setDefaultAgentKind: (v: string) => void;
   defaultModel: string; setDefaultModel: (v: string) => void;
+  /** Project-wide default reasoning effort. `''` = no project default, which
+   *  resolves to the engine default (`high`) at run time. */
+  defaultEffort: EffortLevel | ''; setDefaultEffort: (v: EffortLevel | '') => void;
   defaultLoopIterations: string; setDefaultLoopIterations: (v: string) => void;
   extraWritablePaths: string[]; setExtraWritablePaths: (v: string[]) => void;
   newExtraPath: string; setNewExtraPath: (v: string) => void;
@@ -81,8 +102,8 @@ interface SettingsCtx {
   showDeleteConfirm: boolean; setShowDeleteConfirm: (v: boolean) => void;
   // overrides
   workflows: { id: string; name: string; description: string; steps: StepConfig[] }[];
-  overrides: Record<string, { agent_kind: string | null; model: string | null }>;
-  setOverrides: (v: Record<string, { agent_kind: string | null; model: string | null }>) => void;
+  overrides: Record<string, OverrideRowValue>;
+  setOverrides: (v: Record<string, OverrideRowValue>) => void;
   isLoadingOverrides: boolean; overridesError: string;
   expandedWf: Record<string, boolean>; setExpandedWf: (v: Record<string, boolean>) => void;
   rowModels: Record<string, ConfigOptionValue[]>;
@@ -108,11 +129,16 @@ interface SettingsCtx {
   toggleWorkflowExpanded: (wf: { id: string; steps: StepConfig[] }) => void;
   handleAgentChange: (wfId: string, stepId: string, step: StepConfig | null, agentKind: string) => void;
   handleModelChange: (wfId: string, stepId: string, model: string) => void;
+  handleEffortChange: (wfId: string, stepId: string, effort: EffortLevel | '') => void;
   handleClearRow: (wfId: string, stepId: string) => void;
   workflowOverrideCount: (wf: { id: string; steps: StepConfig[] }) => number;
   inheritedAgent: (wfId: string, step: StepConfig) => string;
   inheritedModel: (wfId: string, step: StepConfig) => string;
+  inheritedEffort: (wfId: string, step: StepConfig) => EffortLevel;
   effectiveAgentForRow: (wfId: string, step: StepConfig | null) => string;
+  /** The effort levels a harness accepts, from the backend agent catalog.
+   *  Empty (hermes) means the picker must disable the control. */
+  effortLevelsFor: (kind: string) => readonly EffortLevel[];
 }
 
 const Ctx = createContext<SettingsCtx | null>(null);
@@ -191,6 +217,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
 
   const [defaultAgentKind, setDefaultAgentKind] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
+  const [defaultEffort, setDefaultEffort] = useState<EffortLevel | ''>('');
   const [defaultLoopIterations, setDefaultLoopIterations] = useState('');
   const [availableModelsForDefault, setAvailableModelsForDefault] = useState<ConfigOptionValue[]>([]);
   const [isLoadingModelsForDefault, setIsLoadingModelsForDefault] = useState(false);
@@ -200,7 +227,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [newExtraPath, setNewExtraPath] = useState('');
 
   const [workflows, setWorkflows] = useState<{ id: string; name: string; description: string; steps: StepConfig[] }[]>([]);
-  const [overrides, setOverrides] = useState<Record<string, { agent_kind: string | null; model: string | null }>>({});
+  const [overrides, setOverrides] = useState<Record<string, OverrideRowValue>>({});
   const [isLoadingOverrides, setIsLoadingOverrides] = useState(false);
   const [overridesError, setOverridesError] = useState('');
   const [expandedWf, setExpandedWf] = useState<Record<string, boolean>>({});
@@ -213,6 +240,9 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     .filter(a => a.enabled && a.available)
     .map(a => a.kind);
 
+  const { agents: agentCatalog } = useAgentCatalog();
+  const effortLevels = (kind: string) => effortLevelsFor(agentCatalog, kind);
+
   const inheritedAgent = (workflowId: string, step: StepConfig): string => {
     const wfOv = overrides[ovKey(workflowId, WF_LEVEL)];
     return wfOv?.agent_kind || step.agent_kind || defaultAgentKind || '';
@@ -220,6 +250,14 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const inheritedModel = (workflowId: string, step: StepConfig): string => {
     const wfOv = overrides[ovKey(workflowId, WF_LEVEL)];
     return wfOv?.model || step.model || defaultModel || '';
+  };
+  // Shaped exactly like `inheritedModel`, with one difference: the chain has a
+  // known terminal value. The engine falls back to `EffortLevel::DEFAULT`
+  // (`high`) when nothing pins an effort, so a row with nothing above it shows
+  // `high` rather than a blank — the placeholder states what will actually run.
+  const inheritedEffort = (workflowId: string, step: StepConfig): EffortLevel => {
+    const wfOv = overrides[ovKey(workflowId, WF_LEVEL)];
+    return wfOv?.effort || step.effort || defaultEffort || DEFAULT_EFFORT;
   };
   const effectiveAgentForRow = (workflowId: string, step: StepConfig | null): string => {
     if (step === null) return overrides[ovKey(workflowId, WF_LEVEL)]?.agent_kind || defaultAgentKind || '';
@@ -250,18 +288,22 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     }
   };
 
-  const persistOverride = async (workflowId: string, stepId: string, next: { agent_kind: string | null; model: string | null }) => {
+  const persistOverride = async (workflowId: string, stepId: string, next: OverrideRowValue) => {
     const key = ovKey(workflowId, stepId);
     try {
-      await invoke('set_workflow_override', { projectId: activeProject.id, workflowId, stepId: stepId || null, agentKind: next.agent_kind, model: next.model });
+      await setWorkflowOverride({ projectId: activeProject.id, workflowId, stepId: stepId || null, agentKind: next.agent_kind, model: next.model, effort: next.effort });
       setSavedPulse(prev => ({ ...prev, [key]: true }));
       setTimeout(() => setSavedPulse(prev => ({ ...prev, [key]: false })), 1400);
     } catch (err) { setOverridesError(formatError(err)); }
   };
 
   const handleAgentChange = (workflowId: string, stepId: string, step: StepConfig | null, agentKind: string) => {
-    const next = { agent_kind: agentKind || null, model: null };
     const key = ovKey(workflowId, stepId);
+    const current = overrides[key] ?? EMPTY_ROW;
+    // The model belongs to the previous harness's namespace, so it is dropped.
+    // The effort does not — the ladder is canonical across agents, and the
+    // adapter clamps it to what the new harness declares — so it is kept.
+    const next: OverrideRowValue = { agent_kind: agentKind || null, model: null, effort: current.effort };
     setOverrides(prev => ({ ...prev, [key]: next }));
     const probeAgent = agentKind || (step ? inheritedAgent(workflowId, step) : (defaultAgentKind || ''));
     probeModels(key, probeAgent);
@@ -270,25 +312,31 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
 
   const handleModelChange = (workflowId: string, stepId: string, model: string) => {
     const key = ovKey(workflowId, stepId);
-    const current = overrides[key] ?? { agent_kind: null, model: null };
-    const next = { agent_kind: current.agent_kind, model: model || null };
+    const current = overrides[key] ?? EMPTY_ROW;
+    const next: OverrideRowValue = { ...current, model: model || null };
+    setOverrides(prev => ({ ...prev, [key]: next }));
+    persistOverride(workflowId, stepId, next);
+  };
+
+  const handleEffortChange = (workflowId: string, stepId: string, effort: EffortLevel | '') => {
+    const key = ovKey(workflowId, stepId);
+    const current = overrides[key] ?? EMPTY_ROW;
+    const next: OverrideRowValue = { ...current, effort: effort || null };
     setOverrides(prev => ({ ...prev, [key]: next }));
     persistOverride(workflowId, stepId, next);
   };
 
   const handleClearRow = (workflowId: string, stepId: string) => {
     const key = ovKey(workflowId, stepId);
-    const next = { agent_kind: null, model: null };
-    setOverrides(prev => ({ ...prev, [key]: next }));
-    persistOverride(workflowId, stepId, next);
+    setOverrides(prev => ({ ...prev, [key]: EMPTY_ROW }));
+    persistOverride(workflowId, stepId, EMPTY_ROW);
   };
 
   const workflowOverrideCount = (wf: { id: string; steps: StepConfig[] }): number => {
     let n = 0;
-    if (overrides[ovKey(wf.id, WF_LEVEL)]?.agent_kind || overrides[ovKey(wf.id, WF_LEVEL)]?.model) n++;
+    if (isOverrideActive(overrides[ovKey(wf.id, WF_LEVEL)])) n++;
     for (const s of wf.steps) {
-      const o = overrides[ovKey(wf.id, s.id)];
-      if (o?.agent_kind || o?.model) n++;
+      if (isOverrideActive(overrides[ovKey(wf.id, s.id)])) n++;
     }
     return n;
   };
@@ -303,8 +351,8 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
             invoke<WorkflowOverride[]>('get_workflow_overrides', { projectId: activeProject.id }),
           ]);
           setWorkflows(wfList.map(w => ({ id: w.id, name: w.name, description: w.description, steps: w.steps ?? [] })));
-          const map: Record<string, { agent_kind: string | null; model: string | null }> = {};
-          for (const ov of ovList) map[ovKey(ov.workflow_id, ov.step_id ?? WF_LEVEL)] = { agent_kind: ov.agent_kind ?? null, model: ov.model ?? null };
+          const map: Record<string, OverrideRowValue> = {};
+          for (const ov of ovList) map[ovKey(ov.workflow_id, ov.step_id ?? WF_LEVEL)] = { agent_kind: ov.agent_kind ?? null, model: ov.model ?? null, effort: ov.effort ?? null };
           setOverrides(map);
           const toExpand: Record<string, boolean> = {};
           for (const ov of ovList) toExpand[ov.workflow_id] = true;
@@ -388,6 +436,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setFeatureLifecycle(res.feature_lifecycle);
           setDefaultAgentKind(res.default_agent_kind || '');
           setDefaultModel(res.default_model || '');
+          setDefaultEffort(res.default_effort || '');
           setDefaultLoopIterations(res.default_loop_iterations != null ? String(res.default_loop_iterations) : '');
           setArtifactSubdir(res.artifact_subdir || 'artifacts/');
           setCommitArtifacts(Boolean(res.commit_artifacts));
@@ -479,7 +528,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
   };
 
   const handleSave = async () => {
@@ -502,7 +551,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     } else {
       try {
         await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
         // Keep `compute_type` / `remote_host` in sync with the DB so the
         // Settings tab doesn't fall back to "Local Compute" the next
         // time the user reopens it. Mirrors the re-bootstrap save path
@@ -567,6 +616,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     buildCommand, setBuildCommand, coverageCommand, setCoverageCommand, conventionsFile, setConventionsFile,
     harnesses, setHarnesses, prepareCommand, setPrepareCommand, prTemplate, setPrTemplate, conflictPolicy, setConflictPolicy,
     featureLifecycle, setFeatureLifecycle, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
+    defaultEffort, setDefaultEffort,
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,
     agentConfigs, setAgentConfigs, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,
     extraWritablePaths, setExtraWritablePaths, newExtraPath, setNewExtraPath,
@@ -576,8 +626,9 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     handleSave, handleDeleteClick, proceedWithReBootstrap, proceedWithDelete, handleApproveStrategy,
     handleSaveMemory, handleDeleteMemory, handleEditMemoryClick, handleCancelEdit,
     fetchAllReposFromProviders, toggleRepo, handleTestConnection, fetchWorkspaceHealth, fetchAgentConfigs,
-    toggleWorkflowExpanded, handleAgentChange, handleModelChange, handleClearRow, workflowOverrideCount,
-    inheritedAgent, inheritedModel, effectiveAgentForRow,
+    toggleWorkflowExpanded, handleAgentChange, handleModelChange, handleEffortChange, handleClearRow, workflowOverrideCount,
+    inheritedAgent, inheritedModel, inheritedEffort, effectiveAgentForRow,
+    effortLevelsFor: effortLevels,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

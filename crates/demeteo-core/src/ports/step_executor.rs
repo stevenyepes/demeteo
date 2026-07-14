@@ -1,5 +1,5 @@
 use crate::application::attachments::StagedAttachmentInput;
-use crate::domain::models::{Feature, GateDecision, StepExecution};
+use crate::domain::models::{EffortLevel, Feature, GateDecision, StepExecution};
 use crate::error::AppError;
 use async_trait::async_trait;
 use serde::Serialize;
@@ -21,8 +21,9 @@ pub trait StepExecutor: Send + Sync {
     ///   rendered into `{{feature_description}}` for every step.
     ///   Required — the executor refuses to start with an empty
     ///   description.
-    /// - `agent_kind`, `model`: per-feature overrides for the project's
-    ///   defaults. `None` means "use whatever the project says".
+    /// - `agent_kind`, `model`, `effort`: per-feature overrides for the
+    ///   project's defaults. `None` means "use whatever the project says"
+    ///   (for effort, that bottoms out at [`EffortLevel::DEFAULT`]).
     /// - `commit_artifacts`: per-feature override for the project's
     ///   `commit_artifacts` setting. `None` means inherit the project
     ///   default. See migration V12 and `commit_worktree_changes`.
@@ -51,6 +52,7 @@ pub trait StepExecutor: Send + Sync {
         description: &str,
         agent_kind: Option<&str>,
         model: Option<&str>,
+        effort: Option<EffortLevel>,
         commit_artifacts: Option<bool>,
         loop_iterations: Option<u32>,
         step_overrides: Vec<crate::domain::models::StepOverride>,
@@ -62,9 +64,9 @@ pub trait StepExecutor: Send + Sync {
     async fn feature_cancel(&self, feature_id: &str) -> Result<(), String>;
 
     async fn step_get(&self, execution_id: &str) -> Result<StepExecution, String>;
-    /// Retry a failed/interrupted step. `new_model` / `new_agent` re-pin the
-    /// feature-wide model/harness overrides before the rerun (`None` keeps the
-    /// existing override).
+    /// Retry a failed/interrupted step. `new_model` / `new_agent` /
+    /// `new_effort` re-pin the feature-wide model/harness/effort overrides
+    /// before the rerun (`None` keeps the existing override).
     ///
     /// **Precondition:** the executor refuses to retry when an earlier step
     /// (any step with `step_index < target.step_index`) is still non-terminal
@@ -76,18 +78,20 @@ pub trait StepExecutor: Send + Sync {
         execution_id: &str,
         new_model: Option<&str>,
         new_agent: Option<&str>,
+        new_effort: Option<EffortLevel>,
     ) -> Result<(), AppError>;
     /// Replay from the given step execution — reset the target step and
     /// all subsequent steps to `pending`, clear their artifacts and gate
     /// decisions, then restart the execution loop. Works for any step
     /// status (completed, failed, interrupted, awaiting_gate, running).
-    /// `new_model` / `new_agent` re-pin the feature-wide overrides before the
-    /// rerun (`None` keeps the existing override).
+    /// `new_model` / `new_agent` / `new_effort` re-pin the feature-wide
+    /// overrides before the rerun (`None` keeps the existing override).
     async fn replay_from_step(
         &self,
         execution_id: &str,
         new_model: Option<&str>,
         new_agent: Option<&str>,
+        new_effort: Option<EffortLevel>,
     ) -> Result<(), String>;
     async fn step_list_for_run(&self, feature_id: &str) -> Result<Vec<StepExecution>, String>;
 

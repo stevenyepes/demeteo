@@ -1,4 +1,5 @@
 import { Cpu, Loader2 } from 'lucide-react';
+import type { EffortLevel } from '../../lib/effortLevels';
 import { HarnessModelPicker, type ModelOption } from './HarnessModelPicker';
 
 export interface CreateZeroAgentStepProps {
@@ -7,8 +8,13 @@ export interface CreateZeroAgentStepProps {
   modelsLoading: boolean;
   agentKind: string;
   model: string;
+  /** Seeds the project's `default_effort`. `''` = no project default. */
+  effort: EffortLevel | '';
+  /** The levels the chosen agent declares; empty (hermes) greys the control. */
+  effortLevels: ReadonlyArray<EffortLevel>;
   onAgentKindChange: (kind: string) => void;
   onModelChange: (model: string) => void;
+  onEffortChange: (effort: EffortLevel | '') => void;
   onClear: () => void;
 }
 
@@ -18,8 +24,8 @@ export interface CreateZeroAgentStepProps {
  * that the probe is machine-scoped.
  */
 export function CreateZeroAgentStep(props: CreateZeroAgentStepProps) {
-  const { agentKinds, models, modelsLoading, agentKind, model,
-    onAgentKindChange, onModelChange, onClear } = props;
+  const { agentKinds, models, modelsLoading, agentKind, model, effort, effortLevels,
+    onAgentKindChange, onModelChange, onEffortChange, onClear } = props;
   return (
     <div className="space-y-4">
       <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block">
@@ -31,11 +37,15 @@ export function CreateZeroAgentStep(props: CreateZeroAgentStepProps) {
         modelsLoading={modelsLoading}
         agentKind={agentKind}
         model={model}
+        effort={effort}
+        effortLevels={effortLevels}
         onAgentKindChange={onAgentKindChange}
         onModelChange={onModelChange}
+        onEffortChange={onEffortChange}
         onClear={onClear}
         agentPlaceholder="Pick a harness"
         modelPlaceholder="Agent default model"
+        effortPlaceholder="Engine default (High)"
       />
       {modelsLoading && (
         <p className="text-[11px] text-cyan-300 font-mono flex items-center gap-1.5">
@@ -47,7 +57,7 @@ export function CreateZeroAgentStep(props: CreateZeroAgentStepProps) {
         The probe is machine-scoped — model availability can differ between local and remote machines.
       </p>
       <p className="text-[10px] text-slate-600 font-mono flex items-center gap-1.5">
-        <Cpu className="w-3 h-3" /> Selection persists as the project's default agent/model.
+        <Cpu className="w-3 h-3" /> Selection persists as the project's default agent, model and effort.
       </p>
     </div>
   );

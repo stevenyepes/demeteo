@@ -39,6 +39,7 @@
 use crate::adapters::create_project_adapter::CreateProjectAdapter;
 use crate::domain::bootstrap::{BootstrapState, BootstrapStep};
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
+use crate::domain::models::EffortLevel;
 use crate::error::AppError;
 use crate::ports::create_project_port::{CreateProjectPort, LaunchedFeature};
 use crate::ports::provider_http::NamespaceSummary;
@@ -97,8 +98,15 @@ pub enum CreateProjectStepPayload {
     /// Step 5 — Coding agent (`opencode` / `hermes` / `claude-code`).
     Agent { kind: String },
     /// Step 6 — Model. Either a value returned by `getAgentModels`
-    /// or a free-form override.
-    Model { model: String },
+    /// or a free-form override. `effort` is the project-wide default
+    /// reasoning effort seeded onto `ProjectSettings::default_effort`;
+    /// omitted (an older frontend) means "no project default", which
+    /// resolves to [`EffortLevel::DEFAULT`] at run time.
+    Model {
+        model: String,
+        #[serde(default)]
+        effort: Option<EffortLevel>,
+    },
     /// Step 7 — Description. Carries the full snapshot so the
     /// command can atomically commit the wizard. The trailing
     /// strings are boxed so the enum size stays bounded — the
@@ -120,6 +128,9 @@ pub enum CreateProjectStepPayload {
         machine_id: Box<Option<String>>,
         agent_kind: Box<String>,
         model: Box<String>,
+        /// `Copy`-sized, so it stays unboxed alongside the boxed strings.
+        #[serde(default)]
+        effort: Option<EffortLevel>,
     },
 }
 
@@ -251,10 +262,13 @@ pub async fn submit_create_project_step(
             Ok(BootstrapOutcome::Continue { state })
         }
 
-        CreateProjectStepPayload::Model { model } => {
+        CreateProjectStepPayload::Model { model, effort } => {
             if model.trim().is_empty() {
                 return Err(AppError::validation("Model is required"));
             }
+            // The effort is carried again on the Commit payload (which
+            // snapshots every step), so nothing to persist here.
+            let _ = effort;
             state.advance_to(BootstrapStep::Description);
             Ok(BootstrapOutcome::Continue { state })
         }
@@ -274,6 +288,7 @@ pub async fn submit_create_project_step(
             machine_id,
             agent_kind,
             model,
+            effort,
         } => {
             // Deref the Box<String> fields to plain `&str` slices so
             // the rest of the arm can stay string-typed. `String` → `&str`
@@ -383,6 +398,9 @@ pub async fn submit_create_project_step(
             // 4. Save the project settings (read-merge semantics
             // — never overwrites a populated field with null).
             let settings = crate::domain::models::ProjectSettings {
+                // The wizard's project-wide default. `None` = no stored
+                // default, which every run resolves to `EffortLevel::DEFAULT`.
+                default_effort: effort,
                 project_id: project_id.clone(),
                 worktree_strategy: crate::domain::models::WorktreeStrategy {
                     default_branch: created_repo.default_branch.clone(),

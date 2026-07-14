@@ -68,6 +68,7 @@ async fn probe_models_via_acp(
         env: crate::ports::agent_runtime::agent_base_env(ctx.exec.as_ref(), machine_id).await,
         cwd,
         model: None,
+        effort: None,
         title: None,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),

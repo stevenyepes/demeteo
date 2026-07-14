@@ -108,6 +108,13 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "features", "pr_title", "TEXT")?;
     add_column_if_missing(conn, "features", "pr_body", "TEXT")?;
 
+    // Effort level (V29), the reasoning-budget peer of `model`. Nullable with
+    // no default: NULL = inherit, so pre-V29 rows resolve to
+    // `EffortLevel::DEFAULT` without a backfill.
+    add_column_if_missing(conn, "features", "effort", "TEXT")?;
+    add_column_if_missing(conn, "project_settings", "default_effort", "TEXT")?;
+    add_column_if_missing(conn, "project_workflow_overrides", "effort", "TEXT")?;
+
     Ok(())
 }
 

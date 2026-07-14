@@ -58,6 +58,7 @@ export function useCreateZeroWizardActions(form: WizardFormApi) {
         description: form.description.trim(),
         agentKind: form.agentKind || null,
         model: form.model || null,
+        effort: form.effort || null,
         stagedAttachments: [],
       });
       navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title ?? title });

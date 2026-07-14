@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff, Server, MoonStar } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import type { Machine, Repository, WorkflowSummary } from '../types';
+import type { EffortLevel, Machine, Repository, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 import { getAgentModels } from '../lib/agentModels';
-import { useAgentCatalog } from '../lib/agentCatalog';
+import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
 import { HarnessModelPicker, type ModelOption } from './ui/HarnessModelPicker';
 import type { AgentConfigView } from './settings/ProjectSettingsContext';
 
@@ -48,12 +48,14 @@ interface StartFeatureModalProps {
     description: string;
     agentKind?: string;
     model?: string;
+    /** Feature-wide reasoning effort chosen at launch. Unset = inherit. */
+    effort?: EffortLevel;
     targetRepos: string[];
     commitArtifacts?: boolean;
     /** Per-run override of the loop iteration budget (migration V13). */
     loopIterations?: number;
-    /** Per-step agent/model overrides chosen at launch (migration V13). */
-    stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null }[];
+    /** Per-step agent/model/effort overrides chosen at launch (migration V13). */
+    stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null; effort?: EffortLevel | null }[];
     /**
      * Staged file attachments, keyed by sha256 (see
      * `AttachmentDropzone.tsx`). The modal cannot persist these
@@ -124,6 +126,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [workflowId, setWorkflowId] = useState<string>('');
   const [agentKind, setAgentKind] = useState<string>('');
   const [model, setModel] = useState<string>('');
+  const [effort, setEffort] = useState<EffortLevel | ''>('');
   // Agents actually configured/available on the target machine (or the
   // project's local config when running here). Drives the agent pickers
   // below instead of a hardcoded list, so the modal never offers an
@@ -151,7 +154,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // Steps of the selected workflow + per-step agent/model overrides.
   // A blank entry means "inherit" the workflow/project default for that step.
   const [steps, setSteps] = useState<StepRow[]>([]);
-  const [stepOverrides, setStepOverrides] = useState<Record<string, { agent_kind: string; model: string }>>({});
+  const [stepOverrides, setStepOverrides] = useState<Record<string, { agent_kind: string; model: string; effort: EffortLevel | '' }>>({});
   // Per-run loop budget. Empty string = inherit project/engine default.
   const [loopIterations, setLoopIterations] = useState<string>('');
   // Per-feature override for the project's `commit_artifacts` setting.
@@ -219,6 +222,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setDescription('');
       setAgentKind('');
       setModel('');
+      setEffort('');
       setShowAdvanced(false);
       setCommitArtifacts('inherit');
       setSteps([]);
@@ -509,8 +513,9 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
         step_id,
         agent_kind: v.agent_kind.trim() || null,
         model: v.model.trim() || null,
+        effort: v.effort || null,
       }))
-      .filter((o) => o.agent_kind || o.model);
+      .filter((o) => o.agent_kind || o.model || o.effort);
     const loopArg = loopIterations.trim() ? parseInt(loopIterations, 10) : undefined;
     const costArg = detached && maxCostUsd.trim() ? parseFloat(maxCostUsd) : undefined;
     const wallClockArg =
@@ -521,6 +526,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       description: description.trim(),
       agentKind: agentKind.trim() || undefined,
       model: model.trim() || undefined,
+      effort: effort || undefined,
       targetRepos,
       commitArtifacts: commitArtifactsArg,
       loopIterations: Number.isFinite(loopArg as number) ? loopArg : undefined,
@@ -815,7 +821,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             <div className="space-y-3 pl-3 border-l border-white/5">
               <div>
                 <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                  Default agent &amp; model — all steps
+                  Default agent, model &amp; effort — all steps
                 </label>
                 <HarnessModelPicker
                   agentKinds={agentKinds}
@@ -823,19 +829,25 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   modelsLoading={modelsFor(agentKind).loading}
                   agentKind={agentKind}
                   model={model}
+                  effort={effort}
+                  effortLevels={effortLevelsFor(agentCatalog, agentKind)}
                   onAgentKindChange={(k) => {
                     setAgentKind(k);
                     // The selected model belongs to the previous agent's
                     // namespace — clear it so we don't submit a mismatched pair.
+                    // The effort ladder is canonical across agents, so it stays.
                     setModel('');
                   }}
                   onModelChange={setModel}
+                  onEffortChange={setEffort}
                   onClear={() => {
                     setAgentKind('');
                     setModel('');
+                    setEffort('');
                   }}
                   agentPlaceholder="project default"
                   modelPlaceholder="Agent default model"
+                  effortPlaceholder="project default"
                 />
               </div>
 
@@ -848,10 +860,10 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   </label>
                   <div className="space-y-2.5">
                     {steps.map((s, i) => {
-                      const ov = stepOverrides[s.id] || { agent_kind: '', model: '' };
-                      const setOv = (patch: Partial<{ agent_kind: string; model: string }>) =>
+                      const ov = stepOverrides[s.id] || { agent_kind: '', model: '', effort: '' as const };
+                      const setOv = (patch: Partial<{ agent_kind: string; model: string; effort: EffortLevel | '' }>) =>
                         setStepOverrides((prev) => {
-                          const cur = prev[s.id] || { agent_kind: '', model: '' };
+                          const cur = prev[s.id] || { agent_kind: '', model: '', effort: '' as const };
                           return { ...prev, [s.id]: { ...cur, ...patch } };
                         });
                       const m = modelsFor(ov.agent_kind);
@@ -869,11 +881,16 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                             modelsLoading={m.loading}
                             agentKind={ov.agent_kind}
                             model={ov.model}
+                            effort={ov.effort}
+                            inheritedAgentKind={agentKind}
+                            effortLevels={effortLevelsFor(agentCatalog, ov.agent_kind || agentKind)}
                             onAgentKindChange={(k) => setOv({ agent_kind: k, model: '' })}
                             onModelChange={(model) => setOv({ model })}
-                            onClear={() => setOv({ agent_kind: '', model: '' })}
+                            onEffortChange={(effort) => setOv({ effort })}
+                            onClear={() => setOv({ agent_kind: '', model: '', effort: '' })}
                             agentPlaceholder="inherit"
                             modelPlaceholder="inherit"
+                            effortPlaceholder="inherit"
                           />
                         </div>
                       );

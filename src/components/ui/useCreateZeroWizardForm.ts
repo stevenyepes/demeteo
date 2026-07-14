@@ -5,7 +5,7 @@ import { listProviderNamespaces, type ProviderNamespace } from '../../lib/create
 import { useErrorBus } from '../../lib/errorBus';
 import { formatError } from '../../lib/errors';
 import { useProject } from '../../context';
-import type { Machine, Provider, WorkflowSummary } from '../../types';
+import type { EffortLevel, Machine, Provider, WorkflowSummary } from '../../types';
 
 const WORKFLOW_ID_STARTER = 'wf-starter-standard';
 
@@ -20,6 +20,9 @@ export interface WizardFormState {
   keyPassphrase: string;
   agentKind: string;
   model: string;
+  /** Project-wide default effort picked on the Agent step. `''` = no project
+   *  default, which resolves to the engine default (`high`) at run time. */
+  effort: EffortLevel | '';
   defaultBranch: string;
   branchPrefix: string;
   testCommand: string;
@@ -48,6 +51,7 @@ export interface WizardFormSetters {
   setKeyPassphrase: (v: string) => void;
   setAgentKind: (v: string) => void;
   setModel: (v: string) => void;
+  setEffort: (v: EffortLevel | '') => void;
   setDefaultBranch: (v: string) => void;
   setBranchPrefix: (v: string) => void;
   setTestCommand: (v: string) => void;
@@ -120,6 +124,7 @@ export function useCreateZeroWizardForm(): WizardFormApi {
   const [keyPassphrase, setKeyPassphrase] = useState('');
   const [agentKind, setAgentKind] = useState('');
   const [model, setModel] = useState('');
+  const [effort, setEffort] = useState<EffortLevel | ''>('');
   const [models, setModels] = useState<{ value: string; name: string }[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -283,7 +288,7 @@ export function useCreateZeroWizardForm(): WizardFormApi {
 
   return useMemo<WizardFormApi>(() => ({
     projectName, providerId, namespaceId, repoSlug, repoPrivate,
-    machineKind, machineId, keyPassphrase, agentKind, model,
+    machineKind, machineId, keyPassphrase, agentKind, model, effort,
     defaultBranch, branchPrefix, testCommand, prTemplate,
     conflictPolicy, featureLifecycle, description, workflowId,
     providers, providerHost, namespaces, namespacesLoading,
@@ -291,13 +296,13 @@ export function useCreateZeroWizardForm(): WizardFormApi {
     machineProbeStatus, machineProbeError, retestMachineConnection,
     projectId,
     setProjectName, setProviderId, setNamespaceId, setRepoSlug, setRepoPrivate,
-    setMachineKind, setMachineId, setKeyPassphrase, setAgentKind, setModel,
+    setMachineKind, setMachineId, setKeyPassphrase, setAgentKind, setModel, setEffort,
     setDefaultBranch, setBranchPrefix, setTestCommand, setPrTemplate,
     setConflictPolicy, setFeatureLifecycle, setDescription, setWorkflowId,
     setProjectId, applyStrategyToForm,
   }), [
     projectName, providerId, namespaceId, repoSlug, repoPrivate,
-    machineKind, machineId, keyPassphrase, agentKind, model,
+    machineKind, machineId, keyPassphrase, agentKind, model, effort,
     defaultBranch, branchPrefix, testCommand, prTemplate,
     conflictPolicy, featureLifecycle, description, workflowId,
     providers, providerHost, namespaces, namespacesLoading,

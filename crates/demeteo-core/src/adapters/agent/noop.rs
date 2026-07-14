@@ -25,6 +25,7 @@ impl AgentRuntime for NoopRuntime {
             display_label: "Noop",
             lists_models: false,
             default_model: None,
+            effort_levels: &[],
         }
     }
 

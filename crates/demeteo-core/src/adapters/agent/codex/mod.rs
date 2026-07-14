@@ -26,6 +26,7 @@
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
+use crate::domain::models::{AgentKind, EffortLevel};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_runtime::AgentContext;
 
@@ -296,6 +297,17 @@ fn build_codex_args(
         args.push("sandbox_workspace_write.network_access=true".to_string());
     }
 
+    // Effort, via the same `-c` channel (accepted by both `exec` and
+    // `exec resume`). Clamped here because codex does *not* validate:
+    // an unknown value becomes a `Custom(String)` and goes on the wire.
+    if let Some(effort) = ctx
+        .effort
+        .and_then(|e| EffortLevel::clamp_for(AgentKind::Codex, e))
+    {
+        args.push("-c".to_string());
+        args.push(format!("model_reasoning_effort={}", effort.as_str()));
+    }
+
     if let Some(ref m) = ctx.model {
         args.push("--model".to_string());
         args.push(m.clone());
@@ -334,6 +346,8 @@ pub fn runtime() -> UnifiedCliRuntime {
         // Codex enforces via the `--sandbox`/`-c sandbox_mode` policy in
         // `build_codex_args`, not an env var (flag-based, like claude-code).
         perm_env: crate::ports::agent_runtime::no_permission_env,
+        // Effort rides on argv (`-c model_reasoning_effort=…`), not env.
+        effort_env: crate::adapters::agent::cli_runtime::no_effort_env,
         display_label: "Codex",
         // `codex` has no `models` list subcommand; aliases come from the static
         // fallback in `application::agent_probe`.
@@ -341,6 +355,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         // Codex's default model is user-configurable in ~/.codex/config.toml;
         // don't seed a cost fallback that could misprice an overridden model.
         default_model: None,
+        effort_levels: EffortLevel::supported_for(AgentKind::Codex),
     }
 }
 

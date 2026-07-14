@@ -314,6 +314,7 @@ pub async fn execute_run(
             &spec.description,
             spec.agent_kind.as_deref(),
             spec.model.as_deref(),
+            spec.effort,
             spec.commit_artifacts,
             spec.loop_iterations,
             spec.step_overrides.clone(),

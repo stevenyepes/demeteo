@@ -1,6 +1,13 @@
 // Post-pivot types. Legacy supervisor/thread types were removed as part of
 // the R7 cleanup; see AGENT_INTEGRATION.md §1 for the surviving surface.
 
+import type { EffortLevel } from './lib/effortLevels';
+
+/** The reasoning-effort ladder. Declared (and drift-tested) in
+ *  `lib/effortLevels.ts`; re-exported here so IPC types can name it without
+ *  every consumer reaching into `lib/`. */
+export type { EffortLevel };
+
 /** Release channel baked into the binary at build time. */
 export type ReleaseChannel = 'stable' | 'nightly';
 
@@ -195,7 +202,7 @@ export type CreateProjectStepPayload =
   | { step: 'group'; namespace_id: string; kind: string; name: string }
   | { step: 'machine'; kind: 'local' | 'remote'; machine_id: string | null }
   | { step: 'agent'; kind: string }
-  | { step: 'model'; model: string }
+  | { step: 'model'; model: string; effort?: EffortLevel | null }
   | {
       step: 'commit';
       title: string;
@@ -212,6 +219,9 @@ export type CreateProjectStepPayload =
       machine_id: string | null;
       agent_kind: string;
       model: string;
+      /** Seeds `ProjectSettings.default_effort`. Omitted = no project
+       *  default, which resolves to the engine default (`high`). */
+      effort?: EffortLevel | null;
     };
 
 /** Result of `submit_create_project_step` from the Rust command. The
@@ -303,6 +313,9 @@ export type StepConfig = {
   title: string;
   agent_kind?: string | null;
   model?: string | null;
+  /** Reasoning effort for this step. Unset = inherit (project default, then
+   *  the engine default `high`). A peer of `model`, not a property of it. */
+  effort?: EffortLevel | null;
   /**
    * `sequence` steps only: the earlier step whose `task-list` artifact holds
    * the ordered task list to execute. Unset falls back to the step planning
@@ -353,6 +366,7 @@ export interface WorkflowOverride {
   step_id?: string | null;
   agent_kind?: string | null;
   model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 export interface StepExecution {
@@ -653,6 +667,9 @@ export interface ProjectSettingsData {
   feature_lifecycle: string;
   default_agent_kind?: string | null;
   default_model?: string | null;
+  /** Project-wide default reasoning effort. `null` = no project default,
+   *  which resolves to the engine default (`high`) at run time. */
+  default_effort?: EffortLevel | null;
   default_loop_iterations?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;

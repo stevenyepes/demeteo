@@ -218,6 +218,9 @@ impl DagStepExecutor {
             if wf_level.model.is_some() {
                 settings.default_model = wf_level.model.clone();
             }
+            if wf_level.effort.is_some() {
+                settings.default_effort = wf_level.effort;
+            }
         }
 
         let latest_version = match self.workflows.latest_version(&wf_id) {
@@ -262,6 +265,9 @@ impl DagStepExecutor {
                 }
                 if ov.model.is_some() {
                     step.model = ov.model.clone();
+                }
+                if ov.effort.is_some() {
+                    step.effort = ov.effort;
                 }
             }
         }

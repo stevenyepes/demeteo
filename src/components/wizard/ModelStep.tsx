@@ -1,4 +1,5 @@
-import { Loader2, Zap } from 'lucide-react';
+import { Gauge, Loader2, Zap } from 'lucide-react';
+import { DEFAULT_EFFORT, EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
 import type { CreateProjectStepPayload } from '../../types';
 
 export interface ModelOption {
@@ -15,6 +16,12 @@ export interface ModelStepProps {
   loading: boolean;
   models: ReadonlyArray<ModelOption>;
   value: string;
+  /** Project-wide default effort. `''` = no project default, which resolves
+   *  to the engine default at run time. */
+  effort: EffortLevel | '';
+  /** The levels the chosen agent declares. Empty (hermes) disables the
+   *  control — it has no per-invocation effort knob to set. */
+  effortLevels: ReadonlyArray<EffortLevel>;
   onSubmit: (payload: Extract<CreateProjectStepPayload, { step: 'model' }>) => void;
 }
 
@@ -25,7 +32,9 @@ export interface ModelStepProps {
  * or types a free-form override. Emits the matching
  * `{ step: 'model', model }` payload upward.
  */
-export function ModelStep({ enabled, loading, models, value, onSubmit }: ModelStepProps) {
+export function ModelStep({ enabled, loading, models, value, effort, effortLevels, onSubmit }: ModelStepProps) {
+  const effortSupported = effortLevels.length > 0;
+
   return (
     <div className="space-y-4" data-testid="wizard-step-model">
       <label
@@ -49,7 +58,7 @@ export function ModelStep({ enabled, loading, models, value, onSubmit }: ModelSt
         <>
           <select
             value={models.some((m) => m.value === value) ? value : ''}
-            onChange={(e) => onSubmit({ step: 'model', model: e.target.value })}
+            onChange={(e) => onSubmit({ step: 'model', model: e.target.value, effort: effort || null })}
             data-testid="wizard-model-select"
             className="w-full bg-[#08090c] border border-white/10 rounded-lg py-3 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50"
           >
@@ -75,16 +84,49 @@ export function ModelStep({ enabled, loading, models, value, onSubmit }: ModelSt
               id="wizard-model-input"
               type="text"
               value={value}
-              onChange={(e) => onSubmit({ step: 'model', model: e.target.value })}
+              onChange={(e) => onSubmit({ step: 'model', model: e.target.value, effort: effort || null })}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && value.trim().length > 0) {
                   e.preventDefault();
-                  onSubmit({ step: 'model', model: value.trim() });
+                  onSubmit({ step: 'model', model: value.trim(), effort: effort || null });
                 }
               }}
               placeholder="e.g. anthropic/claude-sonnet-4"
               className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-violet-500/50 placeholder-slate-600"
             />
+          </div>
+
+          {/* Project-wide default reasoning effort. Seeds
+              `ProjectSettings.default_effort`; every step inherits it unless
+              the workflow, an override or the launch modal says otherwise. */}
+          <div>
+            <label
+              htmlFor="wizard-effort-select"
+              className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-1.5"
+            >
+              <Gauge className="w-3 h-3" /> Default effort
+            </label>
+            <select
+              id="wizard-effort-select"
+              value={effort}
+              onChange={(e) =>
+                onSubmit({
+                  step: 'model',
+                  model: value,
+                  effort: (e.target.value || null) as EffortLevel | null,
+                })
+              }
+              disabled={!effortSupported}
+              title={effortSupported ? undefined : 'This agent does not support effort selection'}
+              className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <option value="">
+                {effortSupported ? `Engine default (${EFFORT_LABELS[DEFAULT_EFFORT]})` : 'Not supported'}
+              </option>
+              {effortLevels.map((l) => (
+                <option key={l} value={l}>{EFFORT_LABELS[l]}</option>
+              ))}
+            </select>
           </div>
         </>
       )}

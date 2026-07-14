@@ -201,6 +201,7 @@ fn ctx_for_test() -> AgentContext {
         env: HashMap::new(),
         cwd: "/tmp/wt".into(),
         model: Some("claude-sonnet-4".into()),
+        effort: None,
         title: Some("research".into()),
         agent_exec: Arc::new(StubAgentExec),
         exec: Arc::new(StubExec),
@@ -274,4 +275,31 @@ fn args_prompt_appears_as_trailing_positional() {
         !args.contains(&"".to_string()),
         "empty prompt must be omitted, got {args:?}"
     );
+}
+
+// ── Effort ───────────────────────────────────────────────────────────────
+
+use crate::domain::models::EffortLevel;
+
+fn ctx_with_effort(effort: Option<EffortLevel>) -> AgentContext {
+    AgentContext {
+        effort,
+        ..ctx_for_test()
+    }
+}
+
+#[test]
+fn args_variant_carries_the_resolved_effort() {
+    let args = build_opencode_args(&ctx_with_effort(Some(EffortLevel::High)), None, "");
+    let idx = args
+        .iter()
+        .position(|a| a == "--variant")
+        .expect("--variant should be present");
+    assert_eq!(args[idx + 1], "high", "got {args:?}");
+}
+
+#[test]
+fn args_no_variant_when_effort_unset() {
+    let args = build_opencode_args(&ctx_with_effort(None), None, "");
+    assert!(!args.contains(&"--variant".to_string()), "got {args:?}");
 }

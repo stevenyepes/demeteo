@@ -23,7 +23,7 @@ An agent is one implementation of the `AgentRuntime` port
 newline-delimited JSON from stdout, maps each line to an internal `AgentEvent`,
 and tears the process down when the turn completes. That shared machinery lives
 in `UnifiedCliRuntime` (`crates/demeteo-core/src/adapters/agent/cli_runtime.rs`),
-so a new CLI agent is **three function pointers + one descriptor**, not a new
+so a new CLI agent is **four function pointers + one descriptor**, not a new
 runtime:
 
 | Piece | Type | What it does |
@@ -31,7 +31,8 @@ runtime:
 | `parse_event` | `fn(&str) -> Option<AgentEvent>` | Map one JSON line → internal event |
 | `build_args` | `fn(&AgentContext, Option<&str>, &str) -> Vec<String>` | Build the argv for one turn |
 | `perm_env` | `fn(&PermissionProfile) -> HashMap<String,String>` | Translate the permission policy to native env |
-| `AgentCapabilities` | struct | Declared `display_label`, `lists_models`, `default_model` |
+| `effort_env` | `fn(Option<EffortLevel>) -> HashMap<String,String>` | Translate the resolved effort to native env |
+| `AgentCapabilities` | struct | Declared `display_label`, `lists_models`, `default_model`, `effort_levels` |
 
 Look at `adapters/agent/claude_code/mod.rs` (a mature CLI with structured
 stream output) as the closest template, or `opencode`/`hermes` for the
@@ -92,6 +93,35 @@ There is no config-file/env model path — every supported agent is a CLI runtim
 that takes `--model`. If a captured session id is present, add your CLI's
 resume flag (opencode `--session <id>`, claude-code/hermes `--resume <id>`).
 
+Effort is a **peer of the model**, not a property of it, and rides the same way.
+`ctx.effort` is already resolved (the 5-tier chain, terminating at
+`EffortLevel::DEFAULT` = `high`), but **clamp it to your own kind before you
+emit it** — the clamp is what makes an unsupported level unemittable even if a
+buggy caller asks for one:
+
+```rust
+if let Some(level) = ctx.effort.and_then(|e| EffortLevel::clamp_for(AgentKind::YourName, e)) {
+    args.push("--effort".into());
+    args.push(level.as_str().to_string());   // "low" | "medium" | "high" | "xhigh" | "max"
+}
+```
+
+Do **not** trust the CLI to reject a level it doesn't understand: codex wraps an
+unknown effort as `Custom(String)` and puts it on the wire, and opencode treats
+an unsupported `--variant` as a silent no-op. Demeteo owns the validation.
+
+### `effort_env`
+
+If your CLI reads effort from the environment as well as (or instead of) argv,
+return it here; otherwise return the shared `no_effort_env` helper, exactly as
+`no_permission_env` works for permissions. Only claude-code needs a non-empty
+map today — `CLAUDE_CODE_EFFORT_LEVEL` **outranks** its own `--effort` flag, and
+the child inherits the host environment (`sanitize_child_env` strips only
+`LD_LIBRARY_PATH` / `LD_PRELOAD`), so a developer with that variable exported
+would silently override every Demeteo run unless the adapter sets it explicitly
+on each spawn. If your CLI has the same shape, set the variable — belt *and*
+braces is the correct posture here.
+
 ### `perm_env`
 
 Translate the abstract `PermissionProfile` (`read_fs | write_fs | execute |
@@ -118,9 +148,11 @@ pub fn runtime() -> UnifiedCliRuntime {
         parse_event: parse_yourname_event,
         build_args: build_yourname_args,
         perm_env: crate::ports::agent_runtime::opencode_permission_env, // or no_permission_env
+        effort_env: crate::adapters::agent::cli_runtime::no_effort_env,  // or your own
         display_label: "Your Name",         // shown in every picker
         lists_models: true,                 // does `<binary> models` list models?
         default_model: None,                // Some("...") to seed cost fallback
+        effort_levels: EffortLevel::supported_for(AgentKind::YourName), // may be &[]
     }
 }
 ```
@@ -128,7 +160,16 @@ pub fn runtime() -> UnifiedCliRuntime {
 `AgentCapabilities` is the whole reason no downstream site special-cases your
 kind: `display_label` feeds the UI, `lists_models` drives dynamic model
 discovery in `application/agent_probe.rs`, `default_model` seeds the
-`UsageAccumulator` cost fallback.
+`UsageAccumulator` cost fallback, and `effort_levels` populates every effort
+picker in the frontend.
+
+Declare your effort mapping in one place — the per-agent table in
+`domain/models/effort.rs` (`supported_for` / `clamp_for`), which the exhaustive
+unit test there holds you to. Declare **only** the levels the CLI really takes:
+an agent with no per-invocation effort control declares `&[]` (hermes does), and
+the frontend then disables its effort control with a tooltip instead of
+pretending a level applied. Honest degradation beats a silently ignored flag —
+the user can see the difference; a dropped `--variant` they cannot.
 
 ## Step 3 — Register in composition
 
@@ -162,8 +203,10 @@ silent parse failure weeks later — the whole reason the contract exists.
 ## Checklist
 
 - [ ] `AgentKind` variant + `as_str` / `parse` / `ALL`
-- [ ] `adapters/agent/yourname/mod.rs` with `parse_event` / `build_args` / `perm_env`
+- [ ] `adapters/agent/yourname/mod.rs` with `parse_event` / `build_args` / `perm_env` / `effort_env`
 - [ ] `runtime()` returning a `UnifiedCliRuntime` incl. `AgentCapabilities`
+- [ ] Effort mapping in `domain/models/effort.rs` (`supported_for`) — `&[]` if the CLI has no per-invocation control
+- [ ] `build_args` clamps `ctx.effort` via `EffortLevel::clamp_for` before emitting it
 - [ ] `pub mod yourname;` + one line in `composition/mod.rs`
 - [ ] Pricing rows in `adapters/pricing.rs` (optional but recommended)
 - [ ] Golden-transcript fixture + replay test

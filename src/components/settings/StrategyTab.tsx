@@ -1,8 +1,13 @@
 import { GitBranch, Zap, Settings, FileText, Activity, Check, RotateCw, Trash2, Plus, FolderOpen } from 'lucide-react';
+import { DEFAULT_EFFORT, EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
 import { useSettings } from './ProjectSettingsContext';
 
 export function StrategyTab() {
   const s = useSettings();
+  // Effort is offered per the *default* harness's declared capabilities: with
+  // hermes as the project default there is nothing to pick, so the control
+  // greys out rather than pretending a level would apply.
+  const effortLevels = s.effortLevelsFor(s.defaultAgentKind);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -120,6 +125,21 @@ export function StrategyTab() {
               <input type="text" value={s.defaultModel} onChange={e => s.setDefaultModel(e.target.value)} placeholder="Custom override" className="w-1/3 shrink-0 min-w-[140px] bg-black/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" disabled={!s.defaultAgentKind} />
             </div>
           )}
+          <div className="mt-4">
+            <label htmlFor="default-effort" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Effort</label>
+            <select
+              id="default-effort"
+              value={s.defaultEffort}
+              onChange={e => s.setDefaultEffort(e.target.value as EffortLevel | '')}
+              disabled={effortLevels.length === 0}
+              title={effortLevels.length === 0 ? `${s.defaultAgentKind.replace(/-/g, ' ')} does not support effort selection` : undefined}
+              className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <option value="">{effortLevels.length === 0 ? 'Not supported' : `Engine default (${EFFORT_LABELS[DEFAULT_EFFORT]})`}</option>
+              {effortLevels.map(l => <option key={l} value={l}>{EFFORT_LABELS[l]}</option>)}
+            </select>
+            <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">How much reasoning budget every step asks its agent for, unless a workflow, an override or the launch modal pins something more specific. Leave blank for the engine default ({EFFORT_LABELS[DEFAULT_EFFORT]}).</p>
+          </div>
           <div className="mt-4">
             <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Loop Iterations</label>
             <input type="number" min={1} max={10} value={s.defaultLoopIterations} onChange={e => s.setDefaultLoopIterations(e.target.value)} placeholder="3 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />

@@ -97,6 +97,7 @@ impl ExecutionDriver {
                     accumulated_tokens,
                     agent_kind,
                     override_model,
+                    self.resolve_step_effort(step_conf),
                     machine_str,
                     step_execs,
                     step_index,
@@ -229,6 +230,7 @@ impl ExecutionDriver {
         accumulated_tokens: &mut i64,
         agent_kind: &str,
         override_model: &Option<String>,
+        effort: crate::domain::models::EffortLevel,
         machine_str: &str,
         step_execs: &[StepExecution],
         step_index: usize,
@@ -334,6 +336,9 @@ impl ExecutionDriver {
             env: planner_env,
             cwd: planner_wt_path.clone(),
             model: override_model.clone(),
+            // Decomposing the spec into an ordered task list is real agent
+            // work — it inherits the step's resolved effort.
+            effort: Some(effort),
             title: Some("plan".to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),

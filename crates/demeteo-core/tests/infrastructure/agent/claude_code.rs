@@ -252,6 +252,7 @@ fn ctx_for_test(bare_mode: bool) -> AgentContext {
         env: HashMap::new(),
         cwd: ".".into(),
         model: Some("claude-sonnet-4".into()),
+        effort: None,
         title: None,
         agent_exec: Arc::new(StubAgentExec),
         exec: Arc::new(StubExec),
@@ -343,4 +344,51 @@ fn args_never_emit_settings() {
         !without_bare.contains(&"--settings".to_string()),
         "--settings must NOT be emitted: got {without_bare:?}"
     );
+}
+
+// ── Effort ───────────────────────────────────────────────────────────────
+
+use crate::adapters::agent::claude_code::claude_effort_env;
+use crate::domain::models::EffortLevel;
+
+fn ctx_with_effort(effort: Option<EffortLevel>) -> AgentContext {
+    AgentContext {
+        effort,
+        ..ctx_for_test(false)
+    }
+}
+
+fn arg_pair<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.iter()
+        .position(|a| a == flag)
+        .map(|i| args[i + 1].as_str())
+}
+
+#[test]
+fn args_effort_emitted_when_resolved() {
+    let args = build_claude_args(&ctx_with_effort(Some(EffortLevel::High)), None, "");
+    assert_eq!(arg_pair(&args, "--effort"), Some("high"), "got {args:?}");
+}
+
+#[test]
+fn args_no_effort_when_unset() {
+    let args = build_claude_args(&ctx_with_effort(None), None, "");
+    assert!(!args.contains(&"--effort".to_string()), "got {args:?}");
+}
+
+#[test]
+fn effort_env_is_set_alongside_the_flag() {
+    // `CLAUDE_CODE_EFFORT_LEVEL` outranks `--effort` and the child inherits
+    // the host env, so a developer with it exported would override every run
+    // unless we set it ourselves on every spawn.
+    let env = claude_effort_env(Some(EffortLevel::High));
+    assert_eq!(
+        env.get("CLAUDE_CODE_EFFORT_LEVEL").map(String::as_str),
+        Some("high")
+    );
+}
+
+#[test]
+fn effort_env_empty_when_unset() {
+    assert!(claude_effort_env(None).is_empty());
 }

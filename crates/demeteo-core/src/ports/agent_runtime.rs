@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::SessionInfo;
+use crate::domain::models::{EffortLevel, SessionInfo};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
@@ -29,6 +29,17 @@ pub struct AgentContext {
     /// Optional model identifier to pass as initial configOption
     /// in the `session/new` request (e.g. "deepseek", "gpt-4o").
     pub model: Option<String>,
+    /// The reasoning effort this turn asks for — already resolved through
+    /// the precedence chain and already clamped to what the target agent
+    /// supports. `None` means **inject nothing**: either the caller has no
+    /// opinion, or the agent declares no effort levels at all (hermes).
+    ///
+    /// A peer of [`model`](Self::model), not a property of it. Each
+    /// adapter's `ArgsBuilder` re-applies
+    /// [`EffortLevel::clamp_for`](crate::domain::models::EffortLevel::clamp_for)
+    /// against its own kind before emitting, so no caller needs per-agent
+    /// knowledge and an unsupported level is unemittable.
+    pub effort: Option<EffortLevel>,
     /// Optional step title, passed as `--title <value>` for CLI agents
     /// that support named sessions (opencode, hermes).
     pub title: Option<String>,
@@ -223,6 +234,18 @@ pub struct AgentCapabilities {
     /// used to seed `UsageAccumulator` for pricing-table cost fallback.
     /// `None` when the default isn't statically knowable.
     pub default_model: Option<&'static str>,
+    /// The effort levels this agent actually accepts per invocation, in
+    /// ladder order. Drives the UI picker, so a harness with no
+    /// per-invocation effort control (hermes) declares `&[]` and the
+    /// control greys out instead of the frontend hardcoding a per-agent
+    /// list. Mirrors
+    /// [`EffortLevel::supported_for`](crate::domain::models::EffortLevel::supported_for).
+    ///
+    /// Serializes out to the UI; `skip_deserializing` because serde has no
+    /// `Deserialize` for a borrowed slice of non-`u8` — the value is always
+    /// declared in Rust, never read back off the wire.
+    #[serde(skip_deserializing)]
+    pub effort_levels: &'static [EffortLevel],
 }
 
 /// Transport-neutral runtime for a single agent. The runtime takes a binary

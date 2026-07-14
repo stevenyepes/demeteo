@@ -14,6 +14,7 @@ impl AgentRuntime for NoopRuntime {
             display_label: "Noop",
             lists_models: false,
             default_model: None,
+            effort_levels: &[],
         }
     }
     async fn is_available(
@@ -197,6 +198,7 @@ async fn get_or_spawn_returns_structured_error_for_unknown_kind() {
                 env: Default::default(),
                 cwd: ".".into(),
                 model: None,
+                effort: None,
                 title: None,
                 agent_exec: stub.clone(),
                 exec: stub,
@@ -257,6 +259,7 @@ impl AgentRuntime for FlippableRuntime {
             display_label: "Flippable",
             lists_models: false,
             default_model: None,
+            effort_levels: &[],
         }
     }
     async fn is_available(
@@ -402,4 +405,24 @@ async fn is_available_force_bypasses_cache() {
             .await
     );
     assert_eq!(rt.calls().await, 2, "fresh value must be cached");
+}
+
+#[test]
+fn effort_levels_for_reads_the_runtime_capability() {
+    use crate::domain::models::EffortLevel;
+
+    let reg = AgentRegistry::new(vec![
+        Arc::new(crate::adapters::agent::claude_code::runtime()),
+        Arc::new(crate::adapters::agent::codex::runtime()),
+        Arc::new(crate::adapters::agent::hermes::runtime()),
+    ]);
+
+    assert_eq!(reg.effort_levels_for("claude-code"), &EffortLevel::ALL[..]);
+    // Codex has no `max`.
+    assert!(!reg.effort_levels_for("codex").contains(&EffortLevel::Max));
+    assert!(reg.effort_levels_for("codex").contains(&EffortLevel::XHigh));
+    // Hermes has no per-invocation effort control at all…
+    assert!(reg.effort_levels_for("hermes").is_empty());
+    // …and neither does a kind we don't know about.
+    assert!(reg.effort_levels_for("nonesuch").is_empty());
 }

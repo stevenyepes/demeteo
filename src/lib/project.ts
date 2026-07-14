@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  EffortLevel,
   ProjectMemoryEntry,
   MemoryAgentConfig,
   MemoryAgentTestResult,
@@ -69,6 +70,32 @@ export async function listMemoryAgentModels(
   });
 }
 
+// ── Workflow / step overrides ──────────────────────────────────────────
+
+/**
+ * Upsert one project-scoped override. `stepId === null` is the
+ * workflow-level row ("applies to all steps"); a step id targets one step.
+ * Each field is independently `null` = "inherit that one field"; all three
+ * `null` clears the row entirely (the repo deletes it).
+ */
+export async function setWorkflowOverride(input: {
+  projectId: string;
+  workflowId: string;
+  stepId: string | null;
+  agentKind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+}): Promise<void> {
+  await invoke<void>("set_workflow_override", {
+    projectId: input.projectId,
+    workflowId: input.workflowId,
+    stepId: input.stepId,
+    agentKind: input.agentKind,
+    model: input.model,
+    effort: input.effort,
+  });
+}
+
 /**
  * Partial project-settings input. Any field left `undefined` is filled from
  * the existing DB record (or a sensible default). This prevents the
@@ -90,6 +117,7 @@ export interface ProjectSettingsInput {
   feature_lifecycle?: string;
   default_agent_kind?: string | null;
   default_model?: string | null;
+  default_effort?: EffortLevel | null;
   default_loop_iterations?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
@@ -166,6 +194,13 @@ export async function saveProjectSettings(
       input.default_model !== undefined
         ? input.default_model
         : (existing?.default_model ?? null),
+    // Omitted by every caller that doesn't own the Strategy tab, so it has to
+    // be carried across from the stored record — otherwise saving any other
+    // setting would silently drop the project's default effort.
+    default_effort:
+      input.default_effort !== undefined
+        ? input.default_effort
+        : (existing?.default_effort ?? null),
     default_loop_iterations:
       input.default_loop_iterations !== undefined
         ? input.default_loop_iterations

@@ -32,6 +32,7 @@ fn seed() -> (SqliteAdapter, FeatureId, StepExecutionId) {
     FeatureRepository::add(
         &db,
         Feature {
+            effort: None,
             id: fid.clone(),
             project_id: pid,
             workflow_id: None,

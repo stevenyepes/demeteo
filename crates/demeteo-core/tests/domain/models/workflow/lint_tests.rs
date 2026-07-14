@@ -6,6 +6,7 @@ use crate::domain::verifier::VerifierConfig;
 
 fn step(id: &str, capability: StepCapability, on_failure: Option<&str>) -> StepConfig {
     StepConfig {
+        effort: None,
         id: StepId::from(id.to_string()),
         kind: "agent".into(),
         title: id.into(),
@@ -26,6 +27,7 @@ fn step(id: &str, capability: StepCapability, on_failure: Option<&str>) -> StepC
 
 fn with_verifier(mut s: StepConfig) -> StepConfig {
     s.verifier = Some(VerifierConfig {
+        effort: None,
         agent_kind: None,
         model: None,
         instructions: "check it".into(),
