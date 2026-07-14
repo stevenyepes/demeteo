@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getAgentModels } from '../../lib/agentModels';
 import { listProviderNamespaces, type ProviderNamespace } from '../../lib/createProjectWizard';
 import { useErrorBus } from '../../lib/errorBus';
+import { formatError } from '../../lib/errors';
 import { useProject } from '../../context';
 import type { Machine, Provider, WorkflowSummary } from '../../types';
 
@@ -238,9 +239,8 @@ export function useCreateZeroWizardForm(): WizardFormApi {
         }
       } catch (err) {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
         setMachineProbeStatus('error');
-        setMachineProbeError(msg);
+        setMachineProbeError(formatError(err));
       }
     })();
     return () => { cancelled = true; };

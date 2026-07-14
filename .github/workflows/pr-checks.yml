@@ -56,11 +56,11 @@ jobs:
       # The build/test gate is a single shared script (scripts/checks.sh) that
       # developers and agents run locally before pushing, so "green locally"
       # means "green in CI" — no drift between an ad-hoc local run and this
-      # job. It runs tsc, fmt --check, clippy -D warnings (on the pinned
-      # toolchain, rust-toolchain.toml), the demeteo + core + runner tests, and
-      # the gate-feedback repro. Commitlint is skipped here because the
+      # job. It runs tsc, the Vitest frontend suite, fmt --check, clippy -D
+      # warnings (on the pinned toolchain, rust-toolchain.toml), and the
+      # demeteo + core + runner tests. Commitlint is skipped here because the
       # dedicated `wagoid` step below is the canonical PR-range gate.
-      - name: PR checks (tsc, fmt, clippy, tests, repro)
+      - name: PR checks (tsc, vitest, fmt, clippy, tests)
         env:
           CHECKS_SKIP_COMMITLINT: "1"
         run: ./scripts/checks.sh

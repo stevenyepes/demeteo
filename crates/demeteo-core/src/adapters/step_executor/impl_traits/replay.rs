@@ -20,6 +20,24 @@ impl DagStepExecutor {
             .ok_or_else(|| format!("Step execution not found: {}", execution_id))?;
 
         let feature_id = &step_exec.feature_id;
+
+        // Never replay a runner-owned shadow. This is the shared primitive
+        // behind both `step_retry` and `replay_from_step`, and it calls
+        // `start_execution_loop` directly rather than going through
+        // `ensure_driver_running` — so its shadow guard never fires here.
+        // Without this, replaying a detached run's step would rewind the
+        // mirrored rows and arm a *second* driver, on this machine, against
+        // a run the runner is still driving, in a worktree that only exists
+        // on the runner's box. `step_retry` repeats this check to return a
+        // typed validation error; this one is the backstop for every caller.
+        if self.runner_owned_features().contains(feature_id.as_str()) {
+            return Err(format!(
+                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
+                 replay it on the runner, not here",
+                feature_id.0
+            ));
+        }
+
         let feature = self
             .features
             .get(feature_id)?

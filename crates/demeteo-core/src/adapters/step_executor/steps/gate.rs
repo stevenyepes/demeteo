@@ -401,7 +401,12 @@ impl ExecutionDriver {
                 });
                 StepOutcome::Completed
             }
-            Some("cancel") => StepOutcome::Failed("Gate Cancelled".to_string()),
+            // `reject` is the remote inbox's word for `cancel` (the
+            // detached-run gate buttons are Approve / Reject). Spelled out
+            // rather than left to the catch-all below, which cancels on
+            // *any* unrecognised decision — so a genuine typo stays
+            // distinguishable from a rejection.
+            Some("cancel") | Some("reject") => StepOutcome::Failed("Gate Cancelled".to_string()),
             Some("redirect") => {
                 let cleaned_feedback = decision_recvd
                     .feedback

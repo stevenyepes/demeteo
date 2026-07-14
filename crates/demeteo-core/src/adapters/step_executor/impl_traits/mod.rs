@@ -539,6 +539,18 @@ impl StepExecutor for DagStepExecutor {
     }
 
     async fn feature_cancel(&self, feature_id: &str) -> Result<(), String> {
+        // A shadow has no local driver to signal: the run is executing
+        // under a `demeteo-runner` on another machine, which owns the
+        // only cancel sender that can stop it (`cancel_run` RPC). Refuse
+        // rather than find no sender in the map and report success — a
+        // silent `Ok` here is a "Stop" the user watched do nothing.
+        if self.runner_owned_features().contains(feature_id) {
+            return Err(format!(
+                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
+                 cancel it on the runner (remote_cancel_run), not locally",
+                feature_id
+            ));
+        }
         if let Some(tx) = self.cancel_senders.lock().unwrap().get(feature_id) {
             let _ = tx.send(true);
         }
@@ -577,6 +589,24 @@ impl StepExecutor for DagStepExecutor {
         }
 
         self.assert_no_active_predecessors(&step_exec, "retrying this step")?;
+
+        // A shadow is not ours to replay. `replay_steps_from` rewinds the
+        // step rows and calls `start_execution_loop` directly — it does not
+        // route through `ensure_driver_running`, so its shadow guard never
+        // fires and this machine would arm a *second* driver against a run
+        // the runner is still driving, against a worktree that only exists
+        // on the runner's box. There is no remote retry RPC yet, so the
+        // honest answer is to refuse.
+        if self
+            .runner_owned_features()
+            .contains(step_exec.feature_id.as_str())
+        {
+            return Err(AppError::validation(format!(
+                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
+                 this machine cannot retry its steps",
+                step_exec.feature_id.0
+            )));
+        }
 
         self.replay_steps_from(execution_id, new_model, new_agent, true)
             .await
@@ -651,6 +681,24 @@ impl GatePresenter for DagStepExecutor {
                 AppError::not_found(format!("Step execution not found: {}", step_execution_id))
             })?;
         self.assert_no_active_predecessors(&step_exec, "deciding this gate")?;
+
+        // Refuse a shadow outright. This machine holds a read-only mirror
+        // of a run a `demeteo-runner` owns: the decision belongs in *its*
+        // DB, reached over the tunnel (`remote_decide_gate`). Writing it
+        // here would upsert a row nothing reads and return `Ok` — the
+        // driver spawn below is the only thing that would notice, and it
+        // only logs its refusal, so the user saw an approval that silently
+        // did nothing.
+        if self
+            .runner_owned_features()
+            .contains(step_exec.feature_id.as_str())
+        {
+            return Err(AppError::validation(format!(
+                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
+                 decide this gate on the runner (remote_decide_gate), not locally",
+                step_exec.feature_id.0
+            )));
+        }
 
         // 1. Durable: write the decision to the DB. UPSERT so the call
         //    is idempotent whether or not a row already exists. This is

@@ -562,6 +562,31 @@ export function FeatureDetail() {
     }
   };
 
+  /** Stop the run behind this feature. Cancellation is feature-wide on
+   * both paths — the local `feature_cancel` signals the driver, which
+   * unwinds whatever step it is on — so "Stop Step" and "Cancel Feature"
+   * differ only in their wording. A detached run has no local driver to
+   * signal (the laptop holds a read-only shadow), so it must be cancelled
+   * on the runner over the tunnel instead; the local call would find no
+   * cancel sender for the feature and return `Ok` having done nothing. */
+  const cancelRun = async (failureTitle: string) => {
+    try {
+      if (remoteRun) {
+        await invoke('remote_cancel_run', {
+          machineId: remoteRun.machine_id,
+          runId: remoteRun.run_id,
+        });
+        refreshRemoteRun();
+      } else {
+        await invoke('feature_cancel', { featureId });
+      }
+      setFeatureStatus('cancelled');
+      // feature_status_changed event will fire and call loadFeatureData reactively
+    } catch (err) {
+      await messageDialog(formatError(err), { title: failureTitle, kind: 'error' });
+    }
+  };
+
   const handleCancelFeature = async () => {
     const ok = await confirmDialog('Are you sure you want to cancel the execution of this feature?', {
       title: 'Cancel Feature',
@@ -570,13 +595,7 @@ export function FeatureDetail() {
       cancelLabel: 'Keep Running',
     });
     if (!ok) return;
-    try {
-      await invoke('feature_cancel', { featureId });
-      setFeatureStatus('cancelled');
-      // feature_status_changed event will fire and call loadFeatureData reactively
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Cancel Failed', kind: 'error' });
-    }
+    await cancelRun('Cancel Failed');
   };
 
   const handleStopStep = async () => {
@@ -587,13 +606,7 @@ export function FeatureDetail() {
       cancelLabel: 'Keep Running',
     });
     if (!ok) return;
-    try {
-      await invoke('feature_cancel', { featureId });
-      setFeatureStatus('cancelled');
-      // feature_status_changed event will fire and call loadFeatureData reactively
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Stop Failed', kind: 'error' });
-    }
+    await cancelRun('Stop Failed');
   };
 
   // Switching the harness invalidates the probed model list (models are
@@ -619,7 +632,23 @@ export function FeatureDetail() {
     try {
       const modelParam = selectedModel || null;
       const agentParam = selectedAgent || null;
-      await retryStep({ stepExecutionId, newModel: modelParam, newAgent: agentParam });
+      if (remoteRun) {
+        // A detached run is retried on the runner: this machine has no
+        // driver for it and no worktree to replay into. The shadow mirrors
+        // the runner's step ids verbatim, so the local id is the right one
+        // to name. The command re-injects the PAT and re-opens the run, so
+        // the retried pipeline still pushes and opens its PR at the end.
+        await invoke('remote_retry_step', {
+          machineId: remoteRun.machine_id,
+          runId: remoteRun.run_id,
+          stepExecutionId,
+          model: modelParam,
+          agentKind: agentParam,
+        });
+        refreshRemoteRun();
+      } else {
+        await retryStep({ stepExecutionId, newModel: modelParam, newAgent: agentParam });
+      }
       loadFeatureData();
     } catch (err) {
       // Blocking-predecessor errors are surfaced as warnings rather
@@ -637,7 +666,21 @@ export function FeatureDetail() {
     try {
       const modelParam = selectedModel || null;
       const agentParam = selectedAgent || null;
-      await invoke('replay_from_step', { stepExecutionId: replayTarget.id, newModel: modelParam, newAgent: agentParam });
+      if (remoteRun) {
+        // `replay_from_step` and `step_retry` are the same rewind under the
+        // hood (`replay_steps_from(.., include_target: true)`), so the one
+        // runner-side retry RPC serves both — see `handleRetryStep`.
+        await invoke('remote_retry_step', {
+          machineId: remoteRun.machine_id,
+          runId: remoteRun.run_id,
+          stepExecutionId: replayTarget.id,
+          model: modelParam,
+          agentKind: agentParam,
+        });
+        refreshRemoteRun();
+      } else {
+        await invoke('replay_from_step', { stepExecutionId: replayTarget.id, newModel: modelParam, newAgent: agentParam });
+      }
       setReplayTarget(null);
       loadFeatureData();
     } catch (err) {

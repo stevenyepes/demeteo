@@ -1,8 +1,6 @@
 // Unit tests for `src/lib/runStatus.ts`.
-//
-// Runner: `tsc --noEmit`. Assertions throw on failure so the type-check
-// gate (the project's de-facto test runner for module-level checks)
-// surfaces regressions.
+
+import { describe, expect, it } from 'vitest';
 
 import {
   featureRunStatus,
@@ -11,11 +9,8 @@ import {
   type FeatureRunStatusFields,
 } from './runStatus';
 
-// ── (1) Every status a Feature row can hold gets its own label ──────────
-//
-// The bug this guards: ProjectHome used to badge every non-`gated`
-// feature "RUNNING FLEET", so a failed or completed run looked live.
-
+// The bug this guards: ProjectHome used to badge every non-`gated` feature
+// "RUNNING FLEET", so a failed or completed run looked live.
 const FEATURE_STATUSES: { status: string; label: string; active: boolean }[] = [
   { status: 'pending', label: 'Queued', active: true },
   { status: 'running', label: 'Running', active: true },
@@ -27,80 +22,65 @@ const FEATURE_STATUSES: { status: string; label: string; active: boolean }[] = [
   { status: 'published', label: 'Published', active: false },
 ];
 
-for (const { status, label, active } of FEATURE_STATUSES) {
-  const meta = runStatusMeta(featureRunStatus({ status }));
-  if (meta.label !== label) {
-    throw new Error(
-      `runStatus: '${status}' should be labelled '${label}', got '${meta.label}'`,
-    );
-  }
-  if (meta.active !== active) {
-    throw new Error(
-      `runStatus: '${status}' should have active=${active}, got ${meta.active}`,
-    );
-  }
-  if (!TONE_CHIP[meta.tone]) {
-    throw new Error(`runStatus: '${status}' has no chip classes for tone '${meta.tone}'`);
-  }
-}
+describe('featureRunStatus / runStatusMeta', () => {
+  it.each(FEATURE_STATUSES)(
+    "labels '$status' as '$label' (active=$active)",
+    ({ status, label, active }) => {
+      const meta = runStatusMeta(featureRunStatus({ status }));
 
-// Only in-motion statuses earn the pulsing affordance.
-const stillPulsing = FEATURE_STATUSES.filter(
-  (s) => runStatusMeta(s.status).active && s.status !== 'pending' && s.status !== 'running',
-);
-if (stillPulsing.length !== 0) {
-  throw new Error(
-    `runStatus: terminal/blocked statuses must not be active — ${stillPulsing
-      .map((s) => s.status)
-      .join(', ')}`,
+      expect(meta.label).toBe(label);
+      expect(meta.active).toBe(active);
+      expect(TONE_CHIP[meta.tone]).toBeTruthy();
+    },
   );
-}
 
-// ── (2) Published beats completed ───────────────────────────────────────
-//
-// MrPublisher sets `status = 'completed'` and the MR fields in one write,
-// so `status` alone cannot distinguish a shipped run from a bare one.
+  it('only lets in-motion statuses claim the pulsing affordance', () => {
+    const stillPulsing = FEATURE_STATUSES.filter(
+      (s) => runStatusMeta(s.status).active && s.status !== 'pending' && s.status !== 'running',
+    );
 
-for (const mrState of ['draft', 'open', 'merged']) {
-  const feature: FeatureRunStatusFields = {
-    status: 'completed',
-    mr_url: 'https://github.com/acme/repo/pull/7',
-    mr_state: mrState,
-  };
-  if (featureRunStatus(feature) !== 'published') {
-    throw new Error(`runStatus: mr_state='${mrState}' with an mr_url should resolve to 'published'`);
-  }
-  if (runStatusMeta(featureRunStatus(feature)).label !== 'Published') {
-    throw new Error(`runStatus: mr_state='${mrState}' should be labelled 'Published'`);
-  }
-}
+    expect(stillPulsing.map((s) => s.status)).toEqual([]);
+  });
+});
 
-// A closed-without-merge PR published nothing → fall back to the row's status.
-if (
-  featureRunStatus({
-    status: 'completed',
-    mr_url: 'https://github.com/acme/repo/pull/7',
-    mr_state: 'closed',
-  }) !== 'completed'
-) {
-  throw new Error("runStatus: mr_state='closed' should fall through to the feature status");
-}
+// MrPublisher sets `status = 'completed'` and the MR fields in one write, so
+// `status` alone cannot distinguish a shipped run from a bare one.
+describe('published beats completed', () => {
+  it.each(['draft', 'open', 'merged'])("resolves mr_state='%s' to 'published'", (mrState) => {
+    const feature: FeatureRunStatusFields = {
+      status: 'completed',
+      mr_url: 'https://github.com/acme/repo/pull/7',
+      mr_state: mrState,
+    };
 
-// `mr_state` without an `mr_url`, and vice versa, are not published either.
-if (featureRunStatus({ status: 'completed', mr_state: 'open' }) !== 'completed') {
-  throw new Error('runStatus: mr_state without an mr_url should not resolve to published');
-}
-if (featureRunStatus({ status: 'running', mr_url: '', mr_state: 'none' }) !== 'running') {
-  throw new Error('runStatus: a run with no MR should keep its own status');
-}
+    expect(featureRunStatus(feature)).toBe('published');
+    expect(runStatusMeta(featureRunStatus(feature)).label).toBe('Published');
+  });
 
-// ── (3) Unknown statuses degrade, they do not throw ─────────────────────
+  it('falls through to the feature status when the PR closed without merging', () => {
+    expect(
+      featureRunStatus({
+        status: 'completed',
+        mr_url: 'https://github.com/acme/repo/pull/7',
+        mr_state: 'closed',
+      }),
+    ).toBe('completed');
+  });
 
-const unknown = runStatusMeta(featureRunStatus({ status: 'some_new_state' }));
-if (unknown.label !== 'some new state' || unknown.tone !== 'slate' || unknown.active) {
-  throw new Error(
-    `runStatus: unknown status should fall back to an inert slate chip, got ${JSON.stringify(unknown)}`,
-  );
-}
+  it('does not treat a half-populated MR as published', () => {
+    expect(featureRunStatus({ status: 'completed', mr_state: 'open' })).toBe('completed');
+    expect(featureRunStatus({ status: 'running', mr_url: '', mr_state: 'none' })).toBe('running');
+  });
+});
 
-export {};
+describe('unknown statuses', () => {
+  it('degrades to an inert slate chip instead of throwing', () => {
+    const unknown = runStatusMeta(featureRunStatus({ status: 'some_new_state' }));
+
+    expect(unknown).toMatchObject({
+      label: 'some new state',
+      tone: 'slate',
+      active: false,
+    });
+  });
+});

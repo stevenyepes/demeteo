@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { StepExecution } from '../types';
+import { RemoteRunMirror, StepExecution } from '../types';
 import { Check, ArrowRight, X, ShieldAlert, Terminal, Sparkles, AlertTriangle } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
 import { useErrorBus } from '../lib/errorBus';
@@ -33,11 +33,22 @@ export const GateView: React.FC<GateViewProps> = ({
   // lured into approving a gate whose predecessor agent step is still
   // running.
   const [blockedBy, setBlockedBy] = useState<GateBlocker | null>(null);
+  // Mirror row when this gate belongs to a detached run. The local
+  // `gate_decide` is a no-op for such a feature (the laptop only holds a
+  // read-only shadow — the run's real DB and driver live on the runner),
+  // so the decision has to go over the tunnel instead. `null` = ordinary
+  // local run.
+  const [remoteRun, setRemoteRun] = useState<RemoteRunMirror | null>(null);
 
   const loadGateData = useCallback(async () => {
     try {
       const execDetails = await invoke<StepExecution>('step_get', { executionId: stepExecutionId });
       setStepExec(execDetails);
+      setRemoteRun(
+        await invoke<RemoteRunMirror | null>('remote_run_for_feature', {
+          featureId: execDetails.feature_id,
+        }),
+      );
       // Re-probe the predecessor set on every load. The parent's
       // `feature_status_changed` event triggers a remount via the
       // navigation effect, so the banner clears within one tick of
@@ -73,11 +84,22 @@ export const GateView: React.FC<GateViewProps> = ({
     if (blockedBy && decision !== 'cancel') return;
     setLoading(true);
     try {
-      await decideGate({
-        stepExecutionId,
-        decision,
-        feedback: decision === 'redirect' ? feedback : null,
-      });
+      const gateFeedback = decision === 'redirect' ? feedback : null;
+      if (remoteRun) {
+        // The runner's `decide_gate` RPC keys the gate by its
+        // step_execution_id and delegates to the same `GatePresenter`
+        // call as the local path, so `approve | redirect | cancel` mean
+        // exactly what they mean here.
+        await invoke('remote_decide_gate', {
+          machineId: remoteRun.machine_id,
+          runId: remoteRun.run_id,
+          gateId: stepExecutionId,
+          decision,
+          feedback: gateFeedback,
+        });
+      } else {
+        await decideGate({ stepExecutionId, decision, feedback: gateFeedback });
+      }
       onDecisionSubmitted();
     } catch (err) {
       // Blocking-predecessor errors are already surfaced by the

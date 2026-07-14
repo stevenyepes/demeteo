@@ -72,7 +72,7 @@ pub struct RunOutcome {
 /// `RunEventsPort::append` adapter scrubs every payload before it's
 /// persisted, so the *direct* failure-path appends in `rpc.rs` (which
 /// bypass this helper) are covered by the same guarantee.
-fn emit(ctx: &AppContext, run_id: &str, kind: &str, payload: impl Serialize) {
+pub(crate) fn emit(ctx: &AppContext, run_id: &str, kind: &str, payload: impl Serialize) {
     let payload_json = serde_json::to_string(&payload).ok();
     if let Err(e) = ctx
         .run_events
@@ -640,7 +640,16 @@ async fn await_terminal_and_push_inner(
 
         // M5.1: unattended relaxes gates only — the per-command
         // permission/intercept layer and worktree fence are untouched.
-        if spec.unattended && feature.status == "awaiting_gate" {
+        //
+        // Keyed off the *pending gate row*, not the feature status: an
+        // open gate only flips the gate step to `awaiting_gate` (see
+        // `steps/gate.rs`), while the feature it belongs to stays
+        // `running`. The one writer of `awaiting_gate` onto a feature is
+        // the startup watchdog's restart reconciliation — so gating this
+        // call on the feature status meant a live unattended run never
+        // auto-approved anything and parked on every gate.
+        // `apply_gate_policy` no-ops when there is no pending gate.
+        if spec.unattended {
             apply_gate_policy(svc, run_id, &feature, &mut parked_gates).await;
         }
 
