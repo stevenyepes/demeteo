@@ -7,8 +7,7 @@ import { ErrorToast, ERROR_TOAST_CTA_EVENT } from "./components/ErrorToast";
 import EmptyStateCard from "./components/EmptyStateCard";
 import NewProjectView from "./components/NewProjectView";
 import ProvidersPage from "./components/ProvidersPage";
-import RemoteRunInbox from "./components/RemoteRunInbox";
-import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen, Server } from "lucide-react";
+import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen } from "lucide-react";
 import ProjectHome from "./components/ProjectHome";
 import ProjectSettings from "./components/ProjectSettings";
 import { WorkflowList } from "./components/WorkflowList";
@@ -279,13 +278,13 @@ function AppInner() {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
 
-        // M6.3's "reconcile-on-reopen" desktop notification only fires
-        // from inside this call — previously it only ran when the user
-        // manually opened the Remote Runs inbox, which defeats the
-        // "close the laptop, come back, get told" promise. Fire-and-forget:
-        // never blocks the rest of startup, and any newly-actionable run
-        // (PR ready/failed/parked/needs-credentials) surfaces as a
-        // notification right away instead of waiting for a manual check.
+        // M6.3's "reconcile-on-reopen" desktop notification only fires from
+        // inside this call, which makes it load-bearing: with the Runs tab
+        // and its ambient TopBar badge gone, this notification is the only
+        // passive signal that a run went newly-actionable (PR
+        // ready/failed/parked/needs-credentials). Do not move it behind a
+        // view — that would defeat the "close the laptop, come back, get
+        // told" promise. Fire-and-forget: never blocks the rest of startup.
         invoke('remote_reconcile_runs').catch((err) => {
           console.error('Failed to reconcile remote runs on startup:', err);
         });
@@ -412,7 +411,6 @@ function AppInner() {
     { id: 'nav-new-project', label: 'New Project', description: 'Bootstrap a new workspace', category: 'action' as const, icon: <Plus className="w-4 h-4" />, onSelect: () => navigate({ kind: 'new-project' }) },
     { id: 'nav-workflows', label: 'Workflows', description: 'View and edit workflow templates', category: 'action' as const, icon: <Sliders className="w-4 h-4" />, onSelect: () => navigate({ kind: 'workflows' }) },
     { id: 'nav-providers', label: 'Providers', description: 'Manage Git hosting connections', category: 'action' as const, icon: <Globe className="w-4 h-4" />, onSelect: () => navigate({ kind: 'providers' }) },
-    { id: 'nav-remote-inbox', label: 'Runs', description: 'Every run launched on a remote machine', category: 'action' as const, icon: <Server className="w-4 h-4" />, onSelect: () => navigate({ kind: 'remote-inbox' }) },
     { id: 'nav-settings', label: 'Settings', description: 'Global preferences and machines', category: 'settings' as const, icon: <SettingsIcon className="w-4 h-4" />, onSelect: () => navigate({ kind: 'settings' }) },
     { id: 'nav-docs', label: 'Documentation', description: 'User guide and reference', category: 'settings' as const, icon: <BookOpen className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
     { id: 'nav-shortcuts', label: 'Keyboard Shortcuts', description: 'View available shortcuts', category: 'settings' as const, icon: <Zap className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
@@ -485,8 +483,6 @@ function AppInner() {
           )}
 
           {view.kind === 'providers' && <ProvidersPage />}
-
-          {view.kind === 'remote-inbox' && <RemoteRunInbox />}
 
           {view.kind === 'settings' && <PreferencesScreen />}
 

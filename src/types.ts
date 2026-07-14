@@ -71,8 +71,7 @@ export type AppView =
   | { kind: 'workflows' }
   | { kind: 'workflow-editor'; workflowId: string | null }
   | { kind: 'providers' }
-  | { kind: 'settings' }
-  | { kind: 'remote-inbox' };
+  | { kind: 'settings' };
 
 /** Laptop-side mirror of one remote run (docs/REMOTE_EXECUTION_PLAN.md
  *  M6.1/M6.2), keyed by `(machine_id, run_id)` — mirrors

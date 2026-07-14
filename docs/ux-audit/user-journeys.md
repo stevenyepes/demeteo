@@ -176,21 +176,33 @@ see F33).
 2. Cleanup → applies the project `feature_lifecycle` (archive / keep / auto-delete with
    force-delete fallback prompt).
 
-## J10 — Remote runs (return inbox)
+## J10 — Remote runs
 
-**Entry:** TopBar "Remote runs" (badge polls every 10s), command palette, or the
-post-launch confirmation.
+> **Rewritten July 2026.** This journey used to run through a dedicated Runs tab (the
+> "return inbox"). That tab was removed as redundant with Project Home; see
+> `docs/REMOTE_EXECUTION_PLAN.md` M6.2 amendment for the removal and the tradeoffs
+> accepted with it.
 
-- Runs bucketed by urgency: Parked → Needs credentials → Failed → PR ready → Running →
-  Unreachable → Cancelled.
-- Parked rows resolve their gate inline (Approve/Reject); Running/Parked rows offer a
-  live event-log tail and Cancel; failed/cancelled offer the log and a branch-diff link;
-  PR-ready links out to the PR.
+**Entry:** Project Home (remote/detached pipeline cards) → the run's feature. There is no
+longer a global Runs destination, TopBar button, or command-palette entry.
+
+- Project Home lists the open project's active features, remote ones included; opening one
+  lands in FeatureDetail, which owns the run.
+- FeatureDetail carries the per-run affordances: the event-log tail (`RunEventTimeline`),
+  inline gate Approve/Reject (`RemoteGateActions`), credential re-injection
+  (`ReinjectCredentials`), Cancel for a running/parked run (`CancelRunButton`), and a
+  branch-diff link for a pushed branch with no PR (`DiffLinkButton`). PR-ready runs link
+  out to the PR.
+- The bucket taxonomy (Parked / Needs credentials / Failed / PR ready / Running /
+  Unreachable / Cancelled) survives as `bucketFor` in `lib/runStatus.ts` and still drives
+  which actions render.
 - Startup reconciliation (`remote_reconcile_runs`) fires desktop notifications for newly
   actionable runs.
 
-**Friction:** Cancel has no confirmation (F23). The live-log error copy claims "still
-retrying every 2s" even for terminal runs where polling has stopped (F31).
+**Friction:** Cancel still has no confirmation (F23). Attention is now *pull*, not push —
+with the TopBar badge gone, a parked or failed run's only passive signal is the
+startup-reconcile desktop notification, and a run in a project you don't have open (or on
+an archived feature) is listed nowhere. Accepted knowingly; recorded in the M6.2 amendment.
 
 ## J11 — Workflow authoring
 

@@ -5,9 +5,12 @@
 // surfaces regressions.
 
 import {
+  bucketFor,
   featureRunStatus,
   runStatusMeta,
+  TERMINAL_STATUSES,
   TONE_CHIP,
+  type Bucket,
   type FeatureRunStatusFields,
 } from './runStatus';
 
@@ -101,6 +104,43 @@ if (unknown.label !== 'some new state' || unknown.tone !== 'slate' || unknown.ac
   throw new Error(
     `runStatus: unknown status should fall back to an inert slate chip, got ${JSON.stringify(unknown)}`,
   );
+}
+
+// ── (4) Buckets — the coarse triage grouping over the status vocabulary ─
+//
+// Every status a mirrored run can hold lands in exactly one bucket, and an
+// unrecognised one lands in `running`: a status this build predates is far
+// likelier than a broken run, so we tell the human "still in motion" rather
+// than crying failure.
+
+const BUCKETS: { status: string; bucket: Bucket }[] = [
+  { status: 'awaiting_mr', bucket: 'pr_ready' },
+  { status: 'completed', bucket: 'pr_ready' },
+  { status: 'failed', bucket: 'failed' },
+  { status: 'interrupted', bucket: 'failed' },
+  { status: 'parked', bucket: 'parked' },
+  { status: 'over-budget', bucket: 'parked' },
+  { status: 'needs-credentials', bucket: 'needs_credentials' },
+  { status: 'unreachable', bucket: 'unreachable' },
+  { status: 'cancelled', bucket: 'cancelled' },
+  { status: 'pending', bucket: 'running' },
+  { status: 'running', bucket: 'running' },
+  { status: 'some_new_state', bucket: 'running' },
+];
+
+for (const { status, bucket } of BUCKETS) {
+  const got = bucketFor(status);
+  if (got !== bucket) {
+    throw new Error(`runStatus: '${status}' should bucket to '${bucket}', got '${got}'`);
+  }
+}
+
+// Every terminal status buckets to something inert — none of them may be
+// reported as still running, which is what gates the Cancel affordance.
+for (const status of TERMINAL_STATUSES) {
+  if (bucketFor(status) === 'running') {
+    throw new Error(`runStatus: terminal status '${status}' must not bucket to 'running'`);
+  }
 }
 
 export {};

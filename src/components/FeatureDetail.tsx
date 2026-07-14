@@ -4,7 +4,7 @@ import { useTauriEvent } from '../hooks/useTauriEvent';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import { StepExecution, RemoteRunMirror, RunEvent, BootstrapProgressPayload } from '../types';
 import { BootstrapStepper, orderBootstrapPhases, type BootstrapPhaseView } from './BootstrapStepper';
-import { runStatusMeta, TERMINAL_STATUSES, TONE_CHIP } from '../lib/runStatus';
+import { bucketFor, runStatusMeta, TERMINAL_STATUSES, TONE_CHIP } from '../lib/runStatus';
 import { getAgentModels } from '../lib/agentModels';
 import { useErrorBus } from '../lib/errorBus';
 import { formatError } from '../lib/errors';
@@ -25,8 +25,13 @@ import {
 } from '../lib/features';
 import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
-import { RemoteGateActions, ReinjectCredentials, RunEventTimeline } from './RunEventTimeline';
-import { bucketFor } from './RemoteRunInbox';
+import {
+  CancelRunButton,
+  DiffLinkButton,
+  RemoteGateActions,
+  ReinjectCredentials,
+  RunEventTimeline,
+} from './RunEventTimeline';
 import { useNavigation, useProject, useUIState } from '../context';
 import { formatCost, relativeTime } from '../lib/utils';
 
@@ -1152,15 +1157,29 @@ export function FeatureDetail() {
                       ? `Final state synced ${relativeTime(remoteRun.updated_at)}`
                       : `Last synced ${relativeTime(remoteRun.updated_at)} · polling every 3s`}
                   </p>
-                  {/* Same grouping as the Runs inbox: `over-budget` parks
-                      too, and RemoteGateActions already renders its
-                      no-gate explanation for it. */}
-                  {bucketFor(remoteRun.status) === 'parked' && (
-                    <RemoteGateActions run={remoteRun} onResolved={refreshRemoteRun} />
-                  )}
-                  {bucketFor(remoteRun.status) === 'needs_credentials' && (
-                    <ReinjectCredentials run={remoteRun} onResolved={refreshRemoteRun} />
-                  )}
+                  {/* Grouped by bucket: `over-budget` parks too, and
+                      RemoteGateActions already renders its no-gate
+                      explanation for it. */}
+                  <div className="flex items-center gap-2">
+                    {bucketFor(remoteRun.status) === 'parked' && (
+                      <RemoteGateActions run={remoteRun} onResolved={refreshRemoteRun} />
+                    )}
+                    {bucketFor(remoteRun.status) === 'needs_credentials' && (
+                      <ReinjectCredentials run={remoteRun} onResolved={refreshRemoteRun} />
+                    )}
+                    {/* A run that pushed a branch but opened no PR still
+                        produced code worth reading — the link hides itself
+                        when the backend can't resolve a URL for it. */}
+                    {bucketFor(remoteRun.status) !== 'pr_ready' &&
+                      !remoteRun.pr_url &&
+                      remoteRun.pushed_branch && <DiffLinkButton run={remoteRun} />}
+                    {/* Only a run still in motion can be stopped; `parked`
+                        counts — it's waiting on a human, not finished. */}
+                    {(bucketFor(remoteRun.status) === 'running' ||
+                      bucketFor(remoteRun.status) === 'parked') && (
+                      <CancelRunButton run={remoteRun} onResolved={refreshRemoteRun} />
+                    )}
+                  </div>
                 </div>
               </div>
             )}

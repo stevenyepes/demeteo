@@ -46,8 +46,9 @@ surface (`src-tauri/src/lib.rs`, `commands/*`), the event bus
 **First pass** (F1–F33), read in full: `App.tsx`, all contexts, `ProjectHome`,
 `FeatureDetail`, `StartFeatureModal`, `GateView`, `WorkflowList`,
 `ProvidersPage`/`ProviderSettings`, `NewProjectView`, `PreferencesScreen`,
-`RemoteRunInbox`, `TopBar`, `ProjectRail`, `NotificationBell`, `EmptyStateCard`,
-`CommandPalette`, `DocsPanel`, `ProjectSettingsShell`, `lib/shortcuts.ts`,
+`RemoteRunInbox` (since deleted — see `REMOTE_EXECUTION_PLAN.md` M6.2 amendment; findings
+F14 and F31 were resolved by that deletion), `TopBar`, `ProjectRail`, `NotificationBell`,
+`EmptyStateCard`, `CommandPalette`, `DocsPanel`, `ProjectSettingsShell`, `lib/shortcuts.ts`,
 `hooks/useKeyboardShortcuts.ts`, `lib/features.ts`, `lib/utils.ts`,
 `lib/modelImageSupport.ts`. Backend spot-checks: command registrations,
 `start_feature`/`feature_cancel` signatures, `get_active` SQL, status vocabulary, and

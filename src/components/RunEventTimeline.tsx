@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronDown, ChevronUp, KeyRound, Loader, Radio, ThumbsDown, ThumbsUp, WifiOff } from 'lucide-react';
+import { Ban, ChevronDown, ChevronUp, ExternalLink, KeyRound, Loader, Radio, ThumbsDown, ThumbsUp, WifiOff } from 'lucide-react';
 import type { RemoteRunMirror, RunEvent } from '../types';
 import { TERMINAL_STATUSES } from '../lib/runStatus';
 
@@ -153,8 +153,8 @@ function describeEvent(kind: string, payloadJson: string | null): {
  * Approve/reject a detached run's parked gate from the laptop (M5.3's
  * `decide_gate` RPC). Resolves the live `gate_id` on mount via a fresh
  * `remote_get_status` — the mirror collapses it into a plain `"parked"`
- * status string. Shared by the Runs inbox row and the FeatureDetail
- * Activity section, so gate decisions work wherever the run is shown.
+ * status string. Rendered from the FeatureDetail Activity section, so gate
+ * decisions work wherever the run is shown.
  */
 export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () => void }> = ({
   run,
@@ -203,7 +203,7 @@ export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () 
     return <span className="text-[11px] text-slate-500 font-mono">Checking gate…</span>;
   }
   if (!gateId) {
-    // `over-budget` parks too but has no gate to decide — just point at the inbox refresh.
+    // `over-budget` parks too but has no gate to decide — say so instead of offering buttons.
     return <span className="text-[11px] text-slate-500 font-mono">Over budget — clear the cap to resume.</span>;
   }
   return (
@@ -235,8 +235,8 @@ export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () 
  * or an injection that failed right after submit — leaves the run waiting
  * for the laptop to re-supply it. `remote_reinject_credentials` resolves
  * the PAT from the run's project and pushes it over the tunnel; the runner
- * resumes on its own. Shared by the Runs inbox row and FeatureDetail so a
- * re-inject works wherever the run is shown.
+ * resumes on its own. Rendered from FeatureDetail so a re-inject works
+ * wherever the run is shown.
  */
 export const ReinjectCredentials: React.FC<{ run: RemoteRunMirror; onResolved: () => void }> = ({
   run,
@@ -272,6 +272,89 @@ export const ReinjectCredentials: React.FC<{ run: RemoteRunMirror; onResolved: (
       >
         {busy ? <Loader className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />}
         {busy ? 'Re-injecting…' : 'Re-inject credentials'}
+      </button>
+      {err && <span className="text-[10px] text-ruby-300 font-mono break-all">{err}</span>}
+    </div>
+  );
+};
+
+/**
+ * "View branch diff" (docs/REMOTE_EXECUTION_PLAN.md M6.2 follow-up): a
+ * run that pushed its feature branch but has no PR yet (failed/
+ * cancelled/parked) still produced code worth looking at. Resolves the
+ * compare/tree URL lazily per run rather than eagerly for every run on
+ * the surface, and hides itself entirely if the backend can't resolve a
+ * repo/provider for it (a missing deep link, not a broken one).
+ */
+export const DiffLinkButton: React.FC<{ run: RemoteRunMirror }> = ({ run }) => {
+  const [url, setUrl] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!run.project_id || !run.pushed_branch) {
+      setUrl(null);
+      return;
+    }
+    let cancelled = false;
+    invoke<string | null>('remote_run_diff_url', { projectId: run.project_id, branch: run.pushed_branch })
+      .then((u) => { if (!cancelled) setUrl(u); })
+      .catch(() => { if (!cancelled) setUrl(null); });
+    return () => { cancelled = true; };
+  }, [run.project_id, run.pushed_branch]);
+
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
+      title={`View the diff for the pushed branch (${run.pushed_branch})`}
+    >
+      <ExternalLink className="w-3 h-3" /> View branch diff
+    </a>
+  );
+};
+
+/**
+ * Stop a detached run from the laptop (`remote_cancel_run`, M5.3). The
+ * runner owns the process, so cancelling is an RPC, not a local kill —
+ * `onResolved` re-reads the mirror once the runner has acknowledged.
+ * Shared by every surface that shows a live run, so a run can always be
+ * stopped from wherever it is displayed. Errors render inline, like the
+ * sibling actions above: a failed cancel means the run is still going,
+ * which the user has to know.
+ */
+export const CancelRunButton: React.FC<{ run: RemoteRunMirror; onResolved: () => void }> = ({
+  run,
+  onResolved,
+}) => {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>('');
+
+  const cancel = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      await invoke('remote_cancel_run', { machineId: run.machine_id, runId: run.run_id });
+      onResolved();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={cancel}
+        disabled={busy}
+        title="Cancel this run"
+        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-50"
+      >
+        {busy ? <Loader className="w-3 h-3 animate-spin" /> : <Ban className="w-3 h-3" />}
+        {busy ? 'Cancelling…' : 'Cancel'}
       </button>
       {err && <span className="text-[10px] text-ruby-300 font-mono break-all">{err}</span>}
     </div>

@@ -43,3 +43,28 @@ export const appViewVariants = {
 } as const;
 
 export type AppViewKind = AppView['kind'];
+
+// The complete set of views the app can route to. Pinned exhaustively so
+// that *any* change to the `AppView` union — added variant or removed one —
+// fails type-check here and has to be made deliberately. This is what
+// retired the Runs tab: its variant was dropped from `AppView` (ProjectHome
+// and FeatureDetail are the run surfaces now, and its unique actions were
+// rehomed — `bucketFor` to lib/runStatus, Cancel + View-branch-diff to
+// RunEventTimeline). Re-adding a route here, rather than rendering runs on
+// an existing surface, should be a conscious edit to this list.
+type ExpectedAppViewKind =
+  | 'empty-state'
+  | 'home'
+  | 'detail'
+  | 'editor'
+  | 'new-project'
+  | 'create-project'
+  | 'project-settings'
+  | 'workflows'
+  | 'workflow-editor'
+  | 'providers'
+  | 'settings';
+
+type AssertTrue<T extends true> = T;
+type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+export type AppViewKindsAreExhaustive = AssertTrue<SameUnion<AppViewKind, ExpectedAppViewKind>>;

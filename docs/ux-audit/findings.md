@@ -132,10 +132,14 @@ A user who staged screenshots and picked a remote machine gets an agent that nev
 them. Minimum fix: disable/annotate those controls when a machine is selected.
 
 ### F14. Back-stack pollution for view kinds missing from the equality check
-`NavigationContext.tsx:20-48` — `shallowEqualView` has no case for `'remote-inbox'`
-(falls to `default: return false`), so re-clicking "Remote runs" pushes a duplicate back
-entry every time; Escape/Back then needs N presses to leave. Any future view kind will
-silently inherit the same bug. Add the missing case and a default that compares by kind.
+**Partly resolved by deletion (July 2026).** The `'remote-inbox'` view no longer exists
+(the Runs tab was removed — see `REMOTE_EXECUTION_PLAN.md` M6.2 amendment), so the
+specific duplicate-back-entry bug is gone with it.
+
+The underlying defect is *not* fixed: `NavigationContext.tsx:20-48`'s `shallowEqualView`
+still falls to `default: return false` for any view kind it has no case for, so the next
+view kind added will silently inherit the same bug. The remaining work is the `default`
+that compares by view kind.
 
 ### F15. Workflow ▶ Run silently no-ops with no active project
 `App.tsx:514` renders `StartFeatureModal` only when `currentProjectId && currentProject`.
@@ -193,7 +197,9 @@ anything. Rename to what they do ("Bootstrap a project", "Browse workflows").
 - `FeatureDetail` uses Tauri `confirm`/`message` dialogs.
 - `ProvidersPage`/`ProjectSettings` use custom styled modals.
 - No confirmation at all: deleting a provider with no dependent projects
-  (`ProvidersPage.tsx:26-35`), cancelling a remote run (`RemoteRunInbox.tsx:419-426`).
+  (`ProvidersPage.tsx:26-35`), cancelling a remote run (`CancelRunButton`,
+  `RunEventTimeline.tsx:334-345` — still unconfirmed after the Runs tab was removed and
+  the button moved into `FeatureDetail`).
 
 ### F24. Backend emits `conflict_detected`; nothing listens
 `adapters/tauri_ui/notification.rs:42-45` emits it; no `useTauriEvent`/`listen` consumer
@@ -232,8 +238,9 @@ already exists in `ui/`.
   different capabilities (composer: no title field — title = description, no remote,
   no per-step overrides; modal: no smart workflow inference).
 - `formatTokens` duplicated (`FeatureDetail.tsx:109` vs `lib/utils.ts:1`); `fuzzyMatch`
-  duplicated (`ProjectRail.tsx:6` vs `CommandPalette.tsx:19`); relative-time helpers
-  duplicated (`NotificationBell.tsx:257`, `RemoteRunInbox.tsx:88`).
+  duplicated (`ProjectRail.tsx:6` vs `CommandPalette.tsx:19`). The relative-time helper
+  was also duplicated in `RemoteRunInbox.tsx`; that copy died with the Runs tab, leaving
+  only `NotificationBell.tsx:257` — no dedupe needed there any more.
 - Spec/UI default mismatch: `UX_JOURNEYS.md` J9 says conflict policy default is
   `auto_agent`; all three strategy forms default to `always_gate`.
 
@@ -251,9 +258,11 @@ focus inside the modal fires both the local close and the global `pickEscapeActi
 (currently harmless because both close the same modal; a landmine for reordering).
 
 ### F31. Remote-inbox live log copy contradicts behavior for terminal runs
-`RemoteRunInbox.tsx:335-339` — the error banner says "Still retrying every 2s — events
-shown so far are not lost", but for terminal runs polling deliberately stops after one
-attempt (`:287-289,299`).
+**Resolved by deletion (July 2026).** The banner lived in `RemoteRunInbox.tsx:335-339`;
+the Runs tab and that component are gone (see `REMOTE_EXECUTION_PLAN.md` M6.2 amendment).
+The surviving log viewer, `RunEventTimeline.tsx:479-484`, already gets this right: it
+branches on `isTerminal`, so the "Still retrying every 2s" copy only shows for a live run
+(where it is true) and a terminal run gets "Couldn't fetch the log from `<machine>`".
 
 ### F32. Collapsed rail hides projects beyond the first 8
 `ProjectRail.tsx:68` slices to 8 with no overflow affordance; `Cmd+1..9` and the expanded

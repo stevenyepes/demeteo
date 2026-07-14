@@ -2,9 +2,9 @@
  * Canonical status vocabulary for runs (ux-audit F27). One mapping from
  * every status string a run surface can produce — local `Feature.status`,
  * the runner's `RunnerRun.status` as mirrored into `RemoteRunMirror`, and
- * the laptop-only `unreachable` — to a display label + tone, so
- * FeatureDetail, the Runs inbox, and the TopBar badge all speak the same
- * color language instead of each view keeping its own ternary chain.
+ * the laptop-only `unreachable` — to a display label + tone, so every run
+ * surface (FeatureDetail, ProjectHome) speaks the same color language
+ * instead of each view keeping its own ternary chain.
  *
  * Tone semantics (docs/UX_JOURNEYS.md §2, as settled by F27):
  *   cyan    = in motion (running)
@@ -116,8 +116,53 @@ export const TONE_BORDER_L: Record<RunStatusTone, string> = {
 };
 
 /**
- * Mirror statuses that can never change again. Kept here (not in the
- * inbox component) because both the inbox's fetch-once rule and
- * FeatureDetail's stop-polling rule key off it.
+ * Mirror statuses that can never change again. Kept here (not in any one
+ * component) because several surfaces key their stop-polling rule off it.
  */
 export const TERMINAL_STATUSES = ['failed', 'cancelled', 'awaiting_mr', 'completed'];
+
+/**
+ * Buckets — the coarse triage grouping layered over the fine-grained
+ * status vocabulary above (docs/REMOTE_EXECUTION_PLAN.md design §8's
+ * taxonomy: PR ready / Failed / Parked / Needs credentials / Running /
+ * Unreachable, plus `cancelled`, which isn't an outcome to chase and so
+ * gets its own low-priority bucket rather than being crowbarred into
+ * "Failed"). Statuses answer "what is this run doing?"; buckets answer
+ * "does it want something from me, and how badly?" — which is what the
+ * TopBar badge and FeatureDetail's action row key off.
+ */
+export type Bucket =
+  | 'pr_ready'
+  | 'failed'
+  | 'parked'
+  | 'needs_credentials'
+  | 'running'
+  | 'unreachable'
+  | 'cancelled';
+
+/** An unrecognised status is treated as in-motion, not failed: a run we
+ *  can't name is more likely a status this build predates than a broken
+ *  one, and "still running" is the safe thing to tell a human. */
+export function bucketFor(status: string): Bucket {
+  switch (status) {
+    case 'awaiting_mr':
+    case 'completed':
+      return 'pr_ready';
+    case 'failed':
+    case 'interrupted':
+      return 'failed';
+    case 'parked':
+    case 'over-budget':
+      return 'parked';
+    case 'needs-credentials':
+      return 'needs_credentials';
+    case 'unreachable':
+      return 'unreachable';
+    case 'cancelled':
+      return 'cancelled';
+    case 'pending':
+    case 'running':
+    default:
+      return 'running';
+  }
+}

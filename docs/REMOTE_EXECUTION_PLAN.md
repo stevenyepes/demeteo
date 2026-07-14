@@ -28,7 +28,7 @@
 | M3 | Control channel | Laptop submits + streams + reconciles a remote run | R4, R8, R9, P2 |
 | M4 | Credentials | Remote run clones/pushes with injected PAT; PAT never on disk/argv | R5, §6, P3 |
 | M5 | Unattended policy | Auto-approve safe gates, park dangerous, budget caps, auto-open PR | R6, R7, R10, §5, P4 |
-| M6 | Laptop UX | Launch unattended, close app, get notified, return inbox | R10, §8, P7 |
+| M6 | Laptop UX | Launch unattended, close app, get notified, come back to the run's feature | R10, §8, P7 |
 | M7 | Deploy & harden | One-click enable-remote-runs; version handshake; audit; security review | §10 |
 
 Ordering is mostly linear. M4/M5 can proceed in parallel once M3 lands. M6
@@ -325,7 +325,7 @@ Goal: the full "close the laptop, come back to results" journey (R10, §8, P7).
 - **DoD:** User launches an unattended remote run and can immediately close the
   app.
 
-### M6.2 — Return inbox + status taxonomy
+### M6.2 — Return inbox + status taxonomy — **SHIPPED, THEN REMOVED (July 2026)**
 
 - **What:** On app open, reconcile all runs across all machines into a **return
   inbox** grouped by: **PR ready / Failed / Parked / Needs-credentials / Running /
@@ -336,6 +336,52 @@ Goal: the full "close the laptop, come back to results" journey (R10, §8, P7).
 - **Why:** §8 — the "report back."
 - **DoD:** After runs complete while the app was closed, reopening shows each in
   the correct bucket with the right deep link.
+
+#### Amendment — the Runs tab was removed
+
+The standalone inbox view (`AppView` variant `'remote-inbox'`, component
+`src/components/RemoteRunInbox.tsx`, TopBar "Runs" button, `⌘K → Runs`) **no
+longer exists.** It was deleted as redundant: ProjectHome grew remote/detached
+pipeline cards, and FeatureDetail grew the per-run event timeline, gate actions,
+and credential re-injection — between them they cover everything a user actually
+did in the inbox. §8's "report back" requirement still holds; the surfaces that
+satisfy it are now:
+
+| §8 capability | Where it lives now |
+|---|---|
+| Bucket taxonomy (`bucketFor`, the 7 buckets) | `src/lib/runStatus.ts` (tested in `runStatus.test.ts`) |
+| Per-run event log ("Audit log") | `RunEventTimeline.tsx`, rendered by FeatureDetail |
+| Gate approve/reject, credential re-injection | `RemoteGateActions` / `ReinjectCredentials` (`RunEventTimeline.tsx`), rendered by FeatureDetail |
+| **Cancel run** (`remote_cancel_run`) | `CancelRunButton`, exported from `RunEventTimeline.tsx`, rendered by FeatureDetail |
+| **View branch diff** (`remote_run_diff_url`) | `DiffLinkButton`, exported from `RunEventTimeline.tsx`, rendered by FeatureDetail |
+| Reconcile-on-reopen | unchanged — `App.tsx` still calls `remote_reconcile_runs` at startup |
+| Cross-machine run listing | ProjectHome (`remote_list_mirrored_runs`, scoped to the open project) |
+
+No Tauri command was removed; all four the inbox called are still registered and
+still reachable from the frontend.
+
+**Tradeoffs consciously accepted.** Recording these because they are real losses,
+not oversights — if any of them starts hurting, the fix is to give the surviving
+surfaces the missing reach, not to resurrect the tab:
+
+1. **No ambient attention badge.** The TopBar polled `remote_list_mirrored_runs`
+   every 10s and badged parked / failed / needs-credentials runs. That poll and
+   badge are gone with the button (a badge whose destination doesn't exist is a
+   dead end). The **only passive signal** that a run needs a human is now the
+   **reconcile-on-reopen desktop notification** (M6.3) — which is why the startup
+   `remote_reconcile_runs` call is load-bearing and must not be removed. A user
+   who leaves the app open will not be told about a newly parked run; they have to
+   look.
+2. **Run visibility is project-scoped and active-only.** ProjectHome lists
+   *features* via `fetch_active_features` — `WHERE project_id = ?1 AND status NOT
+   IN ('archived','deleted')`. So a remote run in **another project**, or one whose
+   feature is **archived**, appears in no UI at all. The inbox was the only
+   cross-project view. Accepted on the judgement that you go looking for a run in
+   the project you launched it from.
+3. **Orphan mirror rows are unreachable.** A `remote_run_mirror` row with
+   `feature_id = null` (the inbox handled these explicitly — "mirrored by an older
+   app version") has no FeatureDetail to open and therefore no UI surface. Its data
+   is still in the mirror DB and still reconciled; it is simply not rendered.
 
 ### M6.3 — Dual-channel notifications
 
@@ -405,16 +451,17 @@ Goal: the full "close the laptop, come back to results" journey (R10, §8, P7).
   command, diff, cost) synced back; event-log/notification secret scrubbing; run
   `/security-review` on the credential + control-channel + unattended-policy code.
 - **Why:** §5 non-repudiation + §6 hygiene.
-- **DoD:** Audit visible in the inbox; no secret leaks in synced data; security
+- **DoD:** Audit visible in the app; no secret leaks in synced data; security
   review actioned.
 - **Shipped:**
   - *Audit trail = the append-only `run_events` log, surfaced in the inbox.*
     `run.rs` already emits the control-plane decisions (gate auto-approve, park,
     over-budget, needs-credentials, push, PR) plus a new **`cost`** event at
-    terminal state. The return inbox's log viewer (`RemoteRunInbox.tsx`,
-    relabelled **"Audit log"**) is now reachable from *every* bucket — including
-    successful `pr_ready` runs, whose auto-approved-gate trail is exactly what
-    non-repudiation needs. **Scope note:** per-*command* rows stay in the mirrored
+    terminal state. The log viewer (**"Audit log"**) is reachable for a run in
+    *any* bucket — including successful `pr_ready` runs, whose auto-approved-gate
+    trail is exactly what non-repudiation needs. It shipped inside the return
+    inbox; since that tab was removed (M6.2 amendment) it lives in
+    `RunEventTimeline.tsx`, rendered by `FeatureDetail`. **Scope note:** per-*command* rows stay in the mirrored
     step/feature view ("View feature", C4.3) rather than being duplicated into
     `run_events` — capturing the agent's own commands would need an engine-level
     audit sink, out of scope for "surface the existing log". The event log covers
