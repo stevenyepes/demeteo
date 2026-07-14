@@ -222,11 +222,14 @@ impl ExecutionDriver {
                     missing
                 ),
                 &format!(
-                    "Install `{}` on this machine, or make it available on the login shell's PATH \
-                     (e.g. add it to ~/.profile / ~/.bashrc, or expose it via mise/asdf/nvm). \
-                     The harness runs under an interactive login shell, so anything an \
-                     interactive `ssh` session can run, it can run too.",
-                    missing
+                    "Make `{missing}` *discoverable* on this machine — installed is not enough, it \
+                     has to be on the PATH of a fresh interactive login shell, which is what the \
+                     harness runs commands under. Check it with:\n\
+                     \x20 bash -l -i -c 'command -v {missing}'\n\
+                     If that prints nothing, either export the tool's directory from ~/.profile or \
+                     ~/.bashrc, or — if a version manager owns it (mise, asdf, nvm, pyenv, rbenv) — \
+                     declare it in that manager's *global* config so every shell activates it, not \
+                     just the directories that ask for it.",
                 ),
             );
             self.notify_environment_not_ready(step_exec, &msg);
@@ -694,6 +697,7 @@ impl ExecutionDriver {
 }
 
 /// Result of scanning free text for a verdict JSON object.
+#[derive(Debug)]
 pub(crate) enum ParsedVerdict {
     Pass,
     Fail(crate::domain::verifier::VerdictFailure),
@@ -713,30 +717,21 @@ pub(crate) fn parse_verdict_text(raw_text: &str, verdict_key: &str) -> ParsedVer
     let text_buffer = crate::domain::text::strip_think_tags(raw_text);
     let parsed_val = crate::domain::text::find_json_object_with_key(raw_text, verdict_key);
 
-    let val = match parsed_val {
+    let val = match parsed_val.or_else(|| recover_unbraced_object(&text_buffer, verdict_key)) {
         Some(v) => v,
         None => {
-            let start = text_buffer.find('{');
-            let end = text_buffer.rfind('}');
-            let json_str = if let (Some(s), Some(e)) = (start, end) {
-                if s < e {
-                    &text_buffer[s..=e]
-                } else {
-                    text_buffer.trim()
-                }
-            } else {
-                text_buffer.trim()
-            };
-            match serde_json::from_str(json_str) {
-                Ok(v) => v,
-                Err(e) => {
-                    return ParsedVerdict::Missing(format!(
-                        "Failed to parse verifier output JSON: {} (raw: {})",
-                        e,
-                        tail_chars(json_str, 500)
-                    ))
-                }
-            }
+            // Report against the *turn*, not against a span we stitched together
+            // out of it. The old fallback parsed "first `{` in the turn" through
+            // "last `}`" and surfaced serde's complaint about that span — which,
+            // on a turn that quoted any code, meant the error described a random
+            // brace in someone's TypeScript rather than the verdict. The turn's
+            // tail is where a verdict is supposed to be, so that is what we show.
+            return ParsedVerdict::Missing(format!(
+                "No JSON object carrying the verdict key '{}' in the validate turn — the reply \
+                 must end with a single JSON object. Turn ended with: {}",
+                verdict_key,
+                tail_chars(text_buffer.trim(), 300)
+            ));
         }
     };
 
@@ -824,12 +819,21 @@ fn is_transport_failure(err: &str) -> bool {
 /// Detect "the shell could not find a binary the harness command invokes"
 /// (exit 127) and return the missing command's name.
 ///
-/// Recognizes the three shell diagnostics we can actually receive — dash/`sh`
+/// Recognizes the four diagnostics we can actually receive — dash/`sh`
 /// (`sh: 1: cargo: not found`), bash (`bash: line 1: cargo: command not found`),
-/// and zsh (`zsh: command not found: cargo`) — because the exit code itself is
-/// not reliably in the error string: the local adapter formats
-/// `Command failed (exit code: Some(127)): …` but the SSH adapter substitutes
-/// the remote stderr for the code whenever stderr is non-empty.
+/// zsh (`zsh: command not found: cargo`), and Debian/Ubuntu's `command-not-found`
+/// handler (`Command 'cargo' not found, but can be installed with:`) — because
+/// the exit code itself is not reliably in the error string: the local adapter
+/// formats `Command failed (exit code: Some(127)): …` but the SSH adapter
+/// substitutes the remote stderr for the code whenever stderr is non-empty.
+///
+/// The `command-not-found` shape matters because it is the *default* on the
+/// distro most remote boxes run: the handler is wired into bash's
+/// `command_not_found_handle` hook and **replaces** the shell's own diagnostic,
+/// so an Ubuntu machine never emits any of the three classic strings. Missing it
+/// silently disabled this whole fast path there — the failure fell through to
+/// the triage agent, which then parroted the handler's own `sudo apt install …`
+/// suggestion as the remediation (usually the wrong toolchain entirely).
 ///
 /// Guarded against false positives by requiring the missing name to appear as a
 /// token of `cmd`. A test that merely *prints* "command not found" in its output
@@ -856,7 +860,9 @@ fn detect_missing_command(cmd: &str, output: &str) -> Option<String> {
         // zsh (`command not found: npm`) is matched first because it names the
         // binary *after* the marker while carrying the bash marker's text as a
         // prefix — checking bash first would mis-extract the shell's own name.
-        let raw = if let Some((_, rest)) = line.split_once("command not found: ") {
+        let raw = if let Some(name) = quoted_missing_command(line) {
+            name
+        } else if let Some((_, rest)) = line.split_once("command not found: ") {
             rest.split_whitespace().next()?
         } else if let Some(i) = line.find(": command not found") {
             line[..i].rsplit(':').next()?
@@ -872,6 +878,33 @@ fn detect_missing_command(cmd: &str, output: &str) -> Option<String> {
 
         invoked(name).then(|| name.to_string())
     })
+}
+
+/// Extract the binary name from Debian/Ubuntu's `command-not-found` handler,
+/// which quotes the name instead of using the shell's `name: not found` shape:
+///
+/// ```text
+/// Command 'cargo' not found, but can be installed with:
+/// No command 'cargo' found, did you mean: …          (older releases)
+/// ```
+///
+/// Both wordings are accepted, and the quote is matched loosely (`'` or `"`)
+/// because the handler's own output has changed style across releases. The
+/// caller still gates on the name being a token of the harness command, so a
+/// loose match here cannot turn a red build into a false "environment" verdict.
+fn quoted_missing_command(line: &str) -> Option<&str> {
+    let (before, rest) = line.split_once(['\'', '"'])?;
+    let before = before.trim_start();
+    if !(before.starts_with("Command ") || before.starts_with("No command ")) {
+        return None;
+    }
+    let (name, after) = rest.split_once(['\'', '"'])?;
+    let after = after.trim_start();
+    // "Command 'x' not found…" vs "No command 'x' found…" — one word each way.
+    after
+        .starts_with("not found")
+        .then_some(name)
+        .or_else(|| after.starts_with("found").then_some(name))
 }
 
 /// Truncate `s` to at most `max` characters, keeping the *tail* rather
@@ -990,6 +1023,43 @@ fn build_triage_prompt(machine: &str, wt_path: &str, cmd: &str, output_tail: &st
          libgtk-3-dev'; for regression: an empty string\" }}",
         cmd, machine, wt_path, output_tail,
     )
+}
+
+/// Last-chance recovery for a verdict object whose **braces** are malformed
+/// while its body is perfectly good JSON — in practice, a model that ends its
+/// turn with
+///
+/// ```text
+/// "verdict": "fail", "reason": "…", "failing_tests": [], "implicated_files": [] }
+/// ```
+///
+/// i.e. every key/value the contract asks for, but no opening `{` (or, more
+/// rarely, no closing `}`). Observed from MiniMax-M3 on a detached run; the
+/// object is right there and the whole step was thrown away for one character.
+///
+/// Takes the text from the **last** occurrence of `"<key>"` to the last `}`,
+/// and retries it with the missing brace supplied. Recovery still has to parse
+/// as JSON *and* carry the key, so a turn that merely discusses the word
+/// "verdict" in prose cannot fake one — the guard is the same as the strict
+/// path's, only the braces are forgiven.
+fn recover_unbraced_object(text: &str, key: &str) -> Option<serde_json::Value> {
+    let start = text.rfind(&format!("\"{key}\""))?;
+    let tail = &text[start..];
+
+    // Trailing prose after the object is common ("… that's my verdict."); cut at
+    // the last `}` so it can't poison the parse. With no `}` at all, assume the
+    // closing brace is the one that went missing and take the rest of the turn.
+    let body = match tail.rfind('}') {
+        Some(end) => &tail[..=end],
+        None => tail.trim_end(),
+    };
+
+    let candidates = [format!("{{{body}"), format!("{{{body}}}")];
+    candidates.iter().find_map(|c| {
+        serde_json::from_str::<serde_json::Value>(c)
+            .ok()
+            .filter(|v| v.is_object() && v.get(key).is_some())
+    })
 }
 
 /// Scan a classifier agent's turn text for the triage JSON object. Tolerates

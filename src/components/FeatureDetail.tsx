@@ -21,6 +21,7 @@ import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureS
 import {
   retryStep,
   isBlockingError,
+  isEnvironmentError,
   findActivePredecessor,
 } from '../lib/features';
 import type { SyncOutcomeView, MrState } from '../types';
@@ -97,6 +98,43 @@ const ArtifactIcon: React.FC<{ kind: ArtifactKind; className?: string }> = ({ ki
       return <FileQuestion className={className} />;
   }
 };
+
+/**
+ * Explains *why* an environment failure happens on a machine where the tool is,
+ * as far as the user is concerned, already installed — and what "installed"
+ * actually has to mean for the harness.
+ *
+ * Deliberately names no specific tool: the harness runs whatever prepare/test
+ * command the project declares, so the rule is the same for cargo, npm, pytest
+ * or anything else. The trap it describes is the common one — the tool exists,
+ * but only the user's own shell can see it, because a version manager activates
+ * it per-directory (or only from a config the harness's shell never reads).
+ * Retrying the step cannot fix any of that, which is why this sits next to the
+ * error instead of next to the Retry button.
+ */
+const EnvironmentHint: React.FC = () => (
+  <div
+    className="mt-3 pt-3 border-t border-rose-500/20 flex items-start gap-2 font-sans text-slate-400"
+    title={
+      'The harness runs your prepare/test commands through a fresh interactive login shell on the ' +
+      'target machine (bash -l -i -c), not through your terminal session. A tool is only usable if ' +
+      'that shell can find it on PATH.\n\n' +
+      'Verify on the machine:\n' +
+      "  bash -l -i -c 'command -v <tool>'\n\n" +
+      'If it prints nothing, export the tool from ~/.profile or ~/.bashrc, or declare it in your ' +
+      "version manager's global config (mise use -g, asdf global, nvm alias default) so every " +
+      'shell activates it — not just the directories that ask for it.'
+    }
+  >
+    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px text-amber-400" />
+    <span>
+      Retrying will not help until the machine is fixed. The harness runs commands through a fresh
+      interactive login shell, so every tool must be discoverable on that shell&apos;s{' '}
+      <span className="font-mono text-slate-300">PATH</span> — installed is not enough. Hover for how
+      to check and fix it.
+    </span>
+  </div>
+);
 
 const ARTIFACT_KIND_COLORS: Record<ArtifactKind, string> = {
   'markdown': 'text-cyan-400',
@@ -1335,7 +1373,10 @@ export function FeatureDetail() {
 
                       {(step.status === 'failed' || step.status === 'interrupted') && step.error_message && (
                         <div className="mt-3 p-3 rounded bg-rose-500/5 border border-rose-500/20 text-xs text-rose-400 font-mono">
-                          {step.error_message}
+                          {/* The backend composes this message with newlines and an indented
+                              reproduce line; render it verbatim instead of collapsing it. */}
+                          <div className="whitespace-pre-wrap">{step.error_message}</div>
+                          {isEnvironmentError(step.error_message) && <EnvironmentHint />}
                         </div>
                       )}
 

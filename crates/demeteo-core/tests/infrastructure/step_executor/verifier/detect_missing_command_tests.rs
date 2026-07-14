@@ -36,6 +36,39 @@ fn detects_zsh_command_not_found() {
 }
 
 #[test]
+fn detects_ubuntu_command_not_found_handler() {
+    // The default on Ubuntu: `command-not-found` is wired into bash's
+    // `command_not_found_handle` hook and *replaces* the shell's own
+    // diagnostic, so none of the three classic strings ever appear. This is the
+    // shape the detached run on 10.27.40.55 actually produced.
+    let out = "Command 'cargo' not found, but can be installed with:\n\
+               sudo apt install cargo   # version 1.75.0+dfsg0ubuntu1-0ubuntu7.4, or\n\
+               sudo apt install rustup  # version 1.26.0-5ubuntu0.1\n";
+    assert_eq!(
+        detect_missing_command("cd src-tauri && cargo test", out).as_deref(),
+        Some("cargo")
+    );
+}
+
+#[test]
+fn detects_older_ubuntu_no_command_found_wording() {
+    let out = "No command 'pytest' found, did you mean:\n Command 'pytest-3' from package 'python3-pytest'\n";
+    assert_eq!(
+        detect_missing_command("pytest -q", out).as_deref(),
+        Some("pytest")
+    );
+}
+
+#[test]
+fn ignores_quoted_not_found_for_a_command_the_harness_never_runs() {
+    // The false-positive guard covers the quoted shape too: `apt`'s suggestion
+    // lines name *other* binaries, and a test that prints the handler's wording
+    // must stay a Verdict.
+    let out = "Command 'rustc' not found, but can be installed with:\n";
+    assert_eq!(detect_missing_command("npm test", out), None);
+}
+
+#[test]
 fn detects_missing_command_from_ssh_adapter_error_shape() {
     // The SSH adapter substitutes remote stderr for the exit code whenever
     // stderr is non-empty, so the string carries no "127" at all — the
