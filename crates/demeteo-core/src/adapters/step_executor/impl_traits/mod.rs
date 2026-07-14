@@ -422,7 +422,13 @@ impl DagStepExecutor {
                 feature_id,
                 &feature.project_id.0,
                 workflow_id.as_str(),
-                &feature.title,
+                // The *description*, not the title: this is the same slot
+                // `feature_start` fills with the rich prompt body, and it lands
+                // in `{{feature_description}}` for every step the recovered
+                // driver goes on to run (and in the memory-retrieval query).
+                // Passing the short title here silently degraded every prompt
+                // after a restart, gate decision, or watchdog recovery.
+                &feature.description,
                 false,
             )
             .await?;
