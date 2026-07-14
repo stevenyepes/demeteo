@@ -1,0 +1,90 @@
+// Tests for the attachment staging seam.
+//
+// The bug this guards: Tauri v2 drag-and-drop hands the webview an absolute
+// PATH, not a browser `File`. The dropzone used to stage those with `size = 0`
+// and a fabricated random sha ("staged-<uuid>"), so the chip read "0 B" and the
+// sha-based dedup let the same file through twice — two chips, two commits.
+//
+// The fix routes path-based drops through `stageAttachmentMetadata`, which
+// reads the bytes in Rust and returns the real `{ sha256, size }`, making the
+// dedup key stable across re-drops.
+//
+// Was `tests/repro/attachment-dnd-staging.mjs`, which re-implemented the JS
+// ingest logic AND the Rust command in Node, then asserted the copies agreed
+// with each other. This imports the real wrappers; the Rust sha256 itself is
+// covered by `crates/demeteo-core/tests/domain/attachment.rs`.
+
+import { invoke } from "@tauri-apps/api/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { computeLocalSha256, stageAttachmentMetadata } from "./attachments";
+
+// Known vector: sha256("hello world"). The Rust side must agree byte-for-byte,
+// since the two shas are used as the same dedup key.
+const HELLO_WORLD_SHA = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+
+beforeEach(() => {
+  vi.mocked(invoke).mockReset();
+});
+
+describe("computeLocalSha256", () => {
+  it("produces lowercase hex matching the canonical SHA-256", async () => {
+    const file = new File(["hello world"], "note.txt", { type: "text/plain" });
+
+    expect(await computeLocalSha256(file)).toBe(HELLO_WORLD_SHA);
+  });
+
+  it("gives the same file the same digest across two reads (a stable dedup key)", async () => {
+    const first = new File(["same bytes"], "a.txt");
+    const second = new File(["same bytes"], "b.txt");
+
+    // Dedup keys on content, not filename — re-dropping one file must collide.
+    expect(await computeLocalSha256(first)).toBe(await computeLocalSha256(second));
+  });
+});
+
+describe("stageAttachmentMetadata", () => {
+  it("routes a dropped path to the Rust command with an explicit null mime", async () => {
+    vi.mocked(invoke).mockResolvedValue({ sha256: HELLO_WORLD_SHA, size: 11 });
+
+    const meta = await stageAttachmentMetadata("/tmp/note.txt");
+
+    expect(meta).toEqual({ sha256: HELLO_WORLD_SHA, size: 11 });
+    expect(invoke).toHaveBeenCalledWith("attachment_stage_metadata", {
+      sourcePath: "/tmp/note.txt",
+      mime: null,
+      sourceFilename: null,
+    });
+  });
+
+  it("returns the real byte count so the chip never renders 0 B", async () => {
+    vi.mocked(invoke).mockResolvedValue({ sha256: HELLO_WORLD_SHA, size: 4096 });
+
+    const meta = await stageAttachmentMetadata("/tmp/big.pdf", "application/pdf", "big.pdf");
+
+    expect(meta.size).toBe(4096);
+    expect(meta.sha256).not.toMatch(/^staged-/);
+  });
+
+  it("propagates a Rust validation error instead of staging the entry", async () => {
+    vi.mocked(invoke).mockRejectedValue({ kind: "validation", message: "file too large" });
+
+    await expect(stageAttachmentMetadata("/tmp/huge.bin")).rejects.toMatchObject({
+      kind: "validation",
+    });
+  });
+});
+
+describe("re-drop dedup", () => {
+  it("yields one identical sha for the same path dropped twice", async () => {
+    vi.mocked(invoke).mockResolvedValue({ sha256: HELLO_WORLD_SHA, size: 11 });
+
+    const first = await stageAttachmentMetadata("/tmp/note.txt");
+    const second = await stageAttachmentMetadata("/tmp/note.txt");
+
+    // The dropzone dedups with `filter((e) => e.sha256 !== sha256)`, so a
+    // stable sha is what collapses the second drop onto the first. The old
+    // random "staged-<uuid>" sha is exactly why that filter used to miss.
+    expect(second.sha256).toBe(first.sha256);
+  });
+});

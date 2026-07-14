@@ -1,10 +1,11 @@
-// Type-level smoke tests for the AppView discriminated union in
-// `src/types.ts`. These tests do NOT require a runtime test runner —
-// they exist purely so that `tsc --noEmit` exercises the wiring of
-// the `create-project` variant: producing an `AppView` of that kind
-// and guaranteeing the existing `kind: 'new-project'` / `kind: 'home'`
-// shapes remain assignable. If anyone ever removes the variant from
-// the union, the test file will fail to type-check.
+// Type-level smoke tests for the AppView discriminated union in `src/types.ts`.
+//
+// Deliberately NOT a `.test.ts`: there is nothing to execute here, so it is
+// excluded from the Vitest glob. `tsc --noEmit` is the real gate — it exercises
+// the wiring of the `create-project` variant by producing an `AppView` of that
+// kind and guaranteeing the existing `kind: 'new-project'` / `kind: 'home'`
+// shapes remain assignable. Remove the variant from the union and this file
+// fails to type-check.
 
 import type { AppView } from './types';
 

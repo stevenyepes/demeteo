@@ -1267,6 +1267,82 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         "the refused ensure_driver_running must not have armed a driver"
     );
 
+    // ...and `gate_decide` itself must refuse the shadow rather than
+    // upserting a decision no engine reads and returning `Ok` — the
+    // driver-spawn refusal above is only logged, so a silent success here
+    // is what the user experienced as "I clicked Approve and nothing
+    // happened" on a detached run. The decision belongs on the runner.
+    let err = GatePresenter::gate_decide(&*executor, "se-shadow", "approve", None)
+        .await
+        .expect_err("gate_decide must refuse a runner-owned shadow");
+    assert!(
+        matches!(&err, AppError::Validation { message } if message.contains("read-only shadow")),
+        "expected the shadow refusal, got: {err:?}"
+    );
+    let gates: &dyn GateRepository = &*db;
+    assert!(
+        gates
+            .pending_for_feature(&FeatureId::from("f-shadow"))
+            .unwrap()
+            .is_none_or(|g| g.decision.is_none()),
+        "the refused gate_decide must not have written a local decision"
+    );
+
+    // Cancelling a shadow is the same story: the only cancel sender that
+    // can stop the run lives on the runner, so signalling the (empty)
+    // local map and reporting success is a "Stop" that does nothing.
+    let err = StepExecutor::feature_cancel(&*executor, "f-shadow")
+        .await
+        .expect_err("feature_cancel must refuse a runner-owned shadow");
+    assert!(
+        err.contains("read-only shadow"),
+        "expected the shadow refusal, got: {err}"
+    );
+
+    // Retry is the dangerous one: `replay_steps_from` calls
+    // `start_execution_loop` directly, bypassing `ensure_driver_running`'s
+    // guard, so without this refusal a retry would arm a second driver
+    // against a run the runner still owns.
+    features
+        .step_update(
+            &StepExecutionId::from("se-shadow"),
+            &crate::ports::db::StepExecutionPatch {
+                status: Some("failed".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let err = StepExecutor::step_retry(&*executor, "se-shadow", None, None)
+        .await
+        .expect_err("step_retry must refuse a runner-owned shadow");
+    assert!(
+        matches!(&err, AppError::Validation { message } if message.contains("read-only shadow")),
+        "expected the shadow refusal, got: {err:?}"
+    );
+    assert!(
+        !executor
+            .driver_registry()
+            .is_live(&FeatureId::from("f-shadow")),
+        "the refused step_retry must not have armed a driver"
+    );
+
+    // `replay_from_step` reaches the same primitive by a different door and
+    // skips `step_retry`'s status checks entirely, so it needs the guard in
+    // `replay_steps_from` itself to be refused.
+    let err = StepExecutor::replay_from_step(&*executor, "se-shadow", None, None)
+        .await
+        .expect_err("replay_from_step must refuse a runner-owned shadow");
+    assert!(
+        err.contains("read-only shadow"),
+        "expected the shadow refusal, got: {err}"
+    );
+    assert!(
+        !executor
+            .driver_registry()
+            .is_live(&FeatureId::from("f-shadow")),
+        "the refused replay_from_step must not have armed a driver"
+    );
+
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 

@@ -1,124 +1,67 @@
-// Runtime smoke tests for the EmptyStateCard first-run landing card.
+// Smoke tests for the EmptyStateCard first-run landing card.
 //
-// Spec finding C-4: the wizard entry tile for `create-project` must
-// live on the empty-state card alongside Connect Providers / Sync
-// Worktrees / Deploy Agents. This test file verifies:
-//
-//   (a) All four tiles render — the three originals are still present
-//       and a fourth "Create from Scratch" tile exists with a stable
-//       test id so downstream selectors can find it.
-//
-//   (b) Clicking the fourth tile invokes `onCreateFromZero` exactly
-//       once and does NOT invoke any of the other three handlers
-//       (so the wiring is precise, not cross-firing).
-//
-//   (c) The component still accepts the legacy three callbacks as
-//       required props (no breaking interface change for existing
-//       callers beyond the new `onCreateFromZero` addition).
-//
-// Mirrors the runtime-throws-on-failure pattern in
-// `src/wizard.renderer.test.tsx` and `src/wizard.test.ts`; consumed by
-// `tsc --noEmit` for type-checking and exports
-// `emptyStateCardTestResults` for downstream introspection.
+// Spec finding C-4: the wizard entry tile for `create-project` must live on the
+// empty-state card alongside Connect Providers / Sync Worktrees / Deploy Agents,
+// and clicking it must fire only its own handler — no cross-firing into the
+// legacy three.
 
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
-import { type ReactElement } from 'react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 
 import EmptyStateCard from './EmptyStateCard';
 
-function mount(element: ReactElement): ReactTestRenderer {
-  let renderer: ReactTestRenderer | null = null;
-  act(() => { renderer = create(element); });
-  if (!renderer) throw new Error('EmptyStateCard renderer did not initialise');
-  return renderer;
+function renderCard() {
+  const handlers = {
+    onSeedSample: vi.fn(),
+    onConnectProviders: vi.fn(),
+    onSyncWorktrees: vi.fn(),
+    onDeployAgents: vi.fn(),
+    onCreateFromZero: vi.fn(),
+  };
+
+  render(<EmptyStateCard {...handlers} />);
+
+  return handlers;
 }
 
-function findByTestId(root: ReactTestInstance, id: string): ReactTestInstance | null {
-  const all = root.findAll(() => true);
-  for (const node of all) {
-    if (typeof node.type === 'string' && (node.props as { 'data-testid'?: string })['data-testid'] === id) {
-      return node;
+describe('EmptyStateCard', () => {
+  it('renders all four tiles', () => {
+    renderCard();
+
+    for (const label of [
+      'Connect Providers',
+      'Sync Worktrees',
+      'Deploy Agents',
+      'Create from Scratch',
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
     }
-    const props = node.props as { 'data-testid'?: string };
-    if (props['data-testid'] === id) return node;
-  }
-  return null;
-}
+  });
 
-function findAllByText(root: ReactTestInstance, text: string): ReactTestInstance[] {
-  const matches: ReactTestInstance[] = [];
-  for (const node of root.findAll(() => true)) {
-    if (typeof node !== 'object' || node === null || !('children' in node)) continue;
-    if (!Array.isArray((node as ReactTestInstance).children)) continue;
-    for (const child of (node as ReactTestInstance).children) {
-      if (typeof child === 'string' && child === text) {
-        matches.push(node as ReactTestInstance);
-        break;
-      }
-    }
-  }
-  return matches;
-}
+  // The stable test id is what downstream selectors key off.
+  it('gives the create-project tile a stable test id', () => {
+    renderCard();
 
-// ── (a) Four tiles render ──────────────────────────────────────────────
+    expect(screen.getByTestId('empty-state-create-project')).toBeInTheDocument();
+  });
 
-let renderer: ReactTestRenderer | null = null;
-let onSeedSample = 0;
-let onConnectProviders = 0;
-let onSyncWorktrees = 0;
-let onDeployAgents = 0;
-let onCreateFromZero = 0;
+  it('fires only onCreateFromZero when the create-project tile is clicked', async () => {
+    const handlers = renderCard();
 
-renderer = mount(
-  <EmptyStateCard
-    onSeedSample={() => { onSeedSample += 1; }}
-    onConnectProviders={() => { onConnectProviders += 1; }}
-    onSyncWorktrees={() => { onSyncWorktrees += 1; }}
-    onDeployAgents={() => { onDeployAgents += 1; }}
-    onCreateFromZero={() => { onCreateFromZero += 1; }}
-  />,
-);
+    await userEvent.click(screen.getByTestId('empty-state-create-project'));
 
-const createFromZeroTile = findByTestId(renderer.root, 'empty-state-create-project');
-if (!createFromZeroTile) {
-  throw new Error('EmptyStateCard: fourth "Create from Scratch" tile is missing (data-testid="empty-state-create-project")');
-}
+    expect(handlers.onCreateFromZero).toHaveBeenCalledTimes(1);
+    expect(handlers.onSeedSample).not.toHaveBeenCalled();
+    expect(handlers.onConnectProviders).not.toHaveBeenCalled();
+    expect(handlers.onSyncWorktrees).not.toHaveBeenCalled();
+    expect(handlers.onDeployAgents).not.toHaveBeenCalled();
+  });
 
-const expectedLabels = ['Connect Providers', 'Sync Worktrees', 'Deploy Agents', 'Create from Scratch'];
-for (const label of expectedLabels) {
-  const matches = findAllByText(renderer.root, label);
-  if (matches.length === 0) {
-    throw new Error(`EmptyStateCard: expected tile labelled "${label}" to render, but it was not found`);
-  }
-}
+  it('still renders the legacy tiles as buttons', () => {
+    renderCard();
 
-// ── (b) Clicking the fourth tile fires only onCreateFromZero ──────────
-
-act(() => {
-  (createFromZeroTile.props as { onClick?: () => void }).onClick?.();
+    // 3 legacy tiles + the new tile + seed sample.
+    expect(screen.getAllByRole('button').length).toBeGreaterThanOrEqual(4);
+  });
 });
-
-if (onCreateFromZero !== 1) {
-  throw new Error(`EmptyStateCard: clicking the Create from Scratch tile must invoke onCreateFromZero exactly once; got ${onCreateFromZero}`);
-}
-if (onSeedSample !== 0 || onConnectProviders !== 0 || onSyncWorktrees !== 0 || onDeployAgents !== 0) {
-  throw new Error(
-    `EmptyStateCard: clicking Create from Scratch must not fire sibling handlers; ` +
-    `seedSample=${onSeedSample} connectProviders=${onConnectProviders} syncWorktrees=${onSyncWorktrees} deployAgents=${onDeployAgents}`,
-  );
-}
-
-// ── (c) Other tiles still wire up correctly ────────────────────────────
-
-const allButtons = renderer.root.findAll((node) => typeof node.type === 'string' && (node.type as string) === 'button');
-if (allButtons.length < 4) {
-  throw new Error(`EmptyStateCard: expected at least 4 buttons (3 legacy tiles + 1 new tile + seed sample); got ${allButtons.length}`);
-}
-
-renderer.unmount();
-
-export const emptyStateCardTestResults = {
-  fourthTileTestId: 'empty-state-create-project',
-  fourthTileLabel: 'Create from Scratch',
-  onCreateFromZeroFired: true,
-} as const;

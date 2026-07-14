@@ -1,34 +1,27 @@
 // Integration tests for the create-project wizard hook
 // (`src/hooks/useCreateProjectWizard.ts`).
 //
-// These tests pin down AC-5 from the implementation spec:
+// These pin down AC-5 from the implementation spec:
 //
-//   (a) drive the full 7-step happy path and assert the resulting
-//       AppView transitions to the launched feature with the
-//       expected project id + feature title (the post-launch
-//       `detail` view, derived via `viewForLaunchedFeature`);
+//   (a) drive the full 7-step happy path and assert the resulting AppView
+//       transitions to the launched feature's `detail` view (via
+//       `viewForLaunchedFeature`);
 //
-//   (b) verify Back never revisits an auto-progressed screen — the
-//       hook must route Back through `state.history` (via the Rust
-//       `go_back_create_project` IPC), NOT by subtracting 1 from a
-//       step index;
+//   (b) verify Back never revisits an auto-progressed screen — the hook must
+//       route Back through `state.history` (via the Rust `go_back_create_project`
+//       IPC), NOT by subtracting 1 from a step index;
 //
-//   (c) verify the AppView variant emitted on completion is the
-//       `detail` view emitted by the create-project wizard (via
-//       `viewForLaunchedFeature`), and that `isCreateProjectLaunchedView`
-//       correctly rejects any non-`detail` AppView.
+//   (c) verify `isCreateProjectLaunchedView` accepts only the post-launch
+//       `detail` view.
 //
-// The hook accepts dependency injection (see
-// `CreateProjectWizardDeps`) so we can script the IPC seam without
-// stubbing `invoke()` globally. The test runner is `tsc --noEmit`
-// (mirrors `wizard.test.ts`); assertions throw on failure.
+// The hook takes dependency injection (`CreateProjectWizardDeps`) so the IPC
+// seam is scripted here rather than by stubbing `invoke()` globally.
 
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { type ReactElement, useEffect } from "react";
+import { act, renderHook } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   type CreateProjectWizardDeps,
-  type UseCreateProjectWizardResult,
   isCreateProjectLaunchedView,
   useCreateProjectWizard,
   viewForLaunchedFeature,
@@ -42,64 +35,6 @@ import type {
   LaunchedFeature,
 } from "../types";
 
-// ── Test harness ───────────────────────────────────────────────────────
-//
-// A minimal probe component that calls the hook and exposes its
-// return value via a ref the test can read. We can't return
-// primitives from a React component, so we capture the hook's output
-// into a mutable holder on each render.
-
-interface HookHolder {
-  current: UseCreateProjectWizardResult | null;
-}
-
-function Probe(props: {
-  deps?: Partial<CreateProjectWizardDeps>;
-  onLaunched?: (feature: LaunchedFeature) => void;
-  onDismissed?: () => void;
-  holder: HookHolder;
-}): ReactElement {
-  const result = useCreateProjectWizard(props);
-  useEffect(() => {
-    props.holder.current = result;
-  });
-  return <></>;
-}
-
-function mountHook(
-  holder: HookHolder,
-  deps?: Partial<CreateProjectWizardDeps>,
-  callbacks?: {
-    onLaunched?: (feature: LaunchedFeature) => void;
-    onDismissed?: () => void;
-  },
-): ReactTestRenderer {
-  let renderer: ReactTestRenderer | null = null;
-  act(() => {
-    renderer = create(
-      <Probe
-        deps={deps}
-        holder={holder}
-        onLaunched={callbacks?.onLaunched}
-        onDismissed={callbacks?.onDismissed}
-      />,
-    );
-  });
-  if (!renderer) throw new Error("renderer did not initialise");
-  return renderer;
-}
-
-function readHook(holder: HookHolder): UseCreateProjectWizardResult {
-  if (!holder.current) throw new Error("hook did not mount");
-  return holder.current;
-}
-
-// ── Mock IPC script ────────────────────────────────────────────────────
-//
-// The hook's three IPC calls are stubbed via `deps`. We drive a tiny
-// script: each call returns the next pre-canned outcome, so the test
-// can assert the hook's behaviour step-by-step.
-
 function makeInitialState(): BootstrapState {
   return { step: "name", history: ["name"] };
 }
@@ -108,424 +43,285 @@ function advance(state: BootstrapState, next: BootstrapState["step"]): Bootstrap
   return { step: next, history: [...state.history, next] };
 }
 
-function makeDeps(
-  script: Array<{
-    submit?: BootstrapOutcome | ((state: BootstrapState, payload: CreateProjectStepPayload) => BootstrapOutcome);
-    back?: BootstrapState | ((state: BootstrapState) => BootstrapState);
-  }>,
-): {
-  deps: Partial<CreateProjectWizardDeps>;
-  submitCalls: Array<{ state: BootstrapState; payload: CreateProjectStepPayload }>;
-  backCalls: BootstrapState[];
-} {
+type SubmitOutcome =
+  | BootstrapOutcome
+  | ((state: BootstrapState, payload: CreateProjectStepPayload) => BootstrapOutcome);
+
+// Scripts the hook's IPC seam.
+//
+// `submits` and `backs` are SEPARATE queues on purpose. An earlier version of
+// this harness kept one `script` array and indexed it with two independent
+// cursors, so the first `back()` consumed the first *submit* entry and threw.
+// The file was never executed by a runner, so the bug went unnoticed.
+function makeDeps(script: { submits?: SubmitOutcome[]; backs?: BootstrapState[] }) {
+  const submits = [...(script.submits ?? [])];
+  const backs = [...(script.backs ?? [])];
+
   const submitCalls: Array<{ state: BootstrapState; payload: CreateProjectStepPayload }> = [];
   const backCalls: BootstrapState[] = [];
-  let submitIdx = 0;
-  let backIdx = 0;
+
   const deps: Partial<CreateProjectWizardDeps> = {
     beginCreateProject: async () => makeInitialState(),
+
     submitCreateProjectStep: async (state, payload) => {
       submitCalls.push({ state, payload });
-      const step = script[submitIdx++];
-      if (!step) throw new Error(`unexpected submit call #${submitIdx}`);
-      if (!step.submit) throw new Error(`script entry #${submitIdx} has no submit`);
-      return typeof step.submit === "function" ? step.submit(state, payload) : step.submit;
+      const outcome = submits.shift();
+      if (!outcome) throw new Error(`unscripted submit call #${submitCalls.length}`);
+      return typeof outcome === "function" ? outcome(state, payload) : outcome;
     },
+
     goBackCreateProject: async (state) => {
       backCalls.push(state);
-      const step = script[backIdx++];
-      if (!step || !step.back) throw new Error(`unexpected back call #${backIdx}`);
-      return typeof step.back === "function" ? step.back(state) : step.back;
+      const rewound = backs.shift();
+      if (!rewound) throw new Error(`unscripted back call #${backCalls.length}`);
+      return rewound;
     },
   };
+
   return { deps, submitCalls, backCalls };
 }
 
-// ── (a) Full 7-step happy path → Launched → detail AppView ─────────────
+function mountHook(
+  deps: Partial<CreateProjectWizardDeps>,
+  callbacks: {
+    onLaunched?: (feature: LaunchedFeature) => void;
+    onDismissed?: () => void;
+  } = {},
+) {
+  const { result } = renderHook(() => useCreateProjectWizard({ deps, ...callbacks }));
 
-{
-  const holder: HookHolder = { current: null };
-  const launchedViewBox: { current: AppView | null } = { current: null };
-  // 7 submit calls + 1 final Commit that returns Launched.
-  const launched: LaunchedFeature = {
-    feature_id: "feat-test-1",
-    feature_title: "billing-service",
-    project_id: "p_test_1",
-    created_repo: {
-      full_name: "octocat/billing-service",
-      default_branch: "main",
-      clone_url: "https://github.com/octocat/billing-service.git",
-    },
-  };
-
-  const script: Array<{
-    submit?: BootstrapOutcome;
-  }> = [];
-  let state = makeInitialState();
-  const order: BootstrapState["step"][] = [
-    "provider",
-    "group",
-    "machine",
-    "agent",
-    "model",
-    "description",
-  ];
-  for (const next of order) {
-    state = advance(state, next);
-    script.push({ submit: { kind: "continue", state } });
-  }
-  script.push({ submit: { kind: "launched", feature: launched } });
-
-  const { deps, submitCalls } = makeDeps(script);
-
-  const renderer = mountHook(
-    holder,
-    deps,
-    {
-onLaunched: (f) => {
-      launchedViewBox.current = viewForLaunchedFeature(f);
-    },
-    },
-  );
-
-  // Drive each submit. The final call must yield Launched.
-  const submit = async (payload: CreateProjectStepPayload): Promise<void> => {
+  const submit = async (payload: CreateProjectStepPayload) => {
     await act(async () => {
-      await readHook(holder).submit(payload);
+      await result.current.submit(payload);
     });
   };
 
-  await submit({ step: "name", value: "billing-service" });
-  await submit({ step: "provider", provider_id: "prov-1", kind: "github" });
-  await submit({
-    step: "group",
-    namespace_id: "octocat",
-    kind: "personal",
-    name: "octocat",
-  });
-  await submit({ step: "machine", kind: "local", machine_id: null });
-  await submit({ step: "agent", kind: "opencode" });
-  await submit({ step: "model", model: "anthropic/claude-sonnet-4" });
-  await submit({
-    step: "commit",
-    title: "billing-service",
-    description: "Implement the billing service.",
-    visibility: "private",
-    name: "billing-service",
-    provider_id: "prov-1",
-    provider_kind: "github",
-    provider_host: "github.com",
-    namespace_id: "octocat",
-    namespace_kind: "personal",
-    namespace_name: "octocat",
-    machine_kind: "local",
-    machine_id: null,
-    agent_kind: "opencode",
-    model: "anthropic/claude-sonnet-4",
-  });
+  const back = async () => {
+    await act(async () => {
+      await result.current.back();
+    });
+  };
 
-  // 7 submit calls were made in the documented order.
-  if (submitCalls.length !== 7) {
-    throw new Error(`expected 7 submit calls, got ${submitCalls.length}`);
-  }
-  const stepOrder = submitCalls.map((c) => c.payload.step);
-  const expected: CreateProjectStepPayload["step"][] = [
-    "name",
-    "provider",
-    "group",
-    "machine",
-    "agent",
-    "model",
-    "commit",
-  ];
-  for (let i = 0; i < expected.length; i++) {
-    if (stepOrder[i] !== expected[i]) {
-      throw new Error(`submit #${i} expected ${expected[i]}, got ${stepOrder[i]}`);
+  return { result, submit, back };
+}
+
+const LAUNCHED: LaunchedFeature = {
+  feature_id: "feat-test-1",
+  feature_title: "billing-service",
+  project_id: "p_test_1",
+  created_repo: {
+    full_name: "octocat/billing-service",
+    default_branch: "main",
+    clone_url: "https://github.com/octocat/billing-service.git",
+  },
+};
+
+describe("(a) the full 7-step happy path", () => {
+  it("submits every step in order and lands on the launched feature's detail view", async () => {
+    // Six Continue outcomes walking name → description, then the Commit that
+    // returns Launched.
+    const submits: SubmitOutcome[] = [];
+    let state = makeInitialState();
+    for (const next of ["provider", "group", "machine", "agent", "model", "description"] as const) {
+      state = advance(state, next);
+      submits.push({ kind: "continue", state });
     }
+    submits.push({ kind: "launched", feature: LAUNCHED });
+
+    const { deps, submitCalls } = makeDeps({ submits });
+    let launchedView: AppView | null = null;
+    const { result, submit } = mountHook(deps, {
+      onLaunched: (f) => {
+        launchedView = viewForLaunchedFeature(f);
+      },
+    });
+
+    await submit({ step: "name", value: "billing-service" });
+    await submit({ step: "provider", provider_id: "prov-1", kind: "github" });
+    await submit({ step: "group", namespace_id: "octocat", kind: "personal", name: "octocat" });
+    await submit({ step: "machine", kind: "local", machine_id: null });
+    await submit({ step: "agent", kind: "opencode" });
+    await submit({ step: "model", model: "anthropic/claude-sonnet-4" });
+    await submit({
+      step: "commit",
+      title: "billing-service",
+      description: "Implement the billing service.",
+      visibility: "private",
+      name: "billing-service",
+      provider_id: "prov-1",
+      provider_kind: "github",
+      provider_host: "github.com",
+      namespace_id: "octocat",
+      namespace_kind: "personal",
+      namespace_name: "octocat",
+      machine_kind: "local",
+      machine_id: null,
+      agent_kind: "opencode",
+      model: "anthropic/claude-sonnet-4",
+    });
+
+    expect(submitCalls.map((c) => c.payload.step)).toEqual([
+      "name",
+      "provider",
+      "group",
+      "machine",
+      "agent",
+      "model",
+      "commit",
+    ]);
+
+    expect(result.current.outcome?.kind).toBe("launched");
+    expect(result.current.launched).toMatchObject({
+      feature_id: LAUNCHED.feature_id,
+      project_id: LAUNCHED.project_id,
+      feature_title: LAUNCHED.feature_title,
+    });
+    expect(result.current.isLast).toBe(true);
+
+    // The post-launch destination is the feature's detail page. Emitting the
+    // wizard's own `create-project` surface would silently re-enter the wizard.
+    expect(launchedView).toEqual({
+      kind: "detail",
+      featureId: LAUNCHED.feature_id,
+      featureTitle: LAUNCHED.feature_title,
+    });
+    expect(isCreateProjectLaunchedView(launchedView!)).toBe(true);
+  });
+});
+
+describe("(b) Back never revisits an auto-progressed screen", () => {
+  // History: [name, provider(auto), group(auto), machine]. Three submits are
+  // enough to park the wizard on `machine` — each Continue carries the state
+  // the backend auto-progressed to.
+  function scriptedWizard() {
+    const submits: SubmitOutcome[] = [];
+    let state = makeInitialState();
+    for (const next of ["provider", "group", "machine"] as const) {
+      state = advance(state, next);
+      submits.push({ kind: "continue", state });
+    }
+
+    return makeDeps({
+      submits,
+      backs: [
+        { step: "group", history: ["name", "provider", "group"] },
+        { step: "provider", history: ["name", "provider"] },
+        { step: "name", history: ["name"] },
+      ],
+    });
   }
 
-  // The hook surfaced the Launched outcome.
-  const hook = readHook(holder);
-  if (hook.outcome?.kind !== "launched") {
-    throw new Error(`hook outcome expected 'launched', got ${hook.outcome?.kind}`);
-  }
-  if (hook.launched?.feature_id !== launched.feature_id) {
-    throw new Error(`hook.launched.feature_id mismatch`);
-  }
-  if (hook.launched?.project_id !== launched.project_id) {
-    throw new Error(`hook.launched.project_id mismatch`);
-  }
-  if (hook.launched?.feature_title !== launched.feature_title) {
-    throw new Error(`hook.launched.feature_title mismatch`);
+  async function parkOnMachine() {
+    const { deps, backCalls } = scriptedWizard();
+    const onDismissed = vi.fn();
+    const wizard = mountHook(deps, { onDismissed });
+
+    await wizard.submit({ step: "name", value: "my-repo" });
+    await wizard.submit({ step: "provider", provider_id: "prov-1", kind: "github" });
+    await wizard.submit({
+      step: "group",
+      namespace_id: "octocat",
+      kind: "personal",
+      name: "octocat",
+    });
+
+    return { ...wizard, backCalls, onDismissed };
   }
 
-  // (c) The AppView emitted on completion is the `detail` view
-  // (the post-launch destination of the `create-project` wizard),
-  // not the wizard's own surface.
-  const launchedView: AppView | null = launchedViewBox.current;
-  if (!launchedView) {
-    throw new Error("onLaunched callback did not fire");
-  }
-  if (launchedView.kind !== "detail") {
-    throw new Error(
-      `launched view kind expected 'detail' (create-project post-launch view), got '${launchedView.kind}' — ` +
-      "the wizard's own 'create-project' surface would silently re-enter the wizard",
-    );
-  }
-  const detail = launchedView as Extract<AppView, { kind: "detail" }>;
-  if (detail.featureId !== launched.feature_id) {
-    throw new Error(`viewForLaunchedFeature featureId mismatch: got ${detail.featureId}`);
-  }
-  if (detail.featureTitle !== launched.feature_title) {
-    throw new Error(`viewForLaunchedFeature featureTitle mismatch: got ${detail.featureTitle}`);
-  }
-  if (!isCreateProjectLaunchedView(launchedView)) {
-    throw new Error("isCreateProjectLaunchedView must accept the post-launch detail view");
-  }
+  it("parks on machine with the auto-progressed steps recorded in history", async () => {
+    const { result } = await parkOnMachine();
 
-  // The hook reports `isLast` for the final step only.
-  if (!hook.isLast) {
-    throw new Error("hook.isLast must be true at the end of the happy path");
-  }
-
-  renderer.unmount();
-}
-
-// ── (b) Back never revisits an auto-progressed screen ──────────────────
-//
-// History: [Name, Provider(auto), Group(auto), Machine]. After the
-// hook advances through all 4 transitions, calling `back()` must:
-//   1. first pop to Group (auto-progressed)
-//   2. then pop to Provider (auto-progressed)
-//   3. then pop to Name (the user-visible step)
-// never re-entering an auto-progressed screen silently.
-
-{
-  const holder: HookHolder = { current: null };
-  let dismissedCount = 0;
-
-  // Pre-script 4 advance outcomes + scripted rewinds via `back`.
-  const advances: BootstrapState[] = [];
-  let s = makeInitialState();
-  for (const next of ["provider", "group", "machine"] as const) {
-    s = advance(s, next);
-    advances.push(s);
-  }
-  // Script: 3 submits returning Continue, then 3 backs each returning
-  // a rewinded state, then a fourth back that's a no-op (host dismisses).
-  const rewound1 = { step: "group", history: ["name", "provider", "group"] } as BootstrapState;
-  const rewound2 = { step: "provider", history: ["name", "provider"] } as BootstrapState;
-  const rewound3 = { step: "name", history: ["name"] } as BootstrapState;
-
-  const { deps, backCalls } = makeDeps([
-    { submit: { kind: "continue", state: advances[0] } },
-    { submit: { kind: "continue", state: advances[1] } },
-    { submit: { kind: "continue", state: advances[2] } },
-    { back: rewound1 },
-    { back: rewound2 },
-    { back: rewound3 },
-  ]);
-
-  const renderer = mountHook(holder, deps, {
-    onDismissed: () => { dismissedCount += 1; },
+    expect(result.current.state.step).toBe("machine");
+    expect(result.current.state.history).toEqual(["name", "provider", "group", "machine"]);
+    expect(result.current.isFirst).toBe(false);
   });
 
-  const submit = async (payload: CreateProjectStepPayload): Promise<void> => {
-    await act(async () => { await readHook(holder).submit(payload); });
-  };
-  const back = async (): Promise<void> => {
-    await act(async () => { await readHook(holder).back(); });
-  };
+  it("rewinds one history entry per Back, including the auto-progressed ones", async () => {
+    const { result, back, backCalls } = await parkOnMachine();
 
-  // Advance to Machine (auto-progressing past Provider + Group).
-  await submit({ step: "name", value: "my-repo" });
-  await submit({ step: "provider", provider_id: "prov-1", kind: "github" });
-  await submit({
-    step: "group",
-    namespace_id: "octocat",
-    kind: "personal",
-    name: "octocat",
+    await back();
+    expect(result.current.state.step).toBe("group");
+    expect(result.current.state.history).toContain("group");
+
+    await back();
+    expect(result.current.state.step).toBe("provider");
+
+    await back();
+    expect(result.current.state.step).toBe("name");
+    expect(result.current.state.history).toEqual(["name"]);
+    expect(result.current.isFirst).toBe(true);
+
+    // One IPC call per history entry. A counter-based Back would have made
+    // fewer, silently skipping the auto-progressed screens.
+    expect(backCalls).toHaveLength(3);
   });
-  // No submit for Machine — simulate the wizard auto-progressing past
-  // it as well. We do that by calling submit + advancing state by hand.
-  await submit({ step: "machine", kind: "local", machine_id: null });
 
-  if (readHook(holder).state.step !== "machine") {
-    throw new Error("setup: expected wizard to be parked on machine");
-  }
-  if (readHook(holder).state.history.length !== 4) {
-    throw new Error(
-      `setup: history length expected 4, got ${readHook(holder).state.history.length}`,
-    );
-  }
-  if (readHook(holder).isFirst) {
-    throw new Error("setup: hook.isFirst must be false after auto-progression");
-  }
+  it("dismisses instead of rewinding when Back is pressed on the first step", async () => {
+    const { back, onDismissed } = await parkOnMachine();
 
-  // First back: lands on Group (auto-progressed).
-  await back();
-  if (readHook(holder).state.step !== "group") {
-    throw new Error(
-      `back #1 expected step='group' (auto-progressed), got '${readHook(holder).state.step}'`,
-    );
-  }
-  if (!readHook(holder).state.history.includes("group")) {
-    throw new Error("back #1 must keep auto-progressed entries in history");
-  }
+    await back();
+    await back();
+    await back();
+    expect(onDismissed).not.toHaveBeenCalled();
 
-  // Second back: lands on Provider (auto-progressed).
-  await back();
-  if (readHook(holder).state.step !== "provider") {
-    throw new Error(
-      `back #2 expected step='provider' (auto-progressed), got '${readHook(holder).state.step}'`,
-    );
-  }
+    await back();
 
-  // Third back: lands on Name (the user-visible step).
-  await back();
-  if (readHook(holder).state.step !== "name") {
-    throw new Error(
-      `back #3 expected step='name' (user-visible), got '${readHook(holder).state.step}'`,
-    );
-  }
-  if (readHook(holder).state.history.length !== 1) {
-    throw new Error(
-      `back #3 expected history.length === 1, got ${readHook(holder).state.history.length}`,
-    );
-  }
-  if (!readHook(holder).isFirst) {
-    throw new Error("back #3 expected hook.isFirst === true");
-  }
+    expect(onDismissed).toHaveBeenCalledTimes(1);
+  });
+});
 
-  // 3 back IPC calls — no silent jumps (counter-based back would
-  // have made only 1 or 2 calls).
-  if (backCalls.length !== 3) {
-    throw new Error(
-      `expected 3 back IPC calls (one per history entry), got ${backCalls.length}`,
-    );
-  }
+describe("(c) the post-launch view contract", () => {
+  it("derives a detail view from a launched feature", () => {
+    const view = viewForLaunchedFeature(LAUNCHED) as AppView;
 
-  // Fourth back from the first step: no-op, fires onDismissed.
-  await back();
-  if (dismissedCount !== 1) {
-    throw new Error(`expected onDismissed to fire once, got ${dismissedCount}`);
-  }
+    expect(view.kind).toBe("detail");
+    expect(isCreateProjectLaunchedView(view)).toBe(true);
+  });
 
-  renderer.unmount();
-}
-
-// ── (c) viewForLaunchedFeature + isCreateProjectLaunchedView contract ──
-
-{
-  // Pure-function check: the post-launch view derivation must
-  // always return a `detail` view (the wizard's own `create-project`
-  // surface would silently re-enter the wizard instead of routing
-  // to the launched feature's detail page).
-  const launched: LaunchedFeature = {
-    feature_id: "f",
-    feature_title: "t",
-    project_id: "p",
-    created_repo: {
-      full_name: "octocat/repo",
-      default_branch: "main",
-      clone_url: "https://example/repo",
-    },
-  };
-  const view = viewForLaunchedFeature(launched) as AppView;
-  if (view.kind !== "detail") {
-    throw new Error(
-      `viewForLaunchedFeature expected 'detail', got '${view.kind}' — ` +
-      "the wizard's own 'create-project' surface would re-enter the wizard",
-    );
-  }
-  if (!isCreateProjectLaunchedView(view)) {
-    throw new Error("isCreateProjectLaunchedView must accept the detail view");
-  }
-  // Reject any non-detail AppView (covers `home`, `new-project`,
-  // `create-project` itself, and every other variant). This is the
-  // negative half of the contract: only `detail` counts as the
-  // post-launch destination.
-  const nonDetailSamples: AppView[] = [
+  // The negative half: only `detail` counts as the post-launch destination.
+  it.each([
     { kind: "home" },
     { kind: "new-project" },
     { kind: "create-project" },
     { kind: "empty-state" },
-  ];
-  for (const sample of nonDetailSamples) {
-    if (isCreateProjectLaunchedView(sample)) {
-      throw new Error(
-        `isCreateProjectLaunchedView MUST NOT accept '${sample.kind}'`,
-      );
-    }
-  }
-}
-
-// ── (extra) Hook surfaces errors from IPC seam ────────────────────────
-
-{
-  const holder: HookHolder = { current: null };
-  const expectedError: AppError = { kind: "validation", message: "Repository name is required" };
-  const { deps } = makeDeps([
-    {
-      submit: () => {
-        throw expectedError;
-      },
-    },
-  ]);
-  const renderer = mountHook(holder, deps);
-  await act(async () => {
-    await readHook(holder).submit({ step: "name", value: "x" });
+  ] as AppView[])("rejects the $kind view", (sample) => {
+    expect(isCreateProjectLaunchedView(sample)).toBe(false);
   });
-  const hook = readHook(holder);
-  if (hook.error?.kind !== expectedError.kind) {
-    throw new Error(
-      `expected error.kind '${expectedError.kind}', got '${hook.error?.kind}'`,
-    );
-  }
-  if (hook.error?.message !== expectedError.message) {
-    throw new Error(`expected error.message '${expectedError.message}', got '${hook.error?.message}'`);
-  }
-  // The state must NOT have advanced on a rejected submit.
-  if (hook.state.step !== "name") {
-    throw new Error(`state must not advance on rejected submit, got step='${hook.state.step}'`);
-  }
-  renderer.unmount();
-}
+});
 
-// ── (extra) Hook surfaces a synchronous Continue outcome immediately ──
+describe("the IPC seam", () => {
+  it("surfaces an error and does not advance on a rejected submit", async () => {
+    const expectedError: AppError = {
+      kind: "validation",
+      message: "Repository name is required",
+    };
+    const { deps } = makeDeps({
+      submits: [
+        () => {
+          throw expectedError;
+        },
+      ],
+    });
 
-{
-  const holder: HookHolder = { current: null };
-  // The script returns a Continue outcome the moment the submit
-  // resolves. The hook must mirror the returned state so the next
-  // render shows the new step — this is the "auto-advance when a
-  // step resolves synchronously" behaviour the spec asks for.
-  const next = { step: "provider", history: ["name", "provider"] } as BootstrapState;
-  const { deps } = makeDeps([{ submit: { kind: "continue", state: next } }]);
-  const renderer = mountHook(holder, deps);
-  await act(async () => {
-    await readHook(holder).submit({ step: "name", value: "ok-name" });
+    const { result, submit } = mountHook(deps);
+    await submit({ step: "name", value: "x" });
+
+    expect(result.current.error).toMatchObject(expectedError);
+    expect(result.current.state.step).toBe("name");
   });
-  const hook = readHook(holder);
-  if (hook.state.step !== "provider") {
-    throw new Error(`auto-advance: expected step='provider', got '${hook.state.step}'`);
-  }
-  if (hook.state.history.length !== 2) {
-    throw new Error(
-      `auto-advance: expected history.length=2, got ${hook.state.history.length}`,
-    );
-  }
-  if (hook.isLast) {
-    throw new Error("auto-advance: isLast must be false on step='provider'");
-  }
-  renderer.unmount();
-}
 
-// ── Exported results (runtime introspection for the typechecker) ───────
+  it("mirrors a Continue outcome so the next render shows the new step", async () => {
+    const { deps } = makeDeps({
+      submits: [
+        { kind: "continue", state: { step: "provider", history: ["name", "provider"] } },
+      ],
+    });
 
-export const useCreateProjectWizardTestResults = {
-  happyPathStepCount: 7,
-  lastStepIsDescription: true,
-  postLaunchViewKind: "detail" as const,
-  legacyVariantRejected: true,
-} as const;
+    const { result, submit } = mountHook(deps);
+    await submit({ step: "name", value: "ok-name" });
+
+    expect(result.current.state.step).toBe("provider");
+    expect(result.current.state.history).toEqual(["name", "provider"]);
+    expect(result.current.isLast).toBe(false);
+  });
+});

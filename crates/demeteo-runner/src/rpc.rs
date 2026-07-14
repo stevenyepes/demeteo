@@ -13,7 +13,7 @@
 //! socket client, no RPC framework dependency.
 
 use crate::services::RunnerServices;
-use demeteo_core::domain::ids::{FeatureId, StepExecutionId, ThreadId};
+use demeteo_core::domain::ids::{FeatureId, ProjectId, StepExecutionId, ThreadId};
 use demeteo_core::domain::models::{Feature, Message, StepExecution};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
@@ -97,6 +97,21 @@ struct DecideGateParams {
     decision: String,
     #[serde(default)]
     feedback: Option<String>,
+}
+
+/// `retry_step(run_id, step_execution_id, model?, agent_kind?)` — the
+/// remote twin of the desktop app's `step_retry` command. Unlike
+/// `decide_gate`, `run_id` is load-bearing here: a retry has to re-open
+/// the run (the step's failure already drove it terminal, so its
+/// `await_terminal_and_push` tail has exited), and that is keyed by run.
+#[derive(Debug, Deserialize)]
+struct RetryStepParams {
+    run_id: String,
+    step_execution_id: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    agent_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -220,6 +235,9 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
         "stream_events" => stream_events(svc, req.params, cid)
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "cancel_run" => cancel_run(svc, req.params, cid)
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "retry_step" => retry_step(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         other => Err(format!("unknown method: {}", other)),
@@ -494,37 +512,139 @@ async fn inject_credentials(
         .ok_or_else(|| "run vanished during credential injection".to_string())
 }
 
-/// Resolve a bare `gate_id` (a step_execution_id, M5.3) to the run that
-/// owns its feature and confirm `client_id` owns *that* run (MC-D2 / P0.4).
-/// Before multi-client, a `gate_id` was a bearer capability — any tunnelled
-/// caller who learned one could clear another client's parked gate. This
-/// closes it: resolve gate → step → feature → run, then owner-check the run.
-/// Every failure to resolve (unknown gate, orphan step, no run behind the
-/// feature, or a non-owner) collapses to the *same* "no such gate" error,
-/// so it leaks neither the gate's existence nor its ownership.
-fn require_owner_of_gate(
+/// Resolve a bare step_execution_id — a `gate_id` (M5.3) or a retry
+/// target — to the run that owns its feature and confirm `client_id` owns
+/// *that* run (MC-D2 / P0.4). Before multi-client, such an id was a bearer
+/// capability: any tunnelled caller who learned one could clear another
+/// client's parked gate. This closes it: resolve step → feature → run, then
+/// owner-check the run. Every failure to resolve (unknown step, orphan step,
+/// no run behind the feature, or a non-owner) collapses to the *same* "no
+/// such step" error, so it leaks neither the step's existence nor its
+/// ownership. Returns the owning run, which `retry_step` needs to re-open.
+fn require_owner_of_step(
     svc: &Arc<RunnerServices>,
-    gate_id: &str,
+    step_execution_id: &str,
     client_id: &str,
-) -> Result<(), String> {
-    let not_found = || format!("no such gate: {}", gate_id);
+) -> Result<RunnerRun, String> {
+    let not_found = || format!("no such step: {}", step_execution_id);
     let step = svc
         .ctx
         .features
-        .step_get(&StepExecutionId::from(gate_id.to_string()))?
+        .step_get(&StepExecutionId::from(step_execution_id.to_string()))?
         .ok_or_else(not_found)?;
     let feature_id = step.feature_id.as_str();
-    let owned = svc
-        .ctx
+    svc.ctx
         .runner_runs
         .list()?
         .into_iter()
-        .any(|r| r.feature_id.as_deref() == Some(feature_id) && r.owner_client_id == client_id);
-    if owned {
-        Ok(())
-    } else {
-        Err(not_found())
+        .find(|r| r.feature_id.as_deref() == Some(feature_id) && r.owner_client_id == client_id)
+        .ok_or_else(not_found)
+}
+
+/// Retry a failed / interrupted step of a detached run from the laptop —
+/// the remote twin of the desktop app's `step_retry` command, which can
+/// only ever drive runs *this* machine owns (the local executor refuses a
+/// runner-owned shadow outright).
+///
+/// The subtlety is the second half. The step's failure already drove the
+/// feature terminal, so this run's `await_terminal_and_push` tail has
+/// already exited and stamped the run row `failed`. `step_retry` re-arms
+/// the engine's driver, and the engine will happily run the pipeline to
+/// completion — but with nobody awaiting it, the terminal push + PR-open
+/// (which live *after* that poll loop) would never happen, and the laptop,
+/// seeing a terminal run row, would have stopped polling for progress. So
+/// re-open the run: flip it back to `running` and spawn a fresh
+/// `await_terminal_and_push` over the persisted spec, exactly as the
+/// restart path in `reconcile.rs` does.
+async fn retry_step(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+    client_id: &str,
+) -> Result<RunnerRun, String> {
+    let params: RetryStepParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    let run = require_owner_of_step(svc, &params.step_execution_id, client_id)?;
+    // The step id resolved to a run this client owns — but not necessarily
+    // the run it *said* it was retrying. Reject the mismatch rather than
+    // silently re-opening a different run than the caller named.
+    if run.run_id != params.run_id {
+        return Err(format!("no such step: {}", params.step_execution_id));
     }
+
+    let spec: RunSpec = serde_json::from_str(&run.spec_json)
+        .map_err(|e| format!("run {} has an unparseable spec: {}", run.run_id, e))?;
+    let (Some(project_id), Some(feature_id)) = (run.project_id.clone(), run.feature_id.clone())
+    else {
+        return Err(format!(
+            "run {} never bootstrapped a feature; there is no step to retry",
+            run.run_id
+        ));
+    };
+
+    svc.ctx
+        .executor
+        .step_retry(
+            &params.step_execution_id,
+            params.model.as_deref(),
+            params.agent_kind.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let now = paths::now_ms();
+    svc.ctx
+        .runner_runs
+        .update_status(&run.run_id, "running", None, None, None, None, now)?;
+    crate::run::emit(&svc.ctx, &run.run_id, "retried", &params.step_execution_id);
+
+    let svc_bg = svc.clone();
+    let run_id_bg = run.run_id.clone();
+    tokio::spawn(async move {
+        let result = crate::run::await_terminal_and_push(
+            &svc_bg,
+            &run_id_bg,
+            &ProjectId::from(project_id),
+            &FeatureId::from(feature_id),
+            &spec,
+        )
+        .await;
+        let now = paths::now_ms();
+        match result {
+            Ok(outcome) => {
+                let _ = svc_bg.ctx.runner_runs.update_status(
+                    &run_id_bg,
+                    &outcome.status,
+                    outcome.project_id.as_deref(),
+                    outcome.feature_id.as_deref(),
+                    None,
+                    outcome.pushed_branch.as_deref(),
+                    now,
+                );
+            }
+            Err(e) => {
+                let _ = svc_bg.ctx.run_events.append(
+                    &run_id_bg,
+                    "failed",
+                    serde_json::to_string(&e).ok().as_deref(),
+                    now,
+                );
+                let _ = svc_bg.ctx.runner_runs.update_status(
+                    &run_id_bg,
+                    "failed",
+                    None,
+                    None,
+                    Some(&e),
+                    None,
+                    now,
+                );
+            }
+        }
+    });
+
+    svc.ctx
+        .runner_runs
+        .get(&run.run_id)?
+        .ok_or_else(|| "run vanished during retry".to_string())
 }
 
 /// M5.3: clear a gate the unattended policy parked (`gate_class:
@@ -541,7 +661,7 @@ async fn decide_gate(
 ) -> Result<(), String> {
     let params: DecideGateParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    require_owner_of_gate(svc, &params.gate_id, client_id)?;
+    require_owner_of_step(svc, &params.gate_id, client_id)?;
     svc.ctx
         .presenter
         .gate_decide(

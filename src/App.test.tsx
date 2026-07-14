@@ -1,25 +1,17 @@
 // Unit tests for the pure helpers exported from `src/App.tsx`.
 //
-// The implementation spec puts the keyboard + mouse wiring in
-// `App.tsx`. Mounting the full `AppInner` component for a test
-// would require every child (TopBar, ProjectRail, ProjectHome,
-// FeatureDetail, every modal, every wizard step) to be present,
-// which is out of scope for a smoke test. Instead, the spec-critical
-// decision logic is extracted as named exports from `App.tsx`:
+// The spec puts the keyboard + mouse wiring in `App.tsx`, but mounting the full
+// `AppInner` would drag in every child (TopBar, ProjectRail, ProjectHome,
+// FeatureDetail, every modal, every wizard step). Instead the spec-critical
+// decision logic is exported as pure functions and exercised here directly:
 //
-//   - `pickNextFeature(features, currentId)`   → forward cycling
+//   - `pickNextFeature(features, currentId)`     → forward cycling
 //   - `pickPreviousFeature(features, currentId)` → backward cycling
-//   - `pickEscapeAction(ui, view)`             → Escape priority ladder
+//   - `pickEscapeAction(ui, view)`               → the Escape priority ladder
 //
-// These three functions own the per-AC invariants the spec pins down
-// (wrap-around, "no-op on empty list", "open overlays close in
-// priority order") and are exercised below as plain functions. The
-// reactive wiring in `AppInner` is a thin shell that dispatches the
-// result; `tsc --noEmit` validates the type compatibility of the
-// hook with the surrounding component.
-//
-// Like the other test files in the project, this module is consumed
-// by `tsc --noEmit`; assertions throw on failure.
+// The reactive wiring in `AppInner` is a thin shell that dispatches the result.
+
+import { describe, expect, it } from 'vitest';
 
 import type { Feature, Provider } from './types';
 import {
@@ -27,10 +19,7 @@ import {
   pickPreviousFeature,
   pickEscapeAction,
   type UIStateSlice,
-  type EscapeAction,
 } from './App';
-
-// ── Fixtures ──────────────────────────────────────────────────────────
 
 const provider: Provider = {
   id: 'prov-1',
@@ -72,219 +61,145 @@ function emptyUi(): UIStateSlice {
   };
 }
 
-// ── pickNextFeature ───────────────────────────────────────────────────
-
-{
-  if (pickNextFeature([], 'f-1') !== null) {
-    throw new Error('pickNextFeature: empty list must return null');
-  }
-}
-
-{
-  const next = pickNextFeature(F, null);
-  if (next?.id !== 'f-1') {
-    throw new Error(`pickNextFeature(currentId=null) must return first feature, got ${next?.id ?? 'null'}`);
-  }
-}
-
-{
-  const next = pickNextFeature(F, 'f-1');
-  if (next?.id !== 'f-2') {
-    throw new Error(`pickNextFeature('f-1') must return 'f-2', got ${next?.id ?? 'null'}`);
-  }
-}
-
-{
-  const next = pickNextFeature(F, 'f-2');
-  if (next?.id !== 'f-3') {
-    throw new Error(`pickNextFeature('f-2') must return 'f-3', got ${next?.id ?? 'null'}`);
-  }
-}
-
-{
-  // Wrap-around: last → first.
-  const next = pickNextFeature(F, 'f-3');
-  if (next?.id !== 'f-1') {
-    throw new Error(`pickNextFeature('f-3') must wrap to 'f-1', got ${next?.id ?? 'null'}`);
-  }
-}
-
-{
-  // currentId not in the list: fall back to first.
-  const next = pickNextFeature(F, 'f-unknown');
-  if (next?.id !== 'f-1') {
-    throw new Error(`pickNextFeature(unknown) must return first feature, got ${next?.id ?? 'null'}`);
-  }
-}
-
-{
-  // Single-element list: cycling stays on the same feature.
-  const one = [makeFeature('only', 'only')];
-  if (pickNextFeature(one, 'only')?.id !== 'only') {
-    throw new Error('pickNextFeature: single-element list must stay on the same element');
-  }
-}
-
-// ── pickPreviousFeature ───────────────────────────────────────────────
-
-{
-  if (pickPreviousFeature([], 'f-1') !== null) {
-    throw new Error('pickPreviousFeature: empty list must return null');
-  }
-}
-
-{
-  const prev = pickPreviousFeature(F, null);
-  if (prev?.id !== 'f-3') {
-    throw new Error(`pickPreviousFeature(currentId=null) must return last feature, got ${prev?.id ?? 'null'}`);
-  }
-}
-
-{
-  const prev = pickPreviousFeature(F, 'f-2');
-  if (prev?.id !== 'f-1') {
-    throw new Error(`pickPreviousFeature('f-2') must return 'f-1', got ${prev?.id ?? 'null'}`);
-  }
-}
-
-{
-  const prev = pickPreviousFeature(F, 'f-3');
-  if (prev?.id !== 'f-2') {
-    throw new Error(`pickPreviousFeature('f-3') must return 'f-2', got ${prev?.id ?? 'null'}`);
-  }
-}
-
-{
-  // Wrap-around: first → last.
-  const prev = pickPreviousFeature(F, 'f-1');
-  if (prev?.id !== 'f-3') {
-    throw new Error(`pickPreviousFeature('f-1') must wrap to 'f-3', got ${prev?.id ?? 'null'}`);
-  }
-}
-
-{
-  const prev = pickPreviousFeature(F, 'f-unknown');
-  if (prev?.id !== 'f-3') {
-    throw new Error(`pickPreviousFeature(unknown) must return last feature, got ${prev?.id ?? 'null'}`);
-  }
-}
-
-{
-  const one = [makeFeature('only', 'only')];
-  if (pickPreviousFeature(one, 'only')?.id !== 'only') {
-    throw new Error('pickPreviousFeature: single-element list must stay on the same element');
-  }
-}
-
-// ── pickEscapeAction: priority order (AC-3) ───────────────────────────
-
-function expectAction(actual: EscapeAction, expected: EscapeAction): void {
-  const a = JSON.stringify(actual);
-  const e = JSON.stringify(expected);
-  if (a !== e) {
-    throw new Error(`pickEscapeAction: expected ${e}, got ${a}`);
-  }
-}
-
-{
-  // Command palette wins over everything else.
-  const ui = { ...emptyUi(), commandPaletteOpen: true, docsPanelOpen: true, startFeatureOpen: true };
-  expectAction(pickEscapeAction(ui, { kind: 'home' }), { type: 'close-command-palette' });
-}
-
-{
-  // Docs panel beats start feature and gate view.
-  const ui = { ...emptyUi(), docsPanelOpen: true, startFeatureOpen: true };
-  expectAction(pickEscapeAction(ui, { kind: 'detail', featureId: 'f-1', featureTitle: 'X', gateStepExecutionId: 's-1' }), { type: 'close-docs-panel' });
-}
-
-{
-  // Connect modal wins via either flag.
-  {
-    const ui = { ...emptyUi(), isConnectModalOpen: true };
-    expectAction(pickEscapeAction(ui, { kind: 'home' }), { type: 'close-connect-modal' });
-  }
-  {
-    const ui = { ...emptyUi(), editingProvider: provider };
-    expectAction(pickEscapeAction(ui, { kind: 'home' }), { type: 'close-connect-modal' });
-  }
-  {
-    // editingProvider alone is enough to close, even if isConnectModalOpen is false.
-    const ui = { ...emptyUi(), editingProvider: provider, isConnectModalOpen: false };
-    expectAction(pickEscapeAction(ui, { kind: 'home' }), { type: 'close-connect-modal' });
-  }
-}
-
-{
-  // Start-feature modal wins over gate view.
-  const ui = { ...emptyUi(), startFeatureOpen: true };
-  expectAction(pickEscapeAction(ui, { kind: 'detail', featureId: 'f-1', featureTitle: 'X', gateStepExecutionId: 's-1' }), { type: 'close-start-feature' });
-}
-
-{
-  // Gate view overlay closes with the current feature id + title.
-  const ui = emptyUi();
-  const view = { kind: 'detail' as const, featureId: 'feat-7', featureTitle: 'Refactor', gateStepExecutionId: 'step-exec-9' };
-  expectAction(pickEscapeAction(ui, view), {
-    type: 'close-gate-view',
-    featureId: 'feat-7',
-    featureTitle: 'Refactor',
+describe('pickNextFeature', () => {
+  it('returns null for an empty list', () => {
+    expect(pickNextFeature([], 'f-1')).toBeNull();
   });
-}
 
-{
-  // Gate view with no gateStepExecutionId → falls through to navigate-back.
-  const ui = emptyUi();
-  const view = { kind: 'detail' as const, featureId: 'feat-7', featureTitle: 'Refactor' };
-  expectAction(pickEscapeAction(ui, view), { type: 'navigate-back' });
-}
+  it('starts at the first feature when nothing is selected', () => {
+    expect(pickNextFeature(F, null)?.id).toBe('f-1');
+  });
 
-{
-  // Nothing open → navigate-back fallback (covers settings / new-project /
-  // create-project / home / providers / etc. — any view with no overlay
-  // mounted on top of it).
-  expectAction(pickEscapeAction(emptyUi(), { kind: 'home' }), { type: 'navigate-back' });
-  expectAction(pickEscapeAction(emptyUi(), { kind: 'settings' }), { type: 'navigate-back' });
-  expectAction(pickEscapeAction(emptyUi(), { kind: 'new-project' }), { type: 'navigate-back' });
-  expectAction(pickEscapeAction(emptyUi(), { kind: 'create-project' }), { type: 'navigate-back' });
-  expectAction(pickEscapeAction(emptyUi(), { kind: 'providers' }), { type: 'navigate-back' });
-  expectAction(pickEscapeAction(emptyUi(), { kind: 'workflows' }), { type: 'navigate-back' });
-  expectAction(pickEscapeAction(emptyUi(), { kind: 'empty-state' }), { type: 'navigate-back' });
-}
+  it('advances forward through the list', () => {
+    expect(pickNextFeature(F, 'f-1')?.id).toBe('f-2');
+    expect(pickNextFeature(F, 'f-2')?.id).toBe('f-3');
+  });
 
-{
-  // Command palette beats connect modal (highest priority).
-  const ui = { ...emptyUi(), commandPaletteOpen: true, isConnectModalOpen: true, editingProvider: provider };
-  expectAction(pickEscapeAction(ui, { kind: 'home' }), { type: 'close-command-palette' });
-}
+  it('wraps from the last feature back to the first', () => {
+    expect(pickNextFeature(F, 'f-3')?.id).toBe('f-1');
+  });
 
-// ── Exported results (runtime introspection for the typechecker) ───────
+  it('falls back to the first feature when the current id is unknown', () => {
+    expect(pickNextFeature(F, 'f-unknown')?.id).toBe('f-1');
+  });
 
-export const appTestResults = {
-  pickNextFeature: {
-    emptyReturnsNull: true,
-    nullReturnsFirst: true,
-    advancesForward: true,
-    wrapsAround: true,
-    unknownReturnsFirst: true,
-    singleStaysPut: true,
-  },
-  pickPreviousFeature: {
-    emptyReturnsNull: true,
-    nullReturnsLast: true,
-    stepsBackward: true,
-    wrapsAround: true,
-    unknownReturnsLast: true,
-    singleStaysPut: true,
-  },
-  pickEscapeAction: {
-    commandPaletteHighest: true,
-    docsPanelSecond: true,
-    connectModalThird: true,
-    startFeatureFourth: true,
-    gateViewFifth: true,
-    noGateFallsThrough: true,
-    navigateBackFallback: true,
-    commandPaletteWinsOverConnect: true,
-  },
-} as const;
+  it('stays put on a single-element list', () => {
+    expect(pickNextFeature([makeFeature('only', 'only')], 'only')?.id).toBe('only');
+  });
+});
+
+describe('pickPreviousFeature', () => {
+  it('returns null for an empty list', () => {
+    expect(pickPreviousFeature([], 'f-1')).toBeNull();
+  });
+
+  it('starts at the last feature when nothing is selected', () => {
+    expect(pickPreviousFeature(F, null)?.id).toBe('f-3');
+  });
+
+  it('steps backward through the list', () => {
+    expect(pickPreviousFeature(F, 'f-2')?.id).toBe('f-1');
+    expect(pickPreviousFeature(F, 'f-3')?.id).toBe('f-2');
+  });
+
+  it('wraps from the first feature back to the last', () => {
+    expect(pickPreviousFeature(F, 'f-1')?.id).toBe('f-3');
+  });
+
+  it('falls back to the last feature when the current id is unknown', () => {
+    expect(pickPreviousFeature(F, 'f-unknown')?.id).toBe('f-3');
+  });
+
+  it('stays put on a single-element list', () => {
+    expect(pickPreviousFeature([makeFeature('only', 'only')], 'only')?.id).toBe('only');
+  });
+});
+
+// AC-3: overlays close in a fixed priority order, one Escape at a time.
+describe('pickEscapeAction', () => {
+  const gateView = {
+    kind: 'detail' as const,
+    featureId: 'f-1',
+    featureTitle: 'X',
+    gateStepExecutionId: 's-1',
+  };
+
+  it('closes the command palette ahead of everything else', () => {
+    const ui = {
+      ...emptyUi(),
+      commandPaletteOpen: true,
+      docsPanelOpen: true,
+      startFeatureOpen: true,
+    };
+
+    expect(pickEscapeAction(ui, { kind: 'home' })).toEqual({ type: 'close-command-palette' });
+  });
+
+  it('closes the command palette ahead of the connect modal', () => {
+    const ui = {
+      ...emptyUi(),
+      commandPaletteOpen: true,
+      isConnectModalOpen: true,
+      editingProvider: provider,
+    };
+
+    expect(pickEscapeAction(ui, { kind: 'home' })).toEqual({ type: 'close-command-palette' });
+  });
+
+  it('closes the docs panel ahead of the start-feature modal and gate view', () => {
+    const ui = { ...emptyUi(), docsPanelOpen: true, startFeatureOpen: true };
+
+    expect(pickEscapeAction(ui, gateView)).toEqual({ type: 'close-docs-panel' });
+  });
+
+  // Either flag is sufficient — `editingProvider` alone means the modal is up.
+  it.each([
+    ['isConnectModalOpen', { isConnectModalOpen: true }],
+    ['editingProvider', { editingProvider: provider }],
+    ['editingProvider without the open flag', { editingProvider: provider, isConnectModalOpen: false }],
+  ])('closes the connect modal when %s is set', (_label, patch) => {
+    expect(pickEscapeAction({ ...emptyUi(), ...patch }, { kind: 'home' })).toEqual({
+      type: 'close-connect-modal',
+    });
+  });
+
+  it('closes the start-feature modal ahead of the gate view', () => {
+    const ui = { ...emptyUi(), startFeatureOpen: true };
+
+    expect(pickEscapeAction(ui, gateView)).toEqual({ type: 'close-start-feature' });
+  });
+
+  it('closes the gate view with the current feature id and title', () => {
+    const view = {
+      kind: 'detail' as const,
+      featureId: 'feat-7',
+      featureTitle: 'Refactor',
+      gateStepExecutionId: 'step-exec-9',
+    };
+
+    expect(pickEscapeAction(emptyUi(), view)).toEqual({
+      type: 'close-gate-view',
+      featureId: 'feat-7',
+      featureTitle: 'Refactor',
+    });
+  });
+
+  it('falls through to navigate-back on a detail view with no gate mounted', () => {
+    const view = { kind: 'detail' as const, featureId: 'feat-7', featureTitle: 'Refactor' };
+
+    expect(pickEscapeAction(emptyUi(), view)).toEqual({ type: 'navigate-back' });
+  });
+
+  // Any view with no overlay on top of it falls back to navigation.
+  it.each([
+    'home',
+    'settings',
+    'new-project',
+    'create-project',
+    'providers',
+    'workflows',
+    'empty-state',
+  ] as const)('falls back to navigate-back on the %s view', (kind) => {
+    expect(pickEscapeAction(emptyUi(), { kind })).toEqual({ type: 'navigate-back' });
+  });
+});

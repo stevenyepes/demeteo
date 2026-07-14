@@ -11,6 +11,7 @@ import { TerminalWindow } from './TerminalWindow';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { useNavigation, useProject, useUIState } from '../context';
 import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
+import { buildWorkflowById, classifyWorkflowBadge } from '../lib/workflowBadge';
 
 /**
  * Left accent bar per tone. Local to this component (the way StatusBadge
@@ -211,17 +212,7 @@ const ProjectHome = () => {
             // Handle workflows — only the id → label lookup is needed
             // here now (the launcher's workflow picker lives in the modal).
             if (workflowsRes.status === 'fulfilled' && workflowsRes.value) {
-                const list = workflowsRes.value;
-                const lookup = new Map<string, { name: string; is_starter: boolean }>();
-                for (const wf of list) {
-                    if (wf && typeof wf.id === 'string' && wf.id.length > 0) {
-                        lookup.set(wf.id, {
-                            name: typeof wf.name === 'string' ? wf.name : '',
-                            is_starter: Boolean(wf.is_starter),
-                        });
-                    }
-                }
-                setWorkflowById(lookup);
+                setWorkflowById(buildWorkflowById(workflowsRes.value));
             } else if (workflowsRes.status === 'rejected') {
                 console.error("Failed to fetch workflows:", workflowsRes.reason);
                 setWorkflowById(new Map());
@@ -547,10 +538,8 @@ const ProjectHome = () => {
                                                     {meta.label}
                                                 </span>
                                                 {(() => {
-                                                    const wfMeta = feature.workflow_id
-                                                        ? workflowById.get(feature.workflow_id)
-                                                        : undefined;
-                                                    if (!wfMeta) {
+                                                    const badge = classifyWorkflowBadge(feature, workflowById);
+                                                    if (badge.variant === 'fallback') {
                                                         return (
                                                             <span
                                                                 className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 border border-white/10 text-slate-500 uppercase"
@@ -563,12 +552,12 @@ const ProjectHome = () => {
                                                     return (
                                                         <span
                                                             className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/30 text-violet-300 font-outfit truncate max-w-[220px] inline-flex items-center gap-1"
-                                                            title={`Workflow: ${wfMeta.name}`}
+                                                            title={`Workflow: ${badge.name}`}
                                                         >
                                                             <span className="text-violet-400/80">Workflow:</span>
-                                                            <span className="truncate">{wfMeta.name}</span>
+                                                            <span className="truncate">{badge.name}</span>
                                                             <span className="text-[9px] px-1 rounded bg-violet-500/20 text-violet-300 font-medium font-mono uppercase">
-                                                                {wfMeta.is_starter ? 'Starter' : 'Custom'}
+                                                                {badge.is_starter ? 'Starter' : 'Custom'}
                                                             </span>
                                                         </span>
                                                     );

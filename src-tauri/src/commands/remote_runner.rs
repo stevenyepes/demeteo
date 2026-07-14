@@ -505,6 +505,30 @@ pub async fn remote_reinject_credentials(
     else {
         return Ok(None);
     };
+    inject_pat_for_run(&ctx, &machine_id, &run_id, &row).await?;
+
+    // The runner resumes on injection; re-poll so the returned row already
+    // reflects the run leaving `needs-credentials` rather than lagging a tick.
+    reconcile_one_run(&ctx, &row).await;
+    ctx.remote_run_mirror
+        .get(&machine_id, &run_id)
+        .map_err(AppError::from)
+}
+
+/// Resolve the run's git-provider PAT from the laptop's keyring — exactly
+/// as the original submit did, via the run's own project — and push it
+/// over the control channel. Shared by [`remote_reinject_credentials`] and
+/// [`remote_retry_step`]: the runner wipes a run's PAT the moment the run
+/// reaches *any* end state (success, failure, or cancel — §6.2), so a
+/// retry of a failed run is re-animating a run with no credential, and
+/// would otherwise reach its terminal push with nothing to authenticate
+/// with.
+async fn inject_pat_for_run(
+    ctx: &AppContext,
+    machine_id: &str,
+    run_id: &str,
+    row: &RemoteRunMirror,
+) -> Result<(), AppError> {
     let project_id = row.project_id.clone().ok_or_else(|| {
         AppError::from("Run has no project on record; cannot resolve its git provider".to_string())
     })?;
@@ -536,20 +560,14 @@ pub async fn remote_reinject_credentials(
         .map_err(AppError::from)?;
 
     remote_rpc(
-        &ctx,
-        &machine_id,
+        ctx,
+        machine_id,
         "inject_credentials",
         serde_json::json!({ "run_id": run_id, "git_pat": pat }),
     )
     .await
     .map_err(AppError::from)?;
-
-    // The runner resumes on injection; re-poll so the returned row already
-    // reflects the run leaving `needs-credentials` rather than lagging a tick.
-    reconcile_one_run(&ctx, &row).await;
-    ctx.remote_run_mirror
-        .get(&machine_id, &run_id)
-        .map_err(AppError::from)
+    Ok(())
 }
 
 /// Cheap read of the laptop's own mirror — no network I/O. Used to
@@ -1326,6 +1344,76 @@ pub async fn remote_cancel_run(
             now,
         )
         .map_err(AppError::from)?;
+    Ok(())
+}
+
+/// Retry a failed / interrupted step of a detached run — the remote twin of
+/// the `step_retry` command, which only ever drives runs this machine owns
+/// (the local executor refuses a runner-owned shadow: it has neither the
+/// driver nor the worktree).
+///
+/// Order matters. The PAT goes first: the runner wipes a run's credential
+/// when the run ends, so the failed run we're re-animating has none, and the
+/// retried pipeline would run all the way to its terminal push before
+/// discovering that. Then the retry itself, which re-opens the run on the
+/// runner (back to `running`, with a fresh await/push tail). Finally the
+/// laptop's mirror is dragged off its terminal status too — otherwise
+/// `FeatureDetail`'s poll and the reconcile loop, both of which stop at a
+/// terminal status, would never notice the run came back to life.
+#[tauri::command]
+pub async fn remote_retry_step(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+    step_execution_id: String,
+    model: Option<String>,
+    agent_kind: Option<String>,
+) -> Result<(), AppError> {
+    let Some(row) = ctx
+        .remote_run_mirror
+        .get(&machine_id, &run_id)
+        .map_err(AppError::from)?
+    else {
+        return Err(AppError::not_found(format!(
+            "No detached run {} on machine {}",
+            run_id, machine_id
+        )));
+    };
+    inject_pat_for_run(&ctx, &machine_id, &run_id, &row).await?;
+
+    let result = remote_rpc(
+        &ctx,
+        &machine_id,
+        "retry_step",
+        serde_json::json!({
+            "run_id": run_id,
+            "step_execution_id": step_execution_id,
+            "model": model,
+            "agent_kind": agent_kind,
+        }),
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    let status = json_str(&result, "status").unwrap_or_else(|| "running".to_string());
+    let now = crate::paths::now_ms();
+    ctx.remote_run_mirror
+        .update_status(
+            &machine_id,
+            &run_id,
+            &status,
+            None,
+            None,
+            None,
+            None,
+            0,
+            now,
+        )
+        .map_err(AppError::from)?;
+    // Pull the runner's freshly-rewound steps into the shadow now, so the
+    // retried step doesn't sit on screen in its old `failed` state until
+    // the next poll tick.
+    reconcile_one_run(&ctx, &row).await;
     Ok(())
 }
 
