@@ -6,14 +6,27 @@
 //! or `git diff` for itself — so Demeteo runs them and hands the results
 //! over. This module is that hand-off.
 
+use crate::domain::models::StepExecution;
 use crate::paths;
+use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::execution::ExecutionPort;
 
-/// Hard cap on the diff we paste into the prompt. Big enough for a real
-/// feature, small enough that a vendored-lockfile-sized change can't blow
-/// the context window (and with it the step) on the very last hop of a
-/// long, expensive run.
-const MAX_DIFF_BYTES: usize = 60_000;
+/// Hard cap on the diff we inline into the prompt.
+///
+/// Deliberately small. On a remote (Desktop→SSH) run the prompt is passed as
+/// the trailing argv of `claude`, and the whole shell command is sent as a
+/// *single* SSH channel `exec` request — libssh2 rejects an oversized request
+/// with `-34` ("unable to send channel request"), which is why a big-diff
+/// feature's finalize step failed to spawn its agent at all. The diff is now
+/// a bounded *reality-check* excerpt: the prose reports from earlier steps
+/// (see [`gather_prior_artifacts`]) carry the intent, and `diff --stat`
+/// carries the full file list.
+const MAX_DIFF_BYTES: usize = 15_000;
+
+/// Per-artifact and overall caps for the best-effort prior-step reports.
+/// Bounded for the same SSH-exec-size reason as the diff.
+const MAX_ARTIFACT_BYTES: usize = 4_000;
+const MAX_PRIOR_WORK_BYTES: usize = 12_000;
 
 /// Commit subjects Demeteo itself wrote. They describe the machinery, not
 /// the work, and the whole point of the squash is to make them disappear —
@@ -36,10 +49,19 @@ pub(crate) struct BranchWork {
     /// Whatever the repo says about how commits should be written:
     /// commitlint config, CONTRIBUTING, and the observed house style.
     pub conventions: String,
+    /// Best-effort prose reports from earlier steps (spec, validation,
+    /// critic, …). Empty when the workflow declared none or the artifacts
+    /// weren't captured — finalize enriches with these but never depends on
+    /// them. See [`gather_prior_artifacts`].
+    pub prior_work: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn gather_branch_work(
     exec: &dyn ExecutionPort,
+    artifacts: &dyn ArtifactStore,
+    steps: &[StepExecution],
+    finalize_step_id: &str,
     machine_str: &str,
     repo_dir: &str,
     feature_branch: &str,
@@ -118,7 +140,63 @@ pub(crate) async fn gather_branch_work(
         diff,
         diff_truncated,
         conventions,
+        prior_work: gather_prior_artifacts(artifacts, steps, finalize_step_id),
     }
+}
+
+/// Best-effort context from earlier steps: the prose reports they produced
+/// (spec, validation, critic, …), read from the artifact store the driver is
+/// wired with.
+///
+/// Universal across local / desktop-SSH / detached-runner runs because the
+/// store is always local to the driver process (both the desktop and the
+/// runner build it through the same `build_core_context`). Best-effort by
+/// design: a workflow may declare no report-producing steps, and remote
+/// artifact capture can silently produce nothing — so this returns whatever
+/// exists and an empty string when nothing does. Raw diffs/patches are
+/// skipped: the diff is already inlined separately, bounded. The finalize
+/// step itself is skipped (it hasn't produced anything yet).
+pub(crate) fn gather_prior_artifacts(
+    artifacts: &dyn ArtifactStore,
+    steps: &[StepExecution],
+    finalize_step_id: &str,
+) -> String {
+    let mut out = String::new();
+    for step in steps {
+        if step.step_id.0 == finalize_step_id {
+            continue;
+        }
+        for path in &step.artifact_paths {
+            if path.ends_with(".diff") || path.ends_with(".patch") {
+                continue;
+            }
+            let Ok(body) = artifacts.get(path) else {
+                continue;
+            };
+            let body = body.trim();
+            if body.is_empty() {
+                continue;
+            }
+            let name = path.rsplit('/').next().unwrap_or(path.as_str());
+            let mut chunk = body.to_string();
+            if chunk.len() > MAX_ARTIFACT_BYTES {
+                let mut cut = MAX_ARTIFACT_BYTES;
+                while cut > 0 && !chunk.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                chunk.truncate(cut);
+                chunk.push_str("\n… (truncated)");
+            }
+            out.push_str(&format!(
+                "\n--- {} (from step `{}`) ---\n{}\n",
+                name, step.step_id.0, chunk
+            ));
+            if out.len() >= MAX_PRIOR_WORK_BYTES {
+                return out;
+            }
+        }
+    }
+    out
 }
 
 /// What this repo considers a well-formed commit — read from whatever it
