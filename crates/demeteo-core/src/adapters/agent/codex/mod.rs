@@ -358,6 +358,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         // don't seed a cost fallback that could misprice an overridden model.
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Codex),
+        static_env: &[],
     }
 }
 

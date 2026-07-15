@@ -234,6 +234,28 @@ where
     // as raw text deltas; they are internal reasoning, not user-facing output.
     let text = crate::domain::text::strip_think_tags(&text_buffer);
 
+    // Cache profile for this turn. The hit ratio is the share of the prompt
+    // served from the vendor's prompt cache (~10% of base price); a resumed
+    // turn where `cache_creation` dominates instead means the gap since the
+    // previous turn outlived the cache TTL and the whole transcript was
+    // re-billed at cache-*write* price. Watching this ratio across steps is
+    // the evidence for (or against) keeping agent processes alive between
+    // turns rather than respawning with `--resume`.
+    let cache_read = acc.cache_read_input_tokens();
+    let cache_creation = acc.cache_creation_input_tokens();
+    let uncached_input = acc.input_tokens();
+    let prompt_total = uncached_input + cache_read + cache_creation;
+    if prompt_total > 0 {
+        tracing::info!(
+            session_id = session.session_id(),
+            uncached_input,
+            cache_read,
+            cache_creation,
+            cache_hit_ratio = (cache_read as f64 / prompt_total as f64 * 100.0).round() / 100.0,
+            "turn cache profile"
+        );
+    }
+
     TurnResult::Success(TurnOutcome {
         text,
         produced_artifacts,
