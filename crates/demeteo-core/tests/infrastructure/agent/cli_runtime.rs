@@ -651,7 +651,10 @@ fn apply_static_env_injects_defaults_but_never_overrides_caller() {
     let mut env = std::collections::HashMap::new();
     env.insert("FOO".to_string(), "caller".to_string());
     apply_static_env(&mut env, STATIC_ENV);
-    assert_eq!(env.get("DISABLE_AUTOUPDATER").map(String::as_str), Some("1"));
+    assert_eq!(
+        env.get("DISABLE_AUTOUPDATER").map(String::as_str),
+        Some("1")
+    );
     assert_eq!(
         env.get("FOO").map(String::as_str),
         Some("caller"),
