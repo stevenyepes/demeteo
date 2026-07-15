@@ -120,6 +120,88 @@ fn test_resolve_attached_artifacts() {
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 
+/// Regression: an *earlier* step whose template references a *later*
+/// step's artifact (a "forward reference") must resolve when that later
+/// step has already produced an artifact — the exact case that lets the
+/// standard pipeline's `s-implement` step read `[attached — s-critic]`
+/// on a redirect from the ship gate — and must degrade gracefully to a
+/// "not yet generated" note on the first pass, when the later step has
+/// not run. This behavior is what makes review-feedback routing work
+/// for *any* custom workflow, not just the shipped one, so it is pinned
+/// here.
+#[test]
+fn forward_reference_resolves_on_redirect_and_degrades_on_first_run() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "demeteo_test_fwd_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let store: Arc<dyn ArtifactStore> = Arc::new(
+        crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
+    );
+
+    let critic_path = temp_dir.join("critic-review.md");
+    std::fs::write(&critic_path, "## Critical Issues\n- fix the thing").unwrap();
+    let critic_path_str = critic_path.to_string_lossy().to_string();
+
+    let mk_exec = |id: &str, step_id: &str, idx: u32, artifact: Option<String>| StepExecution {
+        last_failure_fingerprint: None,
+        id: StepExecutionId::from(id.to_string()),
+        feature_id: FeatureId::from("f-1"),
+        step_id: crate::domain::ids::StepId::from(step_id.to_string()),
+        step_index: idx,
+        step_kind: "agent".to_string(),
+        status: "completed".to_string(),
+        cost_usd: Some(0.0),
+        tokens: Some(0),
+        wall_clock_secs: Some(0),
+        artifact_path: artifact,
+        artifact_paths: vec![],
+        error_message: None,
+        iteration_count: 0,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    let step_confs = vec![step_conf_inline("s-implement"), step_conf_inline("s-critic")];
+    // The implement step (index 0) references the later critic step.
+    let template = "Address the review: [attached — s-critic]";
+
+    // Redirect case: s-critic ran on a prior attempt and still holds its
+    // artifact (reset_for_redirect only resets the redirect *target*).
+    let with_critic = vec![
+        mk_exec("se-impl", "s-implement", 0, None),
+        mk_exec("se-critic", "s-critic", 1, Some(critic_path_str.clone())),
+    ];
+    let resolved = resolve_attached_artifacts(template, &with_critic, 0, &*store, &step_confs);
+    assert!(
+        resolved.contains("ATTACHED CONTEXT: s-critic")
+            && resolved.contains("fix the thing")
+            && resolved.contains("[See attached s-critic at the beginning of the prompt]"),
+        "forward reference to a later step with an artifact should resolve; got:\n{resolved}"
+    );
+
+    // First-run case: s-critic has not produced an artifact yet — the
+    // placeholder must degrade, not resolve to a stale/empty block.
+    let without_critic = vec![
+        mk_exec("se-impl", "s-implement", 0, None),
+        mk_exec("se-critic", "s-critic", 1, None),
+    ];
+    let degraded = resolve_attached_artifacts(template, &without_critic, 0, &*store, &step_confs);
+    assert!(
+        degraded.contains("not found or not yet generated")
+            && !degraded.contains("ATTACHED CONTEXT: s-critic"),
+        "forward reference with no artifact yet should degrade gracefully; got:\n{degraded}"
+    );
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
 #[test]
 fn test_inject_artifact_contract_empty() {
     let prompt = "Do the thing.";
