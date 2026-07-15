@@ -1,4 +1,5 @@
 use crate::domain::models::Machine;
+use socket2::{SockRef, TcpKeepalive};
 use ssh2::Session;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
@@ -9,8 +10,9 @@ use std::time::Duration;
 /// Session and TcpStream on success.
 ///
 /// This is the single shared entry point for all SSH connections in
-/// Demeteo. Callers are responsible for setting blocking mode,
-/// keepalive, SFTP init, or disconnect on top of this.
+/// Demeteo. Blocking-call timeouts and both kernel- and app-level keepalive
+/// are configured here so every session is wedge-resistant; callers are
+/// responsible for setting blocking mode, SFTP init, or disconnect on top.
 pub fn connect(machine: &Machine, secret: Option<String>) -> Result<(Session, TcpStream), String> {
     // Local machines don't use SSH — this function should not be called
     // for local auth_type. Callers should check auth_type first.
@@ -36,11 +38,33 @@ pub fn connect(machine: &Machine, secret: Option<String>) -> Result<(Session, Tc
     let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
 
+    // Kernel-level TCP keepalive so a *black-holed* connection (packets
+    // silently dropped, no RST) is torn down by the OS instead of hanging a
+    // blocking read forever. libssh2's own keepalive only helps when the
+    // socket *write* fails; this makes the kernel probe an idle connection and
+    // deliver an ECONNRESET, which surfaces as a read error and lets
+    // `drain_stream` fail the step fast instead of looping to the 30-minute
+    // wall cap (the "pipeline froze at validate/critic" wedge). Idle 30s,
+    // probe every 10s, give up after 3 misses → dead detected in ~60s.
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(30))
+        .with_interval(Duration::from_secs(10))
+        .with_retries(3);
+    let _ = SockRef::from(&tcp).set_tcp_keepalive(&keepalive);
+
     let mut sess = Session::new().map_err(|e| format!("Failed to create SSH session: {}", e))?;
     sess.set_tcp_stream(tcp.try_clone().map_err(|e| e.to_string())?);
     sess.set_timeout(10_000);
     sess.handshake()
         .map_err(|e| format!("SSH handshake failed: {}", e))?;
+
+    // App-level keepalive on every session so `drain_stream`'s no-progress
+    // abort has a signal to work with: with keepalive disabled (the default),
+    // `keepalive_send()` returns `Ok` without touching the wire and the abort
+    // never fires. `want_reply = true` asks the server to respond; 30s matches
+    // the interval `drain_stream`/`NO_PROGRESS_ABORT` are tuned against. This
+    // is the application-layer complement to the kernel keepalive above.
+    sess.set_keepalive(true, 30);
 
     match machine.auth_type.as_str() {
         "password" => {
