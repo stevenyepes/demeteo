@@ -6,7 +6,7 @@ import { formatError } from '../../lib/errors';
 import { listProviderNamespaces, type ProviderNamespace } from '../../lib/createProjectWizard';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
-import type { EffortLevel } from '../../lib/effortLevels';
+import { reconcileEffort, type EffortLevel } from '../../lib/effortLevels';
 import type { Machine, Provider } from '../../types';
 import {
   BootstrapStep,
@@ -311,9 +311,16 @@ export function CreateProjectWizard(): ReactElement {
   );
   const onAgentSubmit = useCallback(
     (payload: Extract<CreateProjectStepPayload, { step: 'agent' }>) => {
-      setDraft((d) => ({ ...d, agentKind: payload.kind }));
+      // Clamp any effort already picked to what the (re)chosen agent accepts,
+      // so going back to change the harness can't leave a stale, unrunnable
+      // level on the draft.
+      setDraft((d) => ({
+        ...d,
+        agentKind: payload.kind,
+        effort: reconcileEffort(d.effort, effortLevelsFor(agentCatalog, payload.kind)),
+      }));
     },
-    [],
+    [agentCatalog],
   );
   const onModelSubmit = useCallback(
     (payload: Extract<CreateProjectStepPayload, { step: 'model' }>) => {

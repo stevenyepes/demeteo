@@ -1,5 +1,5 @@
 import { GitBranch, Zap, Settings, FileText, Activity, Check, RotateCw, Trash2, Plus, FolderOpen } from 'lucide-react';
-import { DEFAULT_EFFORT, EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
+import { DEFAULT_EFFORT, EFFORT_LABELS, reconcileEffort, type EffortLevel } from '../../lib/effortLevels';
 import { useSettings } from './ProjectSettingsContext';
 
 export function StrategyTab() {
@@ -104,7 +104,7 @@ export function StrategyTab() {
         </h3>
         <div>
           <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Coding Agent</label>
-          <select value={s.defaultAgentKind} onChange={e => { s.setDefaultAgentKind(e.target.value); s.setDefaultModel(''); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 capitalize">
+          <select value={s.defaultAgentKind} onChange={e => { const k = e.target.value; s.setDefaultAgentKind(k); s.setDefaultModel(''); s.setDefaultEffort(reconcileEffort(s.defaultEffort, s.effortLevelsFor(k))); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 capitalize">
             <option value="">No default (Prompt on feature creation)</option>
             {s.agentConfigs.filter(a => a.enabled && a.available).map(a => <option key={a.kind} value={a.kind}>{a.display_label}</option>)}
           </select>

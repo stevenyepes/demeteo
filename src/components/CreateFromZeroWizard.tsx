@@ -17,6 +17,7 @@ import { useCreateZeroWizardActions } from './ui/useCreateZeroWizardActions';
 import { useCreateZeroBootstrap } from './ui/useCreateZeroBootstrap';
 import type { WorktreeStrategy } from '../types';
 import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
+import { reconcileEffort } from '../lib/effortLevels';
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{0,99}$/;
 
@@ -243,7 +244,12 @@ const CreateFromZeroWizard: React.FC = () => {
                 model={form.model}
                 effort={form.effort}
                 effortLevels={effortLevelsFor(agentCatalog, form.agentKind)}
-                onAgentKindChange={form.setAgentKind}
+                onAgentKindChange={(k) => {
+                  form.setAgentKind(k);
+                  // Clamp the project default effort to what the chosen agent
+                  // accepts, so it never persists a level the agent can't run.
+                  form.setEffort(reconcileEffort(form.effort, effortLevelsFor(agentCatalog, k)));
+                }}
                 onModelChange={form.setModel}
                 onEffortChange={form.setEffort}
                 onClear={() => { form.setAgentKind(''); form.setModel(''); form.setEffort(''); }}

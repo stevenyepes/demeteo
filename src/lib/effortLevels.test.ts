@@ -13,6 +13,7 @@ import {
   EFFORT_LABELS,
   EFFORT_LEVELS,
   isEffortLevel,
+  reconcileEffort,
   supportedEffortsFor,
   type EffortLevel,
 } from './effortLevels';
@@ -100,5 +101,26 @@ describe('clampForAgent mirrors EffortLevel::clamp_for', () => {
     expect(clampToSupported(supported, 'low')).toBe('high');
     expect(clampToSupported(supported, 'xhigh')).toBe('high');
     expect(clampToSupported([], 'high')).toBeNull();
+  });
+});
+
+describe('reconcileEffort keeps a picker honest across harness changes', () => {
+  it('leaves the inherit sentinel untouched', () => {
+    expect(reconcileEffort('', supportedEffortsFor('codex'))).toBe('');
+    expect(reconcileEffort('', [])).toBe('');
+  });
+
+  it('keeps a level the new agent still supports', () => {
+    expect(reconcileEffort('high', supportedEffortsFor('codex'))).toBe('high');
+  });
+
+  it('clamps a level down to what the new agent accepts', () => {
+    // codex tops out at xhigh, so a carried-over `max` becomes `xhigh`
+    // (what the backend clamp would run) rather than a stale `max`.
+    expect(reconcileEffort('max', supportedEffortsFor('codex'))).toBe('xhigh');
+  });
+
+  it('clears to inherit when the new agent has no effort control', () => {
+    expect(reconcileEffort('max', supportedEffortsFor('hermes'))).toBe('');
   });
 });

@@ -94,3 +94,21 @@ export function clampToSupported(
 export function clampForAgent(kind: string, level: EffortLevel): EffortLevel | null {
   return clampToSupported(supportedEffortsFor(kind), level);
 }
+
+/**
+ * Reconcile a picker's current effort against a (possibly new) supported set —
+ * call this whenever the effective harness changes so the control never keeps
+ * showing (and silently re-sending) a level the agent can't run.
+ *
+ * `''` (inherit) stays `''`. Otherwise the level is clamped down to the nearest
+ * supported rung so the displayed value matches what the backend's `clamp_for`
+ * will actually emit; an agent with no effort control (empty set) collapses
+ * back to `''` (inherit).
+ */
+export function reconcileEffort(
+  effort: EffortLevel | '',
+  supported: readonly EffortLevel[],
+): EffortLevel | '' {
+  if (!effort) return '';
+  return clampToSupported(supported, effort) ?? '';
+}

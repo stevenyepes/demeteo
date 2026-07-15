@@ -1,6 +1,6 @@
 import { Workflow as WorkflowIcon, ShieldAlert, AlertTriangle, RotateCw, ChevronDown, ChevronUp } from 'lucide-react';
 import type { StepConfig } from '../../types';
-import { EFFORT_LABELS } from '../../lib/effortLevels';
+import { DEFAULT_EFFORT, EFFORT_LABELS } from '../../lib/effortLevels';
 import { HarnessModelPicker } from '../ui/HarnessModelPicker';
 import { useSettings, ovKey, EMPTY_ROW, isOverrideActive, WF_LEVEL } from './ProjectSettingsContext';
 
@@ -22,7 +22,7 @@ function OverrideRow({ wf, step }: { wf: { id: string; steps: StepConfig[] }; st
   const inhM = step ? s.inheritedModel(wf.id, step) : (s.defaultModel || '');
   // The workflow-level row inherits from the project default; a step row also
   // inherits through the workflow-level row and the workflow author's setting.
-  const inhE = step ? s.inheritedEffort(wf.id, step) : (s.defaultEffort || 'high');
+  const inhE = step ? s.inheritedEffort(wf.id, step) : (s.defaultEffort || DEFAULT_EFFORT);
   const agentPlaceholder = step ? `Inherit${inhA ? ` · ${inhA.replace(/-/g, ' ')}` : ' · built-in'}` : 'Project default';
   const modelPlaceholder = inhM ? `Inherit · ${inhM}` : 'Agent default model';
 

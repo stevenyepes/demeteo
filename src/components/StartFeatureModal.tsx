@@ -6,6 +6,7 @@ import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone'
 import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 import { getAgentModels } from '../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
+import { reconcileEffort } from '../lib/effortLevels';
 import { HarnessModelPicker, type ModelOption } from './ui/HarnessModelPicker';
 import type { AgentConfigView } from './settings/ProjectSettingsContext';
 
@@ -835,8 +836,11 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                     setAgentKind(k);
                     // The selected model belongs to the previous agent's
                     // namespace — clear it so we don't submit a mismatched pair.
-                    // The effort ladder is canonical across agents, so it stays.
+                    // The effort ladder is canonical across agents, but the new
+                    // agent may not accept the current rung, so clamp it down
+                    // (or clear it) rather than keep a level it can't run.
                     setModel('');
+                    setEffort((e) => reconcileEffort(e, effortLevelsFor(agentCatalog, k)));
                   }}
                   onModelChange={setModel}
                   onEffortChange={setEffort}
@@ -884,7 +888,16 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                             effort={ov.effort}
                             inheritedAgentKind={agentKind}
                             effortLevels={effortLevelsFor(agentCatalog, ov.agent_kind || agentKind)}
-                            onAgentKindChange={(k) => setOv({ agent_kind: k, model: '' })}
+                            onAgentKindChange={(k) =>
+                              setOv({
+                                agent_kind: k,
+                                model: '',
+                                // Clamp the row's effort to what the new
+                                // effective harness (this row's agent, else the
+                                // inherited default) accepts.
+                                effort: reconcileEffort(ov.effort, effortLevelsFor(agentCatalog, k || agentKind)),
+                              })
+                            }
                             onModelChange={(model) => setOv({ model })}
                             onEffortChange={(effort) => setOv({ effort })}
                             onClear={() => setOv({ agent_kind: '', model: '', effort: '' })}
