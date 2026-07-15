@@ -22,6 +22,27 @@ use std::time::{Duration, Instant};
 /// caller's timeout layer.
 const TRANSPORT_WALL_CAP: Duration = Duration::from_secs(30 * 60);
 
+/// How long a drain may go with **no sign of life** — no bytes read *and* no
+/// successful keepalive round-trip — before the transport is declared dead and
+/// the drain aborts. This is the difference between "quiet but alive" and
+/// "connection wedged": a silent-but-healthy command (a `cargo test` compiling
+/// in silence) keeps answering keepalives every ~30s, so its life clock is
+/// continually reset and it survives up to [`TRANSPORT_WALL_CAP`]. A
+/// black-holed connection stops acking keepalives, so this trips in ~2 min
+/// instead of keepalive-looping to the full 30-minute cap — which used to
+/// freeze not just the step but every SSH op queued behind the pooled session.
+/// Deliberately larger than the 30s keepalive interval so a single transient
+/// blip never false-positives, and smaller than the wall cap so it fails fast.
+const NO_PROGRESS_ABORT: Duration = Duration::from_secs(120);
+
+/// Has a silent drain crossed from "quiet but alive" into "the transport is
+/// dead"? `since_last_life` is how long since we last saw *either* bytes on the
+/// wire *or* a keepalive round-trip. Extracted (and kept free of `Session`) so
+/// the boundary is unit-testable without a live socket.
+fn no_progress_expired(since_last_life: Duration) -> bool {
+    since_last_life >= NO_PROGRESS_ABORT
+}
+
 /// Tag `msg` as a *transport/connection* failure (the machine could not be
 /// reached or the channel broke) rather than a *command* failure (it ran and
 /// exited non-zero). Callers distinguish the two via
@@ -50,19 +71,44 @@ fn drain_stream<R: Read>(
     what: &str,
 ) -> Result<(), String> {
     let mut chunk = [0u8; 8192];
+    // Last moment the transport showed life: either bytes arrived or a
+    // keepalive round-tripped. A merely quiet command keeps this fresh (every
+    // keepalive is answered); a wedged connection lets it go stale, which is
+    // how we tell the two apart without killing healthy silent commands.
+    let mut last_life = Instant::now();
     loop {
         match reader.read(&mut chunk) {
             Ok(0) => return Ok(()),
-            Ok(n) => buf_out.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                buf_out.extend_from_slice(&chunk[..n]);
+                last_life = Instant::now();
+            }
             Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
-                if Instant::now() >= deadline {
+                let now = Instant::now();
+                if now >= deadline {
                     return Err(transport_err(format!(
                         "Timed out after the transport wall cap ({}s) waiting for {}",
                         TRANSPORT_WALL_CAP.as_secs(),
                         what
                     )));
                 }
-                let _ = session.keepalive_send();
+                // A blocking read times out every ~10s while a command is
+                // simply quiet (see `ssh_util::connect`'s `set_timeout`). The
+                // keepalive tells us whether the *transport* is still alive:
+                // on a live session it round-trips (`Ok`) and we refresh the
+                // life clock; on a black-holed one it errors (or its socket
+                // write times out), the clock goes stale, and we abort once it
+                // crosses `NO_PROGRESS_ABORT` instead of looping to the wall
+                // cap and freezing every SSH op behind the pooled session.
+                if session.keepalive_send().is_ok() {
+                    last_life = now;
+                } else if no_progress_expired(now.duration_since(last_life)) {
+                    return Err(transport_err(format!(
+                        "Connection appears dead: no data and no keepalive response for {}s while waiting for {}",
+                        NO_PROGRESS_ABORT.as_secs(),
+                        what
+                    )));
+                }
             }
             Err(e) => return Err(transport_err(format!("Failed to read {}: {}", what, e))),
         }
@@ -333,22 +379,38 @@ fn get_sftp_blocking(
     sessions: &Mutex<HashMap<String, Arc<SftpSession>>>,
     machine_id: &str,
 ) -> Result<Arc<SftpSession>, String> {
-    {
-        let mut sessions = sessions
+    // Take a cheap `Arc` clone of any pooled session *under* the lock, then
+    // release it before the liveness probe. The probe (`readdir`) is a blocking
+    // network round-trip; running it while holding the global `sessions` mutex
+    // means one wedged connection blocks every other machine's SSH ops behind
+    // it — a pipeline-wide stall (the "stopped at validate" hang). Off the lock,
+    // a slow probe only delays the caller that owns that connection.
+    let pooled = {
+        let sessions = sessions
             .lock()
             .map_err(|_| "Failed to lock SFTP state".to_string())?;
+        sessions.get(machine_id).cloned()
+    };
 
-        if let Some(s) = sessions.get(machine_id) {
-            let sftp = s
-                .sftp
-                .lock()
-                .map_err(|_| "Failed to lock SFTP".to_string())?;
-            if sftp.readdir(std::path::Path::new(".")).is_ok() {
-                drop(sftp);
-                return Ok(s.clone());
+    if let Some(s) = pooled {
+        let alive = match s.sftp.lock() {
+            Ok(sftp) => sftp.readdir(std::path::Path::new(".")).is_ok(),
+            Err(_) => false,
+        };
+        if alive {
+            return Ok(s);
+        }
+        // Wedged/dead — evict it so the next caller reconnects. Only remove the
+        // entry if it's still the same `Arc` we probed: a concurrent caller may
+        // have already reconnected and inserted a fresh session while our probe
+        // was blocking, and we must not drop that one on the floor.
+        if let Ok(mut sessions) = sessions.lock() {
+            if sessions
+                .get(machine_id)
+                .is_some_and(|cur| Arc::ptr_eq(cur, &s))
+            {
+                sessions.remove(machine_id);
             }
-            drop(sftp);
-            sessions.remove(machine_id);
         }
     }
 
@@ -966,5 +1028,45 @@ impl ExecutionPort for SshClientAdapter {
             channel: Mutex::new(channel),
             session: sess,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The fast-abort window is only correct if it sits strictly between the
+    /// keepalive interval and the wall cap: larger than the interval so a
+    /// quiet-but-alive command (which answers a keepalive every ~30s) never
+    /// trips it, and smaller than the wall cap so a dead connection fails fast
+    /// instead of hanging the pipeline for the full 30 minutes. Lock that
+    /// ordering so a future tweak to any one constant can't silently break it.
+    #[test]
+    fn no_progress_abort_sits_between_keepalive_and_wall_cap() {
+        // Keepalive interval configured on the session (`set_keepalive(true, 30)`).
+        const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+        assert!(
+            NO_PROGRESS_ABORT > KEEPALIVE_INTERVAL,
+            "must outlast a keepalive cycle so silent-but-alive commands survive",
+        );
+        assert!(
+            NO_PROGRESS_ABORT < TRANSPORT_WALL_CAP,
+            "must fire before the wall cap so a dead connection fails fast",
+        );
+    }
+
+    /// The boundary is inclusive at exactly `NO_PROGRESS_ABORT` and never trips
+    /// before it — so a healthy session whose keepalives keep resetting the
+    /// life clock (`since_last_life` stays near zero) is never declared dead.
+    #[test]
+    fn no_progress_expires_only_at_or_past_the_window() {
+        assert!(!no_progress_expired(Duration::from_secs(0)));
+        assert!(!no_progress_expired(
+            NO_PROGRESS_ABORT - Duration::from_millis(1)
+        ));
+        assert!(no_progress_expired(NO_PROGRESS_ABORT));
+        assert!(no_progress_expired(
+            NO_PROGRESS_ABORT + Duration::from_secs(300)
+        ));
     }
 }
