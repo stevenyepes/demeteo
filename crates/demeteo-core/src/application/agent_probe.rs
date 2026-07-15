@@ -76,6 +76,8 @@ async fn probe_models_via_acp(
         bare_mode: false,
         tool_allowlist: None,
         max_turns: None,
+        // Model-probe session: no budget guardrail.
+        max_budget_usd: None,
     };
 
     let session = ctx

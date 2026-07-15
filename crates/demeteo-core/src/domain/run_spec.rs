@@ -88,6 +88,11 @@ pub struct RunSpec {
     /// Per-run override of the `on_failure` retry-loop budget. `None`
     /// inherits the engine default.
     pub loop_iterations: Option<u32>,
+    /// Per-run override of the per-turn dollar budget (`--max-budget-usd`).
+    /// `None` inherits the project default, then the engine default. Serde-
+    /// defaults so specs from an older laptop still deserialize.
+    #[serde(default)]
+    pub max_budget_usd: Option<f64>,
     /// Per-step agent/model overrides chosen at launch — same rows
     /// `start_feature` accepts (migration V13). Serde-default so specs
     /// from older laptops (and to older runners) stay compatible.

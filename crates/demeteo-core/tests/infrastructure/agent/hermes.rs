@@ -32,6 +32,7 @@ fn ctx_for_test() -> AgentContext {
         bare_mode: false,
         tool_allowlist: None,
         max_turns: None,
+        max_budget_usd: None,
     }
 }
 

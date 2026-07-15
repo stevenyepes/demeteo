@@ -62,6 +62,8 @@ pub async fn build_agent_context(
         bare_mode: false,
         tool_allowlist: None,
         max_turns: None,
+        // Interactive session: no budget guardrail.
+        max_budget_usd: None,
     })
 }
 

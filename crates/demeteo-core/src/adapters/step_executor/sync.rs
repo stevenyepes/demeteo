@@ -141,6 +141,9 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         bare_mode: agent_kind == "claude-code",
         tool_allowlist: None,
         max_turns: None,
+        // Standalone resolver path (no driver budget in scope); uncapped like
+        // its turn count.
+        max_budget_usd: None,
     };
 
     let session = registry

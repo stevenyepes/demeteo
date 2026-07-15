@@ -571,6 +571,8 @@ impl ExecutionDriver {
             bare_mode: agent_kind == "claude-code",
             tool_allowlist: None,
             max_turns: None,
+            // A sequence task is a primary coding turn: full base budget.
+            max_budget_usd: self.role_max_budget_usd(1.0),
         };
 
         let mut cancel_watch = self.cancel_watch.clone();

@@ -73,6 +73,7 @@ fn seed_parent_rows(
             created_at: now,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         })

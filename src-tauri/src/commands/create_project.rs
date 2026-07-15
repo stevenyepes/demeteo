@@ -421,6 +421,7 @@ pub async fn submit_create_project_step(
                 artifact_subdir: "artifacts/".to_string(),
                 commit_artifacts: false,
                 default_loop_iterations: None,
+                default_max_budget_usd: None,
             };
             ctx.projects
                 .save_settings(settings)

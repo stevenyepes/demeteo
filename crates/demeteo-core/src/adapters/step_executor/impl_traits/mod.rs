@@ -305,12 +305,14 @@ impl DagStepExecutor {
         let default_model = ctx.settings.default_model.clone();
         let default_effort = ctx.settings.default_effort;
         let project_default_loop_iterations = ctx.settings.default_loop_iterations;
+        let project_default_max_budget_usd = ctx.settings.default_max_budget_usd;
         let feature_row = self.features.get(&f_id).ok().flatten();
         let feature_agent_kind = feature_row.as_ref().and_then(|f| f.agent_kind.clone());
         let feature_model = feature_row.as_ref().and_then(|f| f.model.clone());
         let feature_effort = feature_row.as_ref().and_then(|f| f.effort);
         let feature_model_for_budget = feature_model.clone();
         let loop_iterations_override = feature_row.as_ref().and_then(|f| f.loop_iterations);
+        let max_budget_usd_override = feature_row.as_ref().and_then(|f| f.max_budget_usd);
         let step_overrides = feature_row
             .as_ref()
             .map(|f| f.step_overrides.clone())
@@ -358,6 +360,8 @@ impl DagStepExecutor {
             default_effort,
             loop_iterations_override,
             project_default_loop_iterations,
+            max_budget_usd_override,
+            project_default_max_budget_usd,
             retry_ctx: None,
             current_model: feature_model_for_budget.clone(),
             context_budget_tokens: feature_model_for_budget
@@ -455,6 +459,7 @@ impl StepExecutor for DagStepExecutor {
         effort: Option<crate::domain::models::EffortLevel>,
         commit_artifacts: Option<bool>,
         loop_iterations: Option<u32>,
+        max_budget_usd: Option<f64>,
         step_overrides: Vec<crate::domain::models::StepOverride>,
         staged_attachments: Vec<StagedAttachmentInput>,
     ) -> Result<Feature, String> {
@@ -514,6 +519,7 @@ impl StepExecutor for DagStepExecutor {
             pr_body: None,
             commit_artifacts,
             loop_iterations,
+            max_budget_usd,
             step_overrides,
             attachments: Vec::new(),
         };

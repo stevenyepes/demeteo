@@ -671,6 +671,10 @@ export interface ProjectSettingsData {
    *  which resolves to the engine default (`high`) at run time. */
   default_effort?: EffortLevel | null;
   default_loop_iterations?: number | null;
+  /** Project-wide default per-turn dollar budget passed to the agent as
+   *  `--max-budget-usd`. `null` = no project default, which resolves to the
+   *  engine default ($20) at run time. Overridable per run. */
+  default_max_budget_usd?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
 }

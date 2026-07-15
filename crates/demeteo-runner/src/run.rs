@@ -317,6 +317,7 @@ pub async fn execute_run(
             spec.effort,
             spec.commit_artifacts,
             spec.loop_iterations,
+            spec.max_budget_usd,
             spec.step_overrides.clone(),
             staged,
         )

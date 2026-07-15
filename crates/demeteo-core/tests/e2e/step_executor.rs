@@ -317,6 +317,7 @@ async fn test_executor_gate_decide() {
             created_at: now,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         })
@@ -490,6 +491,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
             created_at: now,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         })
@@ -681,6 +683,7 @@ async fn test_step_retry_blocked_by_active_predecessor() {
             created_at: now,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         })
@@ -784,6 +787,7 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
             created_at: now,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         })
@@ -897,6 +901,7 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
             created_at: now,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         })
@@ -996,6 +1001,7 @@ async fn test_assert_no_active_predecessors_helper() {
             created_at: now,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         })
@@ -1178,6 +1184,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         created_at: now,
         commit_artifacts: None,
         loop_iterations: None,
+        max_budget_usd: None,
         step_overrides: Vec::new(),
         attachments: Vec::new(),
     };
@@ -1391,7 +1398,8 @@ async fn test_feature_start_bootstrap_failure_emits_events_and_fails() {
             "Boot Feature",
             "a description",
             None,
-            // model / effort / commit_artifacts / loop_iterations: all inherit.
+            // model / effort / commit_artifacts / loop_iterations / max_budget_usd: all inherit.
+            None,
             None,
             None,
             None,
@@ -1594,6 +1602,7 @@ async fn effort_resolution_reaches_the_agent_per_step() {
             "Effort Feature",
             "Exercise the effort resolution chain.",
             Some("stub"),
+            None,
             None,
             None,
             None,

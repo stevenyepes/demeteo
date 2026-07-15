@@ -98,6 +98,8 @@ impl ExecutionDriver {
             bare_mode: agent_kind == "claude-code",
             tool_allowlist: None,
             max_turns: None,
+            // Primary coding turn: the full resolved base budget.
+            max_budget_usd: self.role_max_budget_usd(1.0),
         };
 
         // Telemetry: report the EFFECTIVE effort — what the adapter will
@@ -187,6 +189,8 @@ impl ExecutionDriver {
                 bare_mode: agent_kind == "claude-code",
                 tool_allowlist: None,
                 max_turns: None,
+                // Primary coding turn: the full resolved base budget.
+                max_budget_usd: self.role_max_budget_usd(1.0),
             };
             let respawn_fut = self
                 .registry

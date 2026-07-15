@@ -115,6 +115,12 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "project_settings", "default_effort", "TEXT")?;
     add_column_if_missing(conn, "project_workflow_overrides", "effort", "TEXT")?;
 
+    // Per-turn dollar budget (V30), the `--max-budget-usd` peer of
+    // `loop_iterations`. Nullable REAL with no default: NULL = inherit, so
+    // pre-V30 rows resolve to the engine default without a backfill.
+    add_column_if_missing(conn, "features", "max_budget_usd", "REAL")?;
+    add_column_if_missing(conn, "project_settings", "default_max_budget_usd", "REAL")?;
+
     Ok(())
 }
 

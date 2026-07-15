@@ -273,6 +273,8 @@ impl CreateProjectPort for CreateProjectAdapter {
                 model,
                 // Effort: inherit (project default, else the built-in high).
                 None,
+                // commit_artifacts / loop_iterations / max_budget_usd: inherit.
+                None,
                 None,
                 None,
                 Vec::new(),

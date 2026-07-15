@@ -60,7 +60,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -93,6 +93,7 @@ impl FeatureRepository for SqliteAdapter {
                     pr_body: row.get(19)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
                     loop_iterations: loop_iterations.map(|v| v as u32),
+                    max_budget_usd: row.get(21)?,
                     step_overrides: step_overrides_json
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
@@ -111,7 +112,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd
                  FROM features WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -144,6 +145,7 @@ impl FeatureRepository for SqliteAdapter {
                     pr_body: row.get(19)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
                     loop_iterations: loop_iterations.map(|v| v as u32),
+                    max_budget_usd: row.get(21)?,
                     step_overrides: step_overrides_json
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
@@ -173,13 +175,13 @@ impl FeatureRepository for SqliteAdapter {
             Some(serde_json::to_string(&f.attachments).map_err(|e| e.to_string())?)
         };
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort, max_budget_usd)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
                 f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
                 f.mr_url, f.mr_state, commit_artifacts, loop_iterations, step_overrides_json,
-                attachments_json, f.description, f.effort.map(|e| e.as_str())
+                attachments_json, f.description, f.effort.map(|e| e.as_str()), f.max_budget_usd
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -281,7 +283,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd
                  FROM features WHERE mr_state = 'open' AND mr_url IS NOT NULL ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -314,6 +316,7 @@ impl FeatureRepository for SqliteAdapter {
                     pr_body: row.get(19)?,
                     commit_artifacts: commit_artifacts.map(|v| v != 0),
                     loop_iterations: loop_iterations.map(|v| v as u32),
+                    max_budget_usd: row.get(21)?,
                     step_overrides: step_overrides_json
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),

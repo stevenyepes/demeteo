@@ -19,6 +19,9 @@ export interface LaunchRunParams {
   targetRepos?: string[];
   commitArtifacts?: boolean;
   loopIterations?: number;
+  /** Per-run override of the per-turn dollar budget (`--max-budget-usd`).
+   *  Unset = inherit the project default, then the engine default ($20). */
+  maxBudgetUsd?: number;
   stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null; effort?: EffortLevel | null }[];
   attachments?: LaunchStageEntry[];
   /** Run detached on this machine via `remote_submit_run`; unset/empty
@@ -98,6 +101,7 @@ export function useLaunchRun(options: {
             effort: params.effort ?? null,
             commitArtifacts: params.commitArtifacts ?? null,
             loopIterations: params.loopIterations ?? null,
+            maxBudgetUsd: params.maxBudgetUsd ?? null,
             stepOverrides: params.stepOverrides ?? null,
             stagedAttachments,
             // A detached run clones exactly one repository — the first
@@ -136,6 +140,7 @@ export function useLaunchRun(options: {
           effort: params.effort ?? null,
           commitArtifacts: params.commitArtifacts ?? null,
           loopIterations: params.loopIterations ?? null,
+          maxBudgetUsd: params.maxBudgetUsd ?? null,
           stepOverrides: params.stepOverrides ?? null,
           stagedAttachments,
         });

@@ -92,6 +92,8 @@ impl ExecutionDriver {
                 "Glob".to_string(),
             ]),
             max_turns: Some(12),
+            // Summarizes an inlined diff into PR title/body.
+            max_budget_usd: self.role_max_budget_usd(Self::BUDGET_FRACTION_FINALIZE),
         };
 
         let session = match self

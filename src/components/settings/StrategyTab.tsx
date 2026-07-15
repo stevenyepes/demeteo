@@ -145,6 +145,11 @@ export function StrategyTab() {
             <input type="number" min={1} max={10} value={s.defaultLoopIterations} onChange={e => s.setDefaultLoopIterations(e.target.value)} placeholder="3 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">How many times a validation step may loop back to implementation before giving up. Leave blank to use the engine default (3). Overridable per run.</p>
           </div>
+          <div className="mt-4">
+            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Per-Turn Budget (USD)</label>
+            <input type="number" min={0} step={0.5} value={s.defaultMaxBudgetUsd} onChange={e => s.setDefaultMaxBudgetUsd(e.target.value)} placeholder="20 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+            <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Dollar ceiling per agent turn (<span className="font-mono">--max-budget-usd</span>). The coding turn gets the full amount; shorter role turns get a fraction. Anti-runaway guard, not a whole-run cap. Leave blank for the engine default ($20). Overridable per run.</p>
+          </div>
         </div>
       </div>
 

@@ -206,6 +206,7 @@ async fn get_or_spawn_returns_structured_error_for_unknown_kind() {
                 bare_mode: false,
                 tool_allowlist: None,
                 max_turns: None,
+                max_budget_usd: None,
             },
         )
         .await

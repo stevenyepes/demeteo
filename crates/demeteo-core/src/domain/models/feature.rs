@@ -56,6 +56,15 @@ pub struct Feature {
     /// engine default (3). See migration V13.
     #[serde(default)]
     pub loop_iterations: Option<u32>,
+    /// Per-run override of the per-turn dollar budget passed to the agent as
+    /// `--max-budget-usd`. `None` = inherit the project default
+    /// (`ProjectSettings::default_max_budget_usd`) or the engine default
+    /// ([`ExecutionDriver::DEFAULT_MAX_BUDGET_USD`]). This is the *base*
+    /// budget for the primary coding turn; the bounded role turns (triage,
+    /// finalize, verifier, planner) each get a fixed fraction of it. See
+    /// migration V30.
+    #[serde(default)]
+    pub max_budget_usd: Option<f64>,
     /// Per-step agent/model overrides chosen at launch, snapshotted on the
     /// feature so workflow/project edits don't affect an in-flight run.
     /// Empty = every step inherits the workflow/project defaults.

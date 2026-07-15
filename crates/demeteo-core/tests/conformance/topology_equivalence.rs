@@ -332,7 +332,8 @@ async fn run_leg(
             "Topology Feature",
             "Produce a deterministic topology conformance report.",
             Some("stub"),
-            // model / effort / commit_artifacts / loop_iterations: inherit.
+            // model / effort / commit_artifacts / loop_iterations / max_budget_usd: inherit.
+            None,
             None,
             None,
             None,
