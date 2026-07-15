@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, WorkflowOverride, StepConfig, Machine, Project, WorktreeStrategy, ProjectSettingsData } from '../../types';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
-import { DEFAULT_EFFORT } from '../../lib/effortLevels';
+import { DEFAULT_EFFORT, reconcileEffort } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
 import { saveProjectSettings, setWorkflowOverride } from '../../lib/project';
@@ -301,11 +301,13 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     const key = ovKey(workflowId, stepId);
     const current = overrides[key] ?? EMPTY_ROW;
     // The model belongs to the previous harness's namespace, so it is dropped.
-    // The effort does not — the ladder is canonical across agents, and the
-    // adapter clamps it to what the new harness declares — so it is kept.
-    const next: OverrideRowValue = { agent_kind: agentKind || null, model: null, effort: current.effort };
-    setOverrides(prev => ({ ...prev, [key]: next }));
+    // The effort ladder is canonical across agents, but the new effective
+    // harness may not accept the current rung — clamp it down (or clear it)
+    // rather than keep a level the picker would show but the agent can't run.
     const probeAgent = agentKind || (step ? inheritedAgent(workflowId, step) : (defaultAgentKind || ''));
+    const nextEffort = reconcileEffort(current.effort ?? '', effortLevels(probeAgent)) || null;
+    const next: OverrideRowValue = { agent_kind: agentKind || null, model: null, effort: nextEffort };
+    setOverrides(prev => ({ ...prev, [key]: next }));
     probeModels(key, probeAgent);
     persistOverride(workflowId, stepId, next);
   };

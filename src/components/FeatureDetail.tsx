@@ -27,7 +27,7 @@ import {
   findActivePredecessor,
 } from '../lib/features';
 import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
-import { EFFORT_LABELS, type EffortLevel } from '../lib/effortLevels';
+import { EFFORT_LABELS, reconcileEffort, type EffortLevel } from '../lib/effortLevels';
 import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
 import { RemoteGateActions, ReinjectCredentials, RunEventTimeline } from './RunEventTimeline';
@@ -666,6 +666,10 @@ export function FeatureDetail() {
   const handleAgentChange = (agentKind: string) => {
     setSelectedAgent(agentKind);
     setSelectedModel('');
+    // Clamp the re-pinned effort to what the rerun's harness actually accepts,
+    // so a level the previous harness supported doesn't linger in a now-greyed
+    // or mismatched control and get silently re-sent.
+    setSelectedEffort((e) => reconcileEffort(e, effortLevelsFor(agentCatalog, agentKind || featureAgentKind)));
     setIsLoadingModels(true);
     (async () => {
       try {
