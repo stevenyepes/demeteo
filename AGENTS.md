@@ -211,6 +211,15 @@ Things an agent must **never** do without explicit user approval:
 - ❌ Break the hexagon: commands must not contain business logic; adapters must not be called from the frontend directly
 - ❌ Skip `cargo fmt` + `cargo clippy` before finalizing Rust changes
 - ❌ Bypass the `PermissionPolicyPort` when spawning agent processes
+- ❌ Mutate a harness's own persisted configuration (e.g. `~/.codex/config.toml`,
+  `$HERMES_HOME/config.yaml`, `~/.claude`, or shell rc files). Everything Demeteo
+  tells a harness is **per-invocation and ephemeral** — CLI flags or child-process
+  env vars scoped to the spawned process, never written to disk. The only place
+  Demeteo persists a run's shape is **its own SQLite database**
+  (`ProjectSettings.default_effort`, `Feature.effort`, etc.), which is Demeteo's
+  config, not the harness's. If a harness only exposes a setting through its own
+  config file (as Hermes does for reasoning effort), Demeteo declares the
+  capability unsupported and degrades honestly rather than reaching into that file.
 - ❌ Create a git commit whose message does not conform to the Conventional Commits format
   in **Section 8** — no free-form messages, no past tense, no trailing period, no missing type
 
