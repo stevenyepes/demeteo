@@ -81,6 +81,17 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions,
             bare_mode: agent_kind == "claude-code",
+            // The diff and commit log are inlined in the prompt; read tools
+            // stay available for the truncated-diff case, but the denied
+            // tools (Bash/Edit/Write/Web) lose their *definitions* too —
+            // the model can't waste a turn on a call that would only be
+            // denied, and the prompt is smaller.
+            tool_allowlist: Some(vec![
+                "Read".to_string(),
+                "Grep".to_string(),
+                "Glob".to_string(),
+            ]),
+            max_turns: Some(12),
         };
 
         let session = match self

@@ -226,6 +226,8 @@ fn ctx_with(model: Option<&str>, perms: PermissionProfile) -> AgentContext {
         exec: Arc::new(StubExec),
         permissions: perms,
         bare_mode: false,
+        tool_allowlist: None,
+        max_turns: None,
     }
 }
 

@@ -96,6 +96,8 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions,
             bare_mode: agent_kind == "claude-code",
+            tool_allowlist: None,
+            max_turns: None,
         };
 
         // Telemetry: report the EFFECTIVE effort — what the adapter will
@@ -183,6 +185,8 @@ impl ExecutionDriver {
                 exec: self.exec.clone(),
                 permissions,
                 bare_mode: agent_kind == "claude-code",
+                tool_allowlist: None,
+                max_turns: None,
             };
             let respawn_fut = self
                 .registry

@@ -434,6 +434,22 @@ fn build_claude_args(
         args.push("user,project".to_string());
         args.push("--strict-mcp-config".to_string());
     }
+    if let Some(ref allowlist) = ctx.tool_allowlist {
+        // Allowlist of built-in tool *definitions* — `--tools ""` (empty
+        // list) strips every tool from the model's context. Orthogonal to
+        // --disallowedTools below: the allowlist shrinks the prompt for
+        // single-purpose role turns; the deny rules enforce the step's
+        // permission profile.
+        args.push("--tools".to_string());
+        args.push(allowlist.join(","));
+    }
+    if let Some(max_turns) = ctx.max_turns {
+        // Anti-runaway ceiling. Tripping it exits with an error result
+        // that still carries usage, which parse_claude_result_event
+        // credits like any other error.
+        args.push("--max-turns".to_string());
+        args.push(max_turns.to_string());
+    }
     let disallowed = disallowed_tools_for(&ctx.permissions);
     if !disallowed.is_empty() {
         args.push("--disallowedTools".to_string());
