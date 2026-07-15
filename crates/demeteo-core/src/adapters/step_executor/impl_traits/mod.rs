@@ -382,8 +382,14 @@ impl DagStepExecutor {
 
         let registry = self.driver_registry.clone();
         tokio::spawn(async move {
+            // Own the deregister via a drop guard rather than a trailing
+            // statement: if `driver.run()` panics, the panic unwinds the
+            // task and a trailing `deregister` would never run, leaking the
+            // `live` entry (`is_live` stays true forever, blocking
+            // in-process recovery — see `deregister_guard`). The guard's
+            // `Drop` fires on the panic unwind too.
+            let _guard = registry.deregister_guard(f_id);
             driver.run().await;
-            registry.deregister(&f_id);
         });
 
         Ok(())
