@@ -17,12 +17,6 @@ export interface AppVersion {
   channel: ReleaseChannel;
 }
 
-/** Run-in-background / minimize-to-tray preference, surfaced by the
- *  `get_run_in_background` / `set_run_in_background` IPC. */
-export interface BackgroundSettings {
-  runInBackground: boolean;
-}
-
 export interface Project {
   id: string;
   name: string;

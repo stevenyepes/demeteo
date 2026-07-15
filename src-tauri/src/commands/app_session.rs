@@ -4,13 +4,20 @@ use crate::state::AppContext;
 use tauri::State;
 
 const WORKSPACE_BASE_DIR_KEY: &str = "workspace_base_dir";
-const RUN_IN_BACKGROUND_KEY: &str = "run_in_background";
+
+/// Canonical `app_session` key for the run-in-background / minimize-to-tray
+/// preference. The single source of truth — the tray close-path reader
+/// ([`crate::tray::run_in_background_enabled`]) and the integration tests read
+/// through this constant so the key can never drift between writer and readers.
+pub const RUN_IN_BACKGROUND_KEY: &str = "run_in_background";
 
 /// Interpret the stored `run_in_background` app_session value as a bool.
 ///
 /// Pure so it can be unit-tested without a live `AppContext`: an absent key
-/// (or any value other than the string `"true"`) is treated as `false`.
-fn parse_run_in_background(value: Option<String>) -> bool {
+/// (or any value other than the string `"true"`) is treated as `false`. Shared
+/// with [`crate::tray::run_in_background_enabled`] so the decode has one
+/// definition.
+pub fn parse_run_in_background(value: Option<String>) -> bool {
     matches!(value.as_deref(), Some("true"))
 }
 

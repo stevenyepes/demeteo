@@ -10,6 +10,7 @@
 //! headless / minimal Linux sessions) is logged and swallowed rather than
 //! panicking startup (spec Constraint 9).
 
+use crate::commands::app_session::{parse_run_in_background, RUN_IN_BACKGROUND_KEY};
 use crate::state::AppContext;
 use crate::terminal;
 use tauri::menu::{Menu, MenuItem};
@@ -79,21 +80,22 @@ pub fn close_action(hide_to_tray: bool) -> CloseAction {
 
 /// Read the `run_in_background` preference through any [`tauri::Manager`].
 ///
-/// Mirrors `commands::app_session::parse_run_in_background`: an absent key or
-/// any value other than the string `"true"` is treated as `false`, so a
-/// missing/corrupt row can never flip the app into background mode. Returns
-/// `false` when the `AppContext` is not (yet) managed.
+/// Reuses `commands::app_session::{RUN_IN_BACKGROUND_KEY, parse_run_in_background}`
+/// (the same key + decode the `set_run_in_background` command writes) so the key
+/// and encoding have a single source of truth and can never drift between the
+/// writer and this close-path reader. An absent key or any value other than the
+/// string `"true"` is treated as `false`, so a missing/corrupt row can never
+/// flip the app into background mode. Returns `false` when the `AppContext` is
+/// not (yet) managed.
 pub fn run_in_background_enabled<R: tauri::Runtime, M: Manager<R>>(manager: &M) -> bool {
     manager
         .try_state::<AppContext>()
         .map(|ctx| {
-            matches!(
+            parse_run_in_background(
                 ctx.app_settings
-                    .get_app_session("run_in_background")
+                    .get_app_session(RUN_IN_BACKGROUND_KEY)
                     .ok()
-                    .flatten()
-                    .as_deref(),
-                Some("true")
+                    .flatten(),
             )
         })
         .unwrap_or(false)
