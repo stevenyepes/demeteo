@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Server, X, Key, AlertCircle, Cpu, Wifi, WifiOff, Loader } from "lucide-react";
 import { useAgentCatalog } from "../lib/agentCatalog";
+import { formatError } from "../lib/errors";
 
 
 interface EnvFormState {
@@ -139,7 +140,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
       setConnStatus("ok");
     } catch (e: any) {
       setConnStatus("err");
-      setConnError(String(e));
+      setConnError(formatError(e));
     }
   };
 
@@ -202,7 +203,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
       onSaved?.();
       return id;
     } catch (e: any) {
-      setSaveError(String(e));
+      setSaveError(formatError(e));
       return null;
     } finally {
       setSaving(false);
@@ -228,7 +229,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
       onDeleted?.();
       onClose();
     } catch (e: any) {
-      setSaveError(String(e));
+      setSaveError(formatError(e));
     }
   };
 

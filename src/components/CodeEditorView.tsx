@@ -6,6 +6,7 @@ import {
   ArrowLeft, FolderOpen, Folder, File, RefreshCw, GitBranch, Loader2,
   GitCommit, FilePlus, FileMinus, FileEdit,
 } from 'lucide-react';
+import { formatError } from '../lib/errors';
 
 interface SftpEntry {
   name: string;
@@ -130,7 +131,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     try {
       setNodes(await loadDir(worktreePath));
     } catch (err) {
-      setTreeError(String(err));
+      setTreeError(formatError(err));
     } finally {
       setTreeLoading(false);
     }
@@ -166,7 +167,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
       });
       setChangedFiles(files);
     } catch (err) {
-      setChangesError(String(err));
+      setChangesError(formatError(err));
     } finally {
       setChangesLoading(false);
     }
@@ -185,7 +186,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     try {
       setFileContent(await invoke<string>('sftp_read_file', { machineId, path }));
     } catch (err) {
-      setFileError(String(err));
+      setFileError(formatError(err));
     } finally {
       setFileLoading(false);
     }
@@ -224,7 +225,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
       setDiffModified(modified);
     } catch (err) {
       setDiffOriginal('');
-      setDiffModified(String(err));
+      setDiffModified(formatError(err));
     } finally {
       setDiffLoading(false);
     }

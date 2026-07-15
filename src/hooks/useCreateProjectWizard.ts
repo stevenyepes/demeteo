@@ -9,6 +9,7 @@ import {
   viewForLaunchedFeature,
   wizardError,
 } from "../lib/createProject";
+import { formatError } from "../lib/errors";
 import type {
   AppError,
   BootstrapOutcome,
@@ -160,7 +161,7 @@ export function useCreateProjectWizard(
         setReady(true);
       } catch (err) {
         if (cancelled) return;
-        setError(wizardError(err) ?? { kind: "internal", message: String(err) });
+        setError(wizardError(err) ?? { kind: "internal", message: formatError(err) });
       }
     })();
     return () => { cancelled = true; };
@@ -191,7 +192,7 @@ export function useCreateProjectWizard(
           onLaunchedRef.current?.(next.feature);
         }
       } catch (err) {
-        setError(wizardError(err) ?? { kind: "internal", message: String(err) });
+        setError(wizardError(err) ?? { kind: "internal", message: formatError(err) });
       }
     },
     [deps, state],
@@ -220,7 +221,7 @@ export function useCreateProjectWizard(
       // and we'd otherwise surface a stale `Launched`).
       setOutcome(null);
     } catch (err) {
-      setError(wizardError(err) ?? { kind: "internal", message: String(err) });
+      setError(wizardError(err) ?? { kind: "internal", message: formatError(err) });
     }
   }, [deps, state]);
 

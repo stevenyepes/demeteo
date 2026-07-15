@@ -8,6 +8,7 @@ import {
   type AttachedFile,
   type AttachmentInput,
 } from "../lib/attachments";
+import { formatError } from "../lib/errors";
 import { AttachmentChip } from "./AttachmentChip";
 
 /**
@@ -214,7 +215,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
             await ingestOneLaunch({ kind: "file", file });
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatError(err);
           onError?.(message);
         }
       }
@@ -242,7 +243,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
             await ingestOneLaunch({ kind: "path", sourcePath, sourceFilename, mime });
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatError(err);
           onError?.(message);
         }
       }
@@ -311,7 +312,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
           sha256 = meta.sha256;
           size = meta.size;
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatError(err);
           onError?.(message);
           return;
         }
@@ -374,7 +375,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
             setDirectAttachments((prev) => prev.filter((p) => p.id !== a.id));
             onRemoved?.(a.id);
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = formatError(err);
             onError?.(message);
           }
         },
