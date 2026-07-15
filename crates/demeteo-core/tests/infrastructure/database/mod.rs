@@ -256,6 +256,10 @@ fn project_settings_default_effort_round_trips() {
         default_model: None,
         default_effort: effort,
         default_loop_iterations: None,
+        // A sub-dollar value that also exercises the REAL column's precision
+        // alongside the effort round-trip (both are the last-added columns,
+        // most exposed to a SELECT column-index slip).
+        default_max_budget_usd: Some(7.25),
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
     };
@@ -263,10 +267,9 @@ fn project_settings_default_effort_round_trips() {
     adapter
         .save_settings(settings(Some(EffortLevel::Medium)))
         .unwrap();
-    assert_eq!(
-        adapter.get_settings(&pid).unwrap().unwrap().default_effort,
-        Some(EffortLevel::Medium)
-    );
+    let saved = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(saved.default_effort, Some(EffortLevel::Medium));
+    assert_eq!(saved.default_max_budget_usd, Some(7.25));
 
     adapter.save_settings(settings(None)).unwrap();
     assert_eq!(

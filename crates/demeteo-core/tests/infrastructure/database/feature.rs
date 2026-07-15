@@ -52,6 +52,7 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
             pr_body: None,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         },
@@ -102,6 +103,7 @@ fn feature_description_round_trips_through_get_and_get_active() {
             pr_body: None,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         },
@@ -114,6 +116,62 @@ fn feature_description_round_trips_through_get_and_get_active() {
     let active = adapter.get_active(&pid).unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].description, body);
+}
+
+#[test]
+fn feature_max_budget_usd_round_trips_through_get_and_get_active() {
+    let adapter = setup();
+    let pid = ProjectId::from("p_budget".to_string());
+    let fid = FeatureId::from("f_budget".to_string());
+    let _ = ProjectRepository::add(
+        &adapter,
+        Project {
+            id: pid.clone(),
+            name: "budget project".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 1,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        },
+    );
+    // A sub-dollar value guards against an INTEGER column or a truncating
+    // cast: REAL must round-trip the fraction exactly.
+    FeatureRepository::add(
+        &adapter,
+        Feature {
+            effort: None,
+            id: fid.clone(),
+            project_id: pid.clone(),
+            workflow_id: None,
+            title: "Budgeted".to_string(),
+            description: String::new(),
+            status: "running".to_string(),
+            total_cost: 0.0,
+            tokens: 0,
+            duration: "0s".to_string(),
+            created_at: 1000,
+            agent_kind: None,
+            model: None,
+            mr_url: None,
+            mr_state: Some("none".to_string()),
+            pr_title: None,
+            pr_body: None,
+            commit_artifacts: None,
+            loop_iterations: None,
+            max_budget_usd: Some(12.5),
+            step_overrides: Vec::new(),
+            attachments: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(adapter.get(&fid).unwrap().unwrap().max_budget_usd, Some(12.5));
+    let active = adapter.get_active(&pid).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].max_budget_usd, Some(12.5));
 }
 
 #[test]
@@ -230,6 +288,7 @@ fn feature_effort_and_step_override_effort_round_trip() {
             pr_body: None,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: vec![StepOverride {
                 step_id: "s-impl".to_string(),
                 agent_kind: None,

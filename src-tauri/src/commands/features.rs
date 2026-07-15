@@ -49,6 +49,10 @@ pub async fn start_feature(
     effort: Option<EffortLevel>,
     commit_artifacts: Option<bool>,
     loop_iterations: Option<u32>,
+    // Per-run dollar budget override (`--max-budget-usd`). Omitted (an older
+    // frontend) = `None` = inherit the project default, then the engine
+    // default.
+    max_budget_usd: Option<f64>,
     step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
     staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
 ) -> Result<Feature, AppError> {
@@ -64,6 +68,7 @@ pub async fn start_feature(
             effort,
             commit_artifacts,
             loop_iterations,
+            max_budget_usd,
             step_overrides.unwrap_or_default(),
             staged_attachments.unwrap_or_default(),
         )

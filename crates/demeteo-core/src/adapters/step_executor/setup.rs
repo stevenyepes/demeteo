@@ -191,5 +191,6 @@ pub fn fetch_default_settings() -> ProjectSettings {
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
         default_loop_iterations: None,
+        default_max_budget_usd: None,
     }
 }

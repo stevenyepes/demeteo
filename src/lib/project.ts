@@ -119,6 +119,7 @@ export interface ProjectSettingsInput {
   default_model?: string | null;
   default_effort?: EffortLevel | null;
   default_loop_iterations?: number | null;
+  default_max_budget_usd?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
 }
@@ -205,6 +206,10 @@ export async function saveProjectSettings(
       input.default_loop_iterations !== undefined
         ? input.default_loop_iterations
         : (existing?.default_loop_iterations ?? null),
+    default_max_budget_usd:
+      input.default_max_budget_usd !== undefined
+        ? input.default_max_budget_usd
+        : (existing?.default_max_budget_usd ?? null),
     artifact_subdir:
       input.artifact_subdir ?? existing?.artifact_subdir ?? "artifacts/",
     commit_artifacts:

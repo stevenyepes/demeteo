@@ -356,6 +356,8 @@ impl ExecutionDriver {
             // should never take 50 round trips.
             tool_allowlist: None,
             max_turns: Some(50),
+            // Explores the codebase before decomposing into a task list.
+            max_budget_usd: self.role_max_budget_usd(Self::BUDGET_FRACTION_PLANNER),
         };
 
         let mut cancel_watch = self.cancel_watch.clone();

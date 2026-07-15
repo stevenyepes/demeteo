@@ -51,6 +51,7 @@ fn seed() -> (SqliteAdapter, FeatureId, StepExecutionId) {
             pr_body: None,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         },

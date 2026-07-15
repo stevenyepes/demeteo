@@ -245,6 +245,7 @@ pub async fn remote_submit_run(
     effort: Option<crate::domain::models::EffortLevel>,
     commit_artifacts: Option<bool>,
     loop_iterations: Option<u32>,
+    max_budget_usd: Option<f64>,
     step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
     staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
     target_repo_id: Option<String>,
@@ -375,6 +376,7 @@ pub async fn remote_submit_run(
         pr_body: None,
         commit_artifacts,
         loop_iterations,
+        max_budget_usd,
         step_overrides: step_overrides.clone(),
         attachments: Vec::new(),
     }) {
@@ -405,6 +407,7 @@ pub async fn remote_submit_run(
         agent_kind,
         model,
         loop_iterations,
+        max_budget_usd,
         step_overrides,
         commit_artifacts,
         attachments,

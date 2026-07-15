@@ -84,6 +84,12 @@ pub struct ProjectSettings {
     /// `Feature::loop_iterations`. See migration V13.
     #[serde(default)]
     pub default_loop_iterations: Option<u32>,
+    /// Project-level default per-turn dollar budget (`--max-budget-usd`).
+    /// `None` = use the engine default
+    /// ([`ExecutionDriver::DEFAULT_MAX_BUDGET_USD`]). Overridable per run via
+    /// `Feature::max_budget_usd`. See migration V30.
+    #[serde(default)]
+    pub default_max_budget_usd: Option<f64>,
     /// Repo-relative folder where agents write their reports
     /// (`research-report.md`, `critic-review.md`, …). The orchestrator
     /// injects `{{report_dir}}` (alias `{{artifact_dir}}`, kept for

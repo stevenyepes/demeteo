@@ -290,6 +290,7 @@ fn ctx_for_test(bare_mode: bool) -> AgentContext {
         bare_mode,
         tool_allowlist: None,
         max_turns: None,
+        max_budget_usd: None,
     }
 }
 
@@ -490,6 +491,35 @@ fn args_omit_tools_and_max_turns_by_default() {
     let args = build_claude_args(&ctx_with_caps(None, None), None, "");
     assert!(!args.contains(&"--tools".to_string()), "got {args:?}");
     assert!(!args.contains(&"--max-turns".to_string()), "got {args:?}");
+    assert!(
+        !args.contains(&"--max-budget-usd".to_string()),
+        "got {args:?}"
+    );
+}
+
+#[test]
+fn args_max_budget_usd_emitted_when_set() {
+    // Sub-dollar role fractions must pass through as a clean decimal, not a
+    // rounded or scientific-notation string.
+    let ctx = AgentContext {
+        max_budget_usd: Some(0.5),
+        ..ctx_for_test(false)
+    };
+    let args = build_claude_args(&ctx, None, "");
+    let idx = args
+        .iter()
+        .position(|a| a == "--max-budget-usd")
+        .expect("--max-budget-usd flag present");
+    assert_eq!(args[idx + 1], "0.5");
+}
+
+#[test]
+fn args_no_max_budget_usd_when_unset() {
+    let args = build_claude_args(&ctx_for_test(false), None, "");
+    assert!(
+        !args.contains(&"--max-budget-usd".to_string()),
+        "got {args:?}"
+    );
 }
 
 #[test]

@@ -87,6 +87,7 @@ interface SettingsCtx {
    *  resolves to the engine default (`high`) at run time. */
   defaultEffort: EffortLevel | ''; setDefaultEffort: (v: EffortLevel | '') => void;
   defaultLoopIterations: string; setDefaultLoopIterations: (v: string) => void;
+  defaultMaxBudgetUsd: string; setDefaultMaxBudgetUsd: (v: string) => void;
   extraWritablePaths: string[]; setExtraWritablePaths: (v: string[]) => void;
   newExtraPath: string; setNewExtraPath: (v: string) => void;
   availableModelsForDefault: ConfigOptionValue[]; isLoadingModelsForDefault: boolean;
@@ -219,6 +220,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [defaultModel, setDefaultModel] = useState('');
   const [defaultEffort, setDefaultEffort] = useState<EffortLevel | ''>('');
   const [defaultLoopIterations, setDefaultLoopIterations] = useState('');
+  const [defaultMaxBudgetUsd, setDefaultMaxBudgetUsd] = useState('');
   const [availableModelsForDefault, setAvailableModelsForDefault] = useState<ConfigOptionValue[]>([]);
   const [isLoadingModelsForDefault, setIsLoadingModelsForDefault] = useState(false);
   const [artifactSubdir, setArtifactSubdir] = useState('artifacts/');
@@ -440,6 +442,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setDefaultModel(res.default_model || '');
           setDefaultEffort(res.default_effort || '');
           setDefaultLoopIterations(res.default_loop_iterations != null ? String(res.default_loop_iterations) : '');
+          setDefaultMaxBudgetUsd(res.default_max_budget_usd != null ? String(res.default_max_budget_usd) : '');
           setArtifactSubdir(res.artifact_subdir || 'artifacts/');
           setCommitArtifacts(Boolean(res.commit_artifacts));
           setExtraWritablePaths(res.worktree_strategy.extra_writable_paths || []);
@@ -530,7 +533,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
   };
 
   const handleSave = async () => {
@@ -553,7 +556,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     } else {
       try {
         await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
         // Keep `compute_type` / `remote_host` in sync with the DB so the
         // Settings tab doesn't fall back to "Local Compute" the next
         // time the user reopens it. Mirrors the re-bootstrap save path
@@ -620,6 +623,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     featureLifecycle, setFeatureLifecycle, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
     defaultEffort, setDefaultEffort,
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,
+    defaultMaxBudgetUsd, setDefaultMaxBudgetUsd,
     agentConfigs, setAgentConfigs, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,
     extraWritablePaths, setExtraWritablePaths, newExtraPath, setNewExtraPath,
     dirtyWarningRepos, setDirtyWarningRepos, pendingActionAfterConfirm, setPendingActionAfterConfirm, showDeleteConfirm, setShowDeleteConfirm,

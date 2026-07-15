@@ -450,6 +450,14 @@ fn build_claude_args(
         args.push("--max-turns".to_string());
         args.push(max_turns.to_string());
     }
+    if let Some(budget) = ctx.max_budget_usd {
+        // Dollar-cost ceiling, the spend analog of --max-turns. Tripping it
+        // exits with an error result that still carries usage, credited via
+        // the same error path. Display (not a fixed precision) so sub-dollar
+        // role fractions like 0.5 pass through cleanly.
+        args.push("--max-budget-usd".to_string());
+        args.push(format!("{budget}"));
+    }
     let disallowed = disallowed_tools_for(&ctx.permissions);
     if !disallowed.is_empty() {
         args.push("--disallowedTools".to_string());

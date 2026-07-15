@@ -179,7 +179,8 @@ impl ProjectRepository for SqliteAdapter {
                         conflict_policy, feature_lifecycle, build_command, coverage_command,
                         conventions_file, default_agent_kind, default_model, harnesses,
                         artifact_subdir, commit_artifacts, default_loop_iterations,
-                        extra_writable_paths, prepare_command, default_effort
+                        extra_writable_paths, prepare_command, default_effort,
+                        default_max_budget_usd
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -214,6 +215,7 @@ impl ProjectRepository for SqliteAdapter {
                     artifact_subdir: row.get(13)?,
                     commit_artifacts: commit_artifacts != 0,
                     default_loop_iterations: default_loop_iterations.map(|v| v as u32),
+                    default_max_budget_usd: row.get(19)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -244,8 +246,9 @@ impl ProjectRepository for SqliteAdapter {
              (project_id, default_branch, branch_prefix, test_command, build_command,
               coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
               default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts,
-              default_loop_iterations, extra_writable_paths, prepare_command, default_effort)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+              default_loop_iterations, extra_writable_paths, prepare_command, default_effort,
+              default_max_budget_usd)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -266,6 +269,7 @@ impl ProjectRepository for SqliteAdapter {
                 extra_writable_paths_json,
                 s.worktree_strategy.prepare_command,
                 s.default_effort.map(|e| e.as_str()),
+                s.default_max_budget_usd,
             ],
         )
         .map_err(|e| e.to_string())?;

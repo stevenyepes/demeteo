@@ -354,6 +354,8 @@ impl ExecutionDriver {
             // object — no tool definitions in context, no agentic loop.
             tool_allowlist: Some(vec![]),
             max_turns: Some(2),
+            // Cheapest role turn: one classification over inlined output.
+            max_budget_usd: self.role_max_budget_usd(Self::BUDGET_FRACTION_TRIAGE),
         };
 
         let spawn_fut = self.registry.get_or_spawn(&thread_id, &agent_kind, ctx);
@@ -548,6 +550,8 @@ impl ExecutionDriver {
             // error path and the retry ladder owns recovery.
             tool_allowlist: None,
             max_turns: Some(25),
+            // Reads artifacts on demand, then emits one verdict object.
+            max_budget_usd: self.role_max_budget_usd(Self::BUDGET_FRACTION_VERIFIER),
         };
 
         let spawn_fut =

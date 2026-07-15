@@ -258,6 +258,7 @@ impl StepExecutor for StubExecutor {
         _effort: Option<demeteo_lib::domain::models::EffortLevel>,
         _commit_artifacts: Option<bool>,
         _loop_iterations: Option<u32>,
+        _max_budget_usd: Option<f64>,
         _step_overrides: Vec<StepOverride>,
         _staged_attachments: Vec<StagedAttachmentInput>,
     ) -> Result<Feature, String> {
@@ -289,6 +290,7 @@ impl StepExecutor for StubExecutor {
             pr_body: None,
             commit_artifacts: None,
             loop_iterations: None,
+            max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
         })

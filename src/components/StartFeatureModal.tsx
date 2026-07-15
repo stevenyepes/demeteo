@@ -55,6 +55,9 @@ interface StartFeatureModalProps {
     commitArtifacts?: boolean;
     /** Per-run override of the loop iteration budget (migration V13). */
     loopIterations?: number;
+    /** Per-run override of the per-turn dollar budget, `--max-budget-usd`
+     *  (migration V30). Unset = inherit project/engine default ($20). */
+    maxBudgetUsd?: number;
     /** Per-step agent/model/effort overrides chosen at launch (migration V13). */
     stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null; effort?: EffortLevel | null }[];
     /**
@@ -158,6 +161,9 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   const [stepOverrides, setStepOverrides] = useState<Record<string, { agent_kind: string; model: string; effort: EffortLevel | '' }>>({});
   // Per-run loop budget. Empty string = inherit project/engine default.
   const [loopIterations, setLoopIterations] = useState<string>('');
+  // Per-run, per-turn dollar budget (--max-budget-usd). Empty = inherit
+  // project/engine default. Applies on all paths, not just detached.
+  const [maxBudgetUsd, setMaxBudgetUsd] = useState<string>('');
   // Per-feature override for the project's `commit_artifacts` setting.
   // `'inherit'` is the default — pass `undefined` to `start_feature`
   // so the project default applies. `'yes'` / `'no'` become a
@@ -518,6 +524,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       }))
       .filter((o) => o.agent_kind || o.model || o.effort);
     const loopArg = loopIterations.trim() ? parseInt(loopIterations, 10) : undefined;
+    const budgetArg = maxBudgetUsd.trim() ? parseFloat(maxBudgetUsd) : undefined;
     const costArg = detached && maxCostUsd.trim() ? parseFloat(maxCostUsd) : undefined;
     const wallClockArg =
       detached && maxWallClockMins.trim() ? parseInt(maxWallClockMins, 10) : undefined;
@@ -531,6 +538,10 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       targetRepos,
       commitArtifacts: commitArtifactsArg,
       loopIterations: Number.isFinite(loopArg as number) ? loopArg : undefined,
+      maxBudgetUsd:
+        Number.isFinite(budgetArg as number) && (budgetArg as number) > 0
+          ? budgetArg
+          : undefined,
       stepOverrides: overrides.length > 0 ? overrides : undefined,
       attachments: attachments.length > 0 ? attachments : undefined,
       machineId: machineId || undefined,
@@ -927,6 +938,26 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 />
                 <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
                   Max times a validation step loops back to implementation before giving up.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                  Per-turn budget (optional)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={maxBudgetUsd}
+                  onChange={(e) => setMaxBudgetUsd(e.target.value)}
+                  placeholder="blank = project default ($20)"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                />
+                <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
+                  Dollar ceiling per agent turn (<span className="font-mono">--max-budget-usd</span>);
+                  the coding turn gets the full amount, shorter role turns a fraction. Anti-runaway
+                  guard, not a whole-run cap.
                 </p>
               </div>
 

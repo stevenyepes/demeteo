@@ -55,6 +55,7 @@ pub trait StepExecutor: Send + Sync {
         effort: Option<EffortLevel>,
         commit_artifacts: Option<bool>,
         loop_iterations: Option<u32>,
+        max_budget_usd: Option<f64>,
         step_overrides: Vec<crate::domain::models::StepOverride>,
         staged_attachments: Vec<StagedAttachmentInput>,
     ) -> Result<Feature, String>;

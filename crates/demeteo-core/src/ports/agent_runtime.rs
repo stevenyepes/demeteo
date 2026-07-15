@@ -80,6 +80,16 @@ pub struct AgentContext {
     /// instead of burning tokens until the wall-clock watchdog fires.
     /// `None` = no cap. Adapters without an equivalent flag ignore it.
     pub max_turns: Option<u32>,
+    /// Hard dollar ceiling on API spend for this session's process
+    /// (claude-code: `--max-budget-usd N`). Like [`max_turns`](Self::max_turns)
+    /// this is an anti-runaway guard, not a precise per-feature accountant:
+    /// when tripped the CLI exits with an error result that still carries
+    /// usage, and the step fails through the normal error path. The
+    /// orchestrator derives the value from the resolved per-run budget
+    /// (`Feature::max_budget_usd` → `ProjectSettings::default_max_budget_usd`
+    /// → engine default), scaled per role. `None` = no cap. Adapters without
+    /// an equivalent flag ignore it.
+    pub max_budget_usd: Option<f64>,
 }
 
 /// Render a [`PermissionProfile`] to the `OPENCODE_PERMISSION` JSON string.

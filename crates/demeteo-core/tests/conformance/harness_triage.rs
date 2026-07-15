@@ -282,6 +282,8 @@ async fn run_triage_leg(triage_category: &str) -> (String, String, Arc<SignalRec
             None,
             None,
             Some(2),
+            // max_budget_usd: inherit.
+            None,
             vec![],
             vec![],
         )

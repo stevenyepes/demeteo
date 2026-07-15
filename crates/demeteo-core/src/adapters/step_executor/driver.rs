@@ -177,6 +177,11 @@ pub(crate) struct ExecutionDriver {
     pub loop_iterations_override: Option<u32>,
     /// Project default loop budget (`ProjectSettings::default_loop_iterations`).
     pub project_default_loop_iterations: Option<u32>,
+    /// Per-run override of the per-turn dollar budget (`Feature::max_budget_usd`).
+    pub max_budget_usd_override: Option<f64>,
+    /// Project default per-turn dollar budget
+    /// (`ProjectSettings::default_max_budget_usd`).
+    pub project_default_max_budget_usd: Option<f64>,
 
     /// Set when a step fails and the loop redirects to an earlier step;
     /// consumed by the next step's prompt build, then cleared.
@@ -271,6 +276,40 @@ impl ExecutionDriver {
     /// Tier-1 plan: 80% leaves 20% headroom for the new turn's
     /// growth and the in-flight prompt + tools.
     pub(crate) const WATCHDOG_THRESHOLD: f64 = 0.80;
+
+    /// Engine default per-turn dollar budget when neither the run
+    /// (`Feature::max_budget_usd`) nor the project
+    /// (`ProjectSettings::default_max_budget_usd`) sets one. This is the
+    /// *base* ceiling for the primary coding turn — generous enough that only
+    /// a true runaway trips it (the context watchdog resets long-running
+    /// sessions well before then), while still capping open-ended spend.
+    pub(crate) const DEFAULT_MAX_BUDGET_USD: f64 = 20.0;
+
+    /// Fractions of the resolved base budget granted to each bounded role
+    /// turn. These mirror the anti-runaway posture of the per-role
+    /// `max_turns` caps: a single-purpose turn that only interprets inlined
+    /// input into one answer should never approach the coding turn's spend.
+    /// At the $20 default these resolve to ~$0.50 / $2 / $5 / $8.
+    pub(crate) const BUDGET_FRACTION_TRIAGE: f64 = 0.025;
+    pub(crate) const BUDGET_FRACTION_FINALIZE: f64 = 0.10;
+    pub(crate) const BUDGET_FRACTION_VERIFIER: f64 = 0.25;
+    pub(crate) const BUDGET_FRACTION_PLANNER: f64 = 0.40;
+
+    /// The resolved *base* per-turn dollar budget for this run: the per-run
+    /// override, else the project default, else the engine default. Always
+    /// `Some` — every turn carries a ceiling (see
+    /// [`DEFAULT_MAX_BUDGET_USD`](Self::DEFAULT_MAX_BUDGET_USD)).
+    pub(crate) fn base_max_budget_usd(&self) -> f64 {
+        self.max_budget_usd_override
+            .or(self.project_default_max_budget_usd)
+            .unwrap_or(Self::DEFAULT_MAX_BUDGET_USD)
+    }
+
+    /// The per-turn dollar ceiling for a role turn, as `fraction` of the
+    /// resolved base budget. Pass `1.0` for the primary coding turn.
+    pub(crate) fn role_max_budget_usd(&self, fraction: f64) -> Option<f64> {
+        Some(self.base_max_budget_usd() * fraction)
+    }
 
     /// Pure-function watchdog threshold check — returns `true` when
     /// `cumulative >= WATCHDOG_THRESHOLD × budget`. Returns `false`
