@@ -168,7 +168,10 @@ fn forward_reference_resolves_on_redirect_and_degrades_on_first_run() {
         updated_at: 0,
     };
 
-    let step_confs = vec![step_conf_inline("s-implement"), step_conf_inline("s-critic")];
+    let step_confs = vec![
+        step_conf_inline("s-implement"),
+        step_conf_inline("s-critic"),
+    ];
     // The implement step (index 0) references the later critic step.
     let template = "Address the review: [attached — s-critic]";
 
