@@ -351,6 +351,11 @@ impl ExecutionDriver {
                 true,  // allow shell for codebase exploration
             ),
             bare_mode: agent_kind == "claude-code",
+            // Full toolset — the planner explores the codebase before
+            // decomposing. The cap is anti-runaway only: decomposition
+            // should never take 50 round trips.
+            tool_allowlist: None,
+            max_turns: Some(50),
         };
 
         let mut cancel_watch = self.cancel_watch.clone();

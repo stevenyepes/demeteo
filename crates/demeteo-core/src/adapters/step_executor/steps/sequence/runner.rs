@@ -569,6 +569,8 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
             bare_mode: agent_kind == "claude-code",
+            tool_allowlist: None,
+            max_turns: None,
         };
 
         let mut cancel_watch = self.cancel_watch.clone();

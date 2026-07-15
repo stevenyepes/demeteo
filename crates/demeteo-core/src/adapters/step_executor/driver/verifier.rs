@@ -349,6 +349,11 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
             bare_mode: agent_kind == "claude-code",
+            // The classifier's entire input is inlined in the prompt (the
+            // harness output tail) and its entire output is one JSON
+            // object — no tool definitions in context, no agentic loop.
+            tool_allowlist: Some(vec![]),
+            max_turns: Some(2),
         };
 
         let spawn_fut = self.registry.get_or_spawn(&thread_id, &agent_kind, ctx);
@@ -536,6 +541,13 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
             bare_mode: verifier_agent_kind == "claude-code",
+            // The verifier reads artifacts/files on demand, so it keeps its
+            // full toolset — but interpreting an already-run harness into
+            // one verdict object should never take dozens of round trips.
+            // Anti-runaway only; a tripped cap fails through the normal
+            // error path and the retry ladder owns recovery.
+            tool_allowlist: None,
+            max_turns: Some(25),
         };
 
         let spawn_fut =

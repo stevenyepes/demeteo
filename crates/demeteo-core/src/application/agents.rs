@@ -60,6 +60,8 @@ pub async fn build_agent_context(
         exec: ctx.exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),
         bare_mode: false,
+        tool_allowlist: None,
+        max_turns: None,
     })
 }
 

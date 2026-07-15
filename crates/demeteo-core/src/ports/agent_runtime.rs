@@ -63,6 +63,23 @@ pub struct AgentContext {
     /// interactive AgentTerminalDrawer so CLAUDE.md / hooks /
     /// skills still auto-load.
     pub bare_mode: bool,
+    /// Restrict which built-in tools are even *defined* for the session
+    /// (claude-code: `--tools a,b`; `Some(vec![])` → `--tools ""`, no
+    /// tools at all). Distinct from [`permissions`](Self::permissions),
+    /// which *denies* tools but leaves their definitions in the model's
+    /// context: an allowlist shrinks the prompt and removes the wasted
+    /// turn where the model tries a tool that would only be denied. Use
+    /// for single-purpose role turns (triage, finalize) whose entire job
+    /// is to emit one structured answer. `None` = the agent's full set.
+    /// Adapters without an equivalent flag ignore it.
+    pub tool_allowlist: Option<Vec<String>>,
+    /// Hard ceiling on agentic turns for this session's process
+    /// (claude-code: `--max-turns N`). Purely an anti-runaway guard:
+    /// when tripped the CLI exits with an error result that still
+    /// carries usage, and the step fails through the normal error path
+    /// instead of burning tokens until the wall-clock watchdog fires.
+    /// `None` = no cap. Adapters without an equivalent flag ignore it.
+    pub max_turns: Option<u32>,
 }
 
 /// Render a [`PermissionProfile`] to the `OPENCODE_PERMISSION` JSON string.

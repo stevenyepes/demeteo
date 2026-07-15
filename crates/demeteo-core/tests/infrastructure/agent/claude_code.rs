@@ -288,6 +288,8 @@ fn ctx_for_test(bare_mode: bool) -> AgentContext {
         exec: Arc::new(StubExec),
         permissions: PermissionProfile::all_allow(),
         bare_mode,
+        tool_allowlist: None,
+        max_turns: None,
     }
 }
 
@@ -470,4 +472,70 @@ fn init_without_tools_field_is_not_bare() {
     let v: serde_json::Value =
         serde_json::from_str(r#"{"type":"system","subtype":"init","session_id":"s1"}"#).unwrap();
     assert!(!crate::adapters::agent::claude_code::init_looks_bare(&v));
+}
+
+fn ctx_with_caps(
+    tool_allowlist: Option<Vec<String>>,
+    max_turns: Option<u32>,
+) -> AgentContext {
+    AgentContext {
+        tool_allowlist,
+        max_turns,
+        ..ctx_for_test(false)
+    }
+}
+
+#[test]
+fn args_omit_tools_and_max_turns_by_default() {
+    let args = build_claude_args(&ctx_with_caps(None, None), None, "");
+    assert!(!args.contains(&"--tools".to_string()), "got {args:?}");
+    assert!(!args.contains(&"--max-turns".to_string()), "got {args:?}");
+}
+
+#[test]
+fn args_empty_allowlist_emits_empty_tools_flag() {
+    // `--tools ""` strips every built-in tool definition — the shape the
+    // triage classifier uses (its whole input is inlined in the prompt).
+    let args = build_claude_args(&ctx_with_caps(Some(vec![]), None), None, "");
+    let idx = args
+        .iter()
+        .position(|a| a == "--tools")
+        .expect("--tools flag present");
+    assert_eq!(args[idx + 1], "", "empty allowlist must emit an empty value");
+}
+
+#[test]
+fn args_allowlist_joins_tool_names() {
+    let allow = Some(vec!["Read".to_string(), "Grep".to_string(), "Glob".to_string()]);
+    let args = build_claude_args(&ctx_with_caps(allow, None), None, "");
+    let idx = args.iter().position(|a| a == "--tools").unwrap();
+    assert_eq!(args[idx + 1], "Read,Grep,Glob");
+}
+
+#[test]
+fn args_max_turns_emitted_when_set() {
+    let args = build_claude_args(&ctx_with_caps(None, Some(25)), None, "");
+    let idx = args
+        .iter()
+        .position(|a| a == "--max-turns")
+        .expect("--max-turns flag present");
+    assert_eq!(args[idx + 1], "25");
+}
+
+#[test]
+fn args_allowlist_coexists_with_disallowed_tools() {
+    // The allowlist shrinks the definition set; --disallowedTools still
+    // carries the permission profile's deny rules. Both may appear.
+    let mut ctx = ctx_with_caps(Some(vec!["Read".to_string()]), Some(2));
+    ctx.permissions = crate::domain::permission::resolve_profile(
+        crate::domain::permission::StepCapability::ReadOnly,
+        false, // no network
+        false, // no shell
+    );
+    let args = build_claude_args(&ctx, None, "");
+    assert!(args.contains(&"--tools".to_string()), "got {args:?}");
+    assert!(
+        args.contains(&"--disallowedTools".to_string()),
+        "got {args:?}"
+    );
 }

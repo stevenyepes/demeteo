@@ -207,6 +207,8 @@ fn ctx_for_test() -> AgentContext {
         exec: Arc::new(StubExec),
         permissions: PermissionProfile::all_allow(),
         bare_mode: false,
+        tool_allowlist: None,
+        max_turns: None,
     }
 }
 
