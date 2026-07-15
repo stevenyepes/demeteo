@@ -129,6 +129,13 @@ impl UsageAccumulator {
         (self.running_input_tokens + self.running_output_tokens) as i64
     }
 
+    /// Uncached input tokens only — on cache-aware agents (claude-code and
+    /// friends) this is the prompt remainder *not* served from or written to
+    /// the prompt cache. Denominator material for the cache-hit ratio.
+    pub fn input_tokens(&self) -> u64 {
+        self.running_input_tokens
+    }
+
     pub fn cost_usd(&self) -> f64 {
         self.running_cost.unwrap_or(0.0)
     }

@@ -194,6 +194,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         lists_models: true,
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Hermes),
+        static_env: &[],
     }
 }
 

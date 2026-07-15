@@ -50,12 +50,39 @@ fn parse_claude_event(line: &str) -> Option<AgentEvent> {
 
 /// `{"type":"system","subtype":"init"|"thinking_tokens"|...}` — init carries
 /// the session id (captured by `drain_lines` from the raw JSON before we get
-/// here); thinking_tokens is pure telemetry. Both are dropped.
+/// here); thinking_tokens is pure telemetry. All system events are dropped,
+/// but init is first inspected by the bare-mode canary below.
 fn parse_claude_system_event(v: &serde_json::Value) -> Option<AgentEvent> {
-    match v.get("subtype").and_then(|s| s.as_str()) {
-        Some("init") | Some("thinking_tokens") | Some("plugin_install") | None => None,
-        _ => None,
+    if v.get("subtype").and_then(|s| s.as_str()) == Some("init") && init_looks_bare(v) {
+        tracing::warn!(
+            "claude-code init event reports a bare/simple toolset (no Glob/Grep). \
+             Anthropic has announced `--bare` will become the default for `claude -p`; \
+             under bare mode CLAUDE.md, skills, project settings, and keychain/OAuth \
+             auth are NOT loaded, which breaks demeteo's cache and credential \
+             assumptions (see build_claude_args). Pin the Claude Code version on this \
+             machine or update the adapter's isolation flags."
+        );
     }
+    None
+}
+
+/// Canary for the announced flip of `claude -p` to `--bare` by default.
+///
+/// Demeteo deliberately does **not** pass `--bare` (it would set
+/// `CLAUDE_CODE_SIMPLE=1` and drop keychain/OAuth auth — see
+/// `build_claude_args`), relying on `-p` loading user/project config. If a
+/// future Claude Code release makes bare the default, that assumption breaks
+/// silently. Detection heuristic: the init event's `tools` array. Demeteo
+/// never denies the read tools (`disallowed_tools_for` leaves Glob/Grep/Read
+/// alone), so a full-mode session always announces `Glob` and `Grep`; bare
+/// mode ships only bash + file read/edit. A missing `tools` field (older
+/// wire format) is not evidence — stay quiet rather than false-positive.
+fn init_looks_bare(v: &serde_json::Value) -> bool {
+    let Some(tools) = v.get("tools").and_then(|t| t.as_array()) else {
+        return false;
+    };
+    let has = |name: &str| tools.iter().any(|t| t.as_str() == Some(name));
+    !has("Glob") && !has("Grep")
 }
 
 /// Walk `message.content[]` and emit the most important event:
@@ -494,6 +521,14 @@ pub fn runtime() -> UnifiedCliRuntime {
         lists_models: false,
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::ClaudeCode),
+        // Headless hygiene: no self-update check on spawn (latency, and a
+        // mid-fleet version drift hazard) and no non-essential background
+        // traffic. Both are documented Claude Code env switches; callers
+        // can override via `ctx.env`.
+        static_env: &[
+            ("DISABLE_AUTOUPDATER", "1"),
+            ("DISABLE_NONESSENTIAL_TRAFFIC", "1"),
+        ],
     }
 }
 

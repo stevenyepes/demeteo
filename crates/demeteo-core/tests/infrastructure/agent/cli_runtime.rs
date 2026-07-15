@@ -508,6 +508,7 @@ fn remote_availability_probe_uses_a_login_shell() {
         display_label: "OpenCode",
         lists_models: true,
         default_model: None,
+        static_env: &[],
         effort_levels: &[],
     };
     let rec = ShellOptsRecorder::new();
@@ -581,4 +582,79 @@ fn no_effort_env_injects_nothing_at_any_level() {
     for level in EffortLevel::ALL {
         assert!(no_effort_env(Some(level)).is_empty());
     }
+}
+
+/// A parser that reports token usage, for the cumulative-footprint tests.
+/// `usage` lines emit a mid-turn `Usage` snapshot; `end_turn` lines emit the
+/// terminal `TurnComplete` with the same fields.
+fn mock_parse_usage_event(line: &str) -> Option<AgentEvent> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let usage = crate::domain::agent_event::Usage {
+        input_tokens: v.get("input").and_then(|t| t.as_u64()).unwrap_or(0),
+        output_tokens: v.get("output").and_then(|t| t.as_u64()).unwrap_or(0),
+        cost_usd: None,
+        cache_read_input_tokens: v.get("cache_read").and_then(|t| t.as_u64()).unwrap_or(0),
+        cache_creation_input_tokens: v
+            .get("cache_creation")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0),
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("usage") => Some(AgentEvent::Usage(usage)),
+        Some("end_turn") => Some(AgentEvent::TurnComplete {
+            stop_reason: StopReason::EndOfTurn,
+            usage: Some(usage),
+        }),
+        _ => None,
+    }
+}
+
+#[test]
+fn drain_lines_counts_cache_tokens_in_cumulative_footprint() {
+    // A warm resumed Claude Code session reports almost its entire context
+    // as `cache_read_input_tokens` — `input_tokens` is only the uncached
+    // remainder. The context-window watchdog compares this counter against
+    // the model's context window, so cache tokens must count; summing only
+    // input+output made the watchdog fire late or never.
+    let cumulative = Arc::new(AtomicU64::new(0));
+    let input = concat!(
+        r#"{"type":"usage","input":100,"output":50,"cache_read":80000,"cache_creation":2000}"#,
+        "\n",
+        // The terminal snapshot is *smaller* — the high-water mark must hold.
+        r#"{"type":"end_turn","input":90,"output":40,"cache_read":70000,"cache_creation":1000}"#,
+        "\n",
+    );
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(8);
+    let cum = cumulative.clone();
+    let handle = std::thread::spawn(move || {
+        drain_lines(
+            Cursor::new(input),
+            mock_parse_usage_event,
+            || Some(0),
+            tx,
+            None,
+            Some(cum),
+        );
+    });
+    while rx.blocking_recv().is_some() {}
+    handle.join().unwrap();
+    assert_eq!(
+        cumulative.load(Ordering::Relaxed),
+        100 + 50 + 80_000 + 2_000,
+        "footprint must be input + output + cache_read + cache_creation, monotonic-max"
+    );
+}
+
+#[test]
+fn apply_static_env_injects_defaults_but_never_overrides_caller() {
+    const STATIC_ENV: &[(&str, &str)] = &[("DISABLE_AUTOUPDATER", "1"), ("FOO", "default")];
+    let mut env = std::collections::HashMap::new();
+    env.insert("FOO".to_string(), "caller".to_string());
+    apply_static_env(&mut env, STATIC_ENV);
+    assert_eq!(env.get("DISABLE_AUTOUPDATER").map(String::as_str), Some("1"));
+    assert_eq!(
+        env.get("FOO").map(String::as_str),
+        Some("caller"),
+        "a caller-provided value must win over the runtime's static env"
+    );
 }

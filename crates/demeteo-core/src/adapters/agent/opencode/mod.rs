@@ -477,6 +477,7 @@ impl OpencodeCliRuntime {
                 lists_models: true,
                 default_model: None,
                 effort_levels: EffortLevel::supported_for(AgentKind::Opencode),
+                static_env: &[],
             },
         }
     }

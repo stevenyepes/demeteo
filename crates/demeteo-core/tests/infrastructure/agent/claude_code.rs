@@ -422,3 +422,52 @@ fn effort_env_is_set_alongside_the_flag() {
 fn effort_env_empty_when_unset() {
     assert!(claude_effort_env(None).is_empty());
 }
+
+#[test]
+fn runtime_pins_headless_hygiene_env() {
+    // Spawned claude-code children must not self-update mid-fleet or emit
+    // non-essential background traffic; both switches ride on every spawn
+    // via `UnifiedCliRuntime::static_env`.
+    let env = crate::adapters::agent::claude_code::runtime().static_env;
+    assert!(env.contains(&("DISABLE_AUTOUPDATER", "1")), "got {env:?}");
+    assert!(
+        env.contains(&("DISABLE_NONESSENTIAL_TRAFFIC", "1")),
+        "got {env:?}"
+    );
+}
+
+#[test]
+fn init_with_full_toolset_is_not_bare() {
+    // Read tools are never denied by demeteo, so a non-bare init always
+    // announces them — even when Bash/Edit/WebSearch are disallowed.
+    let v: serde_json::Value = serde_json::from_str(
+        r#"{"type":"system","subtype":"init","session_id":"s1",
+            "tools":["Read","Glob","Grep","Bash","Edit","Write"]}"#,
+    )
+    .unwrap();
+    assert!(!crate::adapters::agent::claude_code::init_looks_bare(&v));
+    // And the event itself stays dropped.
+    assert!(parse_claude_event(&v.to_string()).is_none());
+}
+
+#[test]
+fn init_with_bare_toolset_trips_the_canary() {
+    // Bare mode ships only bash + file read/edit — no Glob/Grep. This is
+    // the tripwire for the announced `--bare`-by-default flip in `-p`.
+    let v: serde_json::Value = serde_json::from_str(
+        r#"{"type":"system","subtype":"init","session_id":"s1",
+            "tools":["Bash","Read","Edit","Write"]}"#,
+    )
+    .unwrap();
+    assert!(crate::adapters::agent::claude_code::init_looks_bare(&v));
+    // Canary is a warning, never an event that could fail the turn.
+    assert!(parse_claude_event(&v.to_string()).is_none());
+}
+
+#[test]
+fn init_without_tools_field_is_not_bare() {
+    // An older wire format without `tools` is not evidence of bare mode.
+    let v: serde_json::Value =
+        serde_json::from_str(r#"{"type":"system","subtype":"init","session_id":"s1"}"#).unwrap();
+    assert!(!crate::adapters::agent::claude_code::init_looks_bare(&v));
+}

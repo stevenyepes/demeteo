@@ -57,6 +57,21 @@ pub fn no_effort_env(_effort: Option<EffortLevel>) -> std::collections::HashMap<
     std::collections::HashMap::new()
 }
 
+/// Inject a runtime's fixed hygiene env ([`UnifiedCliRuntime::static_env`])
+/// into a spawn context's env map. Lowest precedence *within demeteo*:
+/// `or_insert` (not `extend`) so a caller-provided value in `ctx.env` wins.
+/// Like the effort env, these still override the host shell's exports —
+/// fleet runs should behave the same on every machine.
+pub(crate) fn apply_static_env(
+    env: &mut std::collections::HashMap<String, String>,
+    static_env: &'static [(&'static str, &'static str)],
+) {
+    for (k, v) in static_env {
+        env.entry((*k).to_string())
+            .or_insert_with(|| (*v).to_string());
+    }
+}
+
 /// Shared runtime for one-shot CLI-based agents (opencode, hermes, claude, etc.)
 pub struct UnifiedCliRuntime {
     pub kind_str: &'static str,
@@ -80,6 +95,13 @@ pub struct UnifiedCliRuntime {
     /// no effort control. Surfaced through `capabilities()` to drive the UI
     /// picker.
     pub effort_levels: &'static [EffortLevel],
+    /// Fixed environment injected into every spawn of this agent, before the
+    /// per-context env (so a caller-provided value wins). For headless CLI
+    /// children this is hygiene, not configuration — e.g. claude-code's
+    /// `DISABLE_AUTOUPDATER` / `DISABLE_NONESSENTIAL_TRAFFIC`, which cut
+    /// spawn latency and background network on fleet machines. `&[]` for
+    /// agents with nothing to pin.
+    pub static_env: &'static [(&'static str, &'static str)],
 }
 
 #[async_trait]
@@ -143,6 +165,7 @@ impl AgentRuntime for UnifiedCliRuntime {
         let build_args = self.build_args;
         let perm_env = self.perm_env;
         let effort_env = self.effort_env;
+        let static_env = self.static_env;
 
         Box::pin(async move {
             // Translate the abstract permission profile into this agent's
@@ -151,6 +174,7 @@ impl AgentRuntime for UnifiedCliRuntime {
             // claude-code's --disallowedTools) is layered by build_args
             // reading the same `ctx.permissions`.
             let mut ctx = ctx;
+            apply_static_env(&mut ctx.env, static_env);
             ctx.env.extend((perm_env)(&ctx.permissions));
             // Same shape for effort. claude-code needs this even though it
             // also takes `--effort`: `CLAUDE_CODE_EFFORT_LEVEL` outranks the
@@ -193,12 +217,13 @@ pub struct UnifiedCliSession {
     live_remote: Mutex<Option<Arc<Mutex<Box<dyn InteractiveHandle>>>>>,
     captured_session_id: Arc<Mutex<Option<String>>>,
     stderr_hb: StderrHeartbeat,
-    /// Monotonic high-water mark of input + output tokens billed
-    /// against this session's underlying agent process. Updated as
-    /// `Usage` / `TurnComplete { usage }` events are parsed by
+    /// Monotonic high-water mark of the session's request footprint
+    /// (input + cache_read + cache_creation + output tokens). Updated
+    /// as `Usage` / `TurnComplete { usage }` events are parsed by
     /// `drain_lines`. Read by the driver's context-window watchdog
-    /// via [`AgentSession::cumulative_tokens`]. Zero for a fresh
-    /// session before the first event arrives.
+    /// via [`AgentSession::cumulative_tokens`] — cache reads count,
+    /// because they occupy context even though they bill at ~10%.
+    /// Zero for a fresh session before the first event arrives.
     cumulative_tokens: Arc<AtomicU64>,
 }
 
@@ -590,19 +615,26 @@ fn drain_lines<R, F>(
                     }
                 }
                 if let Some(evt) = parse_event(trimmed) {
-                    // Track cumulative token cost for the watchdog. Mirrors
-                    // `UsageAccumulator` (monotonic-max per-field). Cache
-                    // reads are included in `input_tokens` from the agent's
-                    // own accounting on most providers; we treat the
-                    // running input+output sum as the context-budget
-                    // approximation — exact cache separation isn't needed
-                    // for the 80% threshold.
+                    // Track the session's context footprint for the watchdog
+                    // (compared against the model's context window at the 80%
+                    // threshold). Every adapter reports cache tokens in their
+                    // own fields, *separate* from `input_tokens` — on Claude
+                    // Code in particular, `usage.input_tokens` is only the
+                    // uncached remainder, and on a warm resumed session almost
+                    // the entire context is `cache_read_input_tokens`. The
+                    // request footprint is therefore
+                    // input + cache_read + cache_creation + output; summing
+                    // only input+output made the watchdog fire late or never.
                     if let Some(ref cumulative) = cumulative_tokens {
+                        let footprint = |u: &crate::domain::agent_event::Usage| {
+                            u.input_tokens
+                                + u.cache_read_input_tokens
+                                + u.cache_creation_input_tokens
+                                + u.output_tokens
+                        };
                         let delta = match &evt {
-                            AgentEvent::Usage(u) => u.input_tokens + u.output_tokens,
-                            AgentEvent::TurnComplete { usage: Some(u), .. } => {
-                                u.input_tokens + u.output_tokens
-                            }
+                            AgentEvent::Usage(u) => footprint(u),
+                            AgentEvent::TurnComplete { usage: Some(u), .. } => footprint(u),
                             _ => 0,
                         };
                         if delta > 0 {
