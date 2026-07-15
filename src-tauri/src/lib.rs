@@ -4,6 +4,7 @@ pub mod composition;
 pub mod forward;
 pub mod sftp;
 pub mod terminal;
+pub mod tray;
 
 // `domain`, `ports`, `application`, `shared`, `error`, `infrastructure`,
 // `paths`, `ssh_util`, `credential_cache`, and `state` live in `demeteo-core`
@@ -242,6 +243,11 @@ pub fn run() {
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
 
+            // Build the system tray (Show / Hide / Quit). A tray-backend
+            // failure is logged and swallowed inside `build_tray`, so this
+            // never aborts startup — hence the ignored result.
+            let _ = tray::build_tray(app.handle());
+
             // Set 1.25x zoom on Linux to offset the container 1x scaling fallback
             #[cfg(target_os = "linux")]
             {
@@ -253,21 +259,27 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if let Some(state) = window.try_state::<terminal::SessionState>() {
-                    if let Ok(sessions) = state.sessions.lock() {
-                        for active in sessions.values() {
-                            match &active.write_sink {
-                                terminal::WriteSink::Ssh(ch) => {
-                                    if let Ok(mut chan) = ch.lock() {
-                                        let _ = chan.close();
-                                    }
-                                }
-                                terminal::WriteSink::LocalPty(_) => {
-                                    // Local PTY child is killed when keepalive drops
-                                }
-                            }
-                        }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Hide to tray only when background mode is ON *and* a tray icon
+                // actually exists to restore/quit the window. When the tray
+                // backend is unavailable (headless / minimal Linux), fall back
+                // to the OFF path so the user is never left with a hidden window
+                // and no way back (spec §5 Linux edge case).
+                let hide_to_tray =
+                    tray::run_in_background_enabled(window) && tray::tray_available(window);
+                match tray::close_action(hide_to_tray) {
+                    // Background mode ON: keep the process alive and just hide
+                    // the window. Terminal sessions are deliberately left
+                    // running (spec Constraint 4).
+                    tray::CloseAction::HideToTray => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    // Background mode OFF: preserve the original behaviour —
+                    // tear down every active terminal session, then let the
+                    // close proceed and the process exit.
+                    tray::CloseAction::Cleanup => {
+                        tray::cleanup_terminal_sessions(window);
                     }
                 }
             }
@@ -309,6 +321,8 @@ pub fn run() {
             commands::app_session::get_workspace_dir,
             commands::app_session::get_workspace_dir_setting,
             commands::app_session::set_workspace_dir_setting,
+            commands::app_session::get_run_in_background,
+            commands::app_session::set_run_in_background,
             commands::messages::get_messages,
             commands::messages::append_message,
             terminal::set_machine_secret,

@@ -39,3 +39,27 @@ fn app_info_serializes_field_names() {
     assert!(json.get("version").is_some());
     assert!(json.get("channel").is_some());
 }
+
+/// An absent `run_in_background` key defaults to `false` (background mode is
+/// opt-in — see spec AC-2 / Constraint 5).
+#[test]
+fn run_in_background_absent_key_is_false() {
+    assert!(!parse_run_in_background(None));
+}
+
+/// The stored booleans round-trip through the string encoding the
+/// `set_run_in_background` command writes.
+#[test]
+fn run_in_background_parses_stored_booleans() {
+    assert!(parse_run_in_background(Some("true".to_string())));
+    assert!(!parse_run_in_background(Some("false".to_string())));
+}
+
+/// Any unexpected value is treated as OFF rather than erroring, so a corrupt
+/// or legacy row can never flip the app into background mode.
+#[test]
+fn run_in_background_unknown_value_is_false() {
+    assert!(!parse_run_in_background(Some(String::new())));
+    assert!(!parse_run_in_background(Some("1".to_string())));
+    assert!(!parse_run_in_background(Some("TRUE".to_string())));
+}
