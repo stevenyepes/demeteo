@@ -168,7 +168,10 @@ fn feature_max_budget_usd_round_trips_through_get_and_get_active() {
     )
     .unwrap();
 
-    assert_eq!(adapter.get(&fid).unwrap().unwrap().max_budget_usd, Some(12.5));
+    assert_eq!(
+        adapter.get(&fid).unwrap().unwrap().max_budget_usd,
+        Some(12.5)
+    );
     let active = adapter.get_active(&pid).unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].max_budget_usd, Some(12.5));

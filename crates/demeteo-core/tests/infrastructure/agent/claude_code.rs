@@ -475,10 +475,7 @@ fn init_without_tools_field_is_not_bare() {
     assert!(!crate::adapters::agent::claude_code::init_looks_bare(&v));
 }
 
-fn ctx_with_caps(
-    tool_allowlist: Option<Vec<String>>,
-    max_turns: Option<u32>,
-) -> AgentContext {
+fn ctx_with_caps(tool_allowlist: Option<Vec<String>>, max_turns: Option<u32>) -> AgentContext {
     AgentContext {
         tool_allowlist,
         max_turns,
@@ -531,12 +528,20 @@ fn args_empty_allowlist_emits_empty_tools_flag() {
         .iter()
         .position(|a| a == "--tools")
         .expect("--tools flag present");
-    assert_eq!(args[idx + 1], "", "empty allowlist must emit an empty value");
+    assert_eq!(
+        args[idx + 1],
+        "",
+        "empty allowlist must emit an empty value"
+    );
 }
 
 #[test]
 fn args_allowlist_joins_tool_names() {
-    let allow = Some(vec!["Read".to_string(), "Grep".to_string(), "Glob".to_string()]);
+    let allow = Some(vec![
+        "Read".to_string(),
+        "Grep".to_string(),
+        "Glob".to_string(),
+    ]);
     let args = build_claude_args(&ctx_with_caps(allow, None), None, "");
     let idx = args.iter().position(|a| a == "--tools").unwrap();
     assert_eq!(args[idx + 1], "Read,Grep,Glob");
