@@ -82,11 +82,16 @@ fn os_notification_for(event: &DomainEvent) -> Option<(String, String)> {
 ///
 /// On macOS (and some Linux backends) `tauri-plugin-notification` gates delivery
 /// behind a runtime permission grant; calling `.show()` without it silently
-/// no-ops. We consult the current permission state and, when it has never been
-/// decided (`Prompt`/`PromptWithRationale`), request it once:
+/// no-ops. This is a **read-only** consult of the current state:
 ///   * `Granted`  → proceed with the show.
 ///   * `Denied`   → skip the pointless show (the user opted out).
-///   * `Prompt*`  → request once; only show if the grant comes back `Granted`.
+///   * `Prompt*`  → fall through to a best-effort show. We deliberately do **not**
+///     call `request_permission()` here: `emit` runs on background step-executor
+///     threads, so prompting on this path would pop a modal off the UI thread and
+///     re-prompt on every subsequent event until the user decides. Permission is
+///     requested exactly once at startup (see `request_startup_permission`), by
+///     which point the state is `Granted`/`Denied`; until then a best-effort show
+///     is harmless (it no-ops without the grant).
 ///   * query error → fall through to a best-effort show, so a permissionless
 ///     backend (typical Linux desktop, where the plugin reports `Granted`
 ///     anyway) still notifies rather than being silently suppressed.
@@ -95,15 +100,26 @@ fn os_notification_for(event: &DomainEvent) -> Option<(String, String)> {
 /// desktop plugin reports `Granted` unconditionally, so this is a no-op there
 /// and the real gate only matters on macOS / mobile.
 fn os_notifications_permitted(app: &AppHandle) -> bool {
-    let notification = app.notification();
-    match notification.permission_state() {
-        Ok(PermissionState::Granted) => true,
+    match app.notification().permission_state() {
         Ok(PermissionState::Denied) => false,
-        Ok(_) => matches!(
-            notification.request_permission(),
-            Ok(PermissionState::Granted)
-        ),
-        Err(_) => true,
+        // Granted, Prompt*, or a query error all fall through to a best-effort
+        // show; only an explicit Denied suppresses it.
+        _ => true,
+    }
+}
+
+/// Request OS-notification permission once, at startup, off the hot path.
+///
+/// Called from `lib.rs`'s `.setup()` on the main thread. On desktop Linux the
+/// plugin already reports `Granted`, so this is a no-op there; on macOS/mobile it
+/// converts the initial `Prompt` state into a durable `Granted`/`Denied` grant so
+/// [`os_notifications_permitted`] never has to prompt from a background thread.
+pub fn request_startup_permission(app: &AppHandle) {
+    let notification = app.notification();
+    if let Ok(PermissionState::Prompt | PermissionState::PromptWithRationale) =
+        notification.permission_state()
+    {
+        let _ = notification.request_permission();
     }
 }
 
@@ -172,32 +188,46 @@ impl NotificationPort for TauriNotificationAdapter {
             .map_err(|e| format!("Failed to emit {}: {}", name, e));
 
         // Additively route user-facing terminal events to a native OS
-        // notification, but only while the main window is hidden or unfocused —
-        // when it is visible and focused the in-app toast/bell already covers it
-        // (spec AC-6 / Constraint 3). A missing window is treated as hidden.
+        // notification, but only when the user opted into background mode *and*
+        // the main window is hidden or unfocused — when the feature is off, or
+        // the window is visible and focused, the in-app toast/bell already
+        // covers it (spec AC-6 / Constraint 3). A missing window is treated as
+        // hidden. The `run_in_background` gate keeps native notifications tied to
+        // the toggle the Preferences copy advertises, rather than firing for
+        // users who never enabled the feature whenever the window loses focus.
+        // The pure routing match runs first — it filters out the high-frequency
+        // progress/telemetry events (AgentStream, StepProgress, …) without
+        // touching the preference store, so only the rare terminal events pay
+        // for the `run_in_background` read and the window-state probes.
         if let Some((title, os_body)) = os_notification_for(event) {
-            let window_hidden_or_unfocused = match self.app.get_webview_window(MAIN_WINDOW) {
-                Some(window) => {
-                    let visible = window.is_visible().unwrap_or(false);
-                    let focused = window.is_focused().unwrap_or(false);
-                    !visible || !focused
+            // `run_in_background` must be ON: keeps native notifications tied to
+            // the toggle the Preferences copy advertises, rather than firing for
+            // users who never enabled the feature whenever the window loses focus.
+            if crate::tray::run_in_background_enabled(&self.app) {
+                let window_hidden_or_unfocused =
+                    match self.app.get_webview_window(MAIN_WINDOW) {
+                        Some(window) => {
+                            let visible = window.is_visible().unwrap_or(false);
+                            let focused = window.is_focused().unwrap_or(false);
+                            !visible || !focused
+                        }
+                        None => true,
+                    };
+                // Only build the notification when the window is out of view *and*
+                // the OS will actually deliver it — an ungranted permission would
+                // otherwise make the show silently no-op (macOS/mobile), leaving
+                // AC-6 unobservably false.
+                if window_hidden_or_unfocused && os_notifications_permitted(&self.app) {
+                    // A failed OS notification must never break the in-app emit
+                    // path, so the result is intentionally ignored (best-effort).
+                    let _ = self
+                        .app
+                        .notification()
+                        .builder()
+                        .title(title)
+                        .body(os_body)
+                        .show();
                 }
-                None => true,
-            };
-            // Only build the notification when the window is out of view *and*
-            // the OS will actually deliver it — an ungranted permission would
-            // otherwise make the show silently no-op (macOS/mobile), leaving
-            // AC-6 unobservably false.
-            if window_hidden_or_unfocused && os_notifications_permitted(&self.app) {
-                // A failed OS notification must never break the in-app emit path,
-                // so the result is intentionally ignored (best-effort surface).
-                let _ = self
-                    .app
-                    .notification()
-                    .builder()
-                    .title(title)
-                    .body(os_body)
-                    .show();
             }
         }
 

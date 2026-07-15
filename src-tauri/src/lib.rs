@@ -248,6 +248,12 @@ pub fn run() {
             // never aborts startup — hence the ignored result.
             let _ = tray::build_tray(app.handle());
 
+            // Request OS-notification permission once here, on the main thread,
+            // rather than lazily from the background emit path — otherwise a
+            // never-decided permission would prompt (and re-prompt) off-thread on
+            // every domain event. No-op on desktop Linux (already `Granted`).
+            adapters::tauri_ui::notification::request_startup_permission(app.handle());
+
             // Set 1.25x zoom on Linux to offset the container 1x scaling fallback
             #[cfg(target_os = "linux")]
             {

@@ -46,9 +46,9 @@ use demeteo_core::ports::db::AppSettingsRepository;
 // The production command core — the same functions the `#[tauri::command]`
 // wrappers delegate to. Testing these (not a local mirror) is what gives this
 // file real protection over the command bodies.
-use demeteo_lib::commands::app_session::{read_run_in_background, write_run_in_background};
-
-const RUN_IN_BACKGROUND_KEY: &str = "run_in_background";
+use demeteo_lib::commands::app_session::{
+    read_run_in_background, write_run_in_background, RUN_IN_BACKGROUND_KEY,
+};
 
 /// Build a real SQLite-backed `AppSettingsRepository` on an isolated temp data
 /// dir, mirroring the on-disk store the app's `AppContext.app_settings` uses.
