@@ -159,6 +159,27 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
         "survived-the-silence",
         "output produced after a >timeout silent gap must be captured to EOF",
     );
+
+    // --- silent command survives across a full keepalive cycle -------------
+    // The drain distinguishes "quiet but alive" from "dead connection" by
+    // whether keepalives still round-trip (`NO_PROGRESS_ABORT` in the SSH
+    // client). A 35s silence crosses the 30s keepalive interval, so the life
+    // clock is only kept fresh if answered keepalives reset it — the exact
+    // property that must NOT regress into killing healthy silent commands.
+    // Only meaningful (and only worth its wall-clock cost) on the SSH leg;
+    // locally there is no keepalive/timeout, so we skip it to keep the default
+    // suite fast.
+    if machine_id != "local" {
+        let out = port
+            .run_command(machine_id, "sleep 35; printf %s survived-a-keepalive-cycle")
+            .await
+            .expect("a command silent across a keepalive cycle must still complete");
+        assert_eq!(
+            out.trim(),
+            "survived-a-keepalive-cycle",
+            "a silent-but-alive command must survive past the keepalive interval",
+        );
+    }
 }
 
 /// Create a fresh, unique, writable temp directory for a local run and
