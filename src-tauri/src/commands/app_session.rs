@@ -1,8 +1,39 @@
 use crate::error::AppError;
+use crate::ports::db::AppSettingsRepository;
 use crate::state::AppContext;
 use tauri::State;
 
 const WORKSPACE_BASE_DIR_KEY: &str = "workspace_base_dir";
+const RUN_IN_BACKGROUND_KEY: &str = "run_in_background";
+
+/// Interpret the stored `run_in_background` app_session value as a bool.
+///
+/// Pure so it can be unit-tested without a live `AppContext`: an absent key
+/// (or any value other than the string `"true"`) is treated as `false`.
+fn parse_run_in_background(value: Option<String>) -> bool {
+    matches!(value.as_deref(), Some("true"))
+}
+
+/// Command core for [`get_run_in_background`], factored out to take the settings
+/// port directly so an integration test can exercise the *exact* key + decode
+/// against a real store without constructing an `AppContext` (whose ~25-port
+/// constructor is Tauri-internal). Returns `false` when the key is absent.
+pub fn read_run_in_background(store: &dyn AppSettingsRepository) -> Result<bool, String> {
+    store
+        .get_app_session(RUN_IN_BACKGROUND_KEY)
+        .map(parse_run_in_background)
+}
+
+/// Command core for [`set_run_in_background`]: persist the preference as the
+/// canonical `"true"`/`"false"` string. Shared with the integration test so the
+/// encoding under real test is the one the command actually writes.
+pub fn write_run_in_background(
+    store: &dyn AppSettingsRepository,
+    enabled: bool,
+) -> Result<(), String> {
+    let value = if enabled { "true" } else { "false" };
+    store.set_app_session(RUN_IN_BACKGROUND_KEY, value)
+}
 
 /// Identity bundle returned to the frontend on startup.
 ///
@@ -89,6 +120,21 @@ pub fn set_workspace_dir_setting(
     ctx.app_settings
         .set_app_session(WORKSPACE_BASE_DIR_KEY, &value)
         .map_err(AppError::from)
+}
+
+/// Read the `run_in_background` preference.
+///
+/// Returns `false` when the key was never set; otherwise parses the stored
+/// `"true"`/`"false"` string (see [`parse_run_in_background`]).
+#[tauri::command]
+pub fn get_run_in_background(ctx: State<'_, AppContext>) -> Result<bool, AppError> {
+    read_run_in_background(ctx.app_settings.as_ref()).map_err(AppError::from)
+}
+
+/// Persist the `run_in_background` preference as the string `"true"`/`"false"`.
+#[tauri::command]
+pub fn set_run_in_background(ctx: State<'_, AppContext>, enabled: bool) -> Result<(), AppError> {
+    write_run_in_background(ctx.app_settings.as_ref(), enabled).map_err(AppError::from)
 }
 
 #[cfg(test)]

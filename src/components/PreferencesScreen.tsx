@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain, Timer } from 'lucide-react';
+import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain, Timer, Minimize2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import MachinesView from './MachinesView';
@@ -8,6 +8,7 @@ import { TabBar } from './ui/TabBar';
 import type { TabDef } from './ui/TabBar';
 import { useNavigation } from '../context';
 import { getAgentTimeouts, setAgentTimeouts } from '../lib/timeouts';
+import { getRunInBackground, setRunInBackground } from '../lib/background';
 import { getAppVersion } from '../lib/appVersion';
 import type { AgentTimeouts as AgentTimeoutsType, AppVersion } from '../types';
 import { useErrorBus } from '../lib/errorBus';
@@ -36,6 +37,11 @@ const PreferencesScreen = () => {
   const [timeoutsInput, setTimeoutsInput] = useState<AgentTimeoutsType>(DEFAULT_AGENT_TIMEOUTS);
   const [timeoutsSaving, setTimeoutsSaving] = useState(false);
   const [timeoutsSaved, setTimeoutsSaved] = useState(false);
+
+  // Run-in-background / minimize-to-tray preference state
+  const [runInBackground, setRunInBackgroundState] = useState(false);
+  const [runInBackgroundSaving, setRunInBackgroundSaving] = useState(false);
+  const [runInBackgroundSaved, setRunInBackgroundSaved] = useState(false);
   const { reportError } = useErrorBus();
 
   // App identity (version + release channel) for the About tab.
@@ -46,14 +52,16 @@ const PreferencesScreen = () => {
   useEffect(() => {
     if (activeTab !== 'defaults') return;
     (async () => {
-      const [effective, override, timeouts] = await Promise.all([
+      const [effective, override, timeouts, background] = await Promise.all([
         invoke<string>('get_workspace_dir'),
         invoke<string | null>('get_workspace_dir_setting'),
         getAgentTimeouts().catch(() => DEFAULT_AGENT_TIMEOUTS),
+        getRunInBackground().catch(() => false),
       ]);
       setEffectiveWorkspaceDir(effective);
       setWorkspaceDirInput(override ?? '');
       setTimeoutsInput(timeouts);
+      setRunInBackgroundState(background);
     })();
   }, [activeTab]);
 
@@ -106,6 +114,23 @@ const PreferencesScreen = () => {
 
   const handleResetTimeouts = () => {
     setTimeoutsInput(DEFAULT_AGENT_TIMEOUTS);
+  };
+
+  const handleToggleRunInBackground = async () => {
+    const next = !runInBackground;
+    setRunInBackgroundState(next);
+    setRunInBackgroundSaving(true);
+    try {
+      await setRunInBackground(next);
+      setRunInBackgroundSaved(true);
+      setTimeout(() => setRunInBackgroundSaved(false), 2500);
+    } catch (e) {
+      // Roll back the optimistic toggle so the UI reflects the persisted value.
+      setRunInBackgroundState(!next);
+      reportError(e);
+    } finally {
+      setRunInBackgroundSaving(false);
+    }
   };
 
   const tabs: TabDef[] = [
@@ -305,6 +330,50 @@ const PreferencesScreen = () => {
                   New timeouts apply to the next agent turn.
                 </p>
               )}
+            </div>
+
+            {/* Run in background */}
+            <div className="glass-panel p-6">
+              <h3 className="text-sm font-outfit font-semibold text-white mb-1 flex items-center gap-2">
+                <Minimize2 className="w-4 h-4 text-cyan-400" />
+                Run in background
+              </h3>
+              <p className="text-xs text-slate-400 mb-4">
+                Keep Demeteo running when you close its window, minimizing to the system tray
+                instead of quitting. Active terminal sessions stay alive and domain events
+                surface as native OS notifications while the window is hidden. Use the tray
+                icon to restore or quit the app.
+              </p>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-300">
+                    Minimize to tray on window close
+                  </span>
+                  {runInBackgroundSaving ? (
+                    <RotateCw className="w-3 h-3 animate-spin text-slate-400" />
+                  ) : runInBackgroundSaved ? (
+                    <Check className="w-3 h-3 text-emerald-400" />
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={runInBackground}
+                  aria-label="Run in background"
+                  onClick={handleToggleRunInBackground}
+                  disabled={runInBackgroundSaving}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+                    runInBackground ? 'bg-cyan-600' : 'bg-white/10'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      runInBackground ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
           </div>
         )}
