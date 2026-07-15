@@ -356,7 +356,15 @@ impl UnifiedCliSession {
         let handle = match exec.spawn_interactive(&machine_id, &binary, &args, &cwd, &env) {
             Ok(h) => h,
             Err(e) => {
-                let _ = tx.blocking_send(AgentEvent::Error {
+                // `try_send`, never `blocking_send`: `spawn_remote` runs inline
+                // on the async caller's runtime worker (see `prompt`), and
+                // `blocking_send` panics ("Cannot block the current thread from
+                // within a runtime") there — turning a recoverable, transient
+                // SSH spawn failure into a hard panic that kills the driver
+                // task and orphans the step at `running` forever. The channel
+                // is freshly created with capacity 256, so `try_send` always
+                // has room here. Matches `spawn_local`'s error branch.
+                let _ = tx.try_send(AgentEvent::Error {
                     code: "spawn_failed".to_string(),
                     message: format!("failed to spawn {} over SSH: {}", self.ctx.binary, e),
                     recoverable: false,
