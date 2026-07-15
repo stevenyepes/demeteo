@@ -30,9 +30,24 @@ pub(crate) fn build_authoring_prompt(
     work: &BranchWork,
 ) -> String {
     let truncation_note = if work.diff_truncated {
-        "\n(The diff below is truncated — summarise from what is shown plus the commit log.)"
+        "\n(The diff below is truncated — summarise from the reports and commit log above \
+         plus what is shown.)"
     } else {
         ""
+    };
+
+    // Best-effort enrichment: the spec / review / check reports from earlier
+    // steps carry the *intent* the raw diff can't. Omitted entirely when the
+    // workflow produced none, so the prompt degrades to diff-only.
+    let prior_work_section = if work.prior_work.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n## Reports from earlier steps of this run\n\
+             These are the spec, review, and checks for this work. Use them for the *why* \
+             and the approach; trust the diff below for what actually shipped.\n{}\n",
+            work.prior_work.trim()
+        )
     };
 
     format!(
@@ -49,7 +64,7 @@ and needs to know why this change exists.
 {feature_title}
 
 {feature_description}
-
+{prior_work_section}
 ## The commits on the branch (Demeteo's own bookkeeping commits already removed)
 {commit_log}
 
@@ -78,6 +93,7 @@ with a file-by-file walkthrough — the diff is right there.
         feature_branch = feature_branch,
         feature_title = feature_title,
         feature_description = feature_description,
+        prior_work_section = prior_work_section,
         commit_log = if work.commit_log.trim().is_empty() {
             "(no commits with a human-written message — work from the diff)"
         } else {

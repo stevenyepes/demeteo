@@ -130,9 +130,18 @@ impl ExecutionDriver {
         let default_branch = settings.worktree_strategy.default_branch.clone();
         let feature_branch = self.branch_name.clone();
 
-        // ── Gather. The agent has no shell, so we run the git reads for it.
+        // ── Gather. The agent has no shell, so we run the git reads for it,
+        // and hand it the prose reports earlier steps already produced
+        // (best-effort — see `gather_prior_artifacts`).
+        let steps = self
+            .features
+            .steps_for_feature(&self.f_id)
+            .unwrap_or_default();
         let work = context::gather_branch_work(
             &*self.exec,
+            self.artifacts.as_ref(),
+            &steps,
+            step_exec.step_id.0.as_str(),
             machine_str,
             &repo_dir,
             &feature_branch,

@@ -10,6 +10,7 @@ fn work() -> BranchWork {
         diff: "--- a/src/a.rs\n+++ b/src/a.rs".to_string(),
         diff_truncated: false,
         conventions: "--- commitlint.config.js ---\nfeat|fix|chore".to_string(),
+        prior_work: String::new(),
     }
 }
 
@@ -54,6 +55,24 @@ fn the_authoring_prompt_flags_a_truncated_diff() {
     w.diff_truncated = true;
     let p = build_authoring_prompt("t", "d", "feature/f-1", "main", &w);
     assert!(p.contains("truncated"));
+}
+
+#[test]
+fn prior_step_reports_are_included_when_present() {
+    let mut w = work();
+    w.prior_work = "\n--- implementation-spec.md (from step `s-spec`) ---\nthe intended approach\n"
+        .to_string();
+    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", &w);
+    assert!(p.contains("Reports from earlier steps"));
+    assert!(p.contains("the intended approach"));
+}
+
+#[test]
+fn prior_step_reports_section_is_omitted_when_empty() {
+    // A workflow with no report-producing steps (or uncaptured artifacts)
+    // degrades to diff-only — the section header must not appear.
+    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", &work());
+    assert!(!p.contains("Reports from earlier steps"));
 }
 
 /// The repair prompt is what turns a commitlint rejection from a wedged
