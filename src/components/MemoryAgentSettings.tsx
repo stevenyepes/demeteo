@@ -6,6 +6,7 @@ import {
   testMemoryAgentConnection,
   listMemoryAgentModels,
 } from '../lib/project';
+import { formatError } from '../lib/errors';
 import type { MemoryAgentConfig, MemoryAgentTestResult } from '../types';
 
 const EMPTY: MemoryAgentConfig = {
@@ -50,7 +51,7 @@ const MemoryAgentSettings: React.FC = () => {
         setModelsError('no models returned by endpoint');
       }
     } catch (e) {
-      setModelsError(String(e));
+      setModelsError(formatError(e));
     } finally {
       setModelsLoading(false);
     }
@@ -97,7 +98,7 @@ const MemoryAgentSettings: React.FC = () => {
       const res = await testMemoryAgentConnection(config, apiKey === '' ? undefined : apiKey);
       setTestResult(res);
     } catch (e) {
-      setTestResult({ chat_ok: false, embed_ok: false, embed_dims: null, error: String(e) });
+      setTestResult({ chat_ok: false, embed_ok: false, embed_dims: null, error: formatError(e) });
     } finally {
       setTesting(false);
     }

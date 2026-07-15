@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, ChevronUp, KeyRound, Loader, Radio, ThumbsDown, ThumbsUp, WifiOff } from 'lucide-react';
 import type { RemoteRunMirror, RunEvent } from '../types';
 import { TERMINAL_STATUSES } from '../lib/runStatus';
+import { formatError } from '../lib/errors';
 
 /** Best-effort human-readable rendering of a `RunEvent.payload_json` —
  *  most kinds carry a plain JSON string (title, branch name, url, …);
@@ -172,7 +173,7 @@ export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () 
         const status: any = await invoke('remote_get_status', { machineId: run.machine_id, runId: run.run_id });
         if (!cancelled) setGateId(status?.parked_gate_id ?? null);
       } catch (e) {
-        if (!cancelled) setErr(String(e));
+        if (!cancelled) setErr(formatError(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -193,7 +194,7 @@ export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () 
       });
       onResolved();
     } catch (e) {
-      setErr(String(e));
+      setErr(formatError(e));
     } finally {
       setDeciding(false);
     }
@@ -255,7 +256,7 @@ export const ReinjectCredentials: React.FC<{ run: RemoteRunMirror; onResolved: (
       });
       onResolved();
     } catch (e) {
-      setErr(String(e));
+      setErr(formatError(e));
     } finally {
       setBusy(false);
     }
@@ -346,12 +347,12 @@ export const RunEventTimeline: React.FC<{
         // to eventually succeed), so don't wait for a streak that will
         // never accumulate — surface the failure right away.
         if (isTerminal) {
-          setError(String(e));
+          setError(formatError(e));
           return;
         }
         setConsecutiveFailures((n) => {
           const next = n + 1;
-          if (next >= FAILURE_THRESHOLD) setError(String(e));
+          if (next >= FAILURE_THRESHOLD) setError(formatError(e));
           return next;
         });
       }

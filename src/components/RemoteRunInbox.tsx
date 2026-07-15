@@ -19,6 +19,7 @@ import { RemoteGateActions, ReinjectCredentials } from './RunEventTimeline';
 import { runStatusMeta, TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
 import { relativeTime } from '../lib/utils';
 import { useNavigation } from '../context';
+import { formatError } from '../lib/errors';
 
 /**
  * Runs — the cross-machine attention hub (docs/REMOTE_EXECUTION_PLAN.md
@@ -154,7 +155,7 @@ const RemoteRunInbox: React.FC = () => {
       setRuns(list ?? []);
       setMachines(machineList ?? []);
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setLoading(false);
     }
@@ -167,7 +168,7 @@ const RemoteRunInbox: React.FC = () => {
       const list = await invoke<RemoteRunMirror[]>('remote_reconcile_runs');
       setRuns(list ?? []);
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     } finally {
       setReconciling(false);
     }
@@ -195,7 +196,7 @@ const RemoteRunInbox: React.FC = () => {
       await invoke('remote_cancel_run', { machineId: run.machine_id, runId: run.run_id });
       await reconcile();
     } catch (e) {
-      setError(String(e));
+      setError(formatError(e));
     }
   };
 

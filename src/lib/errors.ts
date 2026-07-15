@@ -24,6 +24,17 @@ export function formatError(err: unknown): string {
     if (typeof maybe.message === "string" && maybe.message.length > 0) {
       return maybe.message;
     }
+    // AppError-shaped value with no usable `message` (partial value or a
+    // future backend variant): surface the discriminant rather than let
+    // `String(err)` collapse the object to the literal "[object Object]".
+    if (typeof maybe.kind === "string" && maybe.kind.length > 0) {
+      return maybe.kind;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return "Unknown error";
+    }
   }
   return String(err);
 }
