@@ -192,9 +192,9 @@ pub fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     // building an icon-less tray (critic m2).
     match app.default_window_icon() {
         Some(icon) => builder = builder.icon(icon.clone()),
-        None => tracing::warn!(
-            "no default window icon configured; building tray without an icon glyph"
-        ),
+        None => {
+            tracing::warn!("no default window icon configured; building tray without an icon glyph")
+        }
     }
 
     match builder.build(app) {

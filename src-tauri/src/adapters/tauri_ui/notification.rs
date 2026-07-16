@@ -52,7 +52,9 @@ fn os_notification_for(event: &DomainEvent) -> Option<(String, String)> {
             format!("\"{feature_title}\" was merged."),
         )),
         DomainEvent::RetryBudgetExhausted {
-            feature_id, step_id, ..
+            feature_id,
+            step_id,
+            ..
         } => Some((
             "Retry budget exhausted".to_string(),
             format!("{feature_id} gave up on step {step_id} after exhausting its retries."),
@@ -204,15 +206,14 @@ impl NotificationPort for TauriNotificationAdapter {
             // the toggle the Preferences copy advertises, rather than firing for
             // users who never enabled the feature whenever the window loses focus.
             if crate::tray::run_in_background_enabled(&self.app) {
-                let window_hidden_or_unfocused =
-                    match self.app.get_webview_window(MAIN_WINDOW) {
-                        Some(window) => {
-                            let visible = window.is_visible().unwrap_or(false);
-                            let focused = window.is_focused().unwrap_or(false);
-                            !visible || !focused
-                        }
-                        None => true,
-                    };
+                let window_hidden_or_unfocused = match self.app.get_webview_window(MAIN_WINDOW) {
+                    Some(window) => {
+                        let visible = window.is_visible().unwrap_or(false);
+                        let focused = window.is_focused().unwrap_or(false);
+                        !visible || !focused
+                    }
+                    None => true,
+                };
                 // Only build the notification when the window is out of view *and*
                 // the OS will actually deliver it — an ungranted permission would
                 // otherwise make the show silently no-op (macOS/mobile), leaving
@@ -239,9 +240,7 @@ impl NotificationPort for TauriNotificationAdapter {
 mod tests {
     use super::*;
     use crate::domain::action::ActionKind;
-    use crate::domain::ids::{
-        FeatureId, InterceptId, MachineId, StepExecutionId, ThreadId,
-    };
+    use crate::domain::ids::{FeatureId, InterceptId, MachineId, StepExecutionId, ThreadId};
     use crate::domain::intercept::{ExecutionResult, InterceptPayload};
 
     fn feature() -> FeatureId {
@@ -263,8 +262,8 @@ mod tests {
             status: "failed".to_string(),
         };
         for event in [&completed, &failed] {
-            let (title, body) = os_notification_for(event)
-                .unwrap_or_else(|| panic!("expected Some for {event:?}"));
+            let (title, body) =
+                os_notification_for(event).unwrap_or_else(|| panic!("expected Some for {event:?}"));
             assert!(!title.is_empty(), "title must not be empty for {event:?}");
             assert!(!body.is_empty(), "body must not be empty for {event:?}");
             assert!(

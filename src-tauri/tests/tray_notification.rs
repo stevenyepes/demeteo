@@ -87,7 +87,10 @@ fn run_in_background_set_true_round_trips_to_true() {
     // The exact on-disk encoding the command produces, asserted against the
     // raw store so a future re-encode (e.g. to `"1"`) is caught here.
     assert_eq!(
-        store.get_app_session(RUN_IN_BACKGROUND_KEY).unwrap().as_deref(),
+        store
+            .get_app_session(RUN_IN_BACKGROUND_KEY)
+            .unwrap()
+            .as_deref(),
         Some("true"),
         "write_run_in_background(true) must persist the string \"true\""
     );
@@ -102,7 +105,10 @@ fn run_in_background_set_false_round_trips_to_false() {
     write_run_in_background(&store, true).expect("write true");
     write_run_in_background(&store, false).expect("write false");
     assert_eq!(
-        store.get_app_session(RUN_IN_BACKGROUND_KEY).unwrap().as_deref(),
+        store
+            .get_app_session(RUN_IN_BACKGROUND_KEY)
+            .unwrap()
+            .as_deref(),
         Some("false"),
         "write_run_in_background(false) must persist the string \"false\""
     );
