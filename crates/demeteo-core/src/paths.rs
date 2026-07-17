@@ -295,9 +295,12 @@ pub fn git_no_hooks(dir: &str) -> String {
 /// `node_modules/` matches a real directory but not a symlink named
 /// `node_modules`), so it shows up as untracked. Every place that
 /// stages files with `git add -A` (`commit_worktree_changes`) must
-/// pathspec-exclude these names explicitly — otherwise the symlink
-/// itself (an absolute host path) gets committed into the feature
-/// branch.
+/// pathspec-exclude these names — otherwise the symlink itself (an
+/// absolute host path) gets committed into the feature branch. Exclude
+/// only the names git does *not* already ignore, though: a pathspec
+/// naming an ignored path makes `git add` fail outright, and the
+/// slashless form of the same pattern (`node_modules`) does match the
+/// symlink. See `commit_worktree_changes` for the gate.
 ///
 /// [`DECISIONS.md`]: https://github.com/stevenyepes/demeteo/blob/master/docs/DECISIONS.md
 pub const DEPENDENCY_CACHE_DIRS: &[&str] = &[
