@@ -717,6 +717,19 @@ impl ExecutionDriver {
             .clone()
             .unwrap_or_else(|| self.base_ctx.get("test_command").to_string());
 
+        // The task's own done-definition. A legacy plan (or a trivial task)
+        // declares none; say so explicitly rather than rendering an empty
+        // section the agent might read as "no obligations".
+        let acceptance_str = if task.acceptance.is_empty() {
+            "None declared — the task description and the test command define done.".to_string()
+        } else {
+            task.acceptance
+                .iter()
+                .map(|c| format!("- {}", c))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
         let rendered = self
             .base_ctx
             .clone()
@@ -724,6 +737,7 @@ impl ExecutionDriver {
             .set("task_title", &task.title)
             .set("task_description", &task.description)
             .set("task_files", &task_files_str)
+            .set("task_acceptance", &acceptance_str)
             .set("task_index", (task_idx + 1).to_string())
             .set("task_total", task_total.to_string())
             .set("completed_tasks", &completed_str)

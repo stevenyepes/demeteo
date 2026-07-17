@@ -25,6 +25,18 @@ pub struct PlannedTask {
     pub files: Vec<String>,
     #[serde(default)]
     pub test_command: Option<String>,
+    /// Binary pass/fail criteria for *this* task, rendered into the task
+    /// agent's prompt as its done-definition. Optional: a legacy plan (or
+    /// a task that is genuinely just "move the file") carries none.
+    #[serde(default)]
+    pub acceptance: Vec<String>,
+    /// Ids of earlier tasks this one builds on. Execution is strictly in
+    /// list order either way — the edges exist so a targeted retry that
+    /// re-runs a foundation task also re-runs the tasks stacked on it
+    /// (see [`select_targeted_tasks`]), and so the validator can reject a
+    /// list whose order contradicts its own dependencies.
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
     /// Task-specific retry guidance. On a targeted retry the verdict's
     /// feedback is stamped here so a re-run task sees the guidance that
     /// actually concerns it rather than the whole verdict.
@@ -69,16 +81,6 @@ pub struct TaskPlan {
     pub resumes_landed_work: bool,
 }
 
-/// The most tasks a `sequence` step will execute from one plan.
-///
-/// Each task is a fresh agent session, so the task count *is* the step's cost
-/// multiplier. The planner prompt asks for 2–5, but the plan's primary source
-/// is now an agent-written `task-list.json` artifact that nothing else bounds:
-/// a spec agent that decomposes a feature into 60 tasks would spend 60
-/// sessions before anyone noticed. Fail loudly instead — a task list this long
-/// is a decomposition bug, not a big feature.
-pub(crate) const MAX_TASKS: usize = 20;
-
 /// Reject a task list that would misbehave at execution time.
 ///
 /// The task list crossed a trust boundary when it moved out of the step and
@@ -91,21 +93,19 @@ pub(crate) const MAX_TASKS: usize = 20;
 /// * **duplicate ids** — two tasks sharing an id collide on that session key,
 ///   and [`select_targeted_tasks`] would treat them as one task when deciding
 ///   what to re-run and what to report as already landed.
-/// * **too many tasks** — see [`MAX_TASKS`].
+/// * **`blocked_by` pointing forward or at nothing** — tasks run strictly in
+///   list order, so a dependency on a later (or missing) task is an ordering
+///   the executor cannot honor; the "dependency" would run *after* the task
+///   that needs it.
+///
+/// There is deliberately no cap on task count. Decomposition is sized by the
+/// ticket rubric (one context window per task), and the per-task budget
+/// ceiling plus `subtask_runs` telemetry bound and expose the cost of an
+/// over-eager list; a hard count limit only punished well-decomposed large
+/// features.
 ///
 /// Returns a human-readable reason, or `None` when the plan is executable.
 pub(crate) fn validate_task_plan(plan: &TaskPlan) -> Option<String> {
-    if plan.tasks.len() > MAX_TASKS {
-        return Some(format!(
-            "the task list has {} tasks, more than the {} a sequence step will run. Each task is \
-             a separate agent session, so this would cost {} of them. Decompose the feature into \
-             fewer, larger tasks.",
-            plan.tasks.len(),
-            MAX_TASKS,
-            plan.tasks.len()
-        ));
-    }
-
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (i, task) in plan.tasks.iter().enumerate() {
         let id = task.id.trim();
@@ -123,17 +123,42 @@ pub(crate) fn validate_task_plan(plan: &TaskPlan) -> Option<String> {
                 id
             ));
         }
+        for dep in &task.blocked_by {
+            let dep = dep.trim();
+            if dep.is_empty() {
+                continue;
+            }
+            // `seen` holds exactly the ids of earlier tasks (this task's id
+            // included, which also catches a self-dependency).
+            if dep == id {
+                return Some(format!(
+                    "task '{}' lists itself in `blocked_by`. A task cannot depend on itself.",
+                    id
+                ));
+            }
+            if !seen.contains(dep) {
+                return Some(format!(
+                    "task '{}' is blocked_by '{}', which is not an earlier task in the list. \
+                     Tasks run strictly in list order, so every dependency must appear before \
+                     the task that needs it.",
+                    id, dep
+                ));
+            }
+        }
     }
     None
 }
 
 /// Build the attempt-1 targeted retry plan from the cached full plan.
 ///
-/// Selects only the tasks whose `files` intersect the verdict's
-/// `implicated_files`, and stamps the retry feedback onto each selected
-/// task as its `retry_note`. Falls back to re-running every task when the
-/// verdict named no files (or none matched) — a blind retry is still
-/// correct, just not cheap.
+/// Selects the tasks whose `files` intersect the verdict's
+/// `implicated_files`, plus — transitively — every task `blocked_by` a
+/// selected one: re-running a foundation task rewrites what its dependents
+/// were built on, so they re-run too rather than being reported as landed
+/// work that still matches the branch. Stamps the retry feedback onto each
+/// selected task as its `retry_note`. Falls back to re-running every task
+/// when the verdict named no files (or none matched) — a blind retry is
+/// still correct, just not cheap.
 ///
 /// Re-running a subset is safe here in a way it was not under the parallel
 /// design: the tasks that are *not* re-run already have their commits on
@@ -179,8 +204,35 @@ pub(crate) fn select_targeted_tasks(
         }
     };
 
-    let selected_ids: std::collections::HashSet<&str> =
+    // Close the selection over `blocked_by`: a task stacked on a re-running
+    // task re-runs too, or it would be skipped as "landed" while the code
+    // under it changes. Dependencies always point backward (validated), so
+    // one forward pass in list order reaches the transitive closure.
+    let mut selected_ids: std::collections::HashSet<&str> =
         hits.iter().map(|t| t.id.as_str()).collect();
+    let mut hits = hits;
+    for task in &cached.tasks {
+        if selected_ids.contains(task.id.as_str()) {
+            continue;
+        }
+        if task
+            .blocked_by
+            .iter()
+            .any(|dep| selected_ids.contains(dep.trim()))
+        {
+            selected_ids.insert(task.id.as_str());
+            hits.push(task);
+        }
+    }
+    // Dependents were appended out of order; the executor's contract is
+    // list order, so restore it before the plan leaves this function.
+    let order: std::collections::HashMap<&str, usize> = cached
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.as_str(), i))
+        .collect();
+    hits.sort_by_key(|t| order.get(t.id.as_str()).copied().unwrap_or(usize::MAX));
     let already_landed: Vec<PlannedTask> = cached
         .tasks
         .iter()

@@ -212,8 +212,8 @@ impl ExecutionDriver {
         Err(StepOutcome::Failed(format!(
             "sequence step: could not read a task list from step '{}'. It must write a JSON \
              object of the form {{\"tasks\": [{{\"id\": \"task-1\", \"title\": \"...\", \
-             \"description\": \"...\", \"files\": [\"src/foo.rs\"], \"test_command\": \"...\"}}]}} \
-             to `artifacts/task-list.json`.",
+             \"description\": \"...\", \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \
+             \"acceptance\": [\"...\"], \"blocked_by\": []}}]}} to `artifacts/task-list.json`.",
             source_step_id
         )))
     }
@@ -276,22 +276,30 @@ impl ExecutionDriver {
         // run sequentially on one branch, so they must be ordered by
         // dependency and may share files.
         let planner_prompt = format!(
-            "You are a planning agent. Break the following feature into a small, ordered list \
-             of tasks that will be implemented ONE AT A TIME, in the order you give, each by a \
-             separate agent, each committing before the next starts.\n\n\
+            "You are a planning agent. Break the following feature into an ordered list of \
+             tasks that will be implemented ONE AT A TIME, in the order you give, each by a \
+             separate agent with a fresh context, each committing before the next starts.\n\n\
              Feature: {feature_desc}\n\
              Repositories in scope: {repo_list}\n\n\
              Read any attached artifacts (e.g. the spec) for context. Then emit a single JSON \
              object, in a ```json ... ``` fence, of the form:\n\
              {{\"tasks\": [{{\"id\": \"task-1\", \"title\": \"...\", \"description\": \"...\", \
-             \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"retry_note\": null}}]}}\n\n\
+             \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"acceptance\": \
+             [\"...\"], \"blocked_by\": [], \"retry_note\": null}}]}}\n\n\
              Constraints:\n\
-             - 2 to 5 tasks. Aim for the smallest set that covers the work end-to-end.\n\
-             - Order matters: each task may rely on the ones before it being done and committed. \
-             Put foundational work (types, schema, shared helpers) first.\n\
+             - Size each task so ONE agent can complete it in ONE session: small enough that \
+             reading the relevant code, implementing, and testing all fit comfortably. \
+             Guideline: 1–3 closely related files. If a task's description needs \"and then \
+             also…\", split it. There is no upper limit on the task count.\n\
+             - Prefer vertical slices that are verifiable on their own over horizontal layers \
+             like \"all the types\".\n\
+             - Order matters: each task may rely on the ones before it being done and \
+             committed. Declare the ids of earlier tasks a task builds on in `blocked_by`.\n\
              - Task IDs must be kebab-case, unique, and stable.\n\
              - `files` lists what the task is expected to touch. Tasks MAY share files — a later \
              task building on an earlier one's file is normal and expected.\n\
+             - `acceptance` is 1–3 binary pass/fail statements; `test_command` is what proves \
+             the task done.\n\
              - If no decomposition makes sense (the work is small), return a single task with id \
              `task-1` that does the whole thing.\
              {retry_note_constraint}\
@@ -402,7 +410,8 @@ impl ExecutionDriver {
                  the form:\n\
                  ```json\n\
                  {\"tasks\": [{\"id\": \"task-1\", \"title\": \"...\", \"description\": \"...\", \
-                 \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"retry_note\": null}]}\n\
+                 \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"acceptance\": \
+                 [\"...\"], \"blocked_by\": [], \"retry_note\": null}]}\n\
                  ```"
                 .to_string()
             };
