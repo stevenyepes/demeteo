@@ -91,11 +91,20 @@ impl ExecutionDriver {
 
         // 3. Commit changes. The `non_artifact_writes` list computed
         // above (paths the agent wrote that are NOT under the
-        // artifact subdir) is passed so the guard log inside
+        // artifact subdir) is passed so the guard inside
         // `commit_worktree_changes` can flag the historical "agent
         // put the real deliverable under artifacts/ instead of at
         // the real path" failure mode (see declared.rs).
-        let _ = commit_worktree_changes(
+        //
+        // The result is held, not returned here. Every error this can
+        // yield means the agent's work did not land — a failed `git
+        // add`/`commit`, or the stranded-deliverable guard — so the step
+        // must not report success (the `sequence` caller says the same,
+        // in more detail). But returning now would skip artifact
+        // resolution below, which is what persists the agent's work into
+        // the store, and a step whose commit failed is exactly when that
+        // record is worth having. So: resolve first, fail after.
+        let commit_res = commit_worktree_changes(
             &*self.exec,
             machine_str,
             wt_path,
@@ -122,6 +131,23 @@ impl ExecutionDriver {
             &self.f_id_str,
             &step_exec.step_id.0,
         );
+
+        // The agent's work is captured; now surface a commit that never
+        // landed. Without this the step goes green having committed
+        // nothing, and the branch carries none of its work — silently on
+        // a read-only or artifacts step, and misattributed on an
+        // implement step with a retry loop, where the downstream no-op
+        // guard blames the agent for "no code changes" and spends the
+        // whole retry budget re-running a step whose problem was never
+        // the agent.
+        commit_res.map_err(|e| {
+            format!(
+                "could not commit the agent's changes, so the step produced nothing to \
+                 merge: {}",
+                e
+            )
+        })?;
+
         let primary = if step_conf.kind == "parallel" {
             refs.iter()
                 .find(|r| r.contains("code-diff") || r.ends_with(".diff"))
