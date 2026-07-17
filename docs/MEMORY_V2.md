@@ -13,6 +13,13 @@
 > **What / Where / Why / Definition of Done** format. Ground truth is code —
 > verify file paths against the branch when picking up a task; the line numbers
 > here were correct on `master` at 2026-07-16.
+>
+> **Status lives in [`MEMORY_V2_TASKS.md`](MEMORY_V2_TASKS.md), not here.** That file
+> decomposes P0–P3 into agent-sized tasks with dependencies and status markers. This
+> document is the design authority — it carries the decisions and the *why*, and the
+> phase plans below are the design intent behind the queue rather than a checklist to
+> work from. Four blocking decisions this doc left unstated (YAML, archive, git
+> mechanism, bundle location) are queued there as **P0.0**.
 
 ## Guiding principles (non-negotiable)
 
@@ -483,7 +490,12 @@ the pointer instruction. Delete the embed call, the cosine scoring, the `top_k` 
 **Definition of Done:** no embed call on the feature-start critical path; a
 project with zero memories yields an empty string, not an error (`{{project_memory}}`
 already collapses unknown tokens — `prompt_context.rs:121`); `cargo clippy -D
-warnings` clean after `domain/memory.rs:194-226` is deleted.
+warnings` clean.
+
+**Scope boundary:** this task deletes the *call path* only. `cosine_similarity`
+and the blob codecs (`domain/memory.rs:194-226`) are **P0.7**'s to delete —
+they are unreachable once this lands, but removing them here would collide with
+P0.7 if the two run in parallel.
 
 ### P0.6 — Stage the bundle into the worktree
 

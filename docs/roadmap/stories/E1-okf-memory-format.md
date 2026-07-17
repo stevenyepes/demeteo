@@ -6,6 +6,11 @@
 > decisions (`MEM-D1`–`MEM-D9`), the bundle layout, the frontmatter and op schemas, the
 > detailed P0 task plan, and the open questions. **Read it before picking up a story.**
 > This file carries only the stories. Where the two disagree, `MEMORY_V2.md` wins.
+>
+> **Work queue and status: [`docs/MEMORY_V2_TASKS.md`](../../MEMORY_V2_TASKS.md).** The
+> stories below are outcome-sized, not agent-sized; that file decomposes them into tasks
+> with dependencies and is the **single source of truth for what is done**. The `Status`
+> and checkbox lines here are indicative — do not tick them, tick the queue.
 
 **Outcome:** project memory becomes a human-readable, git-versioned OKF bundle on the
 user's own machine that **works on first launch with no configuration** — no endpoint, no
