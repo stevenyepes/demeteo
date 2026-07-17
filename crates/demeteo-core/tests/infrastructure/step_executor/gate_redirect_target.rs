@@ -111,12 +111,13 @@ fn step_with_cap(id: &str, capability: crate::domain::permission::StepCapability
 #[test]
 fn standard_pipeline_ship_gate_feedback_lands_on_implement() {
     // Mirror `workflows/standard-feature-pipeline.json` exactly:
-    // s-gate-ship at index 6, s-critic (artifacts) at index 5,
-    // s-validate (verify) at index 4, s-implement (implement)
-    // at index 3. Free-text implementation feedback must land on
-    // index 3, not on index 4 or 5.
+    // s-gate-ship at index 7, s-critic (artifacts) at index 6,
+    // s-validate (verify) at index 5, s-implement (implement)
+    // at index 4. Free-text implementation feedback must land on
+    // index 4, not on index 5 or 6.
     let steps = vec![
         step("s-research"),
+        step("s-tickets"),
         step("s-spec"),
         step("s-gate-review"),
         step_with_cap(
@@ -136,21 +137,21 @@ fn standard_pipeline_ship_gate_feedback_lands_on_implement() {
     let target = resolve_redirect_target(
         &steps,
         None, // s-gate-ship.on_failure is null in the workflow
-        6,
+        7,
         Some("the implementation is missing the cancel-button handler — add it"),
     );
     assert_eq!(
         target,
-        Some(3),
+        Some(4),
         "must walk past s-critic and s-validate to s-implement"
     );
 }
 
 #[test]
 fn standard_pipeline_review_gate_feedback_routes_to_spec() {
-    // In the standard pipeline, `s-gate-review` sits at index 2,
-    // BEFORE `s-implement` (index 3). The walk-back from index 2
-    // only sees indices 0 and 1 (research + spec) — neither is
+    // In the standard pipeline, `s-gate-review` sits at index 3,
+    // BEFORE `s-implement` (index 4). The walk-back from index 3
+    // only sees indices 0–2 (research + tickets + spec) — none is
     // implement-capable — so the implement-fallback returns
     // None. The predecessor fallback then routes to `s-spec`,
     // which is the right semantic: pre-implementation review
@@ -158,9 +159,10 @@ fn standard_pipeline_review_gate_feedback_routes_to_spec() {
     // want to forward-route can type the explicit step id
     // "s-implement" (covered by
     // `explicit_implement_step_id_still_wins_over_implement_fallback`
-    // below).
+    // below), and decomposition feedback names "s-tickets".
     let steps = vec![
         step("s-research"),
+        step("s-tickets"),
         step("s-spec"),
         step("s-gate-review"),
         step_with_cap(
@@ -171,10 +173,10 @@ fn standard_pipeline_review_gate_feedback_routes_to_spec() {
     let target = resolve_redirect_target(
         &steps,
         None,
-        2,
+        3,
         Some("revise the spec to use cargo before mise"),
     );
-    assert_eq!(target, Some(1));
+    assert_eq!(target, Some(2));
 }
 
 #[test]

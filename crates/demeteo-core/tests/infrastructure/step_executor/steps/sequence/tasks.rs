@@ -2,25 +2,28 @@
 
 use super::*;
 
+fn task(id: &str, title: &str, files: &[&str]) -> PlannedTask {
+    PlannedTask {
+        id: id.into(),
+        title: title.into(),
+        description: format!("d-{id}"),
+        files: files.iter().map(|f| (*f).into()).collect(),
+        test_command: None,
+        acceptance: vec![],
+        blocked_by: vec![],
+        retry_note: None,
+    }
+}
+
 fn plan() -> TaskPlan {
     TaskPlan {
         tasks: vec![
-            PlannedTask {
-                id: "task-1".into(),
-                title: "backend".into(),
-                description: "d1".into(),
-                files: vec!["src/api/mod.rs".into(), "src/api/routes.rs".into()],
-                test_command: None,
-                retry_note: None,
-            },
-            PlannedTask {
-                id: "task-2".into(),
-                title: "frontend".into(),
-                description: "d2".into(),
-                files: vec!["ui/App.tsx".into()],
-                test_command: None,
-                retry_note: None,
-            },
+            task(
+                "task-1",
+                "backend",
+                &["src/api/mod.rs", "src/api/routes.rs"],
+            ),
+            task("task-2", "frontend", &["ui/App.tsx"]),
         ],
         already_landed: vec![],
         resumes_landed_work: false,
@@ -163,17 +166,7 @@ fn rejects_text_with_no_task_list() {
 
 fn plan_of(ids: &[&str]) -> TaskPlan {
     TaskPlan {
-        tasks: ids
-            .iter()
-            .map(|id| PlannedTask {
-                id: (*id).into(),
-                title: "t".into(),
-                description: "d".into(),
-                files: vec![],
-                test_command: None,
-                retry_note: None,
-            })
-            .collect(),
+        tasks: ids.iter().map(|id| task(id, "t", &[])).collect(),
         already_landed: vec![],
         resumes_landed_work: false,
     }
@@ -261,20 +254,68 @@ fn rejects_an_empty_task_id() {
     assert!(reason.contains("empty `id`"), "{reason}");
 }
 
-/// The task list is now an agent-written artifact and each task costs a fresh
-/// agent session, so an over-eager decomposition is a cost incident. Nothing
-/// else bounds it.
+/// There is no cap on task count: decomposition is sized by the ticket
+/// rubric, and cost is bounded per task (budget ceiling) rather than per
+/// list. A long, well-formed list must validate.
 #[test]
-fn rejects_a_task_list_longer_than_the_cap() {
-    let ids: Vec<String> = (0..=MAX_TASKS).map(|i| format!("task-{i}")).collect();
+fn a_long_task_list_validates() {
+    let ids: Vec<String> = (0..60).map(|i| format!("task-{i}")).collect();
     let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-    let reason = validate_task_plan(&plan_of(&refs)).expect("should reject");
-    assert!(reason.contains(&MAX_TASKS.to_string()), "{reason}");
+    assert!(validate_task_plan(&plan_of(&refs)).is_none());
+}
 
-    let ids: Vec<String> = (0..MAX_TASKS).map(|i| format!("task-{i}")).collect();
-    let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-    assert!(
-        validate_task_plan(&plan_of(&refs)).is_none(),
-        "exactly the cap must still be allowed"
-    );
+// --- blocked_by --------------------------------------------------------------
+//
+// Tasks run strictly in list order; `blocked_by` edges are validated against
+// that order and drive the targeted-retry closure below.
+
+#[test]
+fn rejects_a_forward_blocked_by_edge() {
+    let mut plan = plan_of(&["a", "b"]);
+    plan.tasks[0].blocked_by = vec!["b".into()];
+    let reason = validate_task_plan(&plan).expect("should reject");
+    assert!(reason.contains("not an earlier task"), "{reason}");
+}
+
+#[test]
+fn rejects_a_blocked_by_edge_to_a_missing_task() {
+    let mut plan = plan_of(&["a", "b"]);
+    plan.tasks[1].blocked_by = vec!["ghost".into()];
+    let reason = validate_task_plan(&plan).expect("should reject");
+    assert!(reason.contains("ghost"), "{reason}");
+}
+
+#[test]
+fn rejects_a_self_blocked_task() {
+    let mut plan = plan_of(&["a"]);
+    plan.tasks[0].blocked_by = vec!["a".into()];
+    let reason = validate_task_plan(&plan).expect("should reject");
+    assert!(reason.contains("itself"), "{reason}");
+}
+
+#[test]
+fn accepts_backward_blocked_by_edges() {
+    let mut plan = plan_of(&["a", "b", "c"]);
+    plan.tasks[2].blocked_by = vec!["a".into(), "b".into()];
+    assert!(validate_task_plan(&plan).is_none());
+}
+
+/// Re-running a foundation task rewrites what its dependents were built on,
+/// so a targeted retry must pull them in transitively — otherwise they are
+/// reported as landed work that still matches a branch that just changed
+/// under them.
+#[test]
+fn targeted_retry_reruns_transitive_dependents_of_a_selected_task() {
+    let mut plan = plan_of(&["base", "mid", "leaf", "unrelated"]);
+    plan.tasks[0].files = vec!["src/base.rs".into()];
+    plan.tasks[1].blocked_by = vec!["base".into()];
+    plan.tasks[2].blocked_by = vec!["mid".into()];
+    plan.tasks[3].files = vec!["src/other.rs".into()];
+
+    let out = select_targeted_tasks(&plan, "fix base", &["src/base.rs".into()]);
+    let ids: Vec<&str> = out.tasks.iter().map(|t| t.id.as_str()).collect();
+    // List order is preserved, and only the untouched task is skipped.
+    assert_eq!(ids, ["base", "mid", "leaf"]);
+    let landed: Vec<&str> = out.already_landed.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(landed, ["unrelated"]);
 }
