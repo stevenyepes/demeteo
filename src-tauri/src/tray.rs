@@ -127,7 +127,11 @@ pub fn cleanup_terminal_sessions<R: tauri::Runtime, M: Manager<R>>(manager: &M) 
 }
 
 /// Make the main window visible and focused.
-fn show_main_window(app: &tauri::AppHandle) {
+///
+/// `pub(crate)` so the single-instance callback in `lib.rs` can reuse this
+/// exact unminimize/show/focus sequence when a second launch is intercepted,
+/// instead of duplicating it.
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.unminimize();
         let _ = window.show();
