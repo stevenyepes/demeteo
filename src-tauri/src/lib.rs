@@ -248,6 +248,14 @@ pub fn run() {
     );
 
     tauri::Builder::default()
+        // Must be the FIRST `.plugin(...)` registered: this is an upstream
+        // requirement of tauri-plugin-single-instance to reliably intercept a
+        // second launch on all platforms. Do not reorder below other plugins
+        // or `.setup()`.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            tracing::info!("second app instance launched; focusing existing window");
+            tray::show_main_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
