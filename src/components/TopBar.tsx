@@ -11,9 +11,10 @@ interface TopBarProps {
 }
 
 function TopBar({ connectedProvider }: TopBarProps) {
-  const { navigate } = useNavigation();
+  const { navigate, view } = useNavigation();
   const { uiDispatch } = useUIState();
-  const { state: terminalState, togglePanel } = useTerminalPanel();
+  const { state: terminalState } = useTerminalPanel();
+  const terminalsActive = view.kind === 'terminals';
 
   // Ambient badge for the Remote Runs entry point — without this, a
   // parked/failed/needs-credentials run gives zero passive signal that
@@ -86,19 +87,17 @@ function TopBar({ connectedProvider }: TopBarProps) {
             session is alive — gives the user a passive signal that
             hiding the panel did not kill anything (spec §1 AC #6). */}
         <button
-          onClick={togglePanel}
+          onClick={() => navigate({ kind: 'terminals' })}
           className={`relative text-slate-400 hover:text-white transition-all hover:bg-white/5 p-1.5 rounded flex items-center gap-1 text-xs ${
-            terminalState.tabs.length > 0 && !terminalState.collapsed
-              ? 'bg-white/[0.04] text-white'
-              : ''
+            terminalsActive ? 'bg-white/[0.04] text-white' : ''
           }`}
-          title={`${terminalState.tabs.length > 0 && terminalState.collapsed ? 'Show' : 'Toggle'} terminal panel — sessions stay alive while hidden`}
-          aria-label="Toggle terminal panel"
+          title="Open the Terminals view — sessions stay alive as you navigate"
+          aria-label="Open terminals view"
           data-testid="topbar-terminal-toggle"
         >
           <TerminalSquare className="w-4 h-4 text-cyan-400" />
           <span className="hidden md:inline font-mono">Terminals</span>
-          {terminalState.tabs.length > 0 && terminalState.collapsed ? (
+          {terminalState.tabs.length > 0 && !terminalsActive ? (
             <span
               className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-pulse-glow"
               data-testid="topbar-terminal-pulse"

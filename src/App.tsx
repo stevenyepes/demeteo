@@ -30,9 +30,9 @@ import {
   NavigationProvider, useNavigation,
   ProjectProvider, useProject,
   UIStateProvider, useUIState,
-  TerminalPanelProvider, useTerminalPanel,
+  TerminalPanelProvider,
 } from "./context";
-import { TerminalPanelHost } from "./components/TerminalPanelHost";
+import { TerminalsView } from "./components/TerminalsView";
 import "./App.css";
 
 // ── Pure helpers (exported for unit tests in src/App.test.tsx) ─────────
@@ -138,7 +138,6 @@ function AppInner() {
   const { view, navigate, goBack, canGoBack } = useNavigation();
   const { state: proj, dispatch: projDispatch } = useProject();
   const { ui, uiDispatch } = useUIState();
-  const { togglePanel: toggleTerminalPanel } = useTerminalPanel();
 
   const { projects, currentProjectId, providers, reposByProject, initialLoadError } = proj;
   // `commandPaletteOpen`, `docsPanelOpen`, `startFeatureOpen`, and
@@ -384,7 +383,7 @@ function AppInner() {
       const p = projects[index];
       if (p) { projDispatch({ type: 'SET_CURRENT', id: p.id }); navigate({ kind: 'home' }); }
     },
-    onToggleTerminalPanel: () => toggleTerminalPanel(),
+    onToggleTerminalPanel: () => navigate({ kind: 'terminals' }),
   });
 
   const handleSeedSample = async () => {
@@ -420,15 +419,15 @@ function AppInner() {
     { id: 'nav-settings', label: 'Settings', description: 'Global preferences and machines', category: 'settings' as const, icon: <SettingsIcon className="w-4 h-4" />, onSelect: () => navigate({ kind: 'settings' }) },
     { id: 'nav-docs', label: 'Documentation', description: 'User guide and reference', category: 'settings' as const, icon: <BookOpen className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
     { id: 'nav-shortcuts', label: 'Keyboard Shortcuts', description: 'View available shortcuts', category: 'settings' as const, icon: <Zap className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
-    { id: 'cmd-backtick-toggle-terminal-panel', label: 'Toggle Terminal Panel', description: 'Show or hide the global terminal panel — sessions stay alive while hidden.', category: 'action' as const, icon: <TerminalIcon className="w-4 h-4" />, onSelect: () => toggleTerminalPanel() },
-  ], [projects, navigate, projDispatch, uiDispatch, toggleTerminalPanel]);
+    { id: 'nav-terminals', label: 'Terminals', description: 'Open the full-page Terminals view — sessions stay alive as you navigate.', category: 'action' as const, icon: <TerminalIcon className="w-4 h-4" />, onSelect: () => navigate({ kind: 'terminals' }) },
+  ], [projects, navigate, projDispatch, uiDispatch]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#08090c] text-white overflow-hidden font-sans">
       <TopBar connectedProvider={connectedProvider} />
       <div className="flex flex-1 overflow-hidden relative min-h-0">
         <ProjectRail />
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-0 relative">
         <main className="flex-1 flex flex-col relative overflow-hidden bg-[#0a0c10] z-0 min-h-0">
 
           {/* empty-state */}
@@ -532,7 +531,9 @@ function AppInner() {
           />
           <DocsPanel isOpen={docsPanelOpen} onClose={() => uiDispatch({ type: 'SET_DOCS_PANEL', open: false })} />
         </main>
-        <TerminalPanelHost />
+        {/* Keep-mounted, CSS-hidden off-route so the active xterm and all
+            backend sessions survive navigation (spec §4.1). */}
+        <TerminalsView active={view.kind === 'terminals'} />
         </div>
       </div>
     </div>

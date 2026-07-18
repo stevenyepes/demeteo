@@ -79,7 +79,8 @@ export type AppView =
   | { kind: 'workflow-editor'; workflowId: string | null }
   | { kind: 'providers' }
   | { kind: 'settings' }
-  | { kind: 'remote-inbox' };
+  | { kind: 'remote-inbox' }
+  | { kind: 'terminals' };
 
 /** Laptop-side mirror of one remote run (docs/REMOTE_EXECUTION_PLAN.md
  *  M6.1/M6.2), keyed by `(machine_id, run_id)` — mirrors
@@ -709,5 +710,4 @@ export interface TerminalTabDescriptor {
 export interface TerminalPanelState {
   tabs: TerminalTabDescriptor[];
   activeTabId: string | null;
-  collapsed: boolean;
 }

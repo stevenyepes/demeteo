@@ -28,6 +28,7 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
     case 'workflows':
     case 'providers':
     case 'settings':
+    case 'terminals':
       return true;
     case 'detail':
       return b.kind === 'detail'

@@ -101,18 +101,13 @@ describe('useTerminalPanel — open()', () => {
     expect(commandsOf('resolve_repo_dir')).toHaveLength(0);
   });
 
-  it('focuses the new tab and uncollapses the panel on OPEN_TAB', async () => {
+  it('focuses the new tab on OPEN_TAB', async () => {
     const h = mountHarness();
-
-    await act(async () => {
-      h.panel.togglePanel();
-    });
 
     await act(async () => {
       await h.panel.open({ machineId: 'local', machineLabel: 'local' });
     });
 
-    expect(h.panel.state.collapsed).toBe(false);
     expect(h.panel.state.activeTabId).toBe(h.panel.state.tabs[0]?.tabId);
   });
 
@@ -554,7 +549,7 @@ describe('useTerminalPanel — view unmount safety', () => {
 
 describe('useTerminalPanel — focus() rebinds detached tabs', () => {
   it('re-focusing a detached tab triggers attach_terminal_session exactly once', async () => {
-    const { TerminalPanelHost } = await import('../components/TerminalPanelHost');
+    const { TerminalsView } = await import('../components/TerminalsView');
     const { screen } = await import('@testing-library/react');
 
     const ref: { current: ReturnType<typeof useTerminalPanel> | null } = { current: null };
@@ -562,7 +557,10 @@ describe('useTerminalPanel — focus() rebinds detached tabs', () => {
     function Host(): ReactElement {
       const panel = useTerminalPanel();
       ref.current = panel;
-      return <TerminalPanelHost />;
+      // The Terminals view mounts exactly one surface (the active tab)
+      // and remounts it on focus — the same single-surface contract the
+      // retired panel host had.
+      return <TerminalsView active />;
     }
 
     render(

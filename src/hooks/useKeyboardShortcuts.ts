@@ -104,9 +104,10 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
           h.onOpenDocs?.();
           break;
         case '`':
-          // Cmd/Ctrl + ` toggles the global terminal panel (spec §3 / §6).
-          // Sessions stay alive while the panel is hidden — the panel is
-          // a view-only host of session lifecycle.
+          // Cmd/Ctrl + ` opens the full-page Terminals view
+          // (TERMINALS_VIEW_SPEC §4.3 / §6). Sessions stay alive as the
+          // user navigates — the view is a pure renderer of session
+          // lifecycle, not its owner.
           e.preventDefault();
           h.onToggleTerminalPanel?.();
           break;
