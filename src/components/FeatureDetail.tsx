@@ -772,6 +772,10 @@ export function FeatureDetail() {
         workDir: info.worktree_path,
         workBranch: info.branch,
       });
+      // The live terminal surface renders on the full-page Terminals
+      // view, not here — route to it so the session the user just asked
+      // for is actually on screen instead of only pulsing on the rail.
+      navigate({ kind: 'terminals' });
     } catch (err) {
       reportError(err);
     }

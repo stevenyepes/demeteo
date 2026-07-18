@@ -12,7 +12,10 @@ interface ShortcutMap {
   onCloseCurrentView?: () => void;
   onNextFeature?: () => void;
   onPreviousFeature?: () => void;
-  onToggleTerminalPanel?: () => void;
+  /** Opens the full-page Terminals view. Named "open" rather than
+   *  "toggle": the navigation reducer dedups a repeat navigation, so the
+   *  chord only ever opens the view, it does not toggle back. */
+  onOpenTerminalsView?: () => void;
 }
 
 export function useKeyboardShortcuts(handlers: ShortcutMap) {
@@ -109,7 +112,7 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
           // user navigates — the view is a pure renderer of session
           // lifecycle, not its owner.
           e.preventDefault();
-          h.onToggleTerminalPanel?.();
+          h.onOpenTerminalsView?.();
           break;
         default:
           if (e.key >= '1' && e.key <= '9') {

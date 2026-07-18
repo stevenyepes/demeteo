@@ -51,6 +51,8 @@ export function NewTerminalMenu({
   const [agents, setAgents] = useState<AgentEntry[]>(defaultAgents());
   const [launching, setLaunching] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,7 +75,9 @@ export function NewTerminalMenu({
     };
   }, [machineId]);
 
-  // Close the menu on an outside click.
+  // While open: close on an outside click or Escape, and move focus onto
+  // the first menu item so keyboard users can operate the menu (it was
+  // previously mouse-only despite advertising `aria-haspopup="menu"`).
   useEffect(() => {
     if (!openMenu) return;
     const onDocClick = (e: globalThis.MouseEvent) => {
@@ -81,8 +85,22 @@ export function NewTerminalMenu({
         setOpenMenu(false);
       }
     };
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpenMenu(false);
+        triggerRef.current?.focus();
+      }
+    };
     document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKeyDown);
+    menuRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]')
+      ?.focus();
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [openMenu]);
 
   const launch = useCallback(
@@ -104,6 +122,7 @@ export function NewTerminalMenu({
   return (
     <div ref={containerRef} className={`relative ${className}`} data-testid="new-terminal-menu">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpenMenu((v) => !v)}
         disabled={launching}
@@ -120,6 +139,7 @@ export function NewTerminalMenu({
 
       {openMenu && (
         <div
+          ref={menuRef}
           role="menu"
           className="absolute right-0 mt-1 z-30 min-w-[180px] rounded-lg border border-white/10 bg-[#0c0d12] shadow-xl py-1"
           data-testid="new-terminal-dropdown"

@@ -44,14 +44,17 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
       if (tabs.length === 0) return;
       e.preventDefault();
-      const current = Math.max(
-        0,
-        tabs.findIndex((t) => t.tabId === activeTabId),
-      );
+      const current = tabs.findIndex((t) => t.tabId === activeTabId);
+      // With nothing selected yet (`current === -1`), either arrow lands
+      // on the first row. Previously ArrowDown computed `-1 + 1 = 0`
+      // clamped from `max(0, -1)`, which made it jump to the *second*
+      // row and skip the first.
       const next =
-        e.key === 'ArrowDown'
-          ? Math.min(tabs.length - 1, current + 1)
-          : Math.max(0, current - 1);
+        current < 0
+          ? 0
+          : e.key === 'ArrowDown'
+            ? Math.min(tabs.length - 1, current + 1)
+            : Math.max(0, current - 1);
       const target = tabs[next];
       if (target) focus(target.tabId);
     },
@@ -107,6 +110,9 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
               className="flex-1"
               role="tablist"
               aria-orientation="vertical"
+              aria-activedescendant={
+                activeTabId ? `terminal-tab-${activeTabId}` : undefined
+              }
               tabIndex={0}
               onKeyDown={handleListKeyDown}
             >
@@ -124,7 +130,13 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
           </div>
 
           {/* Active surface */}
-          <div className="flex-1 min-h-0 relative flex flex-col">
+          <div
+            className="flex-1 min-h-0 relative flex flex-col"
+            role="tabpanel"
+            aria-labelledby={
+              activeTab ? `terminal-tab-${activeTab.tabId}` : undefined
+            }
+          >
             {activeTab &&
             activeTab.sessionId &&
             (activeTab.phase === 'running' || activeTab.phase === 'disconnected') ? (

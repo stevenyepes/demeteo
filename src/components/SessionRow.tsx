@@ -54,6 +54,7 @@ function SessionRowImpl({
   return (
     <div
       role="tab"
+      id={`terminal-tab-${tab.tabId}`}
       aria-selected={active}
       data-testid={`session-row-${tab.tabId}`}
       data-active={active ? 'true' : 'false'}

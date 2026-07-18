@@ -114,6 +114,38 @@ describe('TerminalsView', () => {
     expect(h.panel.state.activeTabId).toBe(tabB);
   });
 
+  it('ArrowDown selects the FIRST row when nothing is selected yet', async () => {
+    // Restored sessions arrive via STARTUP_RECONCILE, which appends tabs
+    // without setting activeTabId — so the list starts with a null
+    // selection. ArrowDown must land on the first row, not skip to the
+    // second.
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') {
+        return Promise.resolve([
+          { session_id: 'sess_a', machine_id: 'local', created_at: 1, title: null },
+          { session_id: 'sess_b', machine_id: 'local', created_at: 2, title: null },
+        ]);
+      }
+      if (cmd === 'get_agent_configs') return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+
+    const h = mount();
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(h.panel.state.tabs).toHaveLength(2);
+    expect(h.panel.state.activeTabId).toBeNull();
+
+    const list = screen.getByRole('tablist');
+    await act(async () => {
+      list.focus();
+      await userEvent.keyboard('{ArrowDown}');
+      for (let i = 0; i < 3; i++) await Promise.resolve();
+    });
+    expect(h.panel.state.activeTabId).toBe(h.panel.state.tabs[0].tabId);
+  });
+
   it('does not close backend sessions when the view is hidden off-route', async () => {
     const h = mount(true);
     await act(async () => {

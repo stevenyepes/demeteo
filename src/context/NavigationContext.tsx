@@ -29,6 +29,7 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
     case 'providers':
     case 'settings':
     case 'terminals':
+    case 'remote-inbox':
       return true;
     case 'detail':
       return b.kind === 'detail'

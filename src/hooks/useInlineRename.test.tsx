@@ -84,6 +84,39 @@ describe('useInlineRename — commitRename', () => {
     // Draft is reset back to the canonical (untrimmed) committed value.
     expect(result.current.draft).toBe('alpha');
   });
+
+  it('does NOT commit an empty / whitespace-only draft — it reverts to value', () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() =>
+      useInlineRename({ value: 'alpha', onCommit }),
+    );
+
+    act(() => result.current.startRename());
+    act(() => result.current.setDraft('   '));
+    act(() => result.current.commitRename());
+
+    // A blank name would clear the backend title; treat it as "keep".
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(result.current.renaming).toBe(false);
+    expect(result.current.draft).toBe('alpha');
+  });
+
+  it('commits at most once across a repeated commit (Enter then trailing blur)', () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() =>
+      useInlineRename({ value: 'alpha', onCommit }),
+    );
+
+    act(() => result.current.startRename());
+    act(() => result.current.setDraft('beta'));
+    // First commit (e.g. Enter) succeeds; the second (e.g. the input's
+    // trailing blur) must be a no-op now that we've left rename mode.
+    act(() => result.current.commitRename());
+    act(() => result.current.commitRename());
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith('beta');
+  });
 });
 
 describe('useInlineRename — cancelRename', () => {

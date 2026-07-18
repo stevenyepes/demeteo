@@ -276,6 +276,46 @@ describe('useTerminalPanel — open()', () => {
     expect(commandsOf('start_terminal_session')).toHaveLength(2);
     expect(h.panel.state.tabs).toHaveLength(2);
   });
+
+  it('does NOT reuse a tab whose start failed — a retry starts a fresh session', async () => {
+    const h = mountHarness();
+
+    let failNextStart = true;
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: InvokeArgs) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
+      if (cmd === 'start_terminal_session') {
+        if (failNextStart) {
+          failNextStart = false;
+          return Promise.reject(new Error('start failed'));
+        }
+        const sessionId = nextId();
+        startedSessions.push({ sessionId, args: args ?? {} });
+        return Promise.resolve(sessionId);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    // First open fails → the tab lands in the `error` phase.
+    await act(async () => {
+      await h.panel
+        .open({ machineId: 'local', machineLabel: 'local' })
+        .catch(() => {});
+    });
+    expect(h.panel.state.tabs).toHaveLength(1);
+    expect(h.panel.state.tabs[0].phase).toBe('error');
+
+    // A second open for the SAME tuple must NOT reuse the dead tab — the
+    // errored corpse is skipped and a fresh session starts.
+    await act(async () => {
+      await h.panel.open({ machineId: 'local', machineLabel: 'local' });
+    });
+    expect(commandsOf('start_terminal_session')).toHaveLength(2);
+    expect(h.panel.state.tabs).toHaveLength(2);
+    expect(
+      h.panel.state.tabs.find((t) => t.phase === 'running')?.sessionId,
+    ).toBeTruthy();
+  });
 });
 
 describe('useTerminalPanel — close()', () => {

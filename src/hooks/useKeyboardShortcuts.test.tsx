@@ -105,30 +105,30 @@ describe('close-view binding', () => {
   });
 });
 
-// Spec §7 Q4 / §6: Cmd/Ctrl + ` toggles the global terminal panel. The
+// Spec §7 Q4 / §6: Cmd/Ctrl + ` opens the full-page Terminals view. The
 // dispatcher must call preventDefault so the webview's own shortcut
 // fallback (which can be a focus jump in inputs / devtools) does not
 // also fire.
-describe('terminal-panel toggle binding', () => {
+describe('terminals-view open binding', () => {
   it.each([
     ['Cmd+`', { key: '`', metaKey: true }],
     ['Ctrl+`', { key: '`', ctrlKey: true }],
-  ])('%s fires onToggleTerminalPanel and prevents default', (_label, init) => {
-    const onToggleTerminalPanel = vi.fn();
+  ])('%s fires onOpenTerminalsView and prevents default', (_label, init) => {
+    const onOpenTerminalsView = vi.fn();
     const onOpenCommandPalette = vi.fn();
 
-    mountHook({ onToggleTerminalPanel, onOpenCommandPalette });
+    mountHook({ onOpenTerminalsView, onOpenCommandPalette });
 
     expect(dispatchKey(init).prevented).toBe(true);
-    expect(onToggleTerminalPanel).toHaveBeenCalledTimes(1);
+    expect(onOpenTerminalsView).toHaveBeenCalledTimes(1);
     expect(onOpenCommandPalette).not.toHaveBeenCalled();
   });
 
   it('ignores a bare backtick so typing in inputs still works', () => {
-    const onToggleTerminalPanel = vi.fn();
-    mountHook({ onToggleTerminalPanel });
+    const onOpenTerminalsView = vi.fn();
+    mountHook({ onOpenTerminalsView });
 
     expect(dispatchKey({ key: '`' }).prevented).toBe(false);
-    expect(onToggleTerminalPanel).not.toHaveBeenCalled();
+    expect(onOpenTerminalsView).not.toHaveBeenCalled();
   });
 });

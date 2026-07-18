@@ -501,7 +501,17 @@ fn emit_disconnected<R: Runtime>(
     created_at: u64,
     connected: &Arc<AtomicBool>,
 ) {
-    connected.store(false, Ordering::SeqCst);
+    // Emit only on the genuine connected→disconnected transition. An
+    // explicit close (`close_terminal_session` / `close_machine_sessions`)
+    // pre-sets `connected = false` before tearing the transport down, so
+    // the drain thread's subsequent EOF is swallowed here instead of
+    // racing a spurious `terminal-session-disconnected` in *after* the
+    // `terminal-session-ended` the close already emitted. `swap` returns
+    // the previous value: `false` means someone (a close, or an earlier
+    // disconnect) already claimed the transition, so we bail.
+    if !connected.swap(false, Ordering::SeqCst) {
+        return;
+    }
     let _ = app.emit(
         "terminal-session-disconnected",
         SessionInfo {
@@ -648,6 +658,11 @@ pub fn close_terminal_session(
         .lock()
         .map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.remove(&session_id) {
+        // Claim the connected→disconnected transition before tearing the
+        // transport down, so the drain thread's EOF does not emit a
+        // spurious `terminal-session-disconnected` after the
+        // `terminal-session-ended` below.
+        active.connected.store(false, Ordering::SeqCst);
         match &active.write_sink {
             WriteSink::Ssh(ch) => {
                 let mut chan = ch
@@ -708,7 +723,16 @@ pub fn close_machine_sessions(
             .collect();
         to_close
             .into_iter()
-            .filter_map(|id| sessions.remove(&id).map(|s| (id, s.created_at)))
+            .filter_map(|id| {
+                sessions.remove(&id).map(|s| {
+                    // Claim the transition so the drain thread's EOF is
+                    // swallowed rather than emitting a spurious
+                    // `terminal-session-disconnected` after the ended
+                    // event below.
+                    s.connected.store(false, Ordering::SeqCst);
+                    (id, s.created_at)
+                })
+            })
             .collect()
     };
     let count = ended.len();

@@ -487,6 +487,10 @@ const ProjectHome = () => {
                       projectId: activeProject.id,
                       repoPath: activeRepoPath,
                     });
+                    // The terminal surface lives on the full-page
+                    // Terminals view, not this page — route to it so the
+                    // freshly-opened session is actually visible.
+                    navigate({ kind: 'terminals' });
                   }}
                   disabled={!activeRepoPath}
                   className="glass-panel rounded-2xl p-4 flex items-center gap-4 text-left w-full group hover:border-cyan-500/20 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed border border-white/5 hover:bg-cyan-500/5"
@@ -680,10 +684,13 @@ function TerminalTabOpener({
   repoPath: string;
 }): React.ReactElement {
   const { open: openTerminalTab } = useTerminalPanel();
+  const { navigate } = useNavigation();
   const machineId = computeType.toLowerCase() === 'remote' ? remoteHost || 'local' : 'local';
 
-  // Open a panel tab on mount. The panel owns session lifecycle; this
-  // view is just a trigger that registers the intent.
+  // Open a panel tab on mount, then route to the full-page Terminals
+  // view where the live surface renders. The panel owns session
+  // lifecycle; this view is just a trigger that registers the intent and
+  // hands off to the Terminals view.
   useEffect(() => {
     if (!repoPath) return;
     void openTerminalTab({
@@ -692,6 +699,7 @@ function TerminalTabOpener({
       projectId,
       repoPath,
     });
+    navigate({ kind: 'terminals' });
     // The opener fires once per (project, repo, machine) tuple — the
     // panel decides whether to reuse or replace an existing tab.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -700,12 +708,13 @@ function TerminalTabOpener({
   return (
     <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 rounded-xl border border-white/5 bg-[#050608] p-8 text-center">
       <Terminal className="w-6 h-6 text-cyan-400" />
-      <p className="text-sm font-medium text-white">Terminal opened in the panel</p>
+      <p className="text-sm font-medium text-white">Opening the Terminals view…</p>
       <p className="text-xs text-slate-500 max-w-sm">
         The PTY for <span className="font-mono text-slate-300">{repoPath || 'this repo'}</span>{' '}
-        is running in the global terminal panel at the bottom of the window.
-        Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400 font-mono">Cmd/Ctrl + `</kbd>{' '}
-        to toggle the panel, or close the active tab to end the session.
+        is running in the global terminal panel. Its live surface is on the
+        full-page Terminals view; press{' '}
+        <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400 font-mono">Cmd/Ctrl + `</kbd>{' '}
+        to jump there any time, or close the active tab to end the session.
       </p>
     </div>
   );
