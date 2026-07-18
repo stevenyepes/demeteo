@@ -39,6 +39,18 @@ pub(crate) struct LandedTask {
     pub sha: String,
 }
 
+/// Aggregate dollar ceiling for one `sequence` step's whole task list, as a
+/// multiple of the resolved per-task budget.
+///
+/// Each task's own turn is capped by `role_max_budget_usd` (see
+/// `run_one_task`), but that ceiling resets for *every* task — nothing else
+/// bounds how much a long, or over-decomposed, task list spends in total
+/// (`validate_task_plan` in `tasks.rs` deliberately places no cap on task
+/// count). This is the actual backstop: generous enough that a legitimately
+/// large, well-sized ticket list still completes, but it stops a runaway
+/// list before it burns through dozens of unattended paid sessions.
+const SEQUENCE_STEP_COST_CEILING_MULTIPLIER: f64 = 20.0;
+
 impl ExecutionDriver {
     /// Run `tasks` strictly in order inside the single worktree `wt_path`.
     ///
@@ -223,6 +235,24 @@ impl ExecutionDriver {
                 title: task.title.clone(),
                 files,
             });
+
+            let cost_ceiling = self.base_max_budget_usd() * SEQUENCE_STEP_COST_CEILING_MULTIPLIER;
+            if *accumulated_cost > cost_ceiling {
+                return Err((
+                    format!(
+                        "sequence step: aggregate cost after {} of {} tasks reached \
+                         ${:.2}, over the ${:.2} step ceiling. Work already completed and \
+                         committed is preserved; the remaining tasks were not run — this \
+                         usually means the task list is far larger than the feature \
+                         warrants.",
+                        idx + 1,
+                        tasks.len(),
+                        *accumulated_cost,
+                        cost_ceiling
+                    ),
+                    false,
+                ));
+            }
         }
 
         Ok(())

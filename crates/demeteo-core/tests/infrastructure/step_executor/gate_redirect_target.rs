@@ -39,6 +39,52 @@ fn explicit_step_id_in_feedback_wins() {
 }
 
 #[test]
+fn step_id_named_within_free_text_feedback_wins() {
+    // A reviewer writing natural-language feedback that names a step
+    // ("redo s-tickets, the split is too coarse") should land on that
+    // step even though the feedback isn't *only* the bare id — matching
+    // the standard pipeline's own gate prompt, which tells reviewers to
+    // "Redirect to 's-tickets' if the decomposition needs revision".
+    let steps = vec![
+        step("s-research"),
+        step("s-tickets"),
+        step("s-spec"),
+        step("s-gate-review"),
+    ];
+    let target = resolve_redirect_target(
+        &steps,
+        None,
+        3,
+        Some("redo s-tickets, the split is too coarse"),
+    );
+    assert_eq!(
+        target,
+        Some(1),
+        "should route to the named step, not fall back to s-spec"
+    );
+}
+
+#[test]
+fn step_id_substring_within_a_word_does_not_match() {
+    // "s-tickets2" (or any id that merely contains a step id as a
+    // substring) must not be mistaken for "s-tickets" — matching is by
+    // whole word/token, not substring. With no exact token match, this
+    // falls through to the predecessor fallback (s-spec), not s-tickets.
+    let steps = vec![
+        step("s-research"),
+        step("s-tickets"),
+        step("s-spec"),
+        step("s-gate-review"),
+    ];
+    let target = resolve_redirect_target(&steps, None, 3, Some("see s-tickets2 for context"));
+    assert_eq!(
+        target,
+        Some(2),
+        "no exact token match, so this falls back to the immediate predecessor (s-spec), not s-tickets"
+    );
+}
+
+#[test]
 fn free_text_feedback_falls_back_to_previous_step() {
     // The user's bug: typing implementation feedback used to
     // silently cancel the pipeline. The fallback should land on

@@ -29,7 +29,14 @@ struct GateDecisionContext<'a> {
 /// Resolve the redirect target for a `redirect` gate decision.
 ///
 /// Priority:
-///   1. Step ID in `feedback` (if it matches one of `steps`).
+///   1. Step ID in `feedback` (if it matches one of `steps`) — either the
+///      whole trimmed feedback, or a whole word within a longer free-text
+///      note (e.g. "redo s-tickets, the split is too coarse"). A pipeline
+///      can have more than one artifact-only predecessor ahead of a gate
+///      (e.g. ticket decomposition followed by a spec step); a reviewer who
+///      names the one they mean should land there even without typing
+///      nothing else, rather than falling through to a fallback that may
+///      guess the other one.
 ///   2. `on_failure` on the gate's step config.
 ///   3. The nearest preceding step whose effective capability is
 ///      `Implement`. This is the natural intent of "give the agent
@@ -55,7 +62,18 @@ fn resolve_redirect_target(
     let explicit = feedback
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .and_then(|cleaned| steps.iter().position(|s| s.id.0 == cleaned));
+        .and_then(|cleaned| {
+            steps.iter().position(|s| s.id.0 == cleaned).or_else(|| {
+                // Whole-word search: a bare substring match would also fire
+                // on "s-tickets2" or a step id that is a prefix of another,
+                // so split on anything that isn't part of a kebab-case id.
+                steps.iter().position(|s| {
+                    cleaned
+                        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+                        .any(|token| token == s.id.0)
+                })
+            })
+        });
 
     let implement_fallback = |gate_idx: usize| -> Option<usize> {
         if gate_idx == 0 {
