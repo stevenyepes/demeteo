@@ -221,6 +221,66 @@ describe('useTerminalPanel — open()', () => {
     expect(h.panel.state.tabs).toHaveLength(2);
     expect(h.panel.state.activeTabId).toBe(firstTabId);
   });
+
+  it('coalesces two concurrent opens for the same logical tab into one start (F3)', async () => {
+    const h = mountHarness();
+
+    // Fire two opens for the identical tuple in the SAME tick, before
+    // React re-renders `stateRef`. Pre-fix this raced two backend
+    // sessions and orphaned one; now the second coalesces onto the
+    // first's in-flight promise.
+    let idA = '';
+    let idB = '';
+    await act(async () => {
+      const pA = h.panel.open({
+        machineId: 'local',
+        machineLabel: 'local',
+        projectId: 'p1',
+        repoPath: '/srv/repo',
+      });
+      const pB = h.panel.open({
+        machineId: 'local',
+        machineLabel: 'local',
+        projectId: 'p1',
+        repoPath: '/srv/repo',
+      });
+      [idA, idB] = await Promise.all([pA, pB]);
+    });
+
+    // Exactly one backend session, one tab, and both callers got the
+    // same tabId.
+    expect(commandsOf('start_terminal_session')).toHaveLength(1);
+    expect(h.panel.state.tabs).toHaveLength(1);
+    expect(idB).toBe(idA);
+  });
+
+  it('forceNew bypasses dedup and stacks a second session on the same tuple (F3/§7)', async () => {
+    const h = mountHarness();
+
+    await act(async () => {
+      await h.panel.open({
+        machineId: 'local',
+        machineLabel: 'local',
+        projectId: 'p1',
+        repoPath: '/srv/repo',
+      });
+    });
+    expect(commandsOf('start_terminal_session')).toHaveLength(1);
+
+    // A forceNew open for the same tuple must start a second session
+    // and add a second tab rather than reuse the first.
+    await act(async () => {
+      await h.panel.open({
+        machineId: 'local',
+        machineLabel: 'local',
+        projectId: 'p1',
+        repoPath: '/srv/repo',
+        forceNew: true,
+      });
+    });
+    expect(commandsOf('start_terminal_session')).toHaveLength(2);
+    expect(h.panel.state.tabs).toHaveLength(2);
+  });
 });
 
 describe('useTerminalPanel — close()', () => {
@@ -350,8 +410,11 @@ describe('useTerminalPanel — startup reconciliation', () => {
     expect(h.panel.state.tabs).toHaveLength(2);
     expect(h.panel.state.tabs[0]?.sessionId).toBe('sess_a');
     expect(h.panel.state.tabs[1]?.sessionId).toBe('sess_b');
-    expect(h.panel.state.tabs[0]?.phase).toBe('closed');
-    expect(h.panel.state.tabs[1]?.phase).toBe('closed');
+    // Restored sessions are alive PTYs (they only appear if the backend
+    // still holds them), so they reconcile as `running`, not `closed`
+    // (finding F6).
+    expect(h.panel.state.tabs[0]?.phase).toBe('running');
+    expect(h.panel.state.tabs[1]?.phase).toBe('running');
     expect(h.panel.state.tabs[1]?.title).toBe('build');
     expect(h.panel.state.tabs[0]?.title).toBe('local');
   });
