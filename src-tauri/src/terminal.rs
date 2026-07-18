@@ -3,7 +3,7 @@ use crate::state::AppContext;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
 use ssh2::Session;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{
@@ -33,15 +33,72 @@ pub struct ActiveSession {
     pub _keepalive: Arc<Mutex<SessionKeepalive>>,
     pub machine_id: String,
     pub created_at: u64,
-    /// Every attached subscriber is one element in the `Vec`. The drain
-    /// thread holds this lock only long enough to clone a snapshot, then
-    /// iterates the snapshot and calls `send` on each channel (spec §2.1
-    /// — broadcast over the Vec, swallow per-channel errors so a dead
-    /// subscriber never blocks the others).
-    pub frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>>,
+    /// Output fan-out + scrollback for the session (TERMINALS_VIEW_SPEC
+    /// §3). The drain thread appends every chunk to the scrollback ring
+    /// and broadcasts it to every attached channel; a freshly-attached
+    /// surface replays the accumulated scrollback so no output is ever
+    /// lost between `start` and the first `attach`, and none is doubled.
+    pub frontend_channel: Arc<Mutex<Broadcast>>,
     /// User-supplied tab title. `None` until the frontend calls
     /// `rename_terminal_session`; truncated/trimmed server-side.
     pub display_title: Mutex<Option<String>>,
+}
+
+/// Maximum bytes retained in a session's scrollback ring. Caps backend
+/// memory per session; trimming happens on whole-chunk boundaries so a
+/// replay never starts mid-escape-sequence (TERMINALS_VIEW_SPEC §3, §8).
+const SCROLLBACK_MAX_BYTES: usize = 256 * 1024;
+
+/// Per-session output fan-out with a bounded scrollback buffer, all
+/// guarded by a single mutex so attach-replay and live-broadcast are
+/// exactly ordered (TERMINALS_VIEW_SPEC §3). Replaces the PR #58
+/// seed-channel / `consumeStartupReplay` mechanism, which duplicated
+/// output during the attach window and leaked a phantom subscriber.
+pub struct Broadcast {
+    /// Every attached surface is one element. The drain thread clones a
+    /// snapshot under the lock then `send`s outside it, so a slow/dead
+    /// subscriber never blocks the others.
+    pub channels: Vec<Channel<Vec<u8>>>,
+    /// Whole output chunks, oldest first. Never split a chunk — trimming
+    /// on chunk boundaries keeps the first repaint from cutting an escape
+    /// sequence.
+    pub scrollback: VecDeque<Vec<u8>>,
+    /// Running total of `scrollback` byte lengths (avoids re-summing the
+    /// ring on every chunk).
+    pub scrollback_bytes: usize,
+}
+
+impl Broadcast {
+    pub(crate) fn new() -> Self {
+        Broadcast {
+            channels: Vec::new(),
+            scrollback: VecDeque::new(),
+            scrollback_bytes: 0,
+        }
+    }
+
+    /// Append a chunk to the scrollback ring and trim to the byte cap on
+    /// whole-chunk boundaries. Called under the `Broadcast` lock.
+    fn push_scrollback(&mut self, chunk: &[u8]) {
+        self.scrollback.push_back(chunk.to_vec());
+        self.scrollback_bytes += chunk.len();
+        while self.scrollback_bytes > SCROLLBACK_MAX_BYTES {
+            match self.scrollback.pop_front() {
+                Some(dropped) => self.scrollback_bytes -= dropped.len(),
+                None => break,
+            }
+        }
+    }
+
+    /// Concatenate the whole scrollback ring into one buffer for replay
+    /// to a newly-attached channel. Called under the `Broadcast` lock.
+    fn snapshot_scrollback(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.scrollback_bytes);
+        for chunk in &self.scrollback {
+            out.extend_from_slice(chunk);
+        }
+        out
+    }
 }
 
 pub enum SessionKeepalive {
@@ -103,25 +160,12 @@ pub fn connect_ssh(
     crate::ssh_util::connect(machine, secret)
 }
 
-/// Wraps the supplied channel in a `Vec`-backed `Mutex` so it can act
-/// as the seed subscriber for a freshly-started terminal session. The
-/// drain thread broadcasts every output chunk to every element of the
-/// `Vec`, so the seed channel captures shell startup output that would
-/// otherwise race the first `attach_terminal_session` call from the
-/// panel surface.
-pub(crate) fn seed_frontend_channel(
-    channel: Channel<Vec<u8>>,
-) -> Arc<Mutex<Vec<Channel<Vec<u8>>>>> {
-    Arc::new(Mutex::new(vec![channel]))
-}
-
 #[tauri::command]
 pub fn start_terminal_session(
     app: AppHandle,
     ctx: State<'_, AppContext>,
     session_state: State<'_, SessionState>,
     machine_id: String,
-    tauri_channel: Channel<Vec<u8>>,
     work_dir: Option<String>,
     work_branch: Option<String>,
 ) -> Result<String, String> {
@@ -135,18 +179,13 @@ pub fn start_terminal_session(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Seed the subscriber Vec with the channel the frontend already
-    // created. Without this, shell startup output, the bootstrap
-    // `git checkout`, and the first prompt all reach the drain thread
-    // before the surface has a chance to attach and are irretrievably
-    // lost (spec §1 AC #1: "the shell prompt reappears without
-    // restart"). The supplied channel is a no-op for most callers (its
-    // `onmessage` ignores bytes); `attach_terminal_session` later
-    // appends the surface's render-bound channel so the user actually
-    // sees the output. Id-based dedup avoids growing the Vec when the
-    // frontend re-uses the same channel for both the start and the
-    // post-mount attach.
-    let frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>> = seed_frontend_channel(tauri_channel);
+    // Seed an empty `Broadcast`: no subscriber and no permanent seed
+    // channel. Output produced before the surface attaches (shell
+    // startup, the `git checkout` bootstrap, the first prompt) flows
+    // into the scrollback ring and is replayed on the first
+    // `attach_terminal_session`, so nothing is lost and nothing races
+    // the attach (TERMINALS_VIEW_SPEC §3).
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let display_title: Mutex<Option<String>> = Mutex::new(None);
 
     let (read_source, write_sink, keepalive) = if machine.auth_type == "local" {
@@ -357,7 +396,7 @@ fn drain_ssh(
     session_id: String,
     machine_id: String,
     created_at: u64,
-    frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>>,
+    frontend_channel: Arc<Mutex<Broadcast>>,
 ) {
     let mut buffer = [0u8; 8192];
     let mut last_activity = std::time::Instant::now();
@@ -394,7 +433,7 @@ pub(crate) fn drain_local(
     session_id: String,
     machine_id: String,
     created_at: u64,
-    frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>>,
+    frontend_channel: Arc<Mutex<Broadcast>>,
 ) {
     let mut buffer = [0u8; 8192];
     loop {
@@ -424,25 +463,31 @@ fn emit_ended(app: &AppHandle, session_id: &str, machine_id: &str, created_at: u
     );
 }
 
-/// Broadcasts a single output chunk to every currently-attached subscriber.
+/// Appends a chunk to the session's scrollback and broadcasts it to
+/// every currently-attached subscriber.
 ///
-/// Lock is held only long enough to clone the channel list (the Vec is
-/// small — typically 0 or 1 element). The actual `send()` calls happen
-/// outside the lock so a slow/dead subscriber cannot block
-/// attach/detach. Per-channel errors are swallowed: one dead subscriber
-/// must not prevent the others from receiving output. When a `send`
-/// fails, the dead channel is pruned from the Vec so subsequent chunks
-/// don't keep cloning the payload for a subscriber that can never
-/// receive it.
-pub(crate) fn send_chunk(frontend_channel: &Arc<Mutex<Vec<Channel<Vec<u8>>>>>, chunk: Vec<u8>) {
-    let snapshot: Vec<Channel<Vec<u8>>> = match frontend_channel.lock() {
-        Ok(guard) => guard.iter().cloned().collect(),
-        Err(_) => return,
+/// Under the lock we do two cheap things: push the chunk into the
+/// scrollback ring (trimming to the byte cap on whole-chunk
+/// boundaries) and clone the channel list. The actual `send()` calls
+/// happen outside the lock so a slow/dead subscriber cannot block
+/// attach/detach or the scrollback bookkeeping. Per-channel errors are
+/// swallowed: one dead subscriber must not prevent the others from
+/// receiving output. When a `send` fails, the dead channel is pruned so
+/// subsequent chunks don't keep cloning the payload for a subscriber
+/// that can never receive it (TERMINALS_VIEW_SPEC §3).
+pub(crate) fn send_chunk(frontend_channel: &Arc<Mutex<Broadcast>>, chunk: Vec<u8>) {
+    let snapshot: Vec<Channel<Vec<u8>>> = {
+        let mut guard = match frontend_channel.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        guard.push_scrollback(&chunk);
+        guard.channels.clone()
     };
     for chan in &snapshot {
         if chan.send(chunk.clone()).is_err() {
             if let Ok(mut guard) = frontend_channel.lock() {
-                guard.retain(|c| c.id() != chan.id());
+                guard.channels.retain(|c| c.id() != chan.id());
             }
         }
     }
@@ -599,15 +644,22 @@ pub fn attach_terminal_session(
     session_id: String,
     tauri_channel: Channel<Vec<u8>>,
 ) -> Result<(), String> {
-    let sessions = session_state
-        .sessions
-        .lock()
-        .map_err(|_| "Failed to lock sessions".to_string())?;
-    let active = sessions
-        .get(&session_id)
-        .ok_or_else(|| "Session not found".to_string())?;
-    let mut subscribers = active
-        .frontend_channel
+    // Clone the `Broadcast` handle and drop the sessions lock before the
+    // (potentially large) scrollback replay, so a replay never blocks
+    // other session commands.
+    let broadcast = {
+        let sessions = session_state
+            .sessions
+            .lock()
+            .map_err(|_| "Failed to lock sessions".to_string())?;
+        sessions
+            .get(&session_id)
+            .ok_or_else(|| "Session not found".to_string())?
+            .frontend_channel
+            .clone()
+    };
+
+    let mut guard = broadcast
         .lock()
         .map_err(|_| "Failed to lock frontend channel".to_string())?;
     // Deduplicate by channel id: a rapid remount (useEffect cleanup
@@ -617,10 +669,23 @@ pub fn attach_terminal_session(
     // already present we replace it in place so the existing position
     // is preserved (LIFO detach stays predictable).
     let new_id = tauri_channel.id();
-    if let Some(pos) = subscribers.iter().position(|c| c.id() == new_id) {
-        subscribers[pos] = tauri_channel;
+    if let Some(pos) = guard.channels.iter().position(|c| c.id() == new_id) {
+        guard.channels[pos] = tauri_channel.clone();
     } else {
-        subscribers.push(tauri_channel);
+        guard.channels.push(tauri_channel.clone());
+    }
+    // Replay the accumulated scrollback to ONLY the newly-attached
+    // channel, while still holding the `Broadcast` lock. Holding the
+    // lock guarantees the ordering `scrollback → live`: any concurrent
+    // `send_chunk` serializes on this lock, so it cannot enqueue a live
+    // chunk to this channel before the scrollback lands, and — because
+    // the chunk was appended to scrollback under the same lock — the
+    // replay never duplicates a live chunk this subscriber also sees.
+    // Existing subscribers are untouched: the replay targets the new
+    // channel alone.
+    if guard.scrollback_bytes > 0 {
+        let replay = guard.snapshot_scrollback();
+        let _ = tauri_channel.send(replay);
     }
     Ok(())
 }
@@ -636,7 +701,7 @@ pub fn detach_terminal_session(
         .lock()
         .map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.get(&session_id) {
-        if let Ok(mut subscribers) = active.frontend_channel.lock() {
+        if let Ok(mut guard) = active.frontend_channel.lock() {
             match channel_id {
                 Some(id) => {
                     // Channel-specific detach: the caller knows exactly
@@ -646,9 +711,9 @@ pub fn detach_terminal_session(
                     // happens to be racing the unmount cleanup of a
                     // previous surface — the cleanup can't accidentally
                     // pop the new channel.
-                    let before = subscribers.len();
-                    subscribers.retain(|c| c.id() != id);
-                    if subscribers.len() == before {
+                    let before = guard.channels.len();
+                    guard.channels.retain(|c| c.id() != id);
+                    if guard.channels.len() == before {
                         // Unknown id → no-op. We deliberately do NOT
                         // fall back to LIFO pop here: the caller
                         // committed to a specific id, and a stale id
@@ -663,7 +728,7 @@ pub fn detach_terminal_session(
                     // single-subscriber semantics — the typical V1 case
                     // has only one channel attached per session, so
                     // the pop removes it.
-                    subscribers.pop();
+                    guard.channels.pop();
                 }
             }
         }

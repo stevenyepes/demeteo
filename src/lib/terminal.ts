@@ -5,8 +5,14 @@ import type { SessionInfo } from "../types";
 /**
  * Starts a terminal session on the specified machine.
  *
+ * The session streams no output until a surface calls
+ * `attachTerminalSession`. Output produced before the first attach (shell
+ * startup, the `git checkout` bootstrap, the first prompt) accumulates in
+ * the backend scrollback ring and is replayed to the first channel that
+ * attaches — so nothing is lost across the start→attach gap and no seed
+ * channel is required (TERMINALS_VIEW_SPEC §3).
+ *
  * @param machineId The identifier of the machine (local or remote).
- * @param channel The Tauri IPC channel to stream stdout back to the frontend.
  * @param workDir An optional path to initialize the shell's working directory.
  * @param workBranch An optional feature branch to `git checkout` after the
  *   shell starts. When supplied, the backend appends a
@@ -17,13 +23,11 @@ import type { SessionInfo } from "../types";
  */
 export async function startTerminalSession(
   machineId: string,
-  channel: Channel<Uint8Array | number[]>,
   workDir?: string,
   workBranch?: string | null
 ): Promise<string> {
   return invoke<string>("start_terminal_session", {
     machineId,
-    tauriChannel: channel,
     workDir: workDir || null,
     workBranch: workBranch ?? null,
   });

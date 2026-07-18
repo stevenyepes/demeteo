@@ -8,7 +8,6 @@ import {
   useRef,
 } from 'react';
 import type { ReactNode } from 'react';
-import { Channel } from '@tauri-apps/api/core';
 
 import type {
   SessionInfo,
@@ -189,17 +188,6 @@ export interface TerminalPanelContextValue {
    * the frontend-minted `tabId`, which the backend does not recognise.
    */
   getSessionId: (tabId: string) => string | null;
-  /**
-   * Drain the buffered output the panel's seed channel captured between
-   * `start_terminal_session` resolving and `TerminalSurface` mounting.
-   * Called by the surface once its `attach_terminal_session` has
-   * resolved; returns `null` when the surface mounted before any bytes
-   * arrived (the normal case for short bash prompts) or when the tab
-   * has been closed in the meantime. Deactivates the seed channel's
-   * `onmessage` after the first consume so subsequent chunks are
-   * discarded without IPC round-trips.
-   */
-  consumeStartupReplay: (tabId: string) => Uint8Array | null;
 }
 
 export const TerminalPanelContext = createContext<TerminalPanelContextValue | null>(null);
@@ -229,17 +217,6 @@ export function TerminalPanelProvider({ children }: TerminalPanelProviderProps) 
   // state. The cleanup branch in `open()` drains these on resolution so
   // we never leave a backend session with no UI owner.
   const cancelledRef = useRef<Set<string>>(new Set());
-  // Per-tab startup-output capture buffers. `open()` registers a
-  // capturing `onmessage` for the seed channel it passes to
-  // `start_terminal_session`; bytes arrive there until
-  // `consumeStartupReplay(tabId)` is called from the surface once
-  // attach has resolved. Without this, shell startup output, the
-  // `git checkout` bootstrap line, and the first prompt all reach the
-  // drain thread before the surface mounts — and are irretrievably
-  // discarded (spec §1 AC #1).
-  const startupReplayRef = useRef<
-    Map<string, { bytes: Uint8Array[]; deactivate: () => void }>
-  >(new Map());
 
   const open = useCallback(
     async (input: TerminalPanelOpenInput): Promise<string> => {
@@ -288,36 +265,17 @@ export function TerminalPanelProvider({ children }: TerminalPanelProviderProps) 
           }
         }
 
-        // Seed channel: capture startup bytes into a per-tab buffer so
-        // the surface can replay them when it mounts. The drain thread
-        // broadcasts to every channel in the subscriber Vec, including
-        // this one — we just route the chunks into a Uint8Array[] that
-        // `consumeStartupReplay` will concatenate on demand.
-        const seedBytes: Uint8Array[] = [];
-        let seedActive = true;
-        const startChannel = new Channel<Uint8Array | number[]>();
-        startChannel.onmessage = (chunk: Uint8Array | number[]) => {
-          if (!seedActive) return;
-          seedBytes.push(
-            chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk),
-          );
-        };
-        const deactivateSeed = () => {
-          seedActive = false;
-          seedBytes.length = 0;
-        };
-
+        // No seed channel: output produced before the surface attaches
+        // accumulates in the backend scrollback ring and is replayed on
+        // the first `attach_terminal_session` (TERMINALS_VIEW_SPEC §3).
         const sessionId = await startTerminalSession(
           input.machineId,
-          startChannel,
           workDir,
           input.workBranch ?? null,
         );
 
         if (cancelledRef.current.has(tabId)) {
           cancelledRef.current.delete(tabId);
-          startupReplayRef.current.delete(tabId);
-          deactivateSeed();
           try {
             await closeTerminalSession(sessionId);
           } catch (cleanupErr) {
@@ -329,16 +287,11 @@ export function TerminalPanelProvider({ children }: TerminalPanelProviderProps) 
           return tabId;
         }
 
-        startupReplayRef.current.set(tabId, {
-          bytes: seedBytes,
-          deactivate: deactivateSeed,
-        });
         bindingRef.current.set(tabId, sessionId);
         dispatch({ type: 'TAB_SESSION_ATTACHED', tabId, sessionId });
         return tabId;
       } catch (err) {
         cancelledRef.current.delete(tabId);
-        startupReplayRef.current.delete(tabId);
         if (!resolveFailed) {
           console.error('[useTerminalPanel] start_terminal_session failed:', err);
           dispatch({ type: 'TAB_SESSION_FAILED', tabId });
@@ -349,34 +302,10 @@ export function TerminalPanelProvider({ children }: TerminalPanelProviderProps) 
     [],
   );
 
-  const consumeStartupReplay = useCallback(
-    (tabId: string): Uint8Array | null => {
-      const entry = startupReplayRef.current.get(tabId);
-      if (!entry) return null;
-      const { bytes, deactivate } = entry;
-      if (bytes.length === 0) {
-        deactivate();
-        return null;
-      }
-      let total = 0;
-      for (const buf of bytes) total += buf.byteLength;
-      const out = new Uint8Array(total);
-      let offset = 0;
-      for (const buf of bytes) {
-        out.set(buf, offset);
-        offset += buf.byteLength;
-      }
-      deactivate();
-      return out;
-    },
-    [],
-  );
-
   const close = useCallback(async (tabId: string): Promise<void> => {
     const sessionId = bindingRef.current.get(tabId);
     bindingRef.current.delete(tabId);
     cancelledRef.current.delete(tabId);
-    startupReplayRef.current.delete(tabId);
     dispatch({ type: 'CLOSE_TAB', tabId });
 
     if (sessionId) {
@@ -490,7 +419,6 @@ export function TerminalPanelProvider({ children }: TerminalPanelProviderProps) 
       setTitle,
       togglePanel,
       getSessionId,
-      consumeStartupReplay,
     }),
     [
       state,
@@ -500,7 +428,6 @@ export function TerminalPanelProvider({ children }: TerminalPanelProviderProps) 
       setTitle,
       togglePanel,
       getSessionId,
-      consumeStartupReplay,
     ],
   );
 

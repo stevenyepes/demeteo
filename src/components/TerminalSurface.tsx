@@ -12,7 +12,6 @@ import {
   resizeTerminalSession,
   writeTerminalSession,
 } from '../lib/terminal';
-import { useTerminalPanel } from '../hooks/useTerminalPanel';
 
 // xterm.js theme — matches the existing TerminalWindow palette so the
 // panel surface and the legacy modal look identical (AGENTS.md §5).
@@ -56,10 +55,11 @@ export interface TerminalSurfaceProps {
  *   1. Mount:    construct Terminal + FitAddon, open into the container,
  *                create a Tauri `Channel`, register `onmessage`, call
  *                `attach_terminal_session(sessionId, channel)`.
- *   2. Replay:   drain the panel's startup-output buffer and write the
- *                captured bytes to xterm so the shell prompt survives
- *                the gap between `start_terminal_session` resolving
- *                and the surface mounting (spec §1 AC #1).
+ *   2. Replay:   the backend replays the session's scrollback ring to
+ *                the freshly-attached channel, so the shell prompt and
+ *                any pre-attach output survive the gap between
+ *                `start_terminal_session` resolving and the surface
+ *                mounting (TERMINALS_VIEW_SPEC §3). No frontend buffer.
  *   3. Resize:   `ResizeObserver` triggers `fitAddon.fit()` and
  *                `resize_terminal_session(sessionId, cols, rows)`.
  *   4. Unmount:  call `detach_terminal_session(sessionId, channelId)`
@@ -83,7 +83,6 @@ export function TerminalSurface({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const sessionIdRef = useRef<string>(sessionId);
-  const { consumeStartupReplay } = useTerminalPanel();
 
   // The first byte after a fresh attach can race the layout flush;
   // show a transient status badge so the user sees the panel has work
@@ -160,15 +159,11 @@ export function TerminalSurface({
       .then(() => {
         if (cancelled) return;
         setBootstrapping(false);
-        // Replay any startup bytes the panel's seed channel captured
-        // between `start_terminal_session` resolving and this surface
-        // mounting. Without this, the shell prompt and any
-        // `git checkout` bootstrap output land in the seed buffer and
-        // never reach xterm — the user sees an empty canvas.
-        const replay = consumeStartupReplay(tabId);
-        if (replay && replay.byteLength > 0 && terminalRef.current) {
-          terminalRef.current.write(replay);
-        }
+        // The backend replays the session's scrollback ring to this
+        // freshly-attached channel (TERMINALS_VIEW_SPEC §3), so any
+        // pre-attach output — shell prompt, `git checkout` bootstrap —
+        // arrives through the normal `onmessage` path above. No frontend
+        // replay buffer to drain here.
         setTimeout(() => handleResize(), 50);
       })
       .catch((err) => {
@@ -191,7 +186,7 @@ export function TerminalSurface({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [sessionId, handleResize, tabId, consumeStartupReplay]);
+  }, [sessionId, handleResize]);
 
   // Phase overlay badge. The xterm canvas keeps rendering underneath
   // — this is a small, non-blocking indicator for the four lifecycle
