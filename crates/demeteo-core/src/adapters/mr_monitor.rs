@@ -101,6 +101,17 @@ fn record_merged(
     notifications: &dyn NotificationRepository,
     notif: &dyn NotificationPort,
 ) -> Result<(), String> {
+    if notifications
+        .list(Some(&feature.project_id), u32::MAX)?
+        .iter()
+        .any(|notification| {
+            notification.feature_id == feature.id.0
+                && notification.kind == NotificationKind::MrMerged
+        })
+    {
+        return Ok(());
+    }
+
     // 1. Update the feature row. `status = completed` is the
     //    user-visible terminal state; `mr_state = merged` is the
     //    driver.
