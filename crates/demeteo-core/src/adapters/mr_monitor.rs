@@ -151,3 +151,7 @@ fn record_merged(
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../tests/infrastructure/mr_monitor.rs"]
+mod tests;
