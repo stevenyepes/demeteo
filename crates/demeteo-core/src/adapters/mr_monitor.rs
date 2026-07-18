@@ -151,4 +151,3 @@ fn record_merged(
 
     Ok(())
 }
-
