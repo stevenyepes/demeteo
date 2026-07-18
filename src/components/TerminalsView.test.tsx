@@ -89,6 +89,31 @@ describe('TerminalsView', () => {
     expect(screen.getAllByTestId('terminal-surface')).toHaveLength(1);
   });
 
+  it('moves the active selection with ArrowUp/ArrowDown on the session list', async () => {
+    const h = mount();
+    let tabA = '';
+    let tabB = '';
+    await act(async () => {
+      tabA = await h.panel.open({ machineId: 'local', machineLabel: 'local', repoPath: '/a' });
+      tabB = await h.panel.open({ machineId: 'local', machineLabel: 'local', repoPath: '/b' });
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    // B is active (opened last). ArrowUp moves selection to A.
+    const list = screen.getByRole('tablist');
+    await act(async () => {
+      list.focus();
+      await userEvent.keyboard('{ArrowUp}');
+      for (let i = 0; i < 3; i++) await Promise.resolve();
+    });
+    expect(h.panel.state.activeTabId).toBe(tabA);
+    // ArrowDown moves back to B.
+    await act(async () => {
+      await userEvent.keyboard('{ArrowDown}');
+      for (let i = 0; i < 3; i++) await Promise.resolve();
+    });
+    expect(h.panel.state.activeTabId).toBe(tabB);
+  });
+
   it('does not close backend sessions when the view is hidden off-route', async () => {
     const h = mount(true);
     await act(async () => {

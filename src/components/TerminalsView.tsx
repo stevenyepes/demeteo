@@ -38,6 +38,26 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
     for (const t of tabs) void close(t.tabId);
   }, [tabs, close]);
 
+  // Roving ↑/↓ selection within the session list (spec §4.2, §4.3).
+  const handleListKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      if (tabs.length === 0) return;
+      e.preventDefault();
+      const current = Math.max(
+        0,
+        tabs.findIndex((t) => t.tabId === activeTabId),
+      );
+      const next =
+        e.key === 'ArrowDown'
+          ? Math.min(tabs.length - 1, current + 1)
+          : Math.max(0, current - 1);
+      const target = tabs[next];
+      if (target) focus(target.tabId);
+    },
+    [tabs, activeTabId, focus],
+  );
+
   return (
     <div
       data-testid="terminals-view"
@@ -83,7 +103,13 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
               </div>
             </div>
 
-            <ScrollArea className="flex-1" role="tablist" aria-orientation="vertical">
+            <ScrollArea
+              className="flex-1"
+              role="tablist"
+              aria-orientation="vertical"
+              tabIndex={0}
+              onKeyDown={handleListKeyDown}
+            >
               {tabs.map((tab) => (
                 <SessionRow
                   key={tab.tabId}

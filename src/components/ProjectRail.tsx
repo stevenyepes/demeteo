@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles, TerminalSquare } from 'lucide-react';
 import { StatusBadge } from './ui/StatusBadge';
 import { RailNavItem } from './ui/RailNavItem';
+import { ScrollArea } from './ui/ScrollArea';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 
 function fuzzyMatch(text: string, query: string): boolean {
@@ -133,7 +134,7 @@ function ProjectRail() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-2">
+      <ScrollArea className="flex-1 py-2">
         {filtered.length === 0 ? (
           <div className="px-4 py-6 text-center text-slate-500 text-xs">
             {searchQuery ? 'No matching projects.' : 'No workspaces configured.'}
@@ -176,7 +177,7 @@ function ProjectRail() {
             </div>
           ))
         )}
-      </div>
+      </ScrollArea>
 
       {/* Pinned footer: Terminals entry + keyboard hint */}
       <div className="border-t border-white/5 p-2 space-y-1">

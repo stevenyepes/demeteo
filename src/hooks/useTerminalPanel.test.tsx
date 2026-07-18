@@ -743,4 +743,42 @@ describe('useTerminalPanel — setTitle() rollback on IPC failure', () => {
     resolveStart.current?.('sess_x');
     await openPromise.catch(() => {});
   });
+
+  it('flushes a rename made during connecting to the backend once the session resolves (F2)', async () => {
+    const resolveStart: { current: ((sid: string) => void) | null } = { current: null };
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'start_terminal_session') {
+        return new Promise<string>((resolve) => {
+          resolveStart.current = resolve;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const h = mountHarness();
+    const openPromise = h.panel.open({ machineId: 'local', machineLabel: 'local' });
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+    const tabId = h.panel.state.tabs[0]!.tabId;
+
+    // Rename while still connecting — no backend session to address yet,
+    // so no rename IPC should fire.
+    await act(async () => {
+      await h.panel.setTitle(tabId, 'my-shell');
+    });
+    expect(commandsOf('rename_terminal_session')).toHaveLength(0);
+
+    // Now the start resolves; open() must flush the pending title.
+    await act(async () => {
+      resolveStart.current?.('sess_flush');
+      await openPromise.catch(() => {});
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+
+    const renames = commandsOf('rename_terminal_session');
+    expect(renames).toHaveLength(1);
+    expect(renames[0][1]).toMatchObject({ sessionId: 'sess_flush', title: 'my-shell' });
+  });
 });
