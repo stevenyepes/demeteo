@@ -133,6 +133,30 @@ remove `startChannel`, `seedBytes`, `seedActive`, `deactivateSeed`,
 `startupReplayRef`, `consumeStartupReplay` end-to-end; `startTerminalSession()`
 loses its channel argument. This subsumes findings F1 and F5.
 
+### 3.1 Disconnect & reconnect (decision D2)
+
+A dropped transport must be **recoverable in place**, not a dead tab — Demeteo
+runs long-lived agents over flaky SSH, so a Wi-Fi blip should not cost a
+session.
+
+- **Distinguish drop from close.** The drain thread's loop exits on reader
+  EOF/error. Today that path calls `emit_ended` and the session is forgotten.
+  Split it: an *explicit* close (tab close / kill-all / tray cleanup) removes
+  the `ActiveSession` and emits `terminal-session-ended`; an *unexpected*
+  drain exit keeps the `ActiveSession` in the map **with its `Broadcast`
+  (scrollback + title) intact** and emits a new `terminal-session-disconnected`
+  event. The PTY/SSH child is gone but the session shell — id, scrollback,
+  subscribers, title — survives.
+- **`reconnect_terminal_session(session_id)`** [Planned command] —
+  re-establishes the transport for an existing disconnected session:
+  re-open the SSH channel (or re-spawn the local PTY), attach it to the
+  **same** `ActiveSession`, spawn a fresh drain thread on the existing
+  `Broadcast`, then emit `terminal-session-running`. Scrollback is preserved
+  as history; the new child appends after it. Returns an error if the session
+  id is unknown or already connected.
+- **Register** the command in `src-tauri/src/lib.rs` next to
+  `rename_terminal_session` (~L342) and add the wrapper in `src/lib/terminal.ts`.
+
 ---
 
 ## 4. Frontend — the Terminals view [Planned]
@@ -175,7 +199,9 @@ loses its channel argument. This subsumes findings F1 and F5.
 - **Surface header** — breadcrumb `machineLabel · repoPath · branch` +
   `PhaseBadge`. The xterm owns its own scrollback; the page never scrolls.
 - **Empty state** (`state.tabs.length === 0`) — centered card with
-  `NewTerminalMenu` (machine picker + one-click agent buttons).
+  `NewTerminalMenu` (machine picker + one-click agent buttons). This is also
+  what shows when the user closes the **last** tab: the view stays in place and
+  the user immediately launches another — no auto-navigation away (decision D1).
 - **Responsive** — under a width threshold the session list collapses to
   `MachineDot`-only icons (same collapse idiom as the rail).
 - **Motion** — subtle fade on active-tab switch; gate behind
@@ -193,6 +219,24 @@ loses its channel argument. This subsumes findings F1 and F5.
 Wire into `src/lib/shortcuts.ts` + `src/hooks/useKeyboardShortcuts.ts`
 (the `` ` `` case already exists — repoint it from `togglePanel` to navigate).
 
+### 4.4 Reconnect affordance (decision D2)
+
+A dropped session surfaces as the new `disconnected` phase (see §3.1, §10):
+
+- **Session row** — `MachineDot` stops pulsing and goes amber; a small
+  `disconnected` chip replaces the running state. The row is **not** removed.
+- **Surface header** — shows a prominent **Reconnect** button
+  (`RotateCw` icon) alongside the breadcrumb. Click →
+  `reconnectTerminalSession(sessionId)`; the provider handles the
+  `terminal-session-running` event by flipping the tab back to `running`, and
+  the surface re-attaches (repainting scrollback + the fresh child's output).
+- **Auto-retry** is out of scope for V1 — reconnect is user-initiated so a
+  developer stays in control of when a remote shell is re-established. A single
+  in-flight guard prevents double-clicks from spawning two children.
+- Provider subscribes to `terminal-session-disconnected` (phase →
+  `disconnected`) and `terminal-session-running` (phase → `running`) via
+  `useTauriEvent`, mirroring the existing `terminal-session-ended` handler.
+
 ---
 
 ## 5. Component inventory (extract once, reuse everywhere) [Planned]
@@ -206,7 +250,7 @@ logic. Extract shared primitives under `src/components/ui/` (and a hook under
 | `ScrollArea` | Styled scroll container: `overflow-y-auto overscroll-contain`, thin custom scrollbar, `min-h-0` flex child, `content-visibility:auto` rows | Rail workspaces list, session list |
 | `RailNavItem` | One rail button (icon + label + optional count/pulse), expanded & collapsed variants | Projects, Terminals entry |
 | `MachineDot` | Cyan (local) / emerald (remote) status dot + optional pulse | Session rows, rail |
-| `PhaseBadge` | `connecting`/`running`/`closed`/`error` → chip; reuse existing `ui/StatusBadge` | Session rows, surface header |
+| `PhaseBadge` | `connecting`/`running`/`disconnected`/`closed`/`error` → chip; reuse existing `ui/StatusBadge` | Session rows, surface header |
 | `useInlineRename` | Double-click→input, draft/commit/cancel, autofocus+select, Esc/Enter — extracted from today's `TerminalTab` | Session rows (future: project rename) |
 | `SessionRow` | `MachineDot` + title (`useInlineRename`) + `PhaseBadge` + hover close; `React.memo` | `TerminalsView` |
 | `NewTerminalMenu` | Dropdown of enabled agents per machine (reuses `get_agent_configs` + `AGENT_CLI` from the retiring `AgentTerminalDrawer`) → `open({ launchCommand, forceNew })` | View header, empty state |
@@ -292,20 +336,28 @@ first-class capability of `open()`:
 
 ## 10. Data model
 
-`src/types.ts` (already added in PR #58 — no change needed beyond the route):
+`src/types.ts` — two changes from the PR #58 shape: add the `disconnected`
+phase (§3.1/§4.4) and drop `collapsed` (decision D3):
 
 ```ts
 interface SessionInfo { session_id: string; machine_id: string; created_at: number; title: string | null; }
 interface TerminalTabDescriptor {
   sessionId: string | null; tabId: string; machineId: string; machineLabel: string;
   projectId?: string; repoPath?: string; workBranch?: string | null;
-  title: string; phase: 'connecting' | 'running' | 'closed' | 'error'; createdAt: number;
+  title: string;
+  phase: 'connecting' | 'running' | 'disconnected' | 'closed' | 'error';
+  createdAt: number;
 }
-interface TerminalPanelState { tabs: TerminalTabDescriptor[]; activeTabId: string | null; collapsed: boolean; }
+interface TerminalPanelState { tabs: TerminalTabDescriptor[]; activeTabId: string | null; }
 ```
 
-`collapsed` becomes vestigial once the bottom panel is gone; keep it for the
-webview-reload reconcile path or remove in a follow-up cleanup.
+**`collapsed` is removed now** (decision D3), not deferred — with the bottom
+panel gone it is dead state. This touches: `TerminalPanelState` (drop the
+field), `initialState`, the `TOGGLE_PANEL` reducer action + the `togglePanel`
+callback (delete both — the `` ` `` shortcut and TopBar button now navigate to
+the view instead), and the consumers that read `state.collapsed`
+(`TopBar.tsx` ~L96, the retired `TerminalPanelHost.tsx`). Provider tests that
+asserted collapse behavior are removed with it.
 
 ---
 
@@ -333,6 +385,12 @@ a **[Fix]**:
 - Scrollback trims at the cap on whole-chunk boundaries.
 - Two channels attached both receive live output exactly once.
 - start → attach gap loses nothing; no duplication at the cutover.
+- Unexpected drain exit keeps the `ActiveSession` (scrollback + title) and emits
+  `terminal-session-disconnected`; an explicit close removes it and emits
+  `terminal-session-ended` (§3.1).
+- `reconnect_terminal_session` on a disconnected session spawns a fresh child on
+  the same `Broadcast`, preserves scrollback, and emits
+  `terminal-session-running`; errors on an unknown or already-connected id.
 
 **Frontend** (vitest):
 - Rail Terminals entry navigates to the view and shows the live count.
@@ -344,6 +402,11 @@ a **[Fix]**:
   double-open starts exactly one session (F3).
 - Reconciled tab renders as `running` (F6).
 - `launchCommand` issues one `write_terminal_session` after attach (§7).
+- Closing the last tab keeps `view.kind === 'terminals'` and renders the empty
+  state (D1).
+- A `terminal-session-disconnected` event flips the tab to `disconnected` and
+  shows the Reconnect button; clicking it calls `reconnect_terminal_session`
+  once (in-flight guard) and returns to `running` on the event (D2).
 - `ScrollArea` keeps rail header/footer pinned while the workspace list
   scrolls; `overscroll-contain` prevents scroll-chaining into the surface.
 
@@ -353,9 +416,12 @@ a **[Fix]**:
 
 1. §3 backend scrollback + frontend seed-channel deletion (F1, F5).
 2. F3 (`forceNew` + coalescing) and F6 — safe on the current bottom panel.
-3. Extract §5 primitives; build `TerminalsView` + `NewTerminalMenu` (§4, §7,
-   F4); add the route + rail entry (§6); remove `TerminalPanelHost`.
-4. F2 and the keyboard/scroll polish (§4.3, §9).
+3. §3.1 disconnect/reconnect backend (`terminal-session-disconnected`,
+   `reconnect_terminal_session`) — landable independently of the view (D2).
+4. Extract §5 primitives; build `TerminalsView` + `NewTerminalMenu` (§4, §7,
+   F4); add the route + rail entry (§6); remove `TerminalPanelHost`; delete
+   `collapsed`/`TOGGLE_PANEL` (D3); wire the §4.4 Reconnect UI.
+5. F2 and the keyboard/scroll polish (§4.3, §9).
 
 Each step is independently shippable and keeps the app green
 (`cargo check -p demeteo`, `npx tsc --noEmit`, `cargo test terminal`, touched
@@ -363,10 +429,10 @@ vitest suites) per [`AGENTS.md`](../AGENTS.md) §11.
 
 ---
 
-## 14. Open questions
+## 14. Resolved decisions
 
-1. Should closing the *last* tab auto-navigate away from the Terminals view, or
-   show the empty state in place? (Proposed: empty state in place.)
-2. Do remote sessions need a reconnect affordance in the surface header when the
-   SSH child drops, or is tab-level `error` phase enough for V1?
-3. Should `collapsed` in `TerminalPanelState` be removed now or in a follow-up?
+| # | Decision | Rationale |
+|---|---|---|
+| D1 | Closing the last tab shows the **empty state in place**; no auto-navigation | Keeps the developer in the terminals context; matches VSCode/Zellij (§4.2) |
+| D2 | **Reconnect affordance in V1** — `disconnected` phase + surface-header Reconnect button, session shell survives the drop | Long-lived agents over flaky SSH must survive a blip without losing scrollback (§3.1, §4.4) |
+| D3 | **Remove `collapsed` now**, not in a follow-up | With the bottom panel gone it is dead state; carrying it invites drift (§10) |
