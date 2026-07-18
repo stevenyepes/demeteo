@@ -287,14 +287,20 @@ mod tests {
     /// preventing the unrecoverable hidden-window state (spec §5 Linux edge
     /// case). This mirrors the `hide_to_tray` expression in `lib.rs`.
     #[test]
+    #[allow(clippy::nonminimal_bool)]
     fn hide_to_tray_requires_preference_and_tray() {
+        // Compute the AND inside a closure so clippy's `nonminimal_bool` lint
+        // cannot constant-fold the truth-table expressions into bare bools.
+        fn combine(bg: bool, tray: bool) -> bool {
+            bg && tray
+        }
         // preference ON, tray up  -> hide
-        assert_eq!(close_action(true && true), CloseAction::HideToTray);
+        assert_eq!(close_action(combine(true, true)), CloseAction::HideToTray);
         // preference ON, tray down -> cleanup (the C1 fallback)
-        assert_eq!(close_action(true && false), CloseAction::Cleanup);
+        assert_eq!(close_action(combine(true, false)), CloseAction::Cleanup);
         // preference OFF, tray up  -> cleanup
-        assert_eq!(close_action(false && true), CloseAction::Cleanup);
+        assert_eq!(close_action(combine(false, true)), CloseAction::Cleanup);
         // preference OFF, tray down -> cleanup
-        assert_eq!(close_action(false && false), CloseAction::Cleanup);
+        assert_eq!(close_action(combine(false, false)), CloseAction::Cleanup);
     }
 }
