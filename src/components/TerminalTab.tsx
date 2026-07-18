@@ -151,6 +151,14 @@ export function TerminalTab({ tab, active, onFocus, onClose }: TerminalTabProps)
         </span>
       )}
 
+      {phase === 'disconnected' && (
+        <span
+          aria-hidden="true"
+          className="text-[9px] uppercase tracking-wider text-amber-400 font-bold shrink-0"
+        >
+          off
+        </span>
+      )}
       {phase === 'closed' && (
         <span
           aria-hidden="true"

@@ -41,8 +41,8 @@ export interface TerminalSurfaceProps {
   sessionId: string;
   /** Lifecycle phase from the panel descriptor — used for the inline
    *  status overlay (no xterm canvas paints while we are connecting /
-   *  closed / errored). */
-  phase: 'connecting' | 'running' | 'closed' | 'error';
+   *  disconnected / closed / errored). */
+  phase: 'connecting' | 'running' | 'disconnected' | 'closed' | 'error';
   /** User-facing title shown in the surface's local toolbar. */
   title: string;
   /** Host label (local / hostname) shown next to the title. */
@@ -215,6 +215,11 @@ export function TerminalSurface({
             <span className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-mono">
               <Wifi className="w-3 h-3 animate-pulse" />
               <span>Connected</span>
+            </span>
+          ) : phase === 'disconnected' ? (
+            <span className="flex items-center gap-1.5 text-[10px] text-amber-400 font-mono">
+              <WifiOff className="w-3 h-3" />
+              <span>Disconnected</span>
             </span>
           ) : phase === 'closed' ? (
             <span className="flex items-center gap-1.5 text-[10px] text-slate-500 font-mono">

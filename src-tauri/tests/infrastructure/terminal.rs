@@ -93,6 +93,7 @@ fn branch_bootstrap_trims_surrounding_whitespace() {
 // =============================================================================
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -240,6 +241,9 @@ fn spawn_test_session(
         created_at: 0,
         frontend_channel,
         display_title,
+        work_dir: None,
+        work_branch: None,
+        connected: Arc::new(AtomicBool::new(true)),
     };
 
     (writer_handle, drain_handle, session)
@@ -261,6 +265,9 @@ fn insert_test_session(state: &SessionState, session_id: &str) {
         created_at: 0,
         frontend_channel,
         display_title,
+        work_dir: None,
+        work_branch: None,
+        connected: Arc::new(AtomicBool::new(true)),
     };
     let mut sessions = state.sessions.lock().expect("sessions lock");
     sessions.insert(session_id.to_string(), active);
@@ -805,6 +812,9 @@ fn attach_replays_scrollback_to_new_channel() {
         created_at: 0,
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
+        work_dir: None,
+        work_branch: None,
+        connected: Arc::new(AtomicBool::new(true)),
     };
     let session_id = "sess_scrollback_replay".to_string();
     {
@@ -851,6 +861,9 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
         created_at: 0,
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
+        work_dir: None,
+        work_branch: None,
+        connected: Arc::new(AtomicBool::new(true)),
     };
     let session_id = "sess_no_dup_replay".to_string();
     {
@@ -869,7 +882,8 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
     // lands in scrollback.
     super::send_chunk(&frontend_channel, b"live-1\r\n".to_vec());
     assert!(
-        wait_for(2_000, || captured_a.lock().expect("a lock").as_slice() == b"live-1\r\n"),
+        wait_for(2_000, || captured_a.lock().expect("a lock").as_slice()
+            == b"live-1\r\n"),
         "channel A must receive the live chunk"
     );
 
@@ -877,7 +891,8 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
     let (channel_b, captured_b) = appending_capturing_channel();
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_b).expect("attach B");
     assert!(
-        wait_for(2_000, || captured_b.lock().expect("b lock").as_slice() == b"live-1\r\n"),
+        wait_for(2_000, || captured_b.lock().expect("b lock").as_slice()
+            == b"live-1\r\n"),
         "channel B must replay the scrollback on attach"
     );
 
@@ -939,4 +954,152 @@ fn scrollback_trims_at_cap_on_chunk_boundaries() {
     // Most-recent-wins: the last chunk pushed (marker 7) is still present.
     let newest = guard.scrollback.back().expect("non-empty scrollback");
     assert_eq!(newest[0], 7, "the most recent chunk must be retained");
+}
+
+// =============================================================================
+// Disconnect / reconnect tests (TERMINALS_VIEW_SPEC §3.1, §12). A dropped
+// transport marks the session `disconnected` but keeps it (and its scrollback)
+// in the map; `reconnect_terminal_session` rebuilds the transport in place,
+// preserves scrollback, and refuses to run on an already-connected or unknown
+// session.
+// =============================================================================
+
+use super::reconnect_with_machine;
+
+/// The built-in `local` machine descriptor, used to drive
+/// `reconnect_with_machine` without a full `AppContext`.
+fn local_machine() -> crate::domain::models::Machine {
+    crate::infrastructure::worktree::machine_resolver::local_machine()
+}
+
+/// Builds a disconnected `ActiveSession` (no live drain thread,
+/// `connected = false`) with a pre-seeded scrollback and inserts it,
+/// returning the shared `Broadcast` handle for assertions.
+fn insert_disconnected_session(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    session_id: &str,
+    seed: &[u8],
+) -> Arc<Mutex<Broadcast>> {
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
+    if !seed.is_empty() {
+        super::send_chunk(&frontend_channel, seed.to_vec());
+    }
+    let (read_source, write_sink, keepalive) =
+        super::start_local_pty("local", &None, &None).expect("start_local_pty");
+    let session = ActiveSession {
+        read_source,
+        write_sink,
+        _keepalive: keepalive,
+        machine_id: "local".to_string(),
+        created_at: 0,
+        frontend_channel: frontend_channel.clone(),
+        display_title: Mutex::new(None),
+        work_dir: None,
+        work_branch: None,
+        connected: Arc::new(AtomicBool::new(false)),
+    };
+    let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+    state_ref
+        .sessions
+        .lock()
+        .expect("sessions lock")
+        .insert(session_id.to_string(), session);
+    frontend_channel
+}
+
+/// The drain thread's `emit_disconnected` helper flips the shared
+/// `connected` flag to `false` so the session is recognised as
+/// disconnected (and reconnect-eligible) rather than removed.
+#[test]
+fn emit_disconnected_marks_session_not_connected() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle().clone();
+    let connected = Arc::new(AtomicBool::new(true));
+    super::emit_disconnected(&handle, "sess_x", "local", 0, &connected);
+    assert!(
+        !connected.load(Ordering::SeqCst),
+        "an unexpected drain exit must mark the session disconnected"
+    );
+}
+
+/// Reconnecting a disconnected session rebuilds the transport in place:
+/// the session stays in the map, `connected` flips back to `true`, and
+/// the pre-disconnect scrollback is preserved as history (replayed to a
+/// freshly-attached channel).
+#[test]
+fn reconnect_preserves_session_and_scrollback() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle().clone();
+    app.manage(SessionState::default());
+
+    let session_id = "sess_reconnect".to_string();
+    let _broadcast = insert_disconnected_session(&app, &session_id, b"old-history\r\n");
+
+    let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+    reconnect_with_machine(&handle, &local_machine(), &state_ref, &session_id)
+        .expect("reconnect must succeed on a disconnected session");
+
+    // Session preserved and marked connected again.
+    {
+        let sessions = state_ref.sessions.lock().expect("sessions lock");
+        let active = sessions.get(&session_id).expect("session preserved");
+        assert!(
+            active.connected.load(Ordering::SeqCst),
+            "reconnect must mark the session connected"
+        );
+    }
+
+    // Scrollback survived: a fresh attach replays the pre-disconnect
+    // history (the new child may append a prompt after it, so match the
+    // prefix).
+    let (channel, captured) = appending_capturing_channel();
+    attach_terminal_session(state_ref.clone(), session_id.clone(), channel).expect("attach");
+    assert!(
+        wait_for(2_000, || captured
+            .lock()
+            .expect("lock")
+            .starts_with(b"old-history\r\n")),
+        "reconnect must preserve scrollback as replayable history"
+    );
+}
+
+/// Reconnect refuses to run while the session is still connected (a live
+/// transport is attached), so a stray reconnect can't spawn a second
+/// child on the same session.
+#[test]
+fn reconnect_errors_when_already_connected() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle().clone();
+    app.manage(SessionState::default());
+
+    // A default `insert_test_session` is `connected = true`.
+    let session_id = "sess_live".to_string();
+    {
+        let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+        insert_test_session(&state_ref, &session_id);
+    }
+
+    let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+    let err = reconnect_with_machine(&handle, &local_machine(), &state_ref, &session_id)
+        .expect_err("reconnect on a connected session must error");
+    assert!(
+        err.to_lowercase().contains("already connected"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Reconnecting an unknown session id is an error, not a silent spawn.
+#[test]
+fn reconnect_errors_on_unknown_session() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle().clone();
+    app.manage(SessionState::default());
+
+    let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+    let err = reconnect_with_machine(&handle, &local_machine(), &state_ref, "sess_nope")
+        .expect_err("reconnect on an unknown id must error");
+    assert!(
+        err.to_lowercase().contains("not found"),
+        "unexpected error: {err}"
+    );
 }

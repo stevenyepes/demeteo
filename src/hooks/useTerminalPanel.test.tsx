@@ -387,6 +387,34 @@ describe('useTerminalPanel — resolveRepoDir failure', () => {
   });
 });
 
+describe('useTerminalPanel — reconnect()', () => {
+  it('calls reconnect_terminal_session once and coalesces concurrent double-clicks', async () => {
+    const h = mountHarness();
+
+    let tabId = '';
+    await act(async () => {
+      tabId = await h.panel.open({ machineId: 'local', machineLabel: 'local' });
+    });
+
+    // Two rapid reconnect() calls for the same tab — the in-flight guard
+    // must collapse them to a single backend call (spec §4.4).
+    await act(async () => {
+      await Promise.all([h.panel.reconnect(tabId), h.panel.reconnect(tabId)]);
+    });
+
+    expect(commandsOf('reconnect_terminal_session')).toHaveLength(1);
+    expect(h.panel.state.tabs[0]?.phase).toBe('running');
+  });
+
+  it('no-ops for a tab that has no backend session yet', async () => {
+    const h = mountHarness();
+    await act(async () => {
+      await h.panel.reconnect('never-opened');
+    });
+    expect(commandsOf('reconnect_terminal_session')).toHaveLength(0);
+  });
+});
+
 describe('useTerminalPanel — startup reconciliation', () => {
   it('rehydrates tabs from list_terminal_sessions on mount, sorted by created_at', async () => {
     const restored: SessionInfo[] = [
