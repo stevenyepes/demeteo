@@ -383,7 +383,7 @@ function AppInner() {
       const p = projects[index];
       if (p) { projDispatch({ type: 'SET_CURRENT', id: p.id }); navigate({ kind: 'home' }); }
     },
-    onToggleTerminalPanel: () => navigate({ kind: 'terminals' }),
+    onOpenTerminalsView: () => navigate({ kind: 'terminals' }),
   });
 
   const handleSeedSample = async () => {

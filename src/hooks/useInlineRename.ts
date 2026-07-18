@@ -6,8 +6,9 @@ export interface UseInlineRenameOptions {
   /** The current committed title. */
   value: string;
   /**
-   * Called with the trimmed new value ONLY when it differs from `value`.
-   * Committing an unchanged value is a no-op.
+   * Called with the trimmed new value ONLY when it is non-empty and
+   * differs from `value`. Committing an unchanged value, or an
+   * empty/whitespace-only draft, is a no-op that reverts to `value`.
    */
   onCommit: (next: string) => void;
   /** Maximum length for the rename input. Defaults to 64. */
@@ -21,7 +22,8 @@ export interface UseInlineRename {
   inputRef: React.RefObject<HTMLInputElement | null>;
   /** Enter edit mode, seeding the draft from `value`. */
   startRename: () => void;
-  /** Trim the draft; if it changed call `onCommit`; exit edit mode. */
+  /** Trim the draft; if it is non-empty and changed call `onCommit`;
+   *  exit edit mode. Empty/whitespace-only drafts revert to `value`. */
   commitRename: () => void;
   /** Reset the draft back to `value` and exit edit mode. */
   cancelRename: () => void;
@@ -64,14 +66,22 @@ export function useInlineRename(opts: UseInlineRenameOptions): UseInlineRename {
   }, [value]);
 
   const commitRename = useCallback(() => {
+    // Guard against a double-commit: pressing Enter commits and flips
+    // `renaming` to false, and the input's trailing `blur` then fires a
+    // second `commitRename`. Once we've left edit mode there is nothing
+    // to commit, so bail before touching `onCommit` again.
+    if (!renaming) return;
     const trimmed = draft.trim();
     setRenaming(false);
-    if (trimmed === value) {
+    // An empty/whitespace-only draft is treated as "keep the current
+    // title" — revert rather than committing a blank name (which the
+    // backend would store as `None`, silently clearing the title).
+    if (trimmed === '' || trimmed === value) {
       setDraft(value);
       return;
     }
     onCommit(trimmed);
-  }, [draft, value, onCommit]);
+  }, [renaming, draft, value, onCommit]);
 
   const cancelRename = useCallback(() => {
     setDraft(value);

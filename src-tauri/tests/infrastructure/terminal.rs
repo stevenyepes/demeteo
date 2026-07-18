@@ -1022,6 +1022,28 @@ fn emit_disconnected_marks_session_not_connected() {
     );
 }
 
+/// The connected→disconnected transition is claimed exactly once. An
+/// explicit close (`close_terminal_session` / `close_machine_sessions`)
+/// pre-sets `connected = false` before tearing the transport down; the
+/// drain thread's trailing `emit_disconnected` must then find the flag
+/// already claimed and bail, so no spurious `terminal-session-disconnected`
+/// follows the `terminal-session-ended` a close already emitted.
+#[test]
+fn emit_disconnected_is_noop_once_transition_is_claimed() {
+    let app = tauri::test::mock_app();
+    let handle = app.handle().clone();
+
+    // Simulate an explicit close having already claimed the transition.
+    let already_claimed = Arc::new(AtomicBool::new(false));
+    // The drain thread's EOF calls this after teardown; the guard makes
+    // it a no-op — it must neither re-claim nor panic.
+    super::emit_disconnected(&handle, "sess_x", "local", 0, &already_claimed);
+    assert!(
+        !already_claimed.load(Ordering::SeqCst),
+        "an already-claimed transition must stay claimed"
+    );
+}
+
 /// Reconnecting a disconnected session rebuilds the transport in place:
 /// the session stays in the map, `connected` flips back to `true`, and
 /// the pre-disconnect scrollback is preserved as history (replayed to a

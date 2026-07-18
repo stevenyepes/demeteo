@@ -31,7 +31,10 @@ const PHASE_META: Record<TerminalPhase, PhaseMeta> = {
 };
 
 export function PhaseBadge({ phase, className = '' }: PhaseBadgeProps): React.ReactElement {
-  const { Icon, iconClassName, label, color } = PHASE_META[phase];
+  // `phase` originates across the IPC boundary (`TerminalTabDescriptor`),
+  // so fall back defensively rather than destructuring `undefined` and
+  // crashing the whole row if an unknown value ever arrives.
+  const { Icon, iconClassName, label, color } = PHASE_META[phase] ?? PHASE_META.closed;
 
   return (
     <span
