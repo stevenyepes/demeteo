@@ -367,6 +367,18 @@ impl GitOpsHelper {
     }
 
     /// Clean up a linked worktree for a subtask, including its branch.
+    ///
+    /// IMPORTANT: the artifact-scope fence (`apply_artifact_scope`) chmods
+    /// protected paths in the worktree to `a-w` for Verify/Artifacts/ReadOnly
+    /// steps. `unlink()` (which both `git worktree remove` and `rm -rf` rely
+    /// on) needs write permission on the **parent directory**, so an `a-w`
+    /// `src/` left over from the step's own run silently blocks this cleanup
+    /// — `git worktree remove --force` and `rm -rf` each fail partway
+    /// through, and since every command here is best-effort (`let _ = ...`),
+    /// the failure is swallowed and a gutted, git-disconnected directory
+    /// skeleton is left on disk. Restore `u+w` first, exactly as
+    /// [`Self::provision_subtask_worktree`]'s leftover-state cleanup already
+    /// does.
     pub async fn cleanup_subtask_worktree(
         &self,
         machine_id: Option<&str>,
@@ -378,6 +390,16 @@ impl GitOpsHelper {
         let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "chmod -R u+w {} 2>/dev/null || true",
+                    paths::shell_escape_posix(&wt_dir)
+                ),
+            )
+            .await;
         let _ = self
             .exec
             .run_command(
@@ -452,6 +474,20 @@ impl GitOpsHelper {
             for wt in &worktrees {
                 let is_match = wt.branch.as_deref().is_some_and(|b| b.starts_with(&prefix));
                 if is_match {
+                    // Restore write perms the artifact-scope fence may have
+                    // stripped during the step's run — see the doc comment
+                    // on `cleanup_subtask_worktree` for why this must come
+                    // before both `worktree remove` and `rm -rf`.
+                    let _ = self
+                        .exec
+                        .run_command(
+                            machine_str,
+                            &format!(
+                                "chmod -R u+w {} 2>/dev/null || true",
+                                paths::shell_escape_posix(&wt.path)
+                            ),
+                        )
+                        .await;
                     let _ = self
                         .exec
                         .run_command(
