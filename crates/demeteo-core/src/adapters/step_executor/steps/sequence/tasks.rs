@@ -99,10 +99,12 @@ pub struct TaskPlan {
 ///   that needs it.
 ///
 /// There is deliberately no cap on task count. Decomposition is sized by the
-/// ticket rubric (one context window per task), and the per-task budget
-/// ceiling plus `subtask_runs` telemetry bound and expose the cost of an
-/// over-eager list; a hard count limit only punished well-decomposed large
-/// features.
+/// ticket rubric (one context window per task); a hard count limit only
+/// punished well-decomposed large features. Total cost is bounded instead, by
+/// the aggregate dollar ceiling `run_tasks_loop` enforces across the whole
+/// list (see `SEQUENCE_STEP_COST_CEILING_MULTIPLIER` in `runner.rs`) — the
+/// per-task budget alone resets every task and does not, on its own, bound
+/// anything about the list as a whole.
 ///
 /// Returns a human-readable reason, or `None` when the plan is executable.
 pub(crate) fn validate_task_plan(plan: &TaskPlan) -> Option<String> {
@@ -208,11 +210,15 @@ pub(crate) fn select_targeted_tasks(
     // task re-runs too, or it would be skipped as "landed" while the code
     // under it changes. Dependencies always point backward (validated), so
     // one forward pass in list order reaches the transitive closure.
+    // Ids are compared trimmed everywhere below — validate_task_plan accepts
+    // a whitespace-padded id (it trims both sides), so an untrimmed lookup
+    // here would silently fail to recognize an otherwise-valid dependency.
     let mut selected_ids: std::collections::HashSet<&str> =
-        hits.iter().map(|t| t.id.as_str()).collect();
+        hits.iter().map(|t| t.id.trim()).collect();
     let mut hits = hits;
     for task in &cached.tasks {
-        if selected_ids.contains(task.id.as_str()) {
+        let task_id = task.id.trim();
+        if selected_ids.contains(task_id) {
             continue;
         }
         if task
@@ -220,7 +226,7 @@ pub(crate) fn select_targeted_tasks(
             .iter()
             .any(|dep| selected_ids.contains(dep.trim()))
         {
-            selected_ids.insert(task.id.as_str());
+            selected_ids.insert(task_id);
             hits.push(task);
         }
     }
@@ -230,13 +236,13 @@ pub(crate) fn select_targeted_tasks(
         .tasks
         .iter()
         .enumerate()
-        .map(|(i, t)| (t.id.as_str(), i))
+        .map(|(i, t)| (t.id.trim(), i))
         .collect();
-    hits.sort_by_key(|t| order.get(t.id.as_str()).copied().unwrap_or(usize::MAX));
+    hits.sort_by_key(|t| order.get(t.id.trim()).copied().unwrap_or(usize::MAX));
     let already_landed: Vec<PlannedTask> = cached
         .tasks
         .iter()
-        .filter(|t| !selected_ids.contains(t.id.as_str()))
+        .filter(|t| !selected_ids.contains(t.id.trim()))
         .cloned()
         .collect();
 
