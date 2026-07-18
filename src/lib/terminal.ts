@@ -1,5 +1,7 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 
+import type { SessionInfo } from "../types";
+
 /**
  * Starts a terminal session on the specified machine.
  *
@@ -74,5 +76,70 @@ export async function resolveRepoDir(
   return invoke<string>("resolve_repo_dir", {
     projectId,
     repoPath,
+  });
+}
+
+/**
+ * Attaches an output channel to an active terminal session.
+ *
+ * @param sessionId The terminal session identifier.
+ * @param channel The Tauri IPC channel that receives terminal output.
+ * @returns A promise that resolves when the channel is attached.
+ */
+export async function attachTerminalSession(
+  sessionId: string,
+  channel: Channel<Uint8Array | number[]>
+): Promise<void> {
+  return invoke<void>("attach_terminal_session", {
+    sessionId,
+    tauriChannel: channel,
+  });
+}
+
+/**
+ * Detaches output channels from an active terminal session.
+ *
+ * @param sessionId The terminal session identifier.
+ * @param channelId The Tauri `Channel.id` of the subscriber to remove.
+ *   When supplied, only the matching subscriber is evicted — this is
+ *   race-safe against a fresh `attach_terminal_session` call that
+ *   happens to be re-binding the same session. When omitted, the
+ *   backend falls back to LIFO-pop semantics (V1 single-subscriber).
+ * @returns A promise that resolves when the channels are detached.
+ */
+export async function detachTerminalSession(
+  sessionId: string,
+  channelId?: number
+): Promise<void> {
+  const args: { sessionId: string; channelId?: number } = { sessionId };
+  if (channelId !== undefined) {
+    args.channelId = channelId;
+  }
+  return invoke<void>("detach_terminal_session", args);
+}
+
+/**
+ * Lists active terminal sessions.
+ *
+ * @returns A promise that resolves to the active sessions.
+ */
+export async function listTerminalSessions(): Promise<SessionInfo[]> {
+  return invoke<SessionInfo[]>("list_terminal_sessions");
+}
+
+/**
+ * Renames an active terminal session.
+ *
+ * @param sessionId The terminal session identifier.
+ * @param title The new terminal session title.
+ * @returns A promise that resolves when the title is stored.
+ */
+export async function renameTerminalSession(
+  sessionId: string,
+  title: string
+): Promise<void> {
+  return invoke<void>("rename_terminal_session", {
+    sessionId,
+    title,
   });
 }

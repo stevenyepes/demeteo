@@ -198,11 +198,15 @@ describe('the rendered registry', () => {
     mountOverlay();
     dispatchKey({ key: 'F1' });
 
-    const panel = within(screen.getByTestId('shortcut-help-overlay'));
+    const panel = within(screen.getByTestId('shortcut-help-body'));
 
-    expect(panel.getByText('Ctrl + K')).toBeInTheDocument();
+    // Ctrl + K appears twice (once in the Quick Reference callout at
+    // the top of the body, once in the palette group's registry) —
+    // both must be present.
+    expect(panel.getAllByText('Ctrl + K').length).toBeGreaterThanOrEqual(2);
     expect(panel.getByText('Ctrl + T')).toBeInTheDocument();
-    // "New Feature" is listed twice: Cmd/Ctrl+T and its Cmd/Ctrl+Shift+N alias.
+    // "New Feature" is listed twice in the registry: Cmd/Ctrl+T and
+    // its Cmd/Ctrl+Shift+N alias.
     expect(panel.getAllByText('New Feature')).toHaveLength(2);
   });
 
@@ -210,9 +214,35 @@ describe('the rendered registry', () => {
     render(<ShortcutHelp platform="mac" container={document.body} />);
     dispatchKey({ key: 'F1' });
 
-    const panel = within(screen.getByTestId('shortcut-help-overlay'));
+    const panel = within(screen.getByTestId('shortcut-help-body'));
 
-    expect(panel.getByText('⌘K')).toBeInTheDocument();
+    expect(panel.getAllByText('⌘K').length).toBeGreaterThanOrEqual(2);
     expect(panel.getByText('⌘T')).toBeInTheDocument();
+  });
+});
+
+describe('the Quick Reference callout (Cmd/Ctrl + `)', () => {
+  // The new terminal-panel shortcut (spec §3 (f)) is documented in two
+  // places: the prominent Quick Reference callout at the top of the
+  // overlay, and the regular registry below it. Both must render the
+  // chord for the active platform.
+
+  it('shows the backtick shortcut alongside Cmd/Ctrl+K in the callout', () => {
+    render(<ShortcutHelp platform="other" container={document.body} />);
+    dispatchKey({ key: 'F1' });
+
+    const callout = within(screen.getByTestId('shortcut-help-quick-reference'));
+    // Both chords present (universal "Cmd/Ctrl + …" form).
+    expect(callout.getByText('Ctrl + `')).toBeInTheDocument();
+    expect(callout.getByText('Ctrl + K')).toBeInTheDocument();
+  });
+
+  it('renders the backtick shortcut in mac glyph form when the overlay is on mac', () => {
+    render(<ShortcutHelp platform="mac" container={document.body} />);
+    dispatchKey({ key: 'F1' });
+
+    const callout = within(screen.getByTestId('shortcut-help-quick-reference'));
+    expect(callout.getByText('⌘`')).toBeInTheDocument();
+    expect(callout.getByText('⌘K')).toBeInTheDocument();
   });
 });

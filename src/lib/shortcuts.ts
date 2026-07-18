@@ -217,6 +217,15 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     category: 'view',
   },
   {
+    id: 'cmd-backtick-toggle-terminal-panel',
+    chords: [{ primary: true, shift: false, alt: false, key: '`' }],
+    label: 'Toggle terminal panel',
+    description:
+      'Show or hide the global terminal panel at the bottom of the window. ' +
+      'Sessions stay alive while the panel is hidden.',
+    category: 'view',
+  },
+  {
     id: 'cmd-g-next-feature',
     chords: [{ primary: true, shift: false, alt: false, key: 'g' }],
     label: 'Next feature',

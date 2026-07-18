@@ -13,7 +13,6 @@ import {
   GitPullRequest, RotateCcw, FileText, FileCode, FileJson, GitMerge, FileQuestion,
   GitBranch, ExternalLink, AlertTriangle, Terminal, Paperclip,
 } from 'lucide-react';
-import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { ArtifactViewer } from './ArtifactViewer';
 import { AttachmentChip } from './AttachmentChip';
 import { listAttachments, readAttachment, type AttachedFile } from '../lib/attachments';
@@ -32,7 +31,7 @@ import type { SyncOutcomeView, MrState } from '../types';
 import { Modal } from './ui/Modal';
 import { RemoteGateActions, ReinjectCredentials, RunEventTimeline } from './RunEventTimeline';
 import { bucketFor } from './RemoteRunInbox';
-import { useNavigation, useProject, useUIState } from '../context';
+import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 import { formatCost, relativeTime } from '../lib/utils';
 
 
@@ -193,7 +192,12 @@ export function bytesToDataUrl(mime: string, bytes: Uint8Array): string {
 export function FeatureDetail() {
   const { view, navigate } = useNavigation();
   const { state: { currentProjectId, projects } } = useProject();
-  const { ui: { sidebarCollapsed } } = useUIState();
+  const { ui: { sidebarCollapsed: _sidebarCollapsed } } = useUIState();
+  // The legacy `AgentTerminalDrawer` mount consumed `sidebarCollapsed`
+  // to size its drawer; the panel-mounted surface does not need it.
+  // We keep the field on `UIStateSlice` for back-compat with the
+  // `pickEscapeAction` helper exported from `App.tsx`.
+  void _sidebarCollapsed;
 
   if (view.kind !== 'detail') return null;
   const { featureId } = view;
@@ -747,31 +751,26 @@ export function FeatureDetail() {
     }
   };
 
-  /** Publish the feature branch as a PR/MR via the project's
-   *  connected provider (R6). The backend is idempotent: re-publish
-   *  on an already-published feature returns the existing URL
-   *  instead of creating a duplicate. */
-  const [agentDrawerCtx, setAgentDrawerCtx] = useState<{
-    machineId: string;
-    worktreePath: string;
-    branch: string;
-    computeType: string;
-    remoteHost: string | null;
-  } | null>(null);
+  /** Open the feature's worktree in the global terminal panel
+   *  (spec §3 (c)). The panel hosts the live PTY; FeatureDetail only
+   *  routes the request — it does NOT own session teardown. */
+  const { open: openTerminalTab } = useTerminalPanel();
 
-  const handleOpenAgentSession = async () => {
+  const handleOpenTerminalTab = async () => {
     try {
       const info = await invoke<{ machine_id: string; worktree_path: string; branch: string; default_branch: string }>(
         'feature_get_worktree',
         { featureId }
       );
-      const computeType = info.machine_id === 'local' ? 'local' : 'remote';
-      setAgentDrawerCtx({
+      // Pass the absolute worktree path as `workDir` so the panel
+      // bypasses `resolve_repo_dir` and the shell actually starts
+      // inside the feature worktree, not a basename-derived clone.
+      void openTerminalTab({
         machineId: info.machine_id,
-        worktreePath: info.worktree_path,
-        branch: info.branch,
-        computeType,
-        remoteHost: computeType === 'remote' ? info.machine_id : null,
+        machineLabel: info.machine_id,
+        projectId,
+        workDir: info.worktree_path,
+        workBranch: info.branch,
       });
     } catch (err) {
       reportError(err);
@@ -1038,7 +1037,7 @@ export function FeatureDetail() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={handleOpenAgentSession}
+              onClick={handleOpenTerminalTab}
               className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
               title="Open an interactive agent coding session in this feature's worktree"
             >
@@ -1819,19 +1818,14 @@ export function FeatureDetail() {
           </Modal>
       )}
 
-      {agentDrawerCtx && (
-        <AgentTerminalDrawer
-          isOpen={true}
-          onClose={() => setAgentDrawerCtx(null)}
-          machineId={agentDrawerCtx.machineId}
-          absoluteWorkDir={agentDrawerCtx.worktreePath}
-          projectId={featureId}
-          computeType={agentDrawerCtx.computeType}
-          remoteHost={agentDrawerCtx.remoteHost}
-          workBranch={agentDrawerCtx.branch}
-          sidebarWidth={sidebarCollapsed ? 56 : 240}
-        />
-      )}
+      {/*
+        The legacy `<AgentTerminalDrawer>` mount that used to live here
+        was retired as part of the panel migration (spec §3 (c)). The
+        "Code with Agent" button now opens a tab in the global terminal
+        panel via `handleOpenTerminalTab`. Session teardown is owned by
+        the panel (close button / kill-all / tray cleanup) — never by
+        view unmount.
+      */}
     </div>
   );
 };

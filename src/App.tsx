@@ -8,7 +8,7 @@ import EmptyStateCard from "./components/EmptyStateCard";
 import NewProjectView from "./components/NewProjectView";
 import ProvidersPage from "./components/ProvidersPage";
 import RemoteRunInbox from "./components/RemoteRunInbox";
-import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen, Server } from "lucide-react";
+import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen, Server, Terminal as TerminalIcon } from "lucide-react";
 import ProjectHome from "./components/ProjectHome";
 import ProjectSettings from "./components/ProjectSettings";
 import { WorkflowList } from "./components/WorkflowList";
@@ -30,7 +30,9 @@ import {
   NavigationProvider, useNavigation,
   ProjectProvider, useProject,
   UIStateProvider, useUIState,
+  TerminalPanelProvider, useTerminalPanel,
 } from "./context";
+import { TerminalPanelHost } from "./components/TerminalPanelHost";
 import "./App.css";
 
 // ── Pure helpers (exported for unit tests in src/App.test.tsx) ─────────
@@ -136,6 +138,7 @@ function AppInner() {
   const { view, navigate, goBack, canGoBack } = useNavigation();
   const { state: proj, dispatch: projDispatch } = useProject();
   const { ui, uiDispatch } = useUIState();
+  const { togglePanel: toggleTerminalPanel } = useTerminalPanel();
 
   const { projects, currentProjectId, providers, reposByProject, initialLoadError } = proj;
   // `commandPaletteOpen`, `docsPanelOpen`, `startFeatureOpen`, and
@@ -381,6 +384,7 @@ function AppInner() {
       const p = projects[index];
       if (p) { projDispatch({ type: 'SET_CURRENT', id: p.id }); navigate({ kind: 'home' }); }
     },
+    onToggleTerminalPanel: () => toggleTerminalPanel(),
   });
 
   const handleSeedSample = async () => {
@@ -416,14 +420,16 @@ function AppInner() {
     { id: 'nav-settings', label: 'Settings', description: 'Global preferences and machines', category: 'settings' as const, icon: <SettingsIcon className="w-4 h-4" />, onSelect: () => navigate({ kind: 'settings' }) },
     { id: 'nav-docs', label: 'Documentation', description: 'User guide and reference', category: 'settings' as const, icon: <BookOpen className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
     { id: 'nav-shortcuts', label: 'Keyboard Shortcuts', description: 'View available shortcuts', category: 'settings' as const, icon: <Zap className="w-4 h-4" />, onSelect: () => uiDispatch({ type: 'SET_DOCS_PANEL', open: true }) },
-  ], [projects, navigate, projDispatch, uiDispatch]);
+    { id: 'cmd-backtick-toggle-terminal-panel', label: 'Toggle Terminal Panel', description: 'Show or hide the global terminal panel — sessions stay alive while hidden.', category: 'action' as const, icon: <TerminalIcon className="w-4 h-4" />, onSelect: () => toggleTerminalPanel() },
+  ], [projects, navigate, projDispatch, uiDispatch, toggleTerminalPanel]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#08090c] text-white overflow-hidden font-sans">
       <TopBar connectedProvider={connectedProvider} />
-      <div className="flex flex-1 overflow-hidden relative">
+      <div className="flex flex-1 overflow-hidden relative min-h-0">
         <ProjectRail />
-        <main className="flex-1 flex flex-col relative overflow-hidden bg-[#0a0c10] z-0">
+        <div className="flex-1 flex flex-col min-h-0">
+        <main className="flex-1 flex flex-col relative overflow-hidden bg-[#0a0c10] z-0 min-h-0">
 
           {/* empty-state */}
           {view.kind === 'empty-state' && (
@@ -526,6 +532,8 @@ function AppInner() {
           />
           <DocsPanel isOpen={docsPanelOpen} onClose={() => uiDispatch({ type: 'SET_DOCS_PANEL', open: false })} />
         </main>
+        <TerminalPanelHost />
+        </div>
       </div>
     </div>
   );
@@ -546,7 +554,9 @@ function App() {
         <MouseNavigationBridge />
         <ProjectProvider>
           <UIStateProvider>
-            <AppInner />
+            <TerminalPanelProvider>
+              <AppInner />
+            </TerminalPanelProvider>
             <ErrorToast />
           </UIStateProvider>
         </ProjectProvider>

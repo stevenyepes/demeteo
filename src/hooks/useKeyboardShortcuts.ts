@@ -12,6 +12,7 @@ interface ShortcutMap {
   onCloseCurrentView?: () => void;
   onNextFeature?: () => void;
   onPreviousFeature?: () => void;
+  onToggleTerminalPanel?: () => void;
 }
 
 export function useKeyboardShortcuts(handlers: ShortcutMap) {
@@ -101,6 +102,13 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
         case '?':
           e.preventDefault();
           h.onOpenDocs?.();
+          break;
+        case '`':
+          // Cmd/Ctrl + ` toggles the global terminal panel (spec §3 / §6).
+          // Sessions stay alive while the panel is hidden — the panel is
+          // a view-only host of session lifecycle.
+          e.preventDefault();
+          h.onToggleTerminalPanel?.();
           break;
         default:
           if (e.key >= '1' && e.key <= '9') {
