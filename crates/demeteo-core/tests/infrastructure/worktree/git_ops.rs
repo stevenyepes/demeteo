@@ -1874,6 +1874,88 @@ async fn test_branch_delete_removes_subtask_worktree_and_branch() {
     let _ = std::fs::remove_dir_all(&wt_path);
 }
 
+/// Regression: the artifact-scope fence (`apply_artifact_scope`) chmods
+/// protected paths in a step's worktree to `a-w` before the agent's turn.
+/// If the step is a Verify/Artifacts/ReadOnly step (e.g. validate, critic),
+/// that fence is still in place when the step finishes and
+/// `cleanup_subtask_worktree` runs — `unlink()` needs write on the parent
+/// directory, so an `a-w src/` blocks both `git worktree remove --force`
+/// and `rm -rf`. Every command in `cleanup_subtask_worktree` is
+/// best-effort (`let _ = ...`), so the failure was previously swallowed,
+/// leaving a gutted, git-disconnected directory skeleton on disk forever.
+#[tokio::test]
+async fn test_cleanup_subtask_worktree_handles_chmod_locked_worktree() {
+    let (dir, helper) = make_repo("cleanup_chmod_locked").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    let wt_path = helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-cleanup-chmod")
+        .await
+        .expect("provision should succeed");
+    assert!(std::path::Path::new(&wt_path).exists());
+
+    // Mimic the artifact-scope fence left behind by a Verify/Artifacts/
+    // ReadOnly step: every top-level entry chmod'd a-w recursively.
+    let _ = exec
+        .run_command("local", &format!("chmod -R a-w '{wt_path}'"))
+        .await;
+
+    helper
+        .cleanup_subtask_worktree(None, &repo, "main", "sub-cleanup-chmod")
+        .await
+        .expect("cleanup should succeed even with a chmod-locked worktree");
+
+    assert!(
+        !std::path::Path::new(&wt_path).exists(),
+        "chmod-locked worktree dir should be fully removed by cleanup"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
+
+/// Same permission-fence hazard as
+/// `test_cleanup_subtask_worktree_handles_chmod_locked_worktree`, but via
+/// `branch_delete`'s worktree-removal loop — the path used when a whole
+/// feature/branch is torn down, which iterates every `_subtask_*`
+/// worktree and must clean up each one even if the fence chmod'd it a-w.
+#[tokio::test]
+async fn test_branch_delete_handles_chmod_locked_worktree() {
+    let (dir, helper) = make_repo("branch_delete_chmod_locked").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+
+    let feature_branch = "feature/f-chmod-del";
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" branch {feature_branch}"),
+        )
+        .await;
+
+    let wt_path = helper
+        .provision_subtask_worktree(None, &repo, feature_branch, "sub-1")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command("local", &format!("chmod -R a-w '{wt_path}'"))
+        .await;
+
+    helper
+        .branch_delete(None, &repo, feature_branch)
+        .await
+        .expect("branch_delete should succeed even with a chmod-locked subtask worktree");
+
+    assert!(
+        !std::path::Path::new(&wt_path).exists(),
+        "chmod-locked subtask worktree dir should be removed by branch_delete"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}
+
 /// Regression: a prior attempt interrupted mid-merge leaves `MERGE_HEAD`
 /// set on the feature-branch checkout. On retry `merge_subtask` must clear
 /// that stale in-progress merge instead of aborting with
