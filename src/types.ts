@@ -702,7 +702,7 @@ export interface TerminalTabDescriptor {
   repoPath?: string;
   workBranch?: string | null;
   title: string;
-  phase: 'connecting' | 'running' | 'closed' | 'error';
+  phase: 'connecting' | 'running' | 'disconnected' | 'closed' | 'error';
   createdAt: number;
 }
 

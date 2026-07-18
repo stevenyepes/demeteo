@@ -147,3 +147,22 @@ export async function renameTerminalSession(
     title,
   });
 }
+
+/**
+ * Re-establishes the transport for a disconnected terminal session. The
+ * session shell — id, scrollback, subscribers, title — survived the drop;
+ * the backend spawns a fresh PTY/SSH child on the same session, replays
+ * scrollback as history, and emits `terminal-session-running`
+ * (TERMINALS_VIEW_SPEC §3.1). Rejects if the session id is unknown or the
+ * session is still connected.
+ *
+ * @param sessionId The disconnected terminal session identifier.
+ * @returns A promise that resolves once the transport is rebuilt.
+ */
+export async function reconnectTerminalSession(
+  sessionId: string
+): Promise<void> {
+  return invoke<void>("reconnect_terminal_session", {
+    sessionId,
+  });
+}

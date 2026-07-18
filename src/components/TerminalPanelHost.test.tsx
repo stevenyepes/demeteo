@@ -53,6 +53,7 @@ function StubHost({
       setState((prev) => ({ ...prev, activeTabId: tabId, collapsed: false }));
     },
     setTitle: async () => undefined,
+    reconnect: async () => undefined,
     togglePanel: () => {
       setState((prev) => ({ ...prev, collapsed: !prev.collapsed }));
     },
