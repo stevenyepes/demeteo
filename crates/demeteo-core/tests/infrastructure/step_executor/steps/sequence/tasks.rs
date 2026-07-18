@@ -319,3 +319,29 @@ fn targeted_retry_reruns_transitive_dependents_of_a_selected_task() {
     let landed: Vec<&str> = out.already_landed.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(landed, ["unrelated"]);
 }
+
+/// `blocked_by` is a planner-declared edge and can be incomplete. A task
+/// that shares a file with a task the retry is already re-running is
+/// re-run too, even with no `blocked_by` edge between them at all —
+/// otherwise an omitted dependency silently ships stale code built on a
+/// foundation that just changed underneath it.
+#[test]
+fn targeted_retry_reruns_a_task_that_shares_a_file_with_a_selected_task_even_without_a_blocked_by_edge(
+) {
+    let mut plan = plan_of(&["base", "mid", "leaf", "unrelated"]);
+    plan.tasks[0].files = vec!["src/base.rs".into()];
+    // `mid` is pulled in via a declared `blocked_by` edge, not by owning an
+    // implicated file directly.
+    plan.tasks[1].blocked_by = vec!["base".into()];
+    plan.tasks[1].files = vec!["src/mid.rs".into()];
+    // `leaf` declares NO `blocked_by` edge to `mid` — the omission this test
+    // exists for — but shares `src/mid.rs` with it.
+    plan.tasks[2].files = vec!["src/mid.rs".into(), "src/leaf.rs".into()];
+    plan.tasks[3].files = vec!["src/other.rs".into()];
+
+    let out = select_targeted_tasks(&plan, "fix base", &["src/base.rs".into()]);
+    let ids: Vec<&str> = out.tasks.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids, ["base", "mid", "leaf"]);
+    let landed: Vec<&str> = out.already_landed.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(landed, ["unrelated"]);
+}

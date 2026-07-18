@@ -747,18 +747,7 @@ impl ExecutionDriver {
             .clone()
             .unwrap_or_else(|| self.base_ctx.get("test_command").to_string());
 
-        // The task's own done-definition. A legacy plan (or a trivial task)
-        // declares none; say so explicitly rather than rendering an empty
-        // section the agent might read as "no obligations".
-        let acceptance_str = if task.acceptance.is_empty() {
-            "None declared — the task description and the test command define done.".to_string()
-        } else {
-            task.acceptance
-                .iter()
-                .map(|c| format!("- {}", c))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
+        let acceptance_str = format_acceptance_criteria(&task.acceptance);
 
         let rendered = self
             .base_ctx
@@ -824,3 +813,29 @@ impl ExecutionDriver {
         .await
     }
 }
+
+/// Render a task's `acceptance` criteria as the prompt's done-definition
+/// bullet list, or the explicit "none declared" fallback when every entry is
+/// blank — a legacy plan, a genuinely criteria-less task, and a stray `[""]`
+/// left by a partially-filled planner template all resolve here rather than
+/// as a bare, content-less bullet.
+fn format_acceptance_criteria(acceptance: &[String]) -> String {
+    let non_blank: Vec<&str> = acceptance
+        .iter()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .collect();
+    if non_blank.is_empty() {
+        "None declared — the task description and the test command define done.".to_string()
+    } else {
+        non_blank
+            .iter()
+            .map(|c| format!("- {}", c))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/runner.rs"]
+mod tests;
