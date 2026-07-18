@@ -11,7 +11,8 @@
 //! so we keep the old planner turn for them rather than breaking them.
 
 use super::tasks::{
-    apply_landed_checkpoint, extract_task_plan, select_targeted_tasks, validate_task_plan, TaskPlan,
+    apply_landed_checkpoint, extract_task_plan, select_targeted_tasks,
+    task_list_json_shape_example, validate_task_plan, TaskPlan,
 };
 use crate::adapters::step_executor::artifacts::{
     resolve_attached_artifacts, resolve_attached_user_attachments,
@@ -211,10 +212,9 @@ impl ExecutionDriver {
 
         Err(StepOutcome::Failed(format!(
             "sequence step: could not read a task list from step '{}'. It must write a JSON \
-             object of the form {{\"tasks\": [{{\"id\": \"task-1\", \"title\": \"...\", \
-             \"description\": \"...\", \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \
-             \"acceptance\": [\"...\"], \"blocked_by\": []}}]}} to `artifacts/task-list.json`.",
-            source_step_id
+             object of the form {} to `artifacts/task-list.json`.",
+            source_step_id,
+            task_list_json_shape_example(false)
         )))
     }
 
@@ -275,6 +275,7 @@ impl ExecutionDriver {
         // Note the ordering language: unlike the old parallel planner, tasks
         // run sequentially on one branch, so they must be ordered by
         // dependency and may share files.
+        let task_shape = task_list_json_shape_example(true);
         let planner_prompt = format!(
             "You are a planning agent. Break the following feature into an ordered list of \
              tasks that will be implemented ONE AT A TIME, in the order you give, each by a \
@@ -283,9 +284,7 @@ impl ExecutionDriver {
              Repositories in scope: {repo_list}\n\n\
              Read any attached artifacts (e.g. the spec) for context. Then emit a single JSON \
              object, in a ```json ... ``` fence, of the form:\n\
-             {{\"tasks\": [{{\"id\": \"task-1\", \"title\": \"...\", \"description\": \"...\", \
-             \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"acceptance\": \
-             [\"...\"], \"blocked_by\": [], \"retry_note\": null}}]}}\n\n\
+             {task_shape}\n\n\
              Constraints:\n\
              - Size each task so ONE agent can complete it in ONE session: small enough that \
              reading the relevant code, implementing, and testing all fit comfortably. \
@@ -405,15 +404,14 @@ impl ExecutionDriver {
             let prompt = if attempt == 0 {
                 planner_prompt.clone()
             } else {
-                "Your previous response could not be parsed as the required task list. Reply \
-                 with ONLY a single JSON object — no prose, no markdown outside the fence — of \
-                 the form:\n\
-                 ```json\n\
-                 {\"tasks\": [{\"id\": \"task-1\", \"title\": \"...\", \"description\": \"...\", \
-                 \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"acceptance\": \
-                 [\"...\"], \"blocked_by\": [], \"retry_note\": null}]}\n\
-                 ```"
-                .to_string()
+                format!(
+                    "Your previous response could not be parsed as the required task list. \
+                     Reply with ONLY a single JSON object — no prose, no markdown outside the \
+                     fence — of the form:\n\
+                     ```json\n\
+                     {task_shape}\n\
+                     ```"
+                )
             };
 
             let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(

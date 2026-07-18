@@ -81,6 +81,33 @@ pub struct TaskPlan {
     pub resumes_landed_work: bool,
 }
 
+/// The task-list JSON shape, as shown to a planner/spec agent and (in the
+/// `include_retry_note: false` form) surfaced in the "could not read a task
+/// list" error message.
+///
+/// A single source: every prompt or error text that needs to describe
+/// `PlannedTask`'s shape calls this instead of hand-typing the JSON example,
+/// so adding, renaming, or removing a field is one edit instead of several
+/// separately hand-maintained string literals that can — and did — drift out
+/// of sync (the fenced examples in `plan.rs` and the standard pipeline's
+/// `s-tickets` prompt already used a different sample id, `task-1` vs
+/// `ticket-1`, before this existed).
+pub(crate) fn task_list_json_shape_example(include_retry_note: bool) -> String {
+    let mut fields = vec![
+        r#""id": "task-1""#.to_string(),
+        r#""title": "...""#.to_string(),
+        r#""description": "...""#.to_string(),
+        r#""files": ["src/foo.rs"]"#.to_string(),
+        r#""test_command": "...""#.to_string(),
+        r#""acceptance": ["..."]"#.to_string(),
+        r#""blocked_by": []"#.to_string(),
+    ];
+    if include_retry_note {
+        fields.push(r#""retry_note": null"#.to_string());
+    }
+    format!("{{\"tasks\": [{{{}}}]}}", fields.join(", "))
+}
+
 /// Reject a task list that would misbehave at execution time.
 ///
 /// The task list crossed a trust boundary when it moved out of the step and
@@ -154,10 +181,14 @@ pub(crate) fn validate_task_plan(plan: &TaskPlan) -> Option<String> {
 /// Build the attempt-1 targeted retry plan from the cached full plan.
 ///
 /// Selects the tasks whose `files` intersect the verdict's
-/// `implicated_files`, plus — transitively — every task `blocked_by` a
-/// selected one: re-running a foundation task rewrites what its dependents
-/// were built on, so they re-run too rather than being reported as landed
-/// work that still matches the branch. Stamps the retry feedback onto each
+/// `implicated_files`, plus — transitively — every task that either
+/// `blocked_by` a selected one or shares a `files` entry with one: re-running
+/// a foundation task rewrites what its dependents were built on, so they
+/// re-run too rather than being reported as landed work that still matches
+/// the branch. The file-overlap leg exists because `blocked_by` is a
+/// planner-declared edge and can be incomplete — a task that touches the
+/// same file as a re-run task is re-running-worthy whether or not the
+/// planner remembered to say so. Stamps the retry feedback onto each
 /// selected task as its `retry_note`. Falls back to re-running every task
 /// when the verdict named no files (or none matched) — a blind retry is
 /// still correct, just not cheap.
@@ -172,6 +203,15 @@ pub(crate) fn validate_task_plan(plan: &TaskPlan) -> Option<String> {
 /// This only holds when the previous attempt's merge actually landed, which
 /// is why the caller restricts it to failures raised by a *later* step; a
 /// sequence step that failed on its own rolls its commits back.
+///
+/// Implemented as one forward pass over `cached.tasks`: `blocked_by` only
+/// ever references an earlier task (validated) and file-overlap can only
+/// pull in a later task from an earlier one by the same reasoning (the
+/// earlier task cannot have been "built on" a file a later task introduces),
+/// so a task's selection is fully decided by the tasks already visited.
+/// That also means `selected` comes out already in list order — the
+/// executor's contract — with no separate sort or already-landed pass
+/// needed.
 pub(crate) fn select_targeted_tasks(
     cached: &TaskPlan,
     feedback: &str,
@@ -186,7 +226,7 @@ pub(crate) fn select_targeted_tasks(
         .filter(|s| !s.is_empty())
         .collect();
 
-    let owns = |task: &PlannedTask| -> bool {
+    let owns_implicated = |task: &PlannedTask| -> bool {
         task.files.iter().any(|f| {
             let f = norm(f);
             implicated.iter().any(|i| {
@@ -195,61 +235,46 @@ pub(crate) fn select_targeted_tasks(
         })
     };
 
-    let hits: Vec<&PlannedTask> = if implicated.is_empty() {
-        cached.tasks.iter().collect()
-    } else {
-        let owned: Vec<&PlannedTask> = cached.tasks.iter().filter(|t| owns(t)).collect();
-        if owned.is_empty() {
-            cached.tasks.iter().collect()
-        } else {
-            owned
-        }
-    };
+    // The verdict's files told us nothing usable — either it named none, or
+    // it named files nothing in the plan owns — so every task is re-run. A
+    // blind retry, but still a correct one.
+    let blind_retry = implicated.is_empty() || !cached.tasks.iter().any(owns_implicated);
 
-    // Close the selection over `blocked_by`: a task stacked on a re-running
-    // task re-runs too, or it would be skipped as "landed" while the code
-    // under it changes. Dependencies always point backward (validated), so
-    // one forward pass in list order reaches the transitive closure.
-    // Ids are compared trimmed everywhere below — validate_task_plan accepts
-    // a whitespace-padded id (it trims both sides), so an untrimmed lookup
-    // here would silently fail to recognize an otherwise-valid dependency.
-    let mut selected_ids: std::collections::HashSet<&str> =
-        hits.iter().map(|t| t.id.trim()).collect();
-    let mut hits = hits;
+    let mut selected_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut selected_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut selected: Vec<PlannedTask> = Vec::new();
+    let mut already_landed: Vec<PlannedTask> = Vec::new();
     for task in &cached.tasks {
+        // Ids are compared trimmed: validate_task_plan accepts a
+        // whitespace-padded id (it trims both sides), so an untrimmed
+        // lookup here would silently fail to recognize an otherwise-valid
+        // dependency.
         let task_id = task.id.trim();
-        if selected_ids.contains(task_id) {
-            continue;
-        }
-        if task
+        let blocked_by_a_selected_task = task
             .blocked_by
             .iter()
-            .any(|dep| selected_ids.contains(dep.trim()))
+            .any(|dep| selected_ids.contains(dep.trim()));
+        let shares_a_selected_file = task
+            .files
+            .iter()
+            .map(|f| norm(f))
+            .any(|f| !f.is_empty() && selected_files.contains(&f));
+
+        if blind_retry
+            || owns_implicated(task)
+            || blocked_by_a_selected_task
+            || shares_a_selected_file
         {
             selected_ids.insert(task_id);
-            hits.push(task);
+            selected_files.extend(task.files.iter().map(|f| norm(f)).filter(|f| !f.is_empty()));
+            let mut task = task.clone();
+            task.retry_note = Some(feedback.to_string());
+            selected.push(task);
+        } else {
+            already_landed.push(task.clone());
         }
     }
-    // Dependents were appended out of order; the executor's contract is
-    // list order, so restore it before the plan leaves this function.
-    let order: std::collections::HashMap<&str, usize> = cached
-        .tasks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.id.trim(), i))
-        .collect();
-    hits.sort_by_key(|t| order.get(t.id.trim()).copied().unwrap_or(usize::MAX));
-    let already_landed: Vec<PlannedTask> = cached
-        .tasks
-        .iter()
-        .filter(|t| !selected_ids.contains(t.id.trim()))
-        .cloned()
-        .collect();
 
-    let mut selected: Vec<PlannedTask> = hits.into_iter().cloned().collect();
-    for task in &mut selected {
-        task.retry_note = Some(feedback.to_string());
-    }
     TaskPlan {
         tasks: selected,
         already_landed,
