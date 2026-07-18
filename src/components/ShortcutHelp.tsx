@@ -13,6 +13,11 @@
 //     AGENTS.md §5 tokens (`rgba(18,22,30,0.75)` surface, `#8b5cf6`
 //     violet accents, backdrop-blur for depth).
 //
+//   • A "Quick Reference" callout at the top of the overlay highlighting
+//     the two most useful global shortcuts — `Cmd/Ctrl + K` for the
+//     command palette and `Cmd/Ctrl + `` for the terminal panel — so
+//     new users see them without having to scan the registry below.
+//
 //   • A `?help-open` / `?help-close` / `?help-toggle` CustomEvent bridge
 //     so other components can drive the panel without prop-drilling or a
 //     provider chain. See `ShortcutsContext.tsx` for the symmetric side.
@@ -31,11 +36,12 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Keyboard, Sparkles } from 'lucide-react';
+import { X, Keyboard, Sparkles, TerminalSquare, Command } from 'lucide-react';
 
 import {
   SHORTCUTS,
   SHORTCUT_GROUPS,
+  findShortcutById,
   formatEntryChords,
   type ShortcutBadge,
   type ShortcutEntry,
@@ -73,6 +79,57 @@ const BADGE_LABEL: Record<ShortcutBadge, string> = {
   'intentionally-ignored': 'Intentionally ignored',
   alias: 'Alias',
 };
+
+/**
+ * Two-callout "Quick Reference" rendered at the top of the help overlay.
+ * The full registry below stays the source of truth, but a new user
+ * benefits from seeing the two most-used global shortcuts front and
+ * centre (spec §3 (f)): the command palette and the terminal panel.
+ */
+function QuickReferenceCallout({ platform }: { platform: ShortcutPlatform }): React.ReactElement | null {
+  const palette = findShortcutById('cmd-k-command-palette');
+  const terminalPanel = findShortcutById('cmd-backtick-toggle-terminal-panel');
+  if (!palette && !terminalPanel) return null;
+  return (
+    <div
+      data-testid="shortcut-help-quick-reference"
+      className="mx-4 mt-4 mb-2 grid grid-cols-1 md:grid-cols-2 gap-2 rounded-xl border border-white/[0.08] bg-gradient-to-r from-violet-500/[0.06] to-cyan-500/[0.06] p-3"
+    >
+      <div className="flex items-start gap-2 min-w-0">
+        <Command className="w-4 h-4 text-violet-300 mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-slate-200 font-medium">Command palette</span>
+            {palette && (
+              <kbd className="ml-auto shrink-0 text-[10px] font-mono text-violet-200 bg-violet-500/10 border border-violet-500/30 px-1.5 py-0.5 rounded shadow-inner whitespace-nowrap">
+                {formatEntryChords(palette, platform)}
+              </kbd>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-400 leading-snug mt-0.5">
+            Fuzzy launcher for every action in the app.
+          </p>
+        </div>
+      </div>
+      <div className="flex items-start gap-2 min-w-0">
+        <TerminalSquare className="w-4 h-4 text-cyan-300 mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-slate-200 font-medium">Toggle terminal panel</span>
+            {terminalPanel && (
+              <kbd className="ml-auto shrink-0 text-[10px] font-mono text-cyan-200 bg-cyan-500/10 border border-cyan-500/30 px-1.5 py-0.5 rounded shadow-inner whitespace-nowrap">
+                {formatEntryChords(terminalPanel, platform)}
+              </kbd>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-400 leading-snug mt-0.5">
+            Show or hide the global terminal panel — sessions stay alive while hidden.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface ShortcutRowProps {
   entry: ShortcutEntry;
@@ -316,7 +373,8 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
           className="flex-1 overflow-y-auto px-6 py-5 bg-[#0a0c12]/30"
           data-testid="shortcut-help-body"
         >
-          <div className="grid gap-5 md:grid-cols-2">
+          <QuickReferenceCallout platform={platform} />
+          <div className="grid gap-5 md:grid-cols-2 mt-4">
             {SHORTCUT_GROUPS.map((group) => {
               if (group.entries.length === 0) return null;
               return (

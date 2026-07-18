@@ -179,6 +179,19 @@ describe('matchesEntryKeyboard / matchesEntryMouse', () => {
     expect(matchesEntryMouse({ button: 3 }, findShortcutById('mouse-xbutton1-back')!)).toBe(true);
     expect(matchesEntryMouse({ button: 3 }, findShortcutById('mouse-xbutton2-forward')!)).toBe(false);
   });
+
+  // Spec §7 Q4: `Cmd/Ctrl + \`` toggles the terminal panel.
+  it('matches Cmd+` and Ctrl+` against the terminal-panel entry', () => {
+    const entry = findShortcutById('cmd-backtick-toggle-terminal-panel');
+    expect(entry).toBeDefined();
+    expect(matchesEntryKeyboard(ev({ key: '`', metaKey: true }), entry!)).toBe(true);
+    expect(matchesEntryKeyboard(ev({ key: '`', ctrlKey: true }), entry!)).toBe(true);
+  });
+
+  it('rejects a bare backtick against the terminal-panel entry (primary required)', () => {
+    const entry = findShortcutById('cmd-backtick-toggle-terminal-panel')!;
+    expect(matchesEntryKeyboard(ev({ key: '`' }), entry)).toBe(false);
+  });
 });
 
 describe('formatChord', () => {
@@ -238,6 +251,7 @@ const EXPECTED_CHORDS: { id: string; key: string; primary: boolean; shift: boole
   { id: 'cmd-n-new-project', key: 'n', primary: true, shift: false, alt: false },
   { id: 'cmd-comma-settings', key: ',', primary: true, shift: false, alt: false },
   { id: 'cmd-b-toggle-sidebar', key: 'b', primary: true, shift: false, alt: false },
+  { id: 'cmd-backtick-toggle-terminal-panel', key: '`', primary: true, shift: false, alt: false },
   { id: 'cmd-g-next-feature', key: 'g', primary: true, shift: false, alt: false },
   { id: 'cmd-shift-g-previous-feature', key: 'g', primary: true, shift: true, alt: false },
   { id: 'f1-help', key: 'F1', primary: false, shift: false, alt: false },

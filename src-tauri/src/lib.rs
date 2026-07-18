@@ -341,6 +341,7 @@ pub fn run() {
             terminal::close_machine_sessions,
             terminal::attach_terminal_session,
             terminal::detach_terminal_session,
+            terminal::rename_terminal_session,
             forward::start_port_forward,
             forward::stop_port_forward,
             sftp::sftp_list_dir,

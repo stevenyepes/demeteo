@@ -33,7 +33,15 @@ pub struct ActiveSession {
     pub _keepalive: Arc<Mutex<SessionKeepalive>>,
     pub machine_id: String,
     pub created_at: u64,
-    pub frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>>,
+    /// Every attached subscriber is one element in the `Vec`. The drain
+    /// thread holds this lock only long enough to clone a snapshot, then
+    /// iterates the snapshot and calls `send` on each channel (spec §2.1
+    /// — broadcast over the Vec, swallow per-channel errors so a dead
+    /// subscriber never blocks the others).
+    pub frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>>,
+    /// User-supplied tab title. `None` until the frontend calls
+    /// `rename_terminal_session`; truncated/trimmed server-side.
+    pub display_title: Mutex<Option<String>>,
 }
 
 pub enum SessionKeepalive {
@@ -61,6 +69,9 @@ pub struct SessionInfo {
     pub session_id: String,
     pub machine_id: String,
     pub created_at: u64,
+    /// User-supplied tab title (`None` until renamed). New optional field
+    /// — additive on the wire, ignored by older frontends (spec §2.1).
+    pub title: Option<String>,
 }
 
 const IDLE_TIMEOUT_SECS: u64 = 600;
@@ -92,6 +103,18 @@ pub fn connect_ssh(
     crate::ssh_util::connect(machine, secret)
 }
 
+/// Wraps the supplied channel in a `Vec`-backed `Mutex` so it can act
+/// as the seed subscriber for a freshly-started terminal session. The
+/// drain thread broadcasts every output chunk to every element of the
+/// `Vec`, so the seed channel captures shell startup output that would
+/// otherwise race the first `attach_terminal_session` call from the
+/// panel surface.
+pub(crate) fn seed_frontend_channel(
+    channel: Channel<Vec<u8>>,
+) -> Arc<Mutex<Vec<Channel<Vec<u8>>>>> {
+    Arc::new(Mutex::new(vec![channel]))
+}
+
 #[tauri::command]
 pub fn start_terminal_session(
     app: AppHandle,
@@ -112,8 +135,19 @@ pub fn start_terminal_session(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>> =
-        Arc::new(Mutex::new(Some(tauri_channel)));
+    // Seed the subscriber Vec with the channel the frontend already
+    // created. Without this, shell startup output, the bootstrap
+    // `git checkout`, and the first prompt all reach the drain thread
+    // before the surface has a chance to attach and are irretrievably
+    // lost (spec §1 AC #1: "the shell prompt reappears without
+    // restart"). The supplied channel is a no-op for most callers (its
+    // `onmessage` ignores bytes); `attach_terminal_session` later
+    // appends the surface's render-bound channel so the user actually
+    // sees the output. Id-based dedup avoids growing the Vec when the
+    // frontend re-uses the same channel for both the start and the
+    // post-mount attach.
+    let frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>> = seed_frontend_channel(tauri_channel);
+    let display_title: Mutex<Option<String>> = Mutex::new(None);
 
     let (read_source, write_sink, keepalive) = if machine.auth_type == "local" {
         start_local_pty(&machine_id, &work_dir, &work_branch)?
@@ -168,6 +202,7 @@ pub fn start_terminal_session(
             machine_id: machine_id.clone(),
             created_at,
             frontend_channel,
+            display_title,
         },
     );
 
@@ -177,13 +212,14 @@ pub fn start_terminal_session(
             session_id: session_id.clone(),
             machine_id,
             created_at,
+            title: None,
         },
     );
 
     Ok(session_id)
 }
 
-fn start_local_pty(
+pub(crate) fn start_local_pty(
     machine_id: &str,
     work_dir: &Option<String>,
     work_branch: &Option<String>,
@@ -321,7 +357,7 @@ fn drain_ssh(
     session_id: String,
     machine_id: String,
     created_at: u64,
-    frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>>,
+    frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>>,
 ) {
     let mut buffer = [0u8; 8192];
     let mut last_activity = std::time::Instant::now();
@@ -352,13 +388,13 @@ fn drain_ssh(
     }
 }
 
-fn drain_local(
+pub(crate) fn drain_local(
     reader: Arc<Mutex<Box<dyn Read + Send>>>,
     app: AppHandle,
     session_id: String,
     machine_id: String,
     created_at: u64,
-    frontend_channel: Arc<Mutex<Option<Channel<Vec<u8>>>>>,
+    frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>>,
 ) {
     let mut buffer = [0u8; 8192];
     loop {
@@ -383,22 +419,32 @@ fn emit_ended(app: &AppHandle, session_id: &str, machine_id: &str, created_at: u
             session_id: session_id.to_string(),
             machine_id: machine_id.to_string(),
             created_at,
+            title: None,
         },
     );
 }
 
-fn send_chunk(frontend_channel: &Arc<Mutex<Option<Channel<Vec<u8>>>>>, chunk: Vec<u8>) {
-    loop {
-        let chan_opt = frontend_channel.lock().unwrap();
-        if let Some(frontend) = chan_opt.as_ref() {
-            if frontend.send(chunk.clone()).is_ok() {
-                break;
+/// Broadcasts a single output chunk to every currently-attached subscriber.
+///
+/// Lock is held only long enough to clone the channel list (the Vec is
+/// small — typically 0 or 1 element). The actual `send()` calls happen
+/// outside the lock so a slow/dead subscriber cannot block
+/// attach/detach. Per-channel errors are swallowed: one dead subscriber
+/// must not prevent the others from receiving output. When a `send`
+/// fails, the dead channel is pruned from the Vec so subsequent chunks
+/// don't keep cloning the payload for a subscriber that can never
+/// receive it.
+pub(crate) fn send_chunk(frontend_channel: &Arc<Mutex<Vec<Channel<Vec<u8>>>>>, chunk: Vec<u8>) {
+    let snapshot: Vec<Channel<Vec<u8>>> = match frontend_channel.lock() {
+        Ok(guard) => guard.iter().cloned().collect(),
+        Err(_) => return,
+    };
+    for chan in &snapshot {
+        if chan.send(chunk.clone()).is_err() {
+            if let Ok(mut guard) = frontend_channel.lock() {
+                guard.retain(|c| c.id() != chan.id());
             }
-        } else {
-            break;
         }
-        drop(chan_opt);
-        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -521,6 +567,7 @@ pub fn list_terminal_sessions(
             session_id: id.clone(),
             machine_id: s.machine_id.clone(),
             created_at: s.created_at,
+            title: s.display_title.lock().ok().and_then(|g| g.clone()),
         })
         .collect())
 }
@@ -559,11 +606,22 @@ pub fn attach_terminal_session(
     let active = sessions
         .get(&session_id)
         .ok_or_else(|| "Session not found".to_string())?;
-    let mut slot = active
+    let mut subscribers = active
         .frontend_channel
         .lock()
         .map_err(|_| "Failed to lock frontend channel".to_string())?;
-    *slot = Some(tauri_channel);
+    // Deduplicate by channel id: a rapid remount (useEffect cleanup
+    // racing the next mount's attach) can otherwise pile duplicate
+    // subscribers onto the Vec, and every output chunk would then
+    // clone the payload once per stale entry. If the same id is
+    // already present we replace it in place so the existing position
+    // is preserved (LIFO detach stays predictable).
+    let new_id = tauri_channel.id();
+    if let Some(pos) = subscribers.iter().position(|c| c.id() == new_id) {
+        subscribers[pos] = tauri_channel;
+    } else {
+        subscribers.push(tauri_channel);
+    }
     Ok(())
 }
 
@@ -571,19 +629,82 @@ pub fn attach_terminal_session(
 pub fn detach_terminal_session(
     session_state: State<'_, SessionState>,
     session_id: String,
+    channel_id: Option<u32>,
 ) -> Result<(), String> {
     let sessions = session_state
         .sessions
         .lock()
         .map_err(|_| "Failed to lock sessions".to_string())?;
     if let Some(active) = sessions.get(&session_id) {
-        if let Ok(mut slot) = active.frontend_channel.lock() {
-            *slot = None;
+        if let Ok(mut subscribers) = active.frontend_channel.lock() {
+            match channel_id {
+                Some(id) => {
+                    // Channel-specific detach: the caller knows exactly
+                    // which subscriber it owns (via `Channel::id()` on
+                    // the frontend side) and only that entry is removed.
+                    // This is race-safe against a fresh attach that
+                    // happens to be racing the unmount cleanup of a
+                    // previous surface — the cleanup can't accidentally
+                    // pop the new channel.
+                    let before = subscribers.len();
+                    subscribers.retain(|c| c.id() != id);
+                    if subscribers.len() == before {
+                        // Unknown id → no-op. We deliberately do NOT
+                        // fall back to LIFO pop here: the caller
+                        // committed to a specific id, and a stale id
+                        // means either the attach raced us (and is now
+                        // gone) or the caller is mistaken. Either way
+                        // we don't want to evict a peer subscriber.
+                    }
+                }
+                None => {
+                    // Backward-compat fallback for callers that don't
+                    // track channel identity: LIFO pop. Matches the V1
+                    // single-subscriber semantics — the typical V1 case
+                    // has only one channel attached per session, so
+                    // the pop removes it.
+                    subscribers.pop();
+                }
+            }
         }
         Ok(())
     } else {
         Err("Session not found".to_string())
     }
+}
+
+/// Persist a user-supplied tab title for the session. The frontend calls
+/// this on every commit of the inline rename input. We trim
+/// surrounding whitespace and length-cap at 64 chars server-side so a
+/// runaway UI input cannot balloon the panel or leak into log lines.
+/// An empty string after trim is treated as "clear the title" and
+/// stores `None` so the panel falls back to its default-name strategy.
+#[tauri::command]
+pub fn rename_terminal_session(
+    session_state: State<'_, SessionState>,
+    session_id: String,
+    title: String,
+) -> Result<(), String> {
+    const TITLE_MAX_CHARS: usize = 64;
+    let trimmed = title.trim();
+    let stored = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(TITLE_MAX_CHARS).collect::<String>())
+    };
+    let mut sessions = session_state
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock sessions".to_string())?;
+    let active = sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    let mut title_slot = active
+        .display_title
+        .lock()
+        .map_err(|_| "Failed to lock title".to_string())?;
+    *title_slot = stored;
+    Ok(())
 }
 
 #[cfg(test)]

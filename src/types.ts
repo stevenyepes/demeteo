@@ -685,3 +685,29 @@ export interface ProjectSettingsData {
   artifact_subdir?: string;
   commit_artifacts?: boolean;
 }
+
+export interface SessionInfo {
+  session_id: string;
+  machine_id: string;
+  created_at: number;
+  title: string | null;
+}
+
+export interface TerminalTabDescriptor {
+  sessionId: string | null;
+  tabId: string;
+  machineId: string;
+  machineLabel: string;
+  projectId?: string;
+  repoPath?: string;
+  workBranch?: string | null;
+  title: string;
+  phase: 'connecting' | 'running' | 'closed' | 'error';
+  createdAt: number;
+}
+
+export interface TerminalPanelState {
+  tabs: TerminalTabDescriptor[];
+  activeTabId: string | null;
+  collapsed: boolean;
+}

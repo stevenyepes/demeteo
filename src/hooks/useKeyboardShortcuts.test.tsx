@@ -104,3 +104,31 @@ describe('close-view binding', () => {
     expect(onNewFeature).not.toHaveBeenCalled();
   });
 });
+
+// Spec §7 Q4 / §6: Cmd/Ctrl + ` toggles the global terminal panel. The
+// dispatcher must call preventDefault so the webview's own shortcut
+// fallback (which can be a focus jump in inputs / devtools) does not
+// also fire.
+describe('terminal-panel toggle binding', () => {
+  it.each([
+    ['Cmd+`', { key: '`', metaKey: true }],
+    ['Ctrl+`', { key: '`', ctrlKey: true }],
+  ])('%s fires onToggleTerminalPanel and prevents default', (_label, init) => {
+    const onToggleTerminalPanel = vi.fn();
+    const onOpenCommandPalette = vi.fn();
+
+    mountHook({ onToggleTerminalPanel, onOpenCommandPalette });
+
+    expect(dispatchKey(init).prevented).toBe(true);
+    expect(onToggleTerminalPanel).toHaveBeenCalledTimes(1);
+    expect(onOpenCommandPalette).not.toHaveBeenCalled();
+  });
+
+  it('ignores a bare backtick so typing in inputs still works', () => {
+    const onToggleTerminalPanel = vi.fn();
+    mountHook({ onToggleTerminalPanel });
+
+    expect(dispatchKey({ key: '`' }).prevented).toBe(false);
+    expect(onToggleTerminalPanel).not.toHaveBeenCalled();
+  });
+});

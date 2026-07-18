@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Search, Sliders, Globe, Settings, Inbox } from 'lucide-react';
+import { Search, Sliders, Globe, Settings, Inbox, TerminalSquare } from 'lucide-react';
 import { NotificationBell } from './NotificationBell';
 import { bucketFor } from './RemoteRunInbox';
-import { useNavigation, useUIState } from '../context';
+import { useNavigation, useUIState, useTerminalPanel } from '../context';
 import type { Provider, RemoteRunMirror } from '../types';
 
 interface TopBarProps {
@@ -13,6 +13,7 @@ interface TopBarProps {
 function TopBar({ connectedProvider }: TopBarProps) {
   const { navigate } = useNavigation();
   const { uiDispatch } = useUIState();
+  const { state: terminalState, togglePanel } = useTerminalPanel();
 
   // Ambient badge for the Remote Runs entry point — without this, a
   // parked/failed/needs-credentials run gives zero passive signal that
@@ -78,6 +79,31 @@ function TopBar({ connectedProvider }: TopBarProps) {
             </span>
           ) : runningCount > 0 ? (
             <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-cyan-400 animate-pulse" title={`${runningCount} remote run${runningCount === 1 ? '' : 's'} in progress`} />
+          ) : null}
+        </button>
+        {/* Terminal panel toggle (spec §3 (f)). The pulse indicator is
+            visible only while the panel is collapsed but at least one
+            session is alive — gives the user a passive signal that
+            hiding the panel did not kill anything (spec §1 AC #6). */}
+        <button
+          onClick={togglePanel}
+          className={`relative text-slate-400 hover:text-white transition-all hover:bg-white/5 p-1.5 rounded flex items-center gap-1 text-xs ${
+            terminalState.tabs.length > 0 && !terminalState.collapsed
+              ? 'bg-white/[0.04] text-white'
+              : ''
+          }`}
+          title={`${terminalState.tabs.length > 0 && terminalState.collapsed ? 'Show' : 'Toggle'} terminal panel — sessions stay alive while hidden`}
+          aria-label="Toggle terminal panel"
+          data-testid="topbar-terminal-toggle"
+        >
+          <TerminalSquare className="w-4 h-4 text-cyan-400" />
+          <span className="hidden md:inline font-mono">Terminals</span>
+          {terminalState.tabs.length > 0 && terminalState.collapsed ? (
+            <span
+              className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-pulse-glow"
+              data-testid="topbar-terminal-pulse"
+              title={`${terminalState.tabs.length} live session${terminalState.tabs.length === 1 ? '' : 's'}`}
+            />
           ) : null}
         </button>
         <NotificationBell />

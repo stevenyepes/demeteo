@@ -1,15 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal, Code } from 'lucide-react';
-import { AgentTerminalDrawer } from './AgentTerminalDrawer';
 import { invoke } from '@tauri-apps/api/core';
 import { Feature, WorktreeStrategy, ProjectSettingsData } from '../types';
 import { formatTokens } from '../lib/utils';
 import { formatError } from '../lib/errors';
 import { saveProjectSettings } from '../lib/project';
-import { TerminalWindow } from './TerminalWindow';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
-import { useNavigation, useProject, useUIState } from '../context';
+import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
 import { buildWorkflowById, classifyWorkflowBadge } from '../lib/workflowBadge';
 
@@ -30,14 +28,14 @@ const TONE_ACCENT: Record<RunStatusTone, string> = {
 const ProjectHome = () => {
     const { navigate } = useNavigation();
     const { state: { currentProjectId, projects }, dispatch: projDispatch } = useProject();
-    const { ui, uiDispatch } = useUIState();
+    const { uiDispatch } = useUIState();
+    const { open: openTerminalTab } = useTerminalPanel();
     const activeProject = projects.find(p => p.id === currentProjectId)!;
     const [featureInput, setFeatureInput] = useState('');
     const [features, setFeatures] = useState<Feature[]>([]);
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
     const [activeRepoPath, setActiveRepoPath] = useState<string>('');
-    const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
     // Feature ids that have a remote-run mirror → they execute detached under
     // the runner rather than on this machine. Drives the per-card transport
     // badge. Empty when nothing detached is (or was) tracked in this project.
@@ -477,7 +475,19 @@ const ProjectHome = () => {
 
                 {/* Code with Agent card */}
                 <button
-                  onClick={() => setAgentDrawerOpen(true)}
+                  onClick={() => {
+                    if (!activeRepoPath) return;
+                    const machineId =
+                      activeProject.compute_type === 'remote'
+                        ? activeProject.remote_host || 'local'
+                        : 'local';
+                    void openTerminalTab({
+                      machineId,
+                      machineLabel: machineId,
+                      projectId: activeProject.id,
+                      repoPath: activeRepoPath,
+                    });
+                  }}
                   disabled={!activeRepoPath}
                   className="glass-panel rounded-2xl p-4 flex items-center gap-4 text-left w-full group hover:border-cyan-500/20 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed border border-white/5 hover:bg-cyan-500/5"
                 >
@@ -487,7 +497,7 @@ const ProjectHome = () => {
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-white">Start a coding session</p>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Open an interactive agent (Claude, OpenCode…) directly in the repo — no pipeline required
+                      Open an interactive terminal session in the repo — the panel hosts the live PTY
                     </p>
                   </div>
                   <Terminal className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors ml-auto shrink-0" />
@@ -639,39 +649,66 @@ const ProjectHome = () => {
                                 </select>
                             </div>
                         )}
-                        <div className="flex-1 min-h-0">
-                            {activeRepoPath ? (
-                                <TerminalWindow
-                                    projectId={activeProject.id}
-                                    computeType={activeProject.compute_type || 'local'}
-                                    remoteHost={activeProject.remote_host || null}
-                                    repoPath={activeRepoPath}
-                                />
-                            ) : (
-                                <div className="flex-1 flex items-center justify-center p-8 bg-[#050608] border border-white/5 rounded-xl">
-                                    <span className="text-xs text-slate-500 italic">No repositories configured.</span>
-                                </div>
-                            )}
-                        </div>
+                        <TerminalTabOpener
+                            projectId={activeProject.id}
+                            computeType={activeProject.compute_type || 'local'}
+                            remoteHost={activeProject.remote_host || null}
+                            repoPath={activeRepoPath}
+                        />
                     </div>
                 )}
 
             </div>
 
-        {activeRepoPath && (
-          <AgentTerminalDrawer
-            isOpen={agentDrawerOpen}
-            onClose={() => setAgentDrawerOpen(false)}
-            machineId={activeProject.compute_type === 'remote' ? activeProject.remote_host || 'local' : 'local'}
-            repoPath={activeRepoPath}
-            projectId={activeProject.id}
-            computeType={activeProject.compute_type || 'local'}
-            remoteHost={activeProject.remote_host || null}
-            sidebarWidth={ui.sidebarCollapsed ? 56 : 240}
-          />
-        )}
         </div>
     );
 };
+
+// Thin view that opens a terminal tab in the global panel whenever the
+// Terminal tab is active (spec §3 (b)). Replaces the legacy
+// `<TerminalWindow>` mount that used to live inline — the panel now owns
+// session lifecycle and the xterm canvas (`TerminalSurface`).
+function TerminalTabOpener({
+  projectId,
+  computeType,
+  remoteHost,
+  repoPath,
+}: {
+  projectId: string;
+  computeType: string;
+  remoteHost: string | null;
+  repoPath: string;
+}): React.ReactElement {
+  const { open: openTerminalTab } = useTerminalPanel();
+  const machineId = computeType.toLowerCase() === 'remote' ? remoteHost || 'local' : 'local';
+
+  // Open a panel tab on mount. The panel owns session lifecycle; this
+  // view is just a trigger that registers the intent.
+  useEffect(() => {
+    if (!repoPath) return;
+    void openTerminalTab({
+      machineId,
+      machineLabel: machineId,
+      projectId,
+      repoPath,
+    });
+    // The opener fires once per (project, repo, machine) tuple — the
+    // panel decides whether to reuse or replace an existing tab.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, repoPath, machineId]);
+
+  return (
+    <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 rounded-xl border border-white/5 bg-[#050608] p-8 text-center">
+      <Terminal className="w-6 h-6 text-cyan-400" />
+      <p className="text-sm font-medium text-white">Terminal opened in the panel</p>
+      <p className="text-xs text-slate-500 max-w-sm">
+        The PTY for <span className="font-mono text-slate-300">{repoPath || 'this repo'}</span>{' '}
+        is running in the global terminal panel at the bottom of the window.
+        Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400 font-mono">Cmd/Ctrl + `</kbd>{' '}
+        to toggle the panel, or close the active tab to end the session.
+      </p>
+    </div>
+  );
+}
 
 export default ProjectHome;
