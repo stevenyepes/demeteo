@@ -102,8 +102,21 @@ use tauri::Manager;
 
 use super::{
     attach_terminal_session, detach_terminal_session, list_terminal_sessions,
-    rename_terminal_session, ActiveSession, ReadSource, SessionState, WriteSink,
+    rename_terminal_session, ActiveSession, Broadcast, ReadSource, SessionState, WriteSink,
 };
+
+/// Wraps a set of channels in an `Arc<Mutex<Broadcast>>` with an empty
+/// scrollback — the shape `ActiveSession.frontend_channel` expects.
+fn broadcast_with(channels: Vec<Channel<Vec<u8>>>) -> Arc<Mutex<Broadcast>> {
+    let mut broadcast = Broadcast::new();
+    broadcast.channels = channels;
+    Arc::new(Mutex::new(broadcast))
+}
+
+/// Number of currently-attached subscriber channels on a broadcast.
+fn channel_count(broadcast: &Arc<Mutex<Broadcast>>) -> usize {
+    broadcast.lock().expect("broadcast lock").channels.len()
+}
 
 /// Builds a `Channel<Vec<u8>>` whose `on_message` closure captures the most
 /// recent payload into a shared `Vec<u8>` for assertions. `Vec<u8>` is
@@ -180,7 +193,7 @@ fn wait_for(timeout_ms: u64, predicate: impl Fn() -> bool) -> bool {
 /// and the `ActiveSession`, so the PTY master + child outlive either.
 #[allow(clippy::type_complexity)]
 fn spawn_test_session(
-    frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>>,
+    frontend_channel: Arc<Mutex<Broadcast>>,
     display_title: Mutex<Option<String>>,
 ) -> (
     Arc<Mutex<Box<dyn Write + Send>>>,
@@ -238,7 +251,7 @@ fn spawn_test_session(
 fn insert_test_session(state: &SessionState, session_id: &str) {
     let (read_source, write_sink, keepalive) =
         super::start_local_pty("local", &None, &None).expect("start_local_pty");
-    let frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>> = Arc::new(Mutex::new(Vec::new()));
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let display_title: Mutex<Option<String>> = Mutex::new(None);
     let active = ActiveSession {
         read_source,
@@ -261,7 +274,7 @@ fn broadcast_to_multiple_channels() {
     let state = SessionState::default();
     app.manage(state);
 
-    let frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>> = Arc::new(Mutex::new(Vec::new()));
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let (writer_arc, _drain_handle, session) =
         spawn_test_session(frontend_channel.clone(), Mutex::new(None));
 
@@ -319,7 +332,7 @@ fn attach_after_detach_rebinds_channel() {
     let state = SessionState::default();
     app.manage(state);
 
-    let frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>> = Arc::new(Mutex::new(Vec::new()));
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let (writer_arc, _drain_handle, session) =
         spawn_test_session(frontend_channel.clone(), Mutex::new(None));
 
@@ -476,7 +489,7 @@ fn detach_only_removes_last_attached_subscriber() {
     let state = SessionState::default();
     app.manage(state);
 
-    let frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>> = Arc::new(Mutex::new(Vec::new()));
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let (writer_arc, _drain_handle, session) =
         spawn_test_session(frontend_channel.clone(), Mutex::new(None));
 
@@ -595,45 +608,16 @@ fn attach_with_same_channel_id_is_idempotent() {
             .frontend_channel
             .clone()
     };
-    let subscribers = active.lock().expect("subscribers lock");
+    let guard = active.lock().expect("subscribers lock");
     assert_eq!(
-        subscribers.len(),
+        guard.channels.len(),
         1,
         "re-attaching the same channel id must not grow the Vec"
     );
     assert_eq!(
-        subscribers[0].id(),
+        guard.channels[0].id(),
         cid,
         "stored channel must be the one we attached"
-    );
-}
-
-/// `seed_frontend_channel` is the helper `start_terminal_session` uses
-/// to wire the caller's IPC channel as the initial subscriber. Shell
-/// startup output must be deliverable to that channel so the first
-/// prompt is not irretrievably lost (spec §1 AC #1 + previous-attempt
-/// feedback #1).
-#[test]
-fn seed_frontend_channel_supplied_receives_send_chunk_output() {
-    let (channel, captured) = capturing_channel();
-    let seed = super::seed_frontend_channel(channel.clone());
-
-    // The seed Vec must contain exactly the channel we supplied, no
-    // copy / clone shenanigans.
-    {
-        let guard = seed.lock().expect("seed lock");
-        assert_eq!(guard.len(), 1, "seed Vec must hold exactly one entry");
-        assert_eq!(guard[0].id(), channel.id(), "stored channel id mismatch");
-    }
-
-    // Broadcasting a chunk through `send_chunk` must deliver to the
-    // seed channel — proves the helper produces a wire-compatible
-    // `Arc<Mutex<Vec<Channel<Vec<u8>>>>>` for the drain thread.
-    super::send_chunk(&seed, b"hello\r\n".to_vec());
-    assert_eq!(
-        *captured.lock().expect("captured lock"),
-        b"hello\r\n".to_vec(),
-        "seed channel must receive the broadcast chunk"
     );
 }
 
@@ -650,7 +634,7 @@ fn detach_with_channel_id_removes_only_matching() {
     let state = SessionState::default();
     app.manage(state);
 
-    let frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>> = Arc::new(Mutex::new(Vec::new()));
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let (writer_arc, _drain_handle, session) =
         spawn_test_session(frontend_channel.clone(), Mutex::new(None));
 
@@ -725,7 +709,7 @@ fn detach_with_channel_id_removes_only_matching() {
             .frontend_channel
             .clone()
     };
-    let subscribers = active.lock().expect("subscribers lock").len();
+    let subscribers = channel_count(&active);
     assert_eq!(subscribers, 0, "unknown-id detach must not evict anyone");
 
     // Session itself still alive in the listing.
@@ -748,8 +732,7 @@ fn send_chunk_prunes_dead_subscribers() {
     let dead = dead_channel();
     let dead_id = dead.id();
 
-    let frontend_channel: Arc<Mutex<Vec<Channel<Vec<u8>>>>> =
-        Arc::new(Mutex::new(vec![live_channel, dead]));
+    let frontend_channel = broadcast_with(vec![live_channel, dead]);
 
     // First broadcast: live channel receives the chunk, the dead
     // channel's send() fails, and `send_chunk` removes the dead entry.
@@ -762,7 +745,7 @@ fn send_chunk_prunes_dead_subscribers() {
     );
 
     // Confirm the dead channel has been pruned.
-    let after_first = frontend_channel.lock().expect("subs lock").len();
+    let after_first = channel_count(&frontend_channel);
     assert_eq!(
         after_first, 1,
         "dead subscriber must be pruned after a failed send"
@@ -777,17 +760,183 @@ fn send_chunk_prunes_dead_subscribers() {
         "live channel must keep receiving after the dead peer is pruned"
     );
     assert_eq!(
-        frontend_channel.lock().expect("subs lock").len(),
+        channel_count(&frontend_channel),
         1,
         "dead subscriber must stay pruned across multiple chunks"
     );
 
     // Sanity: the remaining entry is the live channel, not the dead
     // one (channel id is the only stable identity we have).
-    let subscribers = frontend_channel.lock().expect("subs lock");
+    let guard = frontend_channel.lock().expect("subs lock");
     assert_ne!(
-        subscribers[0].id(),
+        guard.channels[0].id(),
         dead_id,
         "pruned dead channel must not reappear"
     );
+}
+
+// =============================================================================
+// Scrollback broadcast tests (TERMINALS_VIEW_SPEC §3, §12). These exercise the
+// `Broadcast { channels, scrollback }` replacement for the PR #58 seed-channel
+// mechanism: a fresh attach replays accumulated output exactly once to the new
+// channel, existing subscribers never re-see it, the ring trims at the byte
+// cap on whole-chunk boundaries, and nothing is lost across the start→attach
+// gap.
+// =============================================================================
+
+/// A `send_chunk` before any attach must accumulate into scrollback, and
+/// the first `attach_terminal_session` replays that scrollback to the new
+/// channel only — nothing is lost across the start→attach gap (F1/§3).
+#[test]
+fn attach_replays_scrollback_to_new_channel() {
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
+
+    let app = tauri::test::mock_app();
+    let state = SessionState::default();
+    app.manage(state);
+
+    let (read_source, write_sink, keepalive) =
+        super::start_local_pty("local", &None, &None).expect("start_local_pty");
+    let session = ActiveSession {
+        read_source,
+        write_sink,
+        _keepalive: keepalive,
+        machine_id: "local".to_string(),
+        created_at: 0,
+        frontend_channel: frontend_channel.clone(),
+        display_title: Mutex::new(None),
+    };
+    let session_id = "sess_scrollback_replay".to_string();
+    {
+        let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+        let mut sessions = state_ref.sessions.lock().expect("sessions lock");
+        sessions.insert(session_id.clone(), session);
+    }
+
+    // Output produced BEFORE any surface attaches — accumulates in
+    // scrollback with zero subscribers.
+    super::send_chunk(&frontend_channel, b"startup-line\r\n".to_vec());
+
+    // The surface mounts and attaches. It must receive the buffered
+    // scrollback via the replay.
+    let (channel, captured) = appending_capturing_channel();
+    let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+    attach_terminal_session(state_ref.clone(), session_id.clone(), channel).expect("attach");
+
+    assert!(
+        wait_for(2_000, || captured.lock().expect("lock").as_slice()
+            == b"startup-line\r\n"),
+        "attach must replay the pre-attach scrollback to the new channel"
+    );
+}
+
+/// A second channel attaching after scrollback exists must replay it, but
+/// a channel that was already attached when that scrollback was produced
+/// must NOT re-receive it on the newcomer's attach (§3, §12).
+#[test]
+fn attach_replay_does_not_duplicate_for_existing_subscribers() {
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
+
+    let app = tauri::test::mock_app();
+    let state = SessionState::default();
+    app.manage(state);
+
+    let (read_source, write_sink, keepalive) =
+        super::start_local_pty("local", &None, &None).expect("start_local_pty");
+    let session = ActiveSession {
+        read_source,
+        write_sink,
+        _keepalive: keepalive,
+        machine_id: "local".to_string(),
+        created_at: 0,
+        frontend_channel: frontend_channel.clone(),
+        display_title: Mutex::new(None),
+    };
+    let session_id = "sess_no_dup_replay".to_string();
+    {
+        let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+        let mut sessions = state_ref.sessions.lock().expect("sessions lock");
+        sessions.insert(session_id.clone(), session);
+    }
+
+    let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+
+    // Channel A attaches first (empty scrollback → no replay).
+    let (channel_a, captured_a) = appending_capturing_channel();
+    attach_terminal_session(state_ref.clone(), session_id.clone(), channel_a).expect("attach A");
+
+    // Output produced while only A is attached: A receives it live and it
+    // lands in scrollback.
+    super::send_chunk(&frontend_channel, b"live-1\r\n".to_vec());
+    assert!(
+        wait_for(2_000, || captured_a.lock().expect("a lock").as_slice() == b"live-1\r\n"),
+        "channel A must receive the live chunk"
+    );
+
+    // Channel B attaches — it must replay the scrollback (`live-1`)...
+    let (channel_b, captured_b) = appending_capturing_channel();
+    attach_terminal_session(state_ref.clone(), session_id.clone(), channel_b).expect("attach B");
+    assert!(
+        wait_for(2_000, || captured_b.lock().expect("b lock").as_slice() == b"live-1\r\n"),
+        "channel B must replay the scrollback on attach"
+    );
+
+    // ...but A must NOT see `live-1` a second time from B's attach.
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        *captured_a.lock().expect("a lock"),
+        b"live-1\r\n".to_vec(),
+        "existing subscriber A must not re-receive scrollback on B's attach"
+    );
+
+    // A further live chunk reaches both exactly once.
+    super::send_chunk(&frontend_channel, b"live-2\r\n".to_vec());
+    assert!(
+        wait_for(2_000, || captured_a.lock().expect("a lock").as_slice()
+            == b"live-1\r\nlive-2\r\n"),
+        "A must receive the second live chunk exactly once"
+    );
+    assert!(
+        wait_for(2_000, || captured_b.lock().expect("b lock").as_slice()
+            == b"live-1\r\nlive-2\r\n"),
+        "B must receive the second live chunk exactly once"
+    );
+}
+
+/// The scrollback ring trims at `SCROLLBACK_MAX_BYTES` on whole-chunk
+/// boundaries: the oldest chunks are dropped wholesale so a replay never
+/// starts mid-chunk (§3, §8). We push chunks well past the cap and assert
+/// the replayed buffer is bounded and preserves the most recent chunks
+/// intact.
+#[test]
+fn scrollback_trims_at_cap_on_chunk_boundaries() {
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
+
+    // Each chunk is 64 KiB of a distinct byte; 8 chunks = 512 KiB, twice
+    // the 256 KiB cap, so the oldest chunks must be dropped.
+    const CHUNK: usize = 64 * 1024;
+    for marker in 0u8..8 {
+        super::send_chunk(&frontend_channel, vec![marker; CHUNK]);
+    }
+
+    let guard = frontend_channel.lock().expect("broadcast lock");
+    // Bounded: total retained bytes never exceed the cap.
+    assert!(
+        guard.scrollback_bytes <= super::SCROLLBACK_MAX_BYTES,
+        "scrollback_bytes {} exceeded the cap",
+        guard.scrollback_bytes
+    );
+    // Whole-chunk boundaries: every retained chunk is a full 64 KiB block
+    // of a single marker byte — never a partial slice.
+    for chunk in &guard.scrollback {
+        assert_eq!(chunk.len(), CHUNK, "a retained chunk was split");
+        let first = chunk[0];
+        assert!(
+            chunk.iter().all(|&b| b == first),
+            "a retained chunk mixed markers — it was cut mid-chunk"
+        );
+    }
+    // Most-recent-wins: the last chunk pushed (marker 7) is still present.
+    let newest = guard.scrollback.back().expect("non-empty scrollback");
+    assert_eq!(newest[0], 7, "the most recent chunk must be retained");
 }

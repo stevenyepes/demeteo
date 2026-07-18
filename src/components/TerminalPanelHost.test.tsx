@@ -57,7 +57,6 @@ function StubHost({
       setState((prev) => ({ ...prev, collapsed: !prev.collapsed }));
     },
     getSessionId: () => null,
-    consumeStartupReplay: () => null,
   };
 
   return (
