@@ -711,8 +711,8 @@ async fn hydrate_shadow_feature(
 
     let store = FsArtifactStore::new(ctx.app_data_dir.clone());
     for step in steps {
-        let existing_shadow = ctx.features.step_get(&step.id)?;
-        let force_refresh = shadow_step_artifacts_stale(existing_shadow.as_ref(), &step);
+        let force_refresh =
+            shadow_step_artifacts_stale(ctx.features.step_get(&step.id)?.as_ref(), &step);
         let local_paths = cache_step_artifacts(
             ctx,
             &store,
@@ -723,7 +723,39 @@ async fn hydrate_shadow_feature(
             force_refresh,
         )
         .await;
-        let single = local_paths.first().cloned();
+
+        // Re-read immediately before the create-vs-update branch rather than
+        // reusing the copy read above the awaited `cache_step_artifacts`
+        // call: `hydrate_shadow_feature` is reachable concurrently for the
+        // same step from two unsynchronized pollers (the periodic
+        // `remote_reconcile_runs` tick and `FeatureDetail.tsx`'s live 3s
+        // `remote_refresh_run` poll). Reading `existing_shadow` before the
+        // await lets both passes observe `None` on a step's first-ever
+        // hydrate and both fall into the create arm below; `step_create` is
+        // a bare `INSERT` with no upsert, so the loser's `?` would abort the
+        // rest of this hydrate pass. Re-reading here keeps that window tight
+        // (matching the pre-`force_refresh` code, which read the row
+        // immediately before this same branch).
+        let existing_shadow = ctx.features.step_get(&step.id)?;
+
+        // A forced re-pull that failed outright (no artifact fetched this
+        // round, e.g. every `read_artifact` RPC errored) shouldn't null out
+        // an artifact reference that's still valid on disk from a prior
+        // successful hydrate — `cache_step_artifacts` already backfills
+        // per-artifact from the on-disk cache when a fetch fails, but if
+        // even that comes up empty, prefer whatever the shadow already had.
+        let (single, local_paths) = if local_paths.is_empty() {
+            match existing_shadow.as_ref() {
+                Some(existing) => (
+                    existing.artifact_path.clone(),
+                    existing.artifact_paths.clone(),
+                ),
+                None => (None, local_paths),
+            }
+        } else {
+            (local_paths.first().cloned(), local_paths)
+        };
+
         if existing_shadow.is_none() {
             let mut shadow = step.clone();
             // Keep the step's FK pointing at the pinned feature id, not the
@@ -781,15 +813,15 @@ fn shadow_step_artifacts_stale(existing: Option<&StepExecution>, fresh: &StepExe
 /// returning the *local* references to store on the shadow step. If the
 /// laptop already cached artifacts for this step *and* `force_refresh` is
 /// false, they are reused with no remote read — the offset-equivalent
-/// "don't re-pull" gate C4.2 calls for. `force_refresh` (from
-/// [`shadow_step_artifacts_stale`]) overrides that: a gate redirect can
-/// re-run a step and land it back on `completed` with the same artifact
-/// *count* (one `critic-review.md` both times) but different content, and
-/// the count-based check alone can't tell the two apart. `store.put` writes
-/// to the same path each time (see `FsArtifactStore::put`), so a
-/// forced re-pull simply overwrites the stale file in place. A per-artifact
-/// fetch failure is surfaced (logged) and skipped rather than aborting the
-/// whole hydration.
+/// "don't re-pull" gate C4.2 calls for. `force_refresh` (see
+/// [`shadow_step_artifacts_stale`] for why a gate redirect needs one)
+/// overrides that. `store.put` writes to the same path each time (see
+/// `FsArtifactStore::put`), so a forced re-pull simply overwrites the stale
+/// file in place. A per-artifact fetch or write failure is logged and
+/// backfilled from whatever's already on disk for that artifact, rather
+/// than dropped — otherwise a transient RPC hiccup during a forced re-pull
+/// would wipe a still-valid reference that a plain (non-forced) hydrate
+/// would have left untouched.
 async fn cache_step_artifacts(
     ctx: &AppContext,
     store: &FsArtifactStore,
@@ -804,19 +836,19 @@ async fn cache_step_artifacts(
         return Vec::new();
     }
 
+    let existing = store
+        .list_for_step(feature_id, step.id.as_str())
+        .unwrap_or_default();
+
     // Offset-equivalent gate: already-cached artifacts are not re-pulled,
     // unless the step completed a fresh attempt since we last cached it.
-    if !force_refresh {
-        if let Ok(existing) = store.list_for_step(feature_id, step.id.as_str()) {
-            if !existing.is_empty() && existing.len() >= remote.len() {
-                return existing;
-            }
-        }
+    if !force_refresh && !existing.is_empty() && existing.len() >= remote.len() {
+        return existing;
     }
 
     let mut local = Vec::new();
     for path in remote {
-        match remote_rpc(
+        let fetched = match remote_rpc(
             ctx,
             machine_id,
             "read_artifact",
@@ -841,27 +873,70 @@ async fn cache_step_artifacts(
                     source: ArtifactSource::ToolWrite { path: path.clone() },
                 };
                 match store.put(feature_id, step.id.as_str(), &artifact) {
-                    // Two distinct runner paths that share a basename (e.g. the
-                    // same file declared both as `artifact_path` and inside
-                    // `artifact_paths`, or captured under two absolute paths)
-                    // resolve to the *same* local cache file — `put` is
-                    // idempotent on `{name}.{ext}`. Dedupe so the shadow step's
-                    // `artifact_paths` never carries the identical local ref
-                    // twice (which surfaced as a duplicate-React-key crash in
-                    // the per-step artifact list).
-                    Ok(local_ref) if !local.contains(&local_ref) => local.push(local_ref),
-                    Ok(_) => {}
+                    Ok(local_ref) => Some(local_ref),
                     Err(e) => {
                         eprintln!("shadow artifact cache write failed for {path}: {e}");
+                        None
                     }
                 }
             }
             Err(e) => {
                 eprintln!("shadow artifact fetch failed for {path}: {e}");
+                None
             }
+        };
+        // On failure, fall back to whatever this same artifact already had
+        // on disk from a prior successful pull (matched by the local file's
+        // name stem, which `store.put` always derives from `path`'s stem)
+        // instead of silently dropping it from this hydrate's result.
+        let resolved = fetched.or_else(|| backfill_local_path(&existing, &path));
+        match resolved {
+            // Two distinct runner paths that share a basename (e.g. the
+            // same file declared both as `artifact_path` and inside
+            // `artifact_paths`, or captured under two absolute paths)
+            // resolve to the *same* local cache file — `put` is
+            // idempotent on `{name}.{ext}`. Dedupe so the shadow step's
+            // `artifact_paths` never carries the identical local ref
+            // twice (which surfaced as a duplicate-React-key crash in
+            // the per-step artifact list).
+            Some(local_ref) if !local.contains(&local_ref) => local.push(local_ref),
+            Some(_) | None => {}
         }
     }
     local
+}
+
+/// Find a previously-cached local artifact matching a remote path that just
+/// failed to fetch, so a transient failure during a forced re-pull can fall
+/// back to the last-known-good file instead of dropping the reference.
+/// `FsArtifactStore::put` always names a local file `{sanitized-stem}.{ext}`
+/// where `stem` is `remote_path`'s file stem, so matching on that prefix is
+/// enough without reimplementing the store's extension inference.
+fn backfill_local_path(existing: &[String], remote_path: &str) -> Option<String> {
+    let stem = std::path::Path::new(remote_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("artifact");
+    let safe_stem: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let prefix = format!("{safe_stem}.");
+    existing
+        .iter()
+        .find(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|name| name.starts_with(&prefix))
+        })
+        .cloned()
 }
 
 /// A shadow step's declared artifact paths on the runner, de-duplicated

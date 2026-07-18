@@ -158,8 +158,16 @@ export const GateView: React.FC<GateViewProps> = ({
                 const gatePath = stepExec?.artifact_paths?.length
                   ? stepExec.artifact_paths[0]
                   : stepExec?.artifact_path;
+                // Same cache-busting signal as FeatureDetail's viewer — a
+                // forced re-pull can overwrite this artifact in place at
+                // the same path (see `cache_step_artifacts` on the
+                // backend), so key on the fields that change when a fresh
+                // attempt lands rather than on the unchanged path alone.
+                const contentVersion = stepExec
+                  ? `${stepExec.status}:${stepExec.tokens}:${stepExec.wall_clock_secs}:${stepExec.cost_usd}`
+                  : undefined;
                 return gatePath ? (
-                  <ArtifactViewer artifactPath={gatePath} maxHeight="280px" />
+                  <ArtifactViewer artifactPath={gatePath} maxHeight="280px" contentVersion={contentVersion} />
                 ) : (
                   <div className="text-slate-500 font-mono text-xs italic flex items-center justify-center h-full">
                     No artifact outputs saved for this gate step.
