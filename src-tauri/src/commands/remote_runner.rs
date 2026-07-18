@@ -629,12 +629,15 @@ const NOTIFY_ON: &[&str] = &[
 /// control channel, re-parents the feature to the **local** `project_id`
 /// (so the `features.project_id` FK holds and the inbox deep-links into a
 /// local project view — the runner's own project id doesn't exist on the
-/// laptop), and upserts. Each step's declared artifacts are pulled **once**
-/// into the laptop `FsArtifactStore` and the shadow step's paths rewritten
-/// to those local references, so the artifact viewer reads them as ordinary
+/// laptop), and upserts. Each step's declared artifacts are pulled into
+/// the laptop `FsArtifactStore` and the shadow step's paths rewritten to
+/// those local references, so the artifact viewer reads them as ordinary
 /// local files with no remote round-trip. Idempotent and best-effort: safe
 /// to call on every reconcile; a captured artifact belongs to a finished
-/// step and is never re-pulled (the offset-equivalent gate).
+/// step and is **not** re-pulled *unless* [`shadow_step_artifacts_stale`]
+/// says the step completed a fresh attempt since the last hydrate (a gate
+/// redirect re-ran it) — see that function's doc for why a plain
+/// artifact-count check isn't enough.
 async fn hydrate_shadow_feature(
     ctx: &AppContext,
     machine_id: &str,
@@ -708,10 +711,20 @@ async fn hydrate_shadow_feature(
 
     let store = FsArtifactStore::new(ctx.app_data_dir.clone());
     for step in steps {
-        let local_paths =
-            cache_step_artifacts(ctx, &store, machine_id, run_id, fid.as_str(), &step).await;
+        let existing_shadow = ctx.features.step_get(&step.id)?;
+        let force_refresh = shadow_step_artifacts_stale(existing_shadow.as_ref(), &step);
+        let local_paths = cache_step_artifacts(
+            ctx,
+            &store,
+            machine_id,
+            run_id,
+            fid.as_str(),
+            &step,
+            force_refresh,
+        )
+        .await;
         let single = local_paths.first().cloned();
-        if ctx.features.step_get(&step.id)?.is_none() {
+        if existing_shadow.is_none() {
             let mut shadow = step.clone();
             // Keep the step's FK pointing at the pinned feature id, not the
             // runner's — otherwise `steps_for_feature(canonical)` wouldn't
@@ -739,13 +752,44 @@ async fn hydrate_shadow_feature(
     Ok(())
 }
 
-/// Pull a shadow step's declared artifacts into the laptop artifact cache
-/// once, returning the *local* references to store on the shadow step. If
-/// the laptop already cached artifacts for this step, they are reused with
-/// no remote read — a captured artifact belongs to a finished step and
-/// won't change, which is the offset-equivalent "don't re-pull" gate C4.2
-/// calls for. A per-artifact fetch failure is surfaced (logged) and
-/// skipped rather than aborting the whole hydration.
+/// Whether a shadow step's cached artifacts might be stale relative to the
+/// runner's fresh row, despite the artifact *count* looking unchanged.
+///
+/// A gate redirect can send a step (e.g. `s-critic`) back through the
+/// pipeline; it re-runs and lands on `completed` again with the exact same
+/// number of declared artifacts (one `critic-review.md`, same as before),
+/// so a count-based cache check can't distinguish "still the first run's
+/// output" from "a second run's output that happens to produce one file
+/// too". `status`/`tokens`/`wall_clock_secs`/`cost_usd` are refreshed on
+/// every hydrate regardless of caching (see the `StepExecutionPatch` in
+/// [`hydrate_shadow_feature`]), so comparing them against what's currently
+/// stored on the shadow is a cheap, always-available signal that a fresh
+/// attempt completed since the last successful hydrate. `None` (no shadow
+/// row yet) is never stale by this definition — the artifact-count gate
+/// already handles "first pull" on its own.
+fn shadow_step_artifacts_stale(existing: Option<&StepExecution>, fresh: &StepExecution) -> bool {
+    let Some(existing) = existing else {
+        return false;
+    };
+    existing.status != fresh.status
+        || existing.tokens != fresh.tokens
+        || existing.wall_clock_secs != fresh.wall_clock_secs
+        || existing.cost_usd != fresh.cost_usd
+}
+
+/// Pull a shadow step's declared artifacts into the laptop artifact cache,
+/// returning the *local* references to store on the shadow step. If the
+/// laptop already cached artifacts for this step *and* `force_refresh` is
+/// false, they are reused with no remote read — the offset-equivalent
+/// "don't re-pull" gate C4.2 calls for. `force_refresh` (from
+/// [`shadow_step_artifacts_stale`]) overrides that: a gate redirect can
+/// re-run a step and land it back on `completed` with the same artifact
+/// *count* (one `critic-review.md` both times) but different content, and
+/// the count-based check alone can't tell the two apart. `store.put` writes
+/// to the same path each time (see `FsArtifactStore::put`), so a
+/// forced re-pull simply overwrites the stale file in place. A per-artifact
+/// fetch failure is surfaced (logged) and skipped rather than aborting the
+/// whole hydration.
 async fn cache_step_artifacts(
     ctx: &AppContext,
     store: &FsArtifactStore,
@@ -753,16 +797,20 @@ async fn cache_step_artifacts(
     run_id: &str,
     feature_id: &str,
     step: &StepExecution,
+    force_refresh: bool,
 ) -> Vec<String> {
     let remote = declared_remote_paths(step.artifact_path.as_deref(), &step.artifact_paths);
     if remote.is_empty() {
         return Vec::new();
     }
 
-    // Offset-equivalent gate: already-cached artifacts are not re-pulled.
-    if let Ok(existing) = store.list_for_step(feature_id, step.id.as_str()) {
-        if !existing.is_empty() && existing.len() >= remote.len() {
-            return existing;
+    // Offset-equivalent gate: already-cached artifacts are not re-pulled,
+    // unless the step completed a fresh attempt since we last cached it.
+    if !force_refresh {
+        if let Ok(existing) = store.list_for_step(feature_id, step.id.as_str()) {
+            if !existing.is_empty() && existing.len() >= remote.len() {
+                return existing;
+            }
         }
     }
 
