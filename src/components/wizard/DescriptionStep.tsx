@@ -1,4 +1,4 @@
-import type { CreateProjectStepPayload } from '../../types';
+import type { DescriptionStepPatch } from '../../types';
 
 export interface DescriptionStepProps {
   /** The user's free-text description. */
@@ -9,7 +9,7 @@ export interface DescriptionStepProps {
   /** Repo visibility, used to build the commit payload's
    *  `visibility` field. */
   visibility: 'private' | 'public';
-  onSubmit: (payload: Extract<CreateProjectStepPayload, { step: 'commit' }>) => void;
+  onSubmit: (patch: DescriptionStepPatch) => void;
 }
 
 /**
@@ -45,6 +45,7 @@ export function DescriptionStep({
         </label>
         <input
           id="wizard-title"
+          data-testid="wizard-title"
           type="text"
           value={title}
           onChange={(e) => onSubmit(commitPayloadWith({ title: e.target.value }))}
@@ -67,6 +68,7 @@ export function DescriptionStep({
         </label>
         <textarea
           id="wizard-description"
+          data-testid="wizard-description"
           value={description}
           onChange={(e) => onSubmit(commitPayloadWith({ description: e.target.value }))}
           rows={8}
@@ -128,34 +130,10 @@ export function DescriptionStep({
   );
 }
 
-// Local helper used by the description / title / visibility inputs
-// to emit *partial* commit payloads. The orchestrator merges these
-// patches into the full commit snapshot at submit time (see
-// `CreateProjectWizard.commitPayload`).
-function commitPayloadWith(
-  patch: Partial<Pick<Extract<CreateProjectStepPayload, { step: 'commit' }>,
-    'title' | 'description' | 'visibility'>>,
-): Extract<CreateProjectStepPayload, { step: 'commit' }> {
-  // The orchestrator-supplied defaults live in the React state; we
-  // emit a sentinel payload carrying only the patched fields and
-  // the wizard reducer fills the rest. This keeps the step
-  // component decoupled from the broader commit payload.
-  return {
-    step: 'commit',
-    title: patch.title ?? '',
-    description: patch.description ?? '',
-    visibility: patch.visibility ?? 'private',
-    // Placeholders — the wizard reducer replaces these at submit.
-    name: '',
-    provider_id: '',
-    provider_kind: '',
-    provider_host: '',
-    namespace_id: '',
-    namespace_kind: '',
-    namespace_name: '',
-    machine_kind: 'local',
-    machine_id: null,
-    agent_kind: '',
-    model: '',
-  };
+function commitPayloadWith(patch: Partial<Pick<DescriptionStepPatch, 'title' | 'description' | 'visibility'>>): DescriptionStepPatch {
+  const out: DescriptionStepPatch = { step: 'commit' };
+  if (patch.title !== undefined) out.title = patch.title;
+  if (patch.description !== undefined) out.description = patch.description;
+  if (patch.visibility !== undefined) out.visibility = patch.visibility;
+  return out;
 }

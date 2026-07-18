@@ -206,7 +206,7 @@ describe('the wizard steps', () => {
   });
 
   it('DescriptionStep emits the commit payload with the chosen visibility', async () => {
-    const onSubmit = vi.fn<(p: CreateProjectStepPayload) => void>();
+    const onSubmit = vi.fn();
     render(
       <DescriptionStep
         description="Build a billing service."
@@ -220,6 +220,62 @@ describe('the wizard steps', () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ step: 'commit', visibility: 'public' });
+  });
+
+  describe('DescriptionStep partial-patch behaviour', () => {
+    it('typing into title does not emit description on the patch', async () => {
+      const onSubmit = vi.fn();
+      render(
+        <DescriptionStep
+          description="Already filled description"
+          title=""
+          visibility="private"
+          onSubmit={onSubmit}
+        />,
+      );
+      await userEvent.type(screen.getByTestId('wizard-title'), 'A');
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      const call = onSubmit.mock.calls[0][0] as Record<string, unknown>;
+      expect(call.title).toBe('A');
+      expect(call).not.toHaveProperty('description');
+      expect(call.visibility).toBeUndefined();
+    });
+
+    it('typing into description does not emit title on the patch', async () => {
+      const onSubmit = vi.fn();
+      render(
+        <DescriptionStep
+          description=""
+          title="Existing title"
+          visibility="private"
+          onSubmit={onSubmit}
+        />,
+      );
+      await userEvent.type(screen.getByTestId('wizard-description'), 'B');
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      const call = onSubmit.mock.calls[0][0] as Record<string, unknown>;
+      expect(call.description).toBe('B');
+      expect(call).not.toHaveProperty('title');
+      expect(call.visibility).toBeUndefined();
+    });
+
+    it('clicking a visibility button does not emit title or description', async () => {
+      const onSubmit = vi.fn();
+      render(
+        <DescriptionStep
+          description="Add OAuth2 PKCE flow"
+          title="Auth revamp"
+          visibility="private"
+          onSubmit={onSubmit}
+        />,
+      );
+      await userEvent.click(screen.getByTestId('wizard-visibility-public'));
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      const call = onSubmit.mock.calls[0][0] as Record<string, unknown>;
+      expect(call.visibility).toBe('public');
+      expect(call).not.toHaveProperty('title');
+      expect(call).not.toHaveProperty('description');
+    });
   });
 });
 

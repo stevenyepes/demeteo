@@ -14,6 +14,7 @@ import {
   type BootstrapOutcome,
   type BootstrapState,
   type CreateProjectStepPayload,
+  type DescriptionStepPatch,
 } from '../../types';
 
 import { WizardShell } from './WizardShell';
@@ -329,14 +330,12 @@ export function CreateProjectWizard(): ReactElement {
     [],
   );
   const onCommitPatch = useCallback(
-    (payload: Extract<CreateProjectStepPayload, { step: 'commit' }>) => {
+    (patch: DescriptionStepPatch) => {
       setDraft((d) => ({
         ...d,
-        // Only Description-step-owned fields arrive here; the
-        // orchestrator fills in the rest at submit time.
-        title: payload.title,
-        description: payload.description,
-        visibility: payload.visibility,
+        ...(patch.title !== undefined ? { title: patch.title } : null),
+        ...(patch.description !== undefined ? { description: patch.description } : null),
+        ...(patch.visibility !== undefined ? { visibility: patch.visibility } : null),
       }));
     },
     [],

@@ -224,6 +224,13 @@ export type CreateProjectStepPayload =
       effort?: EffortLevel | null;
     };
 
+export type DescriptionStepPatch = {
+  step: 'commit';
+  title?: string;
+  description?: string;
+  visibility?: 'private' | 'public';
+};
+
 /** Result of `submit_create_project_step` from the Rust command. The
  *  frontend matches on `kind` to decide whether to stay in the wizard
  *  (continue → render the returned state's current step) or navigate
