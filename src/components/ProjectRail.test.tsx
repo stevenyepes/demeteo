@@ -15,6 +15,7 @@ import ProjectRail from './ProjectRail';
 import {
   NavigationProvider,
   ProjectProvider,
+  TerminalPanelProvider,
   UIStateProvider,
   useNavigation,
   useUIState,
@@ -45,8 +46,10 @@ function renderRail(children: ReactNode) {
     <NavigationProvider>
       <ProjectProvider>
         <UIStateProvider>
-          {children}
-          <CaptureView holder={holder} />
+          <TerminalPanelProvider>
+            {children}
+            <CaptureView holder={holder} />
+          </TerminalPanelProvider>
         </UIStateProvider>
       </ProjectProvider>
     </NavigationProvider>,

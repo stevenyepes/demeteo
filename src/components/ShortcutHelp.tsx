@@ -115,7 +115,7 @@ function QuickReferenceCallout({ platform }: { platform: ShortcutPlatform }): Re
         <TerminalSquare className="w-4 h-4 text-cyan-300 mt-0.5 shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs">
-            <span className="text-slate-200 font-medium">Toggle terminal panel</span>
+            <span className="text-slate-200 font-medium">Open Terminals view</span>
             {terminalPanel && (
               <kbd className="ml-auto shrink-0 text-[10px] font-mono text-cyan-200 bg-cyan-500/10 border border-cyan-500/30 px-1.5 py-0.5 rounded shadow-inner whitespace-nowrap">
                 {formatEntryChords(terminalPanel, platform)}
@@ -123,7 +123,7 @@ function QuickReferenceCallout({ platform }: { platform: ShortcutPlatform }): Re
             )}
           </div>
           <p className="text-[11px] text-slate-400 leading-snug mt-0.5">
-            Show or hide the global terminal panel — sessions stay alive while hidden.
+            Open the full-page Terminals view — sessions stay alive as you navigate.
           </p>
         </div>
       </div>

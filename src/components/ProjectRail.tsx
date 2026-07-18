@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
-import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles } from 'lucide-react';
+import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles, TerminalSquare } from 'lucide-react';
 import { StatusBadge } from './ui/StatusBadge';
-import { useNavigation, useProject, useUIState } from '../context';
+import { RailNavItem } from './ui/RailNavItem';
+import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 
 function fuzzyMatch(text: string, query: string): boolean {
   const lower = text.toLowerCase();
@@ -24,9 +25,12 @@ const statusLabel: Record<string, string> = {
 };
 
 function ProjectRail() {
-  const { navigate } = useNavigation();
+  const { navigate, view } = useNavigation();
   const { state: { projects, currentProjectId }, dispatch } = useProject();
   const { ui: { sidebarCollapsed }, uiDispatch } = useUIState();
+  const { state: terminalState } = useTerminalPanel();
+  const terminalCount = terminalState.tabs.length;
+  const terminalsActive = view.kind === 'terminals';
   const collapsed = sidebarCollapsed;
   const currentProject = currentProjectId;
   const setCurrentProject = (id: string) => { dispatch({ type: 'SET_CURRENT', id }); navigate({ kind: 'home' }); };
@@ -79,6 +83,17 @@ function ProjectRail() {
             {p.name.charAt(0).toUpperCase()}
           </button>
         ))}
+        <div className="mt-auto">
+          <RailNavItem
+            icon={TerminalSquare}
+            label="Terminals"
+            collapsed
+            active={terminalsActive}
+            count={terminalCount}
+            pulse={terminalCount > 0}
+            onClick={() => navigate({ kind: 'terminals' })}
+          />
+        </div>
       </aside>
     );
   }
@@ -163,14 +178,22 @@ function ProjectRail() {
         )}
       </div>
 
-      {/* Keyboard hint */}
-      {projects.length > 0 && (
-        <div className="px-3 py-2 border-t border-white/5">
-          <div className="text-[9px] text-slate-600 font-mono text-center">
+      {/* Pinned footer: Terminals entry + keyboard hint */}
+      <div className="border-t border-white/5 p-2 space-y-1">
+        <RailNavItem
+          icon={TerminalSquare}
+          label="Terminals"
+          active={terminalsActive}
+          count={terminalCount}
+          pulse={terminalCount > 0}
+          onClick={() => navigate({ kind: 'terminals' })}
+        />
+        {projects.length > 0 && (
+          <div className="text-[9px] text-slate-600 font-mono text-center pt-1">
             {`⌘1-${Math.min(projects.length, 9)} to jump  ·  ⌘K for palette`}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </aside>
   );
 };
