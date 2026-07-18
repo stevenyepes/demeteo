@@ -1,6 +1,9 @@
 // Tests extracted from `src-tauri/src/commands/remote_runner.rs` (mirrored-tests convention). `super` = that module.
 
-use super::{declared_remote_paths, mime_for_path, shadow_step_artifacts_stale, stamp_client_id};
+use super::{
+    backfill_local_path, declared_remote_paths, mime_for_path, shadow_step_artifacts_stale,
+    stamp_client_id,
+};
 use crate::domain::ids::{FeatureId, StepExecutionId, StepId};
 use crate::domain::models::feature::StepExecution;
 
@@ -109,6 +112,29 @@ fn declared_paths_none_single_uses_list_only() {
 #[test]
 fn declared_paths_empty_when_nothing_declared() {
     assert!(declared_remote_paths(None, &[]).is_empty());
+}
+
+#[test]
+fn backfill_finds_matching_local_file_by_stem() {
+    // `store.put` names the local file `{sanitized-stem}.{ext}` where
+    // `stem` comes from the remote path — a failed re-fetch for
+    // `.../critic-review.md` should still resolve to the file left behind
+    // by a prior successful pull, regardless of its actual extension.
+    let existing = vec!["/data/artifacts/f-1/se-1/critic-review.md".to_string()];
+    let out = backfill_local_path(&existing, "/workspace/critic-review.md");
+    assert_eq!(out, Some(existing[0].clone()));
+}
+
+#[test]
+fn backfill_none_when_no_matching_local_file() {
+    // A step whose first-ever pull failed has nothing on disk to fall
+    // back to — the caller correctly drops the artifact from this
+    // hydrate's result rather than fabricating a reference.
+    let existing = vec!["/data/artifacts/f-1/se-1/other-report.md".to_string()];
+    assert_eq!(
+        backfill_local_path(&existing, "/workspace/critic-review.md"),
+        None
+    );
 }
 
 #[test]

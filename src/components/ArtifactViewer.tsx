@@ -15,6 +15,14 @@ interface ArtifactViewerProps {
   mime?: string;
   /** Called when the user clicks "Open in Editor" on a worktree-ref artifact. */
   onOpenEditorForPath?: (filePath: string) => void;
+  /** Cache-busting signal for content that can be overwritten in place at
+   *  the same `artifactPath` — a shadow step's forced re-pull (see
+   *  `cache_step_artifacts` on the backend) writes fresh content to the
+   *  same local file, so a path-keyed fetch alone won't notice. Callers
+   *  should derive this from whatever changes when the underlying step
+   *  re-runs (e.g. `status:tokens:wall_clock_secs:cost_usd`); any change
+   *  re-triggers the fetch even though `artifactPath` itself is unchanged. */
+  contentVersion?: string;
 }
 
 const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
@@ -22,6 +30,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   maxHeight = '100%',
   mime,
   onOpenEditorForPath,
+  contentVersion,
 }) => {
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -124,7 +133,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
     };
 
     loadArtifact();
-  }, [artifactPath, mime]);
+  }, [artifactPath, mime, contentVersion]);
 
   // Loader state
   if (loading) {

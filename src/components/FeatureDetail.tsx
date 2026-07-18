@@ -1616,6 +1616,18 @@ export function FeatureDetail() {
                 <div className="flex-1 flex flex-col overflow-hidden">
                   <ArtifactViewer
                     artifactPath={selectedArtifactPath}
+                    contentVersion={(() => {
+                      // A shadow step's artifact file can be overwritten in
+                      // place at the same path by a forced re-pull (see
+                      // `cache_step_artifacts` on the backend) — key on the
+                      // same fields that signal a fresh attempt completed
+                      // so the open viewer re-fetches instead of keeping
+                      // the pre-overwrite content on screen.
+                      const selectedStep = steps.find((s) => s.step_id === selectedStepTitle);
+                      return selectedStep
+                        ? `${selectedStep.status}:${selectedStep.tokens}:${selectedStep.wall_clock_secs}:${selectedStep.cost_usd}`
+                        : undefined;
+                    })()}
                     onOpenEditorForPath={async (filePath) => {
                       try {
                         const info = await resolveWorktreeInfo();
