@@ -117,14 +117,32 @@ Ships: **working vs waiting, live, for all agents, everywhere.**
 **Moderate work, highest-value single state.** Precise `awaiting_approval` for
 Claude, plus the notification that reaches you when you've looked away.
 
-- **2a — Transport spike (GATE, do this first).** Verify empirically that a
-  Claude hook subprocess can write an OSC to the PTY. The naive path
-  (`printf '\033]…' >/dev/tty`) depends on hooks having a controlling terminal —
-  **this is unverified and there is evidence it may not hold** (hooks may run
-  with stdin as a pipe and no `/dev/tty`). Spike it in ~30 min before building
-  2b. If it fails, switch the transport to the **hook JSON `terminalSequence`
-  output** (have Claude emit the sequence into the real PTY on the hook's
-  behalf) — this sidesteps `/dev/tty` entirely. Decide here.
+- **2a — Transport spike (GATE). ✅ RESOLVED — transport is the hook-JSON
+  `terminalSequence` output, not `/dev/tty`.** Spiked empirically against real
+  Claude Code v2.1.211 (see `docs/spikes/terminal-activity-transport.md`).
+  Findings:
+  - **`/dev/tty` is dead.** Claude runs hooks in their own session with **no
+    controlling terminal** (since v2.1.139+); the hook diagnostic reported
+    `controlling-tty: ?` and every `printf '…' >/dev/tty` **failed**. (A control
+    PoC that *did* share a controlling terminal succeeded, so the mechanism is
+    fine — Claude deliberately detaches the hook. Docs concur: *"Cannot open
+    `/dev/tty` or send escape sequences directly."*)
+  - **`terminalSequence` works** — the hook returns
+    `{"terminalSequence":"<ESC>]777;…<BEL>"}` and Claude writes the bytes to the
+    PTY on the hook's behalf. Verified end-to-end: on a **`Stop`** hook all probe
+    sequences (OSC 0/9/99, `777;notify`, and a **private `777;demeteo;…`**) landed
+    in the PTY **verbatim** — arbitrary OSC 777 payloads are *not* sanitized to a
+    notification grammar, so our namespaced signal rides through intact
+    (`\x1b]777;…;state=working\x07`).
+  - **Caveat — event scope:** `terminalSequence` renders on post-init events
+    (`Stop`, `Notification`, `PreToolUse`/`PostToolUse`, …) but **not on
+    `SessionStart`** (dropped before the UI is live). Irrelevant to us — every
+    activity signal in §2d rides a post-init event. Also: it does **not** render
+    in headless `claude -p` mode (no interactive terminal); only matters for
+    tests, since demeteo runs Claude interactively.
+  - **`--settings '<inline JSON>'` injects hooks fine** — all injected hooks
+    fired from an inline object; no file needed (the §2c merge-replace caveat
+    still holds).
 - **2b — Drain OSC scanner.** A small stateful scanner between PTY read and
   broadcast: on the namespaced prefix, buffer into a bounded residual (≤128 B),
   parse `state` on `ST` (`ESC \` or `BEL`), **strip** the whole sequence from
@@ -252,8 +270,11 @@ Ships: **"needs a decision" for Codex, OpenCode, and hand-started agents.**
 
 ## 7. Open decisions
 
-1. **Phase-2 transport spike** — `/dev/tty` from hooks vs hook-JSON
-   `terminalSequence`. *Gates Phase 2; resolve first.*
+1. ~~**Phase-2 transport spike** — `/dev/tty` from hooks vs hook-JSON
+   `terminalSequence`.~~ **✅ RESOLVED: `terminalSequence`** (`/dev/tty` has no
+   controlling terminal in current Claude; `terminalSequence` passes a private
+   OSC 777 payload verbatim on post-init hook events). See §2a and
+   `docs/spikes/terminal-activity-transport.md`.
 2. **Cadence window** — the silence threshold for `awaiting_input` (start ~1s;
    tune against real agent idle prompts, watching for agents that animate while
    idle — mitigated by agent-gating + the Phase 2/3 approval overlay correcting
