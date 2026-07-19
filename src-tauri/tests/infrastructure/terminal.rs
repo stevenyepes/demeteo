@@ -1200,82 +1200,153 @@ fn detect_agent_ignores_non_agents() {
     assert_eq!(detect_agent_in_command(""), None);
 }
 
-// --- Activity cadence sweep (T1.2 / T1.9) -----------------------------------
+// --- Activity precedence resolver + cadence sweep (T1.2 / T1.9 / T2.4) -------
 //
-// The cadence decision is factored into the pure `next_activity_emit` so the
-// four required behaviours — byte ⇒ working, ~1s quiet ⇒ awaiting_input,
-// agent-gating (plain shell silent), and dedup (same state not re-emitted) —
-// are testable without spinning the real 250ms sweep thread. A single sweep-
-// level test then proves the wiring: the `last_states` map records agent
-// sessions and gates plain shells end-to-end.
+// The cadence read is factored into the pure `cadence_state` and the §2
+// precedence latch into `resolve` / `apply_hook` / `apply_cadence` /
+// `decide_and_record`, so every required behaviour — the working/awaiting_input
+// floor, the approval latch surviving a cadence tick, the latch clearing on a
+// working or awaiting_input hook, dedup, and exit clearing the record — is
+// testable on a plain `SessionActivity` + map without a real `AppHandle`
+// (TERMINAL_ACTIVITY_PLAN §6). Two sweep-level tests then prove the wiring:
+// agent sessions record + dedup through `SessionState.activity`, plain shells
+// are gated out end-to-end.
 
-use super::{next_activity_emit, sweep_activity_once, CADENCE_WINDOW};
+use super::{
+    apply_cadence, apply_hook, cadence_state, decide_and_record, resolve, sweep_activity_once,
+    SessionActivity, CADENCE_WINDOW,
+};
+use std::collections::HashMap as StdHashMap;
 
-/// A byte just arrived (elapsed within the cadence window) on an agent
-/// session ⇒ `working`. The window boundary is inclusive.
+/// The pure cadence read: within the window ⇒ `working` (boundary inclusive),
+/// quieter ⇒ `awaiting_input`.
 #[test]
-fn activity_recent_output_is_working() {
+fn cadence_state_resolves_by_window() {
+    assert_eq!(cadence_state(Duration::from_millis(0)), "working");
     assert_eq!(
-        next_activity_emit(None, true, Duration::from_millis(0)),
-        Some("working")
-    );
-    assert_eq!(
-        next_activity_emit(None, true, CADENCE_WINDOW),
-        Some("working"),
+        cadence_state(CADENCE_WINDOW),
+        "working",
         "output exactly at the window edge still counts as working"
     );
-}
-
-/// ~1s of silence on an agent session ⇒ `awaiting_input`.
-#[test]
-fn activity_quiet_is_awaiting_input() {
     assert_eq!(
-        next_activity_emit(None, true, CADENCE_WINDOW + Duration::from_millis(200)),
-        Some("awaiting_input")
+        cadence_state(CADENCE_WINDOW + Duration::from_millis(200)),
+        "awaiting_input"
     );
 }
 
-/// Agent-gating: a plain shell (no agent present) NEVER emits, regardless of
-/// output timing or any prior recorded state.
+/// Floor: with no latch, whatever cadence the sweep folds in passes straight
+/// through `resolve` — both `working` and `awaiting_input`.
 #[test]
-fn activity_plain_shell_never_emits() {
+fn resolve_floor_passes_cadence_through() {
+    let mut sa = SessionActivity::default();
+    // Before any cadence read the floor is `working`.
+    assert_eq!(resolve(&sa), "working");
+    apply_cadence(&mut sa, "working");
+    assert_eq!(resolve(&sa), "working");
+    apply_cadence(&mut sa, "awaiting_input");
+    assert_eq!(resolve(&sa), "awaiting_input");
+}
+
+/// Latch survives cadence: once a scanner `awaiting_approval` latches, a
+/// following cadence `awaiting_input` tick must NOT override it (§2's latch).
+#[test]
+fn latch_survives_cadence_tick() {
+    let mut sa = SessionActivity::default();
+    apply_hook(&mut sa, "awaiting_approval");
+    apply_cadence(&mut sa, "awaiting_input");
     assert_eq!(
-        next_activity_emit(None, false, Duration::from_millis(0)),
-        None
+        resolve(&sa),
+        "awaiting_approval",
+        "the approval latch must survive the cadence floor's awaiting_input"
     );
+}
+
+/// Latch clears on a `working` hook (the agent resumed) → resolved `working`.
+#[test]
+fn latch_clears_on_working_hook() {
+    let mut sa = SessionActivity::default();
+    apply_hook(&mut sa, "awaiting_approval");
+    apply_hook(&mut sa, "working");
+    assert_eq!(resolve(&sa), "working");
+}
+
+/// Latch clears on an `awaiting_input` hook (Stop / idle — the source
+/// retracted) → resolved `awaiting_input`.
+#[test]
+fn latch_clears_on_awaiting_input_hook() {
+    let mut sa = SessionActivity::default();
+    apply_hook(&mut sa, "awaiting_approval");
+    apply_hook(&mut sa, "awaiting_input");
+    assert_eq!(resolve(&sa), "awaiting_input");
+}
+
+/// Canonical §2d ordering through the emit decision:
+/// `working → awaiting_approval → (cadence awaiting_input, stays approval) →
+/// working (clears)`. Asserts the exact deduped transitions that reach the wire
+/// by driving `decide_and_record` over a map.
+#[test]
+fn canonical_ordering_latches_then_clears() {
+    let id = "sess";
+    let mut map: StdHashMap<String, SessionActivity> = StdHashMap::new();
+
+    // working hook.
+    apply_hook(map.entry(id.into()).or_default(), "working");
+    assert_eq!(decide_and_record(&mut map, id).as_deref(), Some("working"));
+
+    // awaiting_approval hook — the latch.
+    apply_hook(map.entry(id.into()).or_default(), "awaiting_approval");
     assert_eq!(
-        next_activity_emit(None, false, Duration::from_secs(10)),
-        None
+        decide_and_record(&mut map, id).as_deref(),
+        Some("awaiting_approval")
     );
+
+    // cadence tick goes quiet — latched, so nothing new reaches the wire.
+    apply_cadence(map.entry(id.into()).or_default(), "awaiting_input");
     assert_eq!(
-        next_activity_emit(Some("working"), false, Duration::from_millis(0)),
+        decide_and_record(&mut map, id),
         None,
-        "gating suppresses even when a state was previously recorded"
+        "a cadence awaiting_input must not disturb the latched approval"
+    );
+
+    // working hook — clears the latch, resolves back to working.
+    apply_hook(map.entry(id.into()).or_default(), "working");
+    assert_eq!(decide_and_record(&mut map, id).as_deref(), Some("working"));
+}
+
+/// Dedup: the same resolved state decided twice in a row emits once.
+#[test]
+fn dedup_suppresses_unchanged_state() {
+    let id = "sess";
+    let mut map: StdHashMap<String, SessionActivity> = StdHashMap::new();
+
+    apply_cadence(map.entry(id.into()).or_default(), "working");
+    assert_eq!(decide_and_record(&mut map, id).as_deref(), Some("working"));
+    // Re-fold the same cadence → resolved unchanged → no re-emit.
+    apply_cadence(map.entry(id.into()).or_default(), "working");
+    assert_eq!(decide_and_record(&mut map, id), None);
+    // A genuine transition still emits.
+    apply_cadence(map.entry(id.into()).or_default(), "awaiting_input");
+    assert_eq!(
+        decide_and_record(&mut map, id).as_deref(),
+        Some("awaiting_input")
     );
 }
 
-/// Dedup: the same resolved state is not emitted twice in a row, but a real
-/// transition still emits.
+/// Exit: an `exit` hook emits `exit` once AND removes the record, so a reused
+/// session id starts clean.
 #[test]
-fn activity_dedup_suppresses_unchanged_state() {
-    // Already `working`, still within the window → no re-emit.
-    assert_eq!(
-        next_activity_emit(Some("working"), true, Duration::from_millis(0)),
-        None
-    );
-    // Already `awaiting_input`, still quiet → no re-emit.
-    assert_eq!(
-        next_activity_emit(Some("awaiting_input"), true, Duration::from_secs(5)),
-        None
-    );
-    // Genuine transitions DO emit (both directions).
-    assert_eq!(
-        next_activity_emit(Some("working"), true, Duration::from_secs(5)),
-        Some("awaiting_input")
-    );
-    assert_eq!(
-        next_activity_emit(Some("awaiting_input"), true, Duration::from_millis(0)),
-        Some("working")
+fn exit_emits_and_clears_record() {
+    let id = "sess";
+    let mut map: StdHashMap<String, SessionActivity> = StdHashMap::new();
+
+    apply_cadence(map.entry(id.into()).or_default(), "working");
+    assert_eq!(decide_and_record(&mut map, id).as_deref(), Some("working"));
+
+    apply_hook(map.entry(id.into()).or_default(), "exit");
+    assert_eq!(decide_and_record(&mut map, id).as_deref(), Some("exit"));
+    assert!(
+        !map.contains_key(id),
+        "the record must be dropped after exit so a reused id starts clean"
     );
 }
 
@@ -1309,9 +1380,21 @@ fn insert_agent_session(state: &SessionState, session_id: &str) {
         .insert(session_id.to_string(), active);
 }
 
-/// End-to-end sweep wiring: an agent session with recent output is recorded
-/// as `working`, a plain shell (agent None) is never recorded (gating), and
-/// once the agent session goes quiet it transitions to `awaiting_input`.
+/// Read a session's last-emitted state out of the shared `activity` resolver
+/// map — the sweep's dedup/record store post-T2.4.
+fn activity_last_emitted(state: &SessionState, id: &str) -> Option<String> {
+    state
+        .activity
+        .lock()
+        .expect("activity lock")
+        .get(id)
+        .and_then(|sa| sa.last_emitted.clone())
+}
+
+/// End-to-end sweep wiring + agent-gate: an agent session with recent output
+/// is recorded as `working` in the shared resolver map, a plain shell (agent
+/// None) never produces a record (gating), and once the agent session goes
+/// quiet it transitions to `awaiting_input`.
 #[test]
 fn sweep_records_agent_sessions_and_gates_plain_shells() {
     let app = tauri::test::mock_app();
@@ -1332,20 +1415,18 @@ fn sweep_records_agent_sessions_and_gates_plain_shells() {
             .clone()
     };
 
-    let mut last_states: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-
     // Tick 1: the agent session is freshly active → working; the plain shell
     // is gated out and never recorded.
-    sweep_activity_once(app.handle(), &mut last_states);
+    sweep_activity_once(app.handle());
+    let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
     assert_eq!(
-        last_states.get(&agent_id).map(String::as_str),
+        activity_last_emitted(&state_ref, &agent_id).as_deref(),
         Some("working"),
         "agent session with recent output must resolve working"
     );
     assert!(
-        !last_states.contains_key(&shell_id),
-        "a plain shell (agent None) must never be recorded"
+        activity_last_emitted(&state_ref, &shell_id).is_none(),
+        "a plain shell (agent None) must never produce a record"
     );
 
     // Age the agent session's last output past the cadence window.
@@ -1353,14 +1434,14 @@ fn sweep_records_agent_sessions_and_gates_plain_shells() {
         Instant::now() - (CADENCE_WINDOW + Duration::from_secs(1));
 
     // Tick 2: gone quiet → awaiting_input; the plain shell is still silent.
-    sweep_activity_once(app.handle(), &mut last_states);
+    sweep_activity_once(app.handle());
     assert_eq!(
-        last_states.get(&agent_id).map(String::as_str),
+        activity_last_emitted(&state_ref, &agent_id).as_deref(),
         Some("awaiting_input"),
         "agent session gone quiet must transition to awaiting_input"
     );
     assert!(
-        !last_states.contains_key(&shell_id),
+        activity_last_emitted(&state_ref, &shell_id).is_none(),
         "plain shell must remain gated across sweeps"
     );
 }
