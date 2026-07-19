@@ -825,3 +825,70 @@ describe('useTerminalPanel — setTitle() rollback on IPC failure', () => {
     expect(renames[0][1]).toMatchObject({ sessionId: 'sess_flush', title: 'my-shell' });
   });
 });
+
+describe('useTerminalPanel — launch-line single-write contract (T2.3)', () => {
+  it('writes the backend-augmented launch line exactly once and NOT the raw input command', async () => {
+    // A hooked agent kind: the backend returns an augmented launch line
+    // (base + injected `--settings` reporter hooks). The provider must write
+    // THAT once, and must not also write the original `input.launchCommand`
+    // (which would launch Claude twice — the known footgun).
+    const augmented =
+      "claude --settings '{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"printf\"}]}]}}'";
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
+      if (cmd === 'start_terminal_session') {
+        return Promise.resolve({
+          session_id: 'sess_hooked',
+          launch_command: augmented,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const h = mountHarness();
+    await act(async () => {
+      await h.panel.open({
+        machineId: 'local',
+        machineLabel: 'local',
+        agentKind: 'claude-code',
+        launchCommand: 'claude',
+      });
+    });
+
+    const writes = commandsOf('write_terminal_session');
+    expect(writes).toHaveLength(1);
+    expect((writes[0][1] as { data: string }).data).toBe(augmented + '\r');
+    // The raw input command must never be written when the backend augmented it.
+    expect(
+      writes.some(([, args]) => (args as { data: string }).data === 'claude\r'),
+    ).toBe(false);
+  });
+
+  it('falls back to writing the raw input command when the backend returns no override', async () => {
+    // A non-hooked kind: backend returns `launch_command: null`; the provider
+    // writes the caller's own `input.launchCommand` once.
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
+      if (cmd === 'start_terminal_session') {
+        return Promise.resolve({ session_id: 'sess_plain', launch_command: null });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const h = mountHarness();
+    await act(async () => {
+      await h.panel.open({
+        machineId: 'local',
+        machineLabel: 'local',
+        agentKind: 'opencode',
+        launchCommand: 'opencode',
+      });
+    });
+
+    const writes = commandsOf('write_terminal_session');
+    expect(writes).toHaveLength(1);
+    expect((writes[0][1] as { data: string }).data).toBe('opencode\r');
+  });
+});

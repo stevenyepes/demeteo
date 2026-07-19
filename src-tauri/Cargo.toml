@@ -20,6 +20,11 @@ name = "demeteo_lib"
 [dependencies]
 demeteo-core = { path = "../crates/demeteo-core" }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# Cryptographically-strong bytes for the per-session activity nonce
+# (TERMINAL_ACTIVITY_PLAN §2 — a spoofed OSC becomes notification spam once
+# Phase 2 fires OS notifications, so the nonce must be unguessable). Small,
+# no_std-friendly, and already present transitively in the lock.
+getrandom = "0.3"
 keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"] }
 portable-pty = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
