@@ -243,6 +243,7 @@ fn spawn_test_session(
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel,
         display_title,
         work_dir: None,
@@ -270,6 +271,7 @@ fn insert_test_session(state: &SessionState, session_id: &str) {
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel,
         display_title,
         work_dir: None,
@@ -820,6 +822,7 @@ fn attach_replays_scrollback_to_new_channel() {
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
         work_dir: None,
@@ -872,6 +875,7 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
         work_dir: None,
@@ -1008,6 +1012,7 @@ fn insert_disconnected_session(
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
         work_dir: None,
@@ -1188,4 +1193,168 @@ fn detect_agent_ignores_non_agents() {
     assert_eq!(detect_agent_in_command("-zsh"), None);
     assert_eq!(detect_agent_in_command("vim notes/claude.txt"), None);
     assert_eq!(detect_agent_in_command(""), None);
+}
+
+// --- Activity cadence sweep (T1.2 / T1.9) -----------------------------------
+//
+// The cadence decision is factored into the pure `next_activity_emit` so the
+// four required behaviours — byte ⇒ working, ~1s quiet ⇒ awaiting_input,
+// agent-gating (plain shell silent), and dedup (same state not re-emitted) —
+// are testable without spinning the real 250ms sweep thread. A single sweep-
+// level test then proves the wiring: the `last_states` map records agent
+// sessions and gates plain shells end-to-end.
+
+use super::{next_activity_emit, sweep_activity_once, CADENCE_WINDOW};
+
+/// A byte just arrived (elapsed within the cadence window) on an agent
+/// session ⇒ `working`. The window boundary is inclusive.
+#[test]
+fn activity_recent_output_is_working() {
+    assert_eq!(
+        next_activity_emit(None, true, Duration::from_millis(0)),
+        Some("working")
+    );
+    assert_eq!(
+        next_activity_emit(None, true, CADENCE_WINDOW),
+        Some("working"),
+        "output exactly at the window edge still counts as working"
+    );
+}
+
+/// ~1s of silence on an agent session ⇒ `awaiting_input`.
+#[test]
+fn activity_quiet_is_awaiting_input() {
+    assert_eq!(
+        next_activity_emit(None, true, CADENCE_WINDOW + Duration::from_millis(200)),
+        Some("awaiting_input")
+    );
+}
+
+/// Agent-gating: a plain shell (no agent present) NEVER emits, regardless of
+/// output timing or any prior recorded state.
+#[test]
+fn activity_plain_shell_never_emits() {
+    assert_eq!(
+        next_activity_emit(None, false, Duration::from_millis(0)),
+        None
+    );
+    assert_eq!(
+        next_activity_emit(None, false, Duration::from_secs(10)),
+        None
+    );
+    assert_eq!(
+        next_activity_emit(Some("working"), false, Duration::from_millis(0)),
+        None,
+        "gating suppresses even when a state was previously recorded"
+    );
+}
+
+/// Dedup: the same resolved state is not emitted twice in a row, but a real
+/// transition still emits.
+#[test]
+fn activity_dedup_suppresses_unchanged_state() {
+    // Already `working`, still within the window → no re-emit.
+    assert_eq!(
+        next_activity_emit(Some("working"), true, Duration::from_millis(0)),
+        None
+    );
+    // Already `awaiting_input`, still quiet → no re-emit.
+    assert_eq!(
+        next_activity_emit(Some("awaiting_input"), true, Duration::from_secs(5)),
+        None
+    );
+    // Genuine transitions DO emit (both directions).
+    assert_eq!(
+        next_activity_emit(Some("working"), true, Duration::from_secs(5)),
+        Some("awaiting_input")
+    );
+    assert_eq!(
+        next_activity_emit(Some("awaiting_input"), true, Duration::from_millis(0)),
+        Some("working")
+    );
+}
+
+/// Like `insert_test_session` but seeds an agent kind so the session passes
+/// the activity sweep's agent-gate.
+fn insert_agent_session(state: &SessionState, session_id: &str) {
+    let (read_source, write_sink, keepalive, _child_pid) =
+        super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
+    let active = ActiveSession {
+        read_source,
+        write_sink,
+        _keepalive: keepalive,
+        machine_id: "local".to_string(),
+        machine_name: "local".to_string(),
+        created_at: 0,
+        child_pid: None,
+        agent: Mutex::new(Some("claude-code".to_string())),
+        last_output_at: Arc::new(Mutex::new(Instant::now())),
+        frontend_channel,
+        display_title: Mutex::new(None),
+        work_dir: None,
+        work_branch: None,
+        connected: Arc::new(AtomicBool::new(true)),
+    };
+    state
+        .sessions
+        .lock()
+        .expect("sessions lock")
+        .insert(session_id.to_string(), active);
+}
+
+/// End-to-end sweep wiring: an agent session with recent output is recorded
+/// as `working`, a plain shell (agent None) is never recorded (gating), and
+/// once the agent session goes quiet it transitions to `awaiting_input`.
+#[test]
+fn sweep_records_agent_sessions_and_gates_plain_shells() {
+    let app = tauri::test::mock_app();
+    app.manage(SessionState::default());
+
+    let agent_id = "sess_activity_agent".to_string();
+    let shell_id = "sess_activity_shell".to_string();
+
+    let agent_last_output = {
+        let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+        insert_agent_session(&state_ref, &agent_id);
+        insert_test_session(&state_ref, &shell_id);
+        let sessions = state_ref.sessions.lock().expect("sessions lock");
+        sessions
+            .get(&agent_id)
+            .expect("agent session")
+            .last_output_at
+            .clone()
+    };
+
+    let mut last_states: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    // Tick 1: the agent session is freshly active → working; the plain shell
+    // is gated out and never recorded.
+    sweep_activity_once(app.handle(), &mut last_states);
+    assert_eq!(
+        last_states.get(&agent_id).map(String::as_str),
+        Some("working"),
+        "agent session with recent output must resolve working"
+    );
+    assert!(
+        !last_states.contains_key(&shell_id),
+        "a plain shell (agent None) must never be recorded"
+    );
+
+    // Age the agent session's last output past the cadence window.
+    *agent_last_output.lock().expect("last_output lock") =
+        Instant::now() - (CADENCE_WINDOW + Duration::from_secs(1));
+
+    // Tick 2: gone quiet → awaiting_input; the plain shell is still silent.
+    sweep_activity_once(app.handle(), &mut last_states);
+    assert_eq!(
+        last_states.get(&agent_id).map(String::as_str),
+        Some("awaiting_input"),
+        "agent session gone quiet must transition to awaiting_input"
+    );
+    assert!(
+        !last_states.contains_key(&shell_id),
+        "plain shell must remain gated across sweeps"
+    );
 }
