@@ -247,6 +247,11 @@ pub fn run() {
             // agent (Claude/OpenCode/…), including ones launched by hand.
             terminal::spawn_agent_detector(app.handle().clone());
 
+            // Background cadence sweep that resolves working ↔ awaiting_input
+            // from each agent session's output timing and emits
+            // `terminal-session-activity` on change (TERMINAL_ACTIVITY_PLAN §4).
+            terminal::spawn_activity_sweep(app.handle().clone());
+
             // Build the system tray (Show / Hide / Quit). A tray-backend
             // failure is logged and swallowed inside `build_tray`, so this
             // never aborts startup — hence the ignored result.

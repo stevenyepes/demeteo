@@ -11,7 +11,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager, Runtime, State};
 
 static SESSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -46,6 +46,14 @@ pub struct ActiveSession {
     /// command; the detector overwrites it for local sessions as the
     /// foreground process changes.
     pub agent: Mutex<Option<String>>,
+    /// Wall-clock instant of the most recent chunk this session read off its
+    /// PTY/SSH transport. Written by the drain thread on every chunk (local
+    /// and SSH feed this one shared field) and read by the activity sweep to
+    /// resolve `working` (recent output) vs `awaiting_input` (gone quiet).
+    /// Seeded to the session's start instant so a freshly-started session
+    /// reads as recently-active. Shared (`Arc`) so the drain thread can
+    /// update it after the transport is swapped in on reconnect.
+    pub last_output_at: Arc<Mutex<Instant>>,
     /// Output fan-out + scrollback for the session (TERMINALS_VIEW_SPEC
     /// §3). The drain thread appends every chunk to the scrollback ring
     /// and broadcasts it to every attached channel; a freshly-attached
@@ -187,6 +195,19 @@ pub struct SessionInfo {
     pub agent: Option<String>,
 }
 
+/// Payload for the additive `terminal-session-activity` event
+/// (TERMINAL_ACTIVITY_PLAN §2). `state` is one of `"working"`,
+/// `"awaiting_input"`, or `"exit"` (the latter reserved for Phase 2 — the
+/// Phase 1 cadence sweep only ever emits the first two). Kept a distinct
+/// struct from `SessionInfo` so the activity wire shape stays minimal
+/// (`{ session_id, state }`) and independent of the session-lifecycle
+/// envelope. serde serialises the field names as-is.
+#[derive(Serialize, Clone)]
+pub struct ActivityInfo {
+    pub session_id: String,
+    pub state: String,
+}
+
 const IDLE_TIMEOUT_SECS: u64 = 600;
 
 #[tauri::command]
@@ -260,6 +281,9 @@ pub fn start_terminal_session(
     let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let display_title: Mutex<Option<String>> = Mutex::new(None);
     let connected = Arc::new(AtomicBool::new(true));
+    // Seed the last-output instant to "now" so the session reads as
+    // recently-active until its first quiet window elapses.
+    let last_output_at: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
 
     let (read_source, write_sink, keepalive, child_pid) = if machine.auth_type == "local" {
         start_local_pty(&machine_id, &work_dir, &work_branch, cols, rows)?
@@ -278,6 +302,7 @@ pub fn start_terminal_session(
         created_at,
         frontend_channel.clone(),
         connected.clone(),
+        last_output_at.clone(),
     );
 
     let mut sessions = session_state
@@ -295,6 +320,7 @@ pub fn start_terminal_session(
             created_at,
             child_pid,
             agent: Mutex::new(agent_kind.clone()),
+            last_output_at,
             frontend_channel,
             display_title,
             work_dir,
@@ -486,6 +512,7 @@ fn start_ssh_session(
 /// forwarding output into the session's `Broadcast`. Shared by
 /// `start_terminal_session` and `reconnect_terminal_session` so both wire
 /// up the drain identically (TERMINALS_VIEW_SPEC §3.1).
+#[allow(clippy::too_many_arguments)]
 fn spawn_drain<R: Runtime>(
     read_source: &ReadSource,
     app: AppHandle<R>,
@@ -494,6 +521,7 @@ fn spawn_drain<R: Runtime>(
     created_at: u64,
     frontend_channel: Arc<Mutex<Broadcast>>,
     connected: Arc<AtomicBool>,
+    last_output_at: Arc<Mutex<Instant>>,
 ) {
     match read_source {
         ReadSource::Ssh(ch) => {
@@ -507,6 +535,7 @@ fn spawn_drain<R: Runtime>(
                     created_at,
                     frontend_channel,
                     connected,
+                    last_output_at,
                 );
             });
         }
@@ -521,12 +550,14 @@ fn spawn_drain<R: Runtime>(
                     created_at,
                     frontend_channel,
                     connected,
+                    last_output_at,
                 );
             });
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain_ssh<R: Runtime>(
     ch: Arc<Mutex<ssh2::Channel>>,
     app: AppHandle<R>,
@@ -535,9 +566,13 @@ fn drain_ssh<R: Runtime>(
     created_at: u64,
     frontend_channel: Arc<Mutex<Broadcast>>,
     connected: Arc<AtomicBool>,
+    last_output_at: Arc<Mutex<Instant>>,
 ) {
+    // Re-seed to "now" at drain start so the idle timeout (and the activity
+    // sweep) measure from this transport's lifetime, not a stale value carried
+    // over the shared field from a long-ago disconnect on reconnect.
+    touch_last_output(&last_output_at);
     let mut buffer = [0u8; 8192];
-    let mut last_activity = std::time::Instant::now();
     loop {
         let result = ch.lock().unwrap().read(&mut buffer);
         match result {
@@ -546,12 +581,15 @@ fn drain_ssh<R: Runtime>(
                 break;
             }
             Ok(n) => {
-                last_activity = std::time::Instant::now();
+                // Feed the one shared last-output field (also read by the
+                // idle-timeout check below and the activity sweep) so both
+                // transports have a single source of truth.
+                touch_last_output(&last_output_at);
                 let chunk = buffer[..n].to_vec();
                 send_chunk(&frontend_channel, chunk);
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                if last_activity.elapsed().as_secs() > IDLE_TIMEOUT_SECS {
+                if elapsed_since_last_output(&last_output_at).as_secs() > IDLE_TIMEOUT_SECS {
                     emit_disconnected(&app, &session_id, &machine_id, created_at, &connected);
                     break;
                 }
@@ -565,6 +603,7 @@ fn drain_ssh<R: Runtime>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn drain_local<R: Runtime>(
     reader: Arc<Mutex<Box<dyn Read + Send>>>,
     app: AppHandle<R>,
@@ -573,7 +612,11 @@ pub(crate) fn drain_local<R: Runtime>(
     created_at: u64,
     frontend_channel: Arc<Mutex<Broadcast>>,
     connected: Arc<AtomicBool>,
+    last_output_at: Arc<Mutex<Instant>>,
 ) {
+    // Re-seed to "now" at drain start so the activity sweep measures from this
+    // transport's lifetime rather than a stale value carried over on reconnect.
+    touch_last_output(&last_output_at);
     let mut buffer = [0u8; 8192];
     loop {
         let result = reader.lock().unwrap().read(&mut buffer);
@@ -583,11 +626,34 @@ pub(crate) fn drain_local<R: Runtime>(
                 break;
             }
             Ok(n) => {
+                // Feed the shared last-output field the activity sweep reads.
+                touch_last_output(&last_output_at);
                 let chunk = buffer[..n].to_vec();
                 send_chunk(&frontend_channel, chunk);
             }
         }
     }
+}
+
+/// Stamp a session's shared last-output instant to "now". Called by both
+/// drain transports on every chunk so the activity sweep has one source of
+/// truth for cadence. A poisoned lock is swallowed — a missed stamp only
+/// makes the sweep briefly read the session as quieter than it is, never a
+/// crash on the hot output path.
+fn touch_last_output(last_output_at: &Arc<Mutex<Instant>>) {
+    if let Ok(mut slot) = last_output_at.lock() {
+        *slot = Instant::now();
+    }
+}
+
+/// How long since a session last produced output. A poisoned lock reads as
+/// zero elapsed (treated as recently-active) so a transient poisoning never
+/// spuriously flips a session to `awaiting_input`.
+fn elapsed_since_last_output(last_output_at: &Arc<Mutex<Instant>>) -> Duration {
+    last_output_at
+        .lock()
+        .map(|slot| slot.elapsed())
+        .unwrap_or(Duration::ZERO)
 }
 
 /// The transport (PTY/SSH child) dropped unexpectedly. Mark the session
@@ -1030,7 +1096,15 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
     session_id: &str,
 ) -> Result<(), String> {
     // Snapshot the spawn params + shared handles, then release the lock.
-    let (machine_id, work_dir, work_branch, frontend_channel, created_at, connected) = {
+    let (
+        machine_id,
+        work_dir,
+        work_branch,
+        frontend_channel,
+        created_at,
+        connected,
+        last_output_at,
+    ) = {
         let sessions = session_state
             .sessions
             .lock()
@@ -1045,6 +1119,7 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
             active.frontend_channel.clone(),
             active.created_at,
             active.connected.clone(),
+            active.last_output_at.clone(),
         )
     };
 
@@ -1094,6 +1169,7 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
         created_at,
         frontend_channel,
         connected.clone(),
+        last_output_at,
     );
 
     // Swap the fresh transport onto the existing session.
@@ -1330,6 +1406,119 @@ fn detect_agents_once<R: Runtime>(app: &AppHandle<R>) {
                 agent: detected,
             },
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Activity cadence sweep (working ↔ awaiting_input)
+// ---------------------------------------------------------------------------
+//
+// A second background poller — modelled on `spawn_agent_detector` — resolves
+// the universal working/waiting floor from the byte cadence the drain already
+// records in `ActiveSession.last_output_at` (TERMINAL_ACTIVITY_PLAN §3, §4).
+// Every tick it snapshots each session under the lock, releases it, then for
+// each session WITH an agent present resolves `working` (output within the
+// cadence window) vs `awaiting_input` (gone quiet) and emits
+// `terminal-session-activity` ONLY when that state changed since the last
+// emit. Plain-shell sessions (agent `None`) are never emitted for.
+
+/// Cadence window: output seen within this of a sweep tick reads as
+/// `working`; quieter than this reads as `awaiting_input`
+/// (TERMINAL_ACTIVITY_PLAN §7.2 — start at ~1s, tune against real agents).
+const CADENCE_WINDOW: Duration = Duration::from_millis(1000);
+
+/// Time between activity sweeps. ~250ms keeps `working` appearing within one
+/// tick of the first byte and `awaiting_input` settling ≤ ~1s after silence
+/// (TERMINAL_ACTIVITY_PLAN §5).
+const ACTIVITY_SWEEP_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Pure cadence decision for a single session, factored out of the sweep loop
+/// so it is unit-testable without spinning a real thread. Given the state we
+/// last emitted for the session (`None` if we never have), whether an agent is
+/// present, and how long since the session last produced output, return the
+/// state to emit — or `None` to stay silent.
+///
+/// Two reasons to stay silent: the session has no agent (a plain shell must
+/// NEVER emit — the agent-gate), or the resolved state is unchanged from the
+/// last emit (dedup — emit only on real change). Otherwise resolve `working`
+/// within the cadence window, else `awaiting_input`.
+fn next_activity_emit(
+    last_emitted: Option<&str>,
+    has_agent: bool,
+    since_last_output: Duration,
+) -> Option<&'static str> {
+    if !has_agent {
+        return None;
+    }
+    let resolved = if since_last_output <= CADENCE_WINDOW {
+        "working"
+    } else {
+        "awaiting_input"
+    };
+    if last_emitted == Some(resolved) {
+        None
+    } else {
+        Some(resolved)
+    }
+}
+
+/// Spawn the background activity sweep. Runs for the lifetime of the app (a
+/// cheap sleeping thread, like `spawn_agent_detector`); call once from setup.
+pub fn spawn_activity_sweep<R: Runtime>(app: AppHandle<R>) {
+    thread::spawn(move || {
+        // The last state emitted per session, owned by this loop — the single
+        // place that decides whether a state is a real change worth emitting.
+        let mut last_states: HashMap<String, String> = HashMap::new();
+        loop {
+            thread::sleep(ACTIVITY_SWEEP_INTERVAL);
+            sweep_activity_once(&app, &mut last_states);
+        }
+    });
+}
+
+/// One sweep pass: snapshot each session's (agent-present, quiet-for) under
+/// the lock, release it, drop map entries for sessions that disappeared, then
+/// resolve + emit outside the lock. Mirrors `detect_agents_once`'s
+/// snapshot-then-emit-outside-the-lock shape.
+fn sweep_activity_once<R: Runtime>(app: &AppHandle<R>, last_states: &mut HashMap<String, String>) {
+    let state = app.state::<SessionState>();
+
+    // Snapshot (id, agent-present, elapsed-since-last-output) for every
+    // session, then release the sessions lock before emitting.
+    let snapshot: Vec<(String, bool, Duration)> = {
+        let sessions = match state.sessions.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        sessions
+            .iter()
+            .map(|(id, s)| {
+                let has_agent = s.agent.lock().map(|g| g.is_some()).unwrap_or(false);
+                let elapsed = elapsed_since_last_output(&s.last_output_at);
+                (id.clone(), has_agent, elapsed)
+            })
+            .collect()
+    };
+
+    // Forget sessions that disappeared since the last sweep so their stale
+    // last-emitted state can't linger (and so a reused id starts clean). No
+    // `exit` emit here — that is a Phase 2 concern.
+    let live: std::collections::HashSet<&str> =
+        snapshot.iter().map(|(id, _, _)| id.as_str()).collect();
+    last_states.retain(|id, _| live.contains(id.as_str()));
+
+    for (id, has_agent, elapsed) in &snapshot {
+        let last = last_states.get(id).map(|s| s.as_str());
+        if let Some(next) = next_activity_emit(last, *has_agent, *elapsed) {
+            last_states.insert(id.clone(), next.to_string());
+            let _ = app.emit(
+                "terminal-session-activity",
+                ActivityInfo {
+                    session_id: id.clone(),
+                    state: next.to_string(),
+                },
+            );
+        }
     }
 }
 
