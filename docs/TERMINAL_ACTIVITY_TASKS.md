@@ -126,15 +126,17 @@ with the backend chain (T1.1→).
 Precise `awaiting_approval` for Claude via injected hooks, plus the OS notification.
 **Gated on T2.1 — do the spike before building anything else in this phase.**
 
-### T2.1 — Transport spike (GATE) ‖ isolate
-- **Do:** empirically verify a Claude hook subprocess can write an OSC to the PTY.
-  Test the naive `printf '\033]…' >/dev/tty` path first; if hooks run with no
-  controlling terminal (piped stdin, no `/dev/tty`), fall back to the hook JSON
-  `terminalSequence` output. **Decide the transport here and record it in the plan's
-  §7 open decisions.**
-- **Accept:** a one-paragraph finding + a working proof-of-concept sequence reaching
-  the drain. Blocks T2.2–T2.6.
-- **Context budget:** spike only; no product code. **Deps:** none.
+### T2.1 — Transport spike (GATE) ✅ DONE
+- **Result:** transport = **hook-JSON `terminalSequence`** (`/dev/tty` is dead — no
+  controlling terminal in Claude ≥ v2.1.139). Private OSC 777 payloads pass verbatim
+  on post-init hook events (`Stop`/`Notification`/`PreToolUse`/…), **not**
+  `SessionStart`. `--settings '<inline JSON>'` fires injected hooks. Full write-up:
+  `docs/spikes/terminal-activity-transport.md`; plan §2a/§7 updated.
+- **Impact on downstream tasks:** T2.2 drain scanner is unchanged (parses the same
+  namespaced OSC). T2.3 emits the OSC via the hook's `terminalSequence` output (a tiny
+  reporter script that `printf`s the sequence and `jq`-wraps it as JSON), bound to the
+  §2d post-init events — drop any `/dev/tty` reporter idea. T2.5 nonce goes in the OSC
+  payload as planned.
 
 ### T2.2 — Drain OSC scanner
 - **Files:** `src-tauri/src/terminal.rs` (a new stateful scanner unit + its own tests).
