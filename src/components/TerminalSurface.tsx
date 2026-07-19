@@ -12,6 +12,7 @@ import {
   resizeTerminalSession,
   writeTerminalSession,
 } from '../lib/terminal';
+import { getLastTerminalSize, setLastTerminalSize } from '../lib/terminalViewport';
 
 // xterm.js theme — matches the existing TerminalWindow palette so the
 // panel surface and the legacy modal look identical (AGENTS.md §5).
@@ -83,6 +84,12 @@ export function TerminalSurface({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const sessionIdRef = useRef<string>(sessionId);
+  // The last (cols, rows) actually pushed to the backend PTY. Seeded from the
+  // shared size cache — i.e. the size the session was *spawned* at — so the
+  // first post-attach fit that lands on the same size skips the resize
+  // entirely. Sending a redundant `SIGWINCH` during P10k's instant/transient
+  // prompt startup is what duplicated the command line (see terminalViewport).
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   // The first byte after a fresh attach can race the layout flush;
   // show a transient status badge so the user sees the panel has work
@@ -101,11 +108,20 @@ export function TerminalSurface({
       fit.fit();
       const cols = term.cols;
       const rows = term.rows;
-      if (cols > 0 && rows > 0) {
-        resizeTerminalSession(sessionIdRef.current, cols, rows).catch((err) => {
-          console.warn('[TerminalSurface] resize_terminal_session failed:', err);
-        });
-      }
+      if (cols <= 0 || rows <= 0) return;
+      // Cache the fitted size so the next session `open()` can spawn its PTY
+      // at the real width, drawing its first prompt at the correct size.
+      setLastTerminalSize(cols, rows);
+      // Skip the PTY resize when nothing changed. This suppresses the
+      // redundant startup `SIGWINCH` that corrupts P10k's instant/transient
+      // prompt redraw (duplicated command line): a session spawned at the
+      // cached width fits to that same width and never resizes at all.
+      const last = lastSentSizeRef.current;
+      if (last && last.cols === cols && last.rows === rows) return;
+      lastSentSizeRef.current = { cols, rows };
+      resizeTerminalSession(sessionIdRef.current, cols, rows).catch((err) => {
+        console.warn('[TerminalSurface] resize_terminal_session failed:', err);
+      });
     } catch (err) {
       console.warn('[TerminalSurface] fit failed:', err);
     }
@@ -114,11 +130,23 @@ export function TerminalSurface({
   useEffect(() => {
     if (!containerRef.current) return;
     const sid = sessionId;
+    // Seed the "last sent" size with the size the session was spawned at (the
+    // shared cache value `open()` passed to `start_terminal_session`). When
+    // this surface fits to that same size, `handleResize` recognises the match
+    // and sends no PTY resize — keeping P10k's startup SIGWINCH-free.
+    lastSentSizeRef.current = getLastTerminalSize();
 
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: '"Fira Code", "JetBrains Mono", Menlo, Monaco, Consolas, monospace',
+      // Per-glyph browser fallback walks this list left→right: text glyphs
+      // resolve from the first Nerd/text font present, and prompt icon /
+      // powerline glyphs (P10k separators, timestamp frame) fall through to
+      // the bundled "Symbols Nerd Font Mono" face (App.css @font-face) when no
+      // system Nerd Font is installed — otherwise they render as `?`-tofu.
+      fontFamily:
+        '"MesloLGS NF", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", ' +
+        '"Fira Code", "Symbols Nerd Font Mono", Menlo, Monaco, Consolas, monospace',
       theme: XTERM_THEME,
       allowProposedApi: true,
     });
@@ -164,7 +192,15 @@ export function TerminalSurface({
         // pre-attach output — shell prompt, `git checkout` bootstrap —
         // arrives through the normal `onmessage` path above. No frontend
         // replay buffer to drain here.
-        setTimeout(() => handleResize(), 50);
+        //
+        // Wait for web fonts before the reconciling fit so xterm measures the
+        // cell from the final (Nerd) font metrics — an early fit on fallback
+        // metrics could compute a different column count than the spawn size
+        // and trigger an otherwise-avoidable resize. `document.fonts.ready`
+        // resolves immediately once fonts are loaded.
+        void document.fonts.ready.then(() => {
+          if (!cancelled) handleResize();
+        });
       })
       .catch((err) => {
         console.error('[TerminalSurface] attach_terminal_session failed:', err);

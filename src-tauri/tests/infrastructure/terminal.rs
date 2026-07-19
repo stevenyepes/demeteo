@@ -202,7 +202,7 @@ fn spawn_test_session(
     ActiveSession,
 ) {
     let (read_source, write_sink, keepalive) =
-        super::start_local_pty("local", &None, &None).expect("start_local_pty");
+        super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let reader = match &read_source {
         ReadSource::LocalPty(r) => r.clone(),
         ReadSource::Ssh(_) => unreachable!("local pty path"),
@@ -254,7 +254,7 @@ fn spawn_test_session(
 /// that need a real session entry without exercising the PTY plumbing.
 fn insert_test_session(state: &SessionState, session_id: &str) {
     let (read_source, write_sink, keepalive) =
-        super::start_local_pty("local", &None, &None).expect("start_local_pty");
+        super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let display_title: Mutex<Option<String>> = Mutex::new(None);
     let active = ActiveSession {
@@ -803,7 +803,7 @@ fn attach_replays_scrollback_to_new_channel() {
     app.manage(state);
 
     let (read_source, write_sink, keepalive) =
-        super::start_local_pty("local", &None, &None).expect("start_local_pty");
+        super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
         write_sink,
@@ -852,7 +852,7 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
     app.manage(state);
 
     let (read_source, write_sink, keepalive) =
-        super::start_local_pty("local", &None, &None).expect("start_local_pty");
+        super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
         write_sink,
@@ -985,7 +985,7 @@ fn insert_disconnected_session(
         super::send_chunk(&frontend_channel, seed.to_vec());
     }
     let (read_source, write_sink, keepalive) =
-        super::start_local_pty("local", &None, &None).expect("start_local_pty");
+        super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
         write_sink,

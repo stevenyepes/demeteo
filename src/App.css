@@ -14,6 +14,23 @@
  */
 @source "./**/*.{ts,tsx,js,jsx,html}";
 
+/*
+ * Bundled Nerd Font *symbols* fallback for the xterm.js terminal surface.
+ * This face carries only the Private-Use-Area powerline separators and icon
+ * glyphs that prompts like Powerlevel10k emit; the primary text font in the
+ * terminal font stack is untouched and only *missing* icon glyphs fall through
+ * to this face. Bundling it guarantees those glyphs render even when the user
+ * has no Nerd Font installed system-wide (otherwise they show as `?`-tofu).
+ * Referenced from TerminalSurface.tsx's `fontFamily`.
+ */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  src: url('./assets/fonts/SymbolsNerdFontMono-Regular.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
 @theme {
   --font-sans: 'Inter', -apple-system, sans-serif;
   --font-mono: 'Fira Code', 'JetBrains Mono', monospace;
