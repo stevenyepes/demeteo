@@ -14,12 +14,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager, Runtime, State};
 
-// Phase-2 drain OSC scanner (TERMINAL_ACTIVITY_PLAN §2b). Built and tested as a
-// self-contained unit here; the live drain does not use it yet — see the
-// `TODO(T2.3)` notes in `drain_local` / `drain_ssh` for where it wires in.
-// `allow(dead_code)` until that wiring lands (the scanner's API is exercised
-// only by its own tests for now).
-#[allow(dead_code)]
+// Phase-2 drain OSC scanner (TERMINAL_ACTIVITY_PLAN §2b). Wired into
+// `drain_local` / `drain_ssh` (T2.3): a hooked session (one carrying an
+// `activity_nonce`) runs every chunk through an `ActivityScanner` before
+// broadcast, stripping our private OSC and emitting `terminal-session-activity`
+// for each parsed state.
 pub(crate) mod activity_scanner;
 
 static SESSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -54,6 +53,14 @@ pub struct ActiveSession {
     /// command; the detector overwrites it for local sessions as the
     /// foreground process changes.
     pub agent: Mutex<Option<String>>,
+    /// Per-session activity nonce for hooked agent kinds (Claude), or `None`
+    /// for a plain shell or a non-hooked agent. Minted at `start` and embedded
+    /// in the reporter hooks injected via `--settings`; the drain's
+    /// `ActivityScanner` accepts only sequences carrying exactly this nonce
+    /// (TERMINAL_ACTIVITY_PLAN §2b — anti-spoof + cross-session TTY-bleed
+    /// gate). Retained so `reconnect_terminal_session` rebuilds the scanner
+    /// with the SAME nonce the still-running agent's hooks emit.
+    pub activity_nonce: Option<String>,
     /// Wall-clock instant of the most recent chunk this session read off its
     /// PTY/SSH transport. Written by the drain thread on every chunk (local
     /// and SSH feed this one shared field) and read by the activity sweep to
@@ -205,9 +212,11 @@ pub struct SessionInfo {
 
 /// Payload for the additive `terminal-session-activity` event
 /// (TERMINAL_ACTIVITY_PLAN §2). `state` is one of `"working"`,
-/// `"awaiting_input"`, or `"exit"` (the latter reserved for Phase 2 — the
-/// Phase 1 cadence sweep only ever emits the first two). Kept a distinct
-/// struct from `SessionInfo` so the activity wire shape stays minimal
+/// `"awaiting_input"`, `"awaiting_approval"`, or `"exit"`. The Phase 1 cadence
+/// sweep emits the first two; the Phase 2 hook scanner (T2.3) additionally
+/// emits `awaiting_approval` and `exit` from a hooked session's reporter
+/// sequences. Kept a distinct struct from `SessionInfo` so the activity wire
+/// shape stays minimal
 /// (`{ session_id, state }`) and independent of the session-lifecycle
 /// envelope. serde serialises the field names as-is.
 #[derive(Serialize, Clone)]
@@ -216,7 +225,154 @@ pub struct ActivityInfo {
     pub state: String,
 }
 
+/// What `start_terminal_session` hands back to the frontend. For a hooked
+/// agent kind (Claude) `launch_command` carries the backend-augmented launch
+/// line (base command + injected `--settings` reporter hooks); the frontend
+/// writes THAT instead of its own base command — the single-write contract
+/// that prevents Claude launching twice (TERMINAL_ACTIVITY_PLAN §2c). `None`
+/// for plain shells and non-hooked agents (the frontend writes its own line,
+/// or nothing). serde serialises the fields snake_case (`session_id`,
+/// `launch_command`).
+#[derive(Serialize, Clone)]
+pub struct StartedSession {
+    pub session_id: String,
+    pub launch_command: Option<String>,
+}
+
 const IDLE_TIMEOUT_SECS: u64 = 600;
+
+/// Whether an agent kind self-reports activity via injected hooks (Phase 2).
+/// Only Claude for now; extended as more agents grow a hook transport. Gates
+/// both the per-session nonce and the `--settings` launch-line augmentation.
+fn is_hooked_agent_kind(kind: &str) -> bool {
+    kind == "claude-code"
+}
+
+/// Mint an unguessable per-session activity nonce (hex). Sourced from the OS
+/// CSPRNG so a repo script cannot predict it and spoof `awaiting_approval`
+/// (which would become notification spam once Phase 2e fires OS
+/// notifications). A CSPRNG failure — astronomically unlikely on supported
+/// platforms — degrades to a time-derived seed so the session still launches;
+/// the nonce only gates which sequences are trusted, never correctness.
+fn generate_activity_nonce() -> String {
+    let mut bytes = [0u8; 16];
+    if getrandom::fill(&mut bytes).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        bytes = nanos.to_le_bytes();
+    }
+    use std::fmt::Write;
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(hex, "{b:02x}");
+    }
+    hex
+}
+
+/// POSIX single-quote a value for safe interpolation into a shell command:
+/// wrap in `'…'` and replace every embedded `'` with `'\''` (close-quote,
+/// escaped-quote, re-open-quote). The canonical way to pass an arbitrary
+/// string (here the serialised `--settings` JSON, which itself contains single
+/// quotes from the reporter commands) through the shell verbatim.
+fn shell_single_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    out.push_str(&value.replace('\'', "'\\''"));
+    out.push('\'');
+    out
+}
+
+/// The reporter command injected under one hook: a shell command that prints
+/// the `terminalSequence` hook-JSON to stdout, which Claude then writes to the
+/// PTY verbatim (transport verified in `docs/spikes/terminal-activity-
+/// transport.md`). `` / `` are LITERAL 6-char JSON escapes in the
+/// printed payload — Claude's JSON parse of the hook stdout turns them into
+/// ESC / BEL as it emits the sequence, so the drain scanner sees
+/// `ESC ]777;demeteo;…BEL`. `printf '%s'` over a single-quoted literal keeps
+/// the shell from interpreting the backslashes.
+fn activity_reporter_command(nonce: &str, state: &str) -> String {
+    let payload = format!(
+        "{{\"terminalSequence\":\"\\u001b]777;demeteo;v=1;nonce={nonce};state={state}\\u0007\"}}"
+    );
+    format!("printf '%s' {}", shell_single_quote(&payload))
+}
+
+/// Build the compact `--settings` JSON injecting Claude's activity reporter
+/// hooks for `nonce` (TERMINAL_ACTIVITY_PLAN §2c/§2d). Returns `None` for any
+/// non-Claude kind. serde_json guarantees correct escaping of the nested
+/// quotes/backslashes in each reporter command.
+///
+/// The event→state map (§2d): `UserPromptSubmit`/`PreToolUse`/`PostToolUse` →
+/// `working`; `Notification` `permission_prompt` → `awaiting_approval` and
+/// `idle_prompt` → `awaiting_input`; `Stop` → `awaiting_input`; `SessionEnd` →
+/// `exit`. `--settings` deep-merges `hooks` but replaces the array under each
+/// event key, so these ephemerally replace the user's own hooks on those
+/// events for this session only (never touches the user's files).
+fn build_claude_activity_settings(kind: &str, nonce: &str) -> Option<String> {
+    if kind != "claude-code" {
+        return None;
+    }
+    // (event, optional matcher, reported state) — §2d.
+    let specs: [(&str, Option<&str>, &str); 7] = [
+        ("UserPromptSubmit", None, "working"),
+        ("PreToolUse", None, "working"),
+        ("PostToolUse", None, "working"),
+        (
+            "Notification",
+            Some("permission_prompt"),
+            "awaiting_approval",
+        ),
+        ("Notification", Some("idle_prompt"), "awaiting_input"),
+        ("Stop", None, "awaiting_input"),
+        ("SessionEnd", None, "exit"),
+    ];
+    let mut hooks: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    for (event, matcher, state) in specs {
+        let mut group = serde_json::Map::new();
+        if let Some(m) = matcher {
+            group.insert(
+                "matcher".to_string(),
+                serde_json::Value::String(m.to_string()),
+            );
+        }
+        group.insert(
+            "hooks".to_string(),
+            serde_json::json!([{
+                "type": "command",
+                "command": activity_reporter_command(nonce, state),
+            }]),
+        );
+        match hooks.entry(event.to_string()) {
+            serde_json::map::Entry::Vacant(e) => {
+                e.insert(serde_json::Value::Array(vec![serde_json::Value::Object(
+                    group,
+                )]));
+            }
+            serde_json::map::Entry::Occupied(mut e) => {
+                if let serde_json::Value::Array(arr) = e.get_mut() {
+                    arr.push(serde_json::Value::Object(group));
+                }
+            }
+        }
+    }
+    let settings = serde_json::json!({ "hooks": serde_json::Value::Object(hooks) });
+    serde_json::to_string(&settings).ok()
+}
+
+/// Build the launch line for a hooked agent: the base command the frontend
+/// would have written, with `--settings '<reporter hooks>'` appended
+/// (preserving any user args already in `base_command`). Returns `None` for a
+/// non-hooked kind — the frontend then writes its own base command (or
+/// nothing). This is the backend half of the single-write contract (§2c).
+fn build_agent_launch_command(agent_kind: &str, base_command: &str, nonce: &str) -> Option<String> {
+    let settings = build_claude_activity_settings(agent_kind, nonce)?;
+    Some(format!(
+        "{base_command} --settings {}",
+        shell_single_quote(&settings)
+    ))
+}
 
 #[tauri::command]
 pub fn set_machine_secret(machine_id: String, secret: String) -> Result<(), String> {
@@ -263,7 +419,8 @@ pub fn start_terminal_session(
     cols: Option<u16>,
     rows: Option<u16>,
     agent_kind: Option<String>,
-) -> Result<String, String> {
+    launch_command: Option<String>,
+) -> Result<StartedSession, String> {
     let machine = crate::infrastructure::worktree::machine_resolver::resolve_machine(
         &*ctx.machines,
         &machine_id,
@@ -302,6 +459,24 @@ pub fn start_terminal_session(
     // a phantom badge.
     let agent_kind = agent_kind.filter(|k| !k.trim().is_empty());
 
+    // For a hooked agent kind (Claude), mint a per-session nonce so the drain
+    // scanner accepts only THIS launch's activity sequences, and hand the
+    // frontend a launch line augmented with reporter hooks. `launch_override`
+    // is the single-write contract's backend half: `Some` ⇒ the frontend
+    // writes this instead of its own base command (§2c).
+    let activity_nonce = agent_kind
+        .as_deref()
+        .filter(|k| is_hooked_agent_kind(k))
+        .map(|_| generate_activity_nonce());
+    let launch_override = match (
+        agent_kind.as_deref(),
+        activity_nonce.as_deref(),
+        launch_command.as_deref(),
+    ) {
+        (Some(kind), Some(nonce), Some(base)) => build_agent_launch_command(kind, base, nonce),
+        _ => None,
+    };
+
     spawn_drain(
         &read_source,
         app.clone(),
@@ -311,6 +486,7 @@ pub fn start_terminal_session(
         frontend_channel.clone(),
         connected.clone(),
         last_output_at.clone(),
+        activity_nonce.clone(),
     );
 
     let mut sessions = session_state
@@ -328,6 +504,7 @@ pub fn start_terminal_session(
             created_at,
             child_pid,
             agent: Mutex::new(agent_kind.clone()),
+            activity_nonce,
             last_output_at,
             frontend_channel,
             display_title,
@@ -349,7 +526,10 @@ pub fn start_terminal_session(
         },
     );
 
-    Ok(session_id)
+    Ok(StartedSession {
+        session_id,
+        launch_command: launch_override,
+    })
 }
 
 pub(crate) fn start_local_pty(
@@ -530,6 +710,7 @@ fn spawn_drain<R: Runtime>(
     frontend_channel: Arc<Mutex<Broadcast>>,
     connected: Arc<AtomicBool>,
     last_output_at: Arc<Mutex<Instant>>,
+    nonce: Option<String>,
 ) {
     match read_source {
         ReadSource::Ssh(ch) => {
@@ -544,6 +725,7 @@ fn spawn_drain<R: Runtime>(
                     frontend_channel,
                     connected,
                     last_output_at,
+                    nonce,
                 );
             });
         }
@@ -559,9 +741,57 @@ fn spawn_drain<R: Runtime>(
                     frontend_channel,
                     connected,
                     last_output_at,
+                    nonce,
                 );
             });
         }
+    }
+}
+
+/// Feed one drain chunk through a session's activity scanner: broadcast the
+/// stripped `forward` bytes (our OSC removed) and hand back the parsed activity
+/// states for the caller to emit. Factored out of the drain loop so the
+/// feed→forward→events wiring is unit-testable without a live Tauri `emit`
+/// (TERMINAL_ACTIVITY_PLAN §6). The drain calls this, then emits one
+/// `terminal-session-activity` per returned state.
+fn drain_scan_and_forward(
+    scanner: &mut activity_scanner::ActivityScanner,
+    chunk: &[u8],
+    frontend_channel: &Arc<Mutex<Broadcast>>,
+) -> Vec<String> {
+    let out = scanner.feed(chunk);
+    send_chunk(frontend_channel, out.forward);
+    out.events
+}
+
+/// Broadcast one drain chunk, running it through the session's activity
+/// scanner first when the session is hooked (`scanner` present). Shared by
+/// `drain_local` and `drain_ssh` so both transports handle activity
+/// identically — which is what lets remote reuse the scanner unchanged in
+/// Phase 4. A plain shell (`scanner` `None`) keeps the raw forward path.
+fn forward_drained_chunk<R: Runtime>(
+    scanner: Option<&mut activity_scanner::ActivityScanner>,
+    chunk: &[u8],
+    frontend_channel: &Arc<Mutex<Broadcast>>,
+    app: &AppHandle<R>,
+    session_id: &str,
+) {
+    match scanner {
+        Some(sc) => {
+            let states = drain_scan_and_forward(sc, chunk, frontend_channel);
+            for state in states {
+                // TODO(T2.4): precedence latch — awaiting_approval must survive
+                // the cadence sweep's awaiting_input.
+                let _ = app.emit(
+                    "terminal-session-activity",
+                    ActivityInfo {
+                        session_id: session_id.to_string(),
+                        state,
+                    },
+                );
+            }
+        }
+        None => send_chunk(frontend_channel, chunk.to_vec()),
     }
 }
 
@@ -575,11 +805,15 @@ fn drain_ssh<R: Runtime>(
     frontend_channel: Arc<Mutex<Broadcast>>,
     connected: Arc<AtomicBool>,
     last_output_at: Arc<Mutex<Instant>>,
+    nonce: Option<String>,
 ) {
     // Re-seed to "now" at drain start so the idle timeout (and the activity
     // sweep) measure from this transport's lifetime, not a stale value carried
     // over the shared field from a long-ago disconnect on reconnect.
     touch_last_output(&last_output_at);
+    // A hooked session (nonce present) scans every chunk for our activity OSC;
+    // a plain shell keeps the raw fast path untouched. Engages only on ESC.
+    let mut scanner = nonce.map(activity_scanner::ActivityScanner::new);
     let mut buffer = [0u8; 8192];
     loop {
         let result = ch.lock().unwrap().read(&mut buffer);
@@ -593,15 +827,13 @@ fn drain_ssh<R: Runtime>(
                 // idle-timeout check below and the activity sweep) so both
                 // transports have a single source of truth.
                 touch_last_output(&last_output_at);
-                // TODO(T2.3): wire into drain_local/drain_ssh — run this chunk
-                // through the session's `activity_scanner::ActivityScanner`
-                // here, broadcast `ScanOutput.forward` (with our OSC stripped)
-                // instead of the raw chunk, and emit `terminal-session-activity`
-                // for each parsed `ScanOutput.events` state. Left out of this
-                // task so the drain hot path is untouched until the launch-line
-                // work (T2.3) lands the per-session nonce.
-                let chunk = buffer[..n].to_vec();
-                send_chunk(&frontend_channel, chunk);
+                forward_drained_chunk(
+                    scanner.as_mut(),
+                    &buffer[..n],
+                    &frontend_channel,
+                    &app,
+                    &session_id,
+                );
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if elapsed_since_last_output(&last_output_at).as_secs() > IDLE_TIMEOUT_SECS {
@@ -628,10 +860,14 @@ pub(crate) fn drain_local<R: Runtime>(
     frontend_channel: Arc<Mutex<Broadcast>>,
     connected: Arc<AtomicBool>,
     last_output_at: Arc<Mutex<Instant>>,
+    nonce: Option<String>,
 ) {
     // Re-seed to "now" at drain start so the activity sweep measures from this
     // transport's lifetime rather than a stale value carried over on reconnect.
     touch_last_output(&last_output_at);
+    // A hooked session (nonce present) scans every chunk for our activity OSC;
+    // a plain shell keeps the raw fast path untouched. Engages only on ESC.
+    let mut scanner = nonce.map(activity_scanner::ActivityScanner::new);
     let mut buffer = [0u8; 8192];
     loop {
         let result = reader.lock().unwrap().read(&mut buffer);
@@ -643,13 +879,13 @@ pub(crate) fn drain_local<R: Runtime>(
             Ok(n) => {
                 // Feed the shared last-output field the activity sweep reads.
                 touch_last_output(&last_output_at);
-                // TODO(T2.3): wire into drain_local/drain_ssh — same seam as the
-                // SSH drain above: feed the chunk through the session's
-                // `activity_scanner::ActivityScanner`, broadcast the stripped
-                // `forward` bytes, and emit `terminal-session-activity` per
-                // parsed event. Deferred with the launch-line/nonce work (T2.3).
-                let chunk = buffer[..n].to_vec();
-                send_chunk(&frontend_channel, chunk);
+                forward_drained_chunk(
+                    scanner.as_mut(),
+                    &buffer[..n],
+                    &frontend_channel,
+                    &app,
+                    &session_id,
+                );
             }
         }
     }
@@ -1124,6 +1360,7 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
         created_at,
         connected,
         last_output_at,
+        activity_nonce,
     ) = {
         let sessions = session_state
             .sessions
@@ -1140,6 +1377,9 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
             active.created_at,
             active.connected.clone(),
             active.last_output_at.clone(),
+            // Rebuild the scanner with the SAME nonce the still-running agent's
+            // hooks emit — a reconnect must keep parsing its activity OSC.
+            active.activity_nonce.clone(),
         )
     };
 
@@ -1190,6 +1430,7 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
         frontend_channel,
         connected.clone(),
         last_output_at,
+        activity_nonce,
     );
 
     // Swap the fresh transport onto the existing session.

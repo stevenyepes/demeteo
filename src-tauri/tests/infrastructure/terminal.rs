@@ -243,6 +243,7 @@ fn spawn_test_session(
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        activity_nonce: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel,
         display_title,
@@ -271,6 +272,7 @@ fn insert_test_session(state: &SessionState, session_id: &str) {
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        activity_nonce: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel,
         display_title,
@@ -822,6 +824,7 @@ fn attach_replays_scrollback_to_new_channel() {
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        activity_nonce: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
@@ -875,6 +878,7 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        activity_nonce: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
@@ -1012,6 +1016,7 @@ fn insert_disconnected_session(
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(None),
+        activity_nonce: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
@@ -1289,6 +1294,7 @@ fn insert_agent_session(state: &SessionState, session_id: &str) {
         created_at: 0,
         child_pid: None,
         agent: Mutex::new(Some("claude-code".to_string())),
+        activity_nonce: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel,
         display_title: Mutex::new(None),
@@ -1356,5 +1362,180 @@ fn sweep_records_agent_sessions_and_gates_plain_shells() {
     assert!(
         !last_states.contains_key(&shell_id),
         "plain shell must remain gated across sweeps"
+    );
+}
+
+// --- Phase 2 launch-line builder + drain scanner wiring (T2.3) ---------------
+
+use super::{
+    build_agent_launch_command, build_claude_activity_settings, drain_scan_and_forward,
+    is_hooked_agent_kind, shell_single_quote,
+};
+
+/// Reverse `shell_single_quote` for a value produced by it: strip the wrapping
+/// quotes and undo the `'\''` escaping, recovering the original string. Lets
+/// the round-trip tests pull the `--settings` JSON back out of the shell
+/// command and hand it to serde_json.
+fn shell_single_unquote(quoted: &str) -> String {
+    let inner = quoted
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .expect("value must be wrapped in single quotes");
+    inner.replace("'\\''", "'")
+}
+
+/// Only Claude is hooked for now — the gate for both the nonce and the
+/// `--settings` augmentation.
+#[test]
+fn is_hooked_agent_kind_is_claude_only() {
+    assert!(is_hooked_agent_kind("claude-code"));
+    assert!(!is_hooked_agent_kind("opencode"));
+    assert!(!is_hooked_agent_kind("codex"));
+    assert!(!is_hooked_agent_kind(""));
+}
+
+/// `shell_single_quote` wraps a value and escapes an embedded single quote with
+/// the canonical `'\''` POSIX trick, and the escaping round-trips.
+#[test]
+fn shell_single_quote_round_trips_embedded_quote() {
+    assert_eq!(shell_single_quote("plain"), "'plain'");
+    assert_eq!(shell_single_quote("it's"), "'it'\\''s'");
+    for original in ["", "it's", "a'b'c", "no quotes", "'leading", "trailing'"] {
+        assert_eq!(
+            shell_single_unquote(&shell_single_quote(original)),
+            original,
+            "round-trip failed for {original:?}"
+        );
+    }
+}
+
+/// A non-hooked kind yields no launch override (the frontend then writes its
+/// own base command).
+#[test]
+fn build_agent_launch_command_none_for_non_hooked() {
+    assert!(build_agent_launch_command("opencode", "opencode", "abc123").is_none());
+    assert!(build_agent_launch_command("codex", "codex", "abc123").is_none());
+    assert!(build_claude_activity_settings("opencode", "abc123").is_none());
+}
+
+/// For claude-code the builder appends `--settings '<json>'`, preserving any
+/// user args already on the base command, and the injected JSON round-trips as
+/// valid JSON carrying the nonce and one hook per §2d event→state mapping.
+#[test]
+fn build_agent_launch_command_claude_injects_valid_hook_settings() {
+    let nonce = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
+    let cmd = build_agent_launch_command("claude-code", "claude --resume", nonce)
+        .expect("claude-code must produce a launch command");
+
+    // Base args preserved; --settings appended.
+    assert!(
+        cmd.starts_with("claude --resume --settings '"),
+        "base args must be preserved and --settings appended: {cmd}"
+    );
+
+    // The `--settings` argument parses back as valid JSON.
+    let arg = cmd
+        .split_once(" --settings ")
+        .map(|(_, rest)| rest)
+        .expect("--settings arg present");
+    let json_text = shell_single_unquote(arg);
+    let settings: serde_json::Value =
+        serde_json::from_str(&json_text).expect("--settings must be valid JSON");
+
+    let hooks = settings
+        .get("hooks")
+        .and_then(|h| h.as_object())
+        .expect("settings.hooks object");
+
+    // Collect every reporter command across all events.
+    let mut commands: Vec<String> = Vec::new();
+    for groups in hooks.values() {
+        for group in groups.as_array().expect("event value is an array") {
+            for hook in group["hooks"].as_array().expect("group.hooks array") {
+                commands.push(
+                    hook["command"]
+                        .as_str()
+                        .expect("command string")
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    // Every reporter carries the nonce and a literal `` / `` (so
+    // Claude's JSON parse of the hook stdout re-materialises ESC / BEL).
+    for c in &commands {
+        assert!(c.contains(nonce), "reporter missing nonce: {c}");
+        assert!(
+            c.contains("\\u001b"),
+            "reporter missing literal ESC escape: {c}"
+        );
+        assert!(
+            c.contains("\\u0007"),
+            "reporter missing literal BEL escape: {c}"
+        );
+    }
+
+    // Each §2d event→state pairing is present with the right matcher.
+    let has = |event: &str, matcher: Option<&str>, state: &str| -> bool {
+        hooks
+            .get(event)
+            .and_then(|v| v.as_array())
+            .is_some_and(|groups| {
+                groups.iter().any(|g| {
+                    let matcher_ok = match matcher {
+                        Some(m) => g.get("matcher").and_then(|v| v.as_str()) == Some(m),
+                        None => g.get("matcher").is_none(),
+                    };
+                    let state_ok = g["hooks"]
+                        .as_array()
+                        .and_then(|h| h.first())
+                        .and_then(|h| h["command"].as_str())
+                        .is_some_and(|c| c.contains(&format!("state={state}")));
+                    matcher_ok && state_ok
+                })
+            })
+    };
+    assert!(has("UserPromptSubmit", None, "working"));
+    assert!(has("PreToolUse", None, "working"));
+    assert!(has("PostToolUse", None, "working"));
+    assert!(has(
+        "Notification",
+        Some("permission_prompt"),
+        "awaiting_approval"
+    ));
+    assert!(has("Notification", Some("idle_prompt"), "awaiting_input"));
+    assert!(has("Stop", None, "awaiting_input"));
+    assert!(has("SessionEnd", None, "exit"));
+}
+
+/// Drain-level wiring: a synthetic activity sequence embedded in normal output
+/// is stripped from the forwarded (broadcast) bytes and surfaces as an event
+/// for the caller to emit. Exercises the exact `feed → forward → events` seam
+/// the live drain runs, without a real Tauri emit.
+#[test]
+fn drain_scan_and_forward_strips_sequence_and_surfaces_event() {
+    let nonce = "feedface";
+    let mut scanner = super::activity_scanner::ActivityScanner::new(nonce.to_string());
+
+    let (channel, captured) = appending_capturing_channel();
+    let frontend = broadcast_with(vec![channel]);
+
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(b"before ");
+    chunk.extend_from_slice(b"\x1b]777;demeteo;v=1;nonce=feedface;state=awaiting_approval\x07");
+    chunk.extend_from_slice(b" after");
+
+    let events = drain_scan_and_forward(&mut scanner, &chunk, &frontend);
+    assert_eq!(
+        events,
+        vec!["awaiting_approval".to_string()],
+        "the parsed activity state must surface for the drain to emit"
+    );
+
+    assert!(
+        wait_for(2_000, || captured.lock().expect("lock").as_slice()
+            == b"before  after"),
+        "the demeteo sequence must be stripped from the forwarded bytes"
     );
 }

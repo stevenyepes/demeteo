@@ -28,23 +28,44 @@ import type { SessionInfo } from "../types";
  *   launched into the fresh session. Seeds the session's agent label so the
  *   tab shows the badge immediately; for local sessions the backend's
  *   foreground detector keeps it accurate afterwards.
- * @returns A promise that resolves to the session_id string.
+ * @param launchCommand The base command the caller intends to write into the
+ *   fresh session (e.g. `"claude"`). Handed to the backend so that, for hooked
+ *   agent kinds, it can return an augmented launch line (base +
+ *   `--settings '<reporter hooks>'`). The caller then writes the returned
+ *   `launchCommand` instead of its own — the single-write contract that stops
+ *   the agent launching twice (TERMINAL_ACTIVITY_PLAN §2c).
+ * @returns A promise resolving to `{ sessionId, launchCommand }`. `launchCommand`
+ *   is the backend's augmented launch line for hooked kinds, else `null`.
  */
 export async function startTerminalSession(
   machineId: string,
   workDir?: string,
   workBranch?: string | null,
   size?: { cols: number; rows: number },
-  agentKind?: string | null
-): Promise<string> {
-  return invoke<string>("start_terminal_session", {
+  agentKind?: string | null,
+  launchCommand?: string | null
+): Promise<{ sessionId: string; launchCommand: string | null }> {
+  // The backend returns a `StartedSession` struct (serde snake_case:
+  // `session_id`, `launch_command`). A bare-string return is tolerated so
+  // legacy test mocks and any older invoke path still resolve to a session id.
+  const result = await invoke<
+    { session_id: string; launch_command: string | null } | string
+  >("start_terminal_session", {
     machineId,
     workDir: workDir || null,
     workBranch: workBranch ?? null,
     cols: size?.cols ?? null,
     rows: size?.rows ?? null,
     agentKind: agentKind ?? null,
+    launchCommand: launchCommand ?? null,
   });
+  if (typeof result === "string") {
+    return { sessionId: result, launchCommand: null };
+  }
+  return {
+    sessionId: result.session_id,
+    launchCommand: result.launch_command ?? null,
+  };
 }
 
 /**
