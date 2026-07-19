@@ -155,6 +155,11 @@ function AppInner() {
   // shortcut and is refreshed on project change + status events.
   const [features, setFeatures] = useState<Feature[]>([]);
 
+  // Bumped by Cmd/Ctrl+T to pop the New-terminal launcher. Scoped to the
+  // Terminals view — the launcher only lives there, so the shortcut is a
+  // no-op anywhere else rather than yanking the user across the app.
+  const [terminalLauncherSignal, setTerminalLauncherSignal] = useState(0);
+
   // One launch code path for every composer (F28). Pre-seeds the
   // cycling list with the new feature so the user can immediately step
   // through it with Cmd+G; the `feature_status_changed` listener is
@@ -342,6 +347,12 @@ function AppInner() {
     onNewFeature: () => {
       if (currentProjectId) {
         uiDispatch({ type: 'OPEN_START_FEATURE' });
+      }
+    },
+    onNewTerminal: () => {
+      // Only meaningful on the Terminals view, where the launcher is mounted.
+      if (view.kind === 'terminals') {
+        setTerminalLauncherSignal((n) => n + 1);
       }
     },
     onToggleSidebar: () => uiDispatch({ type: 'TOGGLE_SIDEBAR' }),
@@ -533,7 +544,7 @@ function AppInner() {
         </main>
         {/* Keep-mounted, CSS-hidden off-route so the active xterm and all
             backend sessions survive navigation (spec §4.1). */}
-        <TerminalsView active={view.kind === 'terminals'} />
+        <TerminalsView active={view.kind === 'terminals'} openLauncherSignal={terminalLauncherSignal} />
         </div>
       </div>
     </div>

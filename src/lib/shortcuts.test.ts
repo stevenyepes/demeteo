@@ -166,6 +166,15 @@ describe('matchesEntryKeyboard / matchesEntryMouse', () => {
     );
   });
 
+  it('matches Cmd+Shift+` against the new-terminal entry', () => {
+    expect(
+      matchesEntryKeyboard(
+        ev({ key: '`', metaKey: true, shiftKey: true }),
+        findShortcutById('cmd-shift-backtick-new-terminal')!,
+      ),
+    ).toBe(true);
+  });
+
   it('never matches the empty-chord sentinel', () => {
     expect(
       matchesEntryKeyboard(
@@ -245,6 +254,7 @@ describe('formatEntryChords', () => {
 const EXPECTED_CHORDS: { id: string; key: string; primary: boolean; shift: boolean; alt: boolean }[] = [
   { id: 'cmd-t-new-feature', key: 't', primary: true, shift: false, alt: false },
   { id: 'cmd-shift-n-new-feature-alias', key: 'n', primary: true, shift: true, alt: false },
+  { id: 'cmd-shift-backtick-new-terminal', key: '`', primary: true, shift: true, alt: false },
   { id: 'cmd-w-close-view', key: 'w', primary: true, shift: false, alt: false },
   { id: 'cmd-k-command-palette', key: 'k', primary: true, shift: false, alt: false },
   { id: 'cmd-p-palette-alias', key: 'p', primary: true, shift: false, alt: false },

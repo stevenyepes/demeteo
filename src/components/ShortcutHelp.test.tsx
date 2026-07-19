@@ -204,7 +204,9 @@ describe('the rendered registry', () => {
     // the top of the body, once in the palette group's registry) —
     // both must be present.
     expect(panel.getAllByText('Ctrl + K').length).toBeGreaterThanOrEqual(2);
+    // Ctrl + T opens New Feature; Ctrl + Shift + T opens the New-terminal launcher.
     expect(panel.getByText('Ctrl + T')).toBeInTheDocument();
+    expect(panel.getByText('New terminal')).toBeInTheDocument();
     // "New Feature" is listed twice in the registry: Cmd/Ctrl+T and
     // its Cmd/Ctrl+Shift+N alias.
     expect(panel.getAllByText('New Feature')).toHaveLength(2);

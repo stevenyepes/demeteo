@@ -12,6 +12,9 @@ export interface TerminalsViewProps {
    *  mounted off-route (so the active xterm survives navigation, spec
    *  §4.1) and toggles visibility with CSS. */
   active: boolean;
+  /** Monotonic counter forwarded to the New-terminal launcher: each
+   *  increment pops the launcher open (Cmd/Ctrl+T). */
+  openLauncherSignal?: number;
 }
 
 /**
@@ -22,7 +25,7 @@ export interface TerminalsViewProps {
  * navigation (invariant 2, §4.1). Only the active tab mounts a surface
  * (invariant 3).
  */
-export function TerminalsView({ active }: TerminalsViewProps): React.ReactElement {
+export function TerminalsView({ active, openLauncherSignal }: TerminalsViewProps): React.ReactElement {
   const { state, focus, close, setTitle, reconnect } = useTerminalPanel();
   const { tabs, activeTabId } = state;
   const activeTab = tabs.find((t) => t.tabId === activeTabId) ?? null;
@@ -78,7 +81,7 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
             Open a shell or launch a coding agent. Sessions stay alive as you
             navigate around the app.
           </div>
-          <NewTerminalMenu />
+          <NewTerminalMenu openSignal={openLauncherSignal} />
         </div>
       ) : (
         <>
@@ -92,7 +95,7 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
                 <span className="text-cyan-400">{tabs.length}</span>
               </div>
               <div className="flex items-center gap-1">
-                <NewTerminalMenu compact />
+                <NewTerminalMenu compact openSignal={openLauncherSignal} />
                 <button
                   type="button"
                   onClick={handleCloseAll}

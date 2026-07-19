@@ -84,6 +84,10 @@ export interface NewTerminalMenuProps {
    *  label to `New` so the split button doesn't wrap; roomy placements (the
    *  empty state) keep the fuller `New shell`. */
   compact?: boolean;
+  /** Monotonic counter that opens the launcher when it increments — lets a
+   *  keyboard shortcut (Cmd/Ctrl+T) pop the menu from outside the component.
+   *  The initial value never opens it; only a change past mount does. */
+  openSignal?: number;
 }
 
 /**
@@ -115,6 +119,7 @@ export interface NewTerminalMenuProps {
 export function NewTerminalMenu({
   className = '',
   compact = false,
+  openSignal,
 }: NewTerminalMenuProps): React.ReactElement {
   const { open } = useTerminalPanel();
   const { state: projectState } = useProject();
@@ -262,6 +267,15 @@ export function NewTerminalMenu({
       .filter((x): x is { recent: TerminalRecent; target: MachineTarget } => x !== null)
       .slice(0, RECENTS_SHOWN);
   }, [recents, targets]);
+
+  // An external open request (Cmd/Ctrl+T). Skip the mount value so the menu
+  // doesn't spring open on first render; only a later increment opens it.
+  const openSignalSeen = useRef(openSignal);
+  useEffect(() => {
+    if (openSignal === undefined || openSignal === openSignalSeen.current) return;
+    openSignalSeen.current = openSignal;
+    setOpenMenu(true);
+  }, [openSignal]);
 
   // On open: load the recents strip and reset the transient picker state.
   useEffect(() => {
