@@ -19,17 +19,25 @@ import type { SessionInfo } from "../types";
  *   `git checkout <branch> 2>/dev/null || git switch <branch> 2>/dev/null`
  *   bootstrap so the PTY opens on that branch. Missing-branch failures are
  *   swallowed silently (the user still gets a usable terminal).
+ * @param size An optional initial `{ cols, rows }` so the shell draws its very
+ *   first prompt at (near) the real terminal width. When omitted the backend
+ *   falls back to a conservative 80x24 (narrower than any viewport, so the
+ *   first prompt never wraps); the surface still sends the exact size via
+ *   `resizeTerminalSession` once it mounts and fits.
  * @returns A promise that resolves to the session_id string.
  */
 export async function startTerminalSession(
   machineId: string,
   workDir?: string,
-  workBranch?: string | null
+  workBranch?: string | null,
+  size?: { cols: number; rows: number }
 ): Promise<string> {
   return invoke<string>("start_terminal_session", {
     machineId,
     workDir: workDir || null,
     workBranch: workBranch ?? null,
+    cols: size?.cols ?? null,
+    rows: size?.rows ?? null,
   });
 }
 

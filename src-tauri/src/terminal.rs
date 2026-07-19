@@ -59,6 +59,16 @@ pub struct ActiveSession {
 /// replay never starts mid-escape-sequence (TERMINALS_VIEW_SPEC §3, §8).
 const SCROLLBACK_MAX_BYTES: usize = 256 * 1024;
 
+/// Fallback PTY dimensions used when the frontend does not supply a size at
+/// session start (e.g. reconnect, or a caller that has not measured its
+/// surface yet). Kept at the classic 80x24 — crucially *narrower* than any
+/// realistic terminal viewport so the shell's first prompt never wraps wider
+/// than the visible area (a wider default made Powerlevel10k's full-width
+/// frame wrap and the command line appear duplicated). The frontend sends the
+/// real size via `resize_terminal_session` right after it mounts and fits.
+const DEFAULT_TERM_COLS: u16 = 80;
+const DEFAULT_TERM_ROWS: u16 = 24;
+
 /// Per-session output fan-out with a bounded scrollback buffer, all
 /// guarded by a single mutex so attach-replay and live-broadcast are
 /// exactly ordered (TERMINALS_VIEW_SPEC §3). Replaces the PR #58
@@ -178,11 +188,18 @@ pub fn start_terminal_session(
     machine_id: String,
     work_dir: Option<String>,
     work_branch: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
 ) -> Result<String, String> {
     let machine = crate::infrastructure::worktree::machine_resolver::resolve_machine(
         &*ctx.machines,
         &machine_id,
     )?;
+    // Resolve the initial PTY size so the shell draws its very first prompt at
+    // (near) the real terminal width. `0` is treated as "unset" defensively —
+    // a zero-column PTY would make prompts render incoherently.
+    let cols = cols.filter(|c| *c > 0).unwrap_or(DEFAULT_TERM_COLS);
+    let rows = rows.filter(|r| *r > 0).unwrap_or(DEFAULT_TERM_ROWS);
 
     let session_id = format!("sess_{}", SESSION_COUNTER.fetch_add(1, Ordering::SeqCst));
     let created_at = std::time::SystemTime::now()
@@ -200,9 +217,9 @@ pub fn start_terminal_session(
     let connected = Arc::new(AtomicBool::new(true));
 
     let (read_source, write_sink, keepalive) = if machine.auth_type == "local" {
-        start_local_pty(&machine_id, &work_dir, &work_branch)?
+        start_local_pty(&machine_id, &work_dir, &work_branch, cols, rows)?
     } else {
-        start_ssh_session(&machine, &work_dir, &work_branch)?
+        start_ssh_session(&machine, &work_dir, &work_branch, cols, rows)?
     };
 
     spawn_drain(
@@ -252,12 +269,14 @@ pub(crate) fn start_local_pty(
     machine_id: &str,
     work_dir: &Option<String>,
     work_branch: &Option<String>,
+    cols: u16,
+    rows: u16,
 ) -> Result<(ReadSource, WriteSink, Arc<Mutex<SessionKeepalive>>), String> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
-            rows: 24,
-            cols: 220,
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -266,6 +285,26 @@ pub(crate) fn start_local_pty(
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
     let mut cmd = CommandBuilder::new(&shell);
     cmd.env("TERM", "xterm-256color");
+    // Ensure a UTF-8 locale on macOS. A GUI launch (Finder/Dock) can hand the
+    // app an environment with no `LANG`/`LC_*`, dropping the shell into the C
+    // locale where it mishandles multibyte prompt output. `en_US.UTF-8` and the
+    // bare `UTF-8` `LC_CTYPE` are Darwin idioms that are always valid there.
+    //
+    // Deliberately macOS-only: on Linux/BSD these exact values are risky —
+    // `en_US.UTF-8` is frequently not generated and `LC_CTYPE=UTF-8` is not a
+    // valid locale name, so forcing them yields `setlocale` warnings and a C
+    // fallback. Desktop launchers on those platforms already propagate the
+    // session locale, so no override is needed. Only set when absent so a
+    // user's real locale is never overridden.
+    #[cfg(target_os = "macos")]
+    {
+        if std::env::var_os("LANG").is_none() {
+            cmd.env("LANG", "en_US.UTF-8");
+        }
+        if std::env::var_os("LC_CTYPE").is_none() {
+            cmd.env("LC_CTYPE", "UTF-8");
+        }
+    }
     if let Some(dir) = work_dir {
         cmd.cwd(dir);
     }
@@ -334,6 +373,8 @@ fn start_ssh_session(
     machine: &Machine,
     work_dir: &Option<String>,
     work_branch: &Option<String>,
+    cols: u16,
+    rows: u16,
 ) -> Result<(ReadSource, WriteSink, Arc<Mutex<SessionKeepalive>>), String> {
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
@@ -356,7 +397,11 @@ fn start_ssh_session(
         .channel_session()
         .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
     ssh_chan
-        .request_pty("xterm-256color", None, None)
+        .request_pty(
+            "xterm-256color",
+            None,
+            Some((cols as u32, rows as u32, 0, 0)),
+        )
         .map_err(|e| format!("Failed to request PTY: {}", e))?;
     ssh_chan
         .shell()
@@ -951,10 +996,24 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
         return Err("Session is already connected".to_string());
     }
 
+    // Reconnect has no surface size to hand off yet; spawn at the default and
+    // let the frontend's post-mount `resize_terminal_session` correct it.
     let built = if machine.auth_type == "local" {
-        start_local_pty(&machine_id, &work_dir, &work_branch)
+        start_local_pty(
+            &machine_id,
+            &work_dir,
+            &work_branch,
+            DEFAULT_TERM_COLS,
+            DEFAULT_TERM_ROWS,
+        )
     } else {
-        start_ssh_session(machine, &work_dir, &work_branch)
+        start_ssh_session(
+            machine,
+            &work_dir,
+            &work_branch,
+            DEFAULT_TERM_COLS,
+            DEFAULT_TERM_ROWS,
+        )
     };
     let (read_source, write_sink, keepalive) = match built {
         Ok(t) => t,
