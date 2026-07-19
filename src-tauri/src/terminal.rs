@@ -149,6 +149,17 @@ pub enum SessionKeepalive {
     },
 }
 
+/// The I/O handles a freshly started session hands back: the reader, the
+/// writer, a shared keepalive guard, and the child shell's pid (`None` when
+/// the transport can't report one). Shared by the local-PTY and SSH start
+/// paths so their signatures stay in lock-step.
+type SessionHandles = (
+    ReadSource,
+    WriteSink,
+    Arc<Mutex<SessionKeepalive>>,
+    Option<u32>,
+);
+
 #[derive(Default)]
 pub struct SessionState {
     pub sessions: Mutex<HashMap<String, ActiveSession>>,
@@ -212,6 +223,7 @@ pub fn connect_ssh(
 /// seeds the session's agent label immediately so the tab shows the badge
 /// before the foreground detector has run its first pass.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn start_terminal_session(
     app: AppHandle,
     ctx: State<'_, AppContext>,
@@ -312,15 +324,7 @@ pub(crate) fn start_local_pty(
     work_branch: &Option<String>,
     cols: u16,
     rows: u16,
-) -> Result<
-    (
-        ReadSource,
-        WriteSink,
-        Arc<Mutex<SessionKeepalive>>,
-        Option<u32>,
-    ),
-    String,
-> {
+) -> Result<SessionHandles, String> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -427,15 +431,7 @@ fn start_ssh_session(
     work_branch: &Option<String>,
     cols: u16,
     rows: u16,
-) -> Result<
-    (
-        ReadSource,
-        WriteSink,
-        Arc<Mutex<SessionKeepalive>>,
-        Option<u32>,
-    ),
-    String,
-> {
+) -> Result<SessionHandles, String> {
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
             let key = format!("machine_{}", machine.id);
