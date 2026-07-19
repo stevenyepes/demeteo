@@ -14,6 +14,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager, Runtime, State};
 
+// Phase-2 drain OSC scanner (TERMINAL_ACTIVITY_PLAN §2b). Built and tested as a
+// self-contained unit here; the live drain does not use it yet — see the
+// `TODO(T2.3)` notes in `drain_local` / `drain_ssh` for where it wires in.
+// `allow(dead_code)` until that wiring lands (the scanner's API is exercised
+// only by its own tests for now).
+#[allow(dead_code)]
+pub(crate) mod activity_scanner;
+
 static SESSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 pub enum ReadSource {
@@ -585,6 +593,13 @@ fn drain_ssh<R: Runtime>(
                 // idle-timeout check below and the activity sweep) so both
                 // transports have a single source of truth.
                 touch_last_output(&last_output_at);
+                // TODO(T2.3): wire into drain_local/drain_ssh — run this chunk
+                // through the session's `activity_scanner::ActivityScanner`
+                // here, broadcast `ScanOutput.forward` (with our OSC stripped)
+                // instead of the raw chunk, and emit `terminal-session-activity`
+                // for each parsed `ScanOutput.events` state. Left out of this
+                // task so the drain hot path is untouched until the launch-line
+                // work (T2.3) lands the per-session nonce.
                 let chunk = buffer[..n].to_vec();
                 send_chunk(&frontend_channel, chunk);
             }
@@ -628,6 +643,11 @@ pub(crate) fn drain_local<R: Runtime>(
             Ok(n) => {
                 // Feed the shared last-output field the activity sweep reads.
                 touch_last_output(&last_output_at);
+                // TODO(T2.3): wire into drain_local/drain_ssh — same seam as the
+                // SSH drain above: feed the chunk through the session's
+                // `activity_scanner::ActivityScanner`, broadcast the stripped
+                // `forward` bytes, and emit `terminal-session-activity` per
+                // parsed event. Deferred with the launch-line/nonce work (T2.3).
                 let chunk = buffer[..n].to_vec();
                 send_chunk(&frontend_channel, chunk);
             }
