@@ -186,6 +186,37 @@ type SessionHandles = (
 #[derive(Default)]
 pub struct SessionState {
     pub sessions: Mutex<HashMap<String, ActiveSession>>,
+    /// Per-session resolved-activity records (TERMINAL_ACTIVITY_PLAN §2). The
+    /// single place the two signal sources — the cadence sweep and the hook
+    /// scanner — meet: both fold their reading into the session's
+    /// `SessionActivity` and let `resolve` apply the §2 precedence latch, so a
+    /// scanner `awaiting_approval` is no longer clobbered by the next sweep
+    /// tick's `awaiting_input`. Keyed by session id; an entry exists only for a
+    /// session that has produced an activity signal (agent-gated), and is
+    /// dropped on `exit` (and by the sweep's GC when the session disappears) so
+    /// a reused id starts clean.
+    pub activity: Mutex<HashMap<String, SessionActivity>>,
+}
+
+/// The per-session activity record both signal sources feed
+/// (TERMINAL_ACTIVITY_PLAN §2 precedence latch). Fields are folded in by
+/// `apply_cadence` (the sweep) and `apply_hook` (the scanner); the resolved
+/// state is computed by `resolve` and emitted (deduped) by `resolve_and_emit`.
+#[derive(Default)]
+pub struct SessionActivity {
+    /// Last cadence read by the sweep: `Some("working")` or
+    /// `Some("awaiting_input")`, `None` until the first tick. The precedence
+    /// floor.
+    cadence: Option<&'static str>,
+    /// Latched `true` by a scanner `awaiting_approval`; cleared by any
+    /// non-approval explicit hook (working / awaiting_input / exit). While set
+    /// it survives the cadence floor's `awaiting_input` (§2's latch rule).
+    approval_latched: bool,
+    /// A `SessionEnd` (`exit`) hook was seen — the top of the precedence order.
+    exited: bool,
+    /// The last state actually emitted for this session, used to dedup
+    /// (emit only on real change).
+    last_emitted: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -779,16 +810,19 @@ fn forward_drained_chunk<R: Runtime>(
     match scanner {
         Some(sc) => {
             let states = drain_scan_and_forward(sc, chunk, frontend_channel);
+            if states.is_empty() {
+                return;
+            }
+            // Route each scanner state through the shared per-session resolver
+            // instead of emitting directly, so the §2 precedence latch decides
+            // what actually reaches the wire (an `awaiting_approval` now
+            // survives the next cadence tick's `awaiting_input`). The resolver
+            // reaches `SessionState` the same way the sweep does.
+            let session_state = app.state::<SessionState>();
             for state in states {
-                // TODO(T2.4): precedence latch — awaiting_approval must survive
-                // the cadence sweep's awaiting_input.
-                let _ = app.emit(
-                    "terminal-session-activity",
-                    ActivityInfo {
-                        session_id: session_id.to_string(),
-                        state,
-                    },
-                );
+                resolve_and_emit(app, session_id, &session_state.activity, |sa| {
+                    apply_hook(sa, &state);
+                });
             }
         }
         None => send_chunk(frontend_channel, chunk.to_vec()),
@@ -1693,59 +1727,151 @@ const CADENCE_WINDOW: Duration = Duration::from_millis(1000);
 /// (TERMINAL_ACTIVITY_PLAN §5).
 const ACTIVITY_SWEEP_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Pure cadence decision for a single session, factored out of the sweep loop
-/// so it is unit-testable without spinning a real thread. Given the state we
-/// last emitted for the session (`None` if we never have), whether an agent is
-/// present, and how long since the session last produced output, return the
-/// state to emit — or `None` to stay silent.
-///
-/// Two reasons to stay silent: the session has no agent (a plain shell must
-/// NEVER emit — the agent-gate), or the resolved state is unchanged from the
-/// last emit (dedup — emit only on real change). Otherwise resolve `working`
-/// within the cadence window, else `awaiting_input`.
-fn next_activity_emit(
-    last_emitted: Option<&str>,
-    has_agent: bool,
-    since_last_output: Duration,
-) -> Option<&'static str> {
-    if !has_agent {
-        return None;
-    }
-    let resolved = if since_last_output <= CADENCE_WINDOW {
+/// Pure cadence read for a single session, factored out of the sweep loop so it
+/// is unit-testable without spinning a real thread. Resolve `working` when the
+/// session produced output within the cadence window, else `awaiting_input`.
+/// Dedup and the agent-gate no longer live here — the shared resolver
+/// (`SessionActivity` / `resolve_and_emit`) owns them now.
+fn cadence_state(since_last_output: Duration) -> &'static str {
+    if since_last_output <= CADENCE_WINDOW {
         "working"
     } else {
         "awaiting_input"
-    };
-    if last_emitted == Some(resolved) {
-        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Activity precedence resolver (TERMINAL_ACTIVITY_PLAN §2)
+// ---------------------------------------------------------------------------
+//
+// Both signal sources fold their reading into a session's `SessionActivity`
+// and route through `resolve_and_emit`; `resolve` applies the §2 precedence,
+// so the sources no longer race on the wire.
+
+/// Apply one cadence read (from the sweep) to a session's record. Cadence is
+/// the precedence floor — it never touches the approval latch.
+fn apply_cadence(sa: &mut SessionActivity, cadence: &'static str) {
+    sa.cadence = Some(cadence);
+}
+
+/// Apply one explicit scanner (hook) state to a session's record. The approval
+/// latch is set by `awaiting_approval` and cleared by ANY non-approval explicit
+/// signal — a `working` resume, a `Stop`/idle → `awaiting_input`, or `exit` —
+/// which is exactly §2's "clears on a working signal or its own source
+/// retracting."
+fn apply_hook(sa: &mut SessionActivity, state: &str) {
+    match state {
+        "awaiting_approval" => sa.approval_latched = true,
+        "working" => {
+            sa.approval_latched = false;
+            sa.cadence = Some("working");
+        }
+        "awaiting_input" => {
+            sa.approval_latched = false;
+            sa.cadence = Some("awaiting_input");
+        }
+        "exit" => {
+            sa.approval_latched = false;
+            sa.exited = true;
+        }
+        // Unknown states are ignored — the scanner only ever yields the four
+        // above, but keep the resolver total.
+        _ => {}
+    }
+}
+
+/// Resolve the §2 precedence for a record (highest first): a seen `exit` wins,
+/// then a latched `awaiting_approval`, else the cadence floor
+/// (`working` until the first cadence read).
+fn resolve(sa: &SessionActivity) -> &'static str {
+    if sa.exited {
+        "exit"
+    } else if sa.approval_latched {
+        "awaiting_approval"
     } else {
-        Some(resolved)
+        sa.cadence.unwrap_or("working")
+    }
+}
+
+/// Compute the emit decision for a session's record and fold it back in. If the
+/// resolved state differs from what was last emitted, return it (and record it
+/// as the new last-emitted); otherwise return `None` (dedup). On `exit` the
+/// record is REMOVED after emitting once, so a reused session id starts clean.
+/// Pure over the map — no `AppHandle` — so the precedence/dedup logic is
+/// unit-testable in isolation (TERMINAL_ACTIVITY_PLAN §6).
+fn decide_and_record(map: &mut HashMap<String, SessionActivity>, id: &str) -> Option<String> {
+    let resolved = resolve(map.get(id)?);
+    if map.get(id)?.last_emitted.as_deref() == Some(resolved) {
+        return None;
+    }
+    if resolved == "exit" {
+        map.remove(id);
+    } else {
+        // Safe: `get(id)` above proved the entry exists.
+        if let Some(sa) = map.get_mut(id) {
+            sa.last_emitted = Some(resolved.to_string());
+        }
+    }
+    Some(resolved.to_string())
+}
+
+/// The single emit choke point both signal sources route through. Under the
+/// `activity` lock: fold the source's reading into the session's record
+/// (`mutate`, creating the record on first signal), then compute the emit
+/// decision. The lock is released BEFORE `app.emit` so we never hold
+/// `SessionState.activity` across IPC (locking discipline: lock → mutate +
+/// decide → unlock → emit).
+fn resolve_and_emit<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    activity: &Mutex<HashMap<String, SessionActivity>>,
+    mutate: impl FnOnce(&mut SessionActivity),
+) {
+    let emit = {
+        let mut map = match activity.lock() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        mutate(map.entry(id.to_string()).or_default());
+        decide_and_record(&mut map, id)
+    };
+    if let Some(state) = emit {
+        let _ = app.emit(
+            "terminal-session-activity",
+            ActivityInfo {
+                session_id: id.to_string(),
+                state,
+            },
+        );
     }
 }
 
 /// Spawn the background activity sweep. Runs for the lifetime of the app (a
 /// cheap sleeping thread, like `spawn_agent_detector`); call once from setup.
 pub fn spawn_activity_sweep<R: Runtime>(app: AppHandle<R>) {
-    thread::spawn(move || {
-        // The last state emitted per session, owned by this loop — the single
-        // place that decides whether a state is a real change worth emitting.
-        let mut last_states: HashMap<String, String> = HashMap::new();
-        loop {
-            thread::sleep(ACTIVITY_SWEEP_INTERVAL);
-            sweep_activity_once(&app, &mut last_states);
-        }
+    thread::spawn(move || loop {
+        thread::sleep(ACTIVITY_SWEEP_INTERVAL);
+        sweep_activity_once(&app);
     });
 }
 
 /// One sweep pass: snapshot each session's (agent-present, quiet-for) under
-/// the lock, release it, drop map entries for sessions that disappeared, then
-/// resolve + emit outside the lock. Mirrors `detect_agents_once`'s
-/// snapshot-then-emit-outside-the-lock shape.
-fn sweep_activity_once<R: Runtime>(app: &AppHandle<R>, last_states: &mut HashMap<String, String>) {
+/// the `sessions` lock, release it, then feed the cadence read for every
+/// agent-present session into the shared resolver. Mirrors
+/// `detect_agents_once`'s snapshot-then-emit-outside-the-lock shape. Dedup and
+/// the record now live in `SessionState.activity`, so a scanner
+/// `awaiting_approval` survives the tick's `awaiting_input` (the §2 latch).
+///
+/// Agent-gate: a plain shell (agent `None`) is skipped, so it never creates or
+/// emits a record. GC: records for sessions that disappeared are dropped so
+/// their stale state can't linger and a reused id starts clean.
+fn sweep_activity_once<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<SessionState>();
 
     // Snapshot (id, agent-present, elapsed-since-last-output) for every
-    // session, then release the sessions lock before emitting.
+    // session, then release the sessions lock before touching `activity`.
+    // (Never hold `sessions` and `activity` nested — the resolver needs only
+    // `activity`.)
     let snapshot: Vec<(String, bool, Duration)> = {
         let sessions = match state.sessions.lock() {
             Ok(s) => s,
@@ -1761,25 +1887,23 @@ fn sweep_activity_once<R: Runtime>(app: &AppHandle<R>, last_states: &mut HashMap
             .collect()
     };
 
-    // Forget sessions that disappeared since the last sweep so their stale
-    // last-emitted state can't linger (and so a reused id starts clean). No
-    // `exit` emit here — that is a Phase 2 concern.
-    let live: std::collections::HashSet<&str> =
-        snapshot.iter().map(|(id, _, _)| id.as_str()).collect();
-    last_states.retain(|id, _| live.contains(id.as_str()));
+    // GC: forget records for sessions that disappeared since the last sweep.
+    // Briefly under the `activity` lock, released before the per-session emits.
+    {
+        let live: std::collections::HashSet<&str> =
+            snapshot.iter().map(|(id, _, _)| id.as_str()).collect();
+        if let Ok(mut map) = state.activity.lock() {
+            map.retain(|id, _| live.contains(id.as_str()));
+        }
+    }
 
     for (id, has_agent, elapsed) in &snapshot {
-        let last = last_states.get(id).map(|s| s.as_str());
-        if let Some(next) = next_activity_emit(last, *has_agent, *elapsed) {
-            last_states.insert(id.clone(), next.to_string());
-            let _ = app.emit(
-                "terminal-session-activity",
-                ActivityInfo {
-                    session_id: id.clone(),
-                    state: next.to_string(),
-                },
-            );
+        // Agent-gate: a plain shell never creates or emits a record.
+        if !has_agent {
+            continue;
         }
+        let cadence = cadence_state(*elapsed);
+        resolve_and_emit(app, id, &state.activity, |sa| apply_cadence(sa, cadence));
     }
 }
 
