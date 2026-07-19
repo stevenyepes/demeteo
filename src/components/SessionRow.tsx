@@ -5,6 +5,7 @@ import type { TerminalTabDescriptor } from '../types';
 import { MachineDot } from './ui/MachineDot';
 import { PhaseBadge } from './ui/PhaseBadge';
 import { AgentBadge } from './ui/AgentBadge';
+import { ActivityIndicator } from './ui/ActivityIndicator';
 import { useInlineRename } from '../hooks/useInlineRename';
 
 export interface SessionRowProps {
@@ -106,6 +107,7 @@ function SessionRowImpl({
                 </span>
               )}
               <AgentBadge agentKind={tab.agentKind} className="shrink-0" />
+              <ActivityIndicator activity={tab.activity ?? null} className="shrink-0" />
             </div>
             <span
               className="truncate text-[9px] font-mono text-slate-500 leading-tight"

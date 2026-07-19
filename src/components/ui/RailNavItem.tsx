@@ -13,6 +13,10 @@ export interface RailNavItemProps {
   active?: boolean;
   /** When > 0, render a small count badge. */
   count?: number;
+  /** When > 0, render a high-salience attention badge — terminals that
+   *  need a decision (spec `TERMINAL_ACTIVITY_UX` §3). Ships wired at 0 in
+   *  Phase 1 and lights up once the backend emits `awaiting_approval`. */
+  attentionCount?: number;
   /** When true, show a small emerald pulse dot (e.g. live sessions). */
   pulse?: boolean;
   /** Collapsed rail (icon-only) vs expanded. */
@@ -30,12 +34,14 @@ export function RailNavItem({
   label,
   active = false,
   count,
+  attentionCount,
   pulse = false,
   collapsed = false,
   onClick,
   className = '',
 }: RailNavItemProps): React.ReactElement {
   const hasCount = typeof count === 'number' && count > 0;
+  const hasAttention = typeof attentionCount === 'number' && attentionCount > 0;
 
   const activeClasses = active
     ? 'bg-white/[0.07] border border-white/10 text-white'
@@ -67,6 +73,15 @@ export function RailNavItem({
             {count}
           </span>
         )}
+        {hasAttention && (
+          <span
+            data-testid="rail-nav-attention"
+            aria-label={`${attentionCount} awaiting your decision`}
+            className="absolute -top-1 -left-1 min-w-[15px] h-[15px] px-1 rounded-full flex items-center justify-center text-[10px] font-mono font-semibold bg-ruby-500/20 text-ruby-300 border border-ruby-500/40 animate-pulse-glow"
+          >
+            {attentionCount}
+          </span>
+        )}
         {pulse && (
           <span className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" />
         )}
@@ -85,6 +100,15 @@ export function RailNavItem({
     >
       <Icon className="w-4 h-4 shrink-0" />
       <span className="text-xs font-medium truncate flex-1 text-left">{label}</span>
+      {hasAttention && (
+        <span
+          data-testid="rail-nav-attention"
+          aria-label={`${attentionCount} awaiting your decision`}
+          className="shrink-0 min-w-[18px] px-1.5 py-0.5 rounded-full flex items-center justify-center text-[10px] font-mono font-semibold bg-ruby-500/20 text-ruby-300 border border-ruby-500/40 animate-pulse-glow"
+        >
+          {attentionCount}
+        </span>
+      )}
       {pulse && (
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow shrink-0" />
       )}
