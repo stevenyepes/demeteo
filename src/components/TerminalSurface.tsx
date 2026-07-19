@@ -15,6 +15,8 @@ import {
 import { getLastTerminalSize, setLastTerminalSize } from '../lib/terminalViewport';
 import { MachineDot } from './ui/MachineDot';
 import { AgentBadge } from './ui/AgentBadge';
+import { ActivityIndicator } from './ui/ActivityIndicator';
+import type { TerminalActivity } from '../types';
 
 // xterm.js theme — matches the existing TerminalWindow palette so the
 // panel surface and the legacy modal look identical (AGENTS.md §5).
@@ -54,6 +56,9 @@ export interface TerminalSurfaceProps {
   machineId: string;
   /** Coding-agent kind running in the session, or null for a plain shell. */
   agentKind?: string | null;
+  /** Live activity of the agent in the focused session, or null when there
+   *  is no signal. Renders the same mark shown on the session-list row. */
+  activity?: TerminalActivity;
 }
 
 /**
@@ -86,6 +91,7 @@ export function TerminalSurface({
   machineLabel,
   machineId,
   agentKind,
+  activity,
 }: TerminalSurfaceProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -250,6 +256,7 @@ export function TerminalSurface({
           <span className="opacity-50 shrink-0">/</span>
           <span className="truncate">{title}</span>
           <AgentBadge agentKind={agentKind} className="ml-1 shrink-0" />
+          <ActivityIndicator activity={activity ?? null} className="ml-1 shrink-0" />
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {phase === 'connecting' || bootstrapping ? (

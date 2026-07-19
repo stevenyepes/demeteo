@@ -31,6 +31,12 @@ function ProjectRail() {
   const { ui: { sidebarCollapsed }, uiDispatch } = useUIState();
   const { state: terminalState } = useTerminalPanel();
   const terminalCount = terminalState.tabs.length;
+  // Terminals blocked on a permission/confirmation gate — the app-wide
+  // "needs you" signal (spec `TERMINAL_ACTIVITY_UX` §3). Structurally 0 in
+  // Phase 1; lights up once the backend emits `awaiting_approval`.
+  const attentionCount = terminalState.tabs.filter(
+    (t) => t.activity === 'awaiting_approval',
+  ).length;
   const terminalsActive = view.kind === 'terminals';
   const collapsed = sidebarCollapsed;
   const currentProject = currentProjectId;
@@ -91,6 +97,7 @@ function ProjectRail() {
             collapsed
             active={terminalsActive}
             count={terminalCount}
+            attentionCount={attentionCount}
             pulse={terminalCount > 0}
             onClick={() => navigate({ kind: 'terminals' })}
           />
@@ -186,6 +193,7 @@ function ProjectRail() {
           label="Terminals"
           active={terminalsActive}
           count={terminalCount}
+          attentionCount={attentionCount}
           pulse={terminalCount > 0}
           onClick={() => navigate({ kind: 'terminals' })}
         />

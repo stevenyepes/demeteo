@@ -91,4 +91,43 @@ describe('RailNavItem', () => {
 
     expect(screen.getByText('5')).toBeInTheDocument();
   });
+
+  it('hides the attention badge when attentionCount is 0 or undefined', () => {
+    const { rerender } = render(
+      <RailNavItem
+        icon={TerminalSquare}
+        label="Terminals"
+        attentionCount={0}
+        onClick={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId('rail-nav-attention')).not.toBeInTheDocument();
+
+    rerender(<RailNavItem icon={TerminalSquare} label="Terminals" onClick={() => {}} />);
+    expect(screen.queryByTestId('rail-nav-attention')).not.toBeInTheDocument();
+  });
+
+  it('renders the attention badge when attentionCount > 0 (expanded and collapsed)', () => {
+    const { rerender } = render(
+      <RailNavItem
+        icon={TerminalSquare}
+        label="Terminals"
+        attentionCount={2}
+        onClick={() => {}}
+      />,
+    );
+    const badge = screen.getByTestId('rail-nav-attention');
+    expect(badge).toHaveTextContent('2');
+
+    rerender(
+      <RailNavItem
+        icon={TerminalSquare}
+        label="Terminals"
+        collapsed
+        attentionCount={2}
+        onClick={() => {}}
+      />,
+    );
+    expect(screen.getByTestId('rail-nav-attention')).toHaveTextContent('2');
+  });
 });

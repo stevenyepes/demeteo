@@ -153,6 +153,7 @@ export function TerminalsView({ active, openLauncherSignal }: TerminalsViewProps
                   machineLabel={activeTab.machineLabel}
                   machineId={activeTab.machineId}
                   agentKind={activeTab.agentKind}
+                  activity={activeTab.activity ?? null}
                 />
                 {activeTab.phase === 'disconnected' && (
                   <button

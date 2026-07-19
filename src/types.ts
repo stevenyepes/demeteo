@@ -701,6 +701,19 @@ export interface SessionInfo {
   agent?: string | null;
 }
 
+/**
+ * What the agent in a terminal is doing right now, layered on top of
+ * presence (`agentKind`). Sourced live from the backend activity sweep
+ * (`terminal-session-activity`). `null` means no activity signal — a
+ * plain shell, or an agent we can't read yet (spec `TERMINAL_ACTIVITY_UX`
+ * §2): the row shows the agent badge and no activity mark.
+ */
+export type TerminalActivity =
+  | 'working'
+  | 'awaiting_input'
+  | 'awaiting_approval'
+  | null;
+
 export interface TerminalTabDescriptor {
   sessionId: string | null;
   tabId: string;
@@ -716,6 +729,10 @@ export interface TerminalTabDescriptor {
    *  …), or null for a plain shell. Seeded from the launch command and kept
    *  live for local tabs by the backend foreground detector. */
   agentKind?: string | null;
+  /** Live activity of the agent in this tab (working / waiting / needs a
+   *  decision), or null/absent when no signal is available. Driven by the
+   *  backend `terminal-session-activity` sweep. */
+  activity?: TerminalActivity;
 }
 
 export interface TerminalPanelState {
