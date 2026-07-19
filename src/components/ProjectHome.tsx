@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal, Code } from 'lucide-react';
+import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { Feature, WorktreeStrategy, ProjectSettingsData } from '../types';
 import { formatTokens } from '../lib/utils';
@@ -29,7 +29,6 @@ const ProjectHome = () => {
     const { navigate } = useNavigation();
     const { state: { currentProjectId, projects }, dispatch: projDispatch } = useProject();
     const { uiDispatch } = useUIState();
-    const { open: openTerminalTab } = useTerminalPanel();
     const activeProject = projects.find(p => p.id === currentProjectId)!;
     const [featureInput, setFeatureInput] = useState('');
     const [features, setFeatures] = useState<Feature[]>([]);
@@ -472,40 +471,6 @@ const ProjectHome = () => {
                                 </div>
                             </div>
                         </div>
-
-                {/* Code with Agent card */}
-                <button
-                  onClick={() => {
-                    if (!activeRepoPath) return;
-                    const machineId =
-                      activeProject.compute_type === 'remote'
-                        ? activeProject.remote_host || 'local'
-                        : 'local';
-                    void openTerminalTab({
-                      machineId,
-                      machineLabel: machineId,
-                      projectId: activeProject.id,
-                      repoPath: activeRepoPath,
-                    });
-                    // The terminal surface lives on the full-page
-                    // Terminals view, not this page — route to it so the
-                    // freshly-opened session is actually visible.
-                    navigate({ kind: 'terminals' });
-                  }}
-                  disabled={!activeRepoPath}
-                  className="glass-panel rounded-2xl p-4 flex items-center gap-4 text-left w-full group hover:border-cyan-500/20 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed border border-white/5 hover:bg-cyan-500/5"
-                >
-                  <div className="w-9 h-9 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center shrink-0 group-hover:bg-cyan-500/20 transition-colors">
-                    <Code className="w-4 h-4 text-cyan-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-white">Start a coding session</p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Open an interactive terminal session in the repo — the panel hosts the live PTY
-                    </p>
-                  </div>
-                  <Terminal className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors ml-auto shrink-0" />
-                </button>
 
                 {/* Feature pipeline list. Not running-only — `fetch_active_features`
                     returns everything that isn't archived/deleted, so completed,

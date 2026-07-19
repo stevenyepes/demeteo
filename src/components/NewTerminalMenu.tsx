@@ -426,14 +426,20 @@ export function NewTerminalMenu({
         </button>
       </div>
 
-      {openMenu && (
-        <div
-          ref={menuRef}
-          role="menu"
-          onKeyDown={onMenuKeyDown}
-          className="absolute left-0 mt-1 z-30 w-[440px] max-w-[92vw] rounded-lg border border-white/10 bg-[#0c0d12] shadow-xl overflow-hidden"
-          data-testid="new-terminal-dropdown"
-        >
+      {openMenu &&
+        (() => {
+          const panel = (
+            <div
+              ref={menuRef}
+              role="menu"
+              onKeyDown={onMenuKeyDown}
+              className={
+                compact
+                  ? 'absolute left-0 mt-1 z-30 w-[440px] max-w-[92vw] rounded-lg border border-white/10 bg-[#0c0d12] shadow-xl overflow-hidden'
+                  : 'relative z-50 w-[440px] max-w-[92vw] rounded-lg border border-white/10 bg-[#0c0d12] shadow-2xl overflow-hidden'
+              }
+              data-testid="new-terminal-dropdown"
+            >
           {/* Search */}
           <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-white/[0.07]">
             <Search className="w-3.5 h-3.5 text-slate-500 shrink-0" />
@@ -673,8 +679,25 @@ export function NewTerminalMenu({
               <kbd className="border border-white/10 rounded px-1 text-slate-500">⏎</kbd> launch
             </span>
           </div>
-        </div>
-      )}
+            </div>
+          );
+
+          // Anchored dropdown for the tight header placement; a screen-centered
+          // modal (with a dimmed backdrop) for the roomy empty-state placement,
+          // where hanging the popover off a centered button looks stranded.
+          if (compact) return panel;
+          return (
+            <div
+              className="fixed inset-0 z-40 flex items-start justify-center pt-[14vh] bg-black/50 backdrop-blur-sm"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setOpenMenu(false);
+              }}
+              data-testid="new-terminal-overlay"
+            >
+              {panel}
+            </div>
+          );
+        })()}
     </div>
   );
 }
