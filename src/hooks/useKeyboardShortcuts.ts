@@ -3,6 +3,8 @@ import { useEffect, useRef } from 'react';
 interface ShortcutMap {
   onNewProject?: () => void;
   onNewFeature?: () => void;
+  /** Opens the New-terminal launcher (Cmd/Ctrl+T). */
+  onNewTerminal?: () => void;
   onOpenSettings?: () => void;
   onOpenCommandPalette?: () => void;
   onOpenDocs?: () => void;
@@ -63,6 +65,8 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
           break;
         case 't':
         case 'T':
+          // Bare Cmd/Ctrl+T opens New Feature; Cmd/Ctrl+Shift+T is left to
+          // the webview (reopen-closed-tab), so we don't touch the Shift case.
           if (!e.shiftKey) {
             e.preventDefault();
             h.onNewFeature?.();
@@ -107,12 +111,21 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
           h.onOpenDocs?.();
           break;
         case '`':
+        case '~':
           // Cmd/Ctrl + ` opens the full-page Terminals view
           // (TERMINALS_VIEW_SPEC §4.3 / §6). Sessions stay alive as the
           // user navigates — the view is a pure renderer of session
           // lifecycle, not its owner.
+          //
+          // Cmd/Ctrl + Shift + ` opens the New-terminal launcher on that
+          // view. Shift + backtick emits '~' on most layouts, so we accept
+          // either key and branch on the Shift flag rather than the char.
           e.preventDefault();
-          h.onOpenTerminalsView?.();
+          if (e.shiftKey) {
+            h.onNewTerminal?.();
+          } else {
+            h.onOpenTerminalsView?.();
+          }
           break;
         default:
           if (e.key >= '1' && e.key <= '9') {

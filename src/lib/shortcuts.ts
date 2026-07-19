@@ -117,6 +117,10 @@ const NEW_FEATURE_ALIAS_CHORDS: readonly ShortcutChord[] = [
   { primary: true, shift: true, alt: false, key: 'n' },
 ];
 
+const NEW_TERMINAL_CHORDS: readonly ShortcutChord[] = [
+  { primary: true, shift: true, alt: false, key: '`' },
+];
+
 const PROJECT_NUMBER_ENTRIES: readonly ShortcutEntry[] = (() => {
   // Generate Cmd/Ctrl+1..9 entries individually so the help overlay renders
   // each row, rather than eliding them behind a generic token.
@@ -223,6 +227,16 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     description:
       'Open the full-page Terminals view. ' +
       'Sessions stay alive as you navigate around the app.',
+    category: 'view',
+  },
+  {
+    id: 'cmd-shift-backtick-new-terminal',
+    chords: NEW_TERMINAL_CHORDS,
+    label: 'New terminal',
+    description:
+      'While on the Terminals view, open the New-terminal launcher — pick a ' +
+      'machine, agent, or feature checkout to launch a session. Companion to ' +
+      'Cmd/Ctrl + ` (open Terminals view).',
     category: 'view',
   },
   {

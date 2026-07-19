@@ -38,15 +38,15 @@ describe('new-feature binding', () => {
     ['Ctrl+T', { key: 't', ctrlKey: true }],
   ])('%s fires onNewFeature and suppresses the new-tab fallback', (_label, init) => {
     const onNewFeature = vi.fn();
+    const onNewTerminal = vi.fn();
     const onCloseCurrentView = vi.fn();
-    const onOpenCommandPalette = vi.fn();
 
-    mountHook({ onNewFeature, onCloseCurrentView, onOpenCommandPalette });
+    mountHook({ onNewFeature, onNewTerminal, onCloseCurrentView });
 
     expect(dispatchKey(init).prevented).toBe(true);
     expect(onNewFeature).toHaveBeenCalledTimes(1);
+    expect(onNewTerminal).not.toHaveBeenCalled();
     expect(onCloseCurrentView).not.toHaveBeenCalled();
-    expect(onOpenCommandPalette).not.toHaveBeenCalled();
   });
 });
 
@@ -55,9 +55,8 @@ describe('the intentionally-ignored Cmd/Ctrl+Shift+T', () => {
   it('fires nothing and does not preventDefault', () => {
     const handlers = {
       onNewFeature: vi.fn(),
+      onNewTerminal: vi.fn(),
       onNewProject: vi.fn(),
-      onCloseCurrentView: vi.fn(),
-      onNextFeature: vi.fn(),
     };
 
     mountHook(handlers);
@@ -67,6 +66,25 @@ describe('the intentionally-ignored Cmd/Ctrl+Shift+T', () => {
     for (const handler of Object.values(handlers)) {
       expect(handler).not.toHaveBeenCalled();
     }
+  });
+});
+
+// Cmd/Ctrl+Shift+` opens the New-terminal launcher. Shift+backtick emits '~'
+// on most layouts, so the dispatcher accepts either key.
+describe('new-terminal binding', () => {
+  it.each([
+    ['Cmd+Shift+~', { key: '~', metaKey: true, shiftKey: true }],
+    ['Ctrl+Shift+~', { key: '~', ctrlKey: true, shiftKey: true }],
+    ['Cmd+Shift+`', { key: '`', metaKey: true, shiftKey: true }],
+  ])('%s fires onNewTerminal and prevents default', (_label, init) => {
+    const onNewTerminal = vi.fn();
+    const onOpenTerminalsView = vi.fn();
+
+    mountHook({ onNewTerminal, onOpenTerminalsView });
+
+    expect(dispatchKey(init).prevented).toBe(true);
+    expect(onNewTerminal).toHaveBeenCalledTimes(1);
+    expect(onOpenTerminalsView).not.toHaveBeenCalled();
   });
 });
 
