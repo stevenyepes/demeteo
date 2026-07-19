@@ -12,7 +12,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::Duration;
-use tauri::{ipc::Channel, AppHandle, Emitter, Runtime, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, Manager, Runtime, State};
 
 static SESSION_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -32,7 +32,20 @@ pub struct ActiveSession {
     /// Kept alive for the lifetime of the session.
     pub _keepalive: Arc<Mutex<SessionKeepalive>>,
     pub machine_id: String,
+    /// Friendly machine name (`Machine.name`) resolved at start, so
+    /// `list_terminal_sessions` can hand the frontend a human label for
+    /// restored tabs instead of the raw machine id.
+    pub machine_name: String,
     pub created_at: u64,
+    /// OS process id of the local shell child, used by the foreground-agent
+    /// detector to walk the process tree. `None` for SSH sessions (the
+    /// child lives on the remote host, out of reach of local `ps`).
+    pub child_pid: Option<u32>,
+    /// Coding-agent kind currently detected in this session (`"claude-code"`,
+    /// `"opencode"`, …) or `None` for a plain shell. Seeded from the launch
+    /// command; the detector overwrites it for local sessions as the
+    /// foreground process changes.
+    pub agent: Mutex<Option<String>>,
     /// Output fan-out + scrollback for the session (TERMINALS_VIEW_SPEC
     /// §3). The drain thread appends every chunk to the scrollback ring
     /// and broadcasts it to every attached channel; a freshly-attached
@@ -149,6 +162,18 @@ pub struct SessionInfo {
     /// User-supplied tab title (`None` until renamed). New optional field
     /// — additive on the wire, ignored by older frontends (spec §2.1).
     pub title: Option<String>,
+    /// Friendly machine name (`Machine.name`, e.g. "prod-gpu"), resolved at
+    /// session start. `None` on lifecycle events (disconnect/ended/running)
+    /// where the frontend already knows the label from the existing tab.
+    /// Lets startup-reconcile show a human name instead of the raw id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_name: Option<String>,
+    /// Coding-agent kind currently running in the session (e.g.
+    /// `"claude-code"`, `"opencode"`), or `None` for a plain shell. Seeded
+    /// from the launch command and, for local sessions, kept live by the
+    /// foreground-process detector. Additive on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 const IDLE_TIMEOUT_SECS: u64 = 600;
@@ -180,6 +205,12 @@ pub fn connect_ssh(
     crate::ssh_util::connect(machine, secret)
 }
 
+/// Starts a terminal session on the given machine.
+///
+/// `agent_kind` is the coding-agent kind the frontend is launching into this
+/// fresh session (e.g. `"claude-code"`), or `None` for a plain shell. It
+/// seeds the session's agent label immediately so the tab shows the badge
+/// before the foreground detector has run its first pass.
 #[tauri::command]
 pub fn start_terminal_session(
     app: AppHandle,
@@ -190,11 +221,13 @@ pub fn start_terminal_session(
     work_branch: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
+    agent_kind: Option<String>,
 ) -> Result<String, String> {
     let machine = crate::infrastructure::worktree::machine_resolver::resolve_machine(
         &*ctx.machines,
         &machine_id,
     )?;
+    let machine_name = machine.name.clone();
     // Resolve the initial PTY size so the shell draws its very first prompt at
     // (near) the real terminal width. `0` is treated as "unset" defensively —
     // a zero-column PTY would make prompts render incoherently.
@@ -216,11 +249,14 @@ pub fn start_terminal_session(
     let display_title: Mutex<Option<String>> = Mutex::new(None);
     let connected = Arc::new(AtomicBool::new(true));
 
-    let (read_source, write_sink, keepalive) = if machine.auth_type == "local" {
+    let (read_source, write_sink, keepalive, child_pid) = if machine.auth_type == "local" {
         start_local_pty(&machine_id, &work_dir, &work_branch, cols, rows)?
     } else {
         start_ssh_session(&machine, &work_dir, &work_branch, cols, rows)?
     };
+    // Normalise an empty agent kind to `None` so a plain shell never carries
+    // a phantom badge.
+    let agent_kind = agent_kind.filter(|k| !k.trim().is_empty());
 
     spawn_drain(
         &read_source,
@@ -243,7 +279,10 @@ pub fn start_terminal_session(
             write_sink,
             _keepalive: keepalive,
             machine_id: machine_id.clone(),
+            machine_name: machine_name.clone(),
             created_at,
+            child_pid,
+            agent: Mutex::new(agent_kind.clone()),
             frontend_channel,
             display_title,
             work_dir,
@@ -259,6 +298,8 @@ pub fn start_terminal_session(
             machine_id,
             created_at,
             title: None,
+            machine_name: Some(machine_name),
+            agent: agent_kind,
         },
     );
 
@@ -271,7 +312,15 @@ pub(crate) fn start_local_pty(
     work_branch: &Option<String>,
     cols: u16,
     rows: u16,
-) -> Result<(ReadSource, WriteSink, Arc<Mutex<SessionKeepalive>>), String> {
+) -> Result<
+    (
+        ReadSource,
+        WriteSink,
+        Arc<Mutex<SessionKeepalive>>,
+        Option<u32>,
+    ),
+    String,
+> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -313,6 +362,9 @@ pub(crate) fn start_local_pty(
         .slave
         .spawn_command(cmd)
         .map_err(|e| format!("Failed to spawn shell: {}", e))?;
+    // Capture the shell pid before `child` is moved into the keepalive — the
+    // foreground-agent detector walks the process tree rooted here.
+    let child_pid = child.process_id();
 
     // Close the slave end in the parent — the child inherited it.
     drop(pair.slave);
@@ -344,7 +396,7 @@ pub(crate) fn start_local_pty(
     }));
 
     let _ = machine_id; // suppress unused warning
-    Ok((read_source, write_sink, keepalive))
+    Ok((read_source, write_sink, keepalive, child_pid))
 }
 
 /// Build the bootstrap line that performs a `git checkout` of the supplied
@@ -375,7 +427,15 @@ fn start_ssh_session(
     work_branch: &Option<String>,
     cols: u16,
     rows: u16,
-) -> Result<(ReadSource, WriteSink, Arc<Mutex<SessionKeepalive>>), String> {
+) -> Result<
+    (
+        ReadSource,
+        WriteSink,
+        Arc<Mutex<SessionKeepalive>>,
+        Option<u32>,
+    ),
+    String,
+> {
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
             let key = format!("machine_{}", machine.id);
@@ -422,7 +482,8 @@ fn start_ssh_session(
     let read_source = ReadSource::Ssh(arc_chan.clone());
     let write_sink = WriteSink::Ssh(arc_chan);
     let keepalive = Arc::new(Mutex::new(SessionKeepalive::Ssh { session: sess, tcp }));
-    Ok((read_source, write_sink, keepalive))
+    // No local pid for a remote session — the shell runs on the far host.
+    Ok((read_source, write_sink, keepalive, None))
 }
 
 /// Spawns the appropriate drain thread for a freshly-built transport,
@@ -564,6 +625,8 @@ fn emit_disconnected<R: Runtime>(
             machine_id: machine_id.to_string(),
             created_at,
             title: None,
+            machine_name: None,
+            agent: None,
         },
     );
 }
@@ -580,6 +643,8 @@ fn emit_ended<R: Runtime>(app: &AppHandle<R>, session_id: &str, machine_id: &str
             machine_id: machine_id.to_string(),
             created_at,
             title: None,
+            machine_name: None,
+            agent: None,
         },
     );
 }
@@ -746,6 +811,8 @@ pub fn list_terminal_sessions(
             machine_id: s.machine_id.clone(),
             created_at: s.created_at,
             title: s.display_title.lock().ok().and_then(|g| g.clone()),
+            machine_name: Some(s.machine_name.clone()),
+            agent: s.agent.lock().ok().and_then(|g| g.clone()),
         })
         .collect())
 }
@@ -1015,7 +1082,7 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
             DEFAULT_TERM_ROWS,
         )
     };
-    let (read_source, write_sink, keepalive) = match built {
+    let (read_source, write_sink, keepalive, child_pid) = match built {
         Ok(t) => t,
         Err(e) => {
             connected.store(false, Ordering::SeqCst);
@@ -1052,6 +1119,9 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
         active.read_source = read_source;
         active.write_sink = write_sink;
         active._keepalive = keepalive;
+        // The rebuilt transport spawned a fresh shell child — repoint the
+        // detector at its pid (or clear it for a remote reconnect).
+        active.child_pid = child_pid;
     }
 
     let _ = app.emit(
@@ -1061,9 +1131,210 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
             machine_id,
             created_at,
             title: None,
+            machine_name: None,
+            agent: None,
         },
     );
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Foreground coding-agent detection
+// ---------------------------------------------------------------------------
+//
+// A background poller walks the local process tree every few seconds and
+// reports whether a known coding-agent CLI (Claude, OpenCode, …) is running
+// under each *local* session's shell. When a session's detected agent
+// changes it emits `terminal-session-agent { session_id, agent }`, so a tab
+// shows an accurate "running Claude" badge even when the user launched the
+// agent by hand (typed `claude` in an already-open shell) rather than via
+// the New menu.
+//
+// SSH sessions are deliberately skipped: their shell runs on the far host,
+// out of reach of a local `ps`, and probing over the shared libssh2 session
+// concurrently with the interactive drain thread is unsafe. Remote tabs keep
+// the agent label seeded from the launch command instead.
+
+/// Time between foreground-agent detection passes. A few seconds keeps the
+/// badge feeling live without spawning `ps` in a tight loop.
+const AGENT_DETECT_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Maps a coding-agent CLI binary name to the "kind" the frontend labels.
+/// Mirrors the frontend `AGENT_CLI` table (NewTerminalMenu) so the launch
+/// path and the detector agree on the same identifiers.
+fn agent_kind_for_binary(binary: &str) -> Option<&'static str> {
+    match binary {
+        "claude" => Some("claude-code"),
+        "opencode" => Some("opencode"),
+        "hermes" => Some("hermes"),
+        "codex" => Some("codex"),
+        _ => None,
+    }
+}
+
+/// Scan a full command line for a known agent CLI. Matches on whole-token
+/// basenames (with a `.js`/`.mjs` script suffix stripped) rather than raw
+/// substrings, so a path that merely *contains* an agent name doesn't
+/// false-positive. Catches native launchers (`claude`, `opencode`, `codex`)
+/// directly; node-script installs that appear as `node …/claude` match on
+/// the `claude` token.
+fn detect_agent_in_command(command: &str) -> Option<&'static str> {
+    for token in command.split_whitespace() {
+        let base = token.rsplit('/').next().unwrap_or(token);
+        let base = base
+            .strip_suffix(".js")
+            .or_else(|| base.strip_suffix(".mjs"))
+            .unwrap_or(base);
+        if let Some(kind) = agent_kind_for_binary(base) {
+            return Some(kind);
+        }
+    }
+    None
+}
+
+/// A one-shot snapshot of the local process table: each pid's parent and
+/// the agent (if any) its command line names, plus a ppid→children index
+/// for walking a session's subtree.
+struct ProcessTree {
+    agent_by_pid: HashMap<u32, Option<&'static str>>,
+    children: HashMap<u32, Vec<u32>>,
+}
+
+impl ProcessTree {
+    /// Capture the process table via `ps`. Returns `None` if `ps` is
+    /// unavailable or fails (e.g. a locked-down sandbox) — the detector
+    /// then simply skips the pass.
+    fn capture() -> Option<ProcessTree> {
+        let output = std::process::Command::new("ps")
+            .args(["-axo", "pid=,ppid=,command="])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut agent_by_pid = HashMap::new();
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        for line in text.lines() {
+            let mut parts = line.split_whitespace();
+            let pid = match parts.next().and_then(|s| s.parse::<u32>().ok()) {
+                Some(p) => p,
+                None => continue,
+            };
+            let ppid = match parts.next().and_then(|s| s.parse::<u32>().ok()) {
+                Some(p) => p,
+                None => continue,
+            };
+            let command = parts.collect::<Vec<_>>().join(" ");
+            agent_by_pid.insert(pid, detect_agent_in_command(&command));
+            children.entry(ppid).or_default().push(pid);
+        }
+        Some(ProcessTree {
+            agent_by_pid,
+            children,
+        })
+    }
+
+    /// Find the first known agent running at or below `root` (the session's
+    /// shell pid). Iterative DFS with a visited guard so a pathological
+    /// process table can never spin.
+    fn find_agent_under(&self, root: u32) -> Option<&'static str> {
+        let mut stack = vec![root];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(pid) = stack.pop() {
+            if !visited.insert(pid) {
+                continue;
+            }
+            if let Some(Some(kind)) = self.agent_by_pid.get(&pid) {
+                return Some(kind);
+            }
+            if let Some(kids) = self.children.get(&pid) {
+                stack.extend(kids.iter().copied());
+            }
+        }
+        None
+    }
+}
+
+/// Spawn the background foreground-agent detector. Runs for the lifetime of
+/// the app (a cheap sleeping thread); call once from setup.
+pub fn spawn_agent_detector<R: Runtime>(app: AppHandle<R>) {
+    thread::spawn(move || loop {
+        thread::sleep(AGENT_DETECT_INTERVAL);
+        detect_agents_once(&app);
+    });
+}
+
+/// One detection pass: snapshot local sessions, capture the process table
+/// once, diff each session's detected agent against its stored value, and
+/// emit `terminal-session-agent` for the changes.
+fn detect_agents_once<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<SessionState>();
+
+    // Snapshot (id, shell pid, current agent) for every local session, then
+    // release the lock before the (slower) `ps` call.
+    let locals: Vec<(String, u32, Option<String>)> = {
+        let sessions = match state.sessions.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        sessions
+            .iter()
+            .filter_map(|(id, s)| {
+                let pid = s.child_pid?;
+                let current = s.agent.lock().ok().and_then(|g| g.clone());
+                Some((id.clone(), pid, current))
+            })
+            .collect()
+    };
+    if locals.is_empty() {
+        return;
+    }
+
+    let tree = match ProcessTree::capture() {
+        Some(t) => t,
+        None => return,
+    };
+
+    let mut changes: Vec<(String, Option<String>)> = Vec::new();
+    for (id, pid, current) in locals {
+        let detected = tree.find_agent_under(pid).map(|k| k.to_string());
+        if detected != current {
+            changes.push((id, detected));
+        }
+    }
+    if changes.is_empty() {
+        return;
+    }
+
+    // Write the new values back (skipping sessions closed since the
+    // snapshot), then emit outside the lock.
+    {
+        let sessions = match state.sessions.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for (id, detected) in &changes {
+            if let Some(s) = sessions.get(id) {
+                if let Ok(mut g) = s.agent.lock() {
+                    *g = detected.clone();
+                }
+            }
+        }
+    }
+    for (id, detected) in changes {
+        let _ = app.emit(
+            "terminal-session-agent",
+            SessionInfo {
+                session_id: id,
+                machine_id: String::new(),
+                created_at: 0,
+                title: None,
+                machine_name: None,
+                agent: detected,
+            },
+        );
+    }
 }
 
 #[cfg(test)]

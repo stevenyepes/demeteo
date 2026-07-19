@@ -13,6 +13,8 @@ import {
   writeTerminalSession,
 } from '../lib/terminal';
 import { getLastTerminalSize, setLastTerminalSize } from '../lib/terminalViewport';
+import { MachineDot } from './ui/MachineDot';
+import { AgentBadge } from './ui/AgentBadge';
 
 // xterm.js theme — matches the existing TerminalWindow palette so the
 // panel surface and the legacy modal look identical (AGENTS.md §5).
@@ -48,6 +50,10 @@ export interface TerminalSurfaceProps {
   title: string;
   /** Host label (local / hostname) shown next to the title. */
   machineLabel: string;
+  /** Machine id — drives the local/remote dot colour in the header. */
+  machineId: string;
+  /** Coding-agent kind running in the session, or null for a plain shell. */
+  agentKind?: string | null;
 }
 
 /**
@@ -78,6 +84,8 @@ export function TerminalSurface({
   phase,
   title,
   machineLabel,
+  machineId,
+  agentKind,
 }: TerminalSurfaceProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -237,9 +245,11 @@ export function TerminalSurface({
     >
       <div className="px-3 py-1.5 bg-[#0c0d12] border-b border-white/[0.05] flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 truncate min-w-0">
+          <MachineDot machineId={machineId} machineLabel={machineLabel} pulse={phase === 'running'} />
           <span className="text-cyan-400 shrink-0">{machineLabel}</span>
           <span className="opacity-50 shrink-0">/</span>
           <span className="truncate">{title}</span>
+          <AgentBadge agentKind={agentKind} className="ml-1 shrink-0" />
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {phase === 'connecting' || bootstrapping ? (

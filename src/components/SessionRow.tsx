@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import type { TerminalTabDescriptor } from '../types';
 import { MachineDot } from './ui/MachineDot';
 import { PhaseBadge } from './ui/PhaseBadge';
+import { AgentBadge } from './ui/AgentBadge';
 import { useInlineRename } from '../hooks/useInlineRename';
 
 export interface SessionRowProps {
@@ -76,29 +77,43 @@ function SessionRowImpl({
 
       {!collapsed && (
         <>
-          {rename.renaming ? (
-            <input
-              ref={rename.inputRef}
-              type="text"
-              value={rename.draft}
-              onChange={(e) => rename.setDraft(e.target.value)}
-              onBlur={rename.commitRename}
-              onKeyDown={rename.handleKeyDown}
-              onClick={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
-              maxLength={rename.maxLength}
-              className="flex-1 min-w-0 bg-[#0d0f14] border border-cyan-500/40 rounded px-1.5 py-0.5 text-xs font-mono text-white outline-none focus:border-cyan-400"
-              data-testid={`session-row-rename-${tab.tabId}`}
-              aria-label="Rename terminal session"
-            />
-          ) : (
+          {/* Title (line 1) + machine name (line 2). Two lines keep the
+              machine label always visible without stealing width from the
+              title, so remote terminals read as "prod-gpu" at a glance. */}
+          <div className="flex-1 min-w-0 flex flex-col">
+            <div className="flex items-center gap-1.5 min-w-0">
+              {rename.renaming ? (
+                <input
+                  ref={rename.inputRef}
+                  type="text"
+                  value={rename.draft}
+                  onChange={(e) => rename.setDraft(e.target.value)}
+                  onBlur={rename.commitRename}
+                  onKeyDown={rename.handleKeyDown}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  maxLength={rename.maxLength}
+                  className="flex-1 min-w-0 bg-[#0d0f14] border border-cyan-500/40 rounded px-1.5 py-0.5 text-xs font-mono text-white outline-none focus:border-cyan-400"
+                  data-testid={`session-row-rename-${tab.tabId}`}
+                  aria-label="Rename terminal session"
+                />
+              ) : (
+                <span
+                  className="min-w-0 truncate text-xs font-mono"
+                  onDoubleClick={handleDoubleClick}
+                >
+                  {tab.title}
+                </span>
+              )}
+              <AgentBadge agentKind={tab.agentKind} className="shrink-0" />
+            </div>
             <span
-              className="flex-1 min-w-0 truncate text-xs font-mono"
-              onDoubleClick={handleDoubleClick}
+              className="truncate text-[9px] font-mono text-slate-500 leading-tight"
+              data-testid={`session-row-machine-${tab.tabId}`}
             >
-              {tab.title}
+              {tab.machineLabel}
             </span>
-          )}
+          </div>
 
           <PhaseBadge phase={tab.phase} className="shrink-0" />
 
