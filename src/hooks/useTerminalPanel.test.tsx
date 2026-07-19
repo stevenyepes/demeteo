@@ -7,6 +7,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
 
 import { TerminalPanelProvider } from '../context/TerminalPanelProvider';
+import { ProjectProvider } from '../context/ProjectContext';
 import { useTerminalPanel } from '../hooks/useTerminalPanel';
 import type { SessionInfo } from '../types';
 
@@ -604,9 +605,11 @@ describe('useTerminalPanel — focus() rebinds detached tabs', () => {
     }
 
     render(
-      <TerminalPanelProvider>
-        <Host />
-      </TerminalPanelProvider>,
+      <ProjectProvider>
+        <TerminalPanelProvider>
+          <Host />
+        </TerminalPanelProvider>
+      </ProjectProvider>,
     );
 
     let tabA = '';

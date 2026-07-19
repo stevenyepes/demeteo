@@ -24,13 +24,18 @@ import type { SessionInfo } from "../types";
  *   falls back to a conservative 80x24 (narrower than any viewport, so the
  *   first prompt never wraps); the surface still sends the exact size via
  *   `resizeTerminalSession` once it mounts and fits.
+ * @param agentKind An optional coding-agent kind (e.g. `"claude-code"`) being
+ *   launched into the fresh session. Seeds the session's agent label so the
+ *   tab shows the badge immediately; for local sessions the backend's
+ *   foreground detector keeps it accurate afterwards.
  * @returns A promise that resolves to the session_id string.
  */
 export async function startTerminalSession(
   machineId: string,
   workDir?: string,
   workBranch?: string | null,
-  size?: { cols: number; rows: number }
+  size?: { cols: number; rows: number },
+  agentKind?: string | null
 ): Promise<string> {
   return invoke<string>("start_terminal_session", {
     machineId,
@@ -38,6 +43,7 @@ export async function startTerminalSession(
     workBranch: workBranch ?? null,
     cols: size?.cols ?? null,
     rows: size?.rows ?? null,
+    agentKind: agentKind ?? null,
   });
 }
 

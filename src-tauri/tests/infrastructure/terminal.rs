@@ -1,6 +1,7 @@
 // Tests extracted from `src-tauri/src/terminal.rs` (mirrored-tests convention). `super` = that module.
 
 use super::branch_bootstrap_line;
+use super::{agent_kind_for_binary, detect_agent_in_command};
 
 /// `None` (no pipeline context, e.g. `ProjectHome`) must skip the
 /// bootstrap entirely — no `git checkout`, no `clear`, no noise.
@@ -201,7 +202,7 @@ fn spawn_test_session(
     JoinHandle<()>,
     ActiveSession,
 ) {
-    let (read_source, write_sink, keepalive) =
+    let (read_source, write_sink, keepalive, _child_pid) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let reader = match &read_source {
         ReadSource::LocalPty(r) => r.clone(),
@@ -238,7 +239,10 @@ fn spawn_test_session(
         write_sink,
         _keepalive: keepalive,
         machine_id: "local".to_string(),
+        machine_name: "local".to_string(),
         created_at: 0,
+        child_pid: None,
+        agent: Mutex::new(None),
         frontend_channel,
         display_title,
         work_dir: None,
@@ -253,7 +257,7 @@ fn spawn_test_session(
 /// and returns the live `session_id`. Used by the list / rename tests
 /// that need a real session entry without exercising the PTY plumbing.
 fn insert_test_session(state: &SessionState, session_id: &str) {
-    let (read_source, write_sink, keepalive) =
+    let (read_source, write_sink, keepalive, _child_pid) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let display_title: Mutex<Option<String>> = Mutex::new(None);
@@ -262,7 +266,10 @@ fn insert_test_session(state: &SessionState, session_id: &str) {
         write_sink,
         _keepalive: keepalive,
         machine_id: "local".to_string(),
+        machine_name: "local".to_string(),
         created_at: 0,
+        child_pid: None,
+        agent: Mutex::new(None),
         frontend_channel,
         display_title,
         work_dir: None,
@@ -802,14 +809,17 @@ fn attach_replays_scrollback_to_new_channel() {
     let state = SessionState::default();
     app.manage(state);
 
-    let (read_source, write_sink, keepalive) =
+    let (read_source, write_sink, keepalive, _child_pid) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
         write_sink,
         _keepalive: keepalive,
         machine_id: "local".to_string(),
+        machine_name: "local".to_string(),
         created_at: 0,
+        child_pid: None,
+        agent: Mutex::new(None),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
         work_dir: None,
@@ -851,14 +861,17 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
     let state = SessionState::default();
     app.manage(state);
 
-    let (read_source, write_sink, keepalive) =
+    let (read_source, write_sink, keepalive, _child_pid) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
         write_sink,
         _keepalive: keepalive,
         machine_id: "local".to_string(),
+        machine_name: "local".to_string(),
         created_at: 0,
+        child_pid: None,
+        agent: Mutex::new(None),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
         work_dir: None,
@@ -984,14 +997,17 @@ fn insert_disconnected_session(
     if !seed.is_empty() {
         super::send_chunk(&frontend_channel, seed.to_vec());
     }
-    let (read_source, write_sink, keepalive) =
+    let (read_source, write_sink, keepalive, _child_pid) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
         write_sink,
         _keepalive: keepalive,
         machine_id: "local".to_string(),
+        machine_name: "local".to_string(),
         created_at: 0,
+        child_pid: None,
+        agent: Mutex::new(None),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
         work_dir: None,
@@ -1124,4 +1140,52 @@ fn reconnect_errors_on_unknown_session() {
         err.to_lowercase().contains("not found"),
         "unexpected error: {err}"
     );
+}
+
+// --- Foreground coding-agent detection --------------------------------------
+
+/// Known agent binaries map to the kind the frontend labels; anything else
+/// is not an agent.
+#[test]
+fn agent_kind_maps_known_binaries() {
+    assert_eq!(agent_kind_for_binary("claude"), Some("claude-code"));
+    assert_eq!(agent_kind_for_binary("opencode"), Some("opencode"));
+    assert_eq!(agent_kind_for_binary("codex"), Some("codex"));
+    assert_eq!(agent_kind_for_binary("hermes"), Some("hermes"));
+    assert_eq!(agent_kind_for_binary("bash"), None);
+    assert_eq!(agent_kind_for_binary("node"), None);
+}
+
+/// A native launcher on the command line is detected directly.
+#[test]
+fn detect_agent_matches_native_launcher() {
+    assert_eq!(detect_agent_in_command("claude"), Some("claude-code"));
+    assert_eq!(
+        detect_agent_in_command("/opt/homebrew/bin/opencode --resume"),
+        Some("opencode")
+    );
+}
+
+/// A node-script install shows up as `node …/claude`; the `claude` token
+/// still matches. A `.js`/`.mjs` script suffix is stripped before matching.
+#[test]
+fn detect_agent_matches_script_token() {
+    assert_eq!(
+        detect_agent_in_command("node /Users/x/.bin/claude serve"),
+        Some("claude-code")
+    );
+    assert_eq!(
+        detect_agent_in_command("node /Users/x/tools/codex.js"),
+        Some("codex")
+    );
+}
+
+/// Plain shells and unrelated commands carry no agent — and matching is on
+/// whole-token basenames, so a path that merely *contains* an agent name
+/// (here a `.txt` file) does not false-positive.
+#[test]
+fn detect_agent_ignores_non_agents() {
+    assert_eq!(detect_agent_in_command("-zsh"), None);
+    assert_eq!(detect_agent_in_command("vim notes/claude.txt"), None);
+    assert_eq!(detect_agent_in_command(""), None);
 }

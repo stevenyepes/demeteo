@@ -92,7 +92,7 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
                 <span className="text-cyan-400">{tabs.length}</span>
               </div>
               <div className="flex items-center gap-1">
-                <NewTerminalMenu />
+                <NewTerminalMenu compact />
                 <button
                   type="button"
                   onClick={handleCloseAll}
@@ -148,6 +148,8 @@ export function TerminalsView({ active }: TerminalsViewProps): React.ReactElemen
                   phase={activeTab.phase}
                   title={activeTab.title}
                   machineLabel={activeTab.machineLabel}
+                  machineId={activeTab.machineId}
+                  agentKind={activeTab.agentKind}
                 />
                 {activeTab.phase === 'disconnected' && (
                   <button

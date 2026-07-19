@@ -243,6 +243,10 @@ pub fn run() {
             app.manage(SessionState::default());
             app.manage(ForwardState::default());
 
+            // Background poller that labels local terminals running a coding
+            // agent (Claude/OpenCode/…), including ones launched by hand.
+            terminal::spawn_agent_detector(app.handle().clone());
+
             // Build the system tray (Show / Hide / Quit). A tray-backend
             // failure is logged and swallowed inside `build_tray`, so this
             // never aborts startup — hence the ignored result.

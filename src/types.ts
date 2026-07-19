@@ -692,6 +692,13 @@ export interface SessionInfo {
   machine_id: string;
   created_at: number;
   title: string | null;
+  /** Friendly machine name (`Machine.name`), present on start / list /
+   *  agent events. Absent on lifecycle events where the frontend already
+   *  knows the label. */
+  machine_name?: string | null;
+  /** Coding-agent kind currently detected in the session (`"claude-code"`,
+   *  `"opencode"`, …), or null/absent for a plain shell. */
+  agent?: string | null;
 }
 
 export interface TerminalTabDescriptor {
@@ -705,6 +712,10 @@ export interface TerminalTabDescriptor {
   title: string;
   phase: 'connecting' | 'running' | 'disconnected' | 'closed' | 'error';
   createdAt: number;
+  /** Coding-agent kind running in this tab (`"claude-code"`, `"opencode"`,
+   *  …), or null for a plain shell. Seeded from the launch command and kept
+   *  live for local tabs by the backend foreground detector. */
+  agentKind?: string | null;
 }
 
 export interface TerminalPanelState {

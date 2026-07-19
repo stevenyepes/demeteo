@@ -5,6 +5,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
 
 import { TerminalPanelProvider } from '../context/TerminalPanelProvider';
+import { ProjectProvider } from '../context/ProjectContext';
 import { useTerminalPanel } from '../hooks/useTerminalPanel';
 import { TerminalsView } from './TerminalsView';
 
@@ -40,10 +41,12 @@ function mount(active = true): Harness {
     return <span data-testid="dbg">{panel.state.tabs.length}</span>;
   }
   render(
-    <TerminalPanelProvider>
-      <Capture />
-      <TerminalsView active={active} />
-    </TerminalPanelProvider>,
+    <ProjectProvider>
+      <TerminalPanelProvider>
+        <Capture />
+        <TerminalsView active={active} />
+      </TerminalPanelProvider>
+    </ProjectProvider>,
   );
   return {
     get panel() {
