@@ -165,6 +165,16 @@ pub enum DomainEvent {
         step_id: String,
         reason: String,
     },
+
+    /// A terminal-embedded agent (e.g. Claude Code) blocked on a permission/
+    /// approval prompt and needs a human decision. Fires the OS notification when
+    /// demeteo is backgrounded/unfocused (TERMINAL_ACTIVITY_UX §3). The in-app
+    /// surface is the activity indicator, so this variant exists mainly for the
+    /// gated OS-notification path.
+    TerminalAwaitingApproval {
+        session_id: String,
+        label: Option<String>,
+    },
 }
 
 /// The single deep interface for orchestrator → UI event emission.
