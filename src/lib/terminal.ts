@@ -201,3 +201,26 @@ export async function reconnectTerminalSession(
     sessionId,
   });
 }
+
+/**
+ * Report to the backend whether the on-screen recognizer (Phase 3) currently
+ * sees an agent's approval prompt rendered in a session. `present = true`
+ * latches a screen-sourced `awaiting_approval`; `present = false` retracts it.
+ * The backend folds this into the same activity record as the cadence sweep and
+ * the Claude hook scanner, so precedence, dedup, and the OS notification are
+ * reused — a screen-sourced approval behaves exactly like the hook-sourced one
+ * (TERMINAL_ACTIVITY_PLAN §Phase 3). Fire-and-forget from the recognizer's
+ * debounce; the resolved state comes back over `terminal-session-activity`.
+ *
+ * @param sessionId The backend terminal session identifier.
+ * @param present   Whether an approval prompt is on screen right now.
+ */
+export async function reportScreenActivity(
+  sessionId: string,
+  present: boolean
+): Promise<void> {
+  return invoke<void>("report_terminal_screen_activity", {
+    sessionId,
+    present,
+  });
+}
