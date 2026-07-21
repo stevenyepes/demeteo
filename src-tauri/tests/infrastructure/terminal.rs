@@ -1629,10 +1629,13 @@ fn write_activity_settings_file_writes_valid_json_and_fits_launch_line() {
     );
     let path = write_activity_settings_file(nonce, &json).expect("write settings file");
     let read_back = std::fs::read_to_string(&path).expect("read settings file back");
-    let _: serde_json::Value =
-        serde_json::from_str(&read_back).expect("file must hold valid JSON");
+    let _: serde_json::Value = serde_json::from_str(&read_back).expect("file must hold valid JSON");
     let cmd = build_agent_launch_command("claude", &path);
-    assert!(cmd.len() < 1024, "launch line under MAX_CANON: {} bytes", cmd.len());
+    assert!(
+        cmd.len() < 1024,
+        "launch line under MAX_CANON: {} bytes",
+        cmd.len()
+    );
     let _ = std::fs::remove_file(&path);
 }
 
