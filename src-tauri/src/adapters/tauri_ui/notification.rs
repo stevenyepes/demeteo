@@ -72,6 +72,16 @@ fn os_notification_for(event: &DomainEvent) -> Option<(String, String)> {
             "Merge conflict detected".to_string(),
             format!("{feature_id} has a conflict on subtask {subtask_id}."),
         )),
+        // A terminal agent blocked on an approval prompt is a needs-a-decision
+        // event: fire the gated OS notification so the user hears about it while
+        // demeteo is backgrounded/unfocused (TERMINAL_ACTIVITY_UX §3 item 4).
+        DomainEvent::TerminalAwaitingApproval { label, .. } => Some((
+            "Agent needs a decision".to_string(),
+            match label {
+                Some(l) => format!("{l} is waiting for your approval."),
+                None => "A terminal agent is waiting for your approval.".to_string(),
+            },
+        )),
         // Progress / telemetry / permission events never fire an OS notification:
         // AgentStream, StepProgress, BootstrapProgress, CommandExecuted,
         // AgentSpawned, PermissionRequested (spec §5.1 / AC-6).
@@ -179,6 +189,10 @@ impl NotificationPort for TauriNotificationAdapter {
             ),
             DomainEvent::BootstrapProgress { .. } => (
                 "bootstrap_progress",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::TerminalAwaitingApproval { .. } => (
+                "terminal_awaiting_approval",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
         };
@@ -320,12 +334,45 @@ mod tests {
             feature_id: feature(),
             subtask_id: "st-1".to_string(),
         };
-        for event in [gate, mr, retry, env, conflict] {
+        let approval = DomainEvent::TerminalAwaitingApproval {
+            session_id: "sess-1".to_string(),
+            label: None,
+        };
+        for event in [gate, mr, retry, env, conflict, approval] {
             let (title, body) = os_notification_for(&event)
                 .unwrap_or_else(|| panic!("expected Some for {event:?}"));
             assert!(!title.is_empty(), "title must not be empty for {event:?}");
             assert!(!body.is_empty(), "body must not be empty for {event:?}");
         }
+    }
+
+    /// A terminal agent blocked on approval notifies with the fixed
+    /// "needs a decision" title, and the body names the tab when a `label` is
+    /// present but falls back to a generic line otherwise (T2.6).
+    #[test]
+    fn terminal_awaiting_approval_notifies_with_label_variance() {
+        let labelled = DomainEvent::TerminalAwaitingApproval {
+            session_id: "sess-1".to_string(),
+            label: Some("Claude Code".to_string()),
+        };
+        let unlabelled = DomainEvent::TerminalAwaitingApproval {
+            session_id: "sess-1".to_string(),
+            label: None,
+        };
+
+        let (l_title, l_body) =
+            os_notification_for(&labelled).expect("labelled approval must notify");
+        let (u_title, u_body) =
+            os_notification_for(&unlabelled).expect("unlabelled approval must notify");
+
+        assert_eq!(l_title, "Agent needs a decision");
+        assert_eq!(u_title, "Agent needs a decision");
+        assert_eq!(l_body, "Claude Code is waiting for your approval.");
+        assert_eq!(u_body, "A terminal agent is waiting for your approval.");
+        assert_ne!(
+            l_body, u_body,
+            "body must differ between labelled and unlabelled"
+        );
     }
 
     /// Every progress / telemetry / permission event stays silent (spec §5.1).

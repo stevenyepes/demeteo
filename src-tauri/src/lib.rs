@@ -222,6 +222,12 @@ pub fn run() {
                 ),
             );
 
+            // Expose the notification port as Tauri state BEFORE it is moved into
+            // `build_core_context`, so terminal.rs can read it via `try_state` and
+            // route `awaiting_approval` transitions through the same gated
+            // OS-notification pipeline (Terminal Agent Activity T2.6).
+            app.manage(notif_adapter.clone());
+
             // `.setup()` runs synchronously (not polled as a task), so
             // there's no ambient "current" tokio runtime for the engine's
             // background tasks to spawn onto — pass Tauri's own runtime

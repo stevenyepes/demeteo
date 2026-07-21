@@ -1,4 +1,5 @@
 use crate::domain::models::Machine;
+use crate::ports::notification::{DomainEvent, NotificationPort};
 use crate::state::AppContext;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
@@ -1840,9 +1841,28 @@ fn resolve_and_emit<R: Runtime>(
             "terminal-session-activity",
             ActivityInfo {
                 session_id: id.to_string(),
-                state,
+                state: state.clone(),
             },
         );
+        // A real transition into `awaiting_approval` is a needs-a-decision event:
+        // route it through the NotificationPort so the OS notification fires when
+        // demeteo is backgrounded/unfocused. The focus/permission/
+        // `run_in_background` gating (and de-dup vs. the in-app indicator) lives in
+        // the port adapter and is deliberately reused — not reimplemented here.
+        // Because `resolve_and_emit` only yields `Some(..)` on a real transition
+        // and `awaiting_approval` is a latch (§2), this fires exactly once per
+        // approval gate. `try_state` (not `state`) so a context without the port
+        // managed (e.g. unit tests) doesn't panic. No `sessions`/`activity` lock
+        // is taken here — the lock was released above (lock-ordering safety), and
+        // `label: None` keeps a tab-title lookup off this path for now.
+        if state == "awaiting_approval" {
+            if let Some(port) = app.try_state::<Arc<dyn NotificationPort>>() {
+                let _ = port.emit(&DomainEvent::TerminalAwaitingApproval {
+                    session_id: id.to_string(),
+                    label: None,
+                });
+            }
+        }
     }
 }
 
