@@ -250,6 +250,17 @@ pub struct SessionActivity {
     /// non-approval explicit hook (working / awaiting_input / exit). While set
     /// it survives the cadence floor's `awaiting_input` (§2's latch rule).
     approval_latched: bool,
+    /// Latched `true` by the frontend on-screen recognizer (Phase 3) when an
+    /// agent's approval prompt is rendered, cleared when it disappears. A
+    /// SECOND, source-independent approval latch alongside the hook's
+    /// `approval_latched`: a non-hooked agent (Codex/OpenCode/hand-started) has
+    /// no hook to set the first one, so recognition feeds this instead. It owns
+    /// its own retraction (the prompt leaving the screen), exactly as the hook
+    /// latch owns its `working`/`Stop` retraction — the two never fight because
+    /// a given agent uses at most one source. Either being set resolves to
+    /// `awaiting_approval` (TERMINAL_ACTIVITY_PLAN §Phase 3: "screen-sourced
+    /// awaiting_approval behaves exactly like the hook-sourced one").
+    screen_approval: bool,
     /// A `SessionEnd` (`exit`) hook was seen — the top of the precedence order.
     exited: bool,
     /// The last state actually emitted for this session, used to dedup
@@ -1884,16 +1895,28 @@ fn apply_hook(sa: &mut SessionActivity, state: &str) {
     }
 }
 
+/// Apply one on-screen recognizer reading (Phase 3, T3.3) to a session's
+/// record: `present` = the agent's approval prompt is currently rendered. Sets
+/// or clears the screen-sourced approval latch and nothing else — recognition
+/// is strict approval-only (it never asserts working/idle; the cadence floor
+/// and hooks own those). The retraction (`present = false`) is the recognizer's
+/// own source clearing, mirroring how `apply_hook` clears the hook latch on a
+/// non-approval signal.
+fn apply_screen(sa: &mut SessionActivity, present: bool) {
+    sa.screen_approval = present;
+}
+
 /// Resolve the §2 precedence for a record (highest first): a seen `exit` wins,
-/// then a latched `awaiting_approval`, then an explicit hook working/awaiting_input
-/// (authoritative over the cadence floor once the session's hooks have spoken),
-/// else the cadence floor (`working` until the first cadence read). The hook
-/// tier is what stops a TUI agent's never-quiet byte cadence from re-pinning an
-/// idle session to `working` after its `Stop` hook reported `awaiting_input`.
+/// then a latched `awaiting_approval` from EITHER source (hook or on-screen
+/// recognizer), then an explicit hook working/awaiting_input (authoritative over
+/// the cadence floor once the session's hooks have spoken), else the cadence
+/// floor (`working` until the first cadence read). The hook tier is what stops a
+/// TUI agent's never-quiet byte cadence from re-pinning an idle session to
+/// `working` after its `Stop` hook reported `awaiting_input`.
 fn resolve(sa: &SessionActivity) -> &'static str {
     if sa.exited {
         activity_state::EXIT
-    } else if sa.approval_latched {
+    } else if sa.approval_latched || sa.screen_approval {
         activity_state::AWAITING_APPROVAL
     } else if let Some(hook) = sa.hook {
         hook
@@ -1985,6 +2008,60 @@ fn resolve_and_emit<R: Runtime>(
             }
         }
     }
+}
+
+/// Frontend on-screen recognizer (Phase 3, T3.3) reports whether an agent's
+/// approval prompt is currently rendered in a session. `present = true` latches
+/// screen-sourced `awaiting_approval`; `present = false` retracts it. Routed
+/// through the SAME resolver as the hook scanner and the cadence sweep, so the
+/// §2 precedence, dedup, and the OS notification are reused verbatim — a
+/// screen-sourced approval "behaves exactly like the hook-sourced one"
+/// (TERMINAL_ACTIVITY_PLAN §Phase 3).
+///
+/// Agent-gated (defence in depth; the frontend already scans only agent tabs):
+/// a session with no agent present — or an unknown/closed one — is ignored, so
+/// a plain shell can never be pushed into `awaiting_approval`. A retraction for
+/// a session that has no activity record yet is also a no-op: creating a fresh
+/// record just to clear a latch that was never set would resolve to the cadence
+/// default and emit a phantom `working`.
+#[tauri::command]
+pub fn report_terminal_screen_activity(
+    app: AppHandle,
+    session_state: State<'_, SessionState>,
+    session_id: String,
+    present: bool,
+) -> Result<(), String> {
+    let has_agent = {
+        let sessions = session_state
+            .sessions
+            .lock()
+            .map_err(|_| "session state lock poisoned".to_string())?;
+        match sessions.get(&session_id) {
+            Some(s) => s.agent.lock().map(|g| g.is_some()).unwrap_or(false),
+            // Unknown / already-closed session — nothing to report against.
+            None => return Ok(()),
+        }
+    };
+    if !has_agent {
+        return Ok(());
+    }
+    // A retraction only matters when a record already exists; never CREATE one
+    // here (a fresh record resolves to the cadence default `working`). The
+    // recognizer only retracts after asserting, so the record normally exists.
+    if !present {
+        let exists = session_state
+            .activity
+            .lock()
+            .map(|m| m.contains_key(&session_id))
+            .unwrap_or(false);
+        if !exists {
+            return Ok(());
+        }
+    }
+    resolve_and_emit(&app, &session_id, &session_state.activity, |sa| {
+        apply_screen(sa, present);
+    });
+    Ok(())
 }
 
 /// Spawn the background activity sweep. Runs for the lifetime of the app (a

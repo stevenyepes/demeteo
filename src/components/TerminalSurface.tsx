@@ -9,10 +9,14 @@ import '@xterm/xterm/css/xterm.css';
 import {
   attachTerminalSession,
   detachTerminalSession,
+  reportScreenActivity,
   resizeTerminalSession,
   writeTerminalSession,
 } from '../lib/terminal';
 import { getLastTerminalSize, setLastTerminalSize } from '../lib/terminalViewport';
+import { DEFAULT_COMPILED_PACKS } from '../lib/terminalActivity/rulePacks';
+import { readBottomRows, recognizerTick } from '../lib/terminalActivity/recognizer';
+import { ScreenApprovalDebouncer } from '../lib/terminalActivity/screenApprovalMonitor';
 import { MachineDot } from './ui/MachineDot';
 import { AgentBadge } from './ui/AgentBadge';
 import { ActivityIndicator } from './ui/ActivityIndicator';
@@ -237,6 +241,59 @@ export function TerminalSurface({
       fitAddonRef.current = null;
     };
   }, [sessionId, handleResize]);
+
+  // Phase 3 — on-screen "needs a decision" recognition for agents that do NOT
+  // self-report via hooks (Codex / OpenCode / hand-started). Scans the bottom
+  // rows of THIS surface's rendered grid on render-idle and reports a debounced
+  // approval signal to the backend, which folds it into the same activity state
+  // as the Claude hooks (screen-sourced approval == hook-sourced;
+  // TERMINAL_ACTIVITY_PLAN §Phase 3). Only the focused tab mounts a surface, so
+  // today this covers the focused agent tab; always-mounted headless per-tab
+  // buffers extend it to background tabs later (no change needed here — the
+  // recognizer/feed are buffer-source-agnostic).
+  useEffect(() => {
+    const term = terminalRef.current;
+    // Agent-gated + pack-gated: a plain shell, or an agent with no rule pack
+    // (Claude — it hooks instead), never runs recognition and never guesses.
+    const pack = agentKind ? DEFAULT_COMPILED_PACKS.get(agentKind) : undefined;
+    if (!term || !pack) return;
+
+    const sid = sessionId;
+    const debouncer = new ScreenApprovalDebouncer();
+    let scheduled = false;
+
+    const scan = () => {
+      scheduled = false;
+      const present = recognizerTick(() => readBottomRows(term), pack);
+      const change = debouncer.observe(present);
+      if (change !== null) {
+        void reportScreenActivity(sid, change).catch((err) => {
+          console.warn('[TerminalSurface] reportScreenActivity failed:', err);
+        });
+      }
+    };
+
+    // Throttle to render-idle: coalesce a burst of renders into a single scan on
+    // the next animation frame, so recognition never runs on the paint path
+    // (plan §5: must never block a frame).
+    const disposable = term.onRender(() => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(scan);
+    });
+
+    return () => {
+      disposable.dispose();
+      // Retract any latched approval on unmount (tab switch / close): the screen
+      // latch is only honest while a live recognizer backs it, and an unmounted
+      // surface has no buffer to keep scanning. Clearing it avoids a stale
+      // "needs a decision" mark. (Option B's always-mounted headless buffers
+      // remove this limitation and preserve the mark across a tab switch.)
+      if (debouncer.reset(false) !== null) {
+        void reportScreenActivity(sid, false).catch(() => {});
+      }
+    };
+  }, [sessionId, agentKind]);
 
   // Phase overlay badge. The xterm canvas keeps rendering underneath
   // — this is a small, non-blocking indicator for the four lifecycle

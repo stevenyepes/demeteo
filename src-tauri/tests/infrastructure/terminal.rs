@@ -1218,8 +1218,8 @@ fn detect_agent_ignores_non_agents() {
 // are gated out end-to-end.
 
 use super::{
-    apply_cadence, apply_hook, cadence_state, decide_and_record, resolve, sweep_activity_once,
-    SessionActivity, CADENCE_WINDOW,
+    apply_cadence, apply_hook, apply_screen, cadence_state, decide_and_record, resolve,
+    sweep_activity_once, SessionActivity, CADENCE_WINDOW,
 };
 use std::collections::HashMap as StdHashMap;
 
@@ -1377,6 +1377,103 @@ fn exit_emits_and_clears_record() {
         !map.contains_key(id),
         "the record must be dropped after exit so a reused id starts clean"
     );
+}
+
+// --- Screen-sourced approval feed (Phase 3, T3.3) ---------------------------
+//
+// The on-screen recognizer folds a debounced present/absent reading into the
+// SAME record via `apply_screen`, so a non-hooked agent's approval "behaves
+// exactly like the hook-sourced one": it resolves to `awaiting_approval`,
+// survives the cadence floor, and clears when the prompt leaves the screen.
+
+/// Screen latch survives cadence: a rendered approval prompt outranks the
+/// cadence floor's `awaiting_input`, exactly as the hook latch does.
+#[test]
+fn screen_latch_survives_cadence_tick() {
+    let mut sa = SessionActivity::default();
+    apply_screen(&mut sa, true);
+    apply_cadence(&mut sa, "awaiting_input");
+    assert_eq!(
+        resolve(&sa),
+        "awaiting_approval",
+        "a rendered approval prompt must survive the cadence floor's awaiting_input"
+    );
+}
+
+/// Screen latch survives a cadence `working` tick too: a non-hooked TUI agent
+/// often animates a spinner inside its own approval prompt, so the byte cadence
+/// reads `working` while the prompt is still on screen. The screen latch owns
+/// its own retraction (the prompt leaving), not the cadence floor.
+#[test]
+fn screen_latch_survives_cadence_working_tick() {
+    let mut sa = SessionActivity::default();
+    apply_screen(&mut sa, true);
+    apply_cadence(&mut sa, "working");
+    assert_eq!(resolve(&sa), "awaiting_approval");
+}
+
+/// Screen latch clears when the recognizer retracts (prompt gone) → resolves
+/// back to whatever the cadence floor last read.
+#[test]
+fn screen_latch_clears_on_retract() {
+    let mut sa = SessionActivity::default();
+    apply_cadence(&mut sa, "working");
+    apply_screen(&mut sa, true);
+    assert_eq!(resolve(&sa), "awaiting_approval");
+    apply_screen(&mut sa, false);
+    assert_eq!(
+        resolve(&sa),
+        "working",
+        "retracting the on-screen prompt clears the screen latch"
+    );
+}
+
+/// The screen latch is independent of the hook latch: clearing the hook latch
+/// (a `working`/`awaiting_input` hook) does not clear a screen-sourced one, and
+/// vice versa. They never coexist for a real agent (hooked agents have no rule
+/// pack), but the resolver stays honest if a signal crosses over.
+#[test]
+fn screen_and_hook_latches_are_independent() {
+    let mut sa = SessionActivity::default();
+    apply_screen(&mut sa, true);
+    // A stray hook working must not clear the screen latch.
+    apply_hook(&mut sa, "working");
+    assert_eq!(resolve(&sa), "awaiting_approval");
+    // Only the screen source retracting clears it.
+    apply_screen(&mut sa, false);
+    assert_eq!(resolve(&sa), "working");
+}
+
+/// Canonical screen ordering through the emit decision:
+/// `working (cadence) → awaiting_approval (screen) → (cadence working tick,
+/// stays approval) → working (screen retracts)`. Asserts the exact deduped
+/// transitions that reach the wire.
+#[test]
+fn canonical_screen_ordering_latches_then_clears() {
+    let id = "sess";
+    let mut map: StdHashMap<String, SessionActivity> = StdHashMap::new();
+
+    apply_cadence(map.entry(id.into()).or_default(), "working");
+    assert_eq!(decide_and_record(&mut map, id).as_deref(), Some("working"));
+
+    // Recognizer sees the approval prompt.
+    apply_screen(map.entry(id.into()).or_default(), true);
+    assert_eq!(
+        decide_and_record(&mut map, id).as_deref(),
+        Some("awaiting_approval")
+    );
+
+    // Spinner animates inside the prompt → cadence working → latched, no re-emit.
+    apply_cadence(map.entry(id.into()).or_default(), "working");
+    assert_eq!(
+        decide_and_record(&mut map, id),
+        None,
+        "a cadence working tick must not disturb the latched screen approval"
+    );
+
+    // Prompt leaves the screen → retract → resolves back to working.
+    apply_screen(map.entry(id.into()).or_default(), false);
+    assert_eq!(decide_and_record(&mut map, id).as_deref(), Some("working"));
 }
 
 /// Like `insert_test_session` but seeds an agent kind so the session passes
