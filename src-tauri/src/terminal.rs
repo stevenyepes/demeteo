@@ -7,6 +7,7 @@ use ssh2::Session;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
@@ -62,6 +63,18 @@ pub struct ActiveSession {
     /// gate). Retained so `reconnect_terminal_session` rebuilds the scanner
     /// with the SAME nonce the still-running agent's hooks emit.
     pub activity_nonce: Option<String>,
+    /// Path to the ephemeral, per-session settings file handed to Claude via
+    /// `claude --settings <path>` (the reporter hooks — see
+    /// `write_activity_settings_file`). `None` for a plain shell or a non-hooked
+    /// agent. The file lives in the OS temp dir, is written at `start`, and is
+    /// removed when this `ActiveSession` is dropped (`Drop` below). We pass a
+    /// file PATH rather than inline JSON because the full `--settings '<json>'`
+    /// command line is ~1.4 KB — well over a PTY's 1024-byte canonical-mode
+    /// input limit (`MAX_CANON`), which truncated the launch line mid-quote so
+    /// it never executed. A short `--settings <path>` sidesteps that entirely
+    /// and, being a per-session throwaway, never touches the user's `~/.claude`
+    /// or the project's `.claude/` settings.
+    pub activity_settings_path: Option<PathBuf>,
     /// Wall-clock instant of the most recent chunk this session read off its
     /// PTY/SSH transport. Written by the drain thread on every chunk (local
     /// and SSH feed this one shared field) and read by the activity sweep to
@@ -89,6 +102,19 @@ pub struct ActiveSession {
     /// `reconnect_terminal_session` flips it back to `true`. Reconnect
     /// refuses to run while this is `true` (transport still live).
     pub connected: Arc<AtomicBool>,
+}
+
+impl Drop for ActiveSession {
+    /// Remove the ephemeral `--settings` file when the session is torn down.
+    /// Fires on every removal path (explicit close, `close_machine_sessions`,
+    /// the sweep GC) because they all drop the `ActiveSession`; a reconnect
+    /// mutates the session in place and never drops it, so the file survives a
+    /// reconnect as intended. Best-effort — a leftover temp file is harmless.
+    fn drop(&mut self) {
+        if let Some(path) = self.activity_settings_path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// Maximum bytes retained in a session's scrollback ring. Caps backend
@@ -207,8 +233,19 @@ pub struct SessionState {
 pub struct SessionActivity {
     /// Last cadence read by the sweep: `Some("working")` or
     /// `Some("awaiting_input")`, `None` until the first tick. The precedence
-    /// floor.
+    /// *floor* — only consulted for a session that has NOT reported an explicit
+    /// hook state (`hook` is `None`).
     cadence: Option<&'static str>,
+    /// Last explicit working/awaiting_input reported by a hook, or `None` until
+    /// the first one arrives. Once a session's hooks speak, the hook is
+    /// **authoritative** over the cadence floor for the working ↔ awaiting_input
+    /// axis: a TUI agent like Claude Code repaints continuously (blinking
+    /// cursor, footer, the reporter OSC's own bytes), so the byte cadence never
+    /// falls quiet and would otherwise pin the session to `working` forever
+    /// even after `Stop` fired `awaiting_input`. Latching to the hook lets the
+    /// cheap universal floor and the precise hook layer coexist without the
+    /// floor clobbering the hook (TERMINAL_ACTIVITY_PLAN §2).
+    hook: Option<&'static str>,
     /// Latched `true` by a scanner `awaiting_approval`; cleared by any
     /// non-approval explicit hook (working / awaiting_input / exit). While set
     /// it survives the cadence floor's `awaiting_input` (§2's latch rule).
@@ -272,6 +309,21 @@ pub struct StartedSession {
 }
 
 const IDLE_TIMEOUT_SECS: u64 = 600;
+
+/// The four activity states that ride the `terminal-session-activity` wire and
+/// the OSC `state=` field. Centralised so the reporter-hook builder
+/// (`build_claude_activity_settings`) and the resolver (`apply_hook` /
+/// `apply_cadence` / `cadence_state` / `resolve`) share ONE source of truth: a
+/// rename in one site becomes a compile error instead of a silent no-op in
+/// `apply_hook`'s `_ =>` arm. Kept as `&str` consts (not an enum) so the wire
+/// format and serde serialisation stay byte-for-byte unchanged, and so they can
+/// be used both as values and as `match` patterns.
+mod activity_state {
+    pub const WORKING: &str = "working";
+    pub const AWAITING_INPUT: &str = "awaiting_input";
+    pub const AWAITING_APPROVAL: &str = "awaiting_approval";
+    pub const EXIT: &str = "exit";
+}
 
 /// Whether an agent kind self-reports activity via injected hooks (Phase 2).
 /// Only Claude for now; extended as more agents grow a hook transport. Gates
@@ -346,19 +398,26 @@ fn build_claude_activity_settings(kind: &str, nonce: &str) -> Option<String> {
     if kind != "claude-code" {
         return None;
     }
-    // (event, optional matcher, reported state) — §2d.
+    // (event, optional matcher, reported state) — §2d. Claude honors `matcher`
+    // for `Notification` (filtering by notification type, e.g.
+    // `permission_prompt` / `idle_prompt`), so the two Notification groups do
+    // NOT both fire on the same notification.
     let specs: [(&str, Option<&str>, &str); 7] = [
-        ("UserPromptSubmit", None, "working"),
-        ("PreToolUse", None, "working"),
-        ("PostToolUse", None, "working"),
+        ("UserPromptSubmit", None, activity_state::WORKING),
+        ("PreToolUse", None, activity_state::WORKING),
+        ("PostToolUse", None, activity_state::WORKING),
         (
             "Notification",
             Some("permission_prompt"),
-            "awaiting_approval",
+            activity_state::AWAITING_APPROVAL,
         ),
-        ("Notification", Some("idle_prompt"), "awaiting_input"),
-        ("Stop", None, "awaiting_input"),
-        ("SessionEnd", None, "exit"),
+        (
+            "Notification",
+            Some("idle_prompt"),
+            activity_state::AWAITING_INPUT,
+        ),
+        ("Stop", None, activity_state::AWAITING_INPUT),
+        ("SessionEnd", None, activity_state::EXIT),
     ];
     let mut hooks: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
     for (event, matcher, state) in specs {
@@ -393,17 +452,39 @@ fn build_claude_activity_settings(kind: &str, nonce: &str) -> Option<String> {
     serde_json::to_string(&settings).ok()
 }
 
+/// Ephemeral settings-file path for a session's reporter hooks: the OS temp dir
+/// plus a nonce-keyed name. The nonce is random per launch, so two concurrent
+/// hooked sessions never collide, and it is already exposed in the process argv
+/// — the file adds no new secret.
+fn activity_settings_file_path(nonce: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("demeteo-claude-activity-{nonce}.json"))
+}
+
+/// Write the reporter-hooks JSON to the session's ephemeral settings file and
+/// return its path. The file is a per-session throwaway (removed on session
+/// teardown, see `ActiveSession`'s `Drop`) — it is NOT the user's
+/// `~/.claude/settings.json` nor the project `.claude/settings*.json`, so
+/// demeteo never mutates the user's or the project's own agent settings.
+fn write_activity_settings_file(nonce: &str, settings_json: &str) -> std::io::Result<PathBuf> {
+    let path = activity_settings_file_path(nonce);
+    std::fs::write(&path, settings_json)?;
+    Ok(path)
+}
+
 /// Build the launch line for a hooked agent: the base command the frontend
-/// would have written, with `--settings '<reporter hooks>'` appended
-/// (preserving any user args already in `base_command`). Returns `None` for a
-/// non-hooked kind — the frontend then writes its own base command (or
-/// nothing). This is the backend half of the single-write contract (§2c).
-fn build_agent_launch_command(agent_kind: &str, base_command: &str, nonce: &str) -> Option<String> {
-    let settings = build_claude_activity_settings(agent_kind, nonce)?;
-    Some(format!(
+/// would have written, with `--settings <path>` appended (preserving any user
+/// args already in `base_command`). We point Claude at a FILE rather than
+/// inline JSON so the command line stays short — the full inline
+/// `--settings '<json>'` is ~1.4 KB and a PTY's canonical-mode input line caps
+/// at 1024 bytes (`MAX_CANON`), which truncated the launch mid-quote so it
+/// never ran. Returns `None` for a non-hooked kind — the frontend then writes
+/// its own base command (or nothing). Backend half of the single-write
+/// contract (§2c).
+fn build_agent_launch_command(base_command: &str, settings_path: &Path) -> String {
+    format!(
         "{base_command} --settings {}",
-        shell_single_quote(&settings)
-    ))
+        shell_single_quote(&settings_path.to_string_lossy())
+    )
 }
 
 #[tauri::command]
@@ -500,13 +581,34 @@ pub fn start_terminal_session(
         .as_deref()
         .filter(|k| is_hooked_agent_kind(k))
         .map(|_| generate_activity_nonce());
-    let launch_override = match (
+    let (launch_override, activity_settings_path) = match (
         agent_kind.as_deref(),
         activity_nonce.as_deref(),
         launch_command.as_deref(),
     ) {
-        (Some(kind), Some(nonce), Some(base)) => build_agent_launch_command(kind, base, nonce),
-        _ => None,
+        (Some(kind), Some(nonce), Some(base)) => {
+            // Reporter hooks go to an ephemeral per-session file; the launch
+            // line is a short `claude --settings <path>` (NOT ~1.4 KB of inline
+            // JSON, which overran the PTY's 1024-byte canonical input limit and
+            // truncated the command). The file is a throwaway — never the
+            // user's `~/.claude` nor the project `.claude/` settings. A write
+            // failure degrades to an unhooked launch (frontend writes plain
+            // `base`) rather than breaking the launch outright — the nonce only
+            // gates precise activity, not correctness.
+            match build_claude_activity_settings(kind, nonce) {
+                Some(json) => match write_activity_settings_file(nonce, &json) {
+                    Ok(path) => (Some(build_agent_launch_command(base, &path)), Some(path)),
+                    Err(e) => {
+                        eprintln!(
+                            "[terminal] activity settings file write failed: {e}; launching {kind} unhooked"
+                        );
+                        (None, None)
+                    }
+                },
+                None => (None, None),
+            }
+        }
+        _ => (None, None),
     };
 
     spawn_drain(
@@ -537,6 +639,7 @@ pub fn start_terminal_session(
             child_pid,
             agent: Mutex::new(agent_kind.clone()),
             activity_nonce,
+            activity_settings_path,
             last_output_at,
             frontend_channel,
             display_title,
@@ -1735,9 +1838,9 @@ const ACTIVITY_SWEEP_INTERVAL: Duration = Duration::from_millis(250);
 /// (`SessionActivity` / `resolve_and_emit`) owns them now.
 fn cadence_state(since_last_output: Duration) -> &'static str {
     if since_last_output <= CADENCE_WINDOW {
-        "working"
+        activity_state::WORKING
     } else {
-        "awaiting_input"
+        activity_state::AWAITING_INPUT
     }
 }
 
@@ -1762,16 +1865,16 @@ fn apply_cadence(sa: &mut SessionActivity, cadence: &'static str) {
 /// retracting."
 fn apply_hook(sa: &mut SessionActivity, state: &str) {
     match state {
-        "awaiting_approval" => sa.approval_latched = true,
-        "working" => {
+        activity_state::AWAITING_APPROVAL => sa.approval_latched = true,
+        activity_state::WORKING => {
             sa.approval_latched = false;
-            sa.cadence = Some("working");
+            sa.hook = Some(activity_state::WORKING);
         }
-        "awaiting_input" => {
+        activity_state::AWAITING_INPUT => {
             sa.approval_latched = false;
-            sa.cadence = Some("awaiting_input");
+            sa.hook = Some(activity_state::AWAITING_INPUT);
         }
-        "exit" => {
+        activity_state::EXIT => {
             sa.approval_latched = false;
             sa.exited = true;
         }
@@ -1782,15 +1885,20 @@ fn apply_hook(sa: &mut SessionActivity, state: &str) {
 }
 
 /// Resolve the §2 precedence for a record (highest first): a seen `exit` wins,
-/// then a latched `awaiting_approval`, else the cadence floor
-/// (`working` until the first cadence read).
+/// then a latched `awaiting_approval`, then an explicit hook working/awaiting_input
+/// (authoritative over the cadence floor once the session's hooks have spoken),
+/// else the cadence floor (`working` until the first cadence read). The hook
+/// tier is what stops a TUI agent's never-quiet byte cadence from re-pinning an
+/// idle session to `working` after its `Stop` hook reported `awaiting_input`.
 fn resolve(sa: &SessionActivity) -> &'static str {
     if sa.exited {
-        "exit"
+        activity_state::EXIT
     } else if sa.approval_latched {
-        "awaiting_approval"
+        activity_state::AWAITING_APPROVAL
+    } else if let Some(hook) = sa.hook {
+        hook
     } else {
-        sa.cadence.unwrap_or("working")
+        sa.cadence.unwrap_or(activity_state::WORKING)
     }
 }
 
@@ -1801,17 +1909,18 @@ fn resolve(sa: &SessionActivity) -> &'static str {
 /// Pure over the map — no `AppHandle` — so the precedence/dedup logic is
 /// unit-testable in isolation (TERMINAL_ACTIVITY_PLAN §6).
 fn decide_and_record(map: &mut HashMap<String, SessionActivity>, id: &str) -> Option<String> {
-    let resolved = resolve(map.get(id)?);
-    if map.get(id)?.last_emitted.as_deref() == Some(resolved) {
+    // Single lookup: `resolve` returns a `&'static str` (it does not borrow the
+    // record), so the `&mut` borrow ends before the `exit` branch removes the
+    // entry.
+    let sa = map.get_mut(id)?;
+    let resolved = resolve(sa);
+    if sa.last_emitted.as_deref() == Some(resolved) {
         return None;
     }
-    if resolved == "exit" {
+    if resolved == activity_state::EXIT {
         map.remove(id);
     } else {
-        // Safe: `get(id)` above proved the entry exists.
-        if let Some(sa) = map.get_mut(id) {
-            sa.last_emitted = Some(resolved.to_string());
-        }
+        sa.last_emitted = Some(resolved.to_string());
     }
     Some(resolved.to_string())
 }
@@ -1855,11 +1964,23 @@ fn resolve_and_emit<R: Runtime>(
         // managed (e.g. unit tests) doesn't panic. No `sessions`/`activity` lock
         // is taken here — the lock was released above (lock-ordering safety), and
         // `label: None` keeps a tab-title lookup off this path for now.
-        if state == "awaiting_approval" {
+        if state == activity_state::AWAITING_APPROVAL {
             if let Some(port) = app.try_state::<Arc<dyn NotificationPort>>() {
-                let _ = port.emit(&DomainEvent::TerminalAwaitingApproval {
-                    session_id: id.to_string(),
-                    label: None,
+                // Fire on a detached thread. `port.emit` reads the
+                // `run_in_background` preference and probes window
+                // focus/visibility, and this choke point runs on the per-session
+                // PTY drain thread (the scanner path) — doing that blocking work
+                // inline would stall output forwarding for the session until the
+                // probes return. The approval edge is rare and latched, so a
+                // one-off thread is cheap. Clone the `Arc` out of the managed
+                // state first so nothing borrows `app` into the thread.
+                let port = port.inner().clone();
+                let session_id = id.to_string();
+                thread::spawn(move || {
+                    let _ = port.emit(&DomainEvent::TerminalAwaitingApproval {
+                        session_id,
+                        label: None,
+                    });
                 });
             }
         }
@@ -1888,11 +2009,11 @@ pub fn spawn_activity_sweep<R: Runtime>(app: AppHandle<R>) {
 fn sweep_activity_once<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<SessionState>();
 
-    // Snapshot (id, agent-present, elapsed-since-last-output) for every
+    // Snapshot (id, agent-present, hooked, elapsed-since-last-output) for every
     // session, then release the sessions lock before touching `activity`.
     // (Never hold `sessions` and `activity` nested — the resolver needs only
     // `activity`.)
-    let snapshot: Vec<(String, bool, Duration)> = {
+    let snapshot: Vec<(String, bool, bool, Duration)> = {
         let sessions = match state.sessions.lock() {
             Ok(s) => s,
             Err(_) => return,
@@ -1901,8 +2022,9 @@ fn sweep_activity_once<R: Runtime>(app: &AppHandle<R>) {
             .iter()
             .map(|(id, s)| {
                 let has_agent = s.agent.lock().map(|g| g.is_some()).unwrap_or(false);
+                let hooked = s.activity_nonce.is_some();
                 let elapsed = elapsed_since_last_output(&s.last_output_at);
-                (id.clone(), has_agent, elapsed)
+                (id.clone(), has_agent, hooked, elapsed)
             })
             .collect()
     };
@@ -1911,15 +2033,27 @@ fn sweep_activity_once<R: Runtime>(app: &AppHandle<R>) {
     // Briefly under the `activity` lock, released before the per-session emits.
     {
         let live: std::collections::HashSet<&str> =
-            snapshot.iter().map(|(id, _, _)| id.as_str()).collect();
+            snapshot.iter().map(|(id, _, _, _)| id.as_str()).collect();
         if let Ok(mut map) = state.activity.lock() {
             map.retain(|id, _| live.contains(id.as_str()));
         }
     }
 
-    for (id, has_agent, elapsed) in &snapshot {
+    for (id, has_agent, hooked, elapsed) in &snapshot {
         // Agent-gate: a plain shell never creates or emits a record.
         if !has_agent {
+            continue;
+        }
+        // Hooked-gate: a hooked session (Claude via `--settings`) is driven
+        // PURELY by its hook scanner on the drain path, not the cadence floor.
+        // A TUI agent repaints continuously (blinking cursor, footer, rotating
+        // placeholder tips) so its byte cadence never falls quiet — letting the
+        // sweep emit `working` would pin a freshly-launched or idle Claude to a
+        // false spinner in the window before/between hook events. Skipping it
+        // means the session shows NO activity mark until a hook actually fires
+        // (`UserPromptSubmit`→working, `Stop`→awaiting_input, …), which is the
+        // honest signal (TERMINAL_ACTIVITY_PLAN §2/§3).
+        if *hooked {
             continue;
         }
         let cadence = cadence_state(*elapsed);

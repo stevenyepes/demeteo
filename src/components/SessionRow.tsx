@@ -106,7 +106,7 @@ function SessionRowImpl({
                   {tab.title}
                 </span>
               )}
-              <AgentBadge agentKind={tab.agentKind} className="shrink-0" />
+              <AgentBadge agentKind={tab.agentKind} compact className="shrink-0" />
               <ActivityIndicator activity={tab.activity ?? null} className="shrink-0" />
             </div>
             <span

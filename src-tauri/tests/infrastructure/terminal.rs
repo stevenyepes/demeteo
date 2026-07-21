@@ -244,6 +244,7 @@ fn spawn_test_session(
         child_pid: None,
         agent: Mutex::new(None),
         activity_nonce: None,
+        activity_settings_path: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel,
         display_title,
@@ -273,6 +274,7 @@ fn insert_test_session(state: &SessionState, session_id: &str) {
         child_pid: None,
         agent: Mutex::new(None),
         activity_nonce: None,
+        activity_settings_path: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel,
         display_title,
@@ -825,6 +827,7 @@ fn attach_replays_scrollback_to_new_channel() {
         child_pid: None,
         agent: Mutex::new(None),
         activity_nonce: None,
+        activity_settings_path: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
@@ -879,6 +882,7 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
         child_pid: None,
         agent: Mutex::new(None),
         activity_nonce: None,
+        activity_settings_path: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
@@ -1017,6 +1021,7 @@ fn insert_disconnected_session(
         child_pid: None,
         agent: Mutex::new(None),
         activity_nonce: None,
+        activity_settings_path: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel: frontend_channel.clone(),
         display_title: Mutex::new(None),
@@ -1280,6 +1285,30 @@ fn latch_clears_on_awaiting_input_hook() {
     assert_eq!(resolve(&sa), "awaiting_input");
 }
 
+/// Regression (stuck-spinner): once a hook reports `awaiting_input` (Claude's
+/// `Stop`), a following cadence `working` tick must NOT re-pin the session to
+/// `working`. A TUI agent repaints continuously — including the reporter OSC's
+/// own bytes — so the byte cadence never falls quiet; the hook is authoritative
+/// over the cadence floor for the working ↔ awaiting_input axis.
+#[test]
+fn hook_awaiting_input_survives_cadence_working_tick() {
+    let mut sa = SessionActivity::default();
+    // Turn ran (hook working), then Stop (hook awaiting_input).
+    apply_hook(&mut sa, "working");
+    apply_hook(&mut sa, "awaiting_input");
+    assert_eq!(resolve(&sa), "awaiting_input");
+    // The TUI keeps painting → sweep reads recent output → cadence working.
+    apply_cadence(&mut sa, "working");
+    assert_eq!(
+        resolve(&sa),
+        "awaiting_input",
+        "a hooked session's awaiting_input must survive the never-quiet cadence floor"
+    );
+    // Only the next real hook (the user's next prompt) resumes working.
+    apply_hook(&mut sa, "working");
+    assert_eq!(resolve(&sa), "working");
+}
+
 /// Canonical §2d ordering through the emit decision:
 /// `working → awaiting_approval → (cadence awaiting_input, stays approval) →
 /// working (clears)`. Asserts the exact deduped transitions that reach the wire
@@ -1366,6 +1395,39 @@ fn insert_agent_session(state: &SessionState, session_id: &str) {
         child_pid: None,
         agent: Mutex::new(Some("claude-code".to_string())),
         activity_nonce: None,
+        activity_settings_path: None,
+        last_output_at: Arc::new(Mutex::new(Instant::now())),
+        frontend_channel,
+        display_title: Mutex::new(None),
+        work_dir: None,
+        work_branch: None,
+        connected: Arc::new(AtomicBool::new(true)),
+    };
+    state
+        .sessions
+        .lock()
+        .expect("sessions lock")
+        .insert(session_id.to_string(), active);
+}
+
+/// Like `insert_agent_session` but marks the session hooked (a per-launch
+/// `activity_nonce`), so the sweep must treat it as scanner-driven and skip the
+/// cadence floor.
+fn insert_hooked_agent_session(state: &SessionState, session_id: &str) {
+    let (read_source, write_sink, keepalive, _child_pid) =
+        super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
+    let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
+    let active = ActiveSession {
+        read_source,
+        write_sink,
+        _keepalive: keepalive,
+        machine_id: "local".to_string(),
+        machine_name: "local".to_string(),
+        created_at: 0,
+        child_pid: None,
+        agent: Mutex::new(Some("claude-code".to_string())),
+        activity_nonce: Some("deadbeef".to_string()),
+        activity_settings_path: None,
         last_output_at: Arc::new(Mutex::new(Instant::now())),
         frontend_channel,
         display_title: Mutex::new(None),
@@ -1446,11 +1508,45 @@ fn sweep_records_agent_sessions_and_gates_plain_shells() {
     );
 }
 
+/// A hooked session (per-launch nonce) is driven purely by its hook scanner, so
+/// the cadence sweep must SKIP it — even with recent output it produces no
+/// cadence record. This is what stops a freshly-launched or idle Claude (a TUI
+/// that never falls quiet) from showing a false `working` spinner before/between
+/// hook events.
+#[test]
+fn sweep_skips_hooked_sessions() {
+    let app = tauri::test::mock_app();
+    app.manage(SessionState::default());
+
+    let hooked_id = "sess_hooked_agent".to_string();
+    let unhooked_id = "sess_unhooked_agent".to_string();
+
+    {
+        let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+        insert_hooked_agent_session(&state_ref, &hooked_id);
+        insert_agent_session(&state_ref, &unhooked_id);
+    }
+
+    // Both have recent output. The unhooked agent resolves working via cadence;
+    // the hooked one is skipped and never gets a record.
+    sweep_activity_once(app.handle());
+    let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
+    assert!(
+        activity_last_emitted(&state_ref, &hooked_id).is_none(),
+        "a hooked session must be skipped by the cadence sweep (scanner-driven only)"
+    );
+    assert_eq!(
+        activity_last_emitted(&state_ref, &unhooked_id).as_deref(),
+        Some("working"),
+        "an unhooked agent session still resolves via the cadence floor"
+    );
+}
+
 // --- Phase 2 launch-line builder + drain scanner wiring (T2.3) ---------------
 
 use super::{
     build_agent_launch_command, build_claude_activity_settings, drain_scan_and_forward,
-    is_hooked_agent_kind, shell_single_quote,
+    is_hooked_agent_kind, shell_single_quote, write_activity_settings_file,
 };
 
 /// Reverse `shell_single_quote` for a value produced by it: strip the wrapping
@@ -1490,38 +1586,66 @@ fn shell_single_quote_round_trips_embedded_quote() {
     }
 }
 
-/// A non-hooked kind yields no launch override (the frontend then writes its
-/// own base command).
+/// A non-hooked kind yields no reporter settings — the gate that stops the
+/// backend building a launch override, so the frontend writes its own base
+/// command.
 #[test]
-fn build_agent_launch_command_none_for_non_hooked() {
-    assert!(build_agent_launch_command("opencode", "opencode", "abc123").is_none());
-    assert!(build_agent_launch_command("codex", "codex", "abc123").is_none());
+fn build_claude_activity_settings_none_for_non_hooked() {
     assert!(build_claude_activity_settings("opencode", "abc123").is_none());
+    assert!(build_claude_activity_settings("codex", "abc123").is_none());
+    assert!(build_claude_activity_settings("", "abc123").is_none());
 }
 
-/// For claude-code the builder appends `--settings '<json>'`, preserving any
-/// user args already on the base command, and the injected JSON round-trips as
-/// valid JSON carrying the nonce and one hook per §2d event→state mapping.
+/// The launch line points Claude at a settings FILE (`--settings <path>`),
+/// preserving any user args already on the base command, and stays comfortably
+/// under a PTY's 1024-byte canonical input limit — the whole reason we stopped
+/// inlining the ~1.4 KB JSON, which truncated the command mid-quote.
 #[test]
-fn build_agent_launch_command_claude_injects_valid_hook_settings() {
-    let nonce = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
-    let cmd = build_agent_launch_command("claude-code", "claude --resume", nonce)
-        .expect("claude-code must produce a launch command");
-
-    // Base args preserved; --settings appended.
-    assert!(
-        cmd.starts_with("claude --resume --settings '"),
-        "base args must be preserved and --settings appended: {cmd}"
+fn build_agent_launch_command_points_at_settings_file() {
+    let path = std::path::Path::new("/tmp/demeteo-claude-activity-abc123.json");
+    let cmd = build_agent_launch_command("claude --resume", path);
+    assert_eq!(
+        cmd,
+        "claude --resume --settings '/tmp/demeteo-claude-activity-abc123.json'"
     );
+    assert!(
+        cmd.len() < 1024,
+        "launch line must fit MAX_CANON, got {} bytes",
+        cmd.len()
+    );
+}
 
-    // The `--settings` argument parses back as valid JSON.
-    let arg = cmd
-        .split_once(" --settings ")
-        .map(|(_, rest)| rest)
-        .expect("--settings arg present");
-    let json_text = shell_single_unquote(arg);
+/// The reporter JSON writes to an ephemeral file that holds valid JSON, and the
+/// resulting `--settings <path>` launch line fits the PTY input limit even
+/// though the JSON itself is far larger than 1024 bytes.
+#[test]
+fn write_activity_settings_file_writes_valid_json_and_fits_launch_line() {
+    let nonce = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
+    let json = build_claude_activity_settings("claude-code", nonce).expect("settings JSON");
+    assert!(
+        json.len() > 1024,
+        "precondition: inline JSON would have overrun MAX_CANON ({} bytes)",
+        json.len()
+    );
+    let path = write_activity_settings_file(nonce, &json).expect("write settings file");
+    let read_back = std::fs::read_to_string(&path).expect("read settings file back");
+    let _: serde_json::Value =
+        serde_json::from_str(&read_back).expect("file must hold valid JSON");
+    let cmd = build_agent_launch_command("claude", &path);
+    assert!(cmd.len() < 1024, "launch line under MAX_CANON: {} bytes", cmd.len());
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The reporter settings JSON carries the nonce and one hook per §2d
+/// event→state mapping (validated straight off `build_claude_activity_settings`
+/// now that the launch line points at a file instead of inlining the JSON).
+#[test]
+fn build_claude_activity_settings_injects_valid_hooks() {
+    let nonce = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
+    let json_text = build_claude_activity_settings("claude-code", nonce)
+        .expect("claude-code must produce settings");
     let settings: serde_json::Value =
-        serde_json::from_str(&json_text).expect("--settings must be valid JSON");
+        serde_json::from_str(&json_text).expect("settings must be valid JSON");
 
     let hooks = settings
         .get("hooks")
