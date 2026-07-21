@@ -225,11 +225,32 @@ Herdr-style recognition against the rendered xterm.js grid. Promotes only
 
 Longest tail, lowest marginal value. Each is independent.
 
-- **T4.1 — Remote hooked agents:** the same Phase-2 drain scanner parses the OSC out
-  of the SSH stream; verify no runner needed. **Deps:** Phase 2.
-- **T4.2 — Stuck-`working` backstop:** defensive TTL / cross-check against the process
-  detector for the hooked path (Stop payload has no background-tasks field). **Deps:**
-  Phase 2.
+- **T4.1 — Remote hooked agents:** ✅ DONE. The Phase-2 drain scanner already runs on
+  the SSH stream unchanged (`drain_ssh` builds an `ActivityScanner` when a nonce is
+  present) — no runner needed. The missing half was *delivery*: a local `--settings`
+  temp path is meaningless on the far host, so the reporter-hooks JSON is now SFTP'd
+  onto the remote (`write_remote_settings_file`, run inside `start_ssh_session` while
+  the session is still blocking and before the drain thread starts, so it never races
+  the interactive read) to a nonce-keyed `/tmp/demeteo-claude-activity-<nonce>.json`
+  (`remote_activity_settings_path`); the launch line references that remote path. An
+  SFTP failure degrades to an unhooked launch. Remote file is left in `/tmp`
+  (harmless — no live channel at teardown). Scope: remote *menu-launched* Claude only;
+  remote hand-started agents still get nothing (no over-SSH presence detection — a
+  separate deferred piece). **Deps:** Phase 2.
+- **T4.2 — Stuck-`working` backstop:** ✅ DONE (cross-check, not TTL). Correction to the
+  plan's premise: the cadence floor does NOT cover hooked sessions — the sweep skips
+  them (`sweep_activity_once`: a TUI agent repaints continuously, so its byte stream
+  never falls quiet), and the hook tier outranks cadence in `resolve`. So a lost
+  `SessionEnd`/`Stop` would spin `working` forever, and a silence TTL can't fire.
+  Implemented instead as a **process-detector cross-check** (`detect_agents_once` →
+  `should_clear_activity_on_agent_exit`): when the local `ps` detector sees a session's
+  agent leave (Some→None), it folds `exit` into the activity record (clearing it) so the
+  badge can't strand on a spinner after the agent is gone. Guarded on an existing record
+  (no spurious `exit` for plain shells). The alive-but-idle case (lost `Stop`, agent
+  still running) is recovered by Claude's own `idle_prompt` Notification (§2d →
+  `awaiting_input`) and the next `UserPromptSubmit`. **Documented gap:** remote hooked
+  sessions have no `ps` cross-check (matching remote presence detection's constraint) and
+  rely solely on those hook signals. **Deps:** Phase 2.
 - **T4.3 — Merge user's own hooks** into the `--settings` payload (removes the 2c
   per-event replace caveat). **Deps:** T2.3.
 - **T4.4 — Nonce hardening finalize + Windows.** **Deps:** T2.5.
