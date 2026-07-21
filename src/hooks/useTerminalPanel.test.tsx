@@ -829,11 +829,14 @@ describe('useTerminalPanel — setTitle() rollback on IPC failure', () => {
 describe('useTerminalPanel — launch-line single-write contract (T2.3)', () => {
   it('writes the backend-augmented launch line exactly once and NOT the raw input command', async () => {
     // A hooked agent kind: the backend returns an augmented launch line
-    // (base + injected `--settings` reporter hooks). The provider must write
-    // THAT once, and must not also write the original `input.launchCommand`
-    // (which would launch Claude twice — the known footgun).
+    // pointing Claude at an ephemeral per-session settings FILE (base +
+    // `--settings <path>`; the reporter hooks live in the file, not inline, so
+    // the command line stays under the PTY's 1024-byte input limit). The
+    // provider must write THAT once, and must not also write the original
+    // `input.launchCommand` (which would launch Claude twice — the known
+    // footgun).
     const augmented =
-      "claude --settings '{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"printf\"}]}]}}'";
+      "claude --settings '/tmp/demeteo-claude-activity-0a1b2c3d.json'";
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
       if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
