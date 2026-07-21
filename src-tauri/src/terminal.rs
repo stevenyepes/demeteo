@@ -757,6 +757,34 @@ pub fn start_terminal_session(
     })
 }
 
+/// Resolve the shell binary to spawn for a local terminal from the value of
+/// `$SHELL` (passed in so the decision is pure and unit-testable). An explicit,
+/// non-empty `SHELL` always wins — it honours a user override on any OS.
+/// Otherwise the default is per-OS: Windows has neither `SHELL` nor
+/// `/bin/bash`, so the historical bash fallback made *every* local terminal
+/// fail to spawn there ("open a terminal failed" on Windows). `powershell.exe`
+/// ships on every supported Windows and is the conventional terminal default.
+fn resolve_shell(shell_env: Option<&str>) -> String {
+    if let Some(shell) = shell_env {
+        if !shell.trim().is_empty() {
+            return shell.to_string();
+        }
+    }
+    #[cfg(windows)]
+    {
+        "powershell.exe".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        "/bin/bash".to_string()
+    }
+}
+
+/// The shell binary to spawn for a local terminal, reading the live `$SHELL`.
+fn default_local_shell() -> String {
+    resolve_shell(std::env::var("SHELL").ok().as_deref())
+}
+
 pub(crate) fn start_local_pty(
     machine_id: &str,
     work_dir: &Option<String>,
@@ -774,7 +802,7 @@ pub(crate) fn start_local_pty(
         })
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let shell = default_local_shell();
     let mut cmd = CommandBuilder::new(&shell);
     cmd.env("TERM", "xterm-256color");
     // Ensure a UTF-8 locale on macOS. A GUI launch (Finder/Dock) can hand the

@@ -1909,3 +1909,27 @@ fn drain_scan_and_forward_strips_sequence_and_surfaces_event() {
         "the demeteo sequence must be stripped from the forwarded bytes"
     );
 }
+
+#[test]
+fn resolve_shell_prefers_explicit_shell_env() {
+    // An explicit, non-empty $SHELL always wins on every OS (user override).
+    assert_eq!(super::resolve_shell(Some("/usr/bin/fish")), "/usr/bin/fish");
+    assert_eq!(
+        super::resolve_shell(Some("/opt/homebrew/bin/zsh")),
+        "/opt/homebrew/bin/zsh"
+    );
+}
+
+#[test]
+fn resolve_shell_falls_back_per_os_when_shell_absent_or_blank() {
+    // No $SHELL, or a blank one, drops to the platform default — never an empty
+    // program name, and on Windows never `/bin/bash` (which does not exist
+    // there — the fallback that made "open a terminal" fail on Windows).
+    #[cfg(windows)]
+    let expected = "powershell.exe";
+    #[cfg(not(windows))]
+    let expected = "/bin/bash";
+    assert_eq!(super::resolve_shell(None), expected);
+    assert_eq!(super::resolve_shell(Some("")), expected);
+    assert_eq!(super::resolve_shell(Some("   ")), expected);
+}
