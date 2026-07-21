@@ -202,7 +202,7 @@ fn spawn_test_session(
     JoinHandle<()>,
     ActiveSession,
 ) {
-    let (read_source, write_sink, keepalive, _child_pid) =
+    let (read_source, write_sink, keepalive, _child_pid, _settings) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let reader = match &read_source {
         ReadSource::LocalPty(r) => r.clone(),
@@ -260,7 +260,7 @@ fn spawn_test_session(
 /// and returns the live `session_id`. Used by the list / rename tests
 /// that need a real session entry without exercising the PTY plumbing.
 fn insert_test_session(state: &SessionState, session_id: &str) {
-    let (read_source, write_sink, keepalive, _child_pid) =
+    let (read_source, write_sink, keepalive, _child_pid, _settings) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let display_title: Mutex<Option<String>> = Mutex::new(None);
@@ -815,7 +815,7 @@ fn attach_replays_scrollback_to_new_channel() {
     let state = SessionState::default();
     app.manage(state);
 
-    let (read_source, write_sink, keepalive, _child_pid) =
+    let (read_source, write_sink, keepalive, _child_pid, _settings) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
@@ -870,7 +870,7 @@ fn attach_replay_does_not_duplicate_for_existing_subscribers() {
     let state = SessionState::default();
     app.manage(state);
 
-    let (read_source, write_sink, keepalive, _child_pid) =
+    let (read_source, write_sink, keepalive, _child_pid, _settings) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
@@ -1009,7 +1009,7 @@ fn insert_disconnected_session(
     if !seed.is_empty() {
         super::send_chunk(&frontend_channel, seed.to_vec());
     }
-    let (read_source, write_sink, keepalive, _child_pid) =
+    let (read_source, write_sink, keepalive, _child_pid, _settings) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let session = ActiveSession {
         read_source,
@@ -1219,7 +1219,7 @@ fn detect_agent_ignores_non_agents() {
 
 use super::{
     apply_cadence, apply_hook, apply_screen, cadence_state, decide_and_record, resolve,
-    sweep_activity_once, SessionActivity, CADENCE_WINDOW,
+    should_clear_activity_on_agent_exit, sweep_activity_once, SessionActivity, CADENCE_WINDOW,
 };
 use std::collections::HashMap as StdHashMap;
 
@@ -1273,6 +1273,46 @@ fn latch_clears_on_working_hook() {
     apply_hook(&mut sa, "awaiting_approval");
     apply_hook(&mut sa, "working");
     assert_eq!(resolve(&sa), "working");
+}
+
+/// Stuck-`working` backstop guard (T4.2): the detector clears activity only when
+/// the agent LEFT (Some→None) AND a record exists. A session that never emitted
+/// activity (no record) — or one whose agent is still present — is left alone,
+/// so no spurious `exit` is fired.
+#[test]
+fn clear_on_agent_exit_only_with_record_and_departure() {
+    let mut map: StdHashMap<String, SessionActivity> = StdHashMap::new();
+    map.insert("s1".to_string(), SessionActivity::default());
+
+    // Agent left + record present ⇒ clear.
+    assert!(should_clear_activity_on_agent_exit(&map, "s1", true));
+    // Agent left but NO record (plain shell / never active) ⇒ leave alone.
+    assert!(!should_clear_activity_on_agent_exit(&map, "absent", true));
+    // Record present but agent still there (agent_left == false) ⇒ leave alone.
+    assert!(!should_clear_activity_on_agent_exit(&map, "s1", false));
+}
+
+/// The backstop's clear path: a session stuck at hook-`working` (its `Stop`/
+/// `SessionEnd` was lost) resolves to `exit` when the detector folds in `exit`,
+/// and the record is REMOVED so a reused id starts clean — exactly what the
+/// detector triggers on a Some→None agent transition.
+#[test]
+fn agent_exit_clears_stuck_working_record() {
+    let mut map: StdHashMap<String, SessionActivity> = StdHashMap::new();
+    let mut sa = SessionActivity::default();
+    apply_hook(&mut sa, "working"); // hook tier pinned to working
+    sa.last_emitted = Some("working".to_string());
+    map.insert("s1".to_string(), sa);
+    assert_eq!(resolve(map.get("s1").unwrap()), "working");
+
+    // Detector observed the agent leave → folds in `exit`.
+    apply_hook(map.get_mut("s1").unwrap(), "exit");
+    let emitted = decide_and_record(&mut map, "s1");
+    assert_eq!(emitted.as_deref(), Some("exit"));
+    assert!(
+        !map.contains_key("s1"),
+        "an exited session's record is removed so a reused id starts clean"
+    );
 }
 
 /// Latch clears on an `awaiting_input` hook (Stop / idle — the source
@@ -1479,7 +1519,7 @@ fn canonical_screen_ordering_latches_then_clears() {
 /// Like `insert_test_session` but seeds an agent kind so the session passes
 /// the activity sweep's agent-gate.
 fn insert_agent_session(state: &SessionState, session_id: &str) {
-    let (read_source, write_sink, keepalive, _child_pid) =
+    let (read_source, write_sink, keepalive, _child_pid, _settings) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let active = ActiveSession {
@@ -1511,7 +1551,7 @@ fn insert_agent_session(state: &SessionState, session_id: &str) {
 /// `activity_nonce`), so the sweep must treat it as scanner-driven and skip the
 /// cadence floor.
 fn insert_hooked_agent_session(state: &SessionState, session_id: &str) {
-    let (read_source, write_sink, keepalive, _child_pid) =
+    let (read_source, write_sink, keepalive, _child_pid, _settings) =
         super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
     let frontend_channel: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
     let active = ActiveSession {
@@ -1643,7 +1683,8 @@ fn sweep_skips_hooked_sessions() {
 
 use super::{
     build_agent_launch_command, build_claude_activity_settings, drain_scan_and_forward,
-    is_hooked_agent_kind, shell_single_quote, write_activity_settings_file,
+    is_hooked_agent_kind, remote_activity_settings_path, shell_single_quote,
+    write_activity_settings_file,
 };
 
 /// Reverse `shell_single_quote` for a value produced by it: strip the wrapping
@@ -1734,6 +1775,30 @@ fn write_activity_settings_file_writes_valid_json_and_fits_launch_line() {
         cmd.len()
     );
     let _ = std::fs::remove_file(&path);
+}
+
+/// A remote hooked launch (T4.1) references a nonce-keyed file under the remote
+/// `/tmp` — the SFTP write target on the far host — and the resulting
+/// `--settings <remote-path>` launch line still fits the PTY input limit.
+#[test]
+fn remote_activity_settings_path_is_nonce_keyed_under_tmp_and_fits_launch_line() {
+    let nonce = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
+    let remote = remote_activity_settings_path(nonce);
+    assert_eq!(
+        remote,
+        format!("/tmp/demeteo-claude-activity-{nonce}.json"),
+        "remote path must be the nonce-keyed /tmp target the SFTP write uses"
+    );
+    // The same builder serves both transports; a remote POSIX path round-trips
+    // through `Path` on the host demeteo runs on (also POSIX), so the launch
+    // line comes out byte-identical to the file it points at.
+    let cmd = build_agent_launch_command("claude", std::path::Path::new(&remote));
+    assert_eq!(cmd, format!("claude --settings '{remote}'"));
+    assert!(
+        cmd.len() < 1024,
+        "remote launch line under MAX_CANON: {} bytes",
+        cmd.len()
+    );
 }
 
 /// The reporter settings JSON carries the nonce and one hook per §2d

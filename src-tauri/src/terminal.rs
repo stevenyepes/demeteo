@@ -200,14 +200,18 @@ pub enum SessionKeepalive {
 }
 
 /// The I/O handles a freshly started session hands back: the reader, the
-/// writer, a shared keepalive guard, and the child shell's pid (`None` when
-/// the transport can't report one). Shared by the local-PTY and SSH start
-/// paths so their signatures stay in lock-step.
+/// writer, a shared keepalive guard, the child shell's pid (`None` when the
+/// transport can't report one), and the remote path the reporter-hooks
+/// `--settings` file was placed at (`Some` only for a remote *hooked* launch
+/// whose SFTP write succeeded — `None` for local, for a plain shell, or when
+/// the remote write failed and the launch degrades to unhooked; T4.1). Shared
+/// by the local-PTY and SSH start paths so their signatures stay in lock-step.
 type SessionHandles = (
     ReadSource,
     WriteSink,
     Arc<Mutex<SessionKeepalive>>,
     Option<u32>,
+    Option<String>,
 );
 
 #[derive(Default)]
@@ -482,6 +486,38 @@ fn write_activity_settings_file(nonce: &str, settings_json: &str) -> std::io::Re
     Ok(path)
 }
 
+/// The remote reporter-hooks settings path for a hooked SSH launch (T4.1). A
+/// local temp path is meaningless on the far host, so remote hooked sessions
+/// place the file here — a fixed, nonce-keyed name under the remote `/tmp` (the
+/// one directory a POSIX SSH target reliably lets us write). Left behind on
+/// teardown (unlike the local file, which `ActiveSession`'s `Drop` removes):
+/// a stale nonce-named JSON in the remote `/tmp` is tiny and harmless, and we
+/// hold no live channel to clean it once the session's gone.
+fn remote_activity_settings_path(nonce: &str) -> String {
+    format!("/tmp/demeteo-claude-activity-{nonce}.json")
+}
+
+/// SFTP the reporter-hooks JSON onto the remote host at `remote_path` so a
+/// remote-launched Claude can read `--settings <remote_path>` (T4.1). Must run
+/// while `sess` is still blocking (before `set_blocking(false)`) and before the
+/// drain thread starts, so this synchronous write never races the interactive
+/// read over the shared libssh2 session. A failure (no SFTP subsystem,
+/// unwritable `/tmp`) is surfaced to the caller, which then degrades the launch
+/// to unhooked rather than pointing Claude at a missing file.
+fn write_remote_settings_file(
+    sess: &Session,
+    remote_path: &str,
+    settings_json: &str,
+) -> Result<(), String> {
+    let sftp = sess.sftp().map_err(|e| format!("open SFTP: {e}"))?;
+    let mut file = sftp
+        .create(Path::new(remote_path))
+        .map_err(|e| format!("create {remote_path}: {e}"))?;
+    file.write_all(settings_json.as_bytes())
+        .map_err(|e| format!("write {remote_path}: {e}"))?;
+    Ok(())
+}
+
 /// Build the launch line for a hooked agent: the base command the frontend
 /// would have written, with `--settings <path>` appended (preserving any user
 /// args already in `base_command`). We point Claude at a FILE rather than
@@ -574,49 +610,92 @@ pub fn start_terminal_session(
     // recently-active until its first quiet window elapses.
     let last_output_at: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
 
-    let (read_source, write_sink, keepalive, child_pid) = if machine.auth_type == "local" {
-        start_local_pty(&machine_id, &work_dir, &work_branch, cols, rows)?
-    } else {
-        start_ssh_session(&machine, &work_dir, &work_branch, cols, rows)?
-    };
     // Normalise an empty agent kind to `None` so a plain shell never carries
     // a phantom badge.
     let agent_kind = agent_kind.filter(|k| !k.trim().is_empty());
 
     // For a hooked agent kind (Claude), mint a per-session nonce so the drain
-    // scanner accepts only THIS launch's activity sequences, and hand the
-    // frontend a launch line augmented with reporter hooks. `launch_override`
-    // is the single-write contract's backend half: `Some` ⇒ the frontend
-    // writes this instead of its own base command (§2c).
+    // scanner accepts only THIS launch's activity sequences, and build the
+    // reporter-hooks JSON. Both are computed BEFORE the transport starts so the
+    // remote start path can SFTP the JSON onto the far host while its session is
+    // still blocking and before the drain thread reads (T4.1).
     let activity_nonce = agent_kind
         .as_deref()
         .filter(|k| is_hooked_agent_kind(k))
         .map(|_| generate_activity_nonce());
-    let (launch_override, activity_settings_path) = match (
+    // Reporter-hooks JSON, transport-agnostic. `Some` only for a hooked launch
+    // that also carries a base command to augment (§2c/§2d). Never the user's
+    // `~/.claude` nor the project `.claude/` settings — always a throwaway.
+    let activity_settings_json = match (
         agent_kind.as_deref(),
         activity_nonce.as_deref(),
         launch_command.as_deref(),
     ) {
-        (Some(kind), Some(nonce), Some(base)) => {
-            // Reporter hooks go to an ephemeral per-session file; the launch
-            // line is a short `claude --settings <path>` (NOT ~1.4 KB of inline
-            // JSON, which overran the PTY's 1024-byte canonical input limit and
-            // truncated the command). The file is a throwaway — never the
-            // user's `~/.claude` nor the project `.claude/` settings. A write
-            // failure degrades to an unhooked launch (frontend writes plain
-            // `base`) rather than breaking the launch outright — the nonce only
-            // gates precise activity, not correctness.
-            match build_claude_activity_settings(kind, nonce) {
-                Some(json) => match write_activity_settings_file(nonce, &json) {
+        (Some(kind), Some(nonce), Some(_base)) => build_claude_activity_settings(kind, nonce),
+        _ => None,
+    };
+
+    let is_local = machine.auth_type == "local";
+    let (read_source, write_sink, keepalive, child_pid, remote_settings_path) = if is_local {
+        start_local_pty(&machine_id, &work_dir, &work_branch, cols, rows)?
+    } else {
+        // Hand the remote start path the (remote path, JSON) so it places the
+        // settings file over SFTP and reports the path back for the launch line.
+        let remote_settings = match (activity_settings_json.as_deref(), activity_nonce.as_deref()) {
+            (Some(json), Some(nonce)) => Some((remote_activity_settings_path(nonce), json)),
+            _ => None,
+        };
+        start_ssh_session(
+            &machine,
+            &work_dir,
+            &work_branch,
+            cols,
+            rows,
+            remote_settings,
+        )?
+    };
+
+    // Backend half of the single-write contract (§2c): `launch_override` `Some`
+    // ⇒ the frontend writes this augmented `claude --settings <path>` instead of
+    // its own base command. Local writes an ephemeral file to the OS temp dir
+    // (`--settings <file>`, not ~1.4 KB of inline JSON, which overran the PTY's
+    // 1024-byte canonical input limit); remote already SFTP'd the file above and
+    // just references the returned remote path. Either way a placement failure
+    // degrades to an unhooked launch (frontend writes plain `base`) rather than
+    // breaking the launch — the nonce only gates precise activity, not
+    // correctness.
+    let (launch_override, activity_settings_path) = match (
+        activity_settings_json.as_deref(),
+        activity_nonce.as_deref(),
+        launch_command.as_deref(),
+    ) {
+        (Some(json), Some(nonce), Some(base)) => {
+            if is_local {
+                match write_activity_settings_file(nonce, json) {
                     Ok(path) => (Some(build_agent_launch_command(base, &path)), Some(path)),
                     Err(e) => {
                         eprintln!(
-                            "[terminal] activity settings file write failed: {e}; launching {kind} unhooked"
+                            "[terminal] activity settings file write failed: {e}; launching unhooked"
                         );
                         (None, None)
                     }
-                },
-                None => (None, None),
+                }
+            } else {
+                // The remote file lives on the far host, so it is NOT stored in
+                // `activity_settings_path` (whose `Drop` does a LOCAL
+                // `remove_file`); it is left in the remote `/tmp` (harmless).
+                match remote_settings_path {
+                    Some(remote_path) => (
+                        Some(build_agent_launch_command(base, Path::new(&remote_path))),
+                        None,
+                    ),
+                    None => {
+                        eprintln!(
+                            "[terminal] remote activity settings write failed; launching unhooked"
+                        );
+                        (None, None)
+                    }
+                }
             }
         }
         _ => (None, None),
@@ -760,7 +839,8 @@ pub(crate) fn start_local_pty(
     }));
 
     let _ = machine_id; // suppress unused warning
-    Ok((read_source, write_sink, keepalive, child_pid))
+                        // A local session never places a remote settings file (T4.1).
+    Ok((read_source, write_sink, keepalive, child_pid, None))
 }
 
 /// Build the bootstrap line that performs a `git checkout` of the supplied
@@ -791,6 +871,7 @@ fn start_ssh_session(
     work_branch: &Option<String>,
     cols: u16,
     rows: u16,
+    remote_settings: Option<(String, &str)>,
 ) -> Result<SessionHandles, String> {
     let secret = match machine.auth_type.as_str() {
         "password" | "key" => {
@@ -823,6 +904,22 @@ fn start_ssh_session(
         .shell()
         .map_err(|e| format!("Failed to start shell: {}", e))?;
 
+    // Place the reporter-hooks settings file on the far host over SFTP for a
+    // hooked launch (T4.1). Done here — session still blocking, drain not yet
+    // spawned — so the synchronous write never races the interactive read.
+    // A failure yields `None`, and the caller degrades the launch to unhooked
+    // rather than pointing `claude --settings` at a missing file.
+    let remote_settings_path = match remote_settings {
+        Some((path, json)) => match write_remote_settings_file(&sess, &path, json) {
+            Ok(()) => Some(path),
+            Err(e) => {
+                eprintln!("[terminal] remote activity settings SFTP failed: {e}");
+                None
+            }
+        },
+        None => None,
+    };
+
     if let Some(dir) = work_dir {
         let cd_cmd = format!("cd {} && clear\n", crate::paths::shell_escape_posix(dir));
         let _ = ssh_chan.write_all(cd_cmd.as_bytes());
@@ -839,7 +936,13 @@ fn start_ssh_session(
     let write_sink = WriteSink::Ssh(arc_chan);
     let keepalive = Arc::new(Mutex::new(SessionKeepalive::Ssh { session: sess, tcp }));
     // No local pid for a remote session — the shell runs on the far host.
-    Ok((read_source, write_sink, keepalive, None))
+    Ok((
+        read_source,
+        write_sink,
+        keepalive,
+        None,
+        remote_settings_path,
+    ))
 }
 
 /// Spawns the appropriate drain thread for a freshly-built transport,
@@ -1554,15 +1657,20 @@ pub(crate) fn reconnect_with_machine<R: Runtime>(
             DEFAULT_TERM_ROWS,
         )
     } else {
+        // Reconnect re-attaches to a still-running remote agent whose settings
+        // file was SFTP'd at first launch and survives the reconnect (like the
+        // local file, which `Drop` only removes on teardown), so no re-placement
+        // is needed here (T4.1).
         start_ssh_session(
             machine,
             &work_dir,
             &work_branch,
             DEFAULT_TERM_COLS,
             DEFAULT_TERM_ROWS,
+            None,
         )
     };
-    let (read_source, write_sink, keepalive, child_pid) = match built {
+    let (read_source, write_sink, keepalive, child_pid, _remote_settings_path) = match built {
         Ok(t) => t,
         Err(e) => {
             connected.store(false, Ordering::SeqCst);
@@ -1805,6 +1913,22 @@ fn detect_agents_once<R: Runtime>(app: &AppHandle<R>) {
         }
     }
     for (id, detected) in changes {
+        // Stuck-`working` backstop (T4.2): an agent that vanished from the
+        // process tree (Some→None) may have skipped its `SessionEnd` hook,
+        // leaving a stale activity record the sweep can no longer reach (it
+        // agent-gates on presence, which is now `None`). Clear it here — but
+        // only when a record exists — so the badge can't strand on a spinner
+        // after the agent is gone.
+        let should_clear = state
+            .activity
+            .lock()
+            .map(|m| should_clear_activity_on_agent_exit(&m, &id, detected.is_none()))
+            .unwrap_or(false);
+        if should_clear {
+            resolve_and_emit(app, &id, &state.activity, |sa| {
+                apply_hook(sa, activity_state::EXIT)
+            });
+        }
         let _ = app.emit(
             "terminal-session-agent",
             SessionInfo {
@@ -1946,6 +2070,32 @@ fn decide_and_record(map: &mut HashMap<String, SessionActivity>, id: &str) -> Op
         sa.last_emitted = Some(resolved.to_string());
     }
     Some(resolved.to_string())
+}
+
+/// Stuck-`working` backstop (T4.2). Whether the agent detector should clear a
+/// session's activity because its agent just left the process tree
+/// (`agent_left`, a Some→None transition). Guarded on an existing record: a
+/// plain shell — or an agent that never emitted activity — has none, and must
+/// NOT get a spurious `exit`.
+///
+/// Why the detector, not a silence TTL: the cadence floor SKIPS hooked sessions
+/// (a TUI agent repaints continuously — blinking cursor, rotating tips — so its
+/// byte stream never falls quiet), so silence can never reclaim a hooked
+/// session, and the hook tier outranks cadence in `resolve`. If a `SessionEnd`
+/// (or `Stop`) hook is lost, `working` would otherwise spin forever. The
+/// LOCAL process detector is the one signal that reliably says "the agent is
+/// gone" independent of the (possibly-lost) hook. The alive-but-idle case (lost
+/// `Stop`, agent still running) is instead recovered by Claude's own
+/// `idle_prompt` Notification (§2d → `awaiting_input`) and the next
+/// `UserPromptSubmit`. Remote hooked sessions have no `ps` to lean on and rely
+/// solely on those hook signals (documented gap, matching remote presence
+/// detection's own constraint).
+fn should_clear_activity_on_agent_exit(
+    map: &HashMap<String, SessionActivity>,
+    id: &str,
+    agent_left: bool,
+) -> bool {
+    agent_left && map.contains_key(id)
 }
 
 /// The single emit choke point both signal sources route through. Under the
