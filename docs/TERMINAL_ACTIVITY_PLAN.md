@@ -268,6 +268,53 @@ Ships: **"needs a decision" for Codex, OpenCode, and hand-started agents.**
 
 ---
 
+## Windows support
+
+Local terminals work on Windows, with the activity features degraded to
+best-effort. Three behaviors differ from the POSIX path (gated in `terminal.rs` /
+`lib.rs`, POSIX output unchanged). The split is scoped to the **local** shell —
+the SSH/remote path always targets a POSIX shell and is untouched regardless of
+the client OS (see the SSH note at the end):
+
+- **Shell = `%COMSPEC%` / `cmd.exe`.** `start_local_pty` selects the shell via a
+  shared `select_local_shell()` helper: `$SHELL`→`/bin/bash` on POSIX, and
+  `%COMSPEC%` (falling back to `cmd.exe`) on Windows — the interpreter guaranteed
+  to exist, so ConPTY/`portable-pty` can spawn it. The work-branch bootstrap line
+  is chosen by the *local* selector `branch_bootstrap_line`, which has a cmd.exe
+  variant (`git checkout … 2>nul || git switch … 2>nul & cls`, CRLF-terminated)
+  with a dedicated `cmd_double_quote` escaper; a non-existent branch still leaves
+  a usable terminal. The SSH path never calls this selector — it always emits the
+  POSIX bootstrap via `branch_bootstrap_line_posix`, so a Windows client opening a
+  remote terminal still sends `2>/dev/null … ; clear` to the remote `bash`/`sh`.
+
+- **Local agents run unhooked — no hook injection on the cmd.exe path.** The
+  agent-capability predicate `is_hooked_agent_kind` stays OS-agnostic (Claude Code
+  is still a "hooked" agent everywhere); whether the hook *transport* can actually
+  be used is a separate, session-scoped decision made by
+  `hook_transport_supported(is_local)`. The transport is POSIX-only — it emits
+  `printf '%s' '<json>'` and appends `--settings <path>` quoted with POSIX
+  single-quotes, none of which survive cmd.exe — so on Windows it returns `false`
+  for **local** sessions only. There, no launch override is emitted and
+  `start_terminal_session` returns `launch_command: None`; the frontend writes the
+  plain base command (bare `claude`, which cmd.exe resolves to `claude.cmd` via
+  `PATHEXT`), and the `awaiting_approval` / cadence signals come **only from the
+  on-screen OSC scanner** (Signal B2 / Phase 3), which is platform-neutral and
+  unchanged. SSH sessions (`is_local == false`) keep their hooks on any client —
+  their remote shell is always POSIX.
+
+- **Windows process-tree detector.** The agent-presence badge detector
+  (`ProcessTree::capture`) has a Windows implementation that builds the same
+  pid/ppid/command-line snapshot from a Windows source (`Get-CimInstance
+  Win32_Process`, run with `CREATE_NO_WINDOW`) instead of POSIX `ps`. It returns
+  `None` on any failure and never breaks the session. `detect_agent_in_command`
+  also strips `.cmd`/`.exe`/`.bat` (in addition to `.js`/`.mjs`) so `claude.cmd`
+  maps to `claude-code`.
+
+Remote hooked agents (Phase 4) are unaffected — the SSH path always uses the POSIX
+bootstrap and the POSIX hook transport, so a remote Claude keeps self-reporting
+even when the client is Windows (the Windows/POSIX split is keyed on the target
+shell, local vs. remote, never on the client's compile-time OS alone).
+
 ## 7. Open decisions
 
 1. ~~**Phase-2 transport spike** — `/dev/tty` from hooks vs hook-JSON
