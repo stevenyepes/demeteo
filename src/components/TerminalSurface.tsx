@@ -182,6 +182,13 @@ export function TerminalSurface({
       webgl.onContextLoss(() => {
         console.warn('[TerminalSurface] WebGL context lost, falling back to DOM renderer');
         webgl.dispose();
+        // Context loss wipes the GPU canvas's pixels; disposing the addon
+        // hands rendering back to xterm's DOM renderer, but nothing dirties
+        // the existing rows, so the last-painted screen would otherwise
+        // stay blank until unrelated output happened to touch each row. Force
+        // a full repaint of the current viewport now so the DOM renderer
+        // redraws what's already in the buffer immediately.
+        term.refresh(0, term.rows - 1);
       });
       term.loadAddon(webgl);
     } catch (err) {
