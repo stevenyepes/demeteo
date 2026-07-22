@@ -98,6 +98,36 @@ async fn test_detect_worktree_strategy_local() {
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 
+/// A polyglot repo (here: a Tauri-shaped `package.json` + `Cargo.toml`) must
+/// have *every* ecosystem's suite chained into the detected test command.
+/// Regression guard for the first-match-wins bug where detection returned only
+/// `npm test` (or only `cargo test`), so the verifier harness ran one language's
+/// suite and greenlit changes whose real gate never executed.
+#[tokio::test]
+async fn test_detect_worktree_strategy_polyglot_chains_all_suites() {
+    let (dir, helper) = make_repo("detect_polyglot").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = LocalSubprocessAdapter::new();
+    exec.write_file("local", &format!("{repo}/package.json"), "{}")
+        .await
+        .unwrap();
+    exec.write_file("local", &format!("{repo}/Cargo.toml"), "[package]")
+        .await
+        .unwrap();
+
+    let strategy = helper
+        .detect_worktree_strategy(None, &repo)
+        .await
+        .unwrap();
+    assert_eq!(
+        strategy.test_command,
+        Some("npm test && cargo test".to_string()),
+        "polyglot repo must run both the JS and Rust suites, not just the first match"
+    );
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Helper: create a fresh git repo in a temp dir and return (repo_dir, git_ops).
 async fn make_repo(suffix: &str) -> (std::path::PathBuf, GitOpsHelper) {
     let temp_dir = std::env::temp_dir().join(format!(
