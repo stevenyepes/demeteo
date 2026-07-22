@@ -9,6 +9,8 @@ import { afterEach, vi } from "vitest";
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  webglAddonStubs.length = 0;
+  terminalStubs.length = 0;
 });
 
 // --- Tauri IPC -------------------------------------------------------------
@@ -105,16 +107,23 @@ vi.mock("@monaco-editor/react", () => ({
 // jest functions so tests can still assert "the surface called attach"
 // without actually painting anything.
 
+export const terminalStubs: TerminalStub[] = [];
+
 class TerminalStub {
   write = vi.fn();
   clear = vi.fn();
   dispose = vi.fn();
   reset = vi.fn();
+  refresh = vi.fn();
   onData = vi.fn();
   loadAddon = vi.fn();
   open = vi.fn();
   cols = 80;
   rows = 24;
+
+  constructor() {
+    terminalStubs.push(this);
+  }
 }
 
 class FitAddonStub {
@@ -123,11 +132,21 @@ class FitAddonStub {
 }
 
 // WebglAddon reaches for a real WebGL context, which jsdom does not provide.
-// Inert stand-in: `onContextLoss` is a no-op registrar and `dispose` a spy, so
+// Inert stand-in: `onContextLoss` captures the registered callback (so a test
+// can simulate a GPU context loss) and `dispose` is a spy, so
 // TerminalSurface's renderer-setup path runs without touching the GPU.
+export const webglAddonStubs: WebglAddonStub[] = [];
+
 class WebglAddonStub {
-  onContextLoss = vi.fn();
+  contextLossHandler: (() => void) | null = null;
+  onContextLoss = vi.fn((cb: () => void) => {
+    this.contextLossHandler = cb;
+  });
   dispose = vi.fn();
+
+  constructor() {
+    webglAddonStubs.push(this);
+  }
 }
 
 vi.mock("@xterm/xterm", () => ({
