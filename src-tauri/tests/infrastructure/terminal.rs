@@ -233,7 +233,10 @@ fn branch_bootstrap_posix_is_posix_on_every_platform() {
 #[test]
 fn cmd_double_quote_neutralises_metacharacters() {
     // Plain value: wrapped in quotes, otherwise untouched.
-    assert_eq!(cmd_double_quote("demeteo/features/abc"), "\"demeteo/features/abc\"");
+    assert_eq!(
+        cmd_double_quote("demeteo/features/abc"),
+        "\"demeteo/features/abc\""
+    );
 
     // Every metacharacter gets a leading caret; the whole thing stays quoted.
     assert_eq!(

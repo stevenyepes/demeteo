@@ -513,8 +513,6 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // The Windows PATH-enrichment branch mutates the process env in place and
     // only rewrites PATH when at least one existing agent-install directory was
     // appended. There is no return value to assert, so this is a smoke test: it
@@ -524,6 +522,6 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn enrich_env_path_runs_without_panicking_on_windows() {
-        enrich_env_path();
+        crate::enrich_env_path();
     }
 }
