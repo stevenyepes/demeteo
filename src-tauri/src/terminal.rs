@@ -1920,7 +1920,11 @@ fn detect_agent_in_command(command: &str) -> Option<&'static str> {
         let lower = base.to_ascii_lowercase();
         let base = SUFFIXES
             .iter()
-            .find_map(|suf| lower.strip_suffix(suf).map(|_| &base[..base.len() - suf.len()]))
+            .find_map(|suf| {
+                lower
+                    .strip_suffix(suf)
+                    .map(|_| &base[..base.len() - suf.len()])
+            })
             .unwrap_or(base);
         if let Some(kind) = agent_kind_for_binary(base) {
             return Some(kind);
