@@ -753,12 +753,18 @@ body {
   animation: spin 3s linear infinite;
 }
 
+/* Compositor-cheap pulse: animate ONLY opacity (GPU-composited, no per-frame
+   repaint/raster). The glow is a STATIC box-shadow on the element, faded in and
+   out by the opacity keyframe — so we get the same visual pulse without
+   re-rasterizing box-shadow/scale every frame. Animating box-shadow or scale
+   here previously pinned the WKWebView GPU process at idle. */
 @keyframes pulse-glow {
-  0%, 100% { opacity: 0.35; transform: scale(0.85); box-shadow: 0 0 0 0 rgba(6, 182, 212, 0); }
-  50%      { opacity: 1;    transform: scale(1.1);  box-shadow: 0 0 12px 2px rgba(6, 182, 212, 0.55); }
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
 }
 
 .animate-pulse-glow {
+  box-shadow: 0 0 10px 1px rgba(6, 182, 212, 0.5);
   animation: pulse-glow 1.2s ease-in-out infinite;
 }
 
@@ -788,6 +794,28 @@ body {
   );
   background-size: 200% 100%;
   animation: progress-shimmer 1.6s linear infinite;
+}
+
+/* ----------------------------------------------------
+   REDUCED MOTION
+   ----------------------------------------------------
+   When the OS requests reduced motion, stop every always-on/infinite
+   animation. This is both the accessibility default and a battery win: it
+   lets the WKWebView compositor go fully idle. One-shot enter animations
+   (fade-in, slide-in) are collapsed to instant. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-glow,
+  .animate-spin,
+  .animate-spin-slow,
+  .animate-progress-shimmer,
+  .pulse-indicator {
+    animation: none !important;
+  }
+
+  .animate-fade-in,
+  .animate-slide-in {
+    animation-duration: 0.01ms !important;
+  }
 }
 
 /* ----------------------------------------------------

@@ -18,9 +18,12 @@ const EmptyStateCard: React.FC<EmptyStateCardProps> = ({
 }) => {
   return (
     <div className="flex-1 flex items-center justify-center relative overflow-hidden">
-      {/* Background radial gradients for that neon look */}
-      <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-violet-600/20 rounded-full blur-[120px] pointer-events-none animate-pulse-glow" />
-      <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-cyan-600/20 rounded-full blur-[100px] pointer-events-none animate-pulse-glow-delay-1" />
+      {/* Background radial gradients for that neon look. Static (no pulse):
+          animating a 500px blur-[120px] element forces the WKWebView compositor
+          to re-rasterize the blur every frame, which pinned the GPU process at
+          idle. A static blur is painted once and cached. */}
+      <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-violet-600/20 rounded-full blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-cyan-600/20 rounded-full blur-[100px] pointer-events-none" />
 
       <div className="glass-panel max-w-2xl w-full p-10 flex flex-col items-center text-center relative z-10 border-white/10 hover:border-white/20 transition-all duration-500">
         
