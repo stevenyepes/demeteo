@@ -1,7 +1,38 @@
 // Tests extracted from `src-tauri/src/terminal.rs` (mirrored-tests convention). `super` = that module.
 
 use super::branch_bootstrap_line;
+use super::branch_bootstrap_line_posix;
+use super::cmd_double_quote;
+use super::select_local_shell;
 use super::{agent_kind_for_binary, detect_agent_in_command};
+
+/// The non-Windows arm honours `$SHELL`/`/bin/bash`, so the selected shell
+/// must always be a non-empty absolute POSIX path — never the empty string
+/// that would make `portable-pty` fail to spawn.
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn select_local_shell_returns_non_empty_posix_shell() {
+    let shell = select_local_shell();
+    assert!(!shell.is_empty(), "shell must not be empty: {shell:?}");
+    assert!(
+        shell.starts_with('/'),
+        "expected an absolute POSIX shell path: {shell:?}"
+    );
+}
+
+/// The Windows arm returns `%COMSPEC%` when set, else `cmd.exe` — never
+/// `/bin/bash`, which ConPTY can't spawn.
+#[cfg(target_os = "windows")]
+#[test]
+fn select_local_shell_returns_windows_command_processor() {
+    let shell = select_local_shell();
+    let expected = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+    assert_eq!(shell, expected, "Windows shell must be COMSPEC/cmd.exe");
+    assert!(
+        !shell.contains("/bin/bash"),
+        "Windows must never select /bin/bash: {shell:?}"
+    );
+}
 
 /// `None` (no pipeline context, e.g. `ProjectHome`) must skip the
 /// bootstrap entirely — no `git checkout`, no `clear`, no noise.
@@ -20,6 +51,7 @@ fn branch_bootstrap_returns_none_for_blank_branch() {
 
 /// A well-formed branch produces a `checkout || switch` line and
 /// always ends with `clear\n` so the prompt lands on the new branch.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn branch_bootstrap_emits_checkout_then_switch_with_clear() {
     let line = branch_bootstrap_line(&Some("demeteo/features/abc".into()))
@@ -46,6 +78,7 @@ fn branch_bootstrap_emits_checkout_then_switch_with_clear() {
 /// must be shell-escaped so a malicious / malformed feature id cannot
 /// inject extra commands. The escape function itself is unit-tested
 /// in `shared/shell.rs`; this test guards the wiring here.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn branch_bootstrap_escapes_shell_metacharacters() {
     let line =
@@ -65,6 +98,7 @@ fn branch_bootstrap_escapes_shell_metacharacters() {
 /// A `branch` with a stray single quote is the trickiest case: it
 /// must be quoted and the inner `'` escaped via the standard
 /// `'\''` POSIX trick.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn branch_bootstrap_handles_inner_single_quote() {
     let line = branch_bootstrap_line(&Some("feat'bad".into())).expect("bootstrap must be Some");
@@ -74,15 +108,154 @@ fn branch_bootstrap_handles_inner_single_quote() {
     );
 }
 
+/// The cmd.exe variant of the bootstrap line: a well-formed branch produces a
+/// double-quoted `checkout || switch` chain that redirects to `nul`, chains
+/// the screen clear with `&`, clears via `cls`, and terminates with CRLF so
+/// cmd.exe runs the buffered bytes as one finished command line. The
+/// missing-branch tolerance (checkout falls through to switch) is preserved.
+#[cfg(target_os = "windows")]
+#[test]
+fn branch_bootstrap_emits_cmd_checkout_then_switch_with_cls() {
+    let line = branch_bootstrap_line(&Some("demeteo/features/abc".into()))
+        .expect("bootstrap must be Some");
+    assert!(
+        line.starts_with("git checkout \"demeteo/features/abc\" 2>nul"),
+        "unexpected line: {line:?}"
+    );
+    assert!(
+        line.contains("|| git switch \"demeteo/features/abc\" 2>nul"),
+        "missing switch fallback: {line:?}"
+    );
+    assert!(line.contains("2>nul"), "must redirect to nul: {line:?}");
+    assert!(
+        line.contains("& cls"),
+        "must chain a cmd screen clear: {line:?}"
+    );
+    assert!(
+        line.trim_end().ends_with("cls"),
+        "must clear via cls: {line:?}"
+    );
+    assert!(
+        !line.contains("2>/dev/null") && !line.contains("clear\n"),
+        "POSIX syntax leaked into cmd variant: {line:?}"
+    );
+    assert!(
+        line.ends_with("\r\n"),
+        "cmd variant must terminate with CRLF: {line:?}"
+    );
+}
+
+/// Branch names containing cmd metacharacters must be double-quoted and
+/// caret-escaped so a malformed feature id cannot inject a second command
+/// under cmd.exe. The escape function is unit-tested separately; this guards
+/// the wiring.
+#[cfg(target_os = "windows")]
+#[test]
+fn branch_bootstrap_cmd_escapes_metacharacters() {
+    let line =
+        branch_bootstrap_line(&Some("evil&del /q *".into())).expect("bootstrap must be Some");
+    // The `&` (command separator) must be caret-escaped inside the quotes.
+    assert!(
+        line.contains("\"evil^&del /q *\""),
+        "cmd metachars must be quoted and caret-escaped: {line:?}"
+    );
+    // The unescaped separator must NOT appear as a bare command boundary —
+    // that would be the injection vector.
+    assert!(
+        !line.contains("checkout \"evil&del"),
+        "unescaped `&` leaked into command: {line:?}"
+    );
+}
+
 /// Surrounding whitespace is trimmed so `"  main  "` (e.g. from a UI
 /// input) doesn't produce `git checkout   main` with extra spaces
 /// that git refuses.
 #[test]
 fn branch_bootstrap_trims_surrounding_whitespace() {
     let line = branch_bootstrap_line(&Some("  feat/x  ".into())).expect("bootstrap must be Some");
+    // Platform-agnostic: POSIX emits `checkout feat/x`, cmd emits
+    // `checkout "feat/x"` — both must carry the trimmed branch and neither the
+    // leading nor trailing whitespace of the input.
+    assert!(line.contains("feat/x"), "trimmed branch missing: {line:?}");
     assert!(
-        line.contains(" checkout feat/x "),
-        "branch not trimmed: {line:?}"
+        !line.contains("  feat/x"),
+        "leading whitespace not trimmed: {line:?}"
+    );
+    assert!(
+        !line.contains("feat/x  "),
+        "trailing whitespace not trimmed: {line:?}"
+    );
+}
+
+/// The SSH/remote path calls [`branch_bootstrap_line_posix`] directly (the
+/// remote host is unconditionally a POSIX shell) rather than the client-OS
+/// selector [`branch_bootstrap_line`]. This test runs on **every** platform —
+/// including the Windows CI leg — to guarantee the SSH bootstrap stays POSIX
+/// and never leaks cmd.exe syntax (`2>nul`, `& cls`, double quotes) to a remote
+/// `bash`/`sh`, which would drop a stray `nul` file and print `cls: command not
+/// found`. Regression guard for critic issue C1.
+#[test]
+fn branch_bootstrap_posix_is_posix_on_every_platform() {
+    let line = branch_bootstrap_line_posix(&Some("demeteo/features/abc".into()))
+        .expect("bootstrap must be Some");
+    assert!(
+        line.starts_with("git checkout demeteo/features/abc 2>/dev/null"),
+        "SSH bootstrap must use POSIX /dev/null: {line:?}"
+    );
+    assert!(
+        line.contains("|| git switch demeteo/features/abc 2>/dev/null"),
+        "missing POSIX switch fallback: {line:?}"
+    );
+    assert!(
+        line.trim_end().ends_with("clear"),
+        "SSH bootstrap must clear via POSIX `clear`: {line:?}"
+    );
+    // cmd.exe syntax must NEVER appear on the remote-shell path, on any client.
+    assert!(
+        !line.contains("2>nul") && !line.contains("cls") && !line.contains('"'),
+        "cmd.exe syntax leaked into the POSIX/remote bootstrap: {line:?}"
+    );
+    assert!(
+        line.ends_with('\n') && !line.ends_with("\r\n"),
+        "POSIX bootstrap must use a bare LF terminator: {line:?}"
+    );
+    // Contract parity with the selector: absent/blank branch yields None.
+    assert!(branch_bootstrap_line_posix(&None).is_none());
+    assert!(branch_bootstrap_line_posix(&Some("   ".to_string())).is_none());
+}
+
+/// Direct, cross-platform unit test of the cmd.exe escaper (critic M2). It is
+/// the command-injection guard for the Windows local-bootstrap path, so — like
+/// its POSIX sibling `shell_single_quote` — it must have executed coverage on
+/// the POSIX CI leg, not only inside `#[cfg(target_os = "windows")]` wiring
+/// tests. Verifies the double-quote wrap and that every cmd metacharacter is
+/// caret-prefixed so an injected value cannot start a second command.
+#[test]
+fn cmd_double_quote_neutralises_metacharacters() {
+    // Plain value: wrapped in quotes, otherwise untouched.
+    assert_eq!(
+        cmd_double_quote("demeteo/features/abc"),
+        "\"demeteo/features/abc\""
+    );
+
+    // Every metacharacter gets a leading caret; the whole thing stays quoted.
+    assert_eq!(
+        cmd_double_quote("a&b|c<d>e%f^g\"h"),
+        "\"a^&b^|c^<d^>e^%f^^g^\"h\""
+    );
+
+    // The classic break-out attempt: a `"` to close the string then `& del`.
+    let escaped = cmd_double_quote("x\"&del /q *");
+    assert_eq!(escaped, "\"x^\"^&del /q *\"");
+    // The injected `"` is caret-guarded, so it cannot close the argument and
+    // the `&` cannot become a bare command separator.
+    assert!(
+        !escaped.contains("\"&del"),
+        "unescaped break-out sequence survived: {escaped:?}"
+    );
+    assert!(
+        escaped.starts_with('"') && escaped.ends_with('"'),
+        "result must be wrapped in double quotes: {escaped:?}"
     );
 }
 
@@ -1205,6 +1378,41 @@ fn detect_agent_ignores_non_agents() {
     assert_eq!(detect_agent_in_command(""), None);
 }
 
+/// On Windows the agents install as `claude.cmd` / `claude.exe` / `codex.exe`;
+/// the `.cmd`/`.exe`/`.bat` suffix is stripped (case-insensitively, and with
+/// backslash-separated paths) so the bare-name tables still match. Stripping
+/// is not cfg-gated, so this runs on every host.
+#[test]
+fn detect_agent_matches_windows_launchers() {
+    assert_eq!(
+        detect_agent_in_command("C:/Users/x/claude.cmd --resume"),
+        Some("claude-code")
+    );
+    assert_eq!(
+        detect_agent_in_command("C:\\Users\\x\\AppData\\claude.exe"),
+        Some("claude-code")
+    );
+    // Suffix matching is case-insensitive (here `.EXE`).
+    assert_eq!(
+        detect_agent_in_command("C:\\tools\\codex.EXE serve"),
+        Some("codex")
+    );
+    assert_eq!(
+        detect_agent_in_command("opencode.bat --version"),
+        Some("opencode")
+    );
+    // A `.txt` still isn't a launcher suffix, so no false positive.
+    assert_eq!(detect_agent_in_command("C:\\notes\\claude.txt"), None);
+}
+
+/// The Windows `ProcessTree::capture` shells out to PowerShell and must never
+/// panic — a snapshot failure returns `None` and the detector skips the pass.
+#[cfg(target_os = "windows")]
+#[test]
+fn process_tree_capture_does_not_panic_on_windows() {
+    let _ = super::ProcessTree::capture();
+}
+
 // --- Activity precedence resolver + cadence sweep (T1.2 / T1.9 / T2.4) -------
 //
 // The cadence read is factored into the pure `cadence_state` and the §2
@@ -1683,8 +1891,8 @@ fn sweep_skips_hooked_sessions() {
 
 use super::{
     build_agent_launch_command, build_claude_activity_settings, drain_scan_and_forward,
-    is_hooked_agent_kind, remote_activity_settings_path, shell_single_quote,
-    write_activity_settings_file,
+    hook_transport_supported, is_hooked_agent_kind, remote_activity_settings_path,
+    shell_single_quote, write_activity_settings_file,
 };
 
 /// Reverse `shell_single_quote` for a value produced by it: strip the wrapping
@@ -1699,14 +1907,44 @@ fn shell_single_unquote(quoted: &str) -> String {
     inner.replace("'\\''", "'")
 }
 
-/// Only Claude is hooked for now — the gate for both the nonce and the
-/// `--settings` augmentation.
+/// Only Claude is hooked for now — a pure agent-CAPABILITY predicate, so it is
+/// OS-agnostic (Claude is "hookable" on every platform; whether the transport
+/// is usable is decided separately by `hook_transport_supported`).
 #[test]
 fn is_hooked_agent_kind_is_claude_only() {
     assert!(is_hooked_agent_kind("claude-code"));
     assert!(!is_hooked_agent_kind("opencode"));
     assert!(!is_hooked_agent_kind("codex"));
     assert!(!is_hooked_agent_kind(""));
+}
+
+/// SSH sessions (`is_local == false`) always target a POSIX remote shell, so
+/// the POSIX-only hook transport is supported for them on every client OS —
+/// this is the guard that keeps a Windows client's remote agents hooked
+/// (critic C2). Executed on every platform.
+#[test]
+fn hook_transport_supported_for_ssh_on_every_client() {
+    assert!(hook_transport_supported(false));
+}
+
+/// On a non-Windows client the LOCAL shell is POSIX too, so a local session
+/// stays hooked.
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn hook_transport_supported_for_local_on_posix() {
+    assert!(hook_transport_supported(true));
+}
+
+/// On a Windows client a LOCAL agent runs under cmd.exe, where the POSIX hook
+/// transport (`printf` reporter + POSIX-quoted `--settings`) is invalid, so it
+/// degrades to UNHOOKED — no launch override or reporter is emitted and the
+/// frontend writes the plain base command (activity via the OSC scanner only).
+/// The SSH path stays hooked even here.
+#[cfg(target_os = "windows")]
+#[test]
+fn hook_transport_unsupported_for_local_on_windows() {
+    assert!(!hook_transport_supported(true));
+    assert!(hook_transport_supported(false));
 }
 
 /// `shell_single_quote` wraps a value and escapes an embedded single quote with

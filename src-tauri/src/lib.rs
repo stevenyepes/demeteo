@@ -87,6 +87,48 @@ fn enrich_env_path() {
             }
         }
     }
+
+    // Enrich local PATH so coding agents installed via npm-global, cargo, scoop,
+    // etc. are discoverable when Demeteo is launched from Explorer/Start menu on
+    // Windows (a GUI launch only inherits the user's persisted PATH).
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(current_path) = std::env::var("PATH") {
+            let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(&current_path).collect();
+
+            let mut additional_paths: Vec<std::path::PathBuf> = Vec::new();
+
+            // npm-global `.cmd` shims (e.g. claude.cmd) live in %APPDATA%\npm.
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                additional_paths.push(std::path::PathBuf::from(appdata).join("npm"));
+            }
+            // Per-user installers commonly drop binaries under %LOCALAPPDATA%\Programs.
+            if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+                additional_paths.push(std::path::PathBuf::from(local_appdata).join("Programs"));
+            }
+            if let Ok(userprofile) = std::env::var("USERPROFILE") {
+                let profile = std::path::PathBuf::from(userprofile);
+                // cargo-installed binaries.
+                additional_paths.push(profile.join(".cargo").join("bin"));
+                // scoop shims.
+                additional_paths.push(profile.join("scoop").join("shims"));
+            }
+
+            let mut changed = false;
+            for p in additional_paths {
+                if p.exists() && !paths.contains(&p) {
+                    paths.push(p);
+                    changed = true;
+                }
+            }
+
+            if changed {
+                if let Ok(new_path) = std::env::join_paths(paths) {
+                    std::env::set_var("PATH", new_path);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -467,4 +509,19 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    // The Windows PATH-enrichment branch mutates the process env in place and
+    // only rewrites PATH when at least one existing agent-install directory was
+    // appended. There is no return value to assert, so this is a smoke test: it
+    // exercises the `#[cfg(target_os = "windows")]` block end-to-end (var reads,
+    // existence guard, join_paths) and confirms it runs without panicking. It is
+    // gated to Windows so it only compiles/runs where that branch is active.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn enrich_env_path_runs_without_panicking_on_windows() {
+        crate::enrich_env_path();
+    }
 }

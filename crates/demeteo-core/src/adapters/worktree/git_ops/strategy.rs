@@ -57,37 +57,87 @@ impl GitOpsHelper {
             }
         }
 
-        // 3. Infer test command
-        let mut test_command = None;
-        if self
-            .exec
-            .get_metadata(machine_str, &format!("{}/package.json", repo_dir))
-            .await
-            .is_ok()
-        {
-            test_command = Some("npm test".to_string());
-        } else if self
-            .exec
-            .get_metadata(machine_str, &format!("{}/Cargo.toml", repo_dir))
-            .await
-            .is_ok()
-        {
-            test_command = Some("cargo test".to_string());
-        } else if self
-            .exec
-            .get_metadata(machine_str, &format!("{}/go.mod", repo_dir))
-            .await
-            .is_ok()
-        {
-            test_command = Some("go test ./...".to_string());
-        } else if self
-            .exec
-            .get_metadata(machine_str, &format!("{}/requirements.txt", repo_dir))
-            .await
-            .is_ok()
-        {
-            test_command = Some("pytest".to_string());
+        // 3. Detect ecosystems once, then derive test + build commands from the
+        // same set. A polyglot repo (a Tauri app is package.json *and*
+        // Cargo.toml; a Go service with a JS frontend is go.mod *and*
+        // package.json) needs *every* ecosystem's suite to run. The old
+        // first-match-wins picked a single command and silently dropped the
+        // rest, so the verifier's harness could run e.g. only `cargo test` for
+        // a TypeScript-only change — a gate that passes while the change's real
+        // suite (`tsc`/vitest) never executed, reporting a red build as green
+        // and looping the implement retry forever. Collecting the ecosystem set
+        // in one pass keeps the test and build command lists from drifting (the
+        // build command had the same first-match-wins bug), and stats each
+        // marker file only once. A user can still override with a single
+        // explicit command (e.g. a repo's own `npm run checks` aggregate) in
+        // settings.
+        struct Ecosystem {
+            marker: &'static str,
+            test: &'static str,
+            build: Option<&'static str>,
         }
+        const ECOSYSTEMS: &[Ecosystem] = &[
+            Ecosystem {
+                marker: "package.json",
+                test: "npm test",
+                build: Some("npm run build"),
+            },
+            Ecosystem {
+                marker: "Cargo.toml",
+                test: "cargo test",
+                build: Some("cargo build"),
+            },
+            Ecosystem {
+                marker: "go.mod",
+                test: "go test ./...",
+                build: Some("go build ./..."),
+            },
+            Ecosystem {
+                marker: "requirements.txt",
+                test: "pytest",
+                build: None,
+            },
+        ];
+
+        let mut test_cmds: Vec<&str> = Vec::new();
+        let mut build_cmds: Vec<&str> = Vec::new();
+        for eco in ECOSYSTEMS {
+            if self
+                .exec
+                .get_metadata(machine_str, &format!("{}/{}", repo_dir, eco.marker))
+                .await
+                .is_ok()
+            {
+                test_cmds.push(eco.test);
+                if let Some(b) = eco.build {
+                    build_cmds.push(b);
+                }
+            }
+        }
+
+        // Chain all detected suites so every one runs each verify and the
+        // harness fails if ANY suite fails (not just the first). `&&` would let
+        // an unrelated red in an earlier suite mask or block a change whose real
+        // gate runs later; the `rc` accumulator runs every suite and preserves a
+        // non-zero exit. Runs under the login shell (`run_command_with`), so
+        // `set +e`/`$?`/`exit` behave. A single-ecosystem repo (the common case)
+        // keeps the bare command so it reads cleanly in settings.
+        let run_all = |cmds: &[&str]| -> Option<String> {
+            match cmds {
+                [] => None,
+                [only] => Some((*only).to_string()),
+                _ => {
+                    let body = cmds
+                        .iter()
+                        .map(|c| format!("{c}; rc=$((rc||$?))"))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    Some(format!("set +e; rc=0; {body}; exit $rc"))
+                }
+            }
+        };
+        let test_command = run_all(&test_cmds);
+        let build_command = run_all(&build_cmds);
 
         // 4. Auto-detect project conventions file (for {{project_conventions}} injection).
         // Priority order: AGENTS.md, CLAUDE.md, .cursor/rules/rules.md
@@ -105,32 +155,6 @@ impl GitOpsHelper {
                 break;
             }
         }
-
-        // 5. Infer build command
-        let build_command = if self
-            .exec
-            .get_metadata(machine_str, &format!("{}/package.json", repo_dir))
-            .await
-            .is_ok()
-        {
-            Some("npm run build".to_string())
-        } else if self
-            .exec
-            .get_metadata(machine_str, &format!("{}/Cargo.toml", repo_dir))
-            .await
-            .is_ok()
-        {
-            Some("cargo build".to_string())
-        } else if self
-            .exec
-            .get_metadata(machine_str, &format!("{}/go.mod", repo_dir))
-            .await
-            .is_ok()
-        {
-            Some("go build ./...".to_string())
-        } else {
-            None
-        };
 
         Ok(WorktreeStrategy {
             default_branch,

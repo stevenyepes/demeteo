@@ -61,6 +61,12 @@ Open the `.dmg`, drag Demeteo to Applications. Intel Macs are not currently supp
 
 Run the `.msi` for a standard installer, or the `.exe` (NSIS) for a single-file install.
 
+Local terminals open under `cmd.exe` (from `%COMSPEC%`, falling back to `cmd.exe`).
+Agent-activity hooks are not injected into local Windows terminals — local agents
+run unhooked, and their live working/waiting/needs-a-decision indicators come only
+from the on-screen output scanner. (Agents on remote SSH hosts still run hooked;
+that path is always POSIX.) See [`docs/TERMINAL_ACTIVITY_PLAN.md`](docs/TERMINAL_ACTIVITY_PLAN.md#windows-support).
+
 ---
 
 A nightly pre-release is published automatically on every push to `master` — use it for testing, not production.
@@ -70,7 +76,12 @@ A nightly pre-release is published automatically on every push to `master` — u
 - [Rust](https://rustup.rs/) stable 1.77+
 - Node.js 20+
 - [Tauri v2 system dependencies](https://tauri.app/start/prerequisites/)
-- At least one agent above installed and reachable from your `$PATH`
+- At least one agent above installed and reachable from your `$PATH` (Windows:
+  `%PATH%`). On Windows, Demeteo also auto-enriches `PATH` at launch with the
+  common per-user agent-install locations — `%APPDATA%\npm` (npm-global `.cmd`
+  shims), `%LOCALAPPDATA%\Programs`, `%USERPROFILE%\.cargo\bin`, and
+  `%USERPROFILE%\scoop\shims` — so GUI-launched agents are found even when the
+  desktop session's `PATH` is minimal.
 
 ## Getting started
 
