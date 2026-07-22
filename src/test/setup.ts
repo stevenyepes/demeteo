@@ -122,12 +122,24 @@ class FitAddonStub {
   proposeDimensions = vi.fn();
 }
 
+// WebglAddon reaches for a real WebGL context, which jsdom does not provide.
+// Inert stand-in: `onContextLoss` is a no-op registrar and `dispose` a spy, so
+// TerminalSurface's renderer-setup path runs without touching the GPU.
+class WebglAddonStub {
+  onContextLoss = vi.fn();
+  dispose = vi.fn();
+}
+
 vi.mock("@xterm/xterm", () => ({
   Terminal: TerminalStub,
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: FitAddonStub,
+}));
+
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: WebglAddonStub,
 }));
 
 // --- Browser APIs jsdom omits ----------------------------------------------
