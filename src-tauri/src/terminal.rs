@@ -341,10 +341,48 @@ mod activity_state {
 }
 
 /// Whether an agent kind self-reports activity via injected hooks (Phase 2).
-/// Only Claude for now; extended as more agents grow a hook transport. Gates
-/// both the per-session nonce and the `--settings` launch-line augmentation.
+/// Only Claude for now; extended as more agents grow a hook transport. This is
+/// a pure agent-CAPABILITY predicate and is deliberately OS-agnostic: whether
+/// the hook TRANSPORT can actually be used for a given session (it is
+/// POSIX-only) is a separate, transport-scoped decision made by
+/// [`hook_transport_supported`]. Keeping the two apart is what lets a Windows
+/// client keep its always-POSIX SSH sessions hooked while degrading only its
+/// cmd.exe LOCAL sessions to unhooked.
 fn is_hooked_agent_kind(kind: &str) -> bool {
     kind == "claude-code"
+}
+
+/// Whether the injected-hook activity transport can be used for a session,
+/// given whether that session is LOCAL (`is_local == true`) or SSH
+/// (`is_local == false`). The transport is POSIX-only: `activity_reporter_command`
+/// emits `printf '%s' '<json>'` (no `printf`, single-quotes misbehave under
+/// cmd.exe) and `build_agent_launch_command` appends `--settings <path>` quoted
+/// with the POSIX `shell_single_quote` (wrong for cmd.exe, and %USERPROFILE%
+/// temp paths often contain spaces).
+///
+/// So on a Windows client a LOCAL agent (which runs under cmd.exe) degrades to
+/// UNHOOKED: `activity_nonce` stays `None`, the whole `--settings` launch
+/// override is bypassed, `start_terminal_session` returns `launch_command:
+/// None`, and the frontend writes the plain base command (bare `claude`, which
+/// cmd.exe resolves to `claude.cmd` via PATHEXT). Activity is then best-effort
+/// via the on-screen OSC scanner (`activity_scanner.rs`), the existing fallback
+/// for non-hooked agents.
+///
+/// The SSH path is deliberately UNAFFECTED: an SSH session always targets a
+/// POSIX remote shell (`shell_escape_posix`, `cd … && clear`), so a hooked
+/// remote agent keeps self-reporting regardless of the client OS. The
+/// Windows/POSIX split is therefore keyed on the TARGET shell (local vs.
+/// remote), never on the client's compile-time OS alone — which would wrongly
+/// disable remote hooks for Windows clients (critic C2).
+fn hook_transport_supported(is_local: bool) -> bool {
+    if cfg!(target_os = "windows") {
+        // Windows LOCAL sessions run under cmd.exe → the POSIX transport is
+        // invalid there. SSH sessions (`!is_local`) stay hooked: their remote
+        // shell is always POSIX.
+        !is_local
+    } else {
+        true
+    }
 }
 
 /// Mint an unguessable per-session activity nonce (hex). Sourced from the OS
@@ -380,6 +418,43 @@ fn shell_single_quote(value: &str) -> String {
     out.push('\'');
     out.push_str(&value.replace('\'', "'\\''"));
     out.push('\'');
+    out
+}
+
+/// Defensively quote a value for interpolation into a **cmd.exe** command
+/// line: wrap it in double quotes and prefix every cmd metacharacter (`"`, `%`,
+/// `^`, `&`, `|`, `<`, `>`) with a `^` so a malformed branch name cannot break
+/// out of the argument and inject a second command. The Windows sibling of
+/// [`shell_single_quote`].
+///
+/// cmd.exe's quoting is famously weak: double quotes stop word-splitting but a
+/// stray `"` still closes the string early, after which `& | < >` regain their
+/// command-boundary meaning. The `^` prefix defends the string against exactly
+/// that break-out — for any metacharacter that lands *outside* the quotes (an
+/// injected `"` having closed them) the caret neutralises it; for one that
+/// stays *inside* the quotes the caret is a harmless literal (cmd does not
+/// treat `^` as an escape inside quotes) and the quotes already neutralise the
+/// char. Either way the string cannot start a second command. The cost is that
+/// a branch name genuinely containing one of these metacharacters gets a
+/// literal `^` in it and fails `git checkout` — a tolerated, safe-by-default
+/// outcome for the generated branch ids this actually runs on. Note `%VAR%`
+/// still expands inside cmd double quotes; realistic ASCII branch ids contain
+/// no `%`, so this is defence-in-depth rather than a complete `%` guard.
+///
+/// Compiled on all platforms (only *called* on Windows) so its
+/// command-injection guard keeps executed unit-test coverage on the POSIX CI
+/// leg, mirroring [`shell_single_quote`]'s cross-platform test.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn cmd_double_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        if matches!(ch, '"' | '%' | '^' | '&' | '|' | '<' | '>') {
+            out.push('^');
+        }
+        out.push(ch);
+    }
+    out.push('"');
     out
 }
 
@@ -614,14 +689,18 @@ pub fn start_terminal_session(
     // a phantom badge.
     let agent_kind = agent_kind.filter(|k| !k.trim().is_empty());
 
-    // For a hooked agent kind (Claude), mint a per-session nonce so the drain
-    // scanner accepts only THIS launch's activity sequences, and build the
-    // reporter-hooks JSON. Both are computed BEFORE the transport starts so the
-    // remote start path can SFTP the JSON onto the far host while its session is
-    // still blocking and before the drain thread reads (T4.1).
+    let is_local = machine.auth_type == "local";
+    // For a hooked agent kind (Claude) whose transport is usable on this
+    // session, mint a per-session nonce so the drain scanner accepts only THIS
+    // launch's activity sequences, and build the reporter-hooks JSON. Both are
+    // computed BEFORE the transport starts so the remote start path can SFTP the
+    // JSON onto the far host while its session is still blocking and before the
+    // drain thread reads (T4.1). `hook_transport_supported(is_local)` degrades a
+    // Windows LOCAL (cmd.exe) session to unhooked while leaving the always-POSIX
+    // SSH path hooked regardless of client OS — see that fn's doc.
     let activity_nonce = agent_kind
         .as_deref()
-        .filter(|k| is_hooked_agent_kind(k))
+        .filter(|k| is_hooked_agent_kind(k) && hook_transport_supported(is_local))
         .map(|_| generate_activity_nonce());
     // Reporter-hooks JSON, transport-agnostic. `Some` only for a hooked launch
     // that also carries a base command to augment (§2c/§2d). Never the user's
@@ -635,7 +714,6 @@ pub fn start_terminal_session(
         _ => None,
     };
 
-    let is_local = machine.auth_type == "local";
     let (read_source, write_sink, keepalive, child_pid, remote_settings_path) = if is_local {
         start_local_pty(&machine_id, &work_dir, &work_branch, cols, rows)?
     } else {
@@ -757,6 +835,24 @@ pub fn start_terminal_session(
     })
 }
 
+/// Pick the shell to spawn for a local PTY. Split by platform because the
+/// env var that names the interactive shell differs: POSIX exports `SHELL`,
+/// Windows has no such variable and instead names the command processor via
+/// `COMSPEC`. Spawning `/bin/bash` on Windows makes ConPTY/`portable-pty`
+/// return Err and the session dies with "Failed to spawn shell", so the
+/// Windows arm falls back to `cmd.exe` — the one interpreter guaranteed to
+/// exist there.
+#[cfg(target_os = "windows")]
+fn select_local_shell() -> String {
+    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+}
+
+/// POSIX: honour the user's `$SHELL`, falling back to `/bin/bash`.
+#[cfg(not(target_os = "windows"))]
+fn select_local_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+}
+
 pub(crate) fn start_local_pty(
     machine_id: &str,
     work_dir: &Option<String>,
@@ -774,7 +870,7 @@ pub(crate) fn start_local_pty(
         })
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let shell = select_local_shell();
     let mut cmd = CommandBuilder::new(&shell);
     cmd.env("TERM", "xterm-256color");
     // Ensure a UTF-8 locale on macOS. A GUI launch (Finder/Dock) can hand the
@@ -843,8 +939,8 @@ pub(crate) fn start_local_pty(
     Ok((read_source, write_sink, keepalive, child_pid, None))
 }
 
-/// Build the bootstrap line that performs a `git checkout` of the supplied
-/// feature branch on PTY/SSH startup. Returns `None` when no branch was
+/// Build the POSIX-shell bootstrap line that performs a `git checkout` of the
+/// supplied feature branch on shell startup. Returns `None` when no branch was
 /// supplied, so callers can skip the write entirely for `ProjectHome`-style
 /// flows (no pipeline context).
 ///
@@ -854,7 +950,14 @@ pub(crate) fn start_local_pty(
 /// `cd … && clear` behaviour in the SSH path so the prompt lands cleanly.
 /// Missing-branch failures are intentionally tolerated (`|| true`-style
 /// fallback) so a not-yet-started feature still opens a usable terminal.
-fn branch_bootstrap_line(branch: &Option<String>) -> Option<String> {
+///
+/// Always compiled — the syntax targets a POSIX shell, which is the correct
+/// choice for **every remote SSH host regardless of client OS** (`start_ssh_
+/// session` calls this directly) and for local sessions on non-Windows hosts
+/// (via [`branch_bootstrap_line`]). The Windows/cmd.exe split lives in
+/// [`branch_bootstrap_line`] and applies only to the *local* PTY, never to the
+/// remote shell.
+fn branch_bootstrap_line_posix(branch: &Option<String>) -> Option<String> {
     let raw = branch.as_ref()?.trim();
     if raw.is_empty() {
         return None;
@@ -862,6 +965,36 @@ fn branch_bootstrap_line(branch: &Option<String>) -> Option<String> {
     let safe = crate::paths::shell_escape_posix(raw);
     Some(format!(
         "git checkout {safe} 2>/dev/null || git switch {safe} 2>/dev/null; clear\n"
+    ))
+}
+
+/// Build the bootstrap line for the **local** PTY, choosing shell syntax by the
+/// compile-time host OS: the POSIX form on non-Windows, the cmd.exe form on
+/// Windows. This selector is used ONLY for the local shell — the SSH/remote
+/// path deliberately bypasses it and always calls
+/// [`branch_bootstrap_line_posix`] because the remote host is unconditionally a
+/// POSIX shell. Both arms share the same `None`-on-absent/blank contract and
+/// the same checkout-then-switch tolerance.
+#[cfg(not(target_os = "windows"))]
+fn branch_bootstrap_line(branch: &Option<String>) -> Option<String> {
+    branch_bootstrap_line_posix(branch)
+}
+
+/// cmd.exe variant of [`branch_bootstrap_line`]. Emits `2>nul` (cmd's null
+/// sink), `||`/`&` command chaining, and `cls` (cmd's screen clear), with a
+/// CRLF terminator so cmd.exe treats the buffered bytes as one finished
+/// command line. The branch is quoted with [`cmd_double_quote`] rather than
+/// POSIX single quotes. Used only for the local Windows PTY — never for the
+/// SSH path (see [`branch_bootstrap_line_posix`]).
+#[cfg(target_os = "windows")]
+fn branch_bootstrap_line(branch: &Option<String>) -> Option<String> {
+    let raw = branch.as_ref()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let safe = cmd_double_quote(raw);
+    Some(format!(
+        "git checkout {safe} 2>nul || git switch {safe} 2>nul & cls\r\n"
     ))
 }
 
@@ -925,7 +1058,13 @@ fn start_ssh_session(
         let _ = ssh_chan.write_all(cd_cmd.as_bytes());
         let _ = ssh_chan.flush();
     }
-    if let Some(bootstrap) = branch_bootstrap_line(work_branch) {
+    // The remote is ALWAYS a POSIX shell, so the bootstrap must use POSIX
+    // syntax regardless of the client OS. Calling `branch_bootstrap_line` here
+    // would send cmd.exe syntax (`2>nul`, `& cls`) to a remote `bash`/`sh` on a
+    // Windows client — creating a stray `nul` file and a `cls: command not
+    // found` error in the remote repo. `branch_bootstrap_line_posix` is
+    // compile-time-independent of the client OS and keeps the SSH path correct.
+    if let Some(bootstrap) = branch_bootstrap_line_posix(work_branch) {
         let _ = ssh_chan.write_all(bootstrap.as_bytes());
         let _ = ssh_chan.flush();
     }
@@ -1763,17 +1902,25 @@ fn agent_kind_for_binary(binary: &str) -> Option<&'static str> {
 }
 
 /// Scan a full command line for a known agent CLI. Matches on whole-token
-/// basenames (with a `.js`/`.mjs` script suffix stripped) rather than raw
+/// basenames (with a script/executable suffix stripped) rather than raw
 /// substrings, so a path that merely *contains* an agent name doesn't
 /// false-positive. Catches native launchers (`claude`, `opencode`, `codex`)
 /// directly; node-script installs that appear as `node …/claude` match on
-/// the `claude` token.
+/// the `claude` token. On Windows the agents are installed as `claude.cmd` /
+/// `claude.exe` / `codex.exe`, so `.cmd`/`.exe`/`.bat` are stripped too (all
+/// suffixes case-insensitively) — keeping `agent_kind_for_binary` and the
+/// frontend `AGENTS` table keyed on the bare names.
 fn detect_agent_in_command(command: &str) -> Option<&'static str> {
+    /// Basename suffixes stripped before matching, longest first so `.mjs`
+    /// wins over a hypothetical shorter overlap.
+    const SUFFIXES: [&str; 5] = [".mjs", ".js", ".cmd", ".exe", ".bat"];
     for token in command.split_whitespace() {
-        let base = token.rsplit('/').next().unwrap_or(token);
-        let base = base
-            .strip_suffix(".js")
-            .or_else(|| base.strip_suffix(".mjs"))
+        // Split on both separators — Windows command lines use backslashes.
+        let base = token.rsplit(['/', '\\']).next().unwrap_or(token);
+        let lower = base.to_ascii_lowercase();
+        let base = SUFFIXES
+            .iter()
+            .find_map(|suf| lower.strip_suffix(suf).map(|_| &base[..base.len() - suf.len()]))
             .unwrap_or(base);
         if let Some(kind) = agent_kind_for_binary(base) {
             return Some(kind);
@@ -1794,6 +1941,7 @@ impl ProcessTree {
     /// Capture the process table via `ps`. Returns `None` if `ps` is
     /// unavailable or fails (e.g. a locked-down sandbox) — the detector
     /// then simply skips the pass.
+    #[cfg(not(target_os = "windows"))]
     fn capture() -> Option<ProcessTree> {
         let output = std::process::Command::new("ps")
             .args(["-axo", "pid=,ppid=,command="])
@@ -1817,6 +1965,58 @@ impl ProcessTree {
             };
             let command = parts.collect::<Vec<_>>().join(" ");
             agent_by_pid.insert(pid, detect_agent_in_command(&command));
+            children.entry(ppid).or_default().push(pid);
+        }
+        Some(ProcessTree {
+            agent_by_pid,
+            children,
+        })
+    }
+
+    /// Windows has no `ps`. Snapshot the same pid/ppid/command-line triples
+    /// via `Get-CimInstance Win32_Process` (preferred over the deprecated
+    /// `wmic`), emitting one tab-separated row per process so a command line
+    /// with embedded spaces stays in a single field. `CREATE_NO_WINDOW` keeps
+    /// the 3-second poll from flashing a console window. Any failure — missing
+    /// PowerShell, non-zero exit, unparsable output — yields `None`, so the
+    /// detector skips the pass exactly like the POSIX `ps` path (the badge
+    /// simply never appears rather than the session breaking).
+    #[cfg(target_os = "windows")]
+    fn capture() -> Option<ProcessTree> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // Force UTF-8 stdout: Windows PowerShell 5.1 otherwise emits captured
+        // output in the console OEM code page, which `from_utf8_lossy` would
+        // mangle for non-ASCII command lines. Backtick-t is a literal tab
+        // inside a PowerShell double-quoted string.
+        const SCRIPT: &str = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; \
+            Get-CimInstance Win32_Process | ForEach-Object { \
+            \"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CommandLine)\" }";
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut agent_by_pid = HashMap::new();
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        for line in text.lines() {
+            let mut parts = line.splitn(3, '\t');
+            let pid = match parts.next().and_then(|s| s.trim().parse::<u32>().ok()) {
+                Some(p) => p,
+                None => continue,
+            };
+            let ppid = match parts.next().and_then(|s| s.trim().parse::<u32>().ok()) {
+                Some(p) => p,
+                None => continue,
+            };
+            // A process without a readable command line (system/protected) is
+            // still recorded so the ppid→children walk stays connected.
+            let command = parts.next().unwrap_or("");
+            agent_by_pid.insert(pid, detect_agent_in_command(command));
             children.entry(ppid).or_default().push(pid);
         }
         Some(ProcessTree {
