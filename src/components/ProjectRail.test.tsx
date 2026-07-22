@@ -60,20 +60,24 @@ import {
 } from '../context';
 import type { AppView, Project } from '../types';
 
-// ── Tauri IPC stub for `check_workspace_liveness` ──────────────────────
+// ── Tauri IPC stub for `test_machine_connection` ───────────────────────
 //
 // `ProjectRail` probes any project whose `liveness` is `undefined` (see
-// the effect in `ProjectRail.tsx`), so mounting it with unchecked
-// projects calls the real `checkWorkspaceLiveness` ->
-// `invoke('check_workspace_liveness', ...)`. Stub the IPC bridge
-// (`@tauri-apps/api/core`'s `invoke` reads `window.__TAURI_INTERNALS__`
-// directly) so those calls resolve/reject deterministically instead of
-// hitting a real Tauri runtime. Mirrors `src/lib/project.test.ts`'s
-// `installIpcStub`, extended to key resolutions per-project so a single
-// mount can exercise "checking -> online" and "checking -> offline" side
-// by side.
+// the effect in `ProjectRail.tsx`), calling the real
+// `checkWorkspaceLiveness` -> `invoke('test_machine_connection', {
+// machineId })`; a resolved call means the machine is reachable (->
+// 'online'), a rejected call means it isn't (-> 'offline'). Stub the IPC
+// bridge (`@tauri-apps/api/core`'s `invoke` reads
+// `window.__TAURI_INTERNALS__` directly) so those calls resolve/reject
+// deterministically instead of hitting a real Tauri runtime. Mirrors
+// `src/lib/project.test.ts`'s `installIpcStub`, extended to key outcomes
+// per-machine so a single mount can exercise "checking -> online" and
+// "checking -> offline" side by side. Each fixture project sets
+// `remote_host` to its own id (see `makeProject`), so `deriveMachineId`
+// yields a machineId equal to the project id and outcomes/`calls` stay
+// keyed by project id.
 type LivenessResolution =
-  | { kind: 'online' | 'offline'; checkedAt?: string }
+  | { kind: 'online' | 'offline' }
   | { kind: 'pending' }; // never settles for the lifetime of the test
 
 function installLivenessIpcStub(resolutions: Record<string, LivenessResolution>): { calls: string[] } {
@@ -82,18 +86,15 @@ function installLivenessIpcStub(resolutions: Record<string, LivenessResolution>)
     __TAURI_INTERNALS__: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown> };
   }).__TAURI_INTERNALS__ = {
     invoke: (cmd, args) => {
-      if (cmd !== 'check_workspace_liveness') {
+      if (cmd !== 'test_machine_connection') {
         return Promise.reject(new Error(`unexpected command: ${cmd}`));
       }
-      const projectId = (args as { projectId: string }).projectId;
-      calls.push(projectId);
-      const resolution = resolutions[projectId];
+      const machineId = (args as { machineId: string }).machineId;
+      calls.push(machineId);
+      const resolution = resolutions[machineId];
       if (!resolution || resolution.kind === 'pending') return new Promise(() => {});
-      return Promise.resolve({
-        project_id: projectId,
-        liveness: resolution.kind,
-        checked_at: resolution.checkedAt ?? '2026-07-12T00:00:00Z',
-      });
+      if (resolution.kind === 'offline') return Promise.reject(new Error('machine unreachable'));
+      return Promise.resolve(undefined);
     },
   };
   return { calls };
@@ -111,9 +112,11 @@ function uninstallLivenessIpcStub(): void {
 // resolving them out of order, so this variant hands back one deferred
 // per `invoke` call instead.
 interface DeferredLivenessCall {
-  projectId: string;
-  resolve: (liveness: 'online' | 'offline', checkedAt?: string) => void;
-  reject: (err: unknown) => void;
+  machineId: string;
+  // Settle the underlying `test_machine_connection` promise: 'online'
+  // resolves it (reachable), 'offline' rejects it (unreachable) — matching
+  // how `checkWorkspaceLiveness` maps the IPC outcome to a liveness.
+  resolve: (liveness: 'online' | 'offline') => void;
 }
 
 function installControllableLivenessStub(): { calls: DeferredLivenessCall[] } {
@@ -122,16 +125,17 @@ function installControllableLivenessStub(): { calls: DeferredLivenessCall[] } {
     __TAURI_INTERNALS__: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown> };
   }).__TAURI_INTERNALS__ = {
     invoke: (cmd, args) => {
-      if (cmd !== 'check_workspace_liveness') {
+      if (cmd !== 'test_machine_connection') {
         return Promise.reject(new Error(`unexpected command: ${cmd}`));
       }
-      const projectId = (args as { projectId: string }).projectId;
+      const machineId = (args as { machineId: string }).machineId;
       return new Promise((resolvePromise, rejectPromise) => {
         calls.push({
-          projectId,
-          resolve: (liveness, checkedAt) =>
-            resolvePromise({ project_id: projectId, liveness, checked_at: checkedAt ?? '2026-07-12T00:00:00Z' }),
-          reject: (err) => rejectPromise(err),
+          machineId,
+          resolve: (liveness) =>
+            liveness === 'online'
+              ? resolvePromise(undefined)
+              : rejectPromise(new Error('machine unreachable')),
         });
       });
     },
@@ -184,6 +188,10 @@ function findLivenessDots(root: ReactTestInstance): ReactTestInstance[] {
   });
 }
 
+// Each project is made `remote` with `remote_host` set to its own id, so
+// `deriveMachineId` (see `src/lib/project.ts`) resolves a machineId equal to
+// the project id. That lets the IPC stubs — which see `machineId`, not the
+// project id — steer and count probes per project.
 function makeProject(id: string, overrides: Partial<Project> = {}): Project {
   return {
     id,
@@ -193,6 +201,8 @@ function makeProject(id: string, overrides: Partial<Project> = {}): Project {
     nodes: 0,
     spend: 0,
     tokens: 0,
+    compute_type: 'remote',
+    remote_host: id,
     ...overrides,
   };
 }
@@ -625,13 +635,13 @@ async function run() {
     act(() => { selectHolder.select!('p-b'); }); // call #1: B
     act(() => { selectHolder.select!('p-a'); }); // call #2: A, generation 2 (supersedes call #0)
 
-    if (calls.length !== 3 || calls[0].projectId !== 'p-a' || calls[1].projectId !== 'p-b' || calls[2].projectId !== 'p-a') {
-      throw new Error(`ProjectRail: expected probes [p-a, p-b, p-a] for the A->B->A switch, got ${JSON.stringify(calls.map(c => c.projectId))}`);
+    if (calls.length !== 3 || calls[0].machineId !== 'p-a' || calls[1].machineId !== 'p-b' || calls[2].machineId !== 'p-a') {
+      throw new Error(`ProjectRail: expected probes [p-a, p-b, p-a] for the A->B->A switch, got ${JSON.stringify(calls.map(c => c.machineId))}`);
     }
 
     // Resolve A's latest (second) probe first.
     await act(async () => {
-      calls[2].resolve('online', '2026-07-12T02:00:00Z');
+      calls[2].resolve('online');
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -644,7 +654,7 @@ async function run() {
     // Now resolve A's stale first probe with a conflicting result — must
     // be ignored since a newer probe for 'p-a' has since been initiated.
     await act(async () => {
-      calls[0].resolve('offline', '2026-07-12T01:00:00Z');
+      calls[0].resolve('offline');
       await Promise.resolve();
       await Promise.resolve();
     });

@@ -3,7 +3,6 @@ import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles }
 import { StatusBadge, LivenessDot } from './ui/StatusBadge';
 import { useNavigation, useProject, useUIState } from '../context';
 import { checkWorkspaceLiveness } from '../lib/project';
-import { formatError } from '../lib/errors';
 
 // Statuses that mean "this workspace has a pipeline actively running/gated
 // right now" — the only ones probed for machine reachability at app start.
@@ -54,25 +53,31 @@ function ProjectRail() {
   // clobber the result of a probe started after it.
   const probeGenerations = useRef<Map<string, number>>(new Map());
 
+  // Latest projects snapshot, read (not depended on) by `probeProject` so it
+  // can resolve a project's machine coordinates (compute_type/remote_host)
+  // without turning `projects` into a dependency of the probe callback or the
+  // effects below — which would re-fire them on every liveness dispatch and
+  // loop.
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+
   const probeProject = useCallback((id: string) => {
+    const project = projectsRef.current.find(p => p.id === id);
+    if (!project) return;
     const generation = (probeGenerations.current.get(id) ?? 0) + 1;
     probeGenerations.current.set(id, generation);
     dispatch({ type: 'SET_LIVENESS', id, liveness: 'checking' });
-    checkWorkspaceLiveness(id)
-      .then(result => {
-        if (probeGenerations.current.get(id) !== generation) return;
-        dispatch({
-          type: 'SET_LIVENESS',
-          id,
-          liveness: result.liveness === 'online' ? 'online' : 'offline',
-          checkedAt: result.checked_at,
-        });
-      })
-      .catch(err => {
-        if (probeGenerations.current.get(id) !== generation) return;
-        console.warn('Liveness check failed for project', id, formatError(err));
-        dispatch({ type: 'SET_LIVENESS', id, liveness: 'offline' });
+    // `checkWorkspaceLiveness` never rejects — a failed probe resolves with
+    // liveness 'offline' — so there's no catch branch to wire here.
+    checkWorkspaceLiveness(project).then(result => {
+      if (probeGenerations.current.get(id) !== generation) return;
+      dispatch({
+        type: 'SET_LIVENESS',
+        id,
+        liveness: result.liveness,
+        checkedAt: result.checked_at,
       });
+    });
   }, [dispatch]);
 
   // Startup sweep: probe machine reachability only for workspaces with an
@@ -81,10 +86,15 @@ function ProjectRail() {
   // `undefined` on each app launch/list load; dispatching 'checking'
   // synchronously moves a project out of the `undefined` bucket, so this
   // effect can't loop as SET_LIVENESS results flow back through `projects`.
+  // The currently-selected workspace is probed unconditionally by the
+  // on-demand effect below, so exclude it here to avoid a duplicate probe at
+  // mount.
   useEffect(() => {
-    const unchecked = projects.filter(p => p.liveness === undefined && hasActivePipeline(p.status));
+    const unchecked = projects.filter(
+      p => p.liveness === undefined && p.id !== currentProjectId && hasActivePipeline(p.status),
+    );
     for (const p of unchecked) probeProject(p.id);
-  }, [projects, probeProject]);
+  }, [projects, currentProjectId, probeProject]);
 
   // On-demand: whenever the selected workspace changes, fire a fresh probe
   // for it unconditionally — regardless of its prior liveness or pipeline
