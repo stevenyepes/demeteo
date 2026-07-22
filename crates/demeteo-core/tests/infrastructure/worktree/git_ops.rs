@@ -119,13 +119,26 @@ async fn test_detect_worktree_strategy_polyglot_chains_all_suites() {
         .detect_worktree_strategy(None, &repo)
         .await
         .unwrap();
-    assert_eq!(
-        strategy.test_command,
-        Some("npm test && cargo test".to_string()),
-        "polyglot repo must run both the JS and Rust suites, not just the first match"
-    );
 
-    let _ = std::fs::remove_dir_all(dir);
+    // Clean up before asserting so a regression doesn't leak the repo dir.
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let tc = strategy
+        .test_command
+        .expect("polyglot repo must detect a suite");
+    assert!(
+        tc.contains("npm test") && tc.contains("cargo test"),
+        "polyglot repo must run both the JS and Rust suites, not just the first match; got: {tc}"
+    );
+    // Build command must chain the same way (regression guard for the
+    // first-match-wins bug that survived in build detection).
+    let bc = strategy
+        .build_command
+        .expect("polyglot repo must detect a build command");
+    assert!(
+        bc.contains("npm run build") && bc.contains("cargo build"),
+        "polyglot repo must build both the JS and Rust sides; got: {bc}"
+    );
 }
 
 /// Helper: create a fresh git repo in a temp dir and return (repo_dir, git_ops).
