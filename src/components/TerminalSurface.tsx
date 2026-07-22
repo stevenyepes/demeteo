@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Channel } from '@tauri-apps/api/core';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { RotateCw, Wifi, WifiOff, AlertCircle } from 'lucide-react';
 
 import '@xterm/xterm/css/xterm.css';
@@ -168,6 +169,25 @@ export function TerminalSurface({
     term.loadAddon(fitAddon);
 
     term.open(containerRef.current);
+
+    // GPU-accelerated renderer. xterm's default DOM renderer redraws glyphs via
+    // CPU DOM manipulation, which shows up as sustained WebContent/GPU CPU under
+    // heavy streaming output; the WebGL renderer uploads the cell grid to the
+    // GPU as a single shader program instead. Must load AFTER term.open(). If
+    // WebGL is unavailable (or the context is later lost — e.g. GPU reset, tab
+    // backgrounded too long), dispose the addon and let xterm fall back to the
+    // DOM renderer automatically. Never let a renderer failure kill the surface.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        console.warn('[TerminalSurface] WebGL context lost, falling back to DOM renderer');
+        webgl.dispose();
+      });
+      term.loadAddon(webgl);
+    } catch (err) {
+      console.warn('[TerminalSurface] WebGL renderer unavailable, using DOM renderer:', err);
+    }
+
     try {
       fitAddon.fit();
     } catch (err) {
