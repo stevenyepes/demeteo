@@ -115,10 +115,7 @@ async fn test_detect_worktree_strategy_polyglot_chains_all_suites() {
         .await
         .unwrap();
 
-    let strategy = helper
-        .detect_worktree_strategy(None, &repo)
-        .await
-        .unwrap();
+    let strategy = helper.detect_worktree_strategy(None, &repo).await.unwrap();
 
     // Clean up before asserting so a regression doesn't leak the repo dir.
     let _ = std::fs::remove_dir_all(&dir);
