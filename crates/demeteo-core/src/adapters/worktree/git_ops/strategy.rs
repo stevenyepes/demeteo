@@ -57,37 +57,55 @@ impl GitOpsHelper {
             }
         }
 
-        // 3. Infer test command
-        let mut test_command = None;
+        // 3. Infer test command. A polyglot repo (a Tauri app is package.json
+        // *and* Cargo.toml; a Go service with a JS frontend is go.mod *and*
+        // package.json) needs *every* ecosystem's suite to run. The old
+        // first-match-wins picked a single command and silently dropped the
+        // rest, so the verifier's harness could run e.g. only `cargo test` for
+        // a TypeScript-only change — a gate that passes while the change's real
+        // suite (`tsc`/vitest) never executed, reporting a red build as green
+        // and looping the implement retry forever. Collect one command per
+        // detected ecosystem and chain them with `&&` so a failure in any suite
+        // fails the harness. A user can still override with a single explicit
+        // command (e.g. a repo's own `npm run checks` aggregate) in settings.
+        let mut test_cmds: Vec<&str> = Vec::new();
         if self
             .exec
             .get_metadata(machine_str, &format!("{}/package.json", repo_dir))
             .await
             .is_ok()
         {
-            test_command = Some("npm test".to_string());
-        } else if self
+            test_cmds.push("npm test");
+        }
+        if self
             .exec
             .get_metadata(machine_str, &format!("{}/Cargo.toml", repo_dir))
             .await
             .is_ok()
         {
-            test_command = Some("cargo test".to_string());
-        } else if self
+            test_cmds.push("cargo test");
+        }
+        if self
             .exec
             .get_metadata(machine_str, &format!("{}/go.mod", repo_dir))
             .await
             .is_ok()
         {
-            test_command = Some("go test ./...".to_string());
-        } else if self
+            test_cmds.push("go test ./...");
+        }
+        if self
             .exec
             .get_metadata(machine_str, &format!("{}/requirements.txt", repo_dir))
             .await
             .is_ok()
         {
-            test_command = Some("pytest".to_string());
+            test_cmds.push("pytest");
         }
+        let test_command = if test_cmds.is_empty() {
+            None
+        } else {
+            Some(test_cmds.join(" && "))
+        };
 
         // 4. Auto-detect project conventions file (for {{project_conventions}} injection).
         // Priority order: AGENTS.md, CLAUDE.md, .cursor/rules/rules.md
