@@ -45,6 +45,12 @@ export function StartSessionButton({
   const [error, setError] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Latch for the in-flight guard. `launching` drives the disabled styling,
+  // but reading it in `launch()` only reflects the last committed render, so
+  // two clicks dispatched before React commits would both get through and —
+  // with `forceNew: true` bypassing the panel's pending-open coalescing —
+  // spawn two PTYs for one perceived click. The ref is set synchronously.
+  const launchingRef = useRef(false);
 
   // Close the agent dropdown on an outside click or Escape, mirroring
   // NewTerminalMenu's popover behavior.
@@ -71,9 +77,16 @@ export function StartSessionButton({
       // Single in-flight guard so a double-click (or a click while an
       // earlier launch is still resolving) can't stack duplicate sessions
       // from what the user experiences as one click.
-      if (launching) return;
+      if (launchingRef.current) return;
+      // No repo path resolved yet (workspace still loading, or the project has
+      // no repositories) — same guard `TerminalTabOpener` uses, so a click in
+      // that window can't open a session at the process's default directory
+      // instead of the repo.
+      if (!repoPath) return;
+      launchingRef.current = true;
       setLaunching(true);
       setMenuOpen(false);
+      setError(null);
       try {
         await open({
           machineId,
@@ -85,16 +98,26 @@ export function StartSessionButton({
           launchCommand: agent?.binary,
         });
         recordRecent({ machineId, machineLabel, agentKind: agent?.kind ?? null });
-        setError(null);
         navigate({ kind: 'terminals' });
       } catch (err) {
         setError(formatError(err));
       } finally {
+        launchingRef.current = false;
         setLaunching(false);
       }
     },
-    [launching, open, machineId, machineLabel, projectId, repoPath, navigate],
+    [open, machineId, machineLabel, projectId, repoPath, navigate],
   );
+
+  // A stale failure must not follow the user to another project or repo: the
+  // message names a target that is no longer the one this button would open.
+  useEffect(() => {
+    setError(null);
+  }, [projectId, repoPath, machineId]);
+
+  // Disabled while a launch is in flight, and until the workspace has
+  // resolved a repo path to scope the session to.
+  const disabled = launching || !repoPath;
 
   return (
     <div ref={containerRef} className={`relative ${className}`} data-testid="start-session-button">
@@ -102,9 +125,9 @@ export function StartSessionButton({
         <button
           type="button"
           onClick={() => void launch()}
-          disabled={launching}
+          disabled={disabled}
           className="flex items-center gap-1.5 pl-3 pr-3 py-1.5 rounded-l-md text-xs font-mono whitespace-nowrap border border-white/10 border-r-0 bg-violet-600 hover:bg-violet-500 text-white shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all disabled:opacity-40"
-          title="Start a shell session in this repo"
+          title={repoPath ? 'Start a shell session in this repo' : 'No repository resolved for this workspace yet'}
           data-testid="start-session-primary"
         >
           <TerminalSquare className="w-3.5 h-3.5 shrink-0" />
@@ -113,7 +136,7 @@ export function StartSessionButton({
         <button
           type="button"
           onClick={() => setMenuOpen((v) => !v)}
-          disabled={launching}
+          disabled={disabled}
           className="flex items-center px-1.5 py-1.5 rounded-r-md text-xs font-mono border border-white/10 bg-violet-600 hover:bg-violet-500 text-white transition-all disabled:opacity-40"
           title="Choose an agent to launch"
           aria-haspopup="menu"
@@ -136,7 +159,7 @@ export function StartSessionButton({
               type="button"
               role="menuitem"
               onClick={() => void launch(agent)}
-              disabled={launching}
+              disabled={disabled}
               className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-violet-500/15 hover:text-violet-200 transition disabled:opacity-40"
               title={`Run ${agent.binary} in a new session`}
               data-testid={`start-session-agent-${agent.kind}`}
