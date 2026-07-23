@@ -139,6 +139,54 @@ describe('ProjectHome — persistent Start Session affordance', () => {
     expect(screen.getByTestId('start-session-button')).toBeInTheDocument();
   });
 
+  it('disables the button for a project with no repositories rather than opening an unscoped shell', async () => {
+    mockBackend([]);
+    mount(baseProject({ compute_type: 'local' }));
+
+    await waitFor(() => expect(screen.getByTestId('start-session-button')).toBeInTheDocument());
+    expect(screen.getByTestId('start-session-primary')).toBeDisabled();
+
+    await act(async () => {
+      screen.getByTestId('start-session-primary').click();
+    });
+    expect(commandsOf('start_terminal_session')).toHaveLength(0);
+  });
+
+  it('leaves TerminalTabOpener auto-open (dedup, no forceNew) intact while the button stacks sessions', async () => {
+    mockBackend(['/repo/one']);
+    mount(baseProject({ id: 'proj-remote', compute_type: 'remote', remote_host: 'gpu-box' }));
+
+    await waitFor(() => expect(screen.getByTestId('start-session-button')).toBeInTheDocument());
+    expect(commandsOf('start_terminal_session')).toHaveLength(0);
+
+    // Switching to the Terminal tab auto-opens exactly one session…
+    await act(async () => {
+      await userEvent.click(screen.getByText('Terminal').closest('button')!);
+    });
+    await waitFor(() => expect(commandsOf('start_terminal_session')).toHaveLength(1));
+
+    // …and re-entering the tab reuses that tab via `logicalTabKey` rather than
+    // starting a second session — i.e. the opener still passes no `forceNew`.
+    await act(async () => {
+      await userEvent.click(screen.getByText('Pipelines').closest('button')!);
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByText('Terminal').closest('button')!);
+    });
+    await waitFor(() => expect(screen.getByText('Opening the Terminals view…')).toBeInTheDocument());
+    expect(commandsOf('start_terminal_session')).toHaveLength(1);
+
+    // The hero button is independent: each click stacks another session.
+    await act(async () => {
+      await userEvent.click(screen.getByTestId('start-session-primary'));
+    });
+    await waitFor(() => expect(commandsOf('start_terminal_session')).toHaveLength(2));
+    await act(async () => {
+      await userEvent.click(screen.getByTestId('start-session-primary'));
+    });
+    await waitFor(() => expect(commandsOf('start_terminal_session')).toHaveLength(3));
+  });
+
   it('shows a repo selector next to the button for a multi-repo local project (previously unreachable)', async () => {
     mockBackend(['/repo/one', '/repo/two']);
     mount(baseProject({ compute_type: 'local' }));
