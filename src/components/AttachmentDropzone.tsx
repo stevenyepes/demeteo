@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   addAttachment,
   computeLocalSha256,
+  extractImageFilesFromClipboard,
   stageAttachmentMetadata,
   type AttachedFile,
   type AttachmentInput,
@@ -81,9 +82,6 @@ interface AttachmentDropzoneProps {
  * command. Click-to-pick falls back to a hidden `<input type="file">`
  * which DOES yield a browser `File` (used to render preview
  * thumbnails via FileReader).
- *
- * Clipboard paste is intentionally NOT supported in v1 (see spec §0
- * decision #5).
  */
 export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
   mode,
@@ -222,6 +220,16 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mode, featureId, stageEntries],
+  );
+
+  const handlePaste = useCallback(
+    async (e: React.ClipboardEvent<HTMLDivElement>) => {
+      const files = extractImageFilesFromClipboard(e.clipboardData);
+      if (files.length === 0) return;
+      e.preventDefault();
+      await ingestFiles(files);
+    },
+    [ingestFiles],
   );
 
   const ingestPaths = useCallback(
@@ -428,6 +436,8 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
           : "border-white/10 bg-[rgba(18,22,30,0.75)]",
         "backdrop-blur-md p-3",
       ].join(" ")}
+      tabIndex={0}
+      onPaste={handlePaste}
       onDragOver={(e) => {
         // Required for the drop event to fire in HTML5 fallback paths.
         e.preventDefault();
@@ -458,7 +468,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
         <div className="flex-1 min-w-0 flex items-center gap-2 text-[11px] font-mono text-slate-400">
           <FilePlus2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
           <span className="truncate">
-            or drop here · png / jpg / webp / gif / pdf / txt · max 100 MB each · 10 per feature
+            or drop here · click to pick · paste an image · png / jpg / webp / gif / pdf / txt · max 100 MB each · 10 per feature
           </span>
         </div>
       </div>
@@ -521,7 +531,16 @@ const ACCEPTED_EXTS = new Set([
   "json",
 ]);
 
+const SUPPORTED_IMAGE_MIMES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
 function isAllowedFile(file: File): boolean {
+  const mime = (file.type || "").toLowerCase();
+  if (SUPPORTED_IMAGE_MIMES.has(mime)) return true;
   const name = file.name.toLowerCase();
   const dot = name.lastIndexOf(".");
   if (dot < 0) return false;
@@ -531,8 +550,6 @@ function isAllowedFile(file: File): boolean {
   // ambiguous (e.g. ".bash_history" has no extension at all but
   // reports text/plain). The Rust side mirrors this check against
   // `mime_for_ext`.
-  const mime = (file.type || "").toLowerCase();
-  if (mime.startsWith("image/")) return true;
   if (mime === "application/pdf") return true;
   if (mime === "text/plain" || mime === "text/markdown" || mime === "application/json") {
     return true;

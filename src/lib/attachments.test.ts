@@ -17,7 +17,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { computeLocalSha256, stageAttachmentMetadata } from "./attachments";
+import {
+  computeLocalSha256,
+  extractImageFilesFromClipboard,
+  stageAttachmentMetadata,
+} from "./attachments";
 
 // Known vector: sha256("hello world"). The Rust side must agree byte-for-byte,
 // since the two shas are used as the same dedup key.
@@ -86,5 +90,153 @@ describe("re-drop dedup", () => {
     // stable sha is what collapses the second drop onto the first. The old
     // random "staged-<uuid>" sha is exactly why that filter used to miss.
     expect(second.sha256).toBe(first.sha256);
+  });
+});
+
+// Local clipboard fixture: jsdom ships no usable `DataTransfer` constructor
+// for paste events, so each test builds a `{ items }` object structurally
+// typed to satisfy the subset of `DataTransferItemList` that
+// `extractImageFilesFromClipboard` actually reads (`length` + indexed
+// access). Cast through `unknown` to keep the helper's public `DataTransfer`
+// signature honest without importing a stub from the global test setup.
+interface FakeClipboardItem {
+  kind: string;
+  type: string;
+  getAsFile: () => File | null;
+}
+
+function makeClipboardData(items: FakeClipboardItem[]): DataTransfer {
+  return { items } as unknown as DataTransfer;
+}
+
+function file(name: string, type: string, bytes: string = "x"): File {
+  return new File([bytes], name, { type });
+}
+
+describe("extractImageFilesFromClipboard", () => {
+  it("returns an empty array when items is empty", () => {
+    expect(extractImageFilesFromClipboard(makeClipboardData([]))).toEqual([]);
+  });
+
+  it("ignores text and html items (kind === 'string')", () => {
+    const stringSpy = vi.fn(() => null);
+    const htmlSpy = vi.fn(() => null);
+    const dt = makeClipboardData([
+      { kind: "string", type: "text/plain", getAsFile: stringSpy },
+      { kind: "string", type: "text/html", getAsFile: htmlSpy },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([]);
+    expect(stringSpy).not.toHaveBeenCalled();
+    expect(htmlSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores unsupported image MIME types (BMP and SVG)", () => {
+    const bmp = file("a.bmp", "image/bmp");
+    const svg = file("a.svg", "image/svg+xml");
+    const bmpSpy = vi.fn(() => bmp);
+    const svgSpy = vi.fn(() => svg);
+    const dt = makeClipboardData([
+      { kind: "file", type: "image/bmp", getAsFile: bmpSpy },
+      { kind: "file", type: "image/svg+xml", getAsFile: svgSpy },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([]);
+    expect(bmpSpy).not.toHaveBeenCalled();
+    expect(svgSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns a single supported image file", () => {
+    const png = file("a.png", "image/png");
+    const dt = makeClipboardData([
+      { kind: "file", type: "image/png", getAsFile: () => png },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([png]);
+  });
+
+  it("returns each of PNG, JPEG, GIF and WebP when present", () => {
+    const png = file("a.png", "image/png");
+    const jpg = file("b.jpg", "image/jpeg");
+    const gif = file("c.gif", "image/gif");
+    const webp = file("d.webp", "image/webp");
+    const dt = makeClipboardData([
+      { kind: "file", type: "image/png", getAsFile: () => png },
+      { kind: "file", type: "image/jpeg", getAsFile: () => jpg },
+      { kind: "file", type: "image/gif", getAsFile: () => gif },
+      { kind: "file", type: "image/webp", getAsFile: () => webp },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([png, jpg, gif, webp]);
+  });
+
+  it("preserves clipboard order across multiple supported images", () => {
+    const a = file("z.png", "image/png");
+    const b = file("a.jpg", "image/jpeg");
+    const c = file("m.gif", "image/gif");
+    const dt = makeClipboardData([
+      { kind: "file", type: "image/png", getAsFile: () => a },
+      { kind: "file", type: "image/jpeg", getAsFile: () => b },
+      { kind: "file", type: "image/gif", getAsFile: () => c },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([a, b, c]);
+  });
+
+  it("filters mixed supported, unsupported and string items to only supported files", () => {
+    const png = file("a.png", "image/png");
+    const jpg = file("b.jpg", "image/jpeg");
+    const dt = makeClipboardData([
+      { kind: "string", type: "text/plain", getAsFile: () => null },
+      { kind: "file", type: "image/png", getAsFile: () => png },
+      { kind: "file", type: "image/bmp", getAsFile: () => file("x.bmp", "image/bmp") },
+      { kind: "string", type: "text/html", getAsFile: () => null },
+      { kind: "file", type: "image/svg+xml", getAsFile: () => file("x.svg", "image/svg+xml") },
+      { kind: "file", type: "image/jpeg", getAsFile: () => jpg },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([png, jpg]);
+  });
+
+  it("omits a supported item whose getAsFile() returns null", () => {
+    const png = file("a.png", "image/png");
+    const dt = makeClipboardData([
+      { kind: "file", type: "image/png", getAsFile: () => null },
+      { kind: "file", type: "image/png", getAsFile: () => png },
+      { kind: "file", type: "image/jpeg", getAsFile: () => null },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([png]);
+  });
+
+  it("compares MIME types case-insensitively (IMAGE/PNG matches image/png)", () => {
+    const png = file("a.png", "image/png");
+    const jpg = file("b.jpg", "image/jpeg");
+    const dt = makeClipboardData([
+      { kind: "file", type: "IMAGE/PNG", getAsFile: () => png },
+      { kind: "file", type: "Image/Jpeg", getAsFile: () => jpg },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([png, jpg]);
+  });
+
+  it("does not invoke getAsFile() for string or unsupported-MIME items", () => {
+    const png = file("a.png", "image/png");
+    const pngSpy = vi.fn(() => png);
+    const stringSpy = vi.fn(() => null);
+    const bmpSpy = vi.fn(() => file("x.bmp", "image/bmp"));
+    const svgSpy = vi.fn(() => file("x.svg", "image/svg+xml"));
+    const dt = makeClipboardData([
+      { kind: "string", type: "text/plain", getAsFile: stringSpy },
+      { kind: "file", type: "image/bmp", getAsFile: bmpSpy },
+      { kind: "file", type: "image/svg+xml", getAsFile: svgSpy },
+      { kind: "file", type: "image/png", getAsFile: pngSpy },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([png]);
+    expect(stringSpy).not.toHaveBeenCalled();
+    expect(bmpSpy).not.toHaveBeenCalled();
+    expect(svgSpy).not.toHaveBeenCalled();
+    expect(pngSpy).toHaveBeenCalledTimes(1);
   });
 });
