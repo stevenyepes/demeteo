@@ -1,4 +1,16 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+// Tests for the inline composer's clipboard image paste handler in
+// ProjectHome. Ticket-5 wires a scoped paste target onto the composer
+// container so the compact `AttachmentDropzone` (which returns before the
+// full dropzone paste target) still receives clipboard files. The handler
+// must also refrain from intercepting ordinary text paste in the title
+// input.
+//
+// Also covers the persistent Start Session affordance: StartSessionButton
+// renders for local/remote projects, stacks sessions independently of the
+// TerminalTabOpener auto-open, and threads the selected repo through to the
+// resolved session start.
+
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
@@ -13,6 +25,12 @@ import {
 } from '../context';
 import ProjectHome from './ProjectHome';
 import type { Project } from '../types';
+
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: vi.fn().mockResolvedValue(() => {}),
+  }),
+}));
 
 // ProjectHome resolves its `activeProject` synchronously on first render
 // (`projects.find(...)!`), so it can't be seeded via a sibling's effect that
@@ -104,8 +122,101 @@ function mount(project: Project) {
   );
 }
 
+/**
+ * Render helper for the clipboard-paste suite below. Seeds a single active
+ * project with the real backend mock (via `mockBackend`) so the composer's
+ * `fetchWorkspaceData` effect resolves without touching Tauri.
+ */
+function renderHome() {
+  mockBackend(['/repo/one']);
+  mount(baseProject({ compute_type: 'local' }));
+}
+
+interface ClipboardItemFixture {
+  kind: string;
+  type: string;
+  getAsFile: () => File | null;
+}
+
+function clipboardData(items: ClipboardItemFixture[]): DataTransfer {
+  return { items } as unknown as DataTransfer;
+}
+
+function imageItem(file: File): ClipboardItemFixture {
+  return { kind: 'file', type: file.type, getAsFile: () => file };
+}
+
+function paste(node: Element, items: ClipboardItemFixture[]) {
+  const event = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'clipboardData', { value: clipboardData(items) });
+  const preventDefault = vi.spyOn(event, 'preventDefault');
+  fireEvent(node, event);
+  return preventDefault;
+}
+
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
+});
+
+describe('ProjectHome inline composer paste', () => {
+  it('prevents the event and stages a supported image paste on the composer container', async () => {
+    renderHome();
+    const composer = await screen.findByTestId('project-home-composer');
+    const file = new File(['image bytes'], 'pasted.png', { type: 'image/png' });
+
+    const preventDefault = paste(composer, [imageItem(file)]);
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.getByText(/pasted\.png/)).toBeInTheDocument(),
+    );
+  });
+
+  it('stages every supported image from a multi-image paste in clipboard order', async () => {
+    renderHome();
+    const composer = await screen.findByTestId('project-home-composer');
+    const png = new File(['png'], 'alpha.png', { type: 'image/png' });
+    const webp = new File(['webp'], 'bravo.webp', { type: 'image/webp' });
+
+    paste(composer, [imageItem(png), imageItem(webp)]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/alpha\.png/)).toBeInTheDocument();
+      expect(screen.getByText(/bravo\.webp/)).toBeInTheDocument();
+    });
+  });
+
+  it('does not stage or prevent an unsupported-image-only paste', async () => {
+    renderHome();
+    const composer = await screen.findByTestId('project-home-composer');
+    const bmp = new File(['bmp'], 'clipboard.bmp', { type: 'image/bmp' });
+
+    const preventDefault = paste(composer, [imageItem(bmp)]);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(screen.queryByText(/clipboard\.bmp/)).not.toBeInTheDocument();
+  });
+
+  it('keeps normal text paste in the title input intact (no preventDefault)', async () => {
+    renderHome();
+    const composer = await screen.findByTestId('project-home-composer');
+    const input = composer.querySelector('input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+
+    // A paste fired on the title input bubbles up to our handler; with
+    // `e.target instanceof HTMLInputElement` set, the handler must bail
+    // without calling `preventDefault`, leaving the input's native text
+    // paste path active.
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    const dt = { items: [], getData: () => '' } as unknown as DataTransfer;
+    Object.defineProperty(event, 'clipboardData', { value: dt });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    fireEvent(input, event);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: 'ship clip support' } });
+    expect(input.value).toBe('ship clip support');
+  });
 });
 
 describe('ProjectHome — persistent Start Session affordance', () => {

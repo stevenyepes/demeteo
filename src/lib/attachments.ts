@@ -231,6 +231,52 @@ function bytesToDataUrl(mime: string, bytes: Uint8Array): string {
 }
 
 /**
+ * Exact allow-list of clipboard image MIME types that the rest of the
+ * pipeline accepts. Kept in sync with the Rust
+ * `commit_attachment_inner` allow-list at
+ * `crates/demeteo-core/src/application/attachments.rs:221-235`; a
+ * clipboard item outside this set never reaches `addAttachment` and
+ * the underlying `feature_add_attachment` would reject it anyway.
+ */
+const SUPPORTED_CLIPBOARD_IMAGE_MIMES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+/**
+ * Extract the supported image `File` handles from a clipboard /
+ * drag-paste `DataTransfer`. Returns the items in clipboard order;
+ * `[]` when no supported image is present.
+ *
+ * Only entries whose `kind === "file"` and whose `type` matches the
+ * exact allow-list of supported image MIME types (compared
+ * case-insensitively) are considered. `getAsFile()` is invoked only
+ * for items that pass both filters, and a `null` return is omitted.
+ *
+ * Pure: no I/O, no IPC, no `preventDefault`, no filename normalization
+ * or hashing — those happen later in `ingestFiles` /
+ * `feature_add_attachment`. The caller (e.g.
+ * `AttachmentDropzone.handlePaste`) decides whether to swallow the
+ * event based on whether this helper returned a non-empty list.
+ */
+export function extractImageFilesFromClipboard(
+  clipboardData: DataTransfer,
+): File[] {
+  const items = clipboardData.items;
+  const out: File[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind !== "file") continue;
+    if (!SUPPORTED_CLIPBOARD_IMAGE_MIMES.has(item.type.toLowerCase())) continue;
+    const file = item.getAsFile();
+    if (file !== null) out.push(file);
+  }
+  return out;
+}
+
+/**
  * Compute SHA-256 hex over a browser `File` using `crypto.subtle`.
  * Used by the launch-stage dedup in {@link AttachmentDropzone} so the
  * staging Map keys the same way the Rust `feature_add_attachment`

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
@@ -11,6 +11,7 @@ import { StartSessionButton } from './StartSessionButton';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
 import { buildWorkflowById, classifyWorkflowBadge } from '../lib/workflowBadge';
+import { computeLocalSha256, extractImageFilesFromClipboard } from '../lib/attachments';
 
 /**
  * Left accent bar per tone. Local to this component (the way StatusBadge
@@ -63,6 +64,49 @@ const ProjectHome = () => {
     // surface (Alternative A): it captures a title + attachments and
     // hands off to the Start Feature modal, which owns every launch
     // knob (repos, runner, overrides) and the actual start_feature call.
+    const stageClipboardFile = useCallback(async (file: File) => {
+        try {
+            const sourceFilename = file.name;
+            const lower = sourceFilename.toLowerCase();
+            const mime = file.type || guessComposerMime(lower);
+            const sha256 = await computeLocalSha256(file);
+            const previewUrl = mime.startsWith('image/') ? await readDataUrl(file) : null;
+            const entry: LaunchStageEntry = {
+                sha256,
+                name: sourceFilename,
+                source_filename: sourceFilename,
+                mime,
+                size: file.size,
+                previewUrl,
+                file,
+                sourcePath: null,
+            };
+            setAttachments((prev) => [...prev.filter((e) => e.sha256 !== sha256), entry]);
+        } catch (err) {
+            console.error('ProjectHome: failed to stage pasted attachment', err);
+        }
+    }, []);
+
+    const handleComposerPaste = useCallback(
+        (e: React.ClipboardEvent<HTMLDivElement>) => {
+            const target = e.target;
+            if (
+                target instanceof HTMLInputElement ||
+                target instanceof HTMLTextAreaElement
+            ) {
+                return;
+            }
+            const files = extractImageFilesFromClipboard(e.clipboardData);
+            if (files.length === 0) return;
+            e.preventDefault();
+            void (async () => {
+                for (const file of files) {
+                    await stageClipboardFile(file);
+                }
+            })();
+        },
+        [stageClipboardFile],
+    );
     const openStartFeature = () => {
         uiDispatch({
             type: 'OPEN_START_FEATURE',
@@ -477,7 +521,12 @@ const ProjectHome = () => {
                                 <div className="mt-2 ml-1 text-violet-400 shrink-0">
                                     <Zap className="w-5 h-5" />
                                 </div>
-                                <div className="flex-1 min-w-0">
+                                <div
+                                    className="flex-1 min-w-0"
+                                    tabIndex={0}
+                                    onPaste={handleComposerPaste}
+                                    data-testid="project-home-composer"
+                                >
                                     <input
                                         type="text"
                                         value={featureInput}
@@ -506,7 +555,7 @@ const ProjectHome = () => {
                                     </div>
                                     <div className="mt-2 flex items-center justify-between gap-3 pl-2">
                                         <span className="text-[11px] text-slate-500 font-mono">
-                                            Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400">Enter</kbd> to configure &amp; launch
+                                            Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400">Enter</kbd> to configure &amp; launch · paste an image to attach
                                         </span>
                                         <button
                                             onClick={openStartFeature}
@@ -717,3 +766,28 @@ function TerminalTabOpener({
 }
 
 export default ProjectHome;
+
+function guessComposerMime(lower: string): string {
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'text/markdown';
+    if (lower.endsWith('.txt')) return 'text/plain';
+    if (lower.endsWith('.json')) return 'application/json';
+    return 'application/octet-stream';
+}
+
+function readDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'));
+        reader.onload = () => {
+            const out = reader.result;
+            if (typeof out === 'string') resolve(out);
+            else reject(new Error('FileReader did not yield a string result'));
+        };
+        reader.readAsDataURL(file);
+    });
+}

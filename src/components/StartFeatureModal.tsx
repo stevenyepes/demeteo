@@ -589,7 +589,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
         <div className="p-6 space-y-4 flex-1 min-h-0 overflow-y-auto">
           {/* Attachments (above the description per sub-3 brief).
-              Drop/drop/pick up to 10 files (100 MB each). The dropzone
+              Drop, paste, or pick up to 10 files (100 MB each). The dropzone
               stages locally in `LaunchStageEntry[]` — see the
               `attachments` field on `onLaunch` for the commit step. */}
           <div>
