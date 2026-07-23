@@ -7,6 +7,7 @@ import { formatTokens } from '../lib/utils';
 import { formatError } from '../lib/errors';
 import { saveProjectSettings } from '../lib/project';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
+import { StartSessionButton } from './StartSessionButton';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
 import { buildWorkflowById, classifyWorkflowBadge } from '../lib/workflowBadge';
@@ -221,9 +222,16 @@ const ProjectHome = () => {
     const isCurrentlyFailed = activeProject.status === 'error';
     const isCurrentlyBootstrapping = activeProject.status === 'bootstrapping';
 
-    const currentStep = localBootstrapStep !== 'idle' ? localBootstrapStep : 
-                        isCurrentlyFailed ? 'error' : 
+    const currentStep = localBootstrapStep !== 'idle' ? localBootstrapStep :
+                        isCurrentlyFailed ? 'error' :
                         isCurrentlyBootstrapping ? 'bootstrapping' : 'idle';
+
+    // Same local-vs-remote derivation TerminalTabOpener uses below — kept as
+    // one source of truth so the hero button and the auto-opened terminal
+    // tab always agree on which machine a session targets.
+    const machineId = activeProject.compute_type?.toLowerCase() === 'remote'
+        ? (activeProject.remote_host || 'local')
+        : 'local';
 
     if (currentStep === 'bootstrapping') {
         return (
@@ -394,6 +402,36 @@ const ProjectHome = () => {
                         <div className="w-px bg-white/10"></div>
                         <div className="flex flex-col"><span className="text-slate-500">Token Spend</span><span className="text-white">{formatTokens(features.reduce((sum, f) => sum + (f.tokens || 0), 0))}</span></div>
                     </div>
+                </div>
+
+                {/* Persistent Start Session affordance — visible for both local
+                    and remote projects, regardless of which tab (if any) is
+                    active. This is the only terminal entry point local projects
+                    ever see; TerminalTabOpener below stays remote/'terminal'-tab
+                    only and keeps its own auto-open behavior untouched. */}
+                <div className="flex items-center gap-3 shrink-0">
+                    {repositories.length > 1 && (
+                        <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-white/5 border border-white/5 rounded-lg p-2.5">
+                            <span>Repository:</span>
+                            <select
+                                value={activeRepoPath}
+                                onChange={(e) => setActiveRepoPath(e.target.value)}
+                                className="bg-[#08090c] border border-white/10 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                            >
+                                {repositories.map((repo) => (
+                                    <option key={repo.path} value={repo.path}>
+                                        {repo.path}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+                    <StartSessionButton
+                        projectId={activeProject.id}
+                        repoPath={activeRepoPath}
+                        machineId={machineId}
+                        machineLabel={machineId}
+                    />
                 </div>
 
                 {/* Tabs Selector */}
@@ -602,22 +640,6 @@ const ProjectHome = () => {
                 </div>
                 ) : (
                     <div className="flex-1 min-h-0 flex flex-col gap-4">
-                        {repositories.length > 1 && (
-                            <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-white/5 border border-white/5 rounded-lg p-2.5 shrink-0">
-                                <span>Select Repository:</span>
-                                <select
-                                    value={activeRepoPath}
-                                    onChange={(e) => setActiveRepoPath(e.target.value)}
-                                    className="bg-[#08090c] border border-white/10 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
-                                >
-                                    {repositories.map((repo) => (
-                                        <option key={repo.path} value={repo.path}>
-                                            {repo.path}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
                         <TerminalTabOpener
                             projectId={activeProject.id}
                             computeType={activeProject.compute_type || 'local'}
