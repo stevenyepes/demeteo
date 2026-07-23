@@ -136,6 +136,15 @@ const ProjectHome = () => {
     };
 
     useEffect(() => {
+        // Drop the outgoing project's repo list/selection before the fetch,
+        // not after: this component is reused across projects (App renders it
+        // without a `key`), and the header Start Session button launches at
+        // `activeRepoPath`. Leaving the old value in place would let a click
+        // during the fetch — or after a failed/empty fetch — open a session in
+        // the project the user just left. An empty path disables the button.
+        setRepositories([]);
+        setActiveRepoPath('');
+
         const fetchWorkspaceData = async () => {
             setIsLoadingFeatures(true);
 
