@@ -73,6 +73,7 @@ The application functions within a single unified shell (no multi-window popouts
 *The control center for a specific project.*
 - **UI State:** `ProjectHome` (Main Pane).
 - **Hero Element:** "Start a Feature" slim input modal.
+- **Hero Element:** `StartSessionButton` split-button — one click opens a plain shell scoped to the project's repo path and navigates to the Terminals view; the caret lets the user pick a coding agent instead. Available for both local and remote projects.
 - **Active Area:** Shows the currently running Feature (progress bar, current step, cost telemetry).
 - **Queue/History:** A list of pending or completed (archived) features.
 - **Repo Map:** A lazy-loaded list of connected repositories and active feature branches (driven by `RepoHealthStatus`; not a visual map).
