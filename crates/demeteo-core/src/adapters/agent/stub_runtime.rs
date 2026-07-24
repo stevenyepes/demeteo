@@ -39,6 +39,11 @@
 //! `report.md` and whose prompt says `@stub-write report.md` gets a real,
 //! materialized deliverable — identically on every transport.
 //!
+//! A directive path whose file name is `task-list.json` gets a valid
+//! two-task `TaskPlan` JSON body instead of the markdown stub (see
+//! [`stub_body`]), so a `sequence` step consuming the artifact via
+//! `task_list_from` resolves a real, deterministic plan.
+//!
 //! A trailing `@stub-verdict <key>` directive makes the stub end its reply
 //! with `{"<key>":"pass"}` so single-turn validate steps (which parse a
 //! verdict object out of the agent text) pass deterministically.
@@ -215,7 +220,27 @@ fn triage_json(category: &str) -> String {
 /// Deterministic body written for a given directive path. Kept stable
 /// across transports so the materialized artifact bytes are identical
 /// whether produced locally, over SSH, or by the runner.
+///
+/// One path is content-aware: a directive whose file name is
+/// `task-list.json` gets a valid two-task [`TaskPlan`] body instead of the
+/// markdown stub, because a `sequence` step's `task_list_from` consumer
+/// parses the artifact through `extract_task_plan` — the markdown body can
+/// never satisfy it, and the starter-baseline harness (P0.2) needs the
+/// bundled sequence-bearing starters to run past plan resolution.
 fn stub_body(path: &str) -> String {
+    if Path::new(path).file_name().and_then(|n| n.to_str()) == Some("task-list.json") {
+        return concat!(
+            "{\"tasks\":[",
+            "{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",",
+            "\"description\":\"Deterministic stub task one.\",\"files\":[],",
+            "\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},",
+            "{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",",
+            "\"description\":\"Deterministic stub task two.\",\"files\":[],",
+            "\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}",
+            "]}\n"
+        )
+        .to_string();
+    }
     format!("# stub artifact\n\npath: {path}\ngenerated-by: demeteo stub agent\n")
 }
 

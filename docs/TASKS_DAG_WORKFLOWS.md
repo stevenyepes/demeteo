@@ -76,8 +76,8 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Goal:** A golden-snapshot integration test that *executes* every bundled starter through the engine with the stub agent and records the resulting step/status/event sequence. This is the regression gate every Phase-1 task runs against.
 - **Depends:** none. **Size:** medium.
 - **Context:** `crates/demeteo-core/tests/conformance/topology_equivalence.rs` (pattern: `minimal_workflow`, `StubRuntime`, `agent_kind: "stub"`, `DEMETEO_STUB_AGENT`); `tests/conformance/execution_port.rs`; `src-tauri/workflows/*.json`; the `#[path]` wiring at `src/ports/execution.rs:283-288`.
-- **Touch:** new `crates/demeteo-core/tests/conformance/starter_baseline.rs` + its `#[path]` mod hookup; golden snapshot fixtures (JSON) beside it.
-- **Do:** For each starter: load JSON → run to completion under stub runtime (auto-approve gates or stub decisions) → serialize ordered (step_id, kind, final status, outcome class) list + `RunView` shape → compare to committed snapshot. Provide `UPDATE_SNAPSHOTS=1` regen path.
+- **Touch:** new `crates/demeteo-core/tests/conformance/starter_baseline.rs` + its `#[path]` mod hookup; golden snapshot fixtures (JSON) beside it; `crates/demeteo-core/src/adapters/agent/stub_runtime.rs` (*plan amendment 2026-07-23:* `stub_body` must emit a valid `TaskPlan` JSON when the directive path is `task-list.json`, or the two sequence-bearing starters die at plan resolution — the fixed markdown body can never satisfy `extract_task_plan`).
+- **Do:** For each starter: load JSON → mechanically inject stub directives (`@stub-write` per declared `last_write_to` artifact, `@stub-verdict` into verifier instructions — prompts are template text, not baselined behavior) → run to completion under stub runtime (auto-approve gates) → serialize ordered (step_id, kind, final status, iterations, normalized error) list + artifacts → compare to committed snapshot. Provide `UPDATE_SNAPSHOTS=1` regen path.
 - **Done when:** `cargo test -p demeteo-core starter_baseline` green on master; snapshots committed; README comment explains the regen flow.
 
 ---
@@ -329,7 +329,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | Task | Title | Status |
 |---|---|---|
 | P0.1 | Decision records | ✅ 2026-07-23 |
-| P0.2 | Starter baseline harness | ☐ |
+| P0.2 | Starter baseline harness | ✅ 2026-07-23 |
 | P1.1 | Schema v2 structs | ☐ |
 | P1.2 | v1→v2 migration | ☐ |
 | P1.3 | JSON Schema validation | ☐ |

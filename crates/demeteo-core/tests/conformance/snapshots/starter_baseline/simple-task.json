@@ -1,0 +1,51 @@
+{
+  "starter": "simple-task",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-plan",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-implement",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-validate",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-finalize",
+      "kind": "finalize",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-implement",
+      "implementation-plan.md",
+      "# stub artifact\n\npath: artifacts/implementation-plan.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-plan",
+      "implementation-plan.md",
+      "# stub artifact\n\npath: artifacts/implementation-plan.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-validate",
+      "s-validate.md",
+      "# stub artifact\n\npath: artifacts/s-validate.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}
