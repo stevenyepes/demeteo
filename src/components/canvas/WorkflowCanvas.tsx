@@ -47,6 +47,8 @@ export interface WorkflowCanvasProps {
    *  highlight follows it — notably so closing the drill-down panel
    *  (`null`) clears the highlight. Omit to let the canvas own selection. */
   selectedNodeId?: string | null;
+  /** Node ids in the replay cone to ring before confirming (P2.4). */
+  highlightedNodeIds?: Set<string> | null;
   className?: string;
 }
 
@@ -55,11 +57,12 @@ function CanvasInner({
   statusByNode,
   onNodeActivate,
   selectedNodeId,
+  highlightedNodeIds,
   className = '',
 }: WorkflowCanvasProps) {
   const base = useMemo(
-    () => toFlowGraph(definition, { statusByNode }),
-    [definition, statusByNode],
+    () => toFlowGraph(definition, { statusByNode, highlightedNodeIds }),
+    [definition, statusByNode, highlightedNodeIds],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(base.nodes);

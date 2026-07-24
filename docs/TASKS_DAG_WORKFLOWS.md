@@ -240,6 +240,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** `FeatureDetail.tsx` agent-stream section (grep `agent_stream`/`AgentStream`); `features.rs` (`step_retry` :160, `replay_from_step` :181, `gate_decide` :144); `impl_traits/replay.rs` (230, what replay invalidates).
 - **Touch:** `NodePanel.tsx` (two tabs), `FeatureDetail.tsx` (remove inline transcript), small backend addition if replay needs to return the affected-subgraph preview.
 - **Done when:** each action verified against a stub run; guard states render with explanations.
+- *Amendments (2026-07-24, as built):* (1) **No backend change** — "the affected-subgraph preview" is computed client-side from the already-pinned migrated v2 graph via a new pure `canvas/graphOps.ts` (`descendantIds`/`replayCone`), so the replay modal's downstream count is now **DAG-accurate** for the panel path (the timeline keeps its index-based count). (2) **"Highlights the downstream subgraph"** = a violet *will-re-run* ring, threaded `flowGraph`→`WorkflowNode`→`WorkflowCanvas` as a new `highlightedNodeIds` prop; `FeatureDetail` sets it to the replay cone while the confirm modal is open and clears it on cancel/confirm (`closeReplay`). Distinct from the cyan selection ring; selection still wins the border. (3) **Inline transcript kept in the timeline, not removed** — the timeline is a *permanent* toggle (PRD §6.1), so stripping its live-reasoning would regress the default surface; the Live tab instead reads the **same** `streamContent` buffer (dual surfaces, one source — the P2.2 pattern). Deleting genuinely-duplicate surfaces stays P2.6's job. (4) **Actions reuse FeatureDetail's existing handlers via callback props** (zero run-logic in the panel): Retry→`handleRetryStep`, Stop→`handleStopStep`, Replay→the existing confirm modal, Decide-gate→the `GateView` route — so canvas and timeline drive identical code paths. The ancestor guard is `findActivePredecessor` (index-based, same as the timeline's Retry button) surfaced as `blockedBy` with a disabled-button + spelled-out explanation (PRD §6.4). (5) Panel is now **four tabs Overview·Live·Output·Actions** (PRD §6.2 order); the `step_attempts` fetch was lifted to panel level so the Overview table and the Actions "which policy rule applied" hint (last failed attempt's `applied_rule`) share one read. (6) Gate: `graphOps.test.ts` (cone traversal over a diamond) + six new `NodePanel.test.tsx` cases (Live buffer/empty; Actions retry-blocked-with-explanation, retry+replay fire, decide-gate, empty state); `tsc` + 477 vitest green.
 
 ### P2.5 — Sequence node expansion (landed-prefix legibility)
 - **Goal:** Sequence nodes expand in place (accordion in node or panel) showing the task list with per-task status/cost; the landed prefix visually distinct from pending tasks — making Decision 13 semantics legible (PRD §6.2).
@@ -360,7 +361,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P2.1 | Canvas foundation | ✅ 2026-07-24 |
 | P2.2 | Run-mode overlay + toggle | ✅ 2026-07-24 |
 | P2.3 | Panel: Overview/Output | ✅ 2026-07-24 |
-| P2.4 | Panel: Live/Actions | ☐ |
+| P2.4 | Panel: Live/Actions | ✅ 2026-07-24 |
 | P2.5 | Sequence expansion | ☐ |
 | P2.6 | Remote on canvas; split-path deletion | ☐ |
 | P3.1 | Registry palette + connect rules | ☐ |

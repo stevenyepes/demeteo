@@ -125,3 +125,114 @@ describe('NodePanel — Output', () => {
     expect(screen.getByText(/No output produced/i)).toBeInTheDocument();
   });
 });
+
+describe('NodePanel — Live', () => {
+  it('shows the agent-stream buffer while running', () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'running' })}
+        onClose={() => {}}
+        liveStream={'thinking about the change…'}
+        isStreaming
+      />,
+    );
+    fireEvent.click(screen.getByText('Live'));
+    expect(screen.getByText(/thinking about the change/)).toBeInTheDocument();
+  });
+
+  it('hints when the node is not running and has no buffer', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'completed', stepExecutionId: 'se-1' };
+    render(<NodePanel featureId="f1" node={node()} run={run} step={step({ status: 'completed' })} onClose={() => {}} />);
+    fireEvent.click(screen.getByText('Live'));
+    expect(screen.getByText(/No live output/i)).toBeInTheDocument();
+    await waitFor(() => expect(invoke).toHaveBeenCalled()); // settle the attempts fetch
+  });
+});
+
+describe('NodePanel — Actions', () => {
+  it('disables Retry with an ancestor explanation when blocked', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
+    const onRetry = vi.fn();
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'failed' })}
+        onClose={() => {}}
+        onRetry={onRetry}
+        blockedBy={{ step_id: 'research', status: 'running' }}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect(retry).toBeDisabled();
+    fireEvent.click(retry);
+    expect(onRetry).not.toHaveBeenCalled();
+    // The guard reason is spelled out, not just a disabled button.
+    expect(screen.getByText(/Ancestor "research" is still running/)).toBeInTheDocument();
+  });
+
+  it('fires Retry and Replay when unblocked', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
+    const onRetry = vi.fn();
+    const onReplay = vi.fn();
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'failed' })}
+        onClose={() => {}}
+        onRetry={onRetry}
+        onReplay={onReplay}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Replay…' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onReplay).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Decide on an awaiting gate node', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'awaiting_gate', stepExecutionId: 'se-g' };
+    const onDecideGate = vi.fn();
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node({ id: 'gate-ship', type: 'gate', title: 'Ship Gate' })}
+        run={run}
+        step={step({ id: 'se-g', step_id: 'gate-ship', step_kind: 'gate', status: 'awaiting_gate' })}
+        onClose={() => {}}
+        onDecideGate={onDecideGate}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    fireEvent.click(screen.getByRole('button', { name: 'Decide' }));
+    expect(onDecideGate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows an empty state when no actions apply', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'completed', stepExecutionId: 'se-1' };
+    render(<NodePanel featureId="f1" node={node()} run={run} step={step({ status: 'completed' })} onClose={() => {}} />);
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    expect(screen.getByText(/No actions available/i)).toBeInTheDocument();
+  });
+});

@@ -62,11 +62,15 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
         'group flex min-w-[200px] max-w-[280px] flex-col gap-2 rounded-xl border px-3.5 py-2.5',
         'bg-slate-900/70 backdrop-blur-sm transition-shadow',
         isSkipped ? 'opacity-50' : '',
-        selected
-          ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]'
-          : tone
-            ? TONE_CARD[tone]
-            : 'border-slate-700/60 shadow-lg shadow-black/30 hover:border-slate-600',
+        // The replay cone reads as a violet "will re-run" ring, distinct from
+        // the cyan selection highlight (P2.4). Selection still wins the border.
+        data.highlighted && !selected
+          ? 'border-violet-400/60 shadow-[0_0_0_2px_rgba(167,139,250,0.45),0_0_18px_rgba(139,92,246,0.25)]'
+          : selected
+            ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]'
+            : tone
+              ? TONE_CARD[tone]
+              : 'border-slate-700/60 shadow-lg shadow-black/30 hover:border-slate-600',
       ].join(' ')}
       title={
         isSkipped

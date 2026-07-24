@@ -1,24 +1,34 @@
 /**
- * `NodePanel` — the node drill-down side panel (task P2.3, PRD §6.2).
+ * `NodePanel` — the node drill-down side panel (tasks P2.3 + P2.4, PRD §6.2).
  *
  * Clicking a node on the run-mode `WorkflowCanvas` opens this panel beside the
  * graph (the same split-panel shape `ArtifactViewer` uses in the timeline). It
  * answers J2 ("which node, which attempt, what did it cost, why did it fail")
- * for the selected node from data Phase-1 now persists:
+ * for the selected node from data Phase-1 now persists, across four tabs:
  *
  *  - **Overview** — status, failure class, the per-attempt table from
  *    `step_attempts` (class · cost · duration · applied rule), so a retry loop
  *    is legible instead of collapsed onto one row.
+ *  - **Live** — the running node's `agent_stream` transcript buffer (P2.4).
  *  - **Output** — the node's declared artifacts (Monaco via `ArtifactViewer`)
- *    plus the harness/verifier output (`error_message`, which carries failing
- *    tests / implicated files today).
- *
- * Later tabs (Live transcript, Actions) land in P2.4; this task ships the two
- * read-only tabs that make the failure→root-cause path ≤3 clicks.
+ *    plus the harness/verifier output (`error_message`).
+ *  - **Actions** — Retry / Replay-from-node / Stop / Decide-gate (P2.4), all
+ *    respecting the ancestor guard with disabled-button explanations. The panel
+ *    holds no run logic of its own: FeatureDetail owns the handlers and passes
+ *    them in, so the canvas and timeline drive the exact same code paths.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { AlertCircle, Loader2, X } from 'lucide-react';
+import {
+  AlertCircle,
+  Cpu,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+  ShieldCheck,
+  X,
+  XCircle,
+} from 'lucide-react';
 
 import { ArtifactViewer } from '../ArtifactViewer';
 import {
@@ -29,11 +39,7 @@ import {
 } from '../../lib/artifacts';
 import { formatError } from '../../lib/errors';
 import { formatDuration } from '../../lib/utils';
-import {
-  runStatusMeta,
-  TONE_CHIP,
-  TONE_TEXT,
-} from '../../lib/runStatus';
+import { runStatusMeta, TONE_CHIP, TONE_TEXT } from '../../lib/runStatus';
 import type { StepAttempt, StepExecution } from '../../types';
 import { nodeTypeMeta, type NodeConfigV2, type NodeRunStatus } from './types';
 
@@ -60,6 +66,12 @@ function formatCost(cost: number | null | undefined): string {
   return `$${cost.toFixed(cost < 1 ? 4 : 2)}`;
 }
 
+/** The active ancestor blocking a manual retry/gate decision, if any. */
+export interface BlockingAncestor {
+  step_id: string;
+  status: string;
+}
+
 export interface NodePanelProps {
   featureId: string;
   /** The selected graph node (from the pinned migrated definition). */
@@ -71,9 +83,26 @@ export interface NodePanelProps {
   onClose: () => void;
   /** Open a worktree-ref artifact in the code editor (passed to `ArtifactViewer`). */
   onOpenEditorForPath?: (filePath: string) => void;
+
+  // --- P2.4 ---
+  /** Live `agent_stream` buffer for the backing execution (running nodes). */
+  liveStream?: string;
+  /** True while the node is running/verifying — drives the Live tab affordance. */
+  isStreaming?: boolean;
+  /** A non-terminal ancestor that blocks retry/gate decisions, else null. */
+  blockedBy?: BlockingAncestor | null;
+  /** Re-run this node from scratch (`step_retry`). Absent = not offered. */
+  onRetry?: () => void;
+  /** Replay from this node (`replay_from_step`); opens the confirm modal and
+   *  highlights the downstream cone on the canvas. */
+  onReplay?: () => void;
+  /** Stop the running execution. */
+  onStop?: () => void;
+  /** Open the full-screen `GateView` for an awaiting gate node. */
+  onDecideGate?: () => void;
 }
 
-type Tab = 'overview' | 'output';
+type Tab = 'overview' | 'live' | 'output' | 'actions';
 
 export function NodePanel({
   featureId: _featureId,
@@ -82,6 +111,13 @@ export function NodePanel({
   step,
   onClose,
   onOpenEditorForPath,
+  liveStream,
+  isStreaming,
+  blockedBy,
+  onRetry,
+  onReplay,
+  onStop,
+  onDecideGate,
 }: NodePanelProps) {
   const [tab, setTab] = useState<Tab>('overview');
   const meta = nodeTypeMeta(node.type);
@@ -90,6 +126,38 @@ export function NodePanel({
   const status = run?.status ?? 'pending';
   const statusMeta = runStatusMeta(status);
   const errorClass = run?.errorClass ?? null;
+  const stepExecutionId = run?.stepExecutionId ?? null;
+
+  // Per-attempt history, fetched once at panel level and shared by the Overview
+  // table and the Actions retry hint. Refetches when the backing execution
+  // changes or advances (a new attempt closing moves status/cost).
+  const [attempts, setAttempts] = useState<StepAttempt[]>([]);
+  const [attemptsLoading, setAttemptsLoading] = useState(false);
+  const [attemptsError, setAttemptsError] = useState<string | null>(null);
+  const version = `${run?.status}:${run?.costUsd}:${run?.wallClockSecs}`;
+  useEffect(() => {
+    if (!stepExecutionId) {
+      setAttempts([]);
+      return;
+    }
+    let cancelled = false;
+    setAttemptsLoading(true);
+    setAttemptsError(null);
+    invoke<StepAttempt[]>('step_attempts_list', { executionId: stepExecutionId })
+      .then((rows) => {
+        if (!cancelled) setAttempts(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) setAttemptsError(formatError(err) || 'Failed to load attempts.');
+      })
+      .finally(() => {
+        if (!cancelled) setAttemptsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepExecutionId, version]);
 
   // Artifacts declared by this node's execution, deduped (two runner artifacts
   // sharing a basename can cache to one local ref — same rule the timeline uses).
@@ -110,6 +178,7 @@ export function NodePanel({
   }, [node.id]);
 
   const hasOutput = artifactPaths.length > 0 || !!step?.error_message;
+  const hasActions = !!(onRetry || onReplay || onStop || onDecideGate);
 
   return (
     <div className="flex h-full w-[62%] min-w-0 flex-col border-l border-white/5 bg-[#0d0f14]/80 backdrop-blur-xl">
@@ -152,16 +221,30 @@ export function NodePanel({
         <TabButton active={tab === 'overview'} onClick={() => setTab('overview')}>
           Overview
         </TabButton>
+        <TabButton active={tab === 'live'} onClick={() => setTab('live')}>
+          Live
+        </TabButton>
         <TabButton active={tab === 'output'} onClick={() => setTab('output')}>
           Output
+        </TabButton>
+        <TabButton active={tab === 'actions'} onClick={() => setTab('actions')}>
+          Actions
         </TabButton>
       </div>
 
       {/* Body */}
       <div className="min-h-0 flex-1 overflow-hidden">
-        {tab === 'overview' ? (
-          <OverviewTab run={run} stepExecutionId={run?.stepExecutionId ?? null} />
-        ) : (
+        {tab === 'overview' && (
+          <OverviewTab
+            run={run}
+            hasExecution={!!stepExecutionId}
+            attempts={attempts}
+            loading={attemptsLoading}
+            error={attemptsError}
+          />
+        )}
+        {tab === 'live' && <LiveTab liveStream={liveStream} isStreaming={!!isStreaming} />}
+        {tab === 'output' && (
           <OutputTab
             step={step}
             hasOutput={hasOutput}
@@ -169,6 +252,19 @@ export function NodePanel({
             selectedArtifact={selectedArtifact}
             onSelectArtifact={setSelectedArtifact}
             onOpenEditorForPath={onOpenEditorForPath}
+          />
+        )}
+        {tab === 'actions' && (
+          <ActionsTab
+            node={node}
+            run={run}
+            hasActions={hasActions}
+            attempts={attempts}
+            blockedBy={blockedBy ?? null}
+            onRetry={onRetry}
+            onReplay={onReplay}
+            onStop={onStop}
+            onDecideGate={onDecideGate}
           />
         )}
       </div>
@@ -202,42 +298,17 @@ function TabButton({
 /** Overview: node totals + the per-attempt history table (`step_attempts`). */
 function OverviewTab({
   run,
-  stepExecutionId,
+  hasExecution,
+  attempts,
+  loading,
+  error,
 }: {
   run: NodeRunStatus | null;
-  stepExecutionId: string | null;
+  hasExecution: boolean;
+  attempts: StepAttempt[];
+  loading: boolean;
+  error: string | null;
 }) {
-  const [attempts, setAttempts] = useState<StepAttempt[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Refetch when the backing execution changes or advances (status/cost move as
-  // a new attempt closes), so the table tracks the live run without polling.
-  const version = `${run?.status}:${run?.costUsd}:${run?.wallClockSecs}`;
-  useEffect(() => {
-    if (!stepExecutionId) {
-      setAttempts([]);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    invoke<StepAttempt[]>('step_attempts_list', { executionId: stepExecutionId })
-      .then((rows) => {
-        if (!cancelled) setAttempts(rows);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(formatError(err) || 'Failed to load attempts.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepExecutionId, version]);
-
   return (
     <div className="h-full space-y-5 overflow-y-auto px-5 py-4">
       {/* Totals */}
@@ -252,7 +323,7 @@ function OverviewTab({
         <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
           Attempt history
         </div>
-        {!stepExecutionId ? (
+        {!hasExecution ? (
           <EmptyHint>This node hasn&apos;t started yet.</EmptyHint>
         ) : loading && attempts.length === 0 ? (
           <div className="flex items-center gap-2 py-6 text-xs text-slate-500">
@@ -304,6 +375,41 @@ function OverviewTab({
             </table>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Live: the running node's agent-stream buffer (same source as the timeline). */
+function LiveTab({ liveStream, isStreaming }: { liveStream?: string; isStreaming: boolean }) {
+  const content = liveStream?.trim() || '';
+  if (!content) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center text-xs text-slate-500">
+        {isStreaming ? (
+          <>
+            <Cpu className="h-5 w-5 animate-spin text-cyan-400" />
+            <span>Waiting for agent output…</span>
+          </>
+        ) : (
+          <span className="font-bold uppercase tracking-wider text-slate-600">
+            No live output — this node isn&apos;t running.
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full flex-col overflow-hidden px-5 py-4">
+      <div className="mb-2 flex shrink-0 items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+        {isStreaming && <Cpu className="h-3 w-3 animate-spin text-cyan-400" />}
+        Agent reasoning
+      </div>
+      {/* Newest at the bottom; `flex-col-reverse` keeps it scrolled to live. */}
+      <div className="flex min-h-0 flex-1 flex-col-reverse overflow-y-auto rounded-lg border border-cyan-500/20 bg-[#020304] p-3">
+        <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-cyan-300/80">
+          {content}
+        </pre>
       </div>
     </div>
   );
@@ -398,6 +504,162 @@ function OutputTab({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Actions: retry / replay / stop / decide-gate, with the ancestor guard. */
+function ActionsTab({
+  node,
+  run,
+  hasActions,
+  attempts,
+  blockedBy,
+  onRetry,
+  onReplay,
+  onStop,
+  onDecideGate,
+}: {
+  node: NodeConfigV2;
+  run: NodeRunStatus | null;
+  hasActions: boolean;
+  attempts: StepAttempt[];
+  blockedBy: BlockingAncestor | null;
+  onRetry?: () => void;
+  onReplay?: () => void;
+  onStop?: () => void;
+  onDecideGate?: () => void;
+}) {
+  const status = run?.status ?? 'pending';
+  const isFailed = status === 'failed' || status === 'interrupted';
+  const isRunning = status === 'running' || status === 'verifying';
+  const isGateWaiting = node.type === 'gate' && status === 'awaiting_gate';
+  const guarded = blockedBy !== null;
+  const guardMsg = blockedBy
+    ? `Ancestor "${blockedBy.step_id}" is still ${blockedBy.status}. Wait for it to finish.`
+    : '';
+
+  // The policy rule the engine applied to this node's most recent failure — the
+  // "which rule will apply" hint (P2.4), read straight from the attempt row.
+  const lastFailed = [...attempts].reverse().find((a) => a.error_class);
+
+  if (!hasActions) {
+    return (
+      <div className="flex h-full items-center justify-center px-8 text-center text-xs font-bold uppercase tracking-wider text-slate-600">
+        No actions available for this node yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full space-y-3 overflow-y-auto px-5 py-4">
+      {onDecideGate && isGateWaiting && (
+        <ActionRow
+          icon={<ShieldCheck className="h-4 w-4" />}
+          tone="amber"
+          title="Decide gate"
+          desc="Open the full-screen review to approve, redirect, or cancel."
+          buttonLabel="Decide"
+          onClick={onDecideGate}
+        />
+      )}
+
+      {onRetry && isFailed && (
+        <ActionRow
+          icon={<RefreshCw className="h-4 w-4" />}
+          tone="ruby"
+          title="Retry node"
+          desc={
+            lastFailed?.applied_rule
+              ? `Re-run from scratch. Last failure (${classLabel(lastFailed.error_class!)}) was handled by ${lastFailed.applied_rule}.`
+              : 'Re-run this node from scratch with the current harness/model.'
+          }
+          buttonLabel="Retry"
+          onClick={onRetry}
+          disabled={guarded}
+          disabledReason={guardMsg}
+        />
+      )}
+
+      {onReplay && (
+        <ActionRow
+          icon={<RotateCcw className="h-4 w-4" />}
+          tone="cyan"
+          title="Replay from node"
+          desc="Re-execute this node and everything downstream. The affected nodes are ringed on the graph before you confirm."
+          buttonLabel="Replay…"
+          onClick={onReplay}
+        />
+      )}
+
+      {onStop && isRunning && (
+        <ActionRow
+          icon={<XCircle className="h-4 w-4" />}
+          tone="ruby"
+          title="Stop node"
+          desc="Cancel the in-flight execution."
+          buttonLabel="Stop"
+          onClick={onStop}
+        />
+      )}
+
+      {guarded && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3 text-xs text-amber-300/90">
+          <AlertCircle className="mt-px h-4 w-4 shrink-0 text-amber-400" />
+          <span>{guardMsg}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ACTION_TONE: Record<string, string> = {
+  ruby: 'border-rose-500/20 bg-rose-950/10',
+  cyan: 'border-cyan-500/20 bg-cyan-950/10',
+  amber: 'border-amber-500/20 bg-amber-950/10',
+};
+const ACTION_BTN: Record<string, string> = {
+  ruby: 'bg-rose-600 hover:bg-rose-500 text-white',
+  cyan: 'bg-cyan-600 hover:bg-cyan-500 text-white',
+  amber: 'bg-amber-500 hover:bg-amber-600 text-black',
+};
+
+function ActionRow({
+  icon,
+  tone,
+  title,
+  desc,
+  buttonLabel,
+  onClick,
+  disabled,
+  disabledReason,
+}: {
+  icon: React.ReactNode;
+  tone: 'ruby' | 'cyan' | 'amber';
+  title: string;
+  desc: string;
+  buttonLabel: string;
+  onClick: () => void;
+  disabled?: boolean;
+  disabledReason?: string;
+}) {
+  return (
+    <div className={`flex items-center gap-3 rounded-xl border p-3.5 ${ACTION_TONE[tone]}`}>
+      <div className={`shrink-0 ${TONE_TEXT[tone as keyof typeof TONE_TEXT] ?? 'text-slate-400'}`}>
+        {icon}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs font-bold uppercase tracking-wider text-slate-200">{title}</div>
+        <div className="mt-0.5 text-[11px] leading-relaxed text-slate-400">{desc}</div>
+      </div>
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        title={disabled ? disabledReason : undefined}
+        className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:bg-slate-700/40 disabled:text-slate-500 ${ACTION_BTN[tone]}`}
+      >
+        {buttonLabel}
+      </button>
     </div>
   );
 }
