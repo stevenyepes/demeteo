@@ -1,4 +1,6 @@
 use crate::domain::ids::{WorkflowId, WorkflowVersionId};
+use crate::domain::models::workflow_migrate::migrate_v1_to_v2;
+use crate::domain::models::workflow_v2::validate_workflow_v2;
 use crate::domain::models::{StepConfig, Workflow, WorkflowVersion};
 use crate::error::AppError;
 use crate::paths;
@@ -188,6 +190,24 @@ pub fn workflow_get(
     })
 }
 
+/// P1.3 boundary invariant: every definition accepted for storage must
+/// have a schema-valid v2 projection (`migrate_v1_to_v2` is pure/total,
+/// so this can only fire if the v2 model and its published JSON Schema
+/// drift apart — surface that loudly at the write, not at run time).
+fn ensure_valid_v2_projection(
+    id: &WorkflowId,
+    name: &str,
+    steps: &[StepConfig],
+) -> Result<(), AppError> {
+    let projection = migrate_v1_to_v2(id.clone(), name, steps);
+    let value = serde_json::to_value(&projection).map_err(|e| e.to_string())?;
+    validate_workflow_v2(&value).map_err(|e| {
+        AppError::validation(format!(
+            "workflow definition failed schema-v2 validation:\n{e}"
+        ))
+    })
+}
+
 #[tauri::command]
 pub fn workflow_create(
     name: String,
@@ -198,6 +218,7 @@ pub fn workflow_create(
     let workflows = &ctx.workflows;
     let now = paths::now_ms();
     let id = WorkflowId::from(format!("wf-{}", paths::new_id()));
+    ensure_valid_v2_projection(&id, &name, &steps)?;
     let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
 
     let workflow = Workflow {
@@ -252,6 +273,7 @@ pub fn workflow_update(
         .get(&wf_id)
         .map_err(AppError::from)?
         .ok_or_else(|| AppError::not_found(format!("Workflow not found: {}", workflow_id)))?;
+    ensure_valid_v2_projection(&wf_id, &name, &steps)?;
     workflows
         .update_meta(&wf_id, &name, &description)
         .map_err(AppError::from)?;
@@ -341,6 +363,23 @@ pub fn workflow_import(
     ctx: State<'_, AppContext>,
 ) -> Result<WorkflowWithSteps, AppError> {
     let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+    // Schema-v2 documents are checked against the published JSON Schema
+    // (docs-site/workflow-schema-v2.json) so hand-authored v2 files get
+    // located, readable errors today. Storage + execution of v2 graphs
+    // arrives with the DAG engine (P1.15/P3.6); until then even a valid
+    // v2 document cannot be imported, and we say so instead of silently
+    // storing something the engine can't run.
+    if v.get("schema_version").and_then(|s| s.as_u64()) == Some(2) {
+        validate_workflow_v2(&v).map_err(|e| {
+            AppError::validation(format!("schema-v2 workflow failed validation:\n{e}"))
+        })?;
+        return Err(AppError::validation(
+            "this is a valid schema-v2 workflow definition, but importing v2 graphs lands with \
+             the DAG engine — export/import currently uses the v1 steps-list format",
+        ));
+    }
+
     let name = v["name"]
         .as_str()
         .unwrap_or("Imported Workflow")
@@ -353,6 +392,7 @@ pub fn workflow_import(
     let workflows = &ctx.workflows;
     let now = paths::now_ms();
     let id = WorkflowId::from(format!("wf-imported-{}", paths::new_id()));
+    ensure_valid_v2_projection(&id, &name, &steps)?;
     let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
 
     let workflow = Workflow {
