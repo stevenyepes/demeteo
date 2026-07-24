@@ -193,11 +193,11 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
 
   return (
     <div 
-      className="flex-1 flex flex-col overflow-hidden" 
+      className="flex-1 min-w-0 flex flex-col overflow-hidden"
       style={{ maxHeight }}
     >
       {viewType === 'markdown' ? (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
           <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-2 shrink-0">
             <span className="flex items-center gap-2 truncate">
               <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
@@ -213,34 +213,34 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
               Copy Complete Output
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto pr-2 space-y-1 font-sans">
+          <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pr-2 space-y-1 font-sans">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
               // Headings
               h1: ({ children }) => (
-                <h1 className="text-xl font-bold font-display text-white mt-6 mb-3 tracking-wide select-text">
+                <h1 className="text-xl font-bold font-display text-white mt-6 mb-3 tracking-wide select-text break-words">
                   {children}
                 </h1>
               ),
               h2: ({ children }) => (
-                <h2 className="text-lg font-bold font-display text-white mt-5 mb-2.5 border-b border-white/5 pb-1 tracking-wide select-text">
+                <h2 className="text-lg font-bold font-display text-white mt-5 mb-2.5 border-b border-white/5 pb-1 tracking-wide select-text break-words">
                   {children}
                 </h2>
               ),
               h3: ({ children }) => (
-                <h3 className="text-md font-bold font-display text-white mt-4 mb-2 tracking-wide select-text">
+                <h3 className="text-md font-bold font-display text-white mt-4 mb-2 tracking-wide select-text break-words">
                   {children}
                 </h3>
               ),
               h4: ({ children }) => (
-                <h4 className="text-sm font-semibold font-display text-violet-300 mt-4 mb-2 uppercase tracking-wider select-text">
+                <h4 className="text-sm font-semibold font-display text-violet-300 mt-4 mb-2 uppercase tracking-wider select-text break-words">
                   {children}
                 </h4>
               ),
               // Paragraph & spacing
               p: ({ children }) => (
-                <p className="text-sm text-slate-300 leading-relaxed my-3 select-text">
+                <p className="text-sm text-slate-300 leading-relaxed my-3 select-text break-words">
                   {children}
                 </p>
               ),
@@ -256,14 +256,14 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </ol>
               ),
               li: ({ children }) => (
-                <li className="flex items-start gap-2.5 text-slate-300 text-sm leading-relaxed my-1.5">
+                <li className="flex items-start gap-2.5 text-slate-300 text-sm leading-relaxed my-1.5 break-words">
                   <span className="mt-2 w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)] shrink-0" />
-                  <span className="select-text">{children}</span>
+                  <span className="select-text break-words">{children}</span>
                 </li>
               ),
               // Blockquote
               blockquote: ({ children }) => (
-                <blockquote className="border-l-4 border-violet-500 bg-violet-950/10 backdrop-blur-md px-4 py-3 rounded-r-xl my-4 text-slate-400 text-sm leading-relaxed italic border-r border-y border-white/[0.02] select-text">
+                <blockquote className="border-l-4 border-violet-500 bg-violet-950/10 backdrop-blur-md px-4 py-3 rounded-r-xl my-4 text-slate-400 text-sm leading-relaxed italic border-r border-y border-white/[0.02] select-text break-words">
                   {children}
                 </blockquote>
               ),
@@ -291,12 +291,12 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </tr>
               ),
               th: ({ children }) => (
-                <th className="px-4 py-3 font-semibold font-display uppercase tracking-wider text-slate-200 border-r border-white/5 last:border-0">
+                <th className="px-4 py-3 font-semibold font-display uppercase tracking-wider text-slate-200 border-r border-white/5 last:border-0 break-words">
                   {children}
                 </th>
               ),
               td: ({ children }) => (
-                <td className="px-4 py-3 text-slate-300 border-r border-white/5 last:border-0 leading-relaxed font-sans">
+                <td className="px-4 py-3 text-slate-300 border-r border-white/5 last:border-0 leading-relaxed font-sans break-words">
                   {children}
                 </td>
               ),
@@ -354,7 +354,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
 
                 return (
                   <code 
-                    className="px-1.5 py-0.5 rounded bg-white/10 text-cyan-400 font-mono text-[11px] border border-white/5 mx-0.5 select-text font-semibold"
+                    className="px-1.5 py-0.5 rounded bg-white/10 text-cyan-400 font-mono text-[11px] border border-white/5 mx-0.5 select-text font-semibold break-words"
                     {...props}
                   >
                     {children}
