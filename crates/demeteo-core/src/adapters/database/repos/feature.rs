@@ -361,6 +361,7 @@ impl FeatureRepository for SqliteAdapter {
         wall_clock_ms: u64,
         error_class: Option<&str>,
         failure_fingerprint: Option<&str>,
+        applied_rule: Option<&str>,
         now: i64,
     ) -> Result<(), String> {
         super::step_attempts::attempt_close(
@@ -373,6 +374,7 @@ impl FeatureRepository for SqliteAdapter {
             wall_clock_ms,
             error_class,
             failure_fingerprint,
+            applied_rule,
             now,
         )
     }

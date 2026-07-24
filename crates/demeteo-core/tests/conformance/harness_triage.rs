@@ -351,16 +351,29 @@ async fn persistent_environment_failure_terminates_without_exhausting_budget() {
     );
     // Per-attempt history (P1.8): the same run leaves one closed row per
     // dispatch, with *distinct* failure classes — a plain verdict failure
-    // on attempt 1, the triaged environment termination on attempt 2.
-    let summary: Vec<(u32, &str, Option<&str>)> = attempts
+    // on attempt 1, the triaged environment termination on attempt 2 —
+    // and each row names the retry-policy rule that answered it (P1.10).
+    let summary: Vec<(u32, &str, Option<&str>, Option<&str>)> = attempts
         .iter()
-        .map(|a| (a.attempt_no, a.status.as_str(), a.error_class.as_deref()))
+        .map(|a| {
+            (
+                a.attempt_no,
+                a.status.as_str(),
+                a.error_class.as_deref(),
+                a.applied_rule.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         summary,
         vec![
-            (1, "failed", Some("verdict")),
-            (2, "failed", Some("non_retryable")),
+            (1, "failed", Some("verdict"), Some("verdict.redirect")),
+            (
+                2,
+                "failed",
+                Some("non_retryable"),
+                Some("non_retryable.fail")
+            ),
         ],
         "environment leg must record two attempts with distinct error classes"
     );
@@ -403,17 +416,26 @@ async fn persistent_regression_failure_exhausts_retry_budget() {
     );
     // Per-attempt history (P1.8): every dispatch of the redirect loop is
     // its own closed row — the two budgeted retries plus the try that
-    // exhausted the budget, all classed as verdict failures.
-    let summary: Vec<(u32, &str, Option<&str>)> = attempts
+    // exhausted the budget, all classed as verdict failures and all
+    // answered by the same redirect rule (P1.10; exhaustion is that
+    // rule's spent budget, not a different rule).
+    let summary: Vec<(u32, &str, Option<&str>, Option<&str>)> = attempts
         .iter()
-        .map(|a| (a.attempt_no, a.status.as_str(), a.error_class.as_deref()))
+        .map(|a| {
+            (
+                a.attempt_no,
+                a.status.as_str(),
+                a.error_class.as_deref(),
+                a.applied_rule.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         summary,
         vec![
-            (1, "failed", Some("verdict")),
-            (2, "failed", Some("verdict")),
-            (3, "failed", Some("verdict")),
+            (1, "failed", Some("verdict"), Some("verdict.redirect")),
+            (2, "failed", Some("verdict"), Some("verdict.redirect")),
+            (3, "failed", Some("verdict"), Some("verdict.redirect")),
         ],
         "regression leg must record one attempt row per dispatch"
     );

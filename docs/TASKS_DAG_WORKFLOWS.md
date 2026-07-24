@@ -155,6 +155,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** PRD §5.4 (retry block); `driver/failure.rs` (all 185); `driver.rs:600-700` + `RetryContext` (:37); `steps/mod.rs` (`StepOutcome`); `domain/verifier.rs:93` (`VerifierError`); `workflow_v2.rs` policy structs.
 - **Touch:** `driver/failure.rs` (rewrite around policy), `driver.rs` (budget sites), new unit tests; keep `RetryBudgetExhausted` notification/event exactly as-is (`failure.rs:117,133` — conformance-tested in `tests/conformance/harness_triage.rs`).
 - **Done when:** `harness_triage.rs` conformance green unmodified; new tests: each failure class × strategy; applied rule id recorded on the attempt row.
+- *Amendments (2026-07-24, as built):* (1) "applied rule id on the attempt row" required an `applied_rule` column — added to V31 (fresh DBs) plus a defensive `add_column_if_missing` in `migration.rs` (branch DBs that already ran V31), threading through `ports/db.rs` / `repos/step_attempts.rs` / `repos/feature.rs` — Touch list was underspecified. (2) **P1.12 landmine:** the runtime deriver (`retry_policy::legacy_policy_for_step`) maps `on_failure` to redirect rules for **both** `verdict` and `agent_failure` (v1 sent both classes through the same path), but P1.2's `migrate_v1_to_v2` maps it to `verdict` only. When P1.12 starts executing *migrated v2* definitions, plain agent failures would silently stop redirecting — extend the P1.2 mapping (or the v2 policy deriver) to cover `agent_failure` before switching the run path, and let the P0.2 baseline arbitrate.
 
 ### P1.11 — Ready-set scheduler core (pure)
 - **Goal:** Pure scheduling module: given graph (P1.4) + node states, compute the ready set (join satisfied, `when` guards pass via P1.5), propagate `skipped(reason)` per join semantics, detect the "empty ready set with non-terminal nodes" invariant violation. Node state machine formalized as a Rust enum incl. `skipped(reason)` and `awaiting_retry` (PRD §5.3 diagram). **No driver changes.**
@@ -339,7 +340,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.7 | gate/sequence/finalize; match deleted | ✅ 2026-07-24 |
 | P1.8 | step_attempts (V31) | ✅ 2026-07-24 |
 | P1.9 | Durable checkpoints (V32) | ✅ 2026-07-24 |
-| P1.10 | Declarative retry policy | ☐ |
+| P1.10 | Declarative retry policy | ✅ 2026-07-24 |
 | P1.11 | Ready-set scheduler core | ✅ 2026-07-24 |
 | P1.12 | Driver integration (L) | ☐ |
 | P1.13 | Unified run_events | ☐ |

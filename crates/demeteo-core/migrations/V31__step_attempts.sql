@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS step_attempts (
     -- Normalized failure output (normalize_failure_fingerprint), for
     -- "same failure again?" comparisons across attempts.
     failure_fingerprint TEXT,
+    -- The retry-policy rule that answered this failure (P1.10), as
+    -- `<class>.<strategy>` (e.g. `verdict.redirect`). NULL for
+    -- non-failure outcomes and cancel-preempted failures.
+    applied_rule        TEXT,
     started_at          INTEGER NOT NULL,
     ended_at            INTEGER,
     UNIQUE(step_execution_id, attempt_no)
