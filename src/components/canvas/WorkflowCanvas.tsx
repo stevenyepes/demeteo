@@ -43,6 +43,10 @@ export interface WorkflowCanvasProps {
   statusByNode?: Record<string, NodeRunStatus>;
   /** Fired on click or Enter over a node — the panel-open seam (P2.3). */
   onNodeActivate?: (nodeId: string) => void;
+  /** Externally-controlled selection (P2.3): when provided, the canvas
+   *  highlight follows it — notably so closing the drill-down panel
+   *  (`null`) clears the highlight. Omit to let the canvas own selection. */
+  selectedNodeId?: string | null;
   className?: string;
 }
 
@@ -50,6 +54,7 @@ function CanvasInner({
   definition,
   statusByNode,
   onNodeActivate,
+  selectedNodeId,
   className = '',
 }: WorkflowCanvasProps) {
   const base = useMemo(
@@ -70,6 +75,20 @@ function CanvasInner({
     setNodes(base.nodes);
     setEdges(base.edges);
   }, [base, setNodes, setEdges]);
+
+  // Reflect externally-controlled selection onto the node `selected` flag.
+  // Only touches nodes whose flag disagrees, so it's a no-op reconcile after a
+  // click (the parent echoes the same id back) and a clear when the panel closes.
+  useEffect(() => {
+    if (selectedNodeId === undefined) return; // uncontrolled — canvas owns it
+    setNodes((prev) =>
+      prev.map((n) =>
+        n.selected === (n.id === selectedNodeId)
+          ? n
+          : { ...n, selected: n.id === selectedNodeId },
+      ),
+    );
+  }, [selectedNodeId, setNodes]);
 
   const showMiniMap = nodes.length >= MINIMAP_THRESHOLD;
 

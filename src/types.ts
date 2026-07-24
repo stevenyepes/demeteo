@@ -408,6 +408,34 @@ export interface StepExecution {
   cache_creation_input_tokens?: number | null;
 }
 
+/**
+ * One row of a step's per-attempt history (`step_attempts`, P1.8) — mirror of
+ * the Rust `StepAttempt`. Each dispatch of a step (an `on_failure` redirect, an
+ * environmental in-place retry, a manual retry) opens a fresh attempt instead
+ * of overwriting the step row, so the node drill-down panel (P2.3) can show the
+ * class/cost/duration/applied-rule of every try. Fetched via `step_attempts_list`.
+ */
+export interface StepAttempt {
+  step_execution_id: string;
+  /** 1-based, dense per step execution. */
+  attempt_no: number;
+  /** `running | completed | failed | cancelled | interrupted | redirected`. */
+  status: string;
+  /** This attempt's own delta, not the step's running total. */
+  cost_usd?: number | null;
+  tokens?: number | null;
+  wall_clock_ms?: number | null;
+  /** `environment | verdict | agent_failure | non_retryable`; null for non-failures. */
+  error_class?: string | null;
+  failure_fingerprint?: string | null;
+  /** The retry-policy rule that answered this failure, `<class>.<strategy>` (P1.10). */
+  applied_rule?: string | null;
+  workspace_fingerprint?: string | null;
+  idempotency_key?: string | null;
+  started_at: number;
+  ended_at?: number | null;
+}
+
 export interface GateDecision {
   id: string;
   step_execution_id: string;
