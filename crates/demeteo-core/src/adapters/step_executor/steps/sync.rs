@@ -304,3 +304,73 @@ impl ExecutionDriver {
         }
     }
 }
+
+// ── NodeHandler registration (P1.6) ───────────────────────────────────────────
+
+/// The `sync` node type behind the [`NodeHandler`] seam. Pure
+/// delegation: execution is [`ExecutionDriver::handle_sync_step`],
+/// byte-for-byte the behavior the old `match` arm dispatched.
+///
+/// [`NodeHandler`]: crate::adapters::step_executor::registry::NodeHandler
+pub(crate) struct SyncNodeHandler;
+
+/// JSON Schema for the `sync` node's `config` payload. A sync node is
+/// mostly structure (its redirect target lives in the v2 retry policy,
+/// lifted from v1 `on_failure` by migration); the residual config is
+/// the agent/model/effort chain its conflict-resolution turn resolves
+/// through, same as any agent turn.
+#[allow(dead_code)] // Read via `NodeHandler::config_schema` (first runtime caller: P3.1).
+static SYNC_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
+    std::sync::LazyLock::new(|| {
+        serde_json::json!({
+            "type": "object",
+            "description": "Configuration for a `sync` node: fetch + merge \
+                origin/<default_branch> into the feature branch; on \
+                conflict, spawn a resolution agent and route the outcome \
+                through the node's retry policy (v1: on_failure).",
+            "properties": {
+                "agent_kind": {
+                    "type": ["string", "null"],
+                    "description": "Agent runtime override for the \
+                        conflict-resolution turn. Unset inherits the \
+                        run/project chain."
+                },
+                "model": {
+                    "type": ["string", "null"],
+                    "description": "Model override for the resolution turn."
+                },
+                "effort": {
+                    "type": ["string", "null"],
+                    "enum": ["low", "medium", "high", "xhigh", "max", null],
+                    "description": "Reasoning-effort override for the \
+                        resolution turn. Unset inherits."
+                }
+            },
+            "additionalProperties": true
+        })
+    });
+
+#[async_trait::async_trait]
+impl crate::adapters::step_executor::registry::NodeHandler for SyncNodeHandler {
+    fn kind(&self) -> &'static str {
+        "sync"
+    }
+
+    fn config_schema(&self) -> &'static serde_json::Value {
+        &SYNC_CONFIG_SCHEMA
+    }
+
+    async fn execute(
+        &self,
+        ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
+    ) -> StepOutcome {
+        ctx.driver
+            .handle_sync_step(
+                ctx.step_exec,
+                ctx.step_conf,
+                ctx.accumulated_cost,
+                ctx.step_start,
+            )
+            .await
+    }
+}
