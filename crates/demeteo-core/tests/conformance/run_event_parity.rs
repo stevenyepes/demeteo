@@ -126,6 +126,111 @@ async fn poll_terminal(ctx: &AppContext, feature_id: &FeatureId) -> String {
     }
 }
 
+/// P1.16 exit criterion (PRD §9): every failure in `run_events` names
+/// its failure class and the retry-policy rule that answered it. A stub
+/// step that declares an artifact it never writes fails
+/// deterministically (`agent_failure`, answered by the derived
+/// `agent_failure.fail` rule since there is no `on_failure`), and the
+/// durable log must carry a `retry_decision` row saying exactly that.
+#[tokio::test]
+async fn failed_run_logs_failure_class_and_policy_rule() {
+    std::env::set_var(STUB_AGENT_ENV, "1");
+    let tmp = std::env::temp_dir().join(format!(
+        "demeteo-run-event-fail-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).expect("create app data dir");
+    let ui = Arc::new(CapturingNotif::default());
+    let recorder = Arc::new(RunEventRecorder::new(ui.clone()));
+    let ctx = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        recorder.clone(),
+        tokio::runtime::Handle::current(),
+    );
+    recorder.wire(ctx.run_events.clone());
+
+    ctx.app_settings
+        .add_provider_instance(ProviderInstance {
+            id: ProviderId::from("parity-fail-provider"),
+            kind: "github".to_string(),
+            host: "github.com".to_string(),
+            username: String::new(),
+            avatar_url: String::new(),
+            created_at: paths::now_ms(),
+        })
+        .expect("register provider");
+    let project = projects::create(
+        &ctx,
+        projects::ProjectConfig {
+            name: "parity-fail".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            repos: vec![projects::RepositoryConfig {
+                repo_path: REPO_PATH.to_string(),
+                provider_id: "parity-fail-provider".to_string(),
+            }],
+        },
+    )
+    .expect("create project");
+    init_local_repo(&ctx.workspace_dir, project.id.as_str());
+    bootstrap::bootstrap_project(&ctx, project.id.0.clone())
+        .await
+        .expect("bootstrap project");
+
+    // Same shape as `minimal_workflow`, but with no `@stub-write` — the
+    // declared artifact is never produced, so the step fails.
+    let mut wf = minimal_workflow();
+    wf["steps"][0]["prompt_template"] =
+        serde_json::json!("Produce the parity report, but write nothing.");
+    let workflow_id =
+        workflows::create_from_json(&ctx.workflows, &wf).expect("ingest workflow");
+
+    let feature = ctx
+        .executor
+        .feature_start(
+            None,
+            project.id.as_str(),
+            workflow_id.as_str(),
+            "Parity Failing Feature",
+            "Fail deterministically for the exit-gate check.",
+            Some("stub"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            vec![],
+            vec![],
+        )
+        .await
+        .expect("feature_start");
+    let status = poll_terminal(&ctx, &feature.id).await;
+    assert_eq!(status, "failed", "the artifact-less stub step must fail");
+
+    let rows = ctx
+        .run_events
+        .list_since(feature.id.as_str(), 0)
+        .expect("list run events");
+    let decision = rows
+        .iter()
+        .find(|r| r.kind == "retry_decision")
+        .expect("a failed run must log the retry decision that answered it");
+    let payload: serde_json::Value =
+        serde_json::from_str(decision.payload_json.as_deref().unwrap()).expect("payload json");
+    assert_eq!(payload["error_class"], "agent_failure");
+    assert_eq!(payload["rule_id"], "agent_failure.fail");
+    assert_eq!(payload["action"], "fail");
+    assert_eq!(payload["step_id"], "s-report");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The parity gate itself.
 #[tokio::test]
 async fn local_run_events_replay_the_live_story() {
