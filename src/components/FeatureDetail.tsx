@@ -227,7 +227,12 @@ export function FeatureDetail() {
   // Single run-event consumer both run-mode surfaces share: the canvas overlay
   // reads node status from here, derived from the same `steps` snapshot the
   // timeline renders (plus failure classes from the `run_events` stream, P1.13).
-  const { statusByNode: runStatusByNode } = useRunEvents(featureId, steps);
+  const { statusByNode: runStatusByNode, events: localRunEvents } = useRunEvents(featureId, steps);
+  // Remote runs don't emit local `run_event` Tauri pushes — the runner does —
+  // so their unified feed comes from the `remote_stream_events` poll that the
+  // Activity strip already tails; we capture the same batch here (P2.6) so the
+  // node panel's Overview raw feed works for both transports from one shape.
+  const [remoteRunEvents, setRemoteRunEvents] = useState<RunEvent[]>([]);
   // Bootstrap sub-step phases (feature-start "phase 0"), keyed by phase id.
   // Fed by the local `bootstrap_progress` Tauri event and, for remote runs,
   // by `bootstrap_progress` entries in the durable run-event log (see
@@ -599,7 +604,9 @@ export function FeatureDetail() {
 
   // Remote (detached) path: bootstrap sub-steps live in the run-event log.
   // `RunEventTimeline` polls it; we tap the same batch via `onEvents` (no
-  // second poll) and lift `bootstrap_progress` entries into the phase map.
+  // second poll), lift `bootstrap_progress` entries into the phase map, and
+  // retain the raw feed so the node panel's Overview (P2.6) shows the same
+  // unified log a local run gets from its Tauri `run_event` pushes.
   const handleRunEvents = useCallback(
     (evts: RunEvent[]) => {
       for (const e of evts) {
@@ -611,9 +618,22 @@ export function FeatureDetail() {
           /* malformed payload — skip */
         }
       }
+      // Retain the raw feed, de-duped by offset (the poll can re-deliver a
+      // batch across a reconnect) and capped to a recent window.
+      setRemoteRunEvents((prev) => {
+        const seen = new Set(prev.map((e) => e.offset));
+        const fresh = evts.filter((e) => !seen.has(e.offset));
+        if (fresh.length === 0) return prev;
+        const next = [...prev, ...fresh];
+        return next.length > 500 ? next.slice(next.length - 500) : next;
+      });
     },
     [upsertBootstrapPhase],
   );
+
+  // The unified feed the node panel reads: local runs push it through
+  // `useRunEvents`; remote runs fill `remoteRunEvents` from the poll above.
+  const panelRunEvents = remoteRun ? remoteRunEvents : localRunEvents;
 
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
     if (feature_id === featureId) {
@@ -1454,6 +1474,7 @@ export function FeatureDetail() {
                     step={selectedStep}
                     onClose={() => setSelectedNodeId(null)}
                     onOpenEditorForPath={openEditorForPath}
+                    runEvents={panelRunEvents}
                     liveStream={selectedStep ? streamContent[selectedStep.id] : undefined}
                     isStreaming={
                       selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
