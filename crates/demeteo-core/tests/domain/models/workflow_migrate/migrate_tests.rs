@@ -284,3 +284,43 @@ fn dangling_task_list_from_is_tolerated_not_fatal() {
     assert!(def.edges.is_empty());
     let _ = StepId::from("ghost");
 }
+
+/// The frontend canvas (task P2.1) renders migrated v2 definitions, and its
+/// fixture-driven render test consumes committed JSON at
+/// `src/components/canvas/__fixtures__/<starter>.v2.json`. Emitting those from
+/// the *live* migration here — rather than hand-authoring them — guarantees the
+/// canvas renders exactly what the engine produces and can never silently drift
+/// from the migration. Off by default (asserts the committed fixtures are
+/// current); regenerate with `UPDATE_CANVAS_FIXTURES=1 cargo test -p
+/// demeteo-core canvas_fixtures_are_current`.
+#[test]
+fn canvas_fixtures_are_current() {
+    let dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/components/canvas/__fixtures__");
+    let update = std::env::var("UPDATE_CANVAS_FIXTURES").is_ok();
+    if update {
+        std::fs::create_dir_all(&dir).expect("create fixtures dir");
+    }
+    for name in STARTERS {
+        let doc = load_starter(name);
+        let def = migrate_definition(&doc)
+            .unwrap_or_else(|e| panic!("starter '{name}' failed to migrate: {e}"));
+        let json = serde_json::to_string_pretty(&def).expect("serialize v2") + "\n";
+        let path = dir.join(format!("{name}.v2.json"));
+        if update {
+            std::fs::write(&path, &json)
+                .unwrap_or_else(|e| panic!("write fixture {}: {e}", path.display()));
+        } else {
+            let existing = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "canvas fixture {} missing: {e}; run UPDATE_CANVAS_FIXTURES=1",
+                    path.display()
+                )
+            });
+            assert_eq!(
+                existing, json,
+                "canvas fixture '{name}' is stale; run UPDATE_CANVAS_FIXTURES=1"
+            );
+        }
+    }
+}
