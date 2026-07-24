@@ -213,7 +213,18 @@ async fn poll_terminal(ctx: &AppContext, feature_id: &FeatureId) -> (String, Str
 /// bootstrap, ingest [`triage_workflow`], and drive one feature to a terminal
 /// state on a locally-executing engine. Returns the terminal feature status,
 /// the failing step's error message, and the recorded terminal signals.
-async fn run_triage_leg(triage_category: &str) -> (String, String, Arc<SignalRecorder>) {
+/// Returns the terminal (status, error), the signal recorder, and the
+/// validate step's `step_attempts` rows (V31, P1.8) — one per driver
+/// dispatch, so the triage legs can assert per-attempt history without
+/// re-running the whole leg.
+async fn run_triage_leg(
+    triage_category: &str,
+) -> (
+    String,
+    String,
+    Arc<SignalRecorder>,
+    Vec<crate::domain::models::StepAttempt>,
+) {
     std::env::set_var(STUB_AGENT_ENV, "1");
     let recorder = Arc::new(SignalRecorder::default());
     let tmp = std::env::temp_dir().join(format!(
@@ -291,8 +302,22 @@ async fn run_triage_leg(triage_category: &str) -> (String, String, Arc<SignalRec
         .expect("feature_start");
 
     let (status, err) = poll_terminal(&ctx, &feature.id).await;
+    // Per-attempt history for the (single) validate step, read before the
+    // context is dropped.
+    let attempts = ctx
+        .features
+        .steps_for_feature(&feature.id)
+        .expect("list steps")
+        .into_iter()
+        .find(|s| s.step_id.0 == "s-validate")
+        .map(|s| {
+            ctx.features
+                .attempts_for_step(&s.id)
+                .expect("list step attempts")
+        })
+        .unwrap_or_default();
     let _ = std::fs::remove_dir_all(&tmp);
-    (status, err, recorder)
+    (status, err, recorder, attempts)
 }
 
 /// The headline C6 fixture: a persistent (reproduces-unchanged) harness failure
@@ -305,7 +330,7 @@ async fn run_triage_leg(triage_category: &str) -> (String, String, Arc<SignalRec
 /// `RetryBudgetExhausted` instead.
 #[tokio::test]
 async fn persistent_environment_failure_terminates_without_exhausting_budget() {
-    let (status, err, rec) = run_triage_leg("environment").await;
+    let (status, err, rec, attempts) = run_triage_leg("environment").await;
 
     assert_eq!(status, "failed", "environment triage must fail the feature");
     assert_eq!(
@@ -324,6 +349,25 @@ async fn persistent_environment_failure_terminates_without_exhausting_budget() {
         err.contains("Environment not ready") && err.contains("Reproduce:"),
         "step error must be the environment remediation message; got: {err}"
     );
+    // Per-attempt history (P1.8): the same run leaves one closed row per
+    // dispatch, with *distinct* failure classes — a plain verdict failure
+    // on attempt 1, the triaged environment termination on attempt 2.
+    let summary: Vec<(u32, &str, Option<&str>)> = attempts
+        .iter()
+        .map(|a| (a.attempt_no, a.status.as_str(), a.error_class.as_deref()))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (1, "failed", Some("verdict")),
+            (2, "failed", Some("non_retryable")),
+        ],
+        "environment leg must record two attempts with distinct error classes"
+    );
+    assert!(
+        attempts.iter().all(|a| a.ended_at.is_some()),
+        "every attempt row must be closed"
+    );
 }
 
 /// The fail-safe direction: a persistent failure the classifier calls a
@@ -333,7 +377,7 @@ async fn persistent_environment_failure_terminates_without_exhausting_budget() {
 /// an escalation, never manufacture one.
 #[tokio::test]
 async fn persistent_regression_failure_exhausts_retry_budget() {
-    let (status, err, rec) = run_triage_leg("regression").await;
+    let (status, err, rec, attempts) = run_triage_leg("regression").await;
 
     assert_eq!(status, "failed", "regression must still fail the feature");
     let budget_events = rec.retry_budget_exhausted.lock().unwrap();
@@ -356,5 +400,28 @@ async fn persistent_regression_failure_exhausts_retry_budget() {
     assert!(
         err.contains("exited with failure"),
         "step error must carry the harness failure; got: {err}"
+    );
+    // Per-attempt history (P1.8): every dispatch of the redirect loop is
+    // its own closed row — the two budgeted retries plus the try that
+    // exhausted the budget, all classed as verdict failures.
+    let summary: Vec<(u32, &str, Option<&str>)> = attempts
+        .iter()
+        .map(|a| (a.attempt_no, a.status.as_str(), a.error_class.as_deref()))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (1, "failed", Some("verdict")),
+            (2, "failed", Some("verdict")),
+            (3, "failed", Some("verdict")),
+        ],
+        "regression leg must record one attempt row per dispatch"
+    );
+    assert!(
+        attempts.iter().all(|a| a
+            .failure_fingerprint
+            .as_deref()
+            .is_some_and(|f| !f.is_empty())),
+        "failed attempts must carry a failure fingerprint"
     );
 }

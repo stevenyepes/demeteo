@@ -346,6 +346,43 @@ impl FeatureRepository for SqliteAdapter {
     fn steps_for_feature(&self, feature_id: &FeatureId) -> Result<Vec<StepExecution>, String> {
         super::feature_steps::steps_for_feature(self, feature_id)
     }
+
+    fn attempt_open(&self, step_execution_id: &StepExecutionId, now: i64) -> Result<u32, String> {
+        super::step_attempts::attempt_open(self, step_execution_id, now)
+    }
+
+    fn attempt_close(
+        &self,
+        step_execution_id: &StepExecutionId,
+        attempt_no: u32,
+        status: &str,
+        cost_usd: f64,
+        tokens: i64,
+        wall_clock_ms: u64,
+        error_class: Option<&str>,
+        failure_fingerprint: Option<&str>,
+        now: i64,
+    ) -> Result<(), String> {
+        super::step_attempts::attempt_close(
+            self,
+            step_execution_id,
+            attempt_no,
+            status,
+            cost_usd,
+            tokens,
+            wall_clock_ms,
+            error_class,
+            failure_fingerprint,
+            now,
+        )
+    }
+
+    fn attempts_for_step(
+        &self,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::StepAttempt>, String> {
+        super::step_attempts::attempts_for_step(self, step_execution_id)
+    }
 }
 
 #[cfg(test)]

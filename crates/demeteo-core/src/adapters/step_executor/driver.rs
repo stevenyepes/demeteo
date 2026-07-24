@@ -807,6 +807,28 @@ impl ExecutionDriver {
             let mut step_cache_read: Option<u64> = None;
             let mut step_cache_creation: Option<u64> = None;
 
+            // Per-attempt history (V31, task P1.8): one row per dispatch,
+            // closed below with this attempt's own outcome and spend
+            // deltas — retries stop overwriting history. Telemetry only,
+            // so a write failure degrades to a warning, never a dead run.
+            let attempt_no = match self
+                .features
+                .attempt_open(&step_exec.id, crate::paths::now_ms())
+            {
+                Ok(n) => Some(n),
+                Err(e) => {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        error = %e,
+                        "failed to open step_attempts row"
+                    );
+                    None
+                }
+            };
+            let attempt_cost_base = accumulated_cost;
+            let attempt_tokens_base = accumulated_tokens;
+
             // Every step kind resolves through the NodeTypeRegistry
             // (P1.6/P1.7) — the seam a new node type plugs into with a
             // single registration line. A registry miss is the same
@@ -866,6 +888,84 @@ impl ExecutionDriver {
                 }
                 other => (other, None),
             };
+
+            // Close this dispatch's attempt row with its own outcome,
+            // failure class (the P1.10 retry-policy vocabulary), and
+            // spend deltas. Runs before the outcome is acted on so every
+            // exit path below — including the early `return`s — leaves a
+            // closed row behind.
+            if let Some(attempt_no) = attempt_no {
+                use crate::adapters::step_executor::steps::StepOutcome;
+                use crate::domain::models::step_attempt::error_class;
+                let (att_status, att_class, att_fingerprint) = match &outcome {
+                    StepOutcome::Completed => ("completed", None, None),
+                    StepOutcome::Failed(msg) => (
+                        // The step row records a Failed-during-cancel as
+                        // `interrupted`; mirror that here.
+                        if *self.cancel_watch.borrow() {
+                            "interrupted"
+                        } else {
+                            "failed"
+                        },
+                        Some(if verdict_failure.is_some() {
+                            error_class::VERDICT
+                        } else {
+                            error_class::AGENT_FAILURE
+                        }),
+                        Some(verifier::normalize_failure_fingerprint(
+                            msg,
+                            &self.target_dir,
+                        )),
+                    ),
+                    // Normalized into `Failed` above; kept exhaustive so a
+                    // future variant is a compile error, not a silent gap.
+                    StepOutcome::VerdictFailed(vf) => (
+                        "failed",
+                        Some(error_class::VERDICT),
+                        Some(verifier::normalize_failure_fingerprint(
+                            &vf.to_feedback(),
+                            &self.target_dir,
+                        )),
+                    ),
+                    StepOutcome::Environmental(msg) => (
+                        "failed",
+                        Some(error_class::ENVIRONMENT),
+                        Some(verifier::normalize_failure_fingerprint(
+                            msg,
+                            &self.target_dir,
+                        )),
+                    ),
+                    StepOutcome::NonRetryable(msg) => (
+                        "failed",
+                        Some(error_class::NON_RETRYABLE),
+                        Some(verifier::normalize_failure_fingerprint(
+                            msg,
+                            &self.target_dir,
+                        )),
+                    ),
+                    StepOutcome::Cancelled => ("cancelled", None, None),
+                    StepOutcome::RedirectTo(_) => ("redirected", None, None),
+                };
+                if let Err(e) = self.features.attempt_close(
+                    &step_exec.id,
+                    attempt_no,
+                    att_status,
+                    accumulated_cost - attempt_cost_base,
+                    accumulated_tokens - attempt_tokens_base,
+                    step_start.elapsed().as_millis() as u64,
+                    att_class,
+                    att_fingerprint.as_deref(),
+                    crate::paths::now_ms(),
+                ) {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        attempt_no,
+                        error = %e,
+                        "failed to close step_attempts row"
+                    );
+                }
+            }
 
             match outcome {
                 crate::adapters::step_executor::steps::StepOutcome::Completed => {

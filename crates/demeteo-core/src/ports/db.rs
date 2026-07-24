@@ -253,6 +253,45 @@ pub trait FeatureRepository: Send + Sync {
     /// Apply a [`StepExecutionPatch`] (replaces the 6-arg `step_execution_update_status`).
     fn step_update(&self, id: &StepExecutionId, patch: &StepExecutionPatch) -> Result<(), String>;
     fn steps_for_feature(&self, feature_id: &FeatureId) -> Result<Vec<StepExecution>, String>;
+
+    // --- Per-attempt history (`step_attempts`, V31 / task P1.8) ---
+    //
+    // A child table of `step_executions`: the driver opens one row per
+    // dispatch and closes it with that attempt's own outcome, spend
+    // deltas, and failure classification, so retries stop overwriting
+    // history. Lives on this port next to the other `step_*` methods —
+    // same adapter, same transaction domain.
+
+    /// Open a `running` attempt row as the driver dispatches the step.
+    /// Returns the 1-based `attempt_no` assigned (dense per step).
+    fn attempt_open(&self, step_execution_id: &StepExecutionId, now: i64) -> Result<u32, String>;
+
+    /// Close an attempt with its terminal `status`
+    /// (`completed | failed | cancelled | interrupted | redirected`),
+    /// this attempt's own cost/token deltas, and — for failures — the
+    /// [`error_class`](crate::domain::models::step_attempt::error_class)
+    /// plus normalized failure fingerprint.
+    #[allow(clippy::too_many_arguments)]
+    fn attempt_close(
+        &self,
+        step_execution_id: &StepExecutionId,
+        attempt_no: u32,
+        status: &str,
+        cost_usd: f64,
+        tokens: i64,
+        wall_clock_ms: u64,
+        error_class: Option<&str>,
+        failure_fingerprint: Option<&str>,
+        now: i64,
+    ) -> Result<(), String>;
+
+    /// All attempts for a step, ordered by `attempt_no`. Feeds the
+    /// per-attempt drill-down (P2.3) and the retry policy's
+    /// "already env-retried" derivation (P1.9/P1.10).
+    fn attempts_for_step(
+        &self,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::StepAttempt>, String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
