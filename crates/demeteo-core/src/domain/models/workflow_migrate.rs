@@ -9,12 +9,17 @@
 //!
 //! - **List order → chain edges.** `steps[i] → steps[i+1]` for every
 //!   consecutive pair.
-//! - **`on_failure` → retry policy.** The backward goto becomes
-//!   `retry.verdict = { strategy: redirect, redirect_to, max_attempts,
-//!   feedback: true }`. `max_attempts` carries the step's own
-//!   `max_iterations` only — the run-time precedence above it (run override
-//!   → project default → engine default 3) keeps applying at evaluation
-//!   time (P1.10), exactly as `effective_loop_iterations` resolves today.
+//! - **`on_failure` → retry policy.** The backward goto becomes the same
+//!   `{ strategy: redirect, redirect_to, max_attempts, feedback: true }`
+//!   rule for **both** `retry.verdict` and `retry.agent_failure` — v1 sent
+//!   both failure classes through the one `on_failure` path (see
+//!   `retry_policy::legacy_policy_for_step`), so a v2 policy that only
+//!   covered `verdict` would silently stop redirecting plain agent
+//!   failures once the engine executes migrated definitions natively.
+//!   `max_attempts` carries the step's own `max_iterations` only — the
+//!   run-time precedence above it (run override → project default →
+//!   engine default 3) keeps applying at evaluation time (P1.10), exactly
+//!   as `effective_loop_iterations` resolves today.
 //! - **`task_list_from` → typed edge.** The magic field becomes a normal
 //!   edge from the task-list-producing node into the sequence node
 //!   (deduplicated when the source is already the chain predecessor). The
@@ -114,15 +119,22 @@ fn migrate_step(step: &StepConfig, index: usize) -> NodeConfig {
         .on_failure
         .as_ref()
         .filter(|t| !t.0.is_empty())
-        .map(|target| RetryPolicy {
-            verdict: Some(RetryRule {
+        .map(|target| {
+            let rule = RetryRule {
                 strategy: RetryStrategy::Redirect,
                 max_attempts: step.max_iterations,
                 backoff_secs: None,
                 feedback: true,
                 redirect_to: Some(target.clone()),
-            }),
-            ..Default::default()
+            };
+            RetryPolicy {
+                // v1 routed verdict failures *and* plain agent failures
+                // through the same `on_failure` goto — both classes get
+                // the rule, mirroring `legacy_policy_for_step`.
+                verdict: Some(rule.clone()),
+                agent_failure: Some(rule),
+                ..Default::default()
+            }
         });
 
     // Everything not lifted into first-class structure stays in the

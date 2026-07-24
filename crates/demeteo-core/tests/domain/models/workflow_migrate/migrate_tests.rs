@@ -86,6 +86,14 @@ fn on_failure_becomes_verdict_redirect_retry() {
     assert_eq!(rule.redirect_to.as_ref().unwrap().as_str(), "s-reproduce");
     assert_eq!(rule.max_attempts, Some(3));
     assert!(rule.feedback, "RetryContext append behavior is preserved");
+    // v1 routed plain agent failures through the same on_failure path —
+    // the migrated policy must cover `agent_failure` identically, or the
+    // v2 engine would silently stop redirecting them (P1.10 amendment).
+    assert_eq!(
+        fix.retry.as_ref().unwrap().agent_failure.as_ref(),
+        Some(rule),
+        "agent_failure mirrors the verdict redirect rule"
+    );
     // Consumed into the policy — not duplicated in the opaque payload.
     assert!(fix.config.get("max_iterations").is_none());
     assert!(fix.config.get("on_failure").is_none());

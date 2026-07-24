@@ -170,6 +170,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** `driver.rs` (full read, 1228); `scheduler.rs`; `driver_registry.rs` (114); `updates.rs` (87); `impl_traits/replay.rs` (230, replay/retry guard); `reconcile.rs`; `src-tauri/src/commands/features.rs:144-199` (`gate_decide`, `step_retry`, `replay_from_step`).
 - **Touch:** `driver.rs`, `reconcile.rs`, `impl_traits/replay.rs`, `features.rs` guard sites.
 - **Done when:** **P0.2 baseline snapshots byte-identical** (chains are DAGs — behavior must not change); topology-equivalence conformance green; P1.9's crash-resume test green.
+- *Amendments (2026-07-24, as built):* (1) `driver.rs` had been split into `driver/run_loop/{mod,dispatch,outcome,attempt,cleanup}.rs` submodules before this task — the loop rewrite lives in `run_loop/mod.rs` plus a new `run_loop/schedule.rs` (state derivation, skip persistence, redirect rewind), not in a 1228-line `driver.rs`. (2) Node states are **derived from `step_executions` rows each tick** (`completed`→Completed, `skipped`→Skipped, everything else→Pending — exactly v1's resume semantics), so restart reconciliation needed **zero** `reconcile.rs`/watchdog changes and there is no in-memory cursor to resync; `features.rs` guard sites also needed no edits (the guard lives in `DagStepExecutor::assert_no_active_predecessors`, now graph-ancestor-aware with an index fallback for unresolvable legacy features). (3) Redirects (policy, gate, sync) rewind target + graph *descendants* to `pending`, persisted before re-evaluation — the DAG form of the v1 cursor jump; `replay_steps_from` got the same descendants-cone reset. (4) The P1.10 landmine was defused in `migrate_v1_to_v2` itself: `on_failure` now maps to identical `verdict` **and** `agent_failure` redirect rules (runtime policy still derives from v1 `StepConfig` via `legacy_policy_for_step`, so behavior is unchanged either way). (5) A scheduler `Deadlock`/`UnknownNode` fails the stuck rows + feature loudly (`fail_unschedulable`); unreachable for migrated chains. (6) Multi-row SQLite tx per transition deferred — repos expose no transactional seam; each per-row write stays durable-first, event-after-write.
 
 ### P1.13 — Unified `run_events` for local transport
 - **Goal:** Every transition, retry decision (with policy rule id), gate decision, harness verdict, and cost sample appends a `run_events` row locally; Tauri events become live push of the same record shape the remote path polls (PRD §5.4 Event log). Old ad-hoc `StepProgress`/`AgentStream` emissions stay until P2.6 deletes the split path.
@@ -342,7 +343,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.9 | Durable checkpoints (V32) | ✅ 2026-07-24 |
 | P1.10 | Declarative retry policy | ✅ 2026-07-24 |
 | P1.11 | Ready-set scheduler core | ✅ 2026-07-24 |
-| P1.12 | Driver integration (L) | ☐ |
+| P1.12 | Driver integration (L) | ✅ 2026-07-24 |
 | P1.13 | Unified run_events | ☐ |
 | P1.14 | Fingerprint + idempotency | ☐ |
 | P1.15 | Pin workflow_version_id (V33) | ✅ 2026-07-24 |
