@@ -319,3 +319,11 @@ mod starter_baseline;
 #[cfg(test)]
 #[path = "../../tests/conformance/run_event_parity.rs"]
 mod run_event_parity;
+
+/// Resume fingerprint guard gate (P1.14): a workspace mutated between
+/// crash and resume parks the interrupted node at the Decision-14
+/// synthetic gate instead of blind re-execution; an untouched workspace
+/// auto-resumes. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/resume_fingerprint.rs"]
+mod resume_fingerprint;

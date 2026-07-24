@@ -388,6 +388,7 @@ impl DagStepExecutor {
             max_budget_usd_override,
             project_default_max_budget_usd,
             retry_ctx: None,
+            resume_guard_done: false,
             current_model: feature_model_for_budget.clone(),
             context_budget_tokens: feature_model_for_budget
                 .as_deref()

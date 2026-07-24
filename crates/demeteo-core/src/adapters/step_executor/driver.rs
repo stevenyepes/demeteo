@@ -220,6 +220,13 @@ pub(crate) struct ExecutionDriver {
     /// consumed by the next step's prompt build, then cleared.
     pub retry_ctx: Option<RetryContext>,
 
+    /// Whether this driver life already ran the P1.14 resume fingerprint
+    /// guard. The guard fires at most once per life, on the first
+    /// watchdog-`interrupted` node the loop is about to re-dispatch —
+    /// after a human approves the synthetic gate (or the fingerprint
+    /// matched), the rest of the life must not re-litigate the workspace.
+    pub resume_guard_done: bool,
+
     // --- Context-window watchdog state (token optimization, Tier 1) ---
     /// Resolved model name for the *current* step's primary agent.
     /// Used by the watchdog to look up the model's context-window

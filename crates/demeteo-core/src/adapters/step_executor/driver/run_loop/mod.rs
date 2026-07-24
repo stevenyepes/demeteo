@@ -52,6 +52,7 @@ mod attempt;
 mod cleanup;
 mod dispatch;
 mod outcome;
+mod resume;
 pub(crate) mod schedule;
 
 use outcome::RunAction;
@@ -141,6 +142,35 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
             let (_agent, model) = driver.resolve_step_agent(&step_conf);
             let effort = driver.resolve_step_effort(&step_conf);
             driver.refresh_watchdog_budget(&step_conf, model.as_deref(), effort);
+        }
+
+        // Resume fingerprint guard (P1.14): a node the watchdog marked
+        // `interrupted` is only re-dispatched blindly when the workspace
+        // still matches what its interrupted attempt started from; a
+        // mismatch parks on the synthetic gate the watchdog surfaced
+        // (Decision 14). Once per driver life — an approval is a human
+        // blessing for the rest of this life.
+        if step_exec.status == "interrupted" && !driver.resume_guard_done {
+            driver.resume_guard_done = true;
+            match driver.resume_fingerprint_guard(step_exec).await {
+                resume::GuardVerdict::Proceed => {}
+                resume::GuardVerdict::Cancelled => {
+                    driver.cancel_feature().await;
+                    return;
+                }
+                resume::GuardVerdict::Rejected(msg) => {
+                    driver
+                        .fail_step_and_feature(
+                            step_exec,
+                            &msg,
+                            step_exec.cost_usd.unwrap_or(0.0),
+                            step_exec.tokens.unwrap_or(0),
+                            Instant::now(),
+                        )
+                        .await;
+                    return;
+                }
+            }
         }
 
         tracing::info!(
