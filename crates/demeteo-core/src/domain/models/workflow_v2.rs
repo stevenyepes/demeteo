@@ -18,6 +18,7 @@
 //! schema belongs to the node handler (`config_schema()`, task P1.6).
 
 use crate::domain::ids::{StepId, WorkflowId};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The schema version this module models. `schema_version: 1` documents
@@ -33,10 +34,12 @@ pub const WORKFLOW_SCHEMA_V2: u32 = 2;
 /// (decision 41): `WorkflowSchedule` remains on [`super::Workflow`], so the
 /// graph schema does not entrench cron and it can move to the Kanban layer
 /// later without a schema break.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct WorkflowDefinitionV2 {
     /// Always [`WORKFLOW_SCHEMA_V2`] for documents this module writes.
     pub schema_version: u32,
+    /// (Ids are `#[serde(transparent)]` newtypes — plain strings on the wire.)
+    #[schemars(with = "String")]
     pub id: WorkflowId,
     pub name: String,
     pub nodes: Vec<NodeConfig>,
@@ -47,7 +50,7 @@ pub struct WorkflowDefinitionV2 {
 }
 
 /// Workflow-level defaults (PRD §5.1 `defaults` block).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct WorkflowDefaults {
     /// Default retry policy for nodes that don't declare their own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,8 +74,9 @@ impl WorkflowDefaults {
 /// these ids, and the v1 → v2 migration maps each `StepConfig.id` onto its
 /// node 1:1 — a parallel "NodeId" universe would only invite mix-ups the
 /// newtype exists to prevent.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct NodeConfig {
+    #[schemars(with = "String")]
     pub id: StepId,
     /// Registry key (`agent`, `gate`, `sequence`, `sync`, `finalize`,
     /// `command`, …). Resolved against the `NodeTypeRegistry` (P1.6);
@@ -112,7 +116,7 @@ fn default_type_version() -> u32 {
 }
 
 /// Editor canvas coordinates.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct Position {
     pub x: f64,
     pub y: f64,
@@ -120,9 +124,11 @@ pub struct Position {
 
 /// A forward dependency: `to` cannot become ready before `from` reaches a
 /// terminal state satisfying `to`'s join semantics.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct EdgeConfig {
+    #[schemars(with = "String")]
     pub from: StepId,
+    #[schemars(with = "String")]
     pub to: StepId,
     /// Optional guard in the sandboxed expression grammar (P1.5):
     /// `${{ nodes.<id>.outputs.<name> }}` plus comparison operators.
@@ -135,7 +141,7 @@ pub struct EdgeConfig {
 /// When a node with multiple incoming edges becomes ready (PRD §5.1).
 /// Default everywhere: `all_success` — with the critic's `PASS_WITH_NOTES`
 /// verdict mapping to *success* for join purposes (decision 39).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinSemantics {
     AllSuccess,
@@ -145,7 +151,7 @@ pub enum JoinSemantics {
 
 /// Coarse typed ports (PRD §5.1): checked at connect-time in the editor
 /// and lint-time in the engine (P1.4). `Any` is the escape hatch.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PortType {
     Text,
@@ -172,7 +178,7 @@ impl PortType {
 /// The four classes map 1:1 onto the existing `StepOutcome` /
 /// `VerifierError` taxonomy — the engine already *classifies* failures;
 /// this makes the *response* declarative.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct RetryPolicy {
     /// Infra/tooling failures (missing deps, transient env) — v1's
     /// one-shot env retry generalized.
@@ -193,7 +199,7 @@ pub struct RetryPolicy {
 }
 
 /// What to do when a failure of the keyed class occurs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct RetryRule {
     pub strategy: RetryStrategy,
     /// Attempt budget for this class. `None` = engine default.
@@ -211,11 +217,12 @@ pub struct RetryRule {
     /// construction). Accepts the PRD §5.4 short form `"to"` on input;
     /// serializes as `redirect_to`.
     #[serde(default, alias = "to", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
     pub redirect_to: Option<StepId>,
 }
 
 /// Response strategy for a failure class.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RetryStrategy {
     /// Re-run the same node in place.
@@ -226,6 +233,50 @@ pub enum RetryStrategy {
     Fail,
 }
 
+/// The published JSON Schema for [`WorkflowDefinitionV2`], generated from
+/// the structs above so it can never drift from the code. The committed
+/// copy lives at `docs-site/workflow-schema-v2.json` (kept in sync by the
+/// `published_schema_is_current` test; regen with `UPDATE_SCHEMAS=1`).
+pub fn workflow_v2_schema() -> serde_json::Value {
+    let mut root = schemars::schema_for!(WorkflowDefinitionV2);
+    root.insert(
+        "$id".into(),
+        "https://demeteo.dev/schemas/workflow-v2.json".into(),
+    );
+    root.to_value()
+}
+
+/// Validate a raw JSON document against the v2 schema. `Ok(())` means the
+/// document is schema-valid (structural lint — cycles, dangling refs,
+/// port types — is P1.4's `WorkflowGraph`, a separate pass). `Err` carries
+/// every violation, one per line, each prefixed with its JSON-pointer
+/// location, so boundary callers can surface it verbatim.
+pub fn validate_workflow_v2(value: &serde_json::Value) -> Result<(), String> {
+    use std::sync::LazyLock;
+    static VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
+        jsonschema::validator_for(&workflow_v2_schema())
+            .expect("generated workflow v2 schema compiles")
+    });
+
+    let errors: Vec<String> = VALIDATOR
+        .iter_errors(value)
+        .map(|e| {
+            let at = e.instance_path.to_string();
+            let at = if at.is_empty() { "/".to_string() } else { at };
+            format!("at {at}: {e}")
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../tests/domain/models/workflow_v2/serde_tests.rs"]
 mod serde_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/domain/models/workflow_v2/schema_tests.rs"]
+mod schema_tests;
