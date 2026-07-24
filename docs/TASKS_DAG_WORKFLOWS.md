@@ -345,7 +345,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.12 | Driver integration (L) | ☐ |
 | P1.13 | Unified run_events | ☐ |
 | P1.14 | Fingerprint + idempotency | ☐ |
-| P1.15 | Pin workflow_version_id (V33) | ☐ |
+| P1.15 | Pin workflow_version_id (V33) | ✅ 2026-07-24 |
 | P1.16 | Phase-1 exit gate | ☐ |
 | P2.1 | Canvas foundation | ☐ |
 | P2.2 | Run-mode overlay + toggle | ☐ |

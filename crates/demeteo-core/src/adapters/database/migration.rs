@@ -125,6 +125,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // ran V31 before the column joined the table on the same branch.
     add_column_if_missing(conn, "step_attempts", "applied_rule", "TEXT")?;
 
+    // Pinned workflow version (V33, decision 38). Defensive for databases
+    // migrated between the V-file landing and this branch merging.
+    add_column_if_missing(conn, "features", "workflow_version_id", "TEXT")?;
+
     Ok(())
 }
 

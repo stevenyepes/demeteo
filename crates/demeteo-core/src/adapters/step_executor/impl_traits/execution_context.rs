@@ -31,6 +31,47 @@ pub struct ExecutionContext {
 }
 
 impl DagStepExecutor {
+    /// Resolve the workflow version this feature runs (decision 38,
+    /// V33): the pinned row when the feature carries one; otherwise
+    /// latest, which is then pinned so every later resume of this
+    /// feature reads the same graph. Pre-V33 features (and rows whose
+    /// eager `feature_start` pin failed) take the backfill path exactly
+    /// once — after that, editing the workflow mid-run can never change
+    /// the running graph.
+    pub(crate) fn resolve_pinned_version(
+        &self,
+        feature_id: &str,
+        wf_id: &WorkflowId,
+    ) -> Result<crate::domain::models::WorkflowVersion, String> {
+        let fid = FeatureId::from(feature_id.to_string());
+        let pinned = self
+            .features
+            .get(&fid)
+            .ok()
+            .flatten()
+            .and_then(|f| f.workflow_version_id);
+        if let Some(vid) = pinned {
+            return match self.workflows.version_get(&vid) {
+                Ok(Some(v)) => Ok(v),
+                // Versions are immutable rows that outlive their pin; a
+                // miss means a hand-edited DB, and silently falling back
+                // to latest would run a graph the user never launched.
+                Ok(None) => Err(format!(
+                    "Pinned workflow version not found: {} (workflow {})",
+                    vid.0, wf_id.0
+                )),
+                Err(e) => Err(e),
+            };
+        }
+        let latest = self
+            .workflows
+            .latest_version(wf_id)?
+            .ok_or_else(|| format!("No versions found for workflow: {}", wf_id.0))?;
+        // Best-effort backfill: a failed pin write only means the next
+        // resume resolves latest again (the pre-V33 behavior).
+        let _ = self.features.pin_workflow_version(&fid, &latest.id);
+        Ok(latest)
+    }
     /// Build the `project_memory` markdown injected into agent prompts.
     ///
     /// When the memory agent is configured, retrieves the semantically most
@@ -223,20 +264,18 @@ impl DagStepExecutor {
             }
         }
 
-        let latest_version = match self.workflows.latest_version(&wf_id) {
-            Ok(Some(v)) => v,
-            Ok(None) => {
-                let e = format!("No versions found for workflow: {}", workflow_id);
-                emit(bp::PREPARING, "failed", Some(e.clone()));
-                return Err(e);
-            }
+        // Decision 38 (V33): the run path reads the feature's *pinned*
+        // version — never a re-resolved latest — so a mid-run workflow
+        // edit cannot change the graph under the driver.
+        let version = match self.resolve_pinned_version(feature_id, &wf_id) {
+            Ok(v) => v,
             Err(e) => {
                 emit(bp::PREPARING, "failed", Some(e.clone()));
                 return Err(e);
             }
         };
 
-        let mut steps: Vec<StepConfig> = match serde_json::from_str(&latest_version.steps_json) {
+        let mut steps: Vec<StepConfig> = match serde_json::from_str(&version.steps_json) {
             Ok(s) => s,
             Err(e) => {
                 let e = format!("Invalid workflow steps JSON: {}", e);

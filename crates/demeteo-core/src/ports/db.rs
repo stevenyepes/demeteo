@@ -241,6 +241,15 @@ pub trait FeatureRepository: Send + Sync {
     /// Backfill a legacy feature that wasn't created with a workflow id.
     fn update_workflow_id(&self, id: &FeatureId, workflow_id: &WorkflowId) -> Result<(), String>;
 
+    /// Pin the workflow version this feature runs (decision 38, V33).
+    /// Pin-once: a no-op when the feature is already pinned, so a
+    /// running graph can never change under a run.
+    fn pin_workflow_version(
+        &self,
+        id: &FeatureId,
+        version_id: &crate::domain::ids::WorkflowVersionId,
+    ) -> Result<(), String>;
+
     /// Every feature whose `mr_state = 'open'` and `mr_url IS NOT NULL`,
     /// regardless of project. Used by the background MR-state monitor
     /// to know which features to poll. Returned with the same
@@ -364,6 +373,12 @@ pub trait WorkflowRepository: Send + Sync {
 
     fn save_version(&self, v: WorkflowVersion) -> Result<(), String>;
     fn latest_version(&self, workflow_id: &WorkflowId) -> Result<Option<WorkflowVersion>, String>;
+    /// Fetch one immutable version row by its id — the read side of the
+    /// `features.workflow_version_id` pin (decision 38, V33).
+    fn version_get(
+        &self,
+        id: &crate::domain::ids::WorkflowVersionId,
+    ) -> Result<Option<WorkflowVersion>, String>;
     fn versions(&self, workflow_id: &WorkflowId) -> Result<Vec<WorkflowVersion>, String>;
     /// Used by the first-launch seed step.
     fn count(&self) -> Result<u32, String>;

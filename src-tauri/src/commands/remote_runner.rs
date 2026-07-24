@@ -361,6 +361,10 @@ pub async fn remote_submit_run(
         id: FeatureId::from(feature_id.clone()),
         project_id: pid.clone(),
         workflow_id: Some(wf_id.clone()),
+        // The same version whose steps were just snapshotted into the
+        // RunSpec's `workflow_json` (decision 38): the shadow row renders
+        // the exact graph the runner executes.
+        workflow_version_id: Some(latest.id.clone()),
         title: title.clone(),
         description: description.clone(),
         status: "pending".to_string(),

@@ -499,6 +499,19 @@ impl StepExecutor for DagStepExecutor {
         // may be `None` = inherit): `resolve_execution_context` reads it back
         // as the per-feature override, and the tail then snapshots the
         // resolved value onto the row so a later replay is stable.
+        // Decision 38 (V33): resolve the workflow's latest version once,
+        // now, and pin it on the row — every resume/replay reads the pin,
+        // so a workflow edit can never change this run's graph. A missing
+        // workflow pins nothing; the bootstrap tail then fails at resolve
+        // exactly as before (and `resolve_pinned_version` backfills if a
+        // version appears in between).
+        let workflow_version_id = self
+            .workflows
+            .latest_version(&WorkflowId::from(workflow_id.to_string()))
+            .ok()
+            .flatten()
+            .map(|v| v.id);
+
         let feature = Feature {
             // The feature-wide run override (resolution tier 2). `None` =
             // inherit; the driver's chain bottoms out at `EffortLevel::DEFAULT`.
@@ -507,6 +520,7 @@ impl StepExecutor for DagStepExecutor {
             id: feature_id.clone(),
             project_id: ProjectId::from(project_id.to_string()),
             workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
+            workflow_version_id,
             title: title.to_string(),
             description: description.to_string(),
             status: "bootstrapping".to_string(),

@@ -1,6 +1,6 @@
 use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{
-    FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId,
+    FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId, WorkflowVersionId,
 };
 use crate::domain::models::EffortLevel;
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,14 @@ pub struct Feature {
     pub id: FeatureId,
     pub project_id: ProjectId,
     pub workflow_id: Option<WorkflowId>,
+    /// The workflow version this feature runs (decision 38, V33):
+    /// resolved once at `feature_start` and read back by every resume,
+    /// replay, and (Phase 2) the run-mode canvas, so editing the
+    /// workflow mid-run never changes a running graph. `None` on
+    /// pre-V33 rows; the run path backfills it by pinning latest on
+    /// first resolve.
+    #[serde(default)]
+    pub workflow_version_id: Option<WorkflowVersionId>,
     pub title: String,
     /// The rich prompt body the user typed at launch (rendered into the
     /// agent's `{{feature_description}}`). Persisted on the row (migration

@@ -275,6 +275,7 @@ impl StepExecutor for StubExecutor {
             id: demeteo_lib::domain::ids::FeatureId(format!("feat-{}", project_id)),
             project_id: ProjectId::from(project_id.to_string()),
             workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
+            workflow_version_id: None,
             title: title.to_string(),
             description: String::new(),
             status: "running".to_string(),
