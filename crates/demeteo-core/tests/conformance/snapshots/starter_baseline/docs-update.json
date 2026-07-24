@@ -1,0 +1,117 @@
+{
+  "starter": "docs-update",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-survey",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-scope",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-draft",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-validate",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-review",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-polish",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-finalize",
+      "kind": "finalize",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-draft",
+      "s-draft.md",
+      "# stub artifact\n\npath: artifacts/s-draft.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-draft",
+      "s-draft.md",
+      "# stub artifact\n\npath: artifacts/s-draft.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-draft",
+      "s-survey.md",
+      "# stub artifact\n\npath: artifacts/s-survey.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-review",
+      "s-validate.md",
+      "# stub artifact\n\npath: artifacts/s-validate.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-scope",
+      "s-survey.md",
+      "# stub artifact\n\npath: artifacts/s-survey.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-polish",
+      "s-draft.md",
+      "# stub artifact\n\npath: artifacts/s-draft.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-polish",
+      "s-polish.md",
+      "# stub artifact\n\npath: artifacts/s-polish.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-polish",
+      "s-polish.md",
+      "# stub artifact\n\npath: artifacts/s-polish.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-polish",
+      "s-survey.md",
+      "# stub artifact\n\npath: artifacts/s-survey.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-polish",
+      "s-validate.md",
+      "# stub artifact\n\npath: artifacts/s-validate.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-survey",
+      "s-survey.md",
+      "# stub artifact\n\npath: artifacts/s-survey.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-validate",
+      "s-validate.md",
+      "# stub artifact\n\npath: artifacts/s-validate.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}

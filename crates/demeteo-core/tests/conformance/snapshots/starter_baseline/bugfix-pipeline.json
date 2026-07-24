@@ -1,0 +1,97 @@
+{
+  "starter": "bugfix-pipeline",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-reproduce",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-confirm",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-fix",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-smoke",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-verify",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-ship",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-finalize",
+      "kind": "finalize",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-fix",
+      "s-reproduce.md",
+      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-confirm",
+      "s-reproduce.md",
+      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-confirm",
+      "s-reproduce.md",
+      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-ship",
+      "s-verify.md",
+      "# stub artifact\n\npath: artifacts/s-verify.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-reproduce",
+      "s-reproduce.md",
+      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-reproduce",
+      "s-reproduce.md",
+      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-smoke",
+      "s-smoke.md",
+      "# stub artifact\n\npath: artifacts/s-smoke.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-verify",
+      "s-verify.md",
+      "# stub artifact\n\npath: artifacts/s-verify.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}
