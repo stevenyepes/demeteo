@@ -766,6 +766,17 @@ impl GatePresenter for DagStepExecutor {
             .upsert_decision(&se_id, decision, feedback, paths::now_ms())
             .map_err(AppError::from)?;
 
+        // Narrate the answer (P1.13): `gate_required` marked the wait,
+        // this marks the human's decision, so the run-event log tells
+        // both halves of the story. Emitted after the durable write —
+        // the event never precedes the state it describes.
+        let _ = self.notif.emit(&DomainEvent::GateDecided {
+            feature_id: step_exec.feature_id.clone(),
+            step_execution_id: se_id.clone(),
+            decision: decision.to_string(),
+            feedback: feedback.map(|s| s.to_string()),
+        });
+
         let gd = GateDecision {
             id: GateDecisionId::from(format!("gd-{}", step_execution_id)),
             step_execution_id: se_id.clone(),

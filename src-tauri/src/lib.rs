@@ -258,11 +258,21 @@ pub fn run() {
                 .expect("Failed to get local data dir");
             eprintln!("[demeteo] data dir: {}", app_data_dir.display());
 
-            let notif_adapter: Arc<dyn NotificationPort> = Arc::new(
-                adapters::tauri_ui::notification::TauriNotificationAdapter::new(
-                    app.handle().clone(),
-                ),
-            );
+            // The unified event log (P1.13): decorate the Tauri emitter
+            // with the local run-event recorder, so every narrative
+            // DomainEvent is also appended to `run_events` (keyed by
+            // feature id) and pushed as a `run_event` record. Late-bound:
+            // the recorder's sink is the `run_events` repo built inside
+            // `build_core_context`, wired right after it returns — events
+            // fired during startup reconcile are forwarded live but not
+            // recorded, same as the runner's `RunEventBridge` pattern.
+            let run_event_recorder =
+                Arc::new(demeteo_core::adapters::run_event_log::RunEventRecorder::new(
+                    Arc::new(adapters::tauri_ui::notification::TauriNotificationAdapter::new(
+                        app.handle().clone(),
+                    )),
+                ));
+            let notif_adapter: Arc<dyn NotificationPort> = run_event_recorder.clone();
 
             // Expose the notification port as Tauri state BEFORE it is moved into
             // `build_core_context`, so terminal.rs can read it via `try_state` and
@@ -284,6 +294,7 @@ pub fn run() {
                 runtime,
             );
             eprintln!("[demeteo] workspace dir: {}", ctx.workspace_dir.display());
+            run_event_recorder.wire(ctx.run_events.clone());
 
             commands::workflows::seed_starter_workflows(&ctx.workflows);
 

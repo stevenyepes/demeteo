@@ -13,6 +13,7 @@ pub mod notification_noop;
 pub mod pricing;
 pub mod provider_http;
 pub mod router;
+pub mod run_event_log;
 pub mod scheduler;
 pub mod ssh;
 pub mod step_executor;

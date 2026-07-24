@@ -195,6 +195,36 @@ impl NotificationPort for TauriNotificationAdapter {
                 "terminal_awaiting_approval",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::RetryDecision { .. } => (
+                "retry_decision",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::GateDecided { .. } => (
+                "gate_decided",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            // The unified-event-log live push (P1.13): re-emit the bare
+            // `run_events` record shape — identical to what the remote
+            // path polls via `stream_events` — under the `run_event`
+            // name. `event_kind` is renamed back to `kind` here; the
+            // enum variant only avoids that field name because it
+            // collides with the enum's own serde tag.
+            DomainEvent::RunEventAppended {
+                run_id,
+                offset,
+                event_kind,
+                payload_json,
+                created_at,
+            } => (
+                "run_event",
+                serde_json::json!({
+                    "run_id": run_id,
+                    "offset": offset,
+                    "kind": event_kind,
+                    "payload_json": payload_json,
+                    "created_at": created_at,
+                }),
+            ),
         };
 
         // In-app emit is preserved exactly (spec Constraint 2 / AC-7).

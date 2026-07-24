@@ -175,6 +175,71 @@ pub enum DomainEvent {
         session_id: String,
         label: Option<String>,
     },
+
+    /// Emitted when the retry-policy engine (P1.10) answers a step
+    /// failure — every failure names the rule that decided its fate, not
+    /// just the exhaustion case ([`RetryBudgetExhausted`] stays the
+    /// user-facing alarm; this is the narrative record, P1.13).
+    ///
+    /// `rule_id` is the applied policy rule (`<class>.<strategy>`, e.g.
+    /// `verdict.redirect`), identical to what the attempt row stores in
+    /// `step_attempts.applied_rule`. `action` is what the driver actually
+    /// did: `"redirect" | "in_place" | "exhausted" | "fail"`. `target_id`
+    /// names the redirect target when one applies. `attempt`/`max` mirror
+    /// the decision's budget arithmetic (`attempt` is the 1-based attempt
+    /// a granted retry starts; for `exhausted`/`fail` it is the attempt
+    /// that would have started had budget remained).
+    ///
+    /// [`RetryBudgetExhausted`]: DomainEvent::RetryBudgetExhausted
+    RetryDecision {
+        feature_id: FeatureId,
+        step_id: String,
+        /// Failure class (`environment | verdict | agent_failure |
+        /// non_retryable`) — also the prefix of `rule_id`, kept explicit
+        /// so consumers don't parse identifiers.
+        error_class: String,
+        rule_id: String,
+        action: String,
+        target_id: Option<String>,
+        attempt: u32,
+        max: u32,
+        reason: String,
+    },
+
+    /// Emitted when a human (or policy) decision is applied to a gate —
+    /// the moment `gate_decide` durably records `approve`/`reject`/
+    /// `redirect`. [`GateRequired`] marks the wait; this marks the
+    /// answer, so the run-event log tells both halves of the story
+    /// (P1.13).
+    ///
+    /// [`GateRequired`]: DomainEvent::GateRequired
+    GateDecided {
+        feature_id: FeatureId,
+        step_execution_id: StepExecutionId,
+        decision: String,
+        feedback: Option<String>,
+    },
+
+    /// A row was appended to the durable `run_events` log (P1.13). This
+    /// is the live-push half of the unified event log: the local
+    /// recorder appends the row, then forwards this variant so the UI
+    /// receives **exactly the record shape** the remote path polls via
+    /// `stream_events` — same `kind` vocabulary, same `payload_json`,
+    /// plus the monotonic `offset` for gap-free catch-up. For local runs
+    /// `run_id` is the feature id (local runs have no runner run row).
+    ///
+    /// Never itself recorded to the log (that would recurse); adapters
+    /// other than the UI emitter ignore it.
+    RunEventAppended {
+        run_id: String,
+        offset: i64,
+        /// The stored row's `kind` (named `event_kind` here only because
+        /// the enum's own serde tag claims `kind`; the UI emitter
+        /// re-emits the bare record shape with `kind`).
+        event_kind: String,
+        payload_json: String,
+        created_at: i64,
+    },
 }
 
 /// The single deep interface for orchestrator → UI event emission.
