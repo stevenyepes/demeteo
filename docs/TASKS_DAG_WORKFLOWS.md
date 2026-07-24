@@ -224,6 +224,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** PRD §6.1; `FeatureDetail.tsx` — **do not read all 1963 lines**: read the header/imports (:1-60), steps state (:200-260), and the step-list render + event wiring sections (grep `useTauriEvent`, `StepProgress`); `useTauriEvent.ts` (37); `runStatus.ts`; `GateView.tsx` (281).
 - **Touch:** `FeatureDetail.tsx` (toggle + mount), `WorkflowCanvas.tsx` (run-mode props), new `src/hooks/useRunEvents.ts` (single stream consumer both modes share).
 - **Done when:** live stub run animates correctly in both modes from the same hook; toggle preserves selection.
+- *Amendments (2026-07-24, as built):* (1) **Touch under-specified a backend command.** The canvas needs a *migrated v2* definition and migration is Rust-only, so a new `feature_workflow_graph(featureId) -> WorkflowDefinitionV2` command was added (`commands/workflows.rs` + registration in `lib.rs`): it reads the feature's **pinned** version (P1.15), falls back to latest for pre-pin features, and returns `migrate_v1_to_v2(...)`. FeatureDetail fetches it once per feature id (the run's graph is immutable). (2) **Overlay source.** `useRunEvents(featureId, steps)` derives `statusByNode` from the authoritative `step_executions` snapshot (already reloaded on every `step_progress`/`feature_status_changed` event) — correct on first mount with no delta replay — and enriches it with the **failure class** from the `run_events` `retry_decision` stream (P1.13), which the step row can't carry. Both run-mode surfaces read node status from this one hook. (3) `WorkflowCanvas`'s `statusByNode` prop grew from `Record<string,string>` to `Record<string, NodeRunStatus>` (status + cost + duration + errorClass + `stepExecutionId`); the node card renders tone-driven glow + an **opacity-only** pulsing dot + duration/cost chips + failure-class chip (battery rule honored). (4) A gate node's card is the click target: `onNodeActivate` opens the existing full-screen `GateView` via `navigate(..., gateStepExecutionId)`; non-gate nodes are inert until the drill-down panel (P2.3). (5) `formatDuration` lifted from FeatureDetail-local into `lib/utils` (shared by chips); FeatureDetail's own copy left untouched to keep the diff scoped. Toggle defaults to Timeline; the Graph option appears only when a definition + a started run both exist.
 
 ### P2.3 — Node drill-down panel: Overview + Output
 - **Goal:** Clicking a node opens a right side panel (split-panel pattern like `ArtifactViewer`): **Overview** = status, attempt table (class, cost, duration, outcome) from `step_attempts` via a new Tauri command; **Output** = artifacts (Monaco), harness output, verifier verdict with failing tests/implicated files.
@@ -356,7 +357,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.15 | Pin workflow_version_id (V33) | ✅ 2026-07-24 |
 | P1.16 | Phase-1 exit gate | ✅ 2026-07-24 |
 | P2.1 | Canvas foundation | ✅ 2026-07-24 |
-| P2.2 | Run-mode overlay + toggle | ☐ |
+| P2.2 | Run-mode overlay + toggle | ✅ 2026-07-24 |
 | P2.3 | Panel: Overview/Output | ☐ |
 | P2.4 | Panel: Live/Actions | ☐ |
 | P2.5 | Sequence expansion | ☐ |

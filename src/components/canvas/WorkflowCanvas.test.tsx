@@ -65,6 +65,30 @@ describe('toFlowGraph', () => {
     }
   });
 
+  it('threads the run-mode overlay (P2.2) onto matching nodes only', () => {
+    const def: WorkflowDefinitionV2 = {
+      schema_version: 2,
+      id: 'wf-x',
+      name: 'X',
+      nodes: [
+        { id: 'a', type: 'agent', title: 'A' },
+        { id: 'b', type: 'gate', title: 'B' },
+      ],
+      edges: [{ from: 'a', to: 'b' }],
+    };
+    const { nodes } = toFlowGraph(def, {
+      statusByNode: {
+        a: { status: 'completed', costUsd: 0.42, wallClockSecs: 12, stepExecutionId: 'se-a' },
+      },
+    });
+    const a = nodes.find((n) => n.id === 'a')!;
+    const b = nodes.find((n) => n.id === 'b')!;
+    expect(a.data.run?.status).toBe('completed');
+    expect(a.data.run?.costUsd).toBe(0.42);
+    // A node with no overlay entry stays in design-mode (no run state).
+    expect(b.data.run).toBeUndefined();
+  });
+
   it('labels conditional (`when`) edges and leaves chain edges bare', () => {
     const def: WorkflowDefinitionV2 = {
       schema_version: 2,

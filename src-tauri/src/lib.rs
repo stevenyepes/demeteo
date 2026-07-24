@@ -488,6 +488,7 @@ pub fn run() {
             commands::git::git_file_at_ref,
             commands::workflows::workflow_list,
             commands::workflows::workflow_get,
+            commands::workflows::feature_workflow_graph,
             commands::workflows::workflow_create,
             commands::workflows::workflow_update,
             commands::workflows::workflow_delete,

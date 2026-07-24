@@ -8,14 +8,14 @@
  * map — design mode (P2.1) simply passes nothing.
  */
 import type { Edge, Node } from '@xyflow/react';
-import type { WorkflowDefinitionV2 } from './types';
+import type { NodeRunStatus, WorkflowDefinitionV2 } from './types';
 
 /** Data carried on each React Flow node into the `WorkflowNode` card. */
 export interface WorkflowNodeData extends Record<string, unknown> {
   nodeType: string;
   title: string;
-  /** Live run status (P2.2); undefined in design mode. */
-  status?: string;
+  /** Live run state (P2.2); undefined in design mode. */
+  run?: NodeRunStatus;
 }
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
@@ -26,8 +26,8 @@ export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
 const FALLBACK_STRIDE = 160;
 
 export interface ToFlowGraphOptions {
-  /** node id → run status, for run-mode overlay (P2.2). */
-  statusByNode?: Record<string, string>;
+  /** node id → live run state, for run-mode overlay (P2.2). */
+  statusByNode?: Record<string, NodeRunStatus>;
 }
 
 export function toFlowGraph(
@@ -41,7 +41,7 @@ export function toFlowGraph(
     data: {
       nodeType: n.type,
       title: n.title,
-      status: opts.statusByNode?.[n.id],
+      run: opts.statusByNode?.[n.id],
     },
   }));
 

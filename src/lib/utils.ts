@@ -17,6 +17,21 @@ export function formatCost(usd: number | null | undefined): string {
   return `$${usd.toFixed(0)}`;
 }
 
+/** Compact wall-clock duration ("45s", "2m 10s", "1h 5m") from a second
+ *  count — the run-surface vocabulary shared by the timeline chips and the
+ *  workflow canvas node cards (P2.2). */
+export function formatDuration(secs: number | null | undefined): string {
+  if (secs == null || !Number.isFinite(secs)) return '0s';
+  const s = Math.round(secs);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM > 0 ? `${h}h ${remM}m` : `${h}h`;
+}
+
 /** Coarse "3m ago"-style age for a millisecond timestamp. */
 export function relativeTime(ms: number): string {
   const deltaSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));

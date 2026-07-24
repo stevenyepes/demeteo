@@ -11,8 +11,11 @@ import { formatError } from '../lib/errors';
 import {
   ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X,
   GitPullRequest, RotateCcw, FileText, FileCode, FileJson, GitMerge, FileQuestion,
-  GitBranch, ExternalLink, AlertTriangle, Terminal, Paperclip,
+  GitBranch, ExternalLink, AlertTriangle, Terminal, Paperclip, Network, List,
 } from 'lucide-react';
+import { WorkflowCanvas } from './canvas/WorkflowCanvas';
+import type { WorkflowDefinitionV2 } from './canvas/types';
+import { useRunEvents } from '../hooks/useRunEvents';
 import { ArtifactViewer } from './ArtifactViewer';
 import { AttachmentChip } from './AttachmentChip';
 import { listAttachments, readAttachment, type AttachedFile } from '../lib/attachments';
@@ -206,6 +209,17 @@ export function FeatureDetail() {
 
   const { reportError } = useErrorBus();
   const [steps, setSteps] = useState<StepExecution[]>([]);
+  // Run-mode visualization toggle (P2.2). The list timeline stays the default
+  // — it's better for skimming long linear runs and preserves muscle memory;
+  // the graph is opt-in until Phase-2 parity is signed off (PRD §6.1).
+  const [viewMode, setViewMode] = useState<'timeline' | 'graph'>('timeline');
+  // The pinned version's schema-v2 graph (P1.15 + `feature_workflow_graph`),
+  // migrated backend-side. Null until loaded / when the feature has none.
+  const [graphDef, setGraphDef] = useState<WorkflowDefinitionV2 | null>(null);
+  // Single run-event consumer both run-mode surfaces share: the canvas overlay
+  // reads node status from here, derived from the same `steps` snapshot the
+  // timeline renders (plus failure classes from the `run_events` stream, P1.13).
+  const { statusByNode: runStatusByNode } = useRunEvents(featureId, steps);
   // Bootstrap sub-step phases (feature-start "phase 0"), keyed by phase id.
   // Fed by the local `bootstrap_progress` Tauri event and, for remote runs,
   // by `bootstrap_progress` entries in the durable run-event log (see
@@ -461,6 +475,47 @@ export function FeatureDetail() {
       cancelled = true;
     };
   }, [featureId]);
+
+  // Load the pinned version's v2 graph once per feature id — it's immutable
+  // for the run's lifetime (runs pin their version forever, PRD §2), so a
+  // single fetch suffices; live status rides on `runStatusByNode`, not this.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const def = await invoke<WorkflowDefinitionV2>('feature_workflow_graph', { featureId });
+        if (!cancelled) setGraphDef(def && def.nodes.length > 0 ? def : null);
+      } catch (err) {
+        // Soft failure: no graph → the toggle simply doesn't appear and the
+        // timeline (the default) carries on. Legacy features with no workflow
+        // land here.
+        if (!cancelled) setGraphDef(null);
+        console.warn('feature_workflow_graph failed:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [featureId]);
+
+  // The graph is offered only once there's a run to overlay and a definition
+  // to draw. A gate node opens the existing full-screen `GateView`; other
+  // nodes are inert until the drill-down panel lands (P2.3).
+  const canShowGraph = graphDef !== null && steps.length > 0;
+  const onNodeActivate = useCallback(
+    (nodeId: string) => {
+      const run = runStatusByNode[nodeId];
+      if (run?.status === 'awaiting_gate' && run.stepExecutionId) {
+        navigate({
+          kind: 'detail',
+          featureId,
+          featureTitle,
+          gateStepExecutionId: run.stepExecutionId,
+        });
+      }
+    },
+    [runStatusByNode, navigate, featureId, featureTitle],
+  );
 
   useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status: s }) => {
     if (feature_id === featureId) {
@@ -1270,6 +1325,42 @@ export function FeatureDetail() {
               </div>
             )}
             {showBootstrap && <BootstrapStepper phases={orderedBootstrapPhases} />}
+            {canShowGraph && (
+              /* Graph | Timeline toggle (PRD §6.1). List stays default; the
+                 graph is the same pinned-version definition with the live
+                 `run_events`-driven overlay. */
+              <div className="mb-6 inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1">
+                <button
+                  onClick={() => setViewMode('graph')}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    viewMode === 'graph'
+                      ? 'bg-cyan-500/15 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Network className="h-3.5 w-3.5" /> Graph
+                </button>
+                <button
+                  onClick={() => setViewMode('timeline')}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    viewMode === 'timeline'
+                      ? 'bg-cyan-500/15 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <List className="h-3.5 w-3.5" /> Timeline
+                </button>
+              </div>
+            )}
+            {canShowGraph && viewMode === 'graph' ? (
+              <div className="h-[600px] w-full overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
+                <WorkflowCanvas
+                  definition={graphDef!}
+                  statusByNode={runStatusByNode}
+                  onNodeActivate={onNodeActivate}
+                />
+              </div>
+            ) : (
             <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
               {remoteRun && steps.length === 0 && bootstrapPhases.size === 0 && (
                 /* Eager shadow, pre-hydration: the run was submitted a
@@ -1584,6 +1675,7 @@ export function FeatureDetail() {
                 );
               })}
             </div>
+            )}
           </div>
 
           {/* Right Column: Artifact Viewer panel */}
