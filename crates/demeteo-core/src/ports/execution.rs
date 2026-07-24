@@ -297,6 +297,13 @@ mod topology_equivalence;
 #[path = "../../tests/conformance/harness_triage.rs"]
 mod harness_triage;
 
+/// Durable-checkpoint crash-resume gate (P1.9): a fresh driver life must
+/// resume a checkpointed `sequence` step from the exact task, not the step
+/// head. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/durable_checkpoints.rs"]
+mod durable_checkpoints;
+
 /// Starter-baseline golden snapshots (P0.2, `docs/TASKS_DAG_WORKFLOWS.md`):
 /// every bundled starter executed end-to-end under the stub agent and
 /// compared to a committed behavioral snapshot — the regression gate for the

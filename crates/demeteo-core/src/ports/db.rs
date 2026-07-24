@@ -292,6 +292,59 @@ pub trait FeatureRepository: Send + Sync {
         &self,
         step_execution_id: &StepExecutionId,
     ) -> Result<Vec<crate::domain::models::StepAttempt>, String>;
+
+    // --- Durable sequence run state (V32 / task P1.9) ---
+    //
+    // Replaces the driver's in-memory `sequence_checkpoints` and
+    // `cached_plans` maps so a restart resumes a sequence step from the
+    // exact task instead of the step head. Keyed per (feature, node):
+    // a workflow may hold several sequence nodes.
+
+    /// Landed task ids for a (feature, node) mid-list checkpoint, in
+    /// landed order; empty when the step never checkpointed.
+    fn sequence_checkpoint_get(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Vec<String>, String>;
+
+    /// Union `landed_task_ids` into the checkpoint (order-preserving,
+    /// deduplicated). Returns the total landed count after the merge.
+    fn sequence_checkpoint_record(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        landed_task_ids: &[String],
+        now: i64,
+    ) -> Result<u32, String>;
+
+    /// Delete the checkpoint once the step completes — a stale
+    /// skip-list would silently exempt tasks from a future full re-run.
+    fn sequence_checkpoint_clear(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<(), String>;
+
+    /// The last full task plan this (feature, node) resolved, as
+    /// serialized JSON.
+    fn plan_cache_get(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Option<String>, String>;
+
+    /// Upsert the plan, recording the `step_attempts.attempt_no` whose
+    /// dispatch produced it (`None` when attempt accounting was
+    /// unavailable).
+    fn plan_cache_put(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        plan_json: &str,
+        attempt_no: Option<u32>,
+        now: i64,
+    ) -> Result<(), String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

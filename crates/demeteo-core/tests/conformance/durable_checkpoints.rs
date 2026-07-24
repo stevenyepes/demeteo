@@ -1,0 +1,349 @@
+//! Durable-checkpoint crash-resume fixture (P1.9, `docs/TASKS_DAG_WORKFLOWS.md`).
+//!
+//! The V32 tables exist so that a driver restart resumes a `sequence`
+//! step **from the exact task**, not the step head. This suite proves it
+//! end-to-end with the deterministic stub agent:
+//!
+//! 1. A plan → sequence feature runs to completion once, establishing
+//!    that both stub tasks execute on a pristine run (the control).
+//! 2. The run is then rewound to look exactly like a driver that died
+//!    mid-sequence after checkpointing its landed prefix: the sequence
+//!    step row goes to `interrupted`, the feature to `failed`, and the
+//!    V32 checkpoint records `stub-task-1` as landed.
+//! 3. A **second app life** (`build_core_context` over the same data
+//!    dir — a genuine restart: fresh executor, fresh driver registry,
+//!    no in-memory state) retries the step. With the old in-memory maps
+//!    this re-ran the whole list; with V32 it must run only
+//!    `stub-task-2`.
+//!
+//! The assertion reads `subtask_runs` — one row per (task, attempt) —
+//! through a direct connection to the same SQLite file, so the observed
+//! evidence is the engine's own audit trail.
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use crate::adapters::agent::stub_runtime::STUB_AGENT_ENV;
+use crate::application::{bootstrap, projects, workflows};
+use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::ids::{FeatureId, ProviderId};
+use crate::domain::models::ProviderInstance;
+use crate::paths;
+use crate::ports::db::FeaturePatch;
+use crate::ports::db::StepExecutionPatch;
+use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::state::AppContext;
+
+const REPO_PATH: &str = "demeteo/durable-checkpoints";
+const PROVIDER_ID: &str = "durable-checkpoints-provider";
+
+struct NoopNotif;
+impl NotificationPort for NoopNotif {
+    fn emit(&self, _event: &DomainEvent) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Plan step writes the stub's deterministic two-task list
+/// (`stub-task-1`, `stub-task-2`); the sequence step consumes it via
+/// `task_list_from`.
+fn plan_then_sequence_workflow() -> serde_json::Value {
+    serde_json::json!({
+        "name": "Durable Checkpoint Resume",
+        "description": "Plan + sequence pair for the P1.9 crash-resume gate.",
+        "steps": [
+            {
+                "id": "s-plan",
+                "kind": "agent",
+                "title": "Plan",
+                "agent_kind": "stub",
+                "prompt_template": "Write the ticket list.\n@stub-write artifacts/task-list.json\n",
+                "capability": "artifacts",
+                "artifacts": [
+                    {
+                        "name": "task-list",
+                        "capture": { "kind": "last_write_to", "path": "artifacts/task-list.json" },
+                        "mode": "full"
+                    }
+                ]
+            },
+            {
+                "id": "s-impl",
+                "kind": "sequence",
+                "title": "Implement",
+                "agent_kind": "stub",
+                "task_list_from": "s-plan",
+                "prompt_template": "Implement the task.\n@stub-write artifacts/task-notes.md\n",
+                "artifacts": [
+                    {
+                        "name": "implemented-files",
+                        "capture": { "kind": "all_writes" },
+                        "mode": "summary_only"
+                    }
+                ]
+            }
+        ]
+    })
+}
+
+/// Same fixture repo the starter-baseline harness uses: a README-only
+/// local git repo at the engine's canonical local target dir, so
+/// bootstrap adopts it instead of trying (and failing headless) to
+/// clone through the keyring.
+fn init_local_repo(workspace_dir: &Path, project_id: &str, repo_path: &str) {
+    let dir = paths::repo_target_dir_local(workspace_dir, project_id, repo_path);
+    std::fs::create_dir_all(&dir).expect("create repo dir");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "demeteo@local"]);
+    git(&["config", "user.name", "demeteo"]);
+    std::fs::write(dir.join("README.md"), "# durable checkpoint fixture\n").expect("seed README");
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "seed"]);
+}
+
+async fn poll_terminal(ctx: &AppContext, feature_id: &FeatureId) -> String {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let status = ctx
+            .features
+            .get(feature_id)
+            .ok()
+            .flatten()
+            .map(|f| f.status)
+            .unwrap_or_default();
+        // `awaiting_mr` is the local-run terminal parking state when no
+        // publisher is wired (same treatment as the starter baseline).
+        if matches!(
+            status.as_str(),
+            "completed" | "failed" | "cancelled" | "awaiting_mr"
+        ) {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "feature did not reach a terminal status (last: {status})"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// `(subtask_id, status)` rows for the feature, in insertion order, read
+/// through a direct connection to the app's SQLite file.
+fn subtask_runs(app_data_dir: &Path, feature_id: &FeatureId) -> Vec<(String, String)> {
+    let conn = rusqlite::Connection::open(app_data_dir.join("demeteo.db")).expect("open db file");
+    let mut stmt = conn
+        .prepare(
+            "SELECT subtask_id, status FROM subtask_runs
+             WHERE feature_id = ?1 ORDER BY rowid",
+        )
+        .expect("prepare");
+    let rows = stmt
+        .query_map(rusqlite::params![feature_id.0], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .expect("query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+    rows
+}
+
+/// The P1.9 exit test: a fresh driver life resumes a checkpointed
+/// sequence step from the exact task, not the step head.
+#[tokio::test]
+async fn restart_resumes_sequence_from_the_exact_task() {
+    std::env::set_var(STUB_AGENT_ENV, "1");
+    let tmp = std::env::temp_dir().join(format!(
+        "demeteo-durable-ckpt-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).expect("create app data dir");
+
+    let ctx = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotif),
+        tokio::runtime::Handle::current(),
+    );
+
+    ctx.app_settings
+        .add_provider_instance(ProviderInstance {
+            id: ProviderId::from(PROVIDER_ID),
+            kind: "github".to_string(),
+            host: "github.com".to_string(),
+            username: String::new(),
+            avatar_url: String::new(),
+            created_at: paths::now_ms(),
+        })
+        .expect("register provider");
+
+    let project = projects::create(
+        &ctx,
+        projects::ProjectConfig {
+            name: "durable-checkpoints".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            repos: vec![projects::RepositoryConfig {
+                repo_path: REPO_PATH.to_string(),
+                provider_id: PROVIDER_ID.to_string(),
+            }],
+        },
+    )
+    .expect("create project");
+
+    let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
+    settings.project_id = project.id.clone();
+    settings.worktree_strategy.test_command = Some("true".to_string());
+    ctx.projects.save_settings(settings).expect("save settings");
+
+    init_local_repo(&ctx.workspace_dir, project.id.as_str(), REPO_PATH);
+    bootstrap::bootstrap_project(&ctx, project.id.0.clone())
+        .await
+        .expect("bootstrap project");
+
+    let workflow_id = workflows::create_from_json(&ctx.workflows, &plan_then_sequence_workflow())
+        .expect("ingest workflow");
+
+    let feature = ctx
+        .executor
+        .feature_start(
+            None,
+            project.id.as_str(),
+            workflow_id.as_str(),
+            "Durable checkpoint resume",
+            "Run the stub plan + sequence pair to completion, then rewind.",
+            Some("stub"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            vec![],
+            vec![],
+        )
+        .await
+        .expect("feature_start");
+
+    // ── Life 1 (control): a pristine run executes both stub tasks. ──
+    let status = poll_terminal(&ctx, &feature.id).await;
+    let step_debug: Vec<String> = ctx
+        .features
+        .steps_for_feature(&feature.id)
+        .unwrap_or_default()
+        .iter()
+        .map(|s| format!("{}={} err={:?}", s.step_id.0, s.status, s.error_message))
+        .collect();
+    assert_eq!(
+        status, "awaiting_mr",
+        "control run failed; steps: {step_debug:#?}"
+    );
+    let life1 = subtask_runs(&tmp, &feature.id);
+    let life1_tasks: Vec<&str> = life1.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(
+        life1_tasks.iter().any(|t| t.contains("stub-task-1"))
+            && life1_tasks.iter().any(|t| t.contains("stub-task-2")),
+        "control run must execute both stub tasks; ran: {life1_tasks:?}"
+    );
+
+    // ── Rewind: forge the exact on-disk state a driver killed
+    // mid-sequence leaves behind — sequence step interrupted, feature
+    // failed, and the V32 checkpoint recording task 1's prefix as
+    // already merged. ──
+    let steps = ctx.features.steps_for_feature(&feature.id).expect("steps");
+    let impl_step = steps
+        .iter()
+        .find(|s| s.step_id.0 == "s-impl")
+        .expect("sequence step exists");
+    ctx.features
+        .step_update(
+            &impl_step.id,
+            &StepExecutionPatch {
+                status: Some("interrupted".to_string()),
+                error_message: Some(None),
+                ..Default::default()
+            },
+        )
+        .expect("reset sequence step");
+    ctx.features
+        .update(
+            &feature.id,
+            &FeaturePatch {
+                status: Some("running".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("reset feature status");
+    ctx.features
+        .sequence_checkpoint_record(
+            &feature.id,
+            "s-impl",
+            &["stub-task-1".to_string()],
+            paths::now_ms(),
+        )
+        .expect("seed checkpoint");
+    let baseline_rows = subtask_runs(&tmp, &feature.id).len();
+
+    // ── Life 2: a genuine app restart — a second composition over the
+    // same data dir, holding none of the first life's memory — retries
+    // the interrupted step. ──
+    let ctx2 = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotif),
+        tokio::runtime::Handle::current(),
+    );
+    ctx2.executor
+        .step_retry(impl_step.id.0.as_str(), None, None, None)
+        .await
+        .expect("retry the interrupted sequence step");
+    assert_eq!(poll_terminal(&ctx2, &feature.id).await, "awaiting_mr");
+
+    let life2: Vec<(String, String)> = subtask_runs(&tmp, &feature.id)
+        .into_iter()
+        .skip(baseline_rows)
+        .collect();
+    assert!(
+        !life2.is_empty(),
+        "the resumed driver must have run the remainder of the list"
+    );
+    assert!(
+        life2.iter().all(|(id, _)| !id.contains("stub-task-1")),
+        "resume must skip the checkpointed task, not re-run the step head; life 2 ran: {life2:?}"
+    );
+    assert!(
+        life2.iter().any(|(id, _)| id.contains("stub-task-2")),
+        "resume must run the exact remaining task; life 2 ran: {life2:?}"
+    );
+
+    // The completed step spends its checkpoint — a stale skip-list must
+    // not exempt tasks from a future full re-run.
+    assert!(
+        ctx2.features
+            .sequence_checkpoint_get(&feature.id, "s-impl")
+            .expect("read checkpoint")
+            .is_empty(),
+        "completing the step must clear the durable checkpoint"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
