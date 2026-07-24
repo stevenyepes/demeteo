@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 
 import { ArtifactViewer } from '../ArtifactViewer';
+import { RunEventFeed } from '../RunEventFeed';
 import {
   ArtifactIcon,
   ARTIFACT_KIND_COLORS,
@@ -42,7 +43,7 @@ import {
 import { formatError } from '../../lib/errors';
 import { formatDuration } from '../../lib/utils';
 import { runStatusMeta, TONE_CHIP, TONE_TEXT } from '../../lib/runStatus';
-import type { SequenceState, StepAttempt, StepExecution } from '../../types';
+import type { RunEvent, SequenceState, StepAttempt, StepExecution } from '../../types';
 import { nodeTypeMeta, type NodeConfigV2, type NodeRunStatus } from './types';
 
 /** Human label for a failure class (`error_class` / retry-policy key). */
@@ -85,6 +86,10 @@ export interface NodePanelProps {
   onClose: () => void;
   /** Open a worktree-ref artifact in the code editor (passed to `ArtifactViewer`). */
   onOpenEditorForPath?: (filePath: string) => void;
+  /** The run's unified `run_events` feed (P1.13) — local push or remote poll,
+   *  same shape either way (P2.6). Rendered raw in the Overview tab, replacing
+   *  the standalone `RunEventTimeline` as a separate surface. */
+  runEvents?: RunEvent[];
 
   // --- P2.4 ---
   /** Live `agent_stream` buffer for the backing execution (running nodes). */
@@ -113,6 +118,7 @@ export function NodePanel({
   step,
   onClose,
   onOpenEditorForPath,
+  runEvents,
   liveStream,
   isStreaming,
   blockedBy,
@@ -248,6 +254,7 @@ export function NodePanel({
             nodeId={node.id}
             stepExecutionId={stepExecutionId}
             version={version}
+            runEvents={runEvents}
           />
         )}
         {tab === 'live' && <LiveTab liveStream={liveStream} isStreaming={!!isStreaming} />}
@@ -315,6 +322,7 @@ function OverviewTab({
   nodeId,
   stepExecutionId,
   version,
+  runEvents,
 }: {
   run: NodeRunStatus | null;
   hasExecution: boolean;
@@ -326,6 +334,7 @@ function OverviewTab({
   nodeId: string;
   stepExecutionId: string | null;
   version: string;
+  runEvents?: RunEvent[];
 }) {
   return (
     <div className="h-full space-y-5 overflow-y-auto px-5 py-4">
@@ -404,6 +413,21 @@ function OverviewTab({
           </div>
         )}
       </div>
+
+      {/* Raw run-event log (P1.13). The standalone `RunEventTimeline` is no
+          longer a separate surface (P2.6) — its feed lives here, one shape for
+          both transports (local push / remote poll). Run-level, not per-node,
+          so it's shown whenever there's a feed to read. */}
+      {runEvents && runEvents.length > 0 && (
+        <div>
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+            Run activity
+          </div>
+          <div className="max-h-48 space-y-2 overflow-y-auto rounded-xl border border-white/5 bg-[#050608] p-3 font-mono text-[11px]">
+            <RunEventFeed events={runEvents} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

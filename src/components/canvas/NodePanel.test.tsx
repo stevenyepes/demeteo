@@ -89,6 +89,26 @@ describe('NodePanel — Overview', () => {
     expect(screen.getByText(/hasn't started yet/i)).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it('renders the unified run-event feed (P2.6) when events are passed', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'completed', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'completed' })}
+        onClose={() => {}}
+        runEvents={[
+          { offset: 1, run_id: 'f1', kind: 'pr_opened', payload_json: JSON.stringify('https://ex/pr/1'), created_at: 0 },
+        ]}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    expect(screen.getByText('Run activity')).toBeInTheDocument();
+    expect(screen.getByText('PR opened')).toBeInTheDocument();
+  });
 });
 
 describe('NodePanel — Output', () => {
