@@ -1,0 +1,114 @@
+{
+  "starter": "refactor",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-baseline",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-analyse",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-plan",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-refactor",
+      "kind": "sequence",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-regression",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-critic",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-diff",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-finalize",
+      "kind": "finalize",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-analyse",
+      "s-analyse.md",
+      "# stub artifact\n\npath: artifacts/s-analyse.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-analyse",
+      "task-list.json",
+      "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
+    ],
+    [
+      "s-baseline",
+      "s-baseline.md",
+      "# stub artifact\n\npath: artifacts/s-baseline.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-critic",
+      "s-critic.md",
+      "# stub artifact\n\npath: artifacts/s-critic.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-diff",
+      "s-critic.md",
+      "# stub artifact\n\npath: artifacts/s-critic.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-plan",
+      "s-analyse.md",
+      "# stub artifact\n\npath: artifacts/s-analyse.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-plan",
+      "task-list.json",
+      "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
+    ],
+    [
+      "s-refactor",
+      "s-analyse.md",
+      "# stub artifact\n\npath: artifacts/s-analyse.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-refactor",
+      "task-list.json",
+      "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
+    ],
+    [
+      "s-regression",
+      "s-regression.md",
+      "# stub artifact\n\npath: artifacts/s-regression.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}

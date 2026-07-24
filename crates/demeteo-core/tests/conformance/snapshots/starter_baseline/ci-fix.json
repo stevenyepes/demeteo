@@ -1,0 +1,75 @@
+{
+  "starter": "ci-fix",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-diagnose",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-confirm",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-fix",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-verify",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-ship",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-finalize",
+      "kind": "finalize",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-diagnose",
+      "s-diagnose.md",
+      "# stub artifact\n\npath: artifacts/s-diagnose.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-fix",
+      "s-diagnose.md",
+      "# stub artifact\n\npath: artifacts/s-diagnose.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-confirm",
+      "s-diagnose.md",
+      "# stub artifact\n\npath: artifacts/s-diagnose.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-ship",
+      "s-verify.md",
+      "# stub artifact\n\npath: artifacts/s-verify.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-verify",
+      "s-verify.md",
+      "# stub artifact\n\npath: artifacts/s-verify.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}
