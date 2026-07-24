@@ -50,3 +50,13 @@ The orchestrator handles all transitions: when step 1 finishes, it renders step 
 ## Running a non-default workflow
 
 When you click **Launch feature**, the workflow dropdown in the Start a feature modal pre-selects your workspace's default (Standard for new workspaces). Switch to any other starter per-feature — for example, *Bugfix Pipeline* for an isolated regression, *Refactor Pipeline* for a behaviour-preserving change, *Simple Task* for a one-line fix.
+## Definition schema
+
+Workflow definitions are data with a versioned, machine-checkable schema.
+The upcoming **schema v2** (nodes + edges — a true DAG) is published as JSON
+Schema at [`workflow-schema-v2.json`](workflow-schema-v2.json); it is
+generated from the engine's own types, so it can never drift from the code.
+Today's stored definitions are schema v1 (the ordered step list described
+above); v1 documents auto-migrate to v2 mechanically — list order becomes a
+chain of edges, `on_failure` becomes a declarative retry policy, and
+`task_list_from` becomes a typed edge.

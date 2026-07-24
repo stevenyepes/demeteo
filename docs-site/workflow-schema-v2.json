@@ -1,0 +1,302 @@
+{
+  "$defs": {
+    "EdgeConfig": {
+      "description": "A forward dependency: `to` cannot become ready before `from` reaches a\nterminal state satisfying `to`'s join semantics.",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "when": {
+          "description": "Optional guard in the sandboxed expression grammar (P1.5):\n`${{ nodes.<id>.outputs.<name> }}` plus comparison operators.\nA guard that evaluates false marks the edge unsatisfied and the\ndownstream node `skipped(reason)` per its join semantics.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "JoinSemantics": {
+      "description": "When a node with multiple incoming edges becomes ready (PRD §5.1).\nDefault everywhere: `all_success` — with the critic's `PASS_WITH_NOTES`\nverdict mapping to *success* for join purposes (decision 39).",
+      "enum": [
+        "all_success",
+        "any_success",
+        "all_done"
+      ],
+      "type": "string"
+    },
+    "NodeConfig": {
+      "description": "One node of the graph.\n\nNode ids reuse the [`StepId`] vocabulary: the run tables\n(`step_executions`, and `step_attempts` from P1.8) keep keying rows by\nthese ids, and the v1 → v2 migration maps each `StepConfig.id` onto its\nnode 1:1 — a parallel \"NodeId\" universe would only invite mix-ups the\nnewtype exists to prevent.",
+      "properties": {
+        "config": {
+          "default": null,
+          "description": "Per-type payload (prompt template, agent/model/effort, capability,\noutputs, …). Deliberately untyped here — the owning node handler\npublishes its schema via `config_schema()` (P1.6) and the editor\nrenders/validates from that."
+        },
+        "id": {
+          "type": "string"
+        },
+        "join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JoinSemantics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Join semantics over this node's incoming edges. Unset = workflow\ndefault, then `all_success` (decision 39). Per-node opt-in exists\nso e.g. a notification-ish node can fire on `all_done`."
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Editor layout, co-persisted with the definition (PRD §5.1). The\nv1 migration synthesizes a simple vertical layout; `None` means\n\"let the editor auto-layout\"."
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-node retry policy; falls back to `defaults.retry`, then the\nengine defaults (P1.10)."
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "description": "Registry key (`agent`, `gate`, `sequence`, `sync`, `finalize`,\n`command`, …). Resolved against the `NodeTypeRegistry` (P1.6);\nan unknown type is a lint error, not a parse error.",
+          "type": "string"
+        },
+        "type_version": {
+          "default": 1,
+          "description": "Per-node-type schema evolution without breaking old definitions\n(n8n's `typeVersion` pattern). Handlers bump this when their\n`config` payload shape changes.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "title"
+      ],
+      "type": "object"
+    },
+    "Position": {
+      "description": "Editor canvas coordinates.",
+      "properties": {
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "RetryPolicy": {
+      "description": "Declarative per-failure-class retry policy (PRD §5.4), unifying the\nv1 scatter of `on_failure` / `max_iterations` / env one-shot retry /\nengine default. A missing class falls back to `defaults.retry`, then\nthe engine defaults (P1.10 wires evaluation).\n\nThe four classes map 1:1 onto the existing `StepOutcome` /\n`VerifierError` taxonomy — the engine already *classifies* failures;\nthis makes the *response* declarative.",
+      "properties": {
+        "agent_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryRule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The agent process itself failed (crash, non-zero exit, timeout)."
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryRule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Infra/tooling failures (missing deps, transient env) — v1's\none-shot env retry generalized."
+        },
+        "non_retryable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryRule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Failures the engine marks as not worth retrying; the only sane\nstrategy is [`RetryStrategy::Fail`], but the class is explicit so\na workflow can (say) attach `feedback: false` semantics later."
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryRule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Verifier verdict failures (failing tests, BLOCKED verdicts) —\nv1's `on_failure` redirect loop generalized."
+        }
+      },
+      "type": "object"
+    },
+    "RetryRule": {
+      "description": "What to do when a failure of the keyed class occurs.",
+      "properties": {
+        "backoff_secs": {
+          "description": "Delay before the next attempt. `None` = immediate.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "feedback": {
+          "default": false,
+          "description": "Carry the failure context into the retried node's prompt — v1's\n`RetryContext` append behavior.",
+          "type": "boolean"
+        },
+        "max_attempts": {
+          "description": "Attempt budget for this class. `None` = engine default.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "redirect_to": {
+          "description": "Target for [`RetryStrategy::Redirect`]; must be an *ancestor* of\nthe failing node (lint rule, P1.4 — cycles stay impossible by\nconstruction). Accepts the PRD §5.4 short form `\"to\"` on input;\nserializes as `redirect_to`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "strategy": {
+          "$ref": "#/$defs/RetryStrategy"
+        }
+      },
+      "required": [
+        "strategy"
+      ],
+      "type": "object"
+    },
+    "RetryStrategy": {
+      "description": "Response strategy for a failure class.",
+      "oneOf": [
+        {
+          "const": "in_place",
+          "description": "Re-run the same node in place.",
+          "type": "string"
+        },
+        {
+          "const": "redirect",
+          "description": "Jump back to an ancestor node (v1 `on_failure` semantics).",
+          "type": "string"
+        },
+        {
+          "const": "fail",
+          "description": "Don't retry; the node (and per join semantics, the run) fails.",
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowDefaults": {
+      "description": "Workflow-level defaults (PRD §5.1 `defaults` block).",
+      "properties": {
+        "join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JoinSemantics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default join semantics for nodes with multiple incoming edges.\nEngine-wide default when unset here too: `all_success` (decision 39)."
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default retry policy for nodes that don't declare their own."
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://demeteo.dev/schemas/workflow-v2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A complete v2 workflow definition — the unit stored in\n`workflow_versions.steps_json` once v2 lands, snapshotted immutably\ninto every run (decision 38 pins `features.workflow_version_id`).\n\nScheduling stays a workflow-level concern *outside* this document\n(decision 41): `WorkflowSchedule` remains on [`super::Workflow`], so the\ngraph schema does not entrench cron and it can move to the Kanban layer\nlater without a schema break.",
+  "properties": {
+    "defaults": {
+      "$ref": "#/$defs/WorkflowDefaults",
+      "description": "Workflow-level fallbacks applied when a node doesn't set its own."
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/EdgeConfig"
+      },
+      "type": "array"
+    },
+    "id": {
+      "description": "(Ids are `#[serde(transparent)]` newtypes — plain strings on the wire.)",
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/NodeConfig"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "description": "Always [`WORKFLOW_SCHEMA_V2`] for documents this module writes.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "nodes",
+    "edges"
+  ],
+  "title": "WorkflowDefinitionV2",
+  "type": "object"
+}
