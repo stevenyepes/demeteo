@@ -81,6 +81,27 @@ export interface WorkflowDefinitionV2 {
   defaults?: WorkflowDefaults;
 }
 
+/**
+ * Live per-node run state for the run-mode overlay (P2.2). One entry per
+ * graph node, keyed by node id (== the v1 `step_id` the migration preserves).
+ * Derived by `useRunEvents` from the feature's `step_executions` snapshot
+ * (authoritative, reloaded on every event) plus the unified `run_events`
+ * stream (P1.13) for the failure class the step row doesn't carry.
+ */
+export interface NodeRunStatus {
+  /** Step status: `pending | running | verifying | awaiting_gate | completed
+   *  | failed | skipped | interrupted | cancelled`. */
+  status: string;
+  costUsd?: number | null;
+  wallClockSecs?: number | null;
+  tokens?: number | null;
+  /** Failure class from a `retry_decision` run-event (`agent_failure`,
+   *  `verdict`, `environment`, `non_retryable`); shown on a failed node. */
+  errorClass?: string | null;
+  /** The `step_executions.id` — the click target for gate/panel wiring. */
+  stepExecutionId?: string | null;
+}
+
 /** Display metadata for a node type: card icon, label, and accent tone drawn
  *  from the shared run-status vocabulary (`lib/runStatus.ts`) so the canvas
  *  can't invent a color language of its own. */

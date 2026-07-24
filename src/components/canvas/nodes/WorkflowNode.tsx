@@ -1,50 +1,130 @@
 /**
  * The card React Flow draws for one workflow node. Dark neon glassmorphism to
  * match the rest of the app; the kind icon + type chip make a graph scannable
- * without opening panels (the anti-"identical boxes" rule, PRD §6.3). Read-only
- * in P2.1 — the live status overlay (pulse/duration/failure tint) and the
- * drill-down panel land in P2.2/P2.3.
+ * without opening panels (the anti-"identical boxes" rule, PRD §6.3).
+ *
+ * Run-mode overlay (P2.2): when `data.run` is present the card takes on the
+ * run-status color language (`lib/runStatus.ts`) — a pulsing dot for in-motion
+ * nodes, a tone-matched glow, duration+cost chips on completion, and the
+ * failure class on a failed node. Animation is **opacity-only** (`animate-pulse`,
+ * static box-shadows) to honor the webview battery rule; no infinite transforms.
  */
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { nodeTypeMeta } from '../types';
-import { TONE_TEXT, TONE_CHIP } from '../../../lib/runStatus';
+import {
+  runStatusMeta,
+  TONE_TEXT,
+  TONE_CHIP,
+  type RunStatusTone,
+} from '../../../lib/runStatus';
+import { formatCost, formatDuration } from '../../../lib/utils';
 import type { WorkflowFlowNode } from '../flowGraph';
 
 const HANDLE_CLASS = '!h-2 !w-2 !border-slate-600 !bg-slate-800';
+
+/** Card border + glow per run tone — the run-mode equivalent of the
+ *  timeline's per-status card tint. Static box-shadows only. */
+const TONE_CARD: Record<RunStatusTone, string> = {
+  cyan: 'border-cyan-500/50 shadow-[0_0_18px_rgba(6,182,212,0.18)]',
+  violet: 'border-violet-500/50 shadow-[0_0_18px_rgba(139,92,246,0.18)]',
+  amber: 'border-amber-500/50 shadow-[0_0_18px_rgba(245,158,11,0.20)]',
+  emerald: 'border-emerald-500/40 shadow-lg shadow-black/30',
+  ruby: 'border-rose-500/50 shadow-[0_0_18px_rgba(244,63,94,0.22)]',
+  slate: 'border-slate-700/60 shadow-lg shadow-black/30',
+};
+
+/** Solid status dot per run tone. */
+const TONE_DOT: Record<RunStatusTone, string> = {
+  cyan: 'bg-cyan-400',
+  violet: 'bg-violet-400',
+  amber: 'bg-amber-400',
+  emerald: 'bg-emerald-400',
+  ruby: 'bg-rose-400',
+  slate: 'bg-slate-500',
+};
 
 export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
   const meta = nodeTypeMeta(data.nodeType);
   const Icon = meta.icon;
 
+  const run = data.run;
+  const runMeta = run ? runStatusMeta(run.status) : null;
+  const tone = runMeta?.tone ?? null;
+  const isActive = run?.status === 'running' || run?.status === 'verifying';
+  const isSkipped = run?.status === 'skipped';
+  const isFailed = run?.status === 'failed' || run?.status === 'interrupted';
+  const isDone = run?.status === 'completed';
+  const showChips = isDone || isFailed;
+
   return (
     <div
       className={[
-        'group flex min-w-[200px] max-w-[280px] items-center gap-3 rounded-xl border px-3.5 py-2.5',
+        'group flex min-w-[200px] max-w-[280px] flex-col gap-2 rounded-xl border px-3.5 py-2.5',
         'bg-slate-900/70 backdrop-blur-sm transition-shadow',
+        isSkipped ? 'opacity-50' : '',
         selected
           ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]'
-          : 'border-slate-700/60 shadow-lg shadow-black/30 hover:border-slate-600',
+          : tone
+            ? TONE_CARD[tone]
+            : 'border-slate-700/60 shadow-lg shadow-black/30 hover:border-slate-600',
       ].join(' ')}
+      title={
+        isSkipped
+          ? `Skipped${run?.errorClass ? `: ${run.errorClass.replace(/_/g, ' ')}` : ''}`
+          : undefined
+      }
     >
       <Handle type="target" position={Position.Top} className={HANDLE_CLASS} />
 
-      <div
-        className={[
-          'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border',
-          TONE_CHIP[meta.tone],
-        ].join(' ')}
-      >
-        <Icon className={`h-4 w-4 ${TONE_TEXT[meta.tone]}`} aria-hidden />
+      <div className="flex items-center gap-3">
+        <div
+          className={[
+            'relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border',
+            TONE_CHIP[meta.tone],
+          ].join(' ')}
+        >
+          <Icon className={`h-4 w-4 ${TONE_TEXT[meta.tone]}`} aria-hidden />
+          {tone && (
+            <span
+              className={[
+                'absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full ring-2 ring-slate-900',
+                TONE_DOT[tone],
+                isActive ? 'animate-pulse' : '',
+              ].join(' ')}
+              aria-hidden
+            />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-slate-100" title={data.title}>
+            {data.title}
+          </div>
+          <div
+            className={`text-[11px] font-medium uppercase tracking-wide ${
+              tone ? TONE_TEXT[tone] : TONE_TEXT[meta.tone]
+            }`}
+          >
+            {runMeta ? runMeta.label : meta.label}
+          </div>
+        </div>
       </div>
 
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-slate-100" title={data.title}>
-          {data.title}
+      {showChips && (
+        <div className="flex items-center gap-2 pl-11 text-[10px] font-mono">
+          {isFailed && run?.errorClass && (
+            <span className="rounded border border-rose-500/20 bg-rose-500/10 px-1.5 py-0.5 text-rose-300">
+              {run.errorClass.replace(/_/g, ' ')}
+            </span>
+          )}
+          {typeof run?.costUsd === 'number' && run.costUsd > 0 && (
+            <span className="text-emerald-400">{formatCost(run.costUsd)}</span>
+          )}
+          {typeof run?.wallClockSecs === 'number' && run.wallClockSecs > 0 && (
+            <span className="text-slate-400">{formatDuration(run.wallClockSecs)}</span>
+          )}
         </div>
-        <div className={`text-[11px] font-medium uppercase tracking-wide ${TONE_TEXT[meta.tone]}`}>
-          {meta.label}
-        </div>
-      </div>
+      )}
 
       <Handle type="source" position={Position.Bottom} className={HANDLE_CLASS} />
     </div>

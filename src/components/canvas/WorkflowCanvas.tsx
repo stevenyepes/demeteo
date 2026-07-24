@@ -30,7 +30,7 @@ import '@xyflow/react/dist/style.css';
 import { WorkflowNode } from './nodes/WorkflowNode';
 import { toFlowGraph, type WorkflowFlowNode } from './flowGraph';
 import { useElkLayout } from './useElkLayout';
-import type { WorkflowDefinitionV2 } from './types';
+import type { NodeRunStatus, WorkflowDefinitionV2 } from './types';
 
 /** Below this node count the minimap is noise, so it auto-hides (PRD §6.1). */
 const MINIMAP_THRESHOLD = 8;
@@ -39,8 +39,8 @@ const NODE_TYPES = { workflow: WorkflowNode };
 
 export interface WorkflowCanvasProps {
   definition: WorkflowDefinitionV2;
-  /** node id → run status for the run-mode overlay (P2.2). */
-  statusByNode?: Record<string, string>;
+  /** node id → live run state for the run-mode overlay (P2.2). */
+  statusByNode?: Record<string, NodeRunStatus>;
   /** Fired on click or Enter over a node — the panel-open seam (P2.3). */
   onNodeActivate?: (nodeId: string) => void;
   className?: string;

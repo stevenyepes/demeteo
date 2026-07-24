@@ -1,4 +1,4 @@
-use crate::domain::ids::{WorkflowId, WorkflowVersionId};
+use crate::domain::ids::{FeatureId, WorkflowId, WorkflowVersionId};
 use crate::domain::models::workflow_migrate::migrate_v1_to_v2;
 use crate::domain::models::workflow_v2::validate_workflow_v2;
 use crate::domain::models::{StepConfig, Workflow, WorkflowVersion};
@@ -188,6 +188,55 @@ pub fn workflow_get(
         version_id,
         schedule: w.schedule.clone(),
     })
+}
+
+/// The **schema-v2 graph** for a feature's *pinned* workflow version
+/// (P1.15), migrated on the fly from the stored v1 step list. This is the
+/// definition the run-mode canvas (P2.2) renders: it must reflect the
+/// version the run actually started with — not the workflow's latest edit
+/// — so a historical run renders its own graph. Falls back to the
+/// workflow's latest version for legacy features that predate the
+/// `workflow_version_id` pin.
+#[tauri::command]
+pub fn feature_workflow_graph(
+    feature_id: String,
+    ctx: State<'_, AppContext>,
+) -> Result<crate::domain::models::workflow_v2::WorkflowDefinitionV2, AppError> {
+    let feature = ctx
+        .run_view
+        .feature(&FeatureId::from(feature_id.clone()))
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("Feature not found: {feature_id}")))?;
+
+    let workflow_id = feature
+        .workflow_id
+        .ok_or_else(|| AppError::not_found(format!("Feature {feature_id} has no workflow")))?;
+
+    let workflows = &ctx.workflows;
+
+    // Prefer the pinned version so a run always renders the graph it
+    // started with; fall back to latest for pre-pin (legacy) features.
+    let pinned = match feature.workflow_version_id {
+        Some(vid) => workflows.version_get(&vid).map_err(AppError::from)?,
+        None => None,
+    };
+    let version = match pinned {
+        Some(v) => Some(v),
+        None => workflows.latest_version(&workflow_id).map_err(AppError::from)?,
+    };
+
+    let steps: Vec<StepConfig> = version
+        .as_ref()
+        .map(|v| serde_json::from_str(&v.steps_json).unwrap_or_default())
+        .unwrap_or_default();
+
+    let name = workflows
+        .get(&workflow_id)
+        .map_err(AppError::from)?
+        .map(|w| w.name)
+        .unwrap_or_default();
+
+    Ok(migrate_v1_to_v2(workflow_id, name, &steps))
 }
 
 /// P1.3 boundary invariant: every definition accepted for storage must
