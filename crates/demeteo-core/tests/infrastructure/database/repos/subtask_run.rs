@@ -36,6 +36,7 @@ fn seed() -> (SqliteAdapter, FeatureId, StepExecutionId) {
             id: fid.clone(),
             project_id: pid,
             workflow_id: None,
+            workflow_version_id: None,
             title: "f".to_string(),
             description: String::new(),
             status: "running".to_string(),

@@ -214,6 +214,36 @@ impl WorkflowRepository for SqliteAdapter {
         }
     }
 
+    fn version_get(
+        &self,
+        id: &crate::domain::ids::WorkflowVersionId,
+    ) -> Result<Option<WorkflowVersion>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id,workflow_id,version,steps_json,note,created_at
+                 FROM workflow_versions WHERE id=?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut iter = stmt
+            .query_map(params![id.0], |row| {
+                Ok(WorkflowVersion {
+                    id: row.get(0)?,
+                    workflow_id: row.get(1)?,
+                    version: row.get::<_, u32>(2)?,
+                    steps_json: row.get(3)?,
+                    note: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        match iter.next() {
+            Some(Ok(v)) => Ok(Some(v)),
+            Some(Err(e)) => Err(e.to_string()),
+            None => Ok(None),
+        }
+    }
+
     fn versions(&self, workflow_id: &WorkflowId) -> Result<Vec<WorkflowVersion>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn

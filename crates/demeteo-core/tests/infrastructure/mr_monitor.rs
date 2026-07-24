@@ -56,6 +56,7 @@ fn make_open_mr_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> 
         id: FeatureId::from(id.to_string()),
         project_id: pid,
         workflow_id: None,
+        workflow_version_id: None,
         title: "Add the widget".to_string(),
         description: String::new(),
         status: "running".to_string(),

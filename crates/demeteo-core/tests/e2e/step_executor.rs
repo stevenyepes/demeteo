@@ -302,6 +302,7 @@ async fn test_executor_gate_decide() {
             id: FeatureId::from("f-1"),
             project_id: ProjectId::from("p-1"),
             workflow_id: Some(WorkflowId::from("w-1")),
+            workflow_version_id: None,
             title: "test feature".to_string(),
             description: String::new(),
             status: "running".to_string(),
@@ -476,6 +477,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
             id: FeatureId::from("f-recov"),
             project_id: ProjectId::from("p-recov"),
             workflow_id: Some(WorkflowId::from("w-recov")),
+            workflow_version_id: None,
             title: "test feature".to_string(),
             description: String::new(),
             status: "awaiting_gate".to_string(),
@@ -668,6 +670,7 @@ async fn test_step_retry_blocked_by_active_predecessor() {
             id: FeatureId::from("f-guard"),
             project_id: ProjectId::from("p-guard"),
             workflow_id: Some(WorkflowId::from("w-guard")),
+            workflow_version_id: None,
             title: "guard feature".to_string(),
             description: String::new(),
             status: "running".to_string(),
@@ -772,6 +775,7 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
             id: FeatureId::from("f-gg"),
             project_id: ProjectId::from("p-gg"),
             workflow_id: Some(WorkflowId::from("w-gg")),
+            workflow_version_id: None,
             title: "gate guard feature".to_string(),
             description: String::new(),
             status: "awaiting_gate".to_string(),
@@ -886,6 +890,7 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
             id: FeatureId::from("f-unb"),
             project_id: ProjectId::from("p-unb"),
             workflow_id: Some(WorkflowId::from("w-unb")),
+            workflow_version_id: None,
             title: "unblock feature".to_string(),
             description: String::new(),
             status: "failed".to_string(),
@@ -986,6 +991,7 @@ async fn test_assert_no_active_predecessors_helper() {
             id: FeatureId::from("f-h"),
             project_id: ProjectId::from("p-h"),
             workflow_id: Some(WorkflowId::from("w-h")),
+            workflow_version_id: None,
             title: "helper".to_string(),
             description: String::new(),
             status: "running".to_string(),
@@ -1169,6 +1175,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         id: FeatureId::from(id.to_string()),
         project_id: ProjectId::from("p-1"),
         workflow_id: Some(WorkflowId::from("w-1")),
+        workflow_version_id: None,
         title: id.to_string(),
         description: String::new(),
         status: "running".to_string(),
@@ -1680,4 +1687,143 @@ async fn effort_resolution_reaches_the_agent_per_step() {
     );
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Decision 38 (V33, task P1.15): `feature_start` resolves the workflow's
+/// latest version once and pins it on the row; the run path reads the pin
+/// — so saving a newer version after launch demonstrably does not change
+/// the graph a running feature resolves.
+#[tokio::test]
+async fn test_feature_start_pins_workflow_version() {
+    let (executor, db, temp_dir) = build_test_executor("wf_pin").await;
+
+    let workflows: Arc<dyn crate::ports::db::WorkflowRepository> = db.clone();
+    let wf_id = crate::application::workflows::create_from_json(
+        &workflows,
+        &serde_json::json!({
+            "name": "Pin Test",
+            "steps": [ { "id": "s1", "kind": "sync", "title": "S1" } ]
+        }),
+    )
+    .expect("create workflow");
+    let v1 = workflows
+        .latest_version(&wf_id)
+        .unwrap()
+        .expect("initial version");
+
+    // Seed the project (FK target); it has no repository, so the
+    // bootstrap tail fails later — the eager pin happens before the tail
+    // spawns and must already be set.
+    let projects: &dyn ProjectRepository = &*db;
+    projects
+        .add(crate::domain::models::Project {
+            id: ProjectId::from("p-pin"),
+            name: "pin-test".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: paths::now_ms(),
+        })
+        .unwrap();
+
+    let feature = executor
+        .feature_start(
+            None,
+            "p-pin",
+            wf_id.as_str(),
+            "Pin Feature",
+            "a description",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            vec![],
+            vec![],
+        )
+        .await
+        .expect("feature_start returns the eager row");
+    assert_eq!(
+        feature.workflow_version_id.as_ref(),
+        Some(&v1.id),
+        "feature_start pins the latest version at launch"
+    );
+
+    // "Edit" the workflow: save a second version with a different graph.
+    workflows
+        .save_version(crate::domain::models::WorkflowVersion {
+            id: crate::domain::ids::WorkflowVersionId::from(format!("{}-v2", wf_id.as_str())),
+            workflow_id: wf_id.clone(),
+            version: 2,
+            steps_json: serde_json::json!([
+                { "id": "s1", "kind": "sync", "title": "S1" },
+                { "id": "s2", "kind": "sync", "title": "S2" }
+            ])
+            .to_string(),
+            note: None,
+            created_at: paths::now_ms(),
+        })
+        .expect("save v2");
+
+    // The row keeps its pin, and the run path resolves the *pinned*
+    // version, not the new latest.
+    let features: &dyn FeatureRepository = &*db;
+    let row = features.get(&feature.id).unwrap().expect("feature row");
+    assert_eq!(row.workflow_version_id.as_ref(), Some(&v1.id));
+    let resolved = executor
+        .resolve_pinned_version(feature.id.as_str(), &wf_id)
+        .expect("resolve pinned");
+    assert_eq!(
+        (resolved.id, resolved.version),
+        (v1.id.clone(), 1),
+        "a mid-run workflow edit must not change the resolved graph"
+    );
+
+    // Backfill: a pre-V33 row (no pin) resolves latest once and pins it.
+    features
+        .add(Feature {
+            effort: None,
+            id: FeatureId::from("f-prepin"),
+            project_id: ProjectId::from("p-pin"),
+            workflow_id: Some(wf_id.clone()),
+            workflow_version_id: None,
+            title: "legacy".to_string(),
+            description: String::new(),
+            status: "running".to_string(),
+            total_cost: 0.0,
+            tokens: 0,
+            duration: "0s".to_string(),
+            agent_kind: None,
+            model: None,
+            mr_url: None,
+            mr_state: Some("none".to_string()),
+            pr_title: None,
+            pr_body: None,
+            created_at: paths::now_ms(),
+            commit_artifacts: None,
+            loop_iterations: None,
+            max_budget_usd: None,
+            step_overrides: Vec::new(),
+            attachments: Vec::new(),
+        })
+        .unwrap();
+    let resolved = executor
+        .resolve_pinned_version("f-prepin", &wf_id)
+        .expect("backfill resolve");
+    assert_eq!(resolved.version, 2, "an unpinned row resolves latest once");
+    let row = features
+        .get(&FeatureId::from("f-prepin"))
+        .unwrap()
+        .expect("legacy row");
+    assert_eq!(
+        row.workflow_version_id.map(|v| v.0),
+        Some(format!("{}-v2", wf_id.as_str())),
+        "the backfill pins what it resolved"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }
