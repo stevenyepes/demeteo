@@ -1588,12 +1588,12 @@ export function FeatureDetail() {
 
           {/* Right Column: Artifact Viewer panel */}
           <div 
-            className={`h-full overflow-hidden border-l border-white/5 bg-[#0d0f14]/60 backdrop-blur-xl flex flex-col transition-all duration-500 ${
+            className={`h-full min-w-0 overflow-hidden border-l border-white/5 bg-[#0d0f14]/60 backdrop-blur-xl flex flex-col transition-all duration-500 ${
               selectedArtifactPath ? 'w-[60%] opacity-100 translate-x-0' : 'w-0 opacity-0 translate-x-[50px] pointer-events-none'
             }`}
           >
             {selectedArtifactPath && (
-              <div className="flex-1 flex flex-col p-6 overflow-hidden h-full">
+              <div className="flex-1 min-w-0 flex flex-col p-6 overflow-hidden h-full">
                 {/* Header */}
                 <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 shrink-0">
                   <div>
@@ -1616,7 +1616,7 @@ export function FeatureDetail() {
                 </div>
 
                 {/* Content */}
-                <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
                   <ArtifactViewer
                     artifactPath={selectedArtifactPath}
                     contentVersion={(() => {
