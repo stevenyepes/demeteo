@@ -989,6 +989,119 @@ pub(crate) fn append_retry_feedback_section(
     }
 }
 
+// ── NodeHandler registration (P1.6) ───────────────────────────────────────────
+
+/// The `agent` node type behind the [`NodeHandler`] seam. Pure
+/// delegation: execution is [`ExecutionDriver::handle_agent_step`],
+/// byte-for-byte the behavior the old `match` arm dispatched.
+///
+/// [`NodeHandler`]: crate::adapters::step_executor::registry::NodeHandler
+pub(crate) struct AgentNodeHandler;
+
+/// JSON Schema for the `agent` node's `config` payload — the residual
+/// [`StepConfig`] fields the v1→v2 migration leaves in `config` after
+/// lifting id/kind/title/on_failure/task_list_from into first-class
+/// structure (see `workflow_migrate.rs::LIFTED_FIELDS`).
+#[allow(dead_code)] // Read via `NodeHandler::config_schema` (first runtime caller: P3.1).
+static AGENT_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
+    std::sync::LazyLock::new(|| {
+        serde_json::json!({
+            "type": "object",
+            "description": "Configuration for an `agent` node: one agent turn \
+                against the feature worktree, producing declared artifacts \
+                and optionally verified by a harness/verifier turn.",
+            "properties": {
+                "agent_kind": {
+                    "type": ["string", "null"],
+                    "description": "Per-step agent runtime override (e.g. \
+                        `claude-code`). Unset inherits the run/project chain."
+                },
+                "model": {
+                    "type": ["string", "null"],
+                    "description": "Per-step model override. Resolves below the \
+                        run-time per-step override, above the project default."
+                },
+                "effort": {
+                    "type": ["string", "null"],
+                    "enum": ["low", "medium", "high", "xhigh", "max", null],
+                    "description": "Per-step reasoning-effort override. \
+                        Unset inherits."
+                },
+                "prompt_template": {
+                    "type": ["string", "null"],
+                    "description": "The step's prompt template. Supports the \
+                        `{{...}}` placeholders documented in PROMPT_CONTEXT."
+                },
+                "max_iterations": {
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "description": "v1 legacy retry budget. In v2 the retry \
+                        block owns budgets; migration lifts this when an \
+                        on_failure existed, and keeps it here only as inert \
+                        author intent."
+                },
+                "artifacts": {
+                    "type": ["array", "null"],
+                    "description": "Declared artifact captures \
+                        (name/path/capture strategy) committed or stored after \
+                        the turn.",
+                    "items": { "type": "object" }
+                },
+                "verifier": {
+                    "type": ["object", "null"],
+                    "description": "Optional harness/verifier turn run after \
+                        the agent turn; a FAIL verdict feeds the retry policy."
+                },
+                "capability": {
+                    "type": ["string", "null"],
+                    "description": "Write-scope capability class (ReadOnly / \
+                        Artifacts / Implement). Unset infers the safe default."
+                },
+                "allow_network": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Opt this step into web search / fetch."
+                },
+                "allow_shell": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Opt a non-shell capability into the shell."
+                }
+            },
+            "additionalProperties": true
+        })
+    });
+
+#[async_trait::async_trait]
+impl crate::adapters::step_executor::registry::NodeHandler for AgentNodeHandler {
+    fn kind(&self) -> &'static str {
+        "agent"
+    }
+
+    fn config_schema(&self) -> &'static serde_json::Value {
+        &AGENT_CONFIG_SCHEMA
+    }
+
+    async fn execute(
+        &self,
+        ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
+    ) -> StepOutcome {
+        ctx.driver
+            .handle_agent_step(
+                ctx.step_exec,
+                ctx.step_conf,
+                ctx.accumulated_cost,
+                ctx.accumulated_tokens,
+                ctx.step_start,
+                ctx.step_index,
+                ctx.step_execs,
+                ctx.out_cache_read,
+                ctx.out_cache_creation,
+            )
+            .await
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../../../tests/infrastructure/step_executor/steps/agent.rs"]
 mod retry_feedback_tests;

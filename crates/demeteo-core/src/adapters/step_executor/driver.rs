@@ -808,20 +808,6 @@ impl ExecutionDriver {
             let mut step_cache_creation: Option<u64> = None;
 
             let outcome = match step_conf.kind.as_str() {
-                "agent" => {
-                    self.handle_agent_step(
-                        step_exec,
-                        &step_conf,
-                        &mut accumulated_cost,
-                        &mut accumulated_tokens,
-                        step_start,
-                        self.step_index,
-                        &step_execs,
-                        &mut step_cache_read,
-                        &mut step_cache_creation,
-                    )
-                    .await
-                }
                 "gate" => {
                     // Clone `step_conf` to release the immutable borrow
                     // on `self.steps` — `handle_gate_step` now takes
@@ -855,10 +841,6 @@ impl ExecutionDriver {
                     )
                     .await
                 }
-                "sync" => {
-                    self.handle_sync_step(step_exec, &step_conf, &mut accumulated_cost, step_start)
-                        .await
-                }
                 "finalize" => {
                     self.handle_finalize_step(
                         step_exec,
@@ -869,17 +851,45 @@ impl ExecutionDriver {
                     )
                     .await
                 }
+                // Everything else resolves through the NodeTypeRegistry
+                // (P1.6: `agent` and `sync`; P1.7 re-homes the arms above
+                // too and deletes this match). A registry miss is the
+                // same "Unknown step kind" failure the old catch-all arm
+                // produced.
                 other => {
-                    let msg = format!("Unknown step kind: {}", other);
-                    self.fail_step_and_feature(
-                        step_exec,
-                        &msg,
-                        accumulated_cost,
-                        accumulated_tokens,
-                        step_start,
-                    )
-                    .await;
-                    return;
+                    match crate::adapters::step_executor::registry::NodeTypeRegistry::global()
+                        .handler_for(other)
+                    {
+                        Some(handler) => {
+                            let step_index = self.step_index;
+                            handler
+                                .execute(crate::adapters::step_executor::registry::NodeCtx {
+                                    driver: &mut self,
+                                    step_exec,
+                                    step_conf: &step_conf,
+                                    accumulated_cost: &mut accumulated_cost,
+                                    accumulated_tokens: &mut accumulated_tokens,
+                                    step_start,
+                                    step_index,
+                                    step_execs: &step_execs,
+                                    out_cache_read: &mut step_cache_read,
+                                    out_cache_creation: &mut step_cache_creation,
+                                })
+                                .await
+                        }
+                        None => {
+                            let msg = format!("Unknown step kind: {}", other);
+                            self.fail_step_and_feature(
+                                step_exec,
+                                &msg,
+                                accumulated_cost,
+                                accumulated_tokens,
+                                step_start,
+                            )
+                            .await;
+                            return;
+                        }
+                    }
                 }
             };
 
