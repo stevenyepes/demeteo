@@ -32,10 +32,30 @@
 
 use std::sync::Arc;
 
+use serde::Deserialize;
+
 use crate::domain::ids::{FeatureId, StepExecutionId, ThreadId};
-use crate::domain::models::{Feature, Message, StepAttempt, StepExecution};
+use crate::domain::models::sequence_view::assemble_tasks;
+use crate::domain::models::{Feature, Message, SequenceState, StepAttempt, StepExecution};
 use crate::ports::db::{FeatureRepository, ThreadRepository};
 use crate::ports::execution::ExecutionPort;
+
+/// Minimal projection of a persisted `TaskPlan` (`sequence_plan_cache`): just
+/// the ordered id + title the drill-down needs. Parsing it here rather than
+/// pulling in the adapter's full `TaskPlan` keeps the application layer free of
+/// the execution-only skip/landed fields (which never serialize anyway).
+#[derive(Deserialize)]
+struct PlanRead {
+    #[serde(alias = "subtasks")]
+    tasks: Vec<PlanTaskRead>,
+}
+
+#[derive(Deserialize)]
+struct PlanTaskRead {
+    id: String,
+    #[serde(default)]
+    title: String,
+}
 
 /// Read model over a run's rendered surface. Cheap to clone (three `Arc`s);
 /// construct one per `AppContext` and share it.
@@ -81,6 +101,52 @@ impl RunView {
     /// show class/cost/duration/applied-rule for every attempt.
     pub fn step_attempts(&self, id: &StepExecutionId) -> Result<Vec<StepAttempt>, String> {
         self.features.attempts_for_step(id)
+    }
+
+    /// A `sequence` node's task list, merged for the drill-down accordion
+    /// (P2.5): the ordered plan (`sequence_plan_cache`), each task's landed
+    /// flag (`sequence_checkpoints` — the committed Decision-13 prefix), and
+    /// its per-task status/cost (`subtask_runs`). `node_id` is the graph node
+    /// id (== v1 `step_id`), which keys plan + checkpoint; `execution_id` keys
+    /// the subtask rows.
+    ///
+    /// Returns [`SequenceState::unplanned`] for a node that hasn't resolved a
+    /// plan yet or for a non-sequence node (neither writes a plan-cache row),
+    /// so the caller needs no node-type branch. Runner-owned features only
+    /// populate this once their sequence state is mirrored locally; until then
+    /// it reads unplanned, same as a not-yet-run node.
+    pub fn sequence_state(
+        &self,
+        feature_id: &FeatureId,
+        node_id: &str,
+        execution_id: &StepExecutionId,
+    ) -> Result<SequenceState, String> {
+        let Some(plan_json) = self.features.plan_cache_get(feature_id, node_id)? else {
+            return Ok(SequenceState::unplanned());
+        };
+        let plan: PlanRead = serde_json::from_str(&plan_json)
+            .map_err(|e| format!("sequence plan cache is not valid TaskPlan JSON: {e}"))?;
+
+        let landed: std::collections::HashSet<String> = self
+            .features
+            .sequence_checkpoint_get(feature_id, node_id)?
+            .into_iter()
+            .collect();
+
+        let runs: std::collections::HashMap<String, _> = self
+            .features
+            .subtask_runs_for_step(execution_id)?
+            .into_iter()
+            .map(|r| (r.subtask_id.clone(), r))
+            .collect();
+
+        let plan_pairs: Vec<(String, String)> =
+            plan.tasks.into_iter().map(|t| (t.id, t.title)).collect();
+
+        Ok(SequenceState {
+            planned: true,
+            tasks: assemble_tasks(&plan_pairs, &landed, &runs),
+        })
     }
 
     /// The persisted agent stream (canonical message history) for a step's

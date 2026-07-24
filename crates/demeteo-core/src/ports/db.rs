@@ -364,6 +364,15 @@ pub trait FeatureRepository: Send + Sync {
         attempt_no: Option<u32>,
         now: i64,
     ) -> Result<(), String>;
+
+    /// Every `subtask_runs` row for a step execution, in start order — the
+    /// per-task status/cost the sequence-node drill-down (P2.5) joins onto
+    /// the plan. A read living beside the checkpoint/plan reads so `RunView`
+    /// assembles a sequence node's task list from one repo.
+    fn subtask_runs_for_step(
+        &self,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::SubtaskRunRow>, String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

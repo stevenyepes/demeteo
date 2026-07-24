@@ -477,6 +477,7 @@ pub fn run() {
             commands::features::artifact_body,
             commands::features::step_get,
             commands::features::step_attempts_list,
+            commands::features::sequence_tasks_list,
             commands::features::step_list_for_run,
             commands::features::gate_pending_for_run,
             commands::features::gate_decide,
