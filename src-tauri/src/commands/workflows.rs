@@ -222,7 +222,9 @@ pub fn feature_workflow_graph(
     };
     let version = match pinned {
         Some(v) => Some(v),
-        None => workflows.latest_version(&workflow_id).map_err(AppError::from)?,
+        None => workflows
+            .latest_version(&workflow_id)
+            .map_err(AppError::from)?,
     };
 
     let steps: Vec<StepConfig> = version
