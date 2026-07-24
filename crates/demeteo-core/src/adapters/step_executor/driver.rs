@@ -25,6 +25,15 @@ use crate::ports::pricing::PricingTable;
 // `driver.rs` is now just the struct + a thin `run()` delegate — see
 // `run_loop/mod.rs` for the loop's decomposition into dispatch / outcome /
 // attempt / cleanup.
+//
+// **TODO — `StepStatusWriter` port.** The 9 remaining `super::updates::update_step_status(...)`
+// + `super::updates::finish_feature(...)` call sites (3 in `driver/failure.rs`,
+// 1 in `run_loop/mod.rs`, 2 in `run_loop/outcome.rs`, 1 in `run_loop/cleanup.rs`)
+// hand-roll an 11-arg `update_step_status` signature each. The natural next
+// step is a `StepStatusWriter` port trait with named transition methods
+// (`mark_running`, `mark_completed`, `mark_failed`, `mark_interrupted`,
+// `mark_pending`, `finish_feature`) — same D6 in `docs/BACKEND_REFACTOR_TASKS.md`,
+// never landed. Out of scope for this PR.
 
 pub(crate) mod failure;
 pub(crate) mod publish;
