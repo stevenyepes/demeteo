@@ -290,6 +290,30 @@ impl DagStepExecutor {
             // `replay_steps_from`, which cancels the old run first.
             return Ok(());
         }
+
+        // Derive the scheduling topology (P1.12) before registering: the
+        // v1 step list migrates to a schema-v2 chain and must build into a
+        // walkable graph. Migrated v1 lists cannot cycle (chain + forward
+        // task_list edges), so a failure here means corrupt input — refuse
+        // to start rather than spawn a driver that can never schedule.
+        let def_v2 = crate::domain::models::workflow_migrate::migrate_v1_to_v2(
+            ctx.workflow_id.clone(),
+            ctx.workflow_id.as_str(),
+            &ctx.steps,
+        );
+        let graph = crate::domain::workflow_graph::WorkflowGraph::build(&def_v2).map_err(
+            |findings| {
+                format!(
+                    "workflow graph is not schedulable: {}",
+                    findings
+                        .iter()
+                        .map(|f| f.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            },
+        )?;
+
         self.driver_registry.register(f_id.clone());
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -345,7 +369,8 @@ impl DagStepExecutor {
             branch_name: ctx.branch_name,
             base_ctx: ctx.base_ctx,
             steps: ctx.steps,
-            step_index: 0,
+            def_v2,
+            graph,
             start_time: Instant::now(),
             cancel_watch: cancel_rx,
             artifact_subdir: ctx.artifact_subdir,
@@ -783,19 +808,23 @@ impl GatePresenter for DagStepExecutor {
 }
 
 impl DagStepExecutor {
-    /// Refuse to act on `target` when an earlier step in the same feature
-    /// is still non-terminal (`pending`, `running`, `verifying`, or
+    /// Refuse to act on `target` while any of its graph *ancestors* is
+    /// still non-terminal (`pending`, `running`, `verifying`, or
     /// `awaiting_gate`). Used by `step_retry` and `gate_decide` so a stale
-    /// retry / approve click does not race a still-running predecessor.
+    /// retry / approve click does not race a still-running dependency.
+    ///
+    /// The ancestor set comes from the feature's pinned workflow version
+    /// migrated to the v2 graph (P1.12) — for a v1 chain that is exactly
+    /// the old `step_index <` predecessor set, and for a DAG it correctly
+    /// leaves independent branches undisturbed. When the graph cannot be
+    /// resolved (legacy feature without a matching workflow, unparseable
+    /// version row), the guard falls back to the index comparison rather
+    /// than failing open.
     ///
     /// `intent` is the user-facing phrase that follows "before" in the
     /// returned message (e.g. "retrying this step", "deciding this gate").
     /// It is purely cosmetic so the two call sites can give the user a
     /// tailored sentence.
-    ///
-    /// Only `step_index < target.step_index` is considered — out-of-order
-    /// races with later steps are out of scope (see Open Question #2 in
-    /// `docs/RELIABILITY_PLAN.md`).
     pub(crate) fn assert_no_active_predecessors(
         &self,
         target: &StepExecution,
@@ -805,11 +834,24 @@ impl DagStepExecutor {
             .features
             .steps_for_feature(&target.feature_id)
             .map_err(AppError::from)?;
+
+        let ancestors: Option<std::collections::HashSet<crate::domain::ids::StepId>> = self
+            .resolve_feature_graph(&target.feature_id)
+            .and_then(|graph| {
+                graph
+                    .ancestors(&target.step_id)
+                    .map(|set| set.into_iter().cloned().collect())
+            });
+
         for s in &siblings {
             if s.id == target.id {
                 continue;
             }
-            if s.step_index >= target.step_index {
+            let blocks = match &ancestors {
+                Some(set) => set.contains(&s.step_id),
+                None => s.step_index < target.step_index,
+            };
+            if !blocks {
                 continue;
             }
             if matches!(
@@ -823,6 +865,27 @@ impl DagStepExecutor {
             }
         }
         Ok(())
+    }
+
+    /// Best-effort resolution of a feature's scheduling graph: pinned
+    /// workflow version → v1 step list → migrated v2 chain → graph. Any
+    /// miss (no workflow, unparseable steps, unbuildable graph) yields
+    /// `None` and callers fall back to v1 index ordering.
+    fn resolve_feature_graph(
+        &self,
+        feature_id: &FeatureId,
+    ) -> Option<crate::domain::workflow_graph::WorkflowGraph> {
+        let feature = self.features.get(feature_id).ok().flatten()?;
+        let wf_id = feature.workflow_id?;
+        let version = self.resolve_pinned_version(feature_id.as_str(), &wf_id).ok()?;
+        let steps: Vec<crate::domain::models::StepConfig> =
+            serde_json::from_str(&version.steps_json).ok()?;
+        let def = crate::domain::models::workflow_migrate::migrate_v1_to_v2(
+            wf_id.clone(),
+            wf_id.as_str(),
+            &steps,
+        );
+        crate::domain::workflow_graph::WorkflowGraph::build(&def).ok()
     }
 
     /// Reconcile DB + notifications for any features that were left

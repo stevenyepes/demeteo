@@ -118,13 +118,31 @@ impl DagStepExecutor {
             )
         })?;
 
+        // The rewind set: the target plus its graph *descendants* (P1.12)
+        // — for a v1 chain exactly the old `step_index >=` tail, and for
+        // a DAG only the downstream cone, leaving independent branches'
+        // results intact. Graph resolution misses (legacy feature, no
+        // matching workflow) fall back to the index comparison.
+        let reset_ids: Option<std::collections::HashSet<crate::domain::ids::StepId>> = self
+            .resolve_feature_graph(feature_id)
+            .and_then(|graph| {
+                graph.descendants(&step_exec.step_id).map(|d| {
+                    let mut set: std::collections::HashSet<crate::domain::ids::StepId> =
+                        d.into_iter().cloned().collect();
+                    if include_target {
+                        set.insert(step_exec.step_id.clone());
+                    }
+                    set
+                })
+            });
+
         let all_steps = self.features.steps_for_feature(feature_id)?;
         let mut patch_list: Vec<(StepExecutionId, String)> = Vec::new();
         for s in &all_steps {
-            let is_in_range = if include_target {
-                s.step_index >= step_exec.step_index
-            } else {
-                s.step_index > step_exec.step_index
+            let is_in_range = match &reset_ids {
+                Some(set) => set.contains(&s.step_id),
+                None if include_target => s.step_index >= step_exec.step_index,
+                None => s.step_index > step_exec.step_index,
             };
 
             if is_in_range {

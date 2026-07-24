@@ -17,13 +17,15 @@ use crate::domain::verifier::VerdictFailure;
 /// been applied to driver state and the database.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RunAction {
-    /// Continue to the next iteration. `step_index` was already
-    /// advanced in-place by the outcome handler (a `Completed` step
-    /// did `step_index += 1`; an in-place retry left it alone).
+    /// Continue to the next iteration; the next ready-set evaluation
+    /// reads the persisted statuses the outcome handler just wrote (a
+    /// `Completed` step's successor becomes ready; an in-place retry
+    /// parked its own row back at `pending`).
     Continue,
-    /// The outcome handler jumped `step_index` to the wrapped index
-    /// (a `Redirect` retry policy or a `RedirectTo(idx)` step result).
-    /// The orchestrator just iterates the loop.
+    /// A `Redirect` retry policy or a `RedirectTo(idx)` step result
+    /// wants the run rewound to `driver.steps[idx]`. The orchestrator
+    /// resets that node and its descendants to `pending`
+    /// (`schedule::reset_for_redirect`) before re-evaluating.
     RedirectTo(usize),
     /// The feature is in a terminal state. The orchestrator returns
     /// from `run()`.
@@ -91,7 +93,6 @@ impl ExecutionDriver {
         // `spawn_agent_session` falls back to fresh spawn
         // + `session_resume_summary` injection.
         self.maybe_watchdog_reset().await;
-        self.step_index += 1;
         // Retry feedback lives until the step that originally
         // failed completes successfully. Intermediate steps (the
         // redirect target and everything between it and the
@@ -184,7 +185,6 @@ impl ExecutionDriver {
                                     .unwrap_or_default(),
                             });
                     }
-                    self.step_index = redirect_idx;
                     return RunAction::RedirectTo(redirect_idx);
                 }
                 // Dangling redirect target — same terminal
@@ -326,8 +326,7 @@ impl ExecutionDriver {
         RunAction::Terminate
     }
 
-    fn apply_redirect(&mut self, idx: usize) -> RunAction {
-        self.step_index = idx;
+    fn apply_redirect(&self, idx: usize) -> RunAction {
         RunAction::RedirectTo(idx)
     }
 }

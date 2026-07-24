@@ -8,7 +8,9 @@ use crate::adapters::agent::registry::AgentRegistry;
 use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::FeatureId;
+use crate::domain::models::workflow_v2::WorkflowDefinitionV2;
 use crate::domain::models::{EffortLevel, StepConfig};
+use crate::domain::workflow_graph::WorkflowGraph;
 use crate::domain::prompt_context::PromptContext;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
@@ -26,9 +28,9 @@ use crate::ports::pricing::PricingTable;
 // `run_loop/mod.rs` for the loop's decomposition into dispatch / outcome /
 // attempt / cleanup.
 //
-// **TODO — `StepStatusWriter` port.** The 9 remaining `super::updates::update_step_status(...)`
-// + `super::updates::finish_feature(...)` call sites (3 in `driver/failure.rs`,
-// 1 in `run_loop/mod.rs`, 2 in `run_loop/outcome.rs`, 1 in `run_loop/cleanup.rs`)
+// **TODO — `StepStatusWriter` port.** The `super::updates::update_step_status(...)`
+// + `super::updates::finish_feature(...)` call sites (spread over
+// `driver/failure.rs`, `run_loop/{mod,outcome,cleanup,schedule}.rs`)
 // hand-roll an 11-arg `update_step_status` signature each. The natural next
 // step is a `StepStatusWriter` port trait with named transition methods
 // (`mark_running`, `mark_completed`, `mark_failed`, `mark_interrupted`,
@@ -143,8 +145,16 @@ pub(crate) struct ExecutionDriver {
     pub base_ctx: PromptContext,
     pub steps: Vec<StepConfig>,
 
+    /// The scheduling topology (P1.12): the v1 `steps` list migrated to a
+    /// schema-v2 definition once at driver construction. `steps` stays the
+    /// config source the node handlers consume; `def_v2`/`graph` own the
+    /// edges, join semantics, and ancestor/descendant queries the
+    /// ready-set scheduler walks. For every v1 definition this is a chain,
+    /// so scheduling order is exactly the old `step_index += 1` walk.
+    pub def_v2: WorkflowDefinitionV2,
+    pub graph: WorkflowGraph,
+
     // Mutable execution state
-    pub step_index: usize,
     pub start_time: Instant,
     pub cancel_watch: watch::Receiver<bool>,
 
