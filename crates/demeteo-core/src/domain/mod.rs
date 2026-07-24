@@ -4,6 +4,7 @@ pub mod app_view;
 pub mod artifact;
 pub mod attachment;
 pub mod bootstrap;
+pub mod expr;
 pub mod ids;
 pub mod intercept;
 pub mod memory;
