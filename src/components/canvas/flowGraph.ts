@@ -16,6 +16,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   title: string;
   /** Live run state (P2.2); undefined in design mode. */
   run?: NodeRunStatus;
+  /** In the replay cone about to re-run (P2.4) — draws a "will re-run" ring. */
+  highlighted?: boolean;
 }
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
@@ -28,6 +30,8 @@ const FALLBACK_STRIDE = 160;
 export interface ToFlowGraphOptions {
   /** node id → live run state, for run-mode overlay (P2.2). */
   statusByNode?: Record<string, NodeRunStatus>;
+  /** node ids in the replay cone to highlight before confirming (P2.4). */
+  highlightedNodeIds?: Set<string> | null;
 }
 
 export function toFlowGraph(
@@ -42,6 +46,7 @@ export function toFlowGraph(
       nodeType: n.type,
       title: n.title,
       run: opts.statusByNode?.[n.id],
+      highlighted: opts.highlightedNodeIds?.has(n.id) ?? false,
     },
   }));
 

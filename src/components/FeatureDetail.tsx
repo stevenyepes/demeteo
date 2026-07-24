@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { WorkflowCanvas } from './canvas/WorkflowCanvas';
 import { NodePanel } from './canvas/NodePanel';
+import { replayCone, descendantIds } from './canvas/graphOps';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 import { useRunEvents } from '../hooks/useRunEvents';
 import { ArtifactViewer } from './ArtifactViewer';
@@ -220,6 +221,9 @@ export function FeatureDetail() {
   // The node whose drill-down panel is open on the run-mode canvas (P2.3).
   // Null = no panel. A gate node routes to the full-screen `GateView` instead.
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // The replay cone (target + descendants) ringed on the canvas while the
+  // replay confirm modal is open (P2.4). Null when no panel-initiated replay.
+  const [replayPreviewNodes, setReplayPreviewNodes] = useState<Set<string> | null>(null);
   // Single run-event consumer both run-mode surfaces share: the canvas overlay
   // reads node status from here, derived from the same `steps` snapshot the
   // timeline renders (plus failure classes from the `run_events` stream, P1.13).
@@ -543,6 +547,32 @@ export function FeatureDetail() {
       : null;
   }, [selectedNodeId, selectedRun, steps]);
 
+  // Replay initiated from the panel (P2.4): ring the whole downstream cone on
+  // the canvas while the confirm modal is open, and count downstream by the
+  // *graph* (accurate for DAGs) rather than the timeline's index arithmetic.
+  const startReplayFromPanel = useCallback(() => {
+    if (!selectedNode || !selectedStep) return;
+    const cone = graphDef ? replayCone(graphDef, selectedNode.id) : null;
+    const downstreamCount = graphDef ? descendantIds(graphDef, selectedNode.id).size : 0;
+    setReplayPreviewNodes(cone);
+    setReplayTarget({ id: selectedStep.id, name: selectedNode.title, downstreamCount });
+  }, [selectedNode, selectedStep, graphDef]);
+
+  // Dismiss the replay modal and drop the canvas highlight together.
+  const closeReplay = useCallback(() => {
+    setReplayTarget(null);
+    setReplayPreviewNodes(null);
+  }, []);
+
+  // The active ancestor (if any) blocking a retry/gate decision on the selected
+  // node — the same guard the timeline's Retry button uses, surfaced as the
+  // panel's disabled-button explanation (PRD §6.4).
+  const selectedBlockedBy = useMemo(() => {
+    if (!selectedStep) return null;
+    const pred = findActivePredecessor(steps, selectedStep);
+    return pred ? { step_id: pred.step_id, status: pred.status } : null;
+  }, [selectedStep, steps]);
+
   useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status: s }) => {
     if (feature_id === featureId) {
       setFeatureStatus(s);
@@ -826,6 +856,7 @@ export function FeatureDetail() {
         await replayFromStep({ stepExecutionId: replayTarget.id, newModel: modelParam, newAgent: agentParam, newEffort: effortParam });
       }
       setReplayTarget(null);
+      setReplayPreviewNodes(null);
       loadFeatureData();
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Replay Failed', kind: 'error' });
@@ -1412,6 +1443,7 @@ export function FeatureDetail() {
                     statusByNode={runStatusByNode}
                     onNodeActivate={onNodeActivate}
                     selectedNodeId={selectedNodeId}
+                    highlightedNodeIds={replayPreviewNodes}
                   />
                 </div>
                 {selectedNode && (
@@ -1422,6 +1454,34 @@ export function FeatureDetail() {
                     step={selectedStep}
                     onClose={() => setSelectedNodeId(null)}
                     onOpenEditorForPath={openEditorForPath}
+                    liveStream={selectedStep ? streamContent[selectedStep.id] : undefined}
+                    isStreaming={
+                      selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
+                    }
+                    blockedBy={selectedBlockedBy}
+                    onRetry={
+                      selectedStep &&
+                      (selectedStep.status === 'failed' || selectedStep.status === 'interrupted')
+                        ? () => handleRetryStep(selectedStep.id)
+                        : undefined
+                    }
+                    onReplay={selectedStep ? startReplayFromPanel : undefined}
+                    onStop={
+                      selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
+                        ? handleStopStep
+                        : undefined
+                    }
+                    onDecideGate={
+                      selectedNode.type === 'gate' && selectedRun?.stepExecutionId
+                        ? () =>
+                            navigate({
+                              kind: 'detail',
+                              featureId,
+                              featureTitle,
+                              gateStepExecutionId: selectedRun.stepExecutionId!,
+                            })
+                        : undefined
+                    }
                   />
                 )}
               </div>
@@ -1889,7 +1949,7 @@ export function FeatureDetail() {
 
       {/* Replay from step confirmation modal */}
       {replayTarget && (
-        <Modal onClose={() => setReplayTarget(null)} backdropClassName="bg-black/60" className="bg-[#0d0f14] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 shadow-[0_0_40px_rgba(0,0,0,0.5)]">
+        <Modal onClose={closeReplay} backdropClassName="bg-black/60" className="bg-[#0d0f14] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 shadow-[0_0_40px_rgba(0,0,0,0.5)]">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-8 h-8 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
                 <RotateCcw className="w-4 h-4 text-cyan-400" />
@@ -1964,7 +2024,7 @@ export function FeatureDetail() {
 
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => setReplayTarget(null)}
+                onClick={closeReplay}
                 className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold transition"
               >
                 Cancel
