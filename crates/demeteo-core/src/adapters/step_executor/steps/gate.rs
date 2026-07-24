@@ -527,3 +527,67 @@ mod redirect_target_tests;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/gate_redirect_reset.rs"]
 mod redirect_reset_tests;
+
+// ── NodeHandler registration (P1.7) ───────────────────────────────────────────
+
+/// The `gate` node type behind the [`NodeHandler`] seam. Pure
+/// delegation: execution is [`ExecutionDriver::handle_gate_step`],
+/// byte-for-byte the behavior the old `match` arm dispatched (the arm's
+/// defensive `step_conf` clone is obsolete here — the dispatch loop
+/// already hands the registry a clone that doesn't borrow the driver).
+///
+/// [`NodeHandler`]: crate::adapters::step_executor::registry::NodeHandler
+pub(crate) struct GateNodeHandler;
+
+/// JSON Schema for the `gate` node's `config` payload. A gate is a
+/// durable suspend point — the only HITL surface (Decision 35) — so
+/// its config is thin: the blast-radius class that decides whether an
+/// unattended run may auto-approve it.
+#[allow(dead_code)] // Read via `NodeHandler::config_schema` (first runtime caller: P3.1).
+static GATE_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
+    std::sync::LazyLock::new(|| {
+        serde_json::json!({
+            "type": "object",
+            "description": "Configuration for a `gate` node: park the run \
+                for a human decision (approve / reject / redirect). The \
+                gate inherits its predecessor's artifacts for review.",
+            "properties": {
+                "gate_class": {
+                    "type": ["string", "null"],
+                    "enum": ["dangerous", "safe", null],
+                    "description": "Blast-radius class. `dangerous` (merge \
+                        to default, push to protected, deploy, delete) is \
+                        parked for a human even on unattended runs; unset \
+                        or `safe` auto-approves unattended."
+                }
+            },
+            "additionalProperties": true
+        })
+    });
+
+#[async_trait::async_trait]
+impl crate::adapters::step_executor::registry::NodeHandler for GateNodeHandler {
+    fn kind(&self) -> &'static str {
+        "gate"
+    }
+
+    fn config_schema(&self) -> &'static serde_json::Value {
+        &GATE_CONFIG_SCHEMA
+    }
+
+    async fn execute(
+        &self,
+        ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
+    ) -> StepOutcome {
+        ctx.driver
+            .handle_gate_step(
+                ctx.step_exec,
+                ctx.step_conf,
+                ctx.accumulated_cost,
+                ctx.step_start,
+                ctx.step_index,
+                ctx.step_execs,
+            )
+            .await
+    }
+}

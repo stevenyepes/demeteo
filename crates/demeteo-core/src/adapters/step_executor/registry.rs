@@ -9,10 +9,10 @@
 //! all derive from the same trait surface (P3.1), and this is the seam
 //! a future WASM plugin host plugs into.
 //!
-//! P1.6 re-homes `agent` and `sync` behind the trait; P1.7 finishes
-//! with `gate`, `sequence`, and `finalize` and deletes the `match`.
-//! Handler *bodies* are untouched — each impl delegates to the
-//! existing `ExecutionDriver` method, so the P0.2 starter-baseline
+//! P1.6 re-homed `agent` and `sync` behind the trait; P1.7 finished
+//! the set with `gate`, `sequence`, and `finalize` and deleted the
+//! `match`. Handler *bodies* are untouched — each impl delegates to
+//! the existing `ExecutionDriver` method, so the P0.2 starter-baseline
 //! snapshots must stay byte-identical.
 //!
 //! [`AgentRegistry`]: crate::adapters::agent::registry::AgentRegistry
@@ -92,6 +92,16 @@ pub(crate) trait NodeHandler: Send + Sync {
     /// contract as `AgentRuntime::kind`.
     fn kind(&self) -> &'static str;
 
+    /// Superseded kind names this handler also answers to (e.g. the
+    /// `sequence` handler owns the retired `"parallel"` alias, so
+    /// workflows the user cloned before the rename keep running).
+    /// Aliases resolve in [`NodeTypeRegistry::handler_for`] but never
+    /// appear in [`NodeTypeRegistry::kinds`] — retired names must not
+    /// reach the editor palette (P3.1).
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// JSON Schema for this type's `config` payload (the opaque
     /// per-node object in [`NodeConfig::config`]). The editor renders
     /// and validates config forms from this (P3.2); until then it is
@@ -138,23 +148,33 @@ impl NodeTypeRegistry {
         Self { handlers }
     }
 
-    /// The process-wide registry of built-in node types. P1.6 registers
-    /// `agent` and `sync`; P1.7 completes the set. A miss here is the
-    /// "Unknown step kind" failure, exactly as the old `match` arm.
+    /// The process-wide registry of built-in node types — the launch
+    /// five, in the [`CORE_NODE_TYPES`] order. A miss here is the
+    /// "Unknown step kind" failure, exactly as the old catch-all
+    /// `match` arm.
+    ///
+    /// [`CORE_NODE_TYPES`]: crate::domain::workflow_graph::CORE_NODE_TYPES
     pub(crate) fn global() -> &'static NodeTypeRegistry {
         static GLOBAL: LazyLock<NodeTypeRegistry> = LazyLock::new(|| {
             NodeTypeRegistry::new(vec![
                 Arc::new(super::steps::agent::AgentNodeHandler),
+                Arc::new(super::steps::gate::GateNodeHandler),
+                Arc::new(super::steps::sequence::SequenceNodeHandler),
                 Arc::new(super::steps::sync::SyncNodeHandler),
+                Arc::new(super::steps::finalize::FinalizeNodeHandler),
             ])
         });
         &GLOBAL
     }
 
-    /// Resolve the handler owning `kind`. Exact match; `None` means the
-    /// definition references a type this build doesn't ship.
+    /// Resolve the handler owning `kind`. Exact match on the canonical
+    /// kind or a declared alias; `None` means the definition references
+    /// a type this build doesn't ship.
     pub(crate) fn handler_for(&self, kind: &str) -> Option<Arc<dyn NodeHandler>> {
-        self.handlers.iter().find(|h| h.kind() == kind).cloned()
+        self.handlers
+            .iter()
+            .find(|h| h.kind() == kind || h.aliases().contains(&kind))
+            .cloned()
     }
 
     /// Registered kinds, in registration order. Feeds the editor
@@ -170,37 +190,59 @@ impl NodeTypeRegistry {
 mod tests {
     use super::*;
 
+    /// Every canonical launch kind — must stay in lockstep with
+    /// [`crate::domain::workflow_graph::CORE_NODE_TYPES`].
+    const ALL_KINDS: [&str; 5] = ["agent", "gate", "sequence", "sync", "finalize"];
+
     #[test]
-    fn global_registry_resolves_wrapped_kinds() {
+    fn global_registry_resolves_all_core_kinds() {
         let reg = NodeTypeRegistry::global();
-        for kind in ["agent", "sync"] {
+        for kind in ALL_KINDS {
             let handler = reg
                 .handler_for(kind)
                 .unwrap_or_else(|| panic!("{kind} must be registered"));
             assert_eq!(handler.kind(), kind);
             assert_eq!(handler.cancel_grace(), CancelBehavior::Graceful);
         }
+        // The registry and the graph lint's boundary constant must agree
+        // on what a known type is, until P3.1 makes the registry the
+        // single authority.
+        let mut kinds = NodeTypeRegistry::global().kinds();
+        kinds.sort_unstable();
+        let mut core = crate::domain::workflow_graph::CORE_NODE_TYPES;
+        core.sort_unstable();
+        assert_eq!(kinds, core);
+    }
+
+    #[test]
+    fn parallel_alias_resolves_to_sequence() {
+        // `parallel` is the superseded name for `sequence`: workflows the
+        // user cloned before the rename keep running, but the alias never
+        // shows up as a kind of its own.
+        let reg = NodeTypeRegistry::global();
+        let handler = reg.handler_for("parallel").expect("alias resolves");
+        assert_eq!(handler.kind(), "sequence");
+        assert!(!reg.kinds().contains(&"parallel"));
     }
 
     #[test]
     fn unregistered_kind_is_a_miss() {
-        // P1.6 scope: the three remaining kinds still dispatch via the
-        // driver's match arms and must NOT be in the registry yet, and
-        // a genuinely unknown kind resolves to nothing.
-        let reg = NodeTypeRegistry::global();
-        for kind in ["gate", "sequence", "finalize", "parallel", "no-such-kind"] {
-            assert!(reg.handler_for(kind).is_none(), "{kind} must miss");
-        }
+        assert!(NodeTypeRegistry::global()
+            .handler_for("no-such-kind")
+            .is_none());
     }
 
     #[test]
     fn kinds_lists_registration_order() {
-        assert_eq!(NodeTypeRegistry::global().kinds(), vec!["agent", "sync"]);
+        assert_eq!(
+            NodeTypeRegistry::global().kinds(),
+            vec!["agent", "gate", "sequence", "sync", "finalize"]
+        );
     }
 
     #[test]
     fn config_schemas_are_valid_schema_objects() {
-        for kind in ["agent", "sync"] {
+        for kind in ALL_KINDS {
             let handler = NodeTypeRegistry::global().handler_for(kind).unwrap();
             let schema = handler.config_schema();
             let obj = schema.as_object().expect("schema is a JSON object");
@@ -219,9 +261,9 @@ mod tests {
     fn lint_defaults_to_no_findings() {
         use crate::domain::models::workflow_v2::WorkflowDefinitionV2;
 
-        // A minimal single-node definition per wrapped kind: the P1.6
+        // A minimal single-node definition per kind: the launch
         // handlers add no type-specific rules yet, so lint is empty.
-        for kind in ["agent", "sync"] {
+        for kind in ALL_KINDS {
             let def: WorkflowDefinitionV2 = serde_json::from_value(serde_json::json!({
                 "schema_version": 2,
                 "id": "wf-lint-default",
