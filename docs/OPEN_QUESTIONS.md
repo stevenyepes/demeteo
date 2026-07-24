@@ -38,15 +38,13 @@ Plus the budget and scheduling machinery that was always part of this: per-proje
 
 ---
 
-## 2. Workflow YAML view (Q19-B → v1.1)
+## 2. Workflow YAML view (Q19-B → **revised 2026-07-23**)
 
 **The question:** How does the user *write* a workflow?
 
-**The v1.0 answer:** Form-based step editor (drag-to-reorder, per-step config forms).
+**The answer now:** The visual DAG builder (`PRD_DAG_WORKFLOWS.md`) supersedes the form editor entirely, and [decision 42](DECISIONS.md#1-the-42-decisions) ships a **read-only Monaco JSON source tab** in builder Phase 3. See the superseded entry for [decision 19](DECISIONS.md#2-superseded-decisions).
 
-**The deferred work:** A Monaco-based YAML view with two-way binding to the form. Autocompletion against the workflow schema. Inline validation. Save = new version.
-
-**Why deferred:** The form editor is enough for the starter pack and most user-authored workflows. YAML view is a power-user affordance that requires non-trivial form ↔ YAML round-trip plumbing.
+**Still deferred:** the *editable* source view with two-way canvas ↔ source binding, autocompletion against the published JSON Schema, inline validation. Requires a new decision record before it's picked up.
 
 ---
 
@@ -113,15 +111,13 @@ Plus the budget and scheduling machinery that was always part of this: per-proje
 
 ---
 
-## 8. `command` step type (Q8-B → v1.1)
+## 8. `command` step type (Q8-B → **picked up 2026-07-23**)
 
 **The question:** Can a workflow step be a deterministic shell command instead of an LLM agent?
 
 **The v1.0 answer:** No. The three step types are `agent`, `parallel`, `gate`. `command` is a useful type but is really a special case of `agent` (spawn an agent and have it run commands).
 
-**The deferred work:** A first-class `command` step type: `command: { shell, cmd, env, expected_exit_code, capture_output: bool }`. Useful for CI-shaped validation steps ("run `cargo test` and capture the output as the gate's evidence") that don't need an LLM in the loop.
-
-**Why deferred:** Validates against `agent` for v1; user can write a one-line agent prompt that runs the command. Adding `command` is cheap once the step-type system is proven.
+**Now in the active plan:** `PRD_DAG_WORKFLOWS.md` §5.2 un-defers this — a first-class `command` node type (command, cwd, env allowlist, timeout, `idempotent: true|false`) runs via the existing `ExecutionPort` and lands in builder Phase 3 as the node-type-registry extensibility proof (task P3.5 in `TASKS_DAG_WORKFLOWS.md`). Zero-token harness/build/script steps stop being emulated by agent prompts.
 
 ---
 
