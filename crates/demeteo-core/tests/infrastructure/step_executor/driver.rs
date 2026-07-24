@@ -1,6 +1,7 @@
 // Tests extracted from `crates/demeteo-core/src/adapters/step_executor/driver.rs` (mirrored-tests convention). `super` = that module.
 
-use super::{resolve_agent_model, resolve_effort, resolve_loop_iterations, ExecutionDriver};
+use super::resolution::{resolve_agent_model, resolve_effort, resolve_loop_iterations};
+use super::ExecutionDriver;
 use crate::domain::ids::StepId;
 use crate::domain::models::{EffortLevel, StepConfig, StepOverride};
 

@@ -27,7 +27,8 @@
 //!
 //! [`StepOutcome`]: super::steps::StepOutcome
 
-use super::driver::{resolve_loop_iterations, DEFAULT_LOOP_ITERATIONS};
+use super::driver::resolution::resolve_loop_iterations;
+use super::driver::DEFAULT_LOOP_ITERATIONS;
 use crate::domain::ids::StepId;
 use crate::domain::models::step_attempt::error_class;
 use crate::domain::models::workflow_v2::{RetryPolicy, RetryRule, RetryStrategy};
