@@ -330,7 +330,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 |---|---|---|
 | P0.1 | Decision records | ✅ 2026-07-23 |
 | P0.2 | Starter baseline harness | ✅ 2026-07-23 |
-| P1.1 | Schema v2 structs | ☐ |
+| P1.1 | Schema v2 structs | ✅ 2026-07-24 |
 | P1.2 | v1→v2 migration | ☐ |
 | P1.3 | JSON Schema validation | ☐ |
 | P1.4 | WorkflowGraph + lint | ☐ |
