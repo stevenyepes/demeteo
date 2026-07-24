@@ -381,3 +381,7 @@ impl GitOpsHelper {
             .map_err(|e| format!("failed to restore {} from backup: {}", feature_branch, e))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/worktree/git_ops/squash.rs"]
+mod tests;
