@@ -9,6 +9,7 @@ pub mod provider;
 pub mod thread;
 pub mod timeouts;
 pub mod workflow;
+pub mod workflow_migrate;
 pub mod workflow_v2;
 
 pub use agent_config::*;
