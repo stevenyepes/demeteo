@@ -14,6 +14,7 @@ import {
   GitBranch, ExternalLink, AlertTriangle, Terminal, Paperclip, Network, List,
 } from 'lucide-react';
 import { WorkflowCanvas } from './canvas/WorkflowCanvas';
+import { NodePanel } from './canvas/NodePanel';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 import { useRunEvents } from '../hooks/useRunEvents';
 import { ArtifactViewer } from './ArtifactViewer';
@@ -216,6 +217,9 @@ export function FeatureDetail() {
   // The pinned version's schema-v2 graph (P1.15 + `feature_workflow_graph`),
   // migrated backend-side. Null until loaded / when the feature has none.
   const [graphDef, setGraphDef] = useState<WorkflowDefinitionV2 | null>(null);
+  // The node whose drill-down panel is open on the run-mode canvas (P2.3).
+  // Null = no panel. A gate node routes to the full-screen `GateView` instead.
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   // Single run-event consumer both run-mode surfaces share: the canvas overlay
   // reads node status from here, derived from the same `steps` snapshot the
   // timeline renders (plus failure classes from the `run_events` stream, P1.13).
@@ -499,8 +503,8 @@ export function FeatureDetail() {
   }, [featureId]);
 
   // The graph is offered only once there's a run to overlay and a definition
-  // to draw. A gate node opens the existing full-screen `GateView`; other
-  // nodes are inert until the drill-down panel lands (P2.3).
+  // to draw. An *awaiting* gate node opens the existing full-screen `GateView`
+  // (the actionable HITL path); every other node opens the drill-down panel.
   const canShowGraph = graphDef !== null && steps.length > 0;
   const onNodeActivate = useCallback(
     (nodeId: string) => {
@@ -512,10 +516,32 @@ export function FeatureDetail() {
           featureTitle,
           gateStepExecutionId: run.stepExecutionId,
         });
+        return;
       }
+      setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId));
     },
     [runStatusByNode, navigate, featureId, featureTitle],
   );
+
+  // The node + its backing rows for the open drill-down panel. Prefer the exact
+  // execution the overlay tracks (`stepExecutionId`); fall back to the newest
+  // row for the node id when the run hasn't been observed live.
+  const selectedNode = useMemo(
+    () => graphDef?.nodes.find((n) => n.id === selectedNodeId) ?? null,
+    [graphDef, selectedNodeId],
+  );
+  const selectedRun = selectedNodeId ? runStatusByNode[selectedNodeId] ?? null : null;
+  const selectedStep = useMemo(() => {
+    if (!selectedNodeId) return null;
+    if (selectedRun?.stepExecutionId) {
+      const exact = steps.find((s) => s.id === selectedRun.stepExecutionId);
+      if (exact) return exact;
+    }
+    const matches = steps.filter((s) => s.step_id === selectedNodeId);
+    return matches.length
+      ? matches.reduce((a, b) => (b.updated_at >= a.updated_at ? b : a))
+      : null;
+  }, [selectedNodeId, selectedRun, steps]);
 
   useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status: s }) => {
     if (feature_id === featureId) {
@@ -857,6 +883,32 @@ export function FeatureDetail() {
     }
     return invoke('feature_get_worktree', { featureId });
   }, [remoteRun, featureId]);
+
+  // Open a worktree-ref artifact in the code editor — the same path the
+  // timeline's `ArtifactViewer` uses, shared with the drill-down panel's Output
+  // tab (P2.3). Declared after `resolveWorktreeInfo` so it isn't in its TDZ.
+  const openEditorForPath = useCallback(
+    async (filePath: string) => {
+      try {
+        const info = await resolveWorktreeInfo();
+        navigate({
+          kind: 'editor',
+          editorContext: {
+            machineId: info.machine_id,
+            worktreePath: info.worktree_path,
+            branch: info.branch,
+            defaultBranch: info.default_branch,
+            initialFile: filePath,
+          },
+          featureId,
+          featureTitle,
+        });
+      } catch (err) {
+        reportError(err);
+      }
+    },
+    [resolveWorktreeInfo, navigate, featureId, featureTitle, reportError],
+  );
 
   const [publishing, setPublishing] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -1353,12 +1405,25 @@ export function FeatureDetail() {
               </div>
             )}
             {canShowGraph && viewMode === 'graph' ? (
-              <div className="h-[600px] w-full overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
-                <WorkflowCanvas
-                  definition={graphDef!}
-                  statusByNode={runStatusByNode}
-                  onNodeActivate={onNodeActivate}
-                />
+              <div className="flex h-[600px] w-full overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
+                <div className="min-w-0 flex-1">
+                  <WorkflowCanvas
+                    definition={graphDef!}
+                    statusByNode={runStatusByNode}
+                    onNodeActivate={onNodeActivate}
+                    selectedNodeId={selectedNodeId}
+                  />
+                </div>
+                {selectedNode && (
+                  <NodePanel
+                    featureId={featureId}
+                    node={selectedNode}
+                    run={selectedRun}
+                    step={selectedStep}
+                    onClose={() => setSelectedNodeId(null)}
+                    onOpenEditorForPath={openEditorForPath}
+                  />
+                )}
               </div>
             ) : (
             <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">

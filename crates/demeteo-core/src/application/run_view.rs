@@ -33,7 +33,7 @@
 use std::sync::Arc;
 
 use crate::domain::ids::{FeatureId, StepExecutionId, ThreadId};
-use crate::domain::models::{Feature, Message, StepExecution};
+use crate::domain::models::{Feature, Message, StepAttempt, StepExecution};
 use crate::ports::db::{FeatureRepository, ThreadRepository};
 use crate::ports::execution::ExecutionPort;
 
@@ -73,6 +73,14 @@ impl RunView {
     /// A single step execution by id. `None` when it doesn't exist.
     pub fn step(&self, id: &StepExecutionId) -> Result<Option<StepExecution>, String> {
         self.features.step_get(id)
+    }
+
+    /// Per-attempt history for a step (`step_attempts`, P1.8), ordered by
+    /// `attempt_no`. Feeds the node drill-down panel's Overview tab (P2.3) —
+    /// the row the timeline overwrites on retry, kept whole here so the UI can
+    /// show class/cost/duration/applied-rule for every attempt.
+    pub fn step_attempts(&self, id: &StepExecutionId) -> Result<Vec<StepAttempt>, String> {
+        self.features.attempts_for_step(id)
     }
 
     /// The persisted agent stream (canonical message history) for a step's

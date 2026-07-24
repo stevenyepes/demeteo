@@ -1,5 +1,5 @@
 use crate::domain::ids::{FeatureId, StepExecutionId};
-use crate::domain::models::{EffortLevel, Feature, GateDecision, StepExecution};
+use crate::domain::models::{EffortLevel, Feature, GateDecision, StepAttempt, StepExecution};
 use crate::error::AppError;
 use crate::ports::step_executor::SyncOutcomeView;
 use crate::state::AppContext;
@@ -117,6 +117,19 @@ pub async fn step_get(
         .step(&StepExecutionId::from(execution_id))
         .map_err(AppError::from)?
         .ok_or_else(|| AppError::not_found("Step execution not found".to_string()))
+}
+
+/// Per-attempt history for a step execution — the node drill-down panel's
+/// Overview tab (P2.3). Read-model path (C3) like `step_get`: goes through
+/// `RunView`, so a runner-owned step's attempts resolve from the shadow.
+#[tauri::command]
+pub async fn step_attempts_list(
+    ctx: State<'_, AppContext>,
+    execution_id: String,
+) -> Result<Vec<StepAttempt>, AppError> {
+    ctx.run_view
+        .step_attempts(&StepExecutionId::from(execution_id))
+        .map_err(AppError::from)
 }
 
 #[tauri::command]

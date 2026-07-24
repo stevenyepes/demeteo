@@ -232,6 +232,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** PRD §6.2; `ArtifactViewer.tsx` (421); `src-tauri/src/commands/features.rs` (`step_get` :110, `artifact_body` :216); `repos/step_attempts.rs`.
 - **Touch:** new Tauri command `step_attempts_list` (features.rs + repo call); new `src/components/canvas/NodePanel.tsx` (+ Overview/Output tabs); `WorkflowCanvas.tsx` selection wiring.
 - **Done when:** seeded failing run → root-cause artifact reachable in ≤3 clicks (the J2 metric).
+- *Amendments (2026-07-24, as built):* (1) **No repo work needed** — `FeatureRepository::attempts_for_step` (V31, P1.8) already existed and was documented as feeding P2.3; the command wires through a new read-only `RunView::step_attempts` delegation (application layer, so a runner-owned step's attempts resolve from the C4.2 shadow like `step_get`), not a fresh repo call. (2) **Shared artifact classifier** lifted into `src/lib/artifacts.tsx` (`classifyArtifact` + kind labels/colors + `ArtifactIcon`) for the panel's Output tab; `FeatureDetail`'s local copy left untouched to keep the diff scoped — the same precedent P2.2 set for `formatDuration`. (3) **Canvas selection wiring** = a new *controlled* `selectedNodeId` prop on `WorkflowCanvas` that syncs the node `selected` flag (notably clearing the highlight when the panel closes); click/keyboard selection still works when the prop is omitted. (4) **`onNodeActivate` split:** an *awaiting* gate node still opens the full-screen `GateView` (the actionable HITL path, kept from P2.2); every other node toggles the drill-down panel — so a completed gate opens its Overview too. (5) **Output tab's "verifier/harness output" is `step.error_message`** — the failing-tests / implicated-files text lives there in the `StepExecution` model (same field the timeline renders), not as separate typed columns; the tab pairs it with the deduped artifact chooser → `ArtifactViewer`. (6) `openEditorForPath` (worktree-ref → code editor, shared with the timeline) had to be declared *after* `resolveWorktreeInfo` to stay out of its TDZ. (7) Gate: `NodePanel.test.tsx` (attempt table from `step_attempts_list`, failure-class chip, not-started skip, Output error text + artifact chooser + empty state); `tsc` + 467 vitest green.
 
 ### P2.4 — Node panel: Live + Actions tabs
 - **Goal:** **Live** tab hosts the existing `agent_stream` transcript (moves from the inline toggle in `FeatureDetail`). **Actions** tab: Retry (shows which policy rule will apply), Replay-from-node (existing `replay_from_step`, now highlights the downstream subgraph before confirm), Stop node, Decide gate — all respecting the ancestor guard with disabled-button explanations (kept UX, PRD §6.4).
@@ -358,7 +359,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.16 | Phase-1 exit gate | ✅ 2026-07-24 |
 | P2.1 | Canvas foundation | ✅ 2026-07-24 |
 | P2.2 | Run-mode overlay + toggle | ✅ 2026-07-24 |
-| P2.3 | Panel: Overview/Output | ☐ |
+| P2.3 | Panel: Overview/Output | ✅ 2026-07-24 |
 | P2.4 | Panel: Live/Actions | ☐ |
 | P2.5 | Sequence expansion | ☐ |
 | P2.6 | Remote on canvas; split-path deletion | ☐ |
