@@ -807,89 +807,42 @@ impl ExecutionDriver {
             let mut step_cache_read: Option<u64> = None;
             let mut step_cache_creation: Option<u64> = None;
 
-            let outcome = match step_conf.kind.as_str() {
-                "gate" => {
-                    // Clone `step_conf` to release the immutable borrow
-                    // on `self.steps` — `handle_gate_step` now takes
-                    // `&mut self` so it can populate `retry_ctx` when a
-                    // redirect carries feedback.
-                    let step_conf = step_conf.clone();
-                    self.handle_gate_step(
-                        step_exec,
-                        &step_conf,
-                        &mut accumulated_cost,
-                        step_start,
-                        self.step_index,
-                        &step_execs,
-                    )
-                    .await
+            // Every step kind resolves through the NodeTypeRegistry
+            // (P1.6/P1.7) — the seam a new node type plugs into with a
+            // single registration line. A registry miss is the same
+            // "Unknown step kind" failure the old catch-all match arm
+            // produced.
+            let outcome = match crate::adapters::step_executor::registry::NodeTypeRegistry::global()
+                .handler_for(&step_conf.kind)
+            {
+                Some(handler) => {
+                    let step_index = self.step_index;
+                    handler
+                        .execute(crate::adapters::step_executor::registry::NodeCtx {
+                            driver: &mut self,
+                            step_exec,
+                            step_conf: &step_conf,
+                            accumulated_cost: &mut accumulated_cost,
+                            accumulated_tokens: &mut accumulated_tokens,
+                            step_start,
+                            step_index,
+                            step_execs: &step_execs,
+                            out_cache_read: &mut step_cache_read,
+                            out_cache_creation: &mut step_cache_creation,
+                        })
+                        .await
                 }
-                // `parallel` is the superseded name for this step. Its
-                // concurrent fan-out was removed; such steps now run their
-                // tasks sequentially. Kept as an alias so workflows the user
-                // cloned or overrode keep running instead of failing with
-                // "Unknown step kind". See `steps/sequence`.
-                "sequence" | "parallel" => {
-                    self.handle_sequence_step(
+                None => {
+                    let msg = format!("Unknown step kind: {}", step_conf.kind);
+                    self.fail_step_and_feature(
                         step_exec,
-                        &step_conf,
-                        &mut accumulated_cost,
-                        &mut accumulated_tokens,
-                        step_start,
-                        self.step_index,
-                        &step_execs,
-                    )
-                    .await
-                }
-                "finalize" => {
-                    self.handle_finalize_step(
-                        step_exec,
-                        &step_conf,
-                        &mut accumulated_cost,
-                        &mut accumulated_tokens,
+                        &msg,
+                        accumulated_cost,
+                        accumulated_tokens,
                         step_start,
                     )
-                    .await
-                }
-                // Everything else resolves through the NodeTypeRegistry
-                // (P1.6: `agent` and `sync`; P1.7 re-homes the arms above
-                // too and deletes this match). A registry miss is the
-                // same "Unknown step kind" failure the old catch-all arm
-                // produced.
-                other => {
-                    match crate::adapters::step_executor::registry::NodeTypeRegistry::global()
-                        .handler_for(other)
-                    {
-                        Some(handler) => {
-                            let step_index = self.step_index;
-                            handler
-                                .execute(crate::adapters::step_executor::registry::NodeCtx {
-                                    driver: &mut self,
-                                    step_exec,
-                                    step_conf: &step_conf,
-                                    accumulated_cost: &mut accumulated_cost,
-                                    accumulated_tokens: &mut accumulated_tokens,
-                                    step_start,
-                                    step_index,
-                                    step_execs: &step_execs,
-                                    out_cache_read: &mut step_cache_read,
-                                    out_cache_creation: &mut step_cache_creation,
-                                })
-                                .await
-                        }
-                        None => {
-                            let msg = format!("Unknown step kind: {}", other);
-                            self.fail_step_and_feature(
-                                step_exec,
-                                &msg,
-                                accumulated_cost,
-                                accumulated_tokens,
-                                step_start,
-                            )
-                            .await;
-                            return;
-                        }
-                    }
+                    .await;
+                    return;
                 }
             };
 

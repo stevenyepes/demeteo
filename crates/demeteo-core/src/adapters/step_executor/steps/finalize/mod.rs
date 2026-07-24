@@ -442,3 +442,76 @@ impl ExecutionDriver {
 #[cfg(test)]
 #[path = "../../../../../tests/infrastructure/step_executor/finalize/mod.rs"]
 mod tests;
+
+// ── NodeHandler registration (P1.7) ───────────────────────────────────────────
+
+/// The `finalize` node type behind the [`NodeHandler`] seam. Pure
+/// delegation: execution is [`ExecutionDriver::handle_finalize_step`],
+/// byte-for-byte the behavior the old `match` arm dispatched. Lint
+/// keeps "exactly one sink of type finalize" as a *per-graph* rule in
+/// `lint_workflow_v2` — a property of the whole graph, not of any one
+/// node, so it does not live here.
+///
+/// [`NodeHandler`]: crate::adapters::step_executor::registry::NodeHandler
+pub(crate) struct FinalizeNodeHandler;
+
+/// JSON Schema for the `finalize` node's `config` payload: the bounded
+/// summary turn that authors the PR description.
+#[allow(dead_code)] // Read via `NodeHandler::config_schema` (first runtime caller: P3.1).
+static FINALIZE_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
+    std::sync::LazyLock::new(|| {
+        serde_json::json!({
+            "type": "object",
+            "description": "Configuration for a `finalize` node: merge the \
+                feature branch outcome, author the run summary / PR \
+                description with a bounded agent turn, and clean up.",
+            "properties": {
+                "agent_kind": {
+                    "type": ["string", "null"],
+                    "description": "Agent runtime override for the summary \
+                        turn. Unset inherits the run/project chain."
+                },
+                "model": {
+                    "type": ["string", "null"],
+                    "description": "Model override for the summary turn."
+                },
+                "effort": {
+                    "type": ["string", "null"],
+                    "enum": ["low", "medium", "high", "xhigh", "max", null],
+                    "description": "Reasoning-effort override for the \
+                        summary turn. Unset inherits."
+                },
+                "prompt_template": {
+                    "type": ["string", "null"],
+                    "description": "Prompt template for the summary turn."
+                }
+            },
+            "additionalProperties": true
+        })
+    });
+
+#[async_trait::async_trait]
+impl crate::adapters::step_executor::registry::NodeHandler for FinalizeNodeHandler {
+    fn kind(&self) -> &'static str {
+        "finalize"
+    }
+
+    fn config_schema(&self) -> &'static serde_json::Value {
+        &FINALIZE_CONFIG_SCHEMA
+    }
+
+    async fn execute(
+        &self,
+        ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
+    ) -> StepOutcome {
+        ctx.driver
+            .handle_finalize_step(
+                ctx.step_exec,
+                ctx.step_conf,
+                ctx.accumulated_cost,
+                ctx.accumulated_tokens,
+                ctx.step_start,
+            )
+            .await
+    }
+}
