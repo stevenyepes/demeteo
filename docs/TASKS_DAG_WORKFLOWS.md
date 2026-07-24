@@ -201,6 +201,10 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** P0.2 harness; `tests/conformance/`; this file.
 - **Touch:** fixes only; update status table.
 - **Done when:** full `cargo test -p demeteo-core` + `src-tauri` tests green; exit criteria checked off in this doc.
+- *Exit criteria (verified 2026-07-24):*
+  - ☑ **Baseline snapshots byte-identical** — `starter_baseline` green unmodified through P1.12–P1.15 (chains are DAGs; behavior unchanged).
+  - ☑ **Crash-mid-sequence resumes from the exact task** — `tests/conformance/durable_checkpoints.rs` green; plus the P1.14 guard (`resume_fingerprint.rs`) proves an *untouched* workspace auto-resumes while a mutated one gates.
+  - ☑ **Every failure in `run_events` carries failure class + applied policy rule** — `run_event_parity.rs::failed_run_logs_failure_class_and_policy_rule` runs a deterministically-failing stub feature end-to-end and finds the `retry_decision` row (`error_class=agent_failure`, `rule_id=agent_failure.fail`) in the durable log. No fixes were surfaced — the phase landed clean.
 
 ---
 
@@ -349,7 +353,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.13 | Unified run_events | ✅ 2026-07-24 |
 | P1.14 | Fingerprint + idempotency | ✅ 2026-07-24 |
 | P1.15 | Pin workflow_version_id (V33) | ✅ 2026-07-24 |
-| P1.16 | Phase-1 exit gate | ☐ |
+| P1.16 | Phase-1 exit gate | ✅ 2026-07-24 |
 | P2.1 | Canvas foundation | ☐ |
 | P2.2 | Run-mode overlay + toggle | ☐ |
 | P2.3 | Panel: Overview/Output | ☐ |
