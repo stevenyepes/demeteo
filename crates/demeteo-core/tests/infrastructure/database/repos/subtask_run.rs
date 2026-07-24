@@ -237,6 +237,58 @@ fn interrupt_stale_closes_only_this_steps_running_rows() {
     );
 }
 
+/// The P2.5 read: `subtask_runs_for_step` returns this step's rows in start
+/// order (the task list's order) with the projected fields, and never another
+/// step's rows.
+#[test]
+fn subtask_runs_for_step_returns_rows_in_start_order() {
+    let (db, fid, sid) = seed();
+    let other_sid = StepExecutionId::from("se-2".to_string());
+    db.step_create(StepExecution {
+        last_failure_fingerprint: None,
+        id: other_sid.clone(),
+        feature_id: fid.clone(),
+        step_id: StepId::from("s-impl-2".to_string()),
+        step_index: 1,
+        step_kind: "sequence".to_string(),
+        status: "running".to_string(),
+        cost_usd: None,
+        tokens: None,
+        wall_clock_secs: None,
+        artifact_path: None,
+        artifact_paths: vec![],
+        error_message: None,
+        iteration_count: 0,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        created_at: 1000,
+        updated_at: 1000,
+    })
+    .unwrap();
+
+    // task-1 started first (earlier `started_at`) and finished; task-2 running.
+    db.subtask_run_start("sr-1", &fid, &sid, "task-1", "a-1", "/tmp/wt", "b", 100)
+        .unwrap();
+    db.subtask_run_finish("sr-1", "completed", 0.3, 400, None, 150)
+        .unwrap();
+    db.subtask_run_start("sr-2", &fid, &sid, "task-2", "a-2", "/tmp/wt", "b", 200)
+        .unwrap();
+    // Another step's row — must not leak into this step's list.
+    db.subtask_run_start(
+        "sr-x", &fid, &other_sid, "task-9", "a-9", "/tmp/wt2", "b2", 120,
+    )
+    .unwrap();
+
+    let rows = subtask_runs_for_step(&db, &sid).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].subtask_id, "task-1");
+    assert_eq!(rows[0].status, "completed");
+    assert!((rows[0].cost_usd - 0.3).abs() < f64::EPSILON);
+    assert_eq!(rows[0].tokens, 400);
+    assert_eq!(rows[1].subtask_id, "task-2");
+    assert_eq!(rows[1].status, "running");
+}
+
 /// A stale row that failed with a real error must keep it — the COALESCE
 /// only fills the message in when the crash left none.
 #[test]

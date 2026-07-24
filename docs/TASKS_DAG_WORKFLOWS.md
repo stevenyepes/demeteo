@@ -248,6 +248,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** `steps/sequence/runner.rs` checkpoint shape (grep only); checkpoint repo (P1.9); `NodePanel.tsx`.
 - **Touch:** canvas sequence node component, `NodePanel.tsx`, a Tauri command exposing checkpoint/task state if not already in `run_events`.
 - **Done when:** mid-sequence stub run shows landed vs pending split matching DB checkpoint.
+- *Amendments (2026-07-24, as built):* (1) **New Tauri command `sequence_tasks_list(featureId, nodeId, executionId) -> SequenceState`** — checkpoint/plan/subtask state is *not* in `run_events`, so the panel reads it on demand through the C3 read-model (`RunView::sequence_state`), same seam as `step_attempts_list`. It joins **three** durable sources the engine already writes: `sequence_plan_cache` (ordered task id+title), `sequence_checkpoints` (the landed prefix — the load-bearing Decision-13 split), and `subtask_runs` (per-task status/cost/tokens/error). `nodeId` (== v1 `step_id`) keys plan+checkpoint; `executionId` keys the subtask rows. (2) **Status precedence: landed wins** — a checkpointed task is `landed` regardless of its `subtask_runs` row (a rev-parse hiccup can leave a `completed` row uncheckpointed, but the checkpoint is the resume authority); no run row + not landed ⇒ `pending`. The merge is a pure `assemble_tasks` in `domain/models/sequence_view.rs` (DB-free unit-tested); a new `FeatureRepository::subtask_runs_for_step` read lives beside the checkpoint reads so `RunView` assembles from one repo. (3) **Surface = panel Overview accordion, not the node card.** PRD §6.2 says "accordion inside the node *or* panel"; the panel was chosen so the fetch only fires for the *selected* sequence node — a per-node canvas fetch would hit every sequence node on every event. `WorkflowNode.tsx` is untouched. (4) Renders solid emerald-railed landed rows (filled check) vs dimmed pending vs tone-matched running/failed, an `N/M landed` summary, per-task cost, and the failing task's error; silent (renders nothing) for a sequence node that hasn't planned yet — the norm before it runs. (5) Remote/runner-owned features read `unplanned` until their sequence state is mirrored locally (out of this task's scope; C4 concern). (6) Gate: `sequence_view.rs` unit tests (landed-wins + failed-task) + `subtask_runs_for_step` repo test (start-order, step-scoped) + three `NodePanel.test.tsx` cases (landed/pending split render, silent-when-unplanned, no-fetch-for-non-sequence); `tsc` + 483 vitest + 855 core tests green.
 
 ### P2.6 — Remote runs on the same canvas; delete the split path
 - **Goal:** Remote/detached runs render on `WorkflowCanvas` from the same `run_events` stream; `RunEventTimeline` survives only as the raw event feed inside the panel's Overview tab. Delete the separate polling surface + dead parallel UI (audit F36) — PRD targets **≥1k LOC net removal**.
@@ -362,7 +363,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P2.2 | Run-mode overlay + toggle | ✅ 2026-07-24 |
 | P2.3 | Panel: Overview/Output | ✅ 2026-07-24 |
 | P2.4 | Panel: Live/Actions | ✅ 2026-07-24 |
-| P2.5 | Sequence expansion | ☐ |
+| P2.5 | Sequence expansion | ✅ 2026-07-24 |
 | P2.6 | Remote on canvas; split-path deletion | ☐ |
 | P3.1 | Registry palette + connect rules | ☐ |
 | P3.2 | Schema-driven config panel | ☐ |

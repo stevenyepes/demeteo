@@ -1,9 +1,43 @@
 use rusqlite::params;
 
 use crate::domain::ids::{FeatureId, StepExecutionId};
+use crate::domain::models::SubtaskRunRow;
 use crate::ports::db::SubtaskRunRepository;
 
 use super::super::SqliteAdapter;
+
+/// Every `subtask_runs` row for a step execution, in start order — the
+/// per-task status/cost the sequence-node drill-down joins onto the plan
+/// (task P2.5). A read, so it lives beside the write impl but is surfaced
+/// through `FeatureRepository` (peer of the sequence-state reads), which is
+/// what `RunView` holds.
+pub fn subtask_runs_for_step(
+    adapter: &SqliteAdapter,
+    step_execution_id: &StepExecutionId,
+) -> Result<Vec<SubtaskRunRow>, String> {
+    let conn = adapter.conn.lock()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT subtask_id, status, cost_usd, tokens, error_message
+             FROM subtask_runs
+             WHERE step_execution_id = ?1
+             ORDER BY started_at ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![step_execution_id.0], |row| {
+            Ok(SubtaskRunRow {
+                subtask_id: row.get(0)?,
+                status: row.get(1)?,
+                cost_usd: row.get(2)?,
+                tokens: row.get(3)?,
+                error_message: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
 
 impl SubtaskRunRepository for SqliteAdapter {
     #[allow(clippy::too_many_arguments)]

@@ -1,5 +1,7 @@
 use crate::domain::ids::{FeatureId, StepExecutionId};
-use crate::domain::models::{EffortLevel, Feature, GateDecision, StepAttempt, StepExecution};
+use crate::domain::models::{
+    EffortLevel, Feature, GateDecision, SequenceState, StepAttempt, StepExecution,
+};
 use crate::error::AppError;
 use crate::ports::step_executor::SyncOutcomeView;
 use crate::state::AppContext;
@@ -129,6 +131,27 @@ pub async fn step_attempts_list(
 ) -> Result<Vec<StepAttempt>, AppError> {
     ctx.run_view
         .step_attempts(&StepExecutionId::from(execution_id))
+        .map_err(AppError::from)
+}
+
+/// A `sequence` node's task list for the drill-down accordion (P2.5): each
+/// task's landed-vs-pending state (Decision 13's committed prefix) plus its
+/// per-task cost. Read-model path (C3) like `step_attempts_list`. `node_id` is
+/// the graph node id (== v1 `step_id`); `execution_id` is its step-execution
+/// row. A non-sequence or not-yet-planned node reads back `unplanned`.
+#[tauri::command]
+pub async fn sequence_tasks_list(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+    node_id: String,
+    execution_id: String,
+) -> Result<SequenceState, AppError> {
+    ctx.run_view
+        .sequence_state(
+            &FeatureId::from(feature_id),
+            &node_id,
+            &StepExecutionId::from(execution_id),
+        )
         .map_err(AppError::from)
 }
 

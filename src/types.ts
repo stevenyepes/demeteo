@@ -436,6 +436,32 @@ export interface StepAttempt {
   ended_at?: number | null;
 }
 
+/**
+ * One task of a `sequence` node's list, merged for the drill-down accordion
+ * (P2.5) — mirror of the Rust `SequenceTaskView`. `landed` (the committed
+ * Decision-13 prefix) is the load-bearing distinction the accordion renders.
+ * Fetched via `sequence_tasks_list`.
+ */
+export interface SequenceTaskView {
+  id: string;
+  title: string;
+  /** `landed | running | completed | failed | interrupted | skipped | pending`.
+   *  `landed` wins over the subtask row — a committed task is done. */
+  status: string;
+  /** True when the task's commit is on the feature branch (won't re-run). */
+  landed: boolean;
+  cost_usd?: number | null;
+  tokens?: number | null;
+  error_message?: string | null;
+}
+
+/** A `sequence` node's whole task list (`SequenceState`). `planned` is false
+ *  before the node resolves a plan, distinct from an empty plan. */
+export interface SequenceState {
+  planned: boolean;
+  tasks: SequenceTaskView[];
+}
+
 export interface GateDecision {
   id: string;
   step_execution_id: string;

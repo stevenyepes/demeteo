@@ -462,6 +462,13 @@ impl FeatureRepository for SqliteAdapter {
     ) -> Result<(), String> {
         super::sequence_state::plan_cache_put(self, feature_id, step_id, plan_json, attempt_no, now)
     }
+
+    fn subtask_runs_for_step(
+        &self,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::SubtaskRunRow>, String> {
+        super::subtask_run::subtask_runs_for_step(self, step_execution_id)
+    }
 }
 
 #[cfg(test)]

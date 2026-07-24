@@ -126,6 +126,73 @@ describe('NodePanel — Output', () => {
   });
 });
 
+describe('NodePanel — Overview: sequence task list (P2.5)', () => {
+  // A command-aware mock: the sequence Overview fires two reads.
+  const routed = (seq: unknown) =>
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === 'sequence_tasks_list' ? seq : []),
+    );
+
+  it('renders the landed prefix distinctly from pending tasks', async () => {
+    routed({
+      planned: true,
+      tasks: [
+        { id: 't1', title: 'Scaffold module', status: 'landed', landed: true, cost_usd: 0.4 },
+        { id: 't2', title: 'Wire the handler', status: 'running', landed: false, cost_usd: 0.1 },
+        { id: 't3', title: 'Add tests', status: 'pending', landed: false },
+      ],
+    });
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node({ id: 'implement', type: 'sequence', title: 'Implement' })}
+        run={run}
+        step={step({ step_kind: 'sequence', status: 'running' })}
+        onClose={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Scaffold module')).toBeInTheDocument());
+    // Landed count summary + landed chip.
+    expect(screen.getByText('1/3 landed')).toBeInTheDocument();
+    expect(screen.getByText('Landed')).toBeInTheDocument();
+    expect(screen.getByText('Wire the handler')).toBeInTheDocument();
+    expect(screen.getByText('Add tests')).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith('sequence_tasks_list', {
+      featureId: 'f1',
+      nodeId: 'implement',
+      executionId: 'se-1',
+    });
+  });
+
+  it('stays silent for a sequence node that has not planned yet', async () => {
+    routed({ planned: false, tasks: [] });
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node({ type: 'sequence', title: 'Implement' })}
+        run={run}
+        step={step({ step_kind: 'sequence' })}
+        onClose={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('sequence_tasks_list', expect.anything()),
+    );
+    expect(screen.queryByText('Task list')).not.toBeInTheDocument();
+  });
+
+  it('does not fetch a task list for a non-sequence node', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'completed', stepExecutionId: 'se-1' };
+    render(<NodePanel featureId="f1" node={node()} run={run} step={step()} onClose={() => {}} />);
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    expect(invoke).not.toHaveBeenCalledWith('sequence_tasks_list', expect.anything());
+  });
+});
+
 describe('NodePanel — Live', () => {
   it('shows the agent-stream buffer while running', () => {
     invoke.mockResolvedValue([]);
