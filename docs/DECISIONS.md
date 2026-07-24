@@ -1,11 +1,11 @@
 # Demeteo: Locked Decisions Reference
 
-> **Standalone reference for the 37 locked design decisions** that emerged
+> **Standalone reference for the 42 locked design decisions** that emerged
 > from the multi-agent orchestrator design. This is the same
 > table that guides the project. If any conflicts ever arise, this
 > doc should be considered a source of truth; flag the conflict and re-align.
 
-## 1. The 37 Decisions
+## 1. The 42 Decisions
 
 | #  | Decision                           | Locked answer                                                                  | Source           |
 |----|------------------------------------|--------------------------------------------------------------------------------|------------------|
@@ -27,7 +27,7 @@
 | 16 | Repo merge model                   | `feature/<slug>` branch from canonical; subtasks merge into it; optional MR    | Interview Q17    |
 | 17 | PAT scope                          | Per-provider global, keyed by `(kind, host)` for multi-instance support        | Interview Q17a   |
 | 18 | Multi-feature concurrency          | **Concurrent — N features per project.** Features on one project run at the same time, each on its own `feature/<slug>` branch and its own feature-scoped worktree. ⚠️ **Supersedes the original "strict serial (A)" answer** — see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q18) |
-| 19 | Workflow authoring UX              | Form-first (v1.0); YAML view (v1.1); "save run as template" (v1.2)             | Interview Q19    |
+| 19 | Workflow authoring UX              | **Visual DAG builder** (`WorkflowCanvas` design mode) replaces the form-first editor; read-only Monaco source tab per [decision 42](#1-the-42-decisions); "save run as template" still v1.2. ⚠️ **Supersedes the form-first (v1.0) / YAML-view (v1.1) answer** — see [§2](#2-superseded-decisions). | 2026-07-23 (was Interview Q19) |
 | 20 | Conflict resolution UX             | **Inline, at the point of conflict — no cascade layer.** A step's task-branch merge that conflicts costs one agent turn in the step's own worktree and session (`steps/conflict_pass`); an upstream-sync conflict is surfaced to the user, who triggers `feature_resolve_sync_conflicts` ("Resolve with agent") from the UI. No dedicated Monaco 3-way component. ⚠️ **Supersedes the original "smart cascade" answer** — the `ConflictResolver` port, its stub adapter, and the `subtask_merges` audit table were deleted as never-called; see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q20) |
 | 21 | Project overview                   | Running features (plural) + queue + lazy-loaded repo map. Revised with [decision 18](#2-superseded-decisions): there is no single "current feature" slot, because a project may have several features in flight. | 2026-07-12 (was Interview Q21) |
 | 22 | "Start a feature" entry point      | Slim modal with description + inferred chips; "Customize…" expands              | Interview Q22    |
@@ -46,6 +46,11 @@
 | 35 | Agent permission enforcement       | Each `StepCapability` compiles to a four-axis `PermissionProfile` (`read_fs`, `write_fs`, `execute`, `network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None` \| `ArtifactsOnly` \| `All`). The compiled policy only ever uses `allow` / `deny`, never `ask`. The abstract profile is translated to the agent's native dialect at spawn: opencode / hermes → `OPENCODE_PERMISSION` env (`{"edit":…,"read":…,"bash":…,"webfetch":…,"websearch":…,"external_directory":"deny","doom_loop":"allow"}`); claude-code → `--disallowedTools` (`Bash` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` / `WebSearch` / `WebFetch` as applicable) + `--exclude-dynamic-system-prompt-sections` + `--setting-sources user,project` + `--strict-mcp-config` for prompt-cache determinism. The `artifacts/` vs source path-shape is enforced uniformly by the OS-level chmod fence in `adapters/worktree/git_ops/scope.rs`. Gate-step approval is the only real-time human-in-the-loop surface. | 2026-06-19   |
 | 36 | Cross-step session continuity      | One captured `session_id` per feature; threaded through every subsequent agent invocation. opencode: `--session <uuid> --continue` (`adapters/agent/opencode/mod.rs:404-408`). hermes: `--resume <sid>` (`adapters/agent/hermes/mod.rs:155-156`). claude-code: `--resume <sid>` (`adapters/agent/claude_code/mod.rs:388-394`), plus `--exclude-dynamic-system-prompt-sections` / `--setting-sources user,project` / `--strict-mcp-config` for byte-identical prompt-cache prefix. Parallel subtasks each get their own session id so they don't pollute each other's context. On context-window saturation (>80% of budget from `PricingTable::context_window`) the driver's watchdog kills the session and the next step's spawn injects a one-shot recap. | 2026-06-19   |
 | 37 | Reasoning effort                   | A **peer of the model**, not a property of it. One canonical ladder — `low` < `medium` < `high` < `xhigh` < `max` (`EffortLevel`, lowercase on every wire) — resolved by the same 5-tier chain as `model` (per-step run override → feature-wide run override → workflow `StepConfig.effort` → project `default_effort` → **`high`**). Each adapter **clamps down** to what its agent declares (`AgentCapabilities.effort_levels`) before emitting: claude-code `--effort` + `CLAUDE_CODE_EFFORT_LEVEL`, codex `-c model_reasoning_effort=`, opencode `--variant`, hermes nothing. See the detail block below. | 2026-07-14 |
+| 38 | Feature pins its workflow version  | **Yes — `features.workflow_version_id` column** (migration V33). `start_feature` resolves the latest version exactly once and stores the row id; the run path and `RunSpec` read the pinned row (remote already snapshots `workflow_json`). Editing a workflow mid-run can never change a running graph; historical runs render the graph they actually executed. Resolves PRD DAG §11 Q1. | PRD DAG §11 (2026-07-23) |
+| 39 | DAG join-semantics default         | **`all_success`** is the default join for every node, including gates fed by multiple verify branches. The critic's `PASS_WITH_NOTES` verdict maps to *success* for join purposes, so a strict join doesn't block on a passing-with-notes critic. `any_success` / `all_done` remain per-node opt-ins in schema v2. Resolves PRD DAG §11 Q2. | PRD DAG §11 (2026-07-23) |
+| 40 | `conflict_policy` becomes sync-node config | The decorative `ProjectSettings.conflict_policy` (decision 20's known loose end) becomes a **config field on the `sync` node type** in schema v2, where the upstream-sync merge it governs actually happens. The project-settings dropdown is removed; v1→v2 migration seeds the node field from the project value. Resolves PRD DAG §11 Q3. | PRD DAG §11 (2026-07-23) |
+| 41 | Scheduling stays outside the graph | `WorkflowSchedule` (cron) remains a **workflow-level sibling of `nodes`/`edges`**, not a node type — schema v2 does not entrench scheduling in the graph, so it can move to the Kanban card/board layer (Epic C1) later without a schema break. Resolves PRD DAG §11 Q4. | PRD DAG §11 (2026-07-23) |
+| 42 | Workflow source view               | The DAG builder ships a **read-only Monaco JSON source tab in Phase 3** (fulfilling decision 19's deferred source-view promise in v2 form). Editable source with two-way canvas binding stays deferred — a later decision record is required to add it. Resolves PRD DAG §11 Q5. | PRD DAG §11 (2026-07-23) |
 
 ### 37 — Effort level (detail)
 
@@ -106,6 +111,24 @@ A decision you silently overwrite stops being a decision *record*. When a
 locked answer changes, the row above is updated **and** the original is kept
 here with the reason it moved, so the next reader can tell "we thought hard and
 changed our minds" from "nobody ever considered this".
+
+### 19 — Workflow authoring UX
+
+| | |
+|---|---|
+| **Was** | Form-first (v1.0): stacked step-list editor with chevron reorder; Monaco YAML view with two-way form binding promised for v1.1; "save run as template" v1.2. |
+| **Now** | Visual DAG builder — `WorkflowCanvas` design mode with palette, schema-driven config panels, live lint, versioning UI; read-only Monaco source tab (decision 42). "Save run as template" remains v1.2. |
+| **Changed** | 2026-07-23 |
+
+**Why it changed.** The form editor could only express what the engine could
+run — a linear list. `PRD_DAG_WORKFLOWS.md` makes the workflow model a real
+DAG (nodes + edges, joins, conditional edges), which a stacked form cannot
+represent at all, and the audit found the form's structural defects (no dirty
+guard F38, dangling `on_failure` refs F39) are exactly the class of bug a
+canvas with connect-time validation eliminates by construction. The YAML-view
+promise survives in reduced form: a **read-only** source tab in builder
+Phase 3 (decision 42); the two-way editable binding that made v1.1's version
+expensive is still deferred.
 
 ### 13 — Implement-step failure semantics
 
@@ -228,12 +251,12 @@ migration V28 — it never held a row); the `precheck_merge` /
 `MergeExecutor` (`sync_feature_with_upstream`, `feature_syncs` audit) is
 live and stays.
 
-**Known loose end.** `ProjectSettings.conflict_policy` still exists as a
-stored string and the project settings UI still renders a "Conflict
-Resolution Policy" dropdown — but nothing has ever read the value to make a
-decision. Either the dropdown should drive the inline flows (e.g.
-`always_gate` skipping the automatic `conflict_pass` turn) or it should be
-removed from the UI; today it is decorative.
+**Known loose end — resolved by decision 40 (2026-07-23).**
+`ProjectSettings.conflict_policy` still exists as a stored string and the
+project settings UI still renders a "Conflict Resolution Policy" dropdown —
+but nothing has ever read the value to make a decision. Decision 40 settles
+it: the policy becomes a config field on the `sync` node type in workflow
+schema v2, and the project-settings dropdown is removed.
 
 ## 3. Cross-References
 
