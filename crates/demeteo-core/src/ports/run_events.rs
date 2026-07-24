@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 /// (docs/REMOTE_EXECUTION_PLAN.md M3.3). `offset` is the log position a
 /// resumed `stream_events(run_id, from_offset)` call pages from — it's
 /// the SQLite rowid, so it's monotonic per table, not just per run.
+///
+/// Since P1.13 this log is written by **both** transports: the runner's
+/// `RunEventBridge` keys rows by `run_id`, the local
+/// [`RunEventRecorder`](crate::adapters::run_event_log::RunEventRecorder)
+/// keys them by feature id. The `kind` vocabulary and payload shapes are
+/// documented in [`crate::adapters::run_event_log`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunEvent {
     pub offset: i64,

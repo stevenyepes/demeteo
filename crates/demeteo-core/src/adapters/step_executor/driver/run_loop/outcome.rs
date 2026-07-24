@@ -146,6 +146,7 @@ impl ExecutionDriver {
             .failure_decision
             .clone()
             .expect("a non-cancelled Failed outcome evaluates a retry decision");
+        self.emit_retry_decision(step_exec, &decision, msg);
         match decision.action {
             RetryAction::Redirect { target, feedback } => {
                 if let Some(redirect_idx) = self.begin_redirect(
@@ -276,6 +277,7 @@ impl ExecutionDriver {
             .failure_decision
             .as_ref()
             .expect("a non-cancelled Environmental outcome evaluates a retry decision");
+        self.emit_retry_decision(step_exec, decision, msg);
         if matches!(decision.action, RetryAction::RetryInPlace { .. }) {
             self.begin_in_place_retry(
                 step_exec,
@@ -310,6 +312,9 @@ impl ExecutionDriver {
             reason = %msg,
             "step failed (non-retryable)"
         );
+        if let Some(decision) = dr.failure_decision.as_ref() {
+            self.emit_retry_decision(step_exec, decision, msg);
+        }
         self.fail_step_and_feature(
             step_exec,
             msg,

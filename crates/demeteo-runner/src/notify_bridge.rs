@@ -30,6 +30,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+use demeteo_core::adapters::run_event_log::run_event_record;
 use demeteo_core::paths;
 use demeteo_core::ports::notification::{DomainEvent, NotificationPort};
 use demeteo_core::ports::run_events::RunEventsPort;
@@ -283,146 +284,55 @@ impl Default for RunEventBridge {
 
 impl NotificationPort for RunEventBridge {
     fn emit(&self, event: &DomainEvent) -> Result<(), String> {
+        // The DomainEvent → (kind, payload) translation is shared with
+        // the local recorder (`demeteo_core::adapters::run_event_log`,
+        // P1.13) so the two transports can never drift in shape; this
+        // impl owns only the runner-specific concerns — feature→run_id
+        // resolution, the progress throttle, and `AgentStream` buffering
+        // into coalesced `step_output` events. Notes on individual
+        // events:
+        //   * `AgentSpawned`'s effective (post-clamp) effort matters in
+        //     the durable log precisely *because* this is the detached
+        //     path: a runner older than the submitting app silently
+        //     drops `RunSpec::effort`, and this event is the only place
+        //     the laptop can see what the run really used.
+        //   * `BootstrapProgress` here covers the feature_start tail
+        //     phases; the run's own pre-feature clone phases are
+        //     appended separately in `run.rs`, keyed by run_id directly.
+        //     The earliest phase(s) may predate the run row learning its
+        //     feature_id and are simply dropped then.
+        //   * Deliberately not bridged (the shared translation returns
+        //     `None`): CommandExecuted / PermissionRequested (high
+        //     volume, low value on the laptop timeline), MrMerged /
+        //     ConflictDetected (not part of the run-progress narrative),
+        //     and RunEventAppended (the local recorder's own echo).
         match event {
-            DomainEvent::StepProgress {
-                feature_id,
-                step_id,
-                status,
-                cost_usd,
-                tokens,
-                wall_clock_secs,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-            } => {
-                if self.should_emit_progress(feature_id.as_str(), step_id, status) {
-                    self.emit_for_feature(
-                        feature_id.as_str(),
-                        "step_progress",
-                        serde_json::json!({
-                            "step_id": step_id,
-                            "status": status,
-                            "cost_usd": cost_usd,
-                            "tokens": tokens,
-                            "wall_clock_secs": wall_clock_secs,
-                            "cache_read_input_tokens": cache_read_input_tokens,
-                            "cache_creation_input_tokens": cache_creation_input_tokens,
-                        }),
-                    );
-                }
-            }
-            DomainEvent::FeatureStatusChanged { feature_id, status } => {
-                // Drain any step's trailing streamed output before the
-                // status line, so the timeline reads output-then-outcome and
-                // nothing is stranded when the run goes terminal.
-                self.drain_feature_output(feature_id.as_str());
-                self.emit_for_feature(
-                    feature_id.as_str(),
-                    "feature_status",
-                    serde_json::json!({ "status": status }),
-                );
-            }
             DomainEvent::AgentStream {
                 feature_id,
                 step_execution_id,
                 content,
             } => {
                 self.buffer_stream(feature_id.as_str(), step_execution_id.as_str(), content);
+                return Ok(());
             }
-            DomainEvent::AgentSpawned {
-                feature_id,
-                step_execution_id,
-                agent_kind,
-                model,
-                effort,
-            } => {
-                // The effective (post-clamp) effort belongs in the durable log
-                // precisely *because* this is the detached path: a runner older
-                // than the submitting app silently drops `RunSpec::effort`, and
-                // this event is the only place the laptop can see what the run
-                // really used.
-                self.emit_for_feature(
-                    feature_id.as_str(),
-                    "agent_spawned",
-                    serde_json::json!({
-                        "step_execution_id": step_execution_id.as_str(),
-                        "agent_kind": agent_kind,
-                        "model": model,
-                        "effort": effort,
-                    }),
-                );
-            }
-            DomainEvent::RetryBudgetExhausted {
+            DomainEvent::StepProgress {
                 feature_id,
                 step_id,
-                target_id,
-                attempt,
-                max,
-                reason,
-            } => {
-                self.emit_for_feature(
-                    feature_id.as_str(),
-                    "retry_exhausted",
-                    serde_json::json!({
-                        "step_id": step_id,
-                        "target_id": target_id,
-                        "attempt": attempt,
-                        "max": max,
-                        "reason": reason,
-                    }),
-                );
-            }
-            DomainEvent::EnvironmentNotReady {
-                feature_id,
-                step_id,
-                reason,
-            } => {
-                self.emit_for_feature(
-                    feature_id.as_str(),
-                    "env_not_ready",
-                    serde_json::json!({ "step_id": step_id, "reason": reason }),
-                );
-            }
-            DomainEvent::GateRequired {
-                feature_id,
-                step_execution_id,
-            } => {
-                self.emit_for_feature(
-                    feature_id.as_str(),
-                    "gate_required",
-                    serde_json::json!({ "step_execution_id": step_execution_id.as_str() }),
-                );
-            }
-            DomainEvent::BootstrapProgress {
-                feature_id,
-                phase,
-                label,
                 status,
-                detail,
-            } => {
-                // Feature-start sub-steps for the laptop's inline stepper. The
-                // run's own pre-feature clone phases are emitted separately in
-                // `run.rs` (keyed by run_id directly); these are the
-                // feature_start tail phases, resolved feature_id -> run_id like
-                // step progress. The earliest phase(s) may predate the run row
-                // learning its feature_id and are simply dropped then.
-                self.emit_for_feature(
-                    feature_id.as_str(),
-                    "bootstrap_progress",
-                    serde_json::json!({
-                        "phase": phase,
-                        "label": label,
-                        "status": status,
-                        "detail": detail,
-                    }),
-                );
+                ..
+            } if !self.should_emit_progress(feature_id.as_str(), step_id, status) => {
+                return Ok(());
             }
-            // Deliberately not bridged into the durable log:
-            //   * CommandExecuted / PermissionRequested — unattended runs
-            //     don't gate on per-command permission; high volume, low
-            //     value on the laptop timeline.
-            //   * MrMerged / ConflictDetected — not part of the run-progress
-            //     narrative the laptop tails for a detached run.
+            DomainEvent::FeatureStatusChanged { feature_id, .. } => {
+                // Drain any step's trailing streamed output before the
+                // status line, so the timeline reads output-then-outcome
+                // and nothing is stranded when the run goes terminal.
+                self.drain_feature_output(feature_id.as_str());
+            }
             _ => {}
+        }
+        if let Some(rec) = run_event_record(event) {
+            self.emit_for_feature(&rec.feature_id, rec.kind, rec.payload);
         }
         Ok(())
     }

@@ -178,6 +178,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** `repos/run_events.rs` (66); `V22__run_events.sql`; emission sites in `driver.rs`/`updates.rs` (grep `emit`); `src-tauri/src/commands/remote_runner.rs` (event shape the remote poller returns).
 - **Touch:** `updates.rs` (central emit → append+push), `repos/run_events.rs` (if payload kinds need enum), event-kind doc comment.
 - **Done when:** a local stub run's `run_events` rows replay into the same ordered story the Tauri events told; kinds documented.
+- *Amendments (2026-07-24, as built):* (1) There is no single emit choke point in `updates.rs` — emissions are scattered across `driver/{failure,status,verifier}.rs`, `run_loop/schedule.rs`, steps, etc. The central seam is the **`NotificationPort` itself**: a new `RunEventRecorder` decorator (`crates/demeteo-core/src/adapters/run_event_log.rs`) wraps the Tauri emitter in `src-tauri/lib.rs` (late-bound to `ctx.run_events` after `build_core_context`, same pattern as the runner's `RunEventBridge`), so every site records without edits. Local rows are keyed by **feature id** (a local run has no runner run row). (2) The `DomainEvent → (kind, payload)` translation was extracted into that module as `run_event_record()` and the runner's `notify_bridge.rs` now calls it too — local and remote payload shapes can no longer drift; the bridge keeps only run-id resolution, progress throttling, and `AgentStream → step_output` coalescing (locally `AgentStream` is *not* logged: the durable transcript already lives in `messages`). (3) "Retry decision with policy rule id" and "gate decision" had no `DomainEvent`s — added `RetryDecision` (emitted in `run_loop/outcome.rs`, carrying `rule_id`/`error_class`/`action`/`attempt`/`max`; the harness-verdict story is its `class=verdict` case + the existing step-status events) and `GateDecided` (emitted in `gate_decide` after the durable upsert), plus `RunEventAppended` — the live push of the exact stored record, which the Tauri adapter re-emits as the `run_event` event (P2.2's `useRunEvents` consumes this). (4) Event-kind vocabulary documented in `run_event_log.rs`'s module doc; parity proven by `tests/conformance/run_event_parity.rs`.
 
 ### P1.14 — Workspace fingerprint + idempotency keys
 - **Goal:** Record repo HEAD + dirty flag at node start; on resume mismatch → existing synthetic-gate path (extends Decision 14). Idempotency key (node id + attempt + fingerprint) stored per attempt; groundwork for `command` nodes' `idempotent: false` → always synthetic-gate on interrupt (PRD §5.4).
@@ -344,7 +345,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.10 | Declarative retry policy | ✅ 2026-07-24 |
 | P1.11 | Ready-set scheduler core | ✅ 2026-07-24 |
 | P1.12 | Driver integration (L) | ✅ 2026-07-24 |
-| P1.13 | Unified run_events | ☐ |
+| P1.13 | Unified run_events | ✅ 2026-07-24 |
 | P1.14 | Fingerprint + idempotency | ☐ |
 | P1.15 | Pin workflow_version_id (V33) | ✅ 2026-07-24 |
 | P1.16 | Phase-1 exit gate | ☐ |

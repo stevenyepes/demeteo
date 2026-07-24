@@ -311,3 +311,11 @@ mod durable_checkpoints;
 #[cfg(test)]
 #[path = "../../tests/conformance/starter_baseline.rs"]
 mod starter_baseline;
+
+/// Unified-event-log parity gate (P1.13): a local stub run's `run_events`
+/// rows must replay into the same ordered story the live UI events told,
+/// and the `run_event` live pushes must mirror the durable rows exactly.
+/// Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/run_event_parity.rs"]
+mod run_event_parity;

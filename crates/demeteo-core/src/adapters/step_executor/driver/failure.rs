@@ -1,4 +1,5 @@
 use super::ExecutionDriver;
+use crate::adapters::step_executor::retry_policy::{RetryAction, RetryDecision};
 use crate::domain::ids::StepId;
 use crate::domain::models::{Notification, NotificationKind, StepExecution};
 use crate::ports::db::StepExecutionPatch;
@@ -6,6 +7,42 @@ use crate::ports::notification::DomainEvent;
 use std::time::Instant;
 
 impl ExecutionDriver {
+    /// Narrate one retry-policy decision (P1.13): every failure names the
+    /// rule that answered it in the live event stream, mirroring what the
+    /// attempt row already stores in `applied_rule`. Emitted *before* the
+    /// decision is acted on, so the log reads decision-then-consequence.
+    pub(crate) fn emit_retry_decision(
+        &self,
+        step_exec: &StepExecution,
+        decision: &RetryDecision,
+        reason: &str,
+    ) {
+        let (action, target_id) = match &decision.action {
+            RetryAction::Redirect { target, .. } => ("redirect", Some(target.0.clone())),
+            RetryAction::Exhausted { target } => ("exhausted", target.as_ref().map(|t| t.0.clone())),
+            RetryAction::RetryInPlace { .. } => ("in_place", None),
+            RetryAction::Fail => ("fail", None),
+        };
+        // `rule_id` is `<class>.<strategy>` (retry_policy::evaluate) and
+        // class names contain no dot, so the prefix *is* the class.
+        let error_class = decision
+            .rule_id
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        let _ = self.notif.emit(&DomainEvent::RetryDecision {
+            feature_id: self.f_id.clone(),
+            step_id: step_exec.step_id.0.clone(),
+            error_class,
+            rule_id: decision.rule_id.clone(),
+            action: action.to_string(),
+            target_id,
+            attempt: decision.attempt,
+            max: decision.max_attempts,
+            reason: reason.to_string(),
+        });
+    }
     pub(crate) async fn fail_step_and_feature(
         &self,
         step_exec: &StepExecution,
