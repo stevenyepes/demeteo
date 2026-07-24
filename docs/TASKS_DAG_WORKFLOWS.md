@@ -338,7 +338,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.6 | Registry + agent/sync handlers | ✅ 2026-07-24 |
 | P1.7 | gate/sequence/finalize; match deleted | ✅ 2026-07-24 |
 | P1.8 | step_attempts (V31) | ✅ 2026-07-24 |
-| P1.9 | Durable checkpoints (V32) | ☐ |
+| P1.9 | Durable checkpoints (V32) | ✅ 2026-07-24 |
 | P1.10 | Declarative retry policy | ☐ |
 | P1.11 | Ready-set scheduler core | ✅ 2026-07-24 |
 | P1.12 | Driver integration (L) | ☐ |

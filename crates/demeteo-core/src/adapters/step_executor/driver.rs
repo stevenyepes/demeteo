@@ -227,38 +227,6 @@ pub(crate) struct ExecutionDriver {
     pub last_cache_read: Option<u64>,
     pub last_cache_creation: Option<u64>,
 
-    /// The last *full* task list each `sequence` step resolved, keyed by that
-    /// step's id. On retry attempt 1 the step reuses its own entry to re-run
-    /// only the tasks owning the verdict's implicated files — skipping the
-    /// untouched ones, whose commits are already on the branch. Attempt 2+
-    /// re-resolves the full plan (the targeted fix didn't stick). In-memory
-    /// only: an app restart just means re-reading the task list.
-    ///
-    /// Keyed, not a single slot: a workflow may contain more than one
-    /// `sequence` step. A bare `Option` would hand the second step's plan to
-    /// the first one on retry, and it would run the wrong task list entirely.
-    pub cached_plans: std::collections::HashMap<
-        String,
-        crate::adapters::step_executor::steps::sequence::tasks::TaskPlan,
-    >,
-
-    /// Task ids a `sequence` step already merged to the feature branch via a
-    /// mid-list checkpoint, keyed by step id. Written when a task fails
-    /// partway through the list and the completed prefix is merged before the
-    /// step reports failure; read by `resolve_task_plan` so the next attempt
-    /// runs only the remainder. Cleared when the step finally completes —
-    /// from then on the ordinary "previous attempt landed" retry logic
-    /// applies. In-memory like `cached_plans`: an app restart loses the
-    /// skip-list, and the retry re-runs tasks whose agents will find (and be
-    /// told about) the committed work.
-    pub sequence_checkpoints: std::collections::HashMap<String, Vec<String>>,
-
-    /// Step-execution ids that already consumed their single free
-    /// in-place retry after an environmental failure (agent blocked,
-    /// spawn failure, worktree provisioning). Second environmental
-    /// failure on the same step execution fails the feature.
-    pub env_retried: std::collections::HashSet<String>,
-
     /// The current step's agent-session registry key (see
     /// `ExecutionDriver::agent_session_key`). Recomputed by
     /// `refresh_watchdog_budget` at the top of each step so
@@ -1112,7 +1080,29 @@ impl ExecutionDriver {
                     // the step one free in-place retry; a second
                     // environmental failure fails the feature with a message
                     // that names the environment, not the code.
-                    if self.env_retried.insert(step_exec.id.0.clone()) {
+                    // "Already env-retried" is derived from the V31 attempt
+                    // history (P1.9): this dispatch's own environment-classed
+                    // row was closed above, so exactly one such row means this
+                    // is the step's first environmental failure. Durable —
+                    // unlike the old in-memory set, a restart no longer grants
+                    // a fresh free retry. Guards: without attempt accounting
+                    // (open failed) or on a read error, treat the retry as
+                    // spent rather than risk an unbounded in-place loop.
+                    let env_failures = self
+                        .features
+                        .attempts_for_step(&step_exec.id)
+                        .map(|rows| {
+                            rows.iter()
+                                .filter(|a| {
+                                    a.error_class.as_deref()
+                                        == Some(
+                                            crate::domain::models::step_attempt::error_class::ENVIRONMENT,
+                                        )
+                                })
+                                .count()
+                        })
+                        .unwrap_or(usize::MAX);
+                    if attempt_no.is_some() && env_failures <= 1 {
                         self.capture_signal(
                             Some(step_exec.id.0.clone()),
                             crate::domain::memory::SignalKind::Retry,

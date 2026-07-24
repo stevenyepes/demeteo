@@ -282,16 +282,31 @@ impl ExecutionDriver {
                     .await
                 {
                     Ok(()) => {
-                        let entry = self
-                            .sequence_checkpoints
-                            .entry(step_exec.step_id.0.clone())
-                            .or_default();
-                        for t in &landed_this_attempt {
-                            if !entry.contains(&t.id) {
-                                entry.push(t.id.clone());
+                        // Durable (V32): record the landed prefix so the next
+                        // attempt — in this process or after a restart — runs
+                        // only the remainder. A write failure degrades to the
+                        // in-attempt count; the retry then re-runs tasks whose
+                        // agents will find (and be told about) the committed
+                        // work, which is the pre-V32 restart behavior.
+                        let landed_ids: Vec<String> =
+                            landed_this_attempt.iter().map(|t| t.id.clone()).collect();
+                        let landed_total = match self.features.sequence_checkpoint_record(
+                            &self.f_id,
+                            &step_exec.step_id.0,
+                            &landed_ids,
+                            crate::paths::now_ms(),
+                        ) {
+                            Ok(total) => total as usize,
+                            Err(e) => {
+                                tracing::warn!(
+                                    feature_id = %self.f_id,
+                                    step_id = %step_exec.step_id.0,
+                                    error = %e,
+                                    "failed to persist sequence checkpoint"
+                                );
+                                landed_ids.len()
                             }
-                        }
-                        let landed_total = entry.len();
+                        };
                         self.cleanup_sequence_worktree(&wt_id).await;
                         return self
                             .fail_sequence_step(
@@ -570,7 +585,9 @@ impl ExecutionDriver {
         // the ordinary "previous attempt landed" retry logic covers the
         // branch's contents, and a stale skip-list would silently exempt
         // tasks from a future full re-run.
-        self.sequence_checkpoints.remove(&step_exec.step_id.0);
+        let _ = self
+            .features
+            .sequence_checkpoint_clear(&self.f_id, &step_exec.step_id.0);
 
         let wall = step_start.elapsed().as_secs();
         let primary = refs.first().cloned();

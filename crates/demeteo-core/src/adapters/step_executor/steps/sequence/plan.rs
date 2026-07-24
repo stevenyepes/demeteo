@@ -69,8 +69,16 @@ impl ExecutionDriver {
 
         if retry_iteration == 1 && previous_attempt_landed {
             // This step's own cached plan, never a sibling sequence step's.
-            let cached_for_this_step = self.cached_plans.get(step_exec.step_id.0.as_str());
-            if let (Some(cached), Some(rc)) = (cached_for_this_step, &self.retry_ctx) {
+            // Durable (V32): read through the repo so the targeted retry
+            // works identically after a restart. An unparsable row (schema
+            // drift) degrades to a full re-plan, same as a cache miss.
+            let cached_for_this_step: Option<TaskPlan> = self
+                .features
+                .plan_cache_get(&self.f_id, step_exec.step_id.0.as_str())
+                .ok()
+                .flatten()
+                .and_then(|json| serde_json::from_str(&json).ok());
+            if let (Some(cached), Some(rc)) = (cached_for_this_step.as_ref(), &self.retry_ctx) {
                 let targeted = select_targeted_tasks(cached, &rc.feedback, &rc.implicated_files);
                 tracing::info!(
                     feature_id = %self.f_id,
@@ -120,8 +128,40 @@ impl ExecutionDriver {
 
         // Cache only full plans — a targeted subset must never shadow the
         // complete decomposition, or attempt 2 would re-plan from a fragment.
-        self.cached_plans
-            .insert(step_exec.step_id.0.clone(), plan.clone());
+        // Durable (V32), stored with the attempt that produced it (the
+        // step's latest V31 row). Telemetry-grade write: failure degrades
+        // to a re-plan on the next targeted retry.
+        let attempt_no = self
+            .features
+            .attempts_for_step(&step_exec.id)
+            .ok()
+            .and_then(|rows| rows.last().map(|a| a.attempt_no));
+        match serde_json::to_string(&plan) {
+            Ok(json) => {
+                if let Err(e) = self.features.plan_cache_put(
+                    &self.f_id,
+                    &step_exec.step_id.0,
+                    &json,
+                    attempt_no,
+                    crate::paths::now_ms(),
+                ) {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        error = %e,
+                        "failed to persist sequence plan cache"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    error = %e,
+                    "failed to serialize task plan for the durable cache"
+                );
+            }
+        }
 
         // A full re-plan still runs against whatever the last attempt left on
         // the branch, so it carries the same warning a targeted retry does.
@@ -135,8 +175,15 @@ impl ExecutionDriver {
     /// iteration 0 — re-runs and re-pays for work that already landed. A
     /// no-op unless this step checkpointed.
     fn skip_checkpointed_tasks(&self, step_id: &str, plan: TaskPlan) -> TaskPlan {
-        match self.sequence_checkpoints.get(step_id) {
-            Some(landed) if !landed.is_empty() => {
+        // Durable (V32): hydrated from the repo, so a restarted driver
+        // resumes from the exact task, not the step head. A read failure
+        // degrades to "no checkpoint" — the pre-V32 restart behavior.
+        let landed = self
+            .features
+            .sequence_checkpoint_get(&self.f_id, step_id)
+            .unwrap_or_default();
+        match &landed {
+            landed if !landed.is_empty() => {
                 let mut filtered = apply_landed_checkpoint(plan, landed);
                 // The checkpoint exists exactly because a prefix *merged* —
                 // so even when none of its ids match this plan (a legacy

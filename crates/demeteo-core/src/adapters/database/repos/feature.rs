@@ -383,6 +383,57 @@ impl FeatureRepository for SqliteAdapter {
     ) -> Result<Vec<crate::domain::models::StepAttempt>, String> {
         super::step_attempts::attempts_for_step(self, step_execution_id)
     }
+
+    fn sequence_checkpoint_get(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Vec<String>, String> {
+        super::sequence_state::sequence_checkpoint_get(self, feature_id, step_id)
+    }
+
+    fn sequence_checkpoint_record(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        landed_task_ids: &[String],
+        now: i64,
+    ) -> Result<u32, String> {
+        super::sequence_state::sequence_checkpoint_record(
+            self,
+            feature_id,
+            step_id,
+            landed_task_ids,
+            now,
+        )
+    }
+
+    fn sequence_checkpoint_clear(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<(), String> {
+        super::sequence_state::sequence_checkpoint_clear(self, feature_id, step_id)
+    }
+
+    fn plan_cache_get(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Option<String>, String> {
+        super::sequence_state::plan_cache_get(self, feature_id, step_id)
+    }
+
+    fn plan_cache_put(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        plan_json: &str,
+        attempt_no: Option<u32>,
+        now: i64,
+    ) -> Result<(), String> {
+        super::sequence_state::plan_cache_put(self, feature_id, step_id, plan_json, attempt_no, now)
+    }
 }
 
 #[cfg(test)]
