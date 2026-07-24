@@ -46,10 +46,7 @@ fn legacy_on_failure_maps_to_verdict_and_agent_failure_redirects() {
     assert_eq!(env.strategy, RetryStrategy::InPlace);
     assert_eq!(env.max_attempts, Some(ENV_MAX_ATTEMPTS));
     assert!(!env.feedback);
-    assert_eq!(
-        policy.non_retryable.unwrap().strategy,
-        RetryStrategy::Fail
-    );
+    assert_eq!(policy.non_retryable.unwrap().strategy, RetryStrategy::Fail);
 }
 
 /// No `on_failure` (or an empty one — the v1 empty-string check) means
@@ -59,10 +56,7 @@ fn legacy_without_on_failure_fails_the_failing_classes() {
     for step_conf in [step(None, None), step(Some(""), None)] {
         let policy = legacy_policy_for_step(&step_conf, None, None);
         assert_eq!(policy.verdict.unwrap().strategy, RetryStrategy::Fail);
-        assert_eq!(
-            policy.agent_failure.unwrap().strategy,
-            RetryStrategy::Fail
-        );
+        assert_eq!(policy.agent_failure.unwrap().strategy, RetryStrategy::Fail);
     }
 }
 
