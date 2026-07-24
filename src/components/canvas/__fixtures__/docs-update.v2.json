@@ -1,0 +1,263 @@
+{
+  "schema_version": 2,
+  "id": "wf-starter-docs-update",
+  "name": "Documentation Update",
+  "nodes": [
+    {
+      "id": "s-survey",
+      "type": "agent",
+      "type_version": 1,
+      "title": "Survey Existing Docs",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "artifacts": [
+          {
+            "capture": {
+              "kind": "last_write_to",
+              "path": "artifacts/s-survey.md"
+            },
+            "inline": false,
+            "mode": "full",
+            "name": "survey"
+          }
+        ],
+        "capability": "artifacts",
+        "max_iterations": 1,
+        "prompt_template": "You are a technical writer performing a documentation audit.\n\nDocumentation update target: {{feature_description}}\nRepositories in scope: {{repo_list}}\n\n## Your task\nSurvey all documentation related to the update target.\n\n## Required sections\n1. **Files to Update** — table: file path | current state | what's wrong or missing | priority (High/Medium/Low). Use this for existing files that need edits.\n2. **Files to Create** — table: new file path | topic / what it will cover | priority (High/Medium/Low). Use this for brand-new docs the user is asking to add (e.g. \"create a new doc explaining feature X\"). Every new doc must land at a real, repo-relative path (e.g. `docs/<area>/<topic>.md`) — never under `{{report_dir}}`.\n3. **Style & Voice Reference** — identify the existing tone, tense, and formatting conventions from the best-written existing doc in the repo.\n4. **Link Inventory** — all internal and external links in the docs that will change. Flag any already-broken links.\n5. **Code Examples** — list all code examples in scope. Flag examples that are likely outdated.\n6. **Proposed Scope** — a conservative list of exactly which files will be touched or created and what will change. Do not include nice-to-haves. Include every entry from both 'Files to Update' and 'Files to Create'.\n\n## Stop condition\nYou are done when all 6 sections are present and every file in 'Files to Update' **and** 'Files to Create' has a stated priority.\n\nWrite your complete output to `{{report_dir}}s-survey.md`.",
+        "verifier": null
+      },
+      "position": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    {
+      "id": "s-gate-scope",
+      "type": "gate",
+      "type_version": 1,
+      "title": "Approve Documentation Scope",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "max_iterations": null,
+        "prompt_template": "Review the Survey artifact from 's-survey'. It must contain BOTH 'Files to Update' and 'Files to Create' sections (the latter is mandatory when the feature asks for new docs). Confirm that:\n- every entry in 'Files to Update' is a real, existing repo path that needs editing;\n- every entry in 'Files to Create' is a real, repo-relative path (e.g. `docs/<area>/<topic>.md`) where the new doc will actually live — NOT a path under `{{report_dir}}`.\n\nApprove to begin drafting with the proposed scope. Redirect to either:\n- narrow the scope (drop low-priority items),\n- expand the scope (e.g. add a missing real path for a new doc), or\n- move an entry from 'Files to Create' out of scope if it isn't actually needed.\nCancel to abort.",
+        "verifier": null
+      },
+      "position": {
+        "x": 0.0,
+        "y": 160.0
+      }
+    },
+    {
+      "id": "s-draft",
+      "type": "agent",
+      "type_version": 1,
+      "title": "Draft Updated Documentation",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "artifacts": [
+          {
+            "capture": {
+              "kind": "last_write_to",
+              "path": "artifacts/s-draft.md"
+            },
+            "inline": false,
+            "mode": "full",
+            "name": "draft-report"
+          },
+          {
+            "capture": {
+              "base": {
+                "kind": "worktree_base"
+              },
+              "kind": "changed_files",
+              "path_filter": "\\.md$"
+            },
+            "inline": false,
+            "mode": "summary_only",
+            "name": "changed-files"
+          },
+          {
+            "capture": {
+              "kind": "all_writes"
+            },
+            "inline": false,
+            "mode": "summary_only",
+            "name": "all-writes"
+          }
+        ],
+        "capability": "implement",
+        "max_iterations": 2,
+        "prompt_template": "You are a technical writer updating documentation.\n\nUpdate target: {{feature_description}}\nSurvey artifact: [attached — from s-survey]\nGate scope feedback: {{gate_feedback}}\n\n## Two distinct outputs\nThis step produces TWO different kinds of content. Keep them separate — they live at different paths and serve different purposes.\n\n### A. The actual doc edits (the deliverable)\nFor every file in the approved 'Proposed Scope' (both 'Files to Update' and 'Files to Create'), write the new or updated doc content to its REAL repo path:\n- existing files: write to the existing path (e.g. `docs/api/auth.md`);\n- new files: write to the new path the gate approved (e.g. `docs/api/new-feature.md`).\nNEVER put the new doc body under `{{report_dir}}` — that folder is reserved for the summary report below, and by project default its contents are NOT committed to the feature branch. Putting a real doc body there means it will be stranded as an untracked file in the worktree and lost from the PR.\n\n### B. The step summary report (the artifact)\nWrite ONLY a short change summary to `{{report_dir}}s-draft.md`. This is the file the orchestrator surfaces in the UI's artifact list and attaches to the validate step's prompt. It must contain:\n- List of files written (real repo paths, NOT under `{{report_dir}}`)\n- New or updated sections (one line per section)\n- Code examples added/updated (one line per example)\n- Links updated (one line per link)\n\n## Rules\n1. Write in the style and voice documented in the survey's 'Style & Voice Reference' section. Match tense, heading style, and tone exactly.\n2. Touch ONLY the files in the approved 'Proposed Scope'. For new docs, write the body to the path the gate approved in 'Files to Create'.\n3. Add or update code examples where they improve clarity — mark new examples with an `<!-- EXAMPLE: new -->` comment.\n4. Do NOT break existing markdown anchors (e.g., `#section-name`) without updating all references to them.\n5. Do NOT update links that are not in the survey's Link Inventory unless they are obviously broken.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — validation failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes (e.g. broken links, failing examples); do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Stop condition\nYou are done when every file in the approved scope has its doc body at the real repo path AND the summary report has been written to `{{report_dir}}s-draft.md`.",
+        "verifier": null
+      },
+      "position": {
+        "x": 0.0,
+        "y": 320.0
+      }
+    },
+    {
+      "id": "s-validate",
+      "type": "agent",
+      "type_version": 1,
+      "title": "Validate Links & Code Examples",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "artifacts": [
+          {
+            "capture": {
+              "kind": "last_write_to",
+              "path": "artifacts/s-validate.md"
+            },
+            "inline": false,
+            "mode": "full",
+            "name": "validate"
+          }
+        ],
+        "capability": "verify",
+        "prompt_template": "You are a documentation QA engineer performing a technical validation pass.\n\nDraft artifact: [attached — from s-draft]\nSurvey link inventory: [attached — from s-survey]\n\n## Validation checklist\n1. **Internal links** — verify every internal markdown link resolves to an existing heading or file. List broken links.\n2. **External links** — check the links from the survey's Link Inventory that were updated. Verify they resolve correctly.\n3. **Code examples** — for every `<!-- EXAMPLE: new -->` example added: attempt to compile or run it. Report pass/fail per example.\n4. **Anchor integrity** — list any heading that was renamed or removed; flag if there are stale references elsewhere in the docs.\n\n## Output artifact\n- Broken internal links: list (should be empty)\n- Broken external links: list\n- Code example results: example | PASS / FAIL / NOT TESTED\n- Stale anchors: list\n- **Verdict: VALID / INVALID**\n\n## Stop condition\nYou are done when all 4 checklist items are assessed and a Verdict is stated.\n\nWrite your complete output to `artifacts/s-validate.md`.",
+        "verifier": {
+          "agent_kind": null,
+          "harness_name": null,
+          "instructions": "Decide whether the documentation update is correct and complete. Base your verdict primarily on the validation results (broken links, failing code examples, stale anchors, and the VALID/INVALID verdict); treat any harness output above as secondary. Return \"pass\" only if there are no broken internal links and no failing code examples; otherwise return \"fail\" with a concise, actionable reason naming exactly what to fix.",
+          "verdict_key": "verdict"
+        }
+      },
+      "retry": {
+        "verdict": {
+          "strategy": "redirect",
+          "feedback": true,
+          "redirect_to": "s-draft"
+        },
+        "agent_failure": {
+          "strategy": "redirect",
+          "feedback": true,
+          "redirect_to": "s-draft"
+        }
+      },
+      "position": {
+        "x": 0.0,
+        "y": 480.0
+      }
+    },
+    {
+      "id": "s-gate-review",
+      "type": "gate",
+      "type_version": 1,
+      "title": "Review Draft Documentation",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "max_iterations": null,
+        "prompt_template": "Review the Draft artifact (s-draft) and the Validation report (s-validate). If Validation shows INVALID, redirect to fix the broken items first. If VALID: approve to begin the final polish pass. Cancel to abort.",
+        "verifier": null
+      },
+      "position": {
+        "x": 0.0,
+        "y": 640.0
+      }
+    },
+    {
+      "id": "s-polish",
+      "type": "agent",
+      "type_version": 1,
+      "title": "Polish & Finalise",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "artifacts": [
+          {
+            "capture": {
+              "kind": "last_write_to",
+              "path": "artifacts/s-polish.md"
+            },
+            "inline": false,
+            "mode": "full",
+            "name": "polish-report"
+          },
+          {
+            "capture": {
+              "base": {
+                "kind": "worktree_base"
+              },
+              "kind": "changed_files",
+              "path_filter": "\\.md$"
+            },
+            "inline": false,
+            "mode": "summary_only",
+            "name": "changed-files"
+          },
+          {
+            "capture": {
+              "kind": "all_writes"
+            },
+            "inline": false,
+            "mode": "summary_only",
+            "name": "all-writes"
+          }
+        ],
+        "capability": "implement",
+        "max_iterations": 2,
+        "prompt_template": "You are a technical writer doing a final polish pass.\n\nGate feedback: {{gate_feedback}}\nDraft artifact: [attached — from s-draft]\nValidation artifact: [attached — from s-validate]\n\n## Two distinct outputs\nThis step produces TWO different kinds of content. Keep them separate — they live at different paths and serve different purposes.\n\n### A. The actual doc edits (the deliverable)\nApply your polish fixes to the REAL doc paths (the same paths s-draft wrote to — typically under `docs/`, possibly creating new files at paths the survey/gate approved). NEVER write the polished doc body under `{{report_dir}}` — that folder is for the summary report only, and by project default its contents are not committed to the feature branch.\n\n### B. The step summary report (the artifact)\nWrite ONLY a short change summary to `{{report_dir}}s-polish.md`. It must contain:\n- Gate feedback items resolved (one line each)\n- Validation issues resolved (one line each)\n- CHANGELOG entry (copy-paste ready, Markdown)\n\n## Tasks\n1. Apply all reviewer feedback from the gate decision at the real doc paths.\n2. Fix all INVALID items from the validation report (broken links, failing examples) at the real doc paths.\n3. Final style pass: consistent heading capitalisation, no trailing whitespace, no double blank lines.\n4. Write a CHANGELOG entry summarising the documentation changes for this feature at the real CHANGELOG path (do NOT put the CHANGELOG entry under `{{report_dir}}`).\n\n## Stop condition\nYou are done when all gate feedback and validation issues are resolved at the real doc paths, the CHANGELOG entry is written at the real CHANGELOG path, AND the summary report has been written to `{{report_dir}}s-polish.md`.",
+        "verifier": null
+      },
+      "position": {
+        "x": 0.0,
+        "y": 800.0
+      }
+    },
+    {
+      "id": "s-finalize",
+      "type": "finalize",
+      "type_version": 1,
+      "title": "Summarize & open PR",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "max_iterations": null,
+        "prompt_template": null,
+        "verifier": null
+      },
+      "position": {
+        "x": 0.0,
+        "y": 960.0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "s-survey",
+      "to": "s-gate-scope"
+    },
+    {
+      "from": "s-gate-scope",
+      "to": "s-draft"
+    },
+    {
+      "from": "s-draft",
+      "to": "s-validate"
+    },
+    {
+      "from": "s-validate",
+      "to": "s-gate-review"
+    },
+    {
+      "from": "s-gate-review",
+      "to": "s-polish"
+    },
+    {
+      "from": "s-polish",
+      "to": "s-finalize"
+    }
+  ]
+}

@@ -216,6 +216,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** PRD §6.1; `package.json`; `src/components/ui/` (skim exports); `src/lib/runStatus.ts`; one starter JSON migrated to v2 for fixture.
 - **Touch:** `package.json`; new `src/components/canvas/WorkflowCanvas.tsx`, `src/components/canvas/nodes/*.tsx`, `src/lib/elkLayout.worker.ts`; a fixture-driven test.
 - **Done when:** canvas renders all 7 migrated starters from fixtures; no console errors; **battery rule respected — opacity-only animation, no infinite transforms** (see webview perf work).
+- *Amendments (2026-07-24, as built):* (1) The 7 v2 fixtures are **emitted from the live Rust migration**, not hand-authored: an env-gated `canvas_fixtures_are_current` regen test co-located in `workflow_migrate/migrate_tests.rs` writes `src/components/canvas/__fixtures__/<starter>.v2.json` under `UPDATE_CANVAS_FIXTURES=1` and otherwise asserts they're current — so the canvas provably renders exactly what the engine migrates and the fixtures can't silently drift. (2) Touch was slightly under-specified: added `types.ts` (TS mirror of `workflow_v2.rs` + node-type icon/tone metadata), `flowGraph.ts` (pure def→ReactFlow transform, the testable seam), and `useElkLayout.ts` (client owner of the worker); the worker itself is `src/lib/elkLayout.worker.ts` as planned. `toFlowGraph` already carries an optional `statusByNode` overlay hook and `WorkflowCanvas` an `onNodeActivate` seam so P2.2/P2.3 layer on without a fork. (3) React Flow needs `ResizeObserver`/`DOMMatrixReadOnly`/`matchMedia`/`getBoundingClientRect` stubbed under jsdom — done locally in the test; the primary guarantee is the DOM-free `toFlowGraph` assertion over all 7 starters, with a per-starter smoke mount on top. (4) **Pre-existing, out-of-scope:** `cargo fmt --all --check` flags ~10 *committed* P1.10–P1.15 files (`driver.rs`, `failure.rs`, `run_event_log.rs`, `run_event_parity.rs`, …) as needing reformatting under the local rustfmt despite the `1.97.0` pin — left untouched here (P2.1 keeps its own diff clean); worth a dedicated `cargo fmt` pass / CI-toolchain check.
 
 ### P2.2 — Run mode: live status overlay + Graph|Timeline toggle
 - **Goal:** Embed `WorkflowCanvas` in `FeatureDetail` behind a "Graph | Timeline" toggle (list stays default). Status overlay from the unified `run_events` stream (P1.13): running pulses (opacity-only), completed shows duration+cost chips, failed glows with failure class, skipped dims with reason tooltip, gate shows amber shield opening the existing `GateView`.
@@ -354,7 +355,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.14 | Fingerprint + idempotency | ✅ 2026-07-24 |
 | P1.15 | Pin workflow_version_id (V33) | ✅ 2026-07-24 |
 | P1.16 | Phase-1 exit gate | ✅ 2026-07-24 |
-| P2.1 | Canvas foundation | ☐ |
+| P2.1 | Canvas foundation | ✅ 2026-07-24 |
 | P2.2 | Run-mode overlay + toggle | ☐ |
 | P2.3 | Panel: Overview/Output | ☐ |
 | P2.4 | Panel: Live/Actions | ☐ |
