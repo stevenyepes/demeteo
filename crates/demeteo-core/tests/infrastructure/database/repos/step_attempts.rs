@@ -27,6 +27,7 @@ fn attempt_numbers_are_dense_and_one_based() {
         500,
         Some("verdict"),
         None,
+        Some("verdict.redirect"),
         150,
     )
     .unwrap();
@@ -50,6 +51,7 @@ fn close_persists_the_attempts_own_outcome() {
         6500,
         Some("environment"),
         Some("error: boom\nat <WT>/src/lib.rs"),
+        Some("environment.in_place"),
         300,
     )
     .unwrap();
@@ -67,6 +69,7 @@ fn close_persists_the_attempts_own_outcome() {
         a.failure_fingerprint.as_deref(),
         Some("error: boom\nat <WT>/src/lib.rs")
     );
+    assert_eq!(a.applied_rule.as_deref(), Some("environment.in_place"));
     assert_eq!(a.started_at, 100);
     assert_eq!(a.ended_at, Some(300));
 }
@@ -79,7 +82,20 @@ fn a_retry_history_keeps_every_attempts_class() {
     let id = sid("se-1");
     for (class, cost) in [("verdict", 0.10), ("verdict", 0.20), ("environment", 0.05)] {
         let no = attempt_open(&db, &id, 100 * no_hint(&db, &id)).unwrap();
-        attempt_close(&db, &id, no, "failed", cost, 1, 10, Some(class), None, 999).unwrap();
+        attempt_close(
+            &db,
+            &id,
+            no,
+            "failed",
+            cost,
+            1,
+            10,
+            Some(class),
+            None,
+            None,
+            999,
+        )
+        .unwrap();
     }
     let rows = attempts_for_step(&db, &id).unwrap();
     assert_eq!(

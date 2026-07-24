@@ -121,6 +121,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "features", "max_budget_usd", "REAL")?;
     add_column_if_missing(conn, "project_settings", "default_max_budget_usd", "REAL")?;
 
+    // Applied retry-policy rule id (P1.10). Defensive for databases that
+    // ran V31 before the column joined the table on the same branch.
+    add_column_if_missing(conn, "step_attempts", "applied_rule", "TEXT")?;
+
     Ok(())
 }
 

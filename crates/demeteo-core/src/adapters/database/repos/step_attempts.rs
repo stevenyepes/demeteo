@@ -63,13 +63,15 @@ pub fn attempt_close(
     wall_clock_ms: u64,
     error_class: Option<&str>,
     failure_fingerprint: Option<&str>,
+    applied_rule: Option<&str>,
     now: i64,
 ) -> Result<(), String> {
     let conn = adapter.conn.lock()?;
     conn.execute(
         "UPDATE step_attempts
          SET status = ?3, cost_usd = ?4, tokens = ?5, wall_clock_ms = ?6,
-             error_class = ?7, failure_fingerprint = ?8, ended_at = ?9
+             error_class = ?7, failure_fingerprint = ?8, applied_rule = ?9,
+             ended_at = ?10
          WHERE step_execution_id = ?1 AND attempt_no = ?2",
         params![
             step_execution_id.0,
@@ -80,6 +82,7 @@ pub fn attempt_close(
             wall_clock_ms as i64,
             error_class,
             failure_fingerprint,
+            applied_rule,
             now,
         ],
     )
@@ -96,7 +99,7 @@ pub fn attempts_for_step(
         .prepare(
             "SELECT step_execution_id, attempt_no, status, cost_usd, tokens,
                     wall_clock_ms, error_class, failure_fingerprint,
-                    started_at, ended_at
+                    applied_rule, started_at, ended_at
              FROM step_attempts
              WHERE step_execution_id = ?1
              ORDER BY attempt_no",
@@ -113,8 +116,9 @@ pub fn attempts_for_step(
                 wall_clock_ms: row.get::<_, Option<i64>>(5)?.map(|v| v as u64),
                 error_class: row.get(6)?,
                 failure_fingerprint: row.get(7)?,
-                started_at: row.get(8)?,
-                ended_at: row.get(9)?,
+                applied_rule: row.get(8)?,
+                started_at: row.get(9)?,
+                ended_at: row.get(10)?,
             })
         })
         .map_err(|e| e.to_string())?;

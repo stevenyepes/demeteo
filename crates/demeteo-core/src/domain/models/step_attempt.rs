@@ -47,6 +47,11 @@ pub struct StepAttempt {
     /// `normalize_failure_fingerprint`), for "same failure again?"
     /// comparisons across attempts.
     pub failure_fingerprint: Option<String>,
+    /// The retry-policy rule that answered this failure (P1.10), as
+    /// `<class>.<strategy>` — e.g. `verdict.redirect`,
+    /// `environment.in_place`. `None` for non-failure outcomes and for
+    /// failures preempted by a cancel (no rule was applied).
+    pub applied_rule: Option<String>,
     pub started_at: i64,
     pub ended_at: Option<i64>,
 }

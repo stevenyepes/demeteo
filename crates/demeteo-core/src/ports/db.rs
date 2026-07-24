@@ -269,8 +269,9 @@ pub trait FeatureRepository: Send + Sync {
     /// Close an attempt with its terminal `status`
     /// (`completed | failed | cancelled | interrupted | redirected`),
     /// this attempt's own cost/token deltas, and — for failures — the
-    /// [`error_class`](crate::domain::models::step_attempt::error_class)
-    /// plus normalized failure fingerprint.
+    /// [`error_class`](crate::domain::models::step_attempt::error_class),
+    /// normalized failure fingerprint, and the retry-policy rule id that
+    /// answered the failure (P1.10, `<class>.<strategy>`).
     #[allow(clippy::too_many_arguments)]
     fn attempt_close(
         &self,
@@ -282,6 +283,7 @@ pub trait FeatureRepository: Send + Sync {
         wall_clock_ms: u64,
         error_class: Option<&str>,
         failure_fingerprint: Option<&str>,
+        applied_rule: Option<&str>,
         now: i64,
     ) -> Result<(), String>;
 

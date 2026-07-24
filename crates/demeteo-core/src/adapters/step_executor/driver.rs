@@ -576,15 +576,28 @@ impl ExecutionDriver {
         resolve_effort(ov, self.feature_effort, step_conf, self.default_effort)
     }
 
-    /// Effective loop-iteration budget for a step with `on_failure` set.
-    /// Precedence: run override → project default → step `max_iterations`
-    /// → engine default (3).
-    pub(crate) fn effective_loop_iterations(&self, step_conf: &StepConfig) -> u32 {
-        resolve_loop_iterations(
+    /// Evaluate the declarative retry policy (P1.10) for one failure of
+    /// `class` on this step. v1 definitions derive their policy via
+    /// [`retry_policy::legacy_policy_for_step`] — the historical budget
+    /// precedence (run override → project default → step
+    /// `max_iterations` → engine default 3) folds into the rule, so
+    /// behavior is identical to the old scattered evaluation.
+    ///
+    /// `attempts_used`: what the class has already consumed — the step's
+    /// `iteration_count` for redirect rules, the class-failure count for
+    /// in-place rules (see [`retry_policy::evaluate`]).
+    pub(crate) fn retry_decision_for(
+        &self,
+        step_conf: &StepConfig,
+        class: super::retry_policy::FailureClass,
+        attempts_used: u32,
+    ) -> super::retry_policy::RetryDecision {
+        let policy = super::retry_policy::legacy_policy_for_step(
+            step_conf,
             self.loop_iterations_override,
             self.project_default_loop_iterations,
-            step_conf.max_iterations,
-        )
+        );
+        super::retry_policy::evaluate(&policy, class, attempts_used)
     }
 }
 
@@ -857,11 +870,69 @@ impl ExecutionDriver {
                 other => (other, None),
             };
 
+            // Evaluate the declarative retry policy (P1.10) for failure
+            // outcomes *before* the attempt row closes, so the row can
+            // record the rule that answered this failure. A cancel
+            // preempts policy — no rule is applied to a cancelled run.
+            let is_cancelled = *self.cancel_watch.borrow();
+            let failure_decision: Option<crate::adapters::step_executor::retry_policy::RetryDecision> = {
+                use crate::adapters::step_executor::retry_policy::FailureClass;
+                use crate::adapters::step_executor::steps::StepOutcome;
+                match &outcome {
+                    StepOutcome::Failed(_) if !is_cancelled => {
+                        let class = if verdict_failure.is_some() {
+                            FailureClass::Verdict
+                        } else {
+                            FailureClass::AgentFailure
+                        };
+                        Some(self.retry_decision_for(
+                            &step_conf,
+                            class,
+                            step_exec.iteration_count,
+                        ))
+                    }
+                    StepOutcome::Environmental(_) if !is_cancelled => {
+                        // Attempts the class has consumed = closed
+                        // environment-classed rows (durable V31 history,
+                        // P1.9 — a restart no longer grants a fresh free
+                        // retry) plus the failure being evaluated, whose
+                        // row is still open here. Guards: without attempt
+                        // accounting (open failed) or on a read error,
+                        // treat the budget as spent rather than risk an
+                        // unbounded in-place loop.
+                        let used = if attempt_no.is_none() {
+                            u32::MAX
+                        } else {
+                            self.features
+                                .attempts_for_step(&step_exec.id)
+                                .map(|rows| {
+                                    rows.iter()
+                                        .filter(|a| {
+                                            a.error_class.as_deref()
+                                                == Some(
+                                                    crate::domain::models::step_attempt::error_class::ENVIRONMENT,
+                                                )
+                                        })
+                                        .count()
+                                        as u32
+                                        + 1
+                                })
+                                .unwrap_or(u32::MAX)
+                        };
+                        Some(self.retry_decision_for(&step_conf, FailureClass::Environment, used))
+                    }
+                    StepOutcome::NonRetryable(_) => {
+                        Some(self.retry_decision_for(&step_conf, FailureClass::NonRetryable, 0))
+                    }
+                    _ => None,
+                }
+            };
+
             // Close this dispatch's attempt row with its own outcome,
-            // failure class (the P1.10 retry-policy vocabulary), and
-            // spend deltas. Runs before the outcome is acted on so every
-            // exit path below — including the early `return`s — leaves a
-            // closed row behind.
+            // failure class (the P1.10 retry-policy vocabulary), the
+            // applied policy rule, and spend deltas. Runs before the
+            // outcome is acted on so every exit path below — including
+            // the early `return`s — leaves a closed row behind.
             if let Some(attempt_no) = attempt_no {
                 use crate::adapters::step_executor::steps::StepOutcome;
                 use crate::domain::models::step_attempt::error_class;
@@ -870,11 +941,7 @@ impl ExecutionDriver {
                     StepOutcome::Failed(msg) => (
                         // The step row records a Failed-during-cancel as
                         // `interrupted`; mirror that here.
-                        if *self.cancel_watch.borrow() {
-                            "interrupted"
-                        } else {
-                            "failed"
-                        },
+                        if is_cancelled { "interrupted" } else { "failed" },
                         Some(if verdict_failure.is_some() {
                             error_class::VERDICT
                         } else {
@@ -923,6 +990,7 @@ impl ExecutionDriver {
                     step_start.elapsed().as_millis() as u64,
                     att_class,
                     att_fingerprint.as_deref(),
+                    failure_decision.as_ref().map(|d| d.rule_id.as_str()),
                     crate::paths::now_ms(),
                 ) {
                     tracing::warn!(
@@ -989,7 +1057,6 @@ impl ExecutionDriver {
                         reason = %msg,
                         "step failed"
                     );
-                    let is_cancelled = *self.cancel_watch.borrow();
                     if is_cancelled {
                         let wall = step_start.elapsed().as_secs();
                         super::updates::update_step_status(
@@ -1007,55 +1074,113 @@ impl ExecutionDriver {
                             self.last_cache_creation,
                         );
                         self.cancel_feature().await;
-                    } else {
-                        if let Some(redirect_idx) = self.evaluate_on_failure(
-                            step_exec,
-                            &step_conf,
-                            &msg,
-                            accumulated_cost,
-                            accumulated_tokens,
-                            step_start,
-                        ) {
-                            // Capture the failure so the retried step's prompt
-                            // isn't blind. `iteration_count` was just bumped to
-                            // `already + 1` in evaluate_on_failure, so the
-                            // attempt now starting is that value.
-                            let max = self.effective_loop_iterations(&step_conf);
-                            let iteration = step_exec.iteration_count + 1;
-                            let feedback = msg.clone();
-                            self.capture_signal(
-                                Some(step_exec.id.0.clone()),
-                                crate::domain::memory::SignalKind::Retry,
-                                format!(
-                                    "Step '{}' failed (attempt {} of {}), retrying: {}",
-                                    step_exec.step_id.0, iteration, max, msg
-                                ),
+                        return;
+                    }
+                    // Act on the policy decision evaluated above (P1.10).
+                    let decision = failure_decision
+                        .expect("a non-cancelled Failed outcome evaluates a retry decision");
+                    use crate::adapters::step_executor::retry_policy::RetryAction;
+                    match decision.action {
+                        RetryAction::Redirect { target, feedback } => {
+                            if let Some(redirect_idx) = self.begin_redirect(
+                                step_exec,
+                                &target,
+                                &msg,
+                                decision.attempt,
+                                decision.max_attempts,
+                                accumulated_cost,
+                                accumulated_tokens,
+                                step_start,
+                            ) {
+                                // Capture the failure so the retried step's
+                                // prompt isn't blind. `iteration_count` was
+                                // just bumped to `decision.attempt` in
+                                // begin_redirect — the attempt now starting.
+                                self.capture_signal(
+                                    Some(step_exec.id.0.clone()),
+                                    crate::domain::memory::SignalKind::Retry,
+                                    format!(
+                                        "Step '{}' failed (attempt {} of {}), retrying: {}",
+                                        step_exec.step_id.0,
+                                        decision.attempt,
+                                        decision.max_attempts,
+                                        msg
+                                    ),
+                                );
+                                if feedback {
+                                    self.retry_ctx = Some(RetryContext {
+                                        feedback: msg.clone(),
+                                        iteration: decision.attempt,
+                                        max: decision.max_attempts,
+                                        failing_step_id: step_exec.step_id.0.clone(),
+                                        failing_tests: verdict_failure
+                                            .as_ref()
+                                            .map(|vf| vf.failing_tests.clone())
+                                            .unwrap_or_default(),
+                                        implicated_files: verdict_failure
+                                            .as_ref()
+                                            .map(|vf| vf.implicated_files.clone())
+                                            .unwrap_or_default(),
+                                    });
+                                }
+                                self.step_index = redirect_idx;
+                                continue;
+                            }
+                            // Dangling redirect target — same terminal
+                            // failure as v1's missing-`on_failure`-step.
+                            self.fail_step_and_feature(
+                                step_exec,
+                                &msg,
+                                accumulated_cost,
+                                accumulated_tokens,
+                                step_start,
+                            )
+                            .await;
+                        }
+                        RetryAction::Exhausted { target } => {
+                            if let Some(target) = target.as_ref() {
+                                self.record_retry_exhausted(
+                                    step_exec,
+                                    target,
+                                    &msg,
+                                    decision.attempt.saturating_sub(1),
+                                    decision.max_attempts,
+                                    accumulated_cost,
+                                    accumulated_tokens,
+                                    step_start,
+                                );
+                            }
+                            self.fail_step_and_feature(
+                                step_exec,
+                                &msg,
+                                accumulated_cost,
+                                accumulated_tokens,
+                                step_start,
+                            )
+                            .await;
+                        }
+                        RetryAction::RetryInPlace { .. } => {
+                            // Not derivable from v1 definitions for this
+                            // class; supported for v2 policies (P1.12).
+                            self.begin_in_place_retry(
+                                step_exec,
+                                &msg,
+                                accumulated_cost,
+                                accumulated_tokens,
+                                step_start,
                             );
-                            self.retry_ctx = Some(RetryContext {
-                                feedback,
-                                iteration,
-                                max,
-                                failing_step_id: step_exec.step_id.0.clone(),
-                                failing_tests: verdict_failure
-                                    .as_ref()
-                                    .map(|vf| vf.failing_tests.clone())
-                                    .unwrap_or_default(),
-                                implicated_files: verdict_failure
-                                    .as_ref()
-                                    .map(|vf| vf.implicated_files.clone())
-                                    .unwrap_or_default(),
-                            });
-                            self.step_index = redirect_idx;
                             continue;
                         }
-                        self.fail_step_and_feature(
-                            step_exec,
-                            &msg,
-                            accumulated_cost,
-                            accumulated_tokens,
-                            step_start,
-                        )
-                        .await;
+                        RetryAction::Fail => {
+                            self.fail_step_and_feature(
+                                step_exec,
+                                &msg,
+                                accumulated_cost,
+                                accumulated_tokens,
+                                step_start,
+                            )
+                            .await;
+                        }
                     }
                     return;
                 }
@@ -1069,64 +1194,31 @@ impl ExecutionDriver {
                         reason = %msg,
                         "step failed (environmental)"
                     );
-                    if *self.cancel_watch.borrow() {
+                    if is_cancelled {
                         self.cancel_feature().await;
                         return;
                     }
                     // The environment broke — a timeout, a dead process, a
                     // worktree that wouldn't provision. Redirecting to an
                     // implementation step can't fix any of that, and burning
-                    // the on_failure budget on it starves real retries. Give
-                    // the step one free in-place retry; a second
-                    // environmental failure fails the feature with a message
+                    // the redirect budget on it starves real retries. The
+                    // policy's environment rule (one free in-place retry,
+                    // budget derived from the durable V31 attempt history —
+                    // a restart no longer grants a fresh one) was evaluated
+                    // above; a spent budget fails the feature with a message
                     // that names the environment, not the code.
-                    // "Already env-retried" is derived from the V31 attempt
-                    // history (P1.9): this dispatch's own environment-classed
-                    // row was closed above, so exactly one such row means this
-                    // is the step's first environmental failure. Durable —
-                    // unlike the old in-memory set, a restart no longer grants
-                    // a fresh free retry. Guards: without attempt accounting
-                    // (open failed) or on a read error, treat the retry as
-                    // spent rather than risk an unbounded in-place loop.
-                    let env_failures = self
-                        .features
-                        .attempts_for_step(&step_exec.id)
-                        .map(|rows| {
-                            rows.iter()
-                                .filter(|a| {
-                                    a.error_class.as_deref()
-                                        == Some(
-                                            crate::domain::models::step_attempt::error_class::ENVIRONMENT,
-                                        )
-                                })
-                                .count()
-                        })
-                        .unwrap_or(usize::MAX);
-                    if attempt_no.is_some() && env_failures <= 1 {
-                        self.capture_signal(
-                            Some(step_exec.id.0.clone()),
-                            crate::domain::memory::SignalKind::Retry,
-                            format!(
-                                "Step '{}' hit an environmental failure, retrying in place: {}",
-                                step_exec.step_id.0, msg
-                            ),
-                        );
-                        super::updates::update_step_status(
-                            &*self.features,
-                            &*self.notif,
+                    let decision = failure_decision
+                        .expect("a non-cancelled Environmental outcome evaluates a retry decision");
+                    if matches!(
+                        decision.action,
+                        crate::adapters::step_executor::retry_policy::RetryAction::RetryInPlace { .. }
+                    ) {
+                        self.begin_in_place_retry(
                             step_exec,
-                            &self.f_id,
-                            "pending",
+                            &msg,
                             accumulated_cost,
-                            Some(accumulated_tokens),
-                            step_start.elapsed().as_secs(),
-                            None,
-                            Some(format!(
-                                "{} (environment issue — retrying step in place)",
-                                msg
-                            )),
-                            self.last_cache_read,
-                            self.last_cache_creation,
+                            accumulated_tokens,
+                            step_start,
                         );
                         // Same step_index — the loop re-dispatches this step.
                         continue;
