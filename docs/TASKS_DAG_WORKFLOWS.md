@@ -333,7 +333,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.1 | Schema v2 structs | ✅ 2026-07-24 |
 | P1.2 | v1→v2 migration | ✅ 2026-07-24 |
 | P1.3 | JSON Schema validation | ✅ 2026-07-24 |
-| P1.4 | WorkflowGraph + lint | ☐ |
+| P1.4 | WorkflowGraph + lint | ✅ 2026-07-24 |
 | P1.5 | Expression evaluator | ☐ |
 | P1.6 | Registry + agent/sync handlers | ☐ |
 | P1.7 | gate/sequence/finalize; match deleted | ☐ |

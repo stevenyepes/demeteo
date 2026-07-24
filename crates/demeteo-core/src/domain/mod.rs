@@ -14,3 +14,4 @@ pub mod run_spec;
 pub mod text;
 pub mod usage;
 pub mod verifier;
+pub mod workflow_graph;
