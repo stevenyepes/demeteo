@@ -671,4 +671,4 @@ fn link_dependency_caches_cmd(repo_dir: &str, wt_dir: &str, cache_dir: &str) -> 
 
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/worktree/git_ops/worktree.rs"]
-mod dependency_cache_link_tests;
+mod tests;

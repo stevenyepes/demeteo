@@ -51,8 +51,8 @@ pub(crate) mod sync;
 pub(crate) mod worktree;
 
 #[cfg(test)]
-#[path = "../../../../tests/infrastructure/worktree/git_ops.rs"]
-mod tests;
+#[path = "../../../../tests/infrastructure/worktree/git_ops/common.rs"]
+mod common;
 
 #[async_trait]
 impl WorktreeOpsPort for GitOpsHelper {

@@ -111,3 +111,7 @@ impl GitOpsHelper {
             .await;
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/worktree/git_ops/merge.rs"]
+mod tests;

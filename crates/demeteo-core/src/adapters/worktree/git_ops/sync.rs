@@ -597,3 +597,7 @@ pub(crate) async fn parse_unmerged_files(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/worktree/git_ops/sync.rs"]
+mod tests;

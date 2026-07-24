@@ -193,3 +193,7 @@ impl GitOpsHelper {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/worktree/git_ops/strategy.rs"]
+mod tests;

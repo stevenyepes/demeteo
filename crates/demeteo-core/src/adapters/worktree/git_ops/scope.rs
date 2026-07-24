@@ -467,3 +467,7 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/worktree/scope.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/worktree/git_ops/scope_runtime.rs"]
+mod tests_runtime;
