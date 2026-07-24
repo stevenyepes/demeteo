@@ -1,0 +1,87 @@
+{
+  "starter": "experiment",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-hypothesis",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-hypothesis",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-prototype",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-evaluate",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-evaluate",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-harden",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-finalize",
+      "kind": "finalize",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-evaluate",
+      "s-evaluate.md",
+      "# stub artifact\n\npath: artifacts/s-evaluate.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-evaluate",
+      "s-evaluate.md",
+      "# stub artifact\n\npath: artifacts/s-evaluate.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-hypothesis",
+      "s-hypothesis.md",
+      "# stub artifact\n\npath: artifacts/s-hypothesis.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-harden",
+      "s-evaluate.md",
+      "# stub artifact\n\npath: artifacts/s-evaluate.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-hypothesis",
+      "s-hypothesis.md",
+      "# stub artifact\n\npath: artifacts/s-hypothesis.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-prototype",
+      "s-hypothesis.md",
+      "# stub artifact\n\npath: artifacts/s-hypothesis.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}

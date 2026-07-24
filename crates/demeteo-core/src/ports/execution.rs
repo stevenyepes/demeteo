@@ -296,3 +296,11 @@ mod topology_equivalence;
 #[cfg(test)]
 #[path = "../../tests/conformance/harness_triage.rs"]
 mod harness_triage;
+
+/// Starter-baseline golden snapshots (P0.2, `docs/TASKS_DAG_WORKFLOWS.md`):
+/// every bundled starter executed end-to-end under the stub agent and
+/// compared to a committed behavioral snapshot — the regression gate for the
+/// Phase-1 DAG engine rework. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/starter_baseline.rs"]
+mod starter_baseline;
