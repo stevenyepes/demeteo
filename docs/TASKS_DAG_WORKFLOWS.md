@@ -186,6 +186,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 - **Context:** PRD §5.4 (fingerprint + idempotency); `reconcile.rs`; `setup.rs` (196, workspace prep); `repos/step_attempts.rs`.
 - **Touch:** `setup.rs`, `reconcile.rs`, attempt repo (+ column on V31 table if not landed yet — coordinate with P1.8).
 - **Done when:** test: dirty-worktree mutation between crash and resume yields synthetic gate, not re-execution.
+- *Amendments (2026-07-24, as built):* (1) V31 grew **two** columns — `workspace_fingerprint` (`<HEAD>:<dirty|clean>`, recorded at every attempt open via a probe in `setup.rs::workspace_fingerprint`) and `idempotency_key` (`<se_id>#<attempt_no>#<fp>`, derived in the repo where `attempt_no` is assigned) — edit-in-place + `add_column_if_missing`, same pattern as P1.10's `applied_rule`. (2) The resume check lives in the **driver run loop** (`run_loop/resume.rs`), not `reconcile.rs`: the pre-P1.14 engine *blindly re-dispatched* watchdog-`interrupted` nodes the moment `resume_interrupted_features` armed the driver, making the watchdog's `gd-syn-*` prompt advisory-only — the guard now parks on that same row + `GateWaiter` rendezvous when the last attempt's recorded fingerprint mismatches the live workspace, and `reconcile.rs` (runner) needed zero changes since it reuses this engine machinery. Match/unknown fingerprint → auto-resume (pre-P1.14 behavior; keeps the P1.9 crash-resume gate green — its resume goes through `step_retry`→replay which resets rows to `pending` and never meets the guard). (3) Approve re-runs (the new attempt records the blessed state as the next baseline); reject/cancel/redirect all fail the step+feature — redirect targeting stays a real-gate affordance. Guard fires once per driver life. (4) Gate: `tests/conformance/resume_fingerprint.rs` (mutation parks until approve; untouched auto-resumes). Note the fingerprint is deliberately coarse — a mutation on an *already-dirty* tree is invisible; the settle-to-clean forge in the test documents this.
 
 ### P1.15 — Pin `workflow_version_id` on Feature end-to-end
 - **Goal:** Migration **V33** adds `features.workflow_version_id`; `start_feature` resolves latest version once, stores it; run path + `RunSpec` read the pinned row (remote already carries `workflow_json`). Required for historical run-mode rendering (P2).
@@ -346,7 +347,7 @@ P3.x  ─▶ P4.1 ─▶ P4.2        P4.3 (needs P1.5+P3.2)   P4.4
 | P1.11 | Ready-set scheduler core | ✅ 2026-07-24 |
 | P1.12 | Driver integration (L) | ✅ 2026-07-24 |
 | P1.13 | Unified run_events | ✅ 2026-07-24 |
-| P1.14 | Fingerprint + idempotency | ☐ |
+| P1.14 | Fingerprint + idempotency | ✅ 2026-07-24 |
 | P1.15 | Pin workflow_version_id (V33) | ✅ 2026-07-24 |
 | P1.16 | Phase-1 exit gate | ☐ |
 | P2.1 | Canvas foundation | ☐ |

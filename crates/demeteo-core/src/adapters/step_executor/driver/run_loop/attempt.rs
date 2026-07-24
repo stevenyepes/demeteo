@@ -26,19 +26,35 @@ pub(crate) struct AttemptRecord {
 }
 
 impl ExecutionDriver {
+    /// Probe the feature worktree's current fingerprint
+    /// (`<HEAD>:<dirty|clean>`, P1.14) on whatever machine hosts it.
+    /// `None` = probe failed; never blocks the run.
+    pub(crate) async fn current_workspace_fingerprint(&self) -> Option<String> {
+        let machine_str = self.machine_id_opt.as_deref().unwrap_or("local");
+        crate::adapters::step_executor::setup::workspace_fingerprint(
+            &*self.exec,
+            machine_str,
+            &self.target_dir,
+        )
+        .await
+    }
+
     /// Open a new `step_attempts` row for the dispatch that's about to
-    /// start. Returns `None` on write failure (logged) so the caller can
+    /// start, recording the workspace fingerprint at node start (P1.14).
+    /// Returns `None` on write failure (logged) so the caller can
     /// continue running the step — telemetry gaps must not block the run.
     pub(crate) fn open_attempt(
         &self,
         step_exec: &StepExecution,
         cost_base: f64,
         tokens_base: i64,
+        workspace_fingerprint: Option<&str>,
     ) -> Option<AttemptRecord> {
-        match self
-            .features
-            .attempt_open(&step_exec.id, crate::paths::now_ms())
-        {
+        match self.features.attempt_open(
+            &step_exec.id,
+            crate::paths::now_ms(),
+            workspace_fingerprint,
+        ) {
             Ok(attempt_no) => Some(AttemptRecord {
                 attempt_no,
                 cost_base,

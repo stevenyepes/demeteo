@@ -65,7 +65,16 @@ impl ExecutionDriver {
         // closed below with this attempt's own outcome and spend
         // deltas — retries stop overwriting history. Telemetry only,
         // so a write failure degrades to a warning, never a dead run.
-        let attempt = self.open_attempt(step_exec, *accumulated_cost, *accumulated_tokens);
+        // The workspace fingerprint at node start (P1.14) rides on the
+        // row: the resume guard compares it against the live workspace
+        // after a crash, and it seeds the attempt's idempotency key.
+        let fingerprint = self.current_workspace_fingerprint().await;
+        let attempt = self.open_attempt(
+            step_exec,
+            *accumulated_cost,
+            *accumulated_tokens,
+            fingerprint.as_deref(),
+        );
 
         // Every step kind resolves through the NodeTypeRegistry
         // (P1.6/P1.7) — the seam a new node type plugs into with a

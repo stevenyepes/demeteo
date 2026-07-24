@@ -52,6 +52,16 @@ pub struct StepAttempt {
     /// `environment.in_place`. `None` for non-failure outcomes and for
     /// failures preempted by a cancel (no rule was applied).
     pub applied_rule: Option<String>,
+    /// Workspace state at attempt start (P1.14):
+    /// `<repo HEAD>:<dirty|clean>`. `None` when the probe failed or the
+    /// row predates the column. On resume of an interrupted node, a
+    /// mismatch against the live workspace surfaces as the Decision-14
+    /// synthetic gate instead of blind re-execution.
+    pub workspace_fingerprint: Option<String>,
+    /// `<step_execution_id>#<attempt_no>#<fingerprint>` (P1.14) — the
+    /// idempotency identity of this attempt's side effects; groundwork
+    /// for `command` nodes' `idempotent: false` semantics (P3.5).
+    pub idempotency_key: Option<String>,
     pub started_at: i64,
     pub ended_at: Option<i64>,
 }

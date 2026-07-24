@@ -368,8 +368,13 @@ impl FeatureRepository for SqliteAdapter {
         super::feature_steps::steps_for_feature(self, feature_id)
     }
 
-    fn attempt_open(&self, step_execution_id: &StepExecutionId, now: i64) -> Result<u32, String> {
-        super::step_attempts::attempt_open(self, step_execution_id, now)
+    fn attempt_open(
+        &self,
+        step_execution_id: &StepExecutionId,
+        now: i64,
+        workspace_fingerprint: Option<&str>,
+    ) -> Result<u32, String> {
+        super::step_attempts::attempt_open(self, step_execution_id, now, workspace_fingerprint)
     }
 
     fn attempt_close(

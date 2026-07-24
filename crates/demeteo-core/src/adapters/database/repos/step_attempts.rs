@@ -16,10 +16,16 @@ use super::super::SqliteAdapter;
 /// UNIQUE constraint makes a racing double-open an error instead of a
 /// silent duplicate — the driver is single-tasked per feature, so this
 /// never fires in practice.
+///
+/// `workspace_fingerprint` is the P1.14 workspace state at node start
+/// (`<HEAD>:<dirty|clean>`, `None` when the probe failed); the row's
+/// `idempotency_key` is derived here — `<se_id>#<attempt_no>#<fp>` —
+/// because only this function knows the assigned `attempt_no`.
 pub fn attempt_open(
     adapter: &SqliteAdapter,
     step_execution_id: &StepExecutionId,
     now: i64,
+    workspace_fingerprint: Option<&str>,
 ) -> Result<u32, String> {
     let conn = adapter.conn.lock()?;
     // A crashed or killed process leaves its in-flight attempt `running`
@@ -42,11 +48,24 @@ pub fn attempt_open(
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
+    let idempotency_key = format!(
+        "{}#{}#{}",
+        step_execution_id.0,
+        next_no,
+        workspace_fingerprint.unwrap_or("unknown")
+    );
     conn.execute(
         "INSERT INTO step_attempts
-             (step_execution_id, attempt_no, status, started_at)
-         VALUES (?1, ?2, 'running', ?3)",
-        params![step_execution_id.0, next_no, now],
+             (step_execution_id, attempt_no, status, started_at,
+              workspace_fingerprint, idempotency_key)
+         VALUES (?1, ?2, 'running', ?3, ?4, ?5)",
+        params![
+            step_execution_id.0,
+            next_no,
+            now,
+            workspace_fingerprint,
+            idempotency_key
+        ],
     )
     .map_err(|e| e.to_string())?;
     Ok(next_no)
@@ -99,7 +118,8 @@ pub fn attempts_for_step(
         .prepare(
             "SELECT step_execution_id, attempt_no, status, cost_usd, tokens,
                     wall_clock_ms, error_class, failure_fingerprint,
-                    applied_rule, started_at, ended_at
+                    applied_rule, workspace_fingerprint, idempotency_key,
+                    started_at, ended_at
              FROM step_attempts
              WHERE step_execution_id = ?1
              ORDER BY attempt_no",
@@ -117,8 +137,10 @@ pub fn attempts_for_step(
                 error_class: row.get(6)?,
                 failure_fingerprint: row.get(7)?,
                 applied_rule: row.get(8)?,
-                started_at: row.get(9)?,
-                ended_at: row.get(10)?,
+                workspace_fingerprint: row.get(9)?,
+                idempotency_key: row.get(10)?,
+                started_at: row.get(11)?,
+                ended_at: row.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?;

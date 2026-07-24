@@ -27,6 +27,15 @@ CREATE TABLE IF NOT EXISTS step_attempts (
     -- `<class>.<strategy>` (e.g. `verdict.redirect`). NULL for
     -- non-failure outcomes and cancel-preempted failures.
     applied_rule        TEXT,
+    -- Workspace state at attempt start (P1.14): `<repo HEAD>:<dirty|clean>`,
+    -- or NULL when the probe failed / predates the column. On resume of an
+    -- interrupted node, a mismatch against the current workspace surfaces
+    -- as the Decision-14 synthetic gate instead of blind re-execution.
+    workspace_fingerprint TEXT,
+    -- `<step_execution_id>#<attempt_no>#<fingerprint>` (P1.14) — the
+    -- idempotency identity of this attempt's side effects; groundwork for
+    -- `command` nodes' `idempotent: false` (interrupted → always gate).
+    idempotency_key     TEXT,
     started_at          INTEGER NOT NULL,
     ended_at            INTEGER,
     UNIQUE(step_execution_id, attempt_no)

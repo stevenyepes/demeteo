@@ -139,6 +139,44 @@ pub(crate) fn build_base_ctx(
         .set("session_resume_summary", session_resume_summary)
 }
 
+/// Probe the feature worktree's state as a comparable fingerprint
+/// (P1.14): `"<repo HEAD>:<dirty|clean>"`. Recorded on every
+/// `step_attempts` row at node start; on resume of an interrupted node,
+/// a mismatch against the live workspace surfaces as the Decision-14
+/// synthetic gate instead of blind re-execution.
+///
+/// `None` on any probe failure (no repo yet, dead transport, git
+/// missing) — a fingerprint that can't be read must never block a run,
+/// so callers treat `None` as "unknown, proceed".
+///
+/// Dirtiness uses plain `git status --porcelain`, untracked included:
+/// agent steps write uncommitted artifacts mid-feature, so mid-run
+/// fingerprints are routinely `dirty` on both sides of a compare — the
+/// signal is the *change* of the pair, not dirtiness itself.
+pub(crate) async fn workspace_fingerprint(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    target_dir: &str,
+) -> Option<String> {
+    let d = paths::shell_escape_posix(target_dir);
+    let script = format!(
+        "cd {d} && git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | head -1"
+    );
+    let out = exec.run_command(machine_id, &script).await.ok()?;
+    let mut lines = out.lines();
+    let head = lines.next()?.trim();
+    // `git rev-parse HEAD` yields a 40-hex sha; anything else means the
+    // probe ran in a broken repo — treat as unknown.
+    if head.len() != 40 || !head.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let dirty = lines.next().is_some_and(|l| !l.trim().is_empty());
+    Some(format!(
+        "{head}:{}",
+        if dirty { "dirty" } else { "clean" }
+    ))
+}
+
 const MAX_SLUG_LEN: usize = 50;
 
 /// Generate a URL-safe slug from a feature description string.
