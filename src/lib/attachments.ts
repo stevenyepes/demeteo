@@ -243,6 +243,7 @@ const SUPPORTED_CLIPBOARD_IMAGE_MIMES: ReadonlySet<string> = new Set([
   "image/jpeg",
   "image/gif",
   "image/webp",
+  "image/tiff",
 ]);
 
 /**

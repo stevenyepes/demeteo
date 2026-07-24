@@ -155,6 +155,15 @@ describe("extractImageFilesFromClipboard", () => {
     expect(extractImageFilesFromClipboard(dt)).toEqual([png]);
   });
 
+  it("returns a macOS clipboard image exposed as TIFF", () => {
+    const tiff = file("clipboard.tiff", "image/tiff");
+    const dt = makeClipboardData([
+      { kind: "file", type: "image/tiff", getAsFile: () => tiff },
+    ]);
+
+    expect(extractImageFilesFromClipboard(dt)).toEqual([tiff]);
+  });
+
   it("returns each of PNG, JPEG, GIF and WebP when present", () => {
     const png = file("a.png", "image/png");
     const jpg = file("b.jpg", "image/jpeg");

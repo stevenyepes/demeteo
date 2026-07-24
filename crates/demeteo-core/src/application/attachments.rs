@@ -113,7 +113,7 @@ pub fn commit_attachment_inner(
 
     if !is_supported_attachment(&resolved_mime, &ext) {
         return Err(AppError::validation(format!(
-            "unsupported attachment type: mime={} ext={} (allowed: png, jpg, gif, webp, pdf, txt, md, json)",
+            "unsupported attachment type: mime={} ext={} (allowed: png, jpg, gif, webp, tiff, pdf, txt, md, json)",
             resolved_mime, ext
         )));
     }
@@ -223,7 +223,7 @@ pub fn is_supported_attachment(mime: &str, ext: &str) -> bool {
     if lower_mime.starts_with("image/") {
         return matches!(
             lower_mime.as_str(),
-            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/tiff"
         );
     }
     matches!(
@@ -231,6 +231,17 @@ pub fn is_supported_attachment(mime: &str, ext: &str) -> bool {
         "text/plain" | "text/markdown" | "application/json" | "application/pdf"
     ) || matches!(
         ext.to_ascii_lowercase().as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf" | "txt" | "md" | "markdown" | "json"
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "webp"
+            | "tiff"
+            | "tif"
+            | "pdf"
+            | "txt"
+            | "md"
+            | "markdown"
+            | "json"
     )
 }
