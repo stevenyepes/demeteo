@@ -28,6 +28,7 @@ pub(crate) mod driver;
 pub(crate) mod driver_registry;
 pub(crate) mod gate_waiter;
 pub(crate) mod impl_traits;
+pub mod node_catalog;
 pub(crate) mod registry;
 pub(crate) mod retry_policy;
 pub mod scheduler;

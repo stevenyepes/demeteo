@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 
-use crate::domain::models::workflow_v2::NodeConfig;
+use crate::domain::models::workflow_v2::{NodeConfig, PortType};
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::workflow_graph::{LintFinding, WorkflowGraph};
 
@@ -44,6 +44,42 @@ pub(crate) enum CancelBehavior {
     Graceful,
     /// Hard-kill is safe; the handler holds no state worth a goodbye.
     Immediate,
+}
+
+/// The coarse typed ports a node type accepts and produces (PRD §5.1).
+///
+/// These are *type-level defaults*: the editor uses them for connect-time
+/// checking and the "what can connect here" picker (P3.1), and an
+/// individual node may narrow them by declaring `config.inputs` /
+/// `config.outputs` — which is what
+/// [`lint_workflow_v2`](crate::domain::workflow_graph::lint_workflow_v2)
+/// already reads.
+///
+/// The launch five all accept [`PortType::Any`] on the way in, because
+/// the engine genuinely refuses no predecessor by type — a `gate` feeding
+/// a `sequence` is a shipped starter shape. Declaring narrower inputs here
+/// would make the editor reject graphs the engine runs happily. Outputs
+/// are declared honestly, which is where the rule earns its keep:
+/// `finalize` produces nothing, so nothing may follow it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NodePorts {
+    pub inputs: &'static [PortType],
+    pub outputs: &'static [PortType],
+}
+
+/// Palette-facing identity of a node type: what the builder calls it and
+/// the one-liner under that name (PRD §6.3 — "palette content derives from
+/// the registry, so `command` and future types appear automatically").
+///
+/// Deliberately **not** defaulted on the trait: a new node type must
+/// introduce itself, which is what makes the zero-frontend-edit guarantee
+/// real rather than aspirational.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NodeDisplay {
+    /// Title case, as it appears in the palette (`"Agent"`, `"Sync"`).
+    pub label: &'static str,
+    /// One line of "what this node does", shown under the label.
+    pub summary: &'static str,
 }
 
 /// Everything a node handler consumes for one dispatch, bundled so the
@@ -107,8 +143,30 @@ pub(crate) trait NodeHandler: Send + Sync {
     /// and validates config forms from this (P3.2); until then it is
     /// documentation with teeth — kept honest by a unit test that
     /// asserts it is a valid schema object.
-    #[allow(dead_code)] // First runtime reader is `node_types_list` (P3.1).
     fn config_schema(&self) -> &'static serde_json::Value;
+
+    /// How this type introduces itself in the builder palette (P3.1).
+    fn display(&self) -> NodeDisplay;
+
+    /// Type-level port declaration for connect-time checking (P3.1).
+    /// Defaults to fully permissive — override to declare something the
+    /// engine actually constrains.
+    fn ports(&self) -> NodePorts {
+        NodePorts {
+            inputs: &[PortType::Any],
+            outputs: &[PortType::Any],
+        }
+    }
+
+    /// How many nodes of this type one workflow may hold, when the engine
+    /// caps it. `None` = unbounded. `finalize` is the only capped type
+    /// today (a second squash would collapse the first — the
+    /// `multiple-finalize` lint error); the palette greys the entry out
+    /// once the cap is reached rather than letting the author build a
+    /// graph that can't be saved.
+    fn max_instances(&self) -> Option<u32> {
+        None
+    }
 
     /// Per-type structural lint, run alongside the graph-level rules in
     /// [`lint_workflow_v2`](crate::domain::workflow_graph::lint_workflow_v2).
@@ -177,12 +235,24 @@ impl NodeTypeRegistry {
             .cloned()
     }
 
-    /// Registered kinds, in registration order. Feeds the editor
-    /// palette (P3.1) and the "known types" input of
-    /// [`lint_workflow_v2`](crate::domain::workflow_graph::lint_workflow_v2).
-    #[allow(dead_code)] // First external reader is `node_types_list` (P3.1).
+    /// Registered kinds, in registration order — the "known types" input
+    /// of
+    /// [`lint_workflow_v2`](crate::domain::workflow_graph::lint_workflow_v2),
+    /// which still takes
+    /// [`CORE_NODE_TYPES`](crate::domain::workflow_graph::CORE_NODE_TYPES)
+    /// from its boundary callers. The `workflow_lint` command (P3.3) is
+    /// what finally routes lint through the registry and retires that
+    /// constant; the test below keeps the two in lockstep until then.
+    #[allow(dead_code)] // First non-test caller: `workflow_lint` (P3.3).
     pub(crate) fn kinds(&self) -> Vec<&'static str> {
         self.handlers.iter().map(|h| h.kind()).collect()
+    }
+
+    /// Every registered handler, in registration order — the palette's
+    /// source of truth (see
+    /// [`node_catalog`](super::node_catalog), P3.1).
+    pub(crate) fn handlers(&self) -> &[Arc<dyn NodeHandler>] {
+        &self.handlers
     }
 }
 
@@ -254,6 +324,55 @@ mod tests {
             // Must be a *compilable* JSON Schema, not just any object.
             jsonschema::validator_for(schema)
                 .unwrap_or_else(|e| panic!("{kind} config schema must compile: {e}"));
+        }
+    }
+
+    #[test]
+    fn every_handler_declares_palette_metadata() {
+        for kind in ALL_KINDS {
+            let handler = NodeTypeRegistry::global().handler_for(kind).unwrap();
+            let display = handler.display();
+            assert!(!display.label.is_empty(), "{kind} needs a palette label");
+            assert!(!display.summary.is_empty(), "{kind} needs a summary");
+            // Labels are title-case nouns, not raw kind strings.
+            assert!(
+                display.label.starts_with(|c: char| c.is_uppercase()),
+                "{kind} label '{}' should be title case",
+                display.label
+            );
+        }
+    }
+
+    #[test]
+    fn every_handler_accepts_something_on_input() {
+        // A type with no inputs could never be connected downstream of
+        // anything, which no launch type intends — `finalize` expresses
+        // "ends the run" through empty *outputs*, not empty inputs.
+        for kind in ALL_KINDS {
+            let handler = NodeTypeRegistry::global().handler_for(kind).unwrap();
+            assert!(
+                !handler.ports().inputs.is_empty(),
+                "{kind} accepts no incoming port type"
+            );
+        }
+    }
+
+    #[test]
+    fn only_finalize_is_capped_and_sinks() {
+        for kind in ALL_KINDS {
+            let handler = NodeTypeRegistry::global().handler_for(kind).unwrap();
+            let outputs_nothing = handler.ports().outputs.is_empty();
+            let capped = handler.max_instances().is_some();
+            assert_eq!(
+                outputs_nothing,
+                kind == "finalize",
+                "{kind}: only finalize produces nothing"
+            );
+            assert_eq!(
+                capped,
+                kind == "finalize",
+                "{kind}: only finalize is instance-capped"
+            );
         }
     }
 

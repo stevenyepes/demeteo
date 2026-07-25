@@ -1082,6 +1082,30 @@ impl crate::adapters::step_executor::registry::NodeHandler for AgentNodeHandler 
         &AGENT_CONFIG_SCHEMA
     }
 
+    fn display(&self) -> crate::adapters::step_executor::registry::NodeDisplay {
+        crate::adapters::step_executor::registry::NodeDisplay {
+            label: "Agent",
+            summary: "One agent turn against the feature worktree: writes the \
+                      declared artifacts, optionally checked by a verifier.",
+        }
+    }
+
+    fn ports(&self) -> crate::adapters::step_executor::registry::NodePorts {
+        use crate::domain::models::workflow_v2::PortType;
+        crate::adapters::step_executor::registry::NodePorts {
+            inputs: &[PortType::Any],
+            // An agent turn can emit prose, files, a task plan (the v1
+            // `task-list.json` a sequence node consumes), and — when a
+            // verifier is attached — a verdict.
+            outputs: &[
+                PortType::Text,
+                PortType::File,
+                PortType::TaskList,
+                PortType::Verdict,
+            ],
+        }
+    }
+
     async fn execute(
         &self,
         ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,

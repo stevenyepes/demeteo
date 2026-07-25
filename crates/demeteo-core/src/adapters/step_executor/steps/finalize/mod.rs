@@ -500,6 +500,31 @@ impl crate::adapters::step_executor::registry::NodeHandler for FinalizeNodeHandl
         &FINALIZE_CONFIG_SCHEMA
     }
 
+    fn display(&self) -> crate::adapters::step_executor::registry::NodeDisplay {
+        crate::adapters::step_executor::registry::NodeDisplay {
+            label: "Finalize",
+            summary: "Squash the feature branch and publish it. Ends the run — \
+                      nothing may follow.",
+        }
+    }
+
+    fn ports(&self) -> crate::adapters::step_executor::registry::NodePorts {
+        use crate::domain::models::workflow_v2::PortType;
+        crate::adapters::step_executor::registry::NodePorts {
+            inputs: &[PortType::Any],
+            // No outputs is the load-bearing declaration: it is what makes
+            // the editor refuse an edge out of finalize, mirroring the
+            // `finalize-not-sink` lint error.
+            outputs: &[],
+        }
+    }
+
+    fn max_instances(&self) -> Option<u32> {
+        // A second squash would collapse the first and overwrite its
+        // summary — the `multiple-finalize` lint error, enforced up front.
+        Some(1)
+    }
+
     async fn execute(
         &self,
         ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
