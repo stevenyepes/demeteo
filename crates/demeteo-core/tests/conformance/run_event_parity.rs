@@ -188,8 +188,7 @@ async fn failed_run_logs_failure_class_and_policy_rule() {
     let mut wf = minimal_workflow();
     wf["steps"][0]["prompt_template"] =
         serde_json::json!("Produce the parity report, but write nothing.");
-    let workflow_id =
-        workflows::create_from_json(&ctx.workflows, &wf).expect("ingest workflow");
+    let workflow_id = workflows::create_from_json(&ctx.workflows, &wf).expect("ingest workflow");
 
     let feature = ctx
         .executor

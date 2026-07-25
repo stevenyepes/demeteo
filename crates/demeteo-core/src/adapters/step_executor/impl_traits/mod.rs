@@ -301,8 +301,8 @@ impl DagStepExecutor {
             ctx.workflow_id.as_str(),
             &ctx.steps,
         );
-        let graph = crate::domain::workflow_graph::WorkflowGraph::build(&def_v2).map_err(
-            |findings| {
+        let graph =
+            crate::domain::workflow_graph::WorkflowGraph::build(&def_v2).map_err(|findings| {
                 format!(
                     "workflow graph is not schedulable: {}",
                     findings
@@ -311,8 +311,7 @@ impl DagStepExecutor {
                         .collect::<Vec<_>>()
                         .join("; ")
                 )
-            },
-        )?;
+            })?;
 
         self.driver_registry.register(f_id.clone());
 
@@ -889,7 +888,9 @@ impl DagStepExecutor {
     ) -> Option<crate::domain::workflow_graph::WorkflowGraph> {
         let feature = self.features.get(feature_id).ok().flatten()?;
         let wf_id = feature.workflow_id?;
-        let version = self.resolve_pinned_version(feature_id.as_str(), &wf_id).ok()?;
+        let version = self
+            .resolve_pinned_version(feature_id.as_str(), &wf_id)
+            .ok()?;
         let steps: Vec<crate::domain::models::StepConfig> =
             serde_json::from_str(&version.steps_json).ok()?;
         let def = crate::domain::models::workflow_migrate::migrate_v1_to_v2(

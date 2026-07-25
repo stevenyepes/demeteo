@@ -266,12 +266,13 @@ pub fn run() {
             // `build_core_context`, wired right after it returns — events
             // fired during startup reconcile are forwarded live but not
             // recorded, same as the runner's `RunEventBridge` pattern.
-            let run_event_recorder =
-                Arc::new(demeteo_core::adapters::run_event_log::RunEventRecorder::new(
-                    Arc::new(adapters::tauri_ui::notification::TauriNotificationAdapter::new(
+            let run_event_recorder = Arc::new(
+                demeteo_core::adapters::run_event_log::RunEventRecorder::new(Arc::new(
+                    adapters::tauri_ui::notification::TauriNotificationAdapter::new(
                         app.handle().clone(),
-                    )),
-                ));
+                    ),
+                )),
+            );
             let notif_adapter: Arc<dyn NotificationPort> = run_event_recorder.clone();
 
             // Expose the notification port as Tauri state BEFORE it is moved into

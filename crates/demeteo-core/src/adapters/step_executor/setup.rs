@@ -171,10 +171,7 @@ pub(crate) async fn workspace_fingerprint(
         return None;
     }
     let dirty = lines.next().is_some_and(|l| !l.trim().is_empty());
-    Some(format!(
-        "{head}:{}",
-        if dirty { "dirty" } else { "clean" }
-    ))
+    Some(format!("{head}:{}", if dirty { "dirty" } else { "clean" }))
 }
 
 const MAX_SLUG_LEN: usize = 50;

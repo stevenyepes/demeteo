@@ -54,10 +54,7 @@ pub(crate) enum GuardVerdict {
 impl ExecutionDriver {
     /// Run the guard for one watchdog-`interrupted` node. See the module
     /// docs for the decision table.
-    pub(crate) async fn resume_fingerprint_guard(
-        &self,
-        step_exec: &StepExecution,
-    ) -> GuardVerdict {
+    pub(crate) async fn resume_fingerprint_guard(&self, step_exec: &StepExecution) -> GuardVerdict {
         // The comparison baseline: the most recent attempt that recorded
         // a fingerprint. Rows predating P1.14 (or opened while the probe
         // failed) yield no baseline — proceed.

@@ -123,9 +123,8 @@ impl DagStepExecutor {
         // a DAG only the downstream cone, leaving independent branches'
         // results intact. Graph resolution misses (legacy feature, no
         // matching workflow) fall back to the index comparison.
-        let reset_ids: Option<std::collections::HashSet<crate::domain::ids::StepId>> = self
-            .resolve_feature_graph(feature_id)
-            .and_then(|graph| {
+        let reset_ids: Option<std::collections::HashSet<crate::domain::ids::StepId>> =
+            self.resolve_feature_graph(feature_id).and_then(|graph| {
                 graph.descendants(&step_exec.step_id).map(|d| {
                     let mut set: std::collections::HashSet<crate::domain::ids::StepId> =
                         d.into_iter().cloned().collect();

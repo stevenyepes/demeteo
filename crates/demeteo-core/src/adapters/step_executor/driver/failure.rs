@@ -19,7 +19,9 @@ impl ExecutionDriver {
     ) {
         let (action, target_id) = match &decision.action {
             RetryAction::Redirect { target, .. } => ("redirect", Some(target.0.clone())),
-            RetryAction::Exhausted { target } => ("exhausted", target.as_ref().map(|t| t.0.clone())),
+            RetryAction::Exhausted { target } => {
+                ("exhausted", target.as_ref().map(|t| t.0.clone()))
+            }
             RetryAction::RetryInPlace { .. } => ("in_place", None),
             RetryAction::Fail => ("fail", None),
         };

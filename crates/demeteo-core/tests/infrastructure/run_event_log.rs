@@ -35,7 +35,11 @@ fn progress(status: &str) -> DomainEvent {
     }
 }
 
-fn wired_recorder() -> (Arc<RunEventRecorder>, Arc<CapturingNotif>, Arc<SqliteAdapter>) {
+fn wired_recorder() -> (
+    Arc<RunEventRecorder>,
+    Arc<CapturingNotif>,
+    Arc<SqliteAdapter>,
+) {
     let inner = Arc::new(CapturingNotif::default());
     let db = Arc::new(SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap());
     let recorder = Arc::new(RunEventRecorder::new(inner.clone()));
@@ -127,8 +131,8 @@ fn translation_maps_narrative_events() {
         ),
     ];
     for (event, want_kind) in cases {
-        let rec = run_event_record(&event)
-            .unwrap_or_else(|| panic!("expected a record for {event:?}"));
+        let rec =
+            run_event_record(&event).unwrap_or_else(|| panic!("expected a record for {event:?}"));
         assert_eq!(rec.kind, want_kind);
         assert_eq!(rec.feature_id, "feat-1");
     }
