@@ -1013,6 +1013,26 @@ impl crate::adapters::step_executor::registry::NodeHandler for SequenceNodeHandl
         &SEQUENCE_CONFIG_SCHEMA
     }
 
+    fn display(&self) -> crate::adapters::step_executor::registry::NodeDisplay {
+        crate::adapters::step_executor::registry::NodeDisplay {
+            label: "Sequence",
+            summary: "Fan a task list into one agent turn per task, \
+                      checkpointing each task as it lands.",
+        }
+    }
+
+    fn ports(&self) -> crate::adapters::step_executor::registry::NodePorts {
+        use crate::domain::models::workflow_v2::PortType;
+        crate::adapters::step_executor::registry::NodePorts {
+            // A sequence *consumes* a task list, but not necessarily from
+            // every predecessor: the shipped starters also wire a gate
+            // straight into one. Input stays `Any`; the task-list source is
+            // the node's own `task_list_from` config, not an edge constraint.
+            inputs: &[PortType::Any],
+            outputs: &[PortType::Text, PortType::File],
+        }
+    }
+
     async fn execute(
         &self,
         ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,

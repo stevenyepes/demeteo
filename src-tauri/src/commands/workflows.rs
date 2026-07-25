@@ -1,3 +1,4 @@
+use crate::adapters::step_executor::node_catalog::{node_type_catalog, NodeTypeInfo};
 use crate::domain::ids::{FeatureId, WorkflowId, WorkflowVersionId};
 use crate::domain::models::workflow_migrate::migrate_v1_to_v2;
 use crate::domain::models::workflow_v2::validate_workflow_v2;
@@ -479,6 +480,18 @@ pub fn workflow_import(
         version_id: version_id.0,
         schedule: None,
     })
+}
+
+/// Every node type this build can dispatch, with the display metadata,
+/// config schema, and port declaration the builder palette needs (P3.1).
+///
+/// Derived entirely from the `NodeTypeRegistry`, so a newly registered
+/// handler appears in the palette with no frontend change — the PRD §6.3
+/// promise and P3.5's acceptance test. Static per build: the frontend
+/// fetches it once and caches it.
+#[tauri::command]
+pub fn node_types_list() -> Vec<NodeTypeInfo> {
+    node_type_catalog()
 }
 
 /// Revert a starter pack workflow to its bundled default version.

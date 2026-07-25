@@ -575,6 +575,22 @@ impl crate::adapters::step_executor::registry::NodeHandler for GateNodeHandler {
         &GATE_CONFIG_SCHEMA
     }
 
+    fn display(&self) -> crate::adapters::step_executor::registry::NodeDisplay {
+        crate::adapters::step_executor::registry::NodeDisplay {
+            label: "Gate",
+            summary: "Pause for a human decision: approve, reject, or send the \
+                      run back to an earlier node with feedback.",
+        }
+    }
+
+    fn ports(&self) -> crate::adapters::step_executor::registry::NodePorts {
+        use crate::domain::models::workflow_v2::PortType;
+        crate::adapters::step_executor::registry::NodePorts {
+            inputs: &[PortType::Any],
+            outputs: &[PortType::Approval],
+        }
+    }
+
     async fn execute(
         &self,
         ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
