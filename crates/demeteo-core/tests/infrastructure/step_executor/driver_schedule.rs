@@ -131,7 +131,12 @@ fn derived_chain_states_make_exactly_the_v1_cursor_step_ready() {
     let rows = vec![
         exec("a", 0, "completed", None),
         exec("b", 1, "completed", None),
-        exec("c", 2, "interrupted", Some("Step interrupted by system restart")),
+        exec(
+            "c",
+            2,
+            "interrupted",
+            Some("Step interrupted by system restart"),
+        ),
         exec("d", 3, "pending", None),
     ];
     let states = derive_states(&g, &rows);
