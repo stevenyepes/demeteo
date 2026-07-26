@@ -974,6 +974,7 @@ static SEQUENCE_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
                 },
                 "capability": {
                     "type": ["string", "null"],
+                    "enum": ["read_only", "artifacts", "verify", "implement", null],
                     "description": "Write-scope capability class. Sequence \
                         steps default to Implement (they legitimately write \
                         across the source tree)."

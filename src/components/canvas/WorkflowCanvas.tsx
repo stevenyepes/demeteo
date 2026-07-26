@@ -106,8 +106,8 @@ function CanvasInner({
   const typesByKind = useMemo(() => byKind(catalog), [catalog]);
   const [picker, setPicker] = useState<PickerState | null>(null);
   const base = useMemo(
-    () => toFlowGraph(definition, { statusByNode, highlightedNodeIds }),
-    [definition, statusByNode, highlightedNodeIds],
+    () => toFlowGraph(definition, { statusByNode, highlightedNodeIds, showEssence: design }),
+    [definition, statusByNode, highlightedNodeIds, design],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(base.nodes);

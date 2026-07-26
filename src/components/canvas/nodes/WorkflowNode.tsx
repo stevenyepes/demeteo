@@ -10,7 +10,9 @@
  * static box-shadows) to honor the webview battery rule; no infinite transforms.
  */
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { ShieldCheck } from 'lucide-react';
 import { nodeTypeMeta } from '../types';
+import type { EssenceKind } from '../nodeSummary';
 import {
   runStatusMeta,
   TONE_TEXT,
@@ -31,6 +33,17 @@ const TONE_CARD: Record<RunStatusTone, string> = {
   emerald: 'border-emerald-500/40 shadow-lg shadow-black/30',
   ruby: 'border-rose-500/50 shadow-[0_0_18px_rgba(244,63,94,0.22)]',
   slate: 'border-slate-700/60 shadow-lg shadow-black/30',
+};
+
+/** Config-essence chip tint per badge kind (design mode, P3.2). Muted on
+ *  purpose: these are scanning aids, not status — the run overlay owns the
+ *  loud colors. */
+const ESSENCE_CHIP: Record<EssenceKind, string> = {
+  agent: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300/90',
+  model: 'border-violet-500/20 bg-violet-500/10 text-violet-300/90',
+  effort: 'border-slate-600/40 bg-slate-700/20 text-slate-300',
+  capability: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300/90',
+  flag: 'border-slate-600/40 bg-slate-800/40 text-slate-400',
 };
 
 /** Solid status dot per run tone. */
@@ -127,6 +140,37 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
           {typeof run?.wallClockSecs === 'number' && run.wallClockSecs > 0 && (
             <span className="text-slate-400">{formatDuration(run.wallClockSecs)}</span>
           )}
+        </div>
+      )}
+
+      {data.essence && (
+        <div
+          className="flex flex-wrap items-center gap-1 pl-11 text-[9px] font-mono"
+          data-testid="node-essence"
+        >
+          {data.essence.verifier && (
+            <span title="A verifier turn checks this node's output">
+              <ShieldCheck className="h-3 w-3 text-emerald-400" aria-label="Verified" />
+            </span>
+          )}
+          {data.essence.badges.map((b) => (
+            <span
+              key={`${b.kind}:${b.label}`}
+              title={b.hint}
+              className={`rounded border px-1 py-0.5 ${ESSENCE_CHIP[b.kind]}`}
+            >
+              {b.label}
+            </span>
+          ))}
+          {data.essence.retry.slice(0, 2).map((r) => (
+            <span
+              key={r}
+              title={`Retry: ${data.essence!.retry.join(' · ')}`}
+              className="rounded border border-amber-500/20 bg-amber-500/10 px-1 py-0.5 text-amber-300/90"
+            >
+              {r}
+            </span>
+          ))}
         </div>
       )}
 
