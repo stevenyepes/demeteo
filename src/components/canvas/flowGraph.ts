@@ -8,6 +8,7 @@
  * map — design mode (P2.1) simply passes nothing.
  */
 import type { Edge, Node } from '@xyflow/react';
+import { isEssenceEmpty, nodeEssence, type NodeEssence } from './nodeSummary';
 import type { NodeRunStatus, WorkflowDefinitionV2 } from './types';
 
 /** Data carried on each React Flow node into the `WorkflowNode` card. */
@@ -18,6 +19,9 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   run?: NodeRunStatus;
   /** In the replay cone about to re-run (P2.4) — draws a "will re-run" ring. */
   highlighted?: boolean;
+  /** Config-essence badges for design mode (P3.2); undefined in run mode,
+   *  where the card's second row belongs to cost/duration instead. */
+  essence?: NodeEssence;
 }
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
@@ -32,23 +36,30 @@ export interface ToFlowGraphOptions {
   statusByNode?: Record<string, NodeRunStatus>;
   /** node ids in the replay cone to highlight before confirming (P2.4). */
   highlightedNodeIds?: Set<string> | null;
+  /** Design mode (P3.2): put each node's config essence on its card, so the
+   *  graph is scannable without opening the config panel (PRD §6.3). */
+  showEssence?: boolean;
 }
 
 export function toFlowGraph(
   def: WorkflowDefinitionV2,
   opts: ToFlowGraphOptions = {},
 ): { nodes: WorkflowFlowNode[]; edges: Edge[] } {
-  const nodes: WorkflowFlowNode[] = def.nodes.map((n, i) => ({
-    id: n.id,
-    type: 'workflow',
-    position: n.position ?? { x: 0, y: i * FALLBACK_STRIDE },
-    data: {
-      nodeType: n.type,
-      title: n.title,
-      run: opts.statusByNode?.[n.id],
-      highlighted: opts.highlightedNodeIds?.has(n.id) ?? false,
-    },
-  }));
+  const nodes: WorkflowFlowNode[] = def.nodes.map((n, i) => {
+    const essence = opts.showEssence ? nodeEssence(n) : null;
+    return {
+      id: n.id,
+      type: 'workflow' as const,
+      position: n.position ?? { x: 0, y: i * FALLBACK_STRIDE },
+      data: {
+        nodeType: n.type,
+        title: n.title,
+        run: opts.statusByNode?.[n.id],
+        highlighted: opts.highlightedNodeIds?.has(n.id) ?? false,
+        essence: essence && !isEssenceEmpty(essence) ? essence : undefined,
+      },
+    };
+  });
 
   const edges: Edge[] = def.edges.map((e) => ({
     id: `${e.from}->${e.to}`,

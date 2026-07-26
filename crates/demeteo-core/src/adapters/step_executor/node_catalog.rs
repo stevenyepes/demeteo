@@ -131,6 +131,70 @@ mod tests {
         assert_eq!(finalize.max_instances, Some(1));
     }
 
+    /// The config side panel (P3.2) renders a control per schema property,
+    /// choosing it from the property's `type`/`enum`. A property that declares
+    /// neither would fall through to the panel's raw-JSON escape hatch — safe,
+    /// but a silent downgrade nobody would notice. Assert the schemas stay
+    /// within the vocabulary the renderer actually models.
+    #[test]
+    fn every_config_property_is_renderable() {
+        const MODELLED: [&str; 6] = ["string", "boolean", "integer", "number", "object", "array"];
+        for entry in node_type_catalog() {
+            let Some(props) = entry
+                .config_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+            else {
+                continue; // a type with no config at all is fine
+            };
+            for (key, spec) in props {
+                if spec.get("enum").is_some() {
+                    continue;
+                }
+                let ty = spec.get("type").unwrap_or_else(|| {
+                    panic!("{}.{key} declares neither `type` nor `enum`", entry.kind)
+                });
+                let names: Vec<&str> = match ty {
+                    serde_json::Value::String(s) => vec![s.as_str()],
+                    serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_str()).collect(),
+                    other => panic!("{}.{key} has a non-schema `type`: {other}", entry.kind),
+                };
+                assert!(
+                    names.iter().any(|n| MODELLED.contains(n)),
+                    "{}.{key} declares only unmodelled types {names:?}",
+                    entry.kind
+                );
+            }
+        }
+    }
+
+    /// Companion to `canvas_fixtures_are_current`: the config panel's tests
+    /// render from the **real** registry schemas rather than hand-written
+    /// stand-ins, so a schema change that breaks the form is caught in Rust
+    /// (fixture goes stale) instead of shipping a panel that silently stops
+    /// offering a field. Regenerate with
+    /// `UPDATE_CANVAS_FIXTURES=1 cargo test -p demeteo-core catalog_fixture`.
+    #[test]
+    fn catalog_fixture_is_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src/components/canvas/__fixtures__/node_catalog.json");
+        let json = serde_json::to_string_pretty(&node_type_catalog()).expect("serialize") + "\n";
+        if std::env::var("UPDATE_CANVAS_FIXTURES").is_ok() {
+            std::fs::write(&path, &json).expect("write catalog fixture");
+            return;
+        }
+        let existing = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "catalog fixture {} missing: {e}; run UPDATE_CANVAS_FIXTURES=1",
+                path.display()
+            )
+        });
+        assert_eq!(
+            existing, json,
+            "node_catalog.json is stale; run UPDATE_CANVAS_FIXTURES=1"
+        );
+    }
+
     #[test]
     fn the_shipped_starter_shapes_stay_connectable() {
         // Guard against a future handler narrowing its inputs into

@@ -1054,6 +1054,7 @@ static AGENT_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
                 },
                 "capability": {
                     "type": ["string", "null"],
+                    "enum": ["read_only", "artifacts", "verify", "implement", null],
                     "description": "Write-scope capability class (ReadOnly / \
                         Artifacts / Implement). Unset infers the safe default."
                 },

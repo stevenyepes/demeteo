@@ -1,0 +1,346 @@
+[
+  {
+    "kind": "agent",
+    "label": "Agent",
+    "summary": "One agent turn against the feature worktree: writes the declared artifacts, optionally checked by a verifier.",
+    "config_schema": {
+      "additionalProperties": true,
+      "description": "Configuration for an `agent` node: one agent turn against the feature worktree, producing declared artifacts and optionally verified by a harness/verifier turn.",
+      "properties": {
+        "agent_kind": {
+          "description": "Per-step agent runtime override (e.g. `claude-code`). Unset inherits the run/project chain.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allow_network": {
+          "default": false,
+          "description": "Opt this step into web search / fetch.",
+          "type": "boolean"
+        },
+        "allow_shell": {
+          "default": false,
+          "description": "Opt a non-shell capability into the shell.",
+          "type": "boolean"
+        },
+        "artifacts": {
+          "description": "Declared artifact captures (name/path/capture strategy) committed or stored after the turn.",
+          "items": {
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "capability": {
+          "description": "Write-scope capability class (ReadOnly / Artifacts / Implement). Unset infers the safe default.",
+          "enum": [
+            "read_only",
+            "artifacts",
+            "verify",
+            "implement",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "description": "Per-step reasoning-effort override. Unset inherits.",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_iterations": {
+          "description": "v1 legacy retry budget. In v2 the retry block owns budgets; migration lifts this when an on_failure existed, and keeps it here only as inert author intent.",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Per-step model override. Resolves below the run-time per-step override, above the project default.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt_template": {
+          "description": "The step's prompt template. Supports the `{{...}}` placeholders documented in PROMPT_CONTEXT.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verifier": {
+          "description": "Optional harness/verifier turn run after the agent turn; a FAIL verdict feeds the retry policy.",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "inputs": [
+      "any"
+    ],
+    "outputs": [
+      "text",
+      "file",
+      "task_list",
+      "verdict"
+    ],
+    "max_instances": null
+  },
+  {
+    "kind": "gate",
+    "label": "Gate",
+    "summary": "Pause for a human decision: approve, reject, or send the run back to an earlier node with feedback.",
+    "config_schema": {
+      "additionalProperties": true,
+      "description": "Configuration for a `gate` node: park the run for a human decision (approve / reject / redirect). The gate inherits its predecessor's artifacts for review.",
+      "properties": {
+        "gate_class": {
+          "description": "Blast-radius class. `dangerous` (merge to default, push to protected, deploy, delete) is parked for a human even on unattended runs; unset or `safe` auto-approves unattended.",
+          "enum": [
+            "dangerous",
+            "safe",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "inputs": [
+      "any"
+    ],
+    "outputs": [
+      "approval"
+    ],
+    "max_instances": null
+  },
+  {
+    "kind": "sequence",
+    "label": "Sequence",
+    "summary": "Fan a task list into one agent turn per task, checkpointing each task as it lands.",
+    "config_schema": {
+      "additionalProperties": true,
+      "description": "Configuration for a `sequence` node: run an ordered task list, one fresh agent session per task, in a single worktree, merging once at the end. The task list arrives on a typed `task_list` edge (v1: `task_list_from`); without one, the node plans its own decomposition.",
+      "properties": {
+        "agent_kind": {
+          "description": "Per-step agent runtime override for the task agents. Unset inherits the run/project chain.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allow_network": {
+          "default": false,
+          "description": "Opt the task agents into web search / fetch.",
+          "type": "boolean"
+        },
+        "allow_shell": {
+          "default": false,
+          "description": "Opt a non-shell capability into the shell.",
+          "type": "boolean"
+        },
+        "artifacts": {
+          "description": "Declared artifact captures committed or stored after the step.",
+          "items": {
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "capability": {
+          "description": "Write-scope capability class. Sequence steps default to Implement (they legitimately write across the source tree).",
+          "enum": [
+            "read_only",
+            "artifacts",
+            "verify",
+            "implement",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "description": "Per-step reasoning-effort override. Unset inherits.",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_iterations": {
+          "description": "v1 legacy retry budget; see the agent node's field of the same name.",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Per-step model override for the task agents.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt_template": {
+          "description": "Prompt template each task agent renders, with the task's own goal injected.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verifier": {
+          "description": "Optional harness/verifier turn run after the list lands; a FAIL verdict feeds the retry policy targeted at the tasks owning the implicated files.",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "inputs": [
+      "any"
+    ],
+    "outputs": [
+      "text",
+      "file"
+    ],
+    "max_instances": null
+  },
+  {
+    "kind": "sync",
+    "label": "Sync",
+    "summary": "Merge the default branch into the feature branch, resolving any conflict with an agent turn.",
+    "config_schema": {
+      "additionalProperties": true,
+      "description": "Configuration for a `sync` node: fetch + merge origin/<default_branch> into the feature branch; on conflict, spawn a resolution agent and route the outcome through the node's retry policy (v1: on_failure).",
+      "properties": {
+        "agent_kind": {
+          "description": "Agent runtime override for the conflict-resolution turn. Unset inherits the run/project chain.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "description": "Reasoning-effort override for the resolution turn. Unset inherits.",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Model override for the resolution turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "inputs": [
+      "any"
+    ],
+    "outputs": [
+      "text"
+    ],
+    "max_instances": null
+  },
+  {
+    "kind": "finalize",
+    "label": "Finalize",
+    "summary": "Squash the feature branch and publish it. Ends the run — nothing may follow.",
+    "config_schema": {
+      "additionalProperties": true,
+      "description": "Configuration for a `finalize` node: merge the feature branch outcome, author the run summary / PR description with a bounded agent turn, and clean up.",
+      "properties": {
+        "agent_kind": {
+          "description": "Agent runtime override for the summary turn. Unset inherits the run/project chain.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "description": "Reasoning-effort override for the summary turn. Unset inherits.",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Model override for the summary turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt_template": {
+          "description": "Prompt template for the summary turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "inputs": [
+      "any"
+    ],
+    "outputs": [],
+    "max_instances": 1
+  }
+]
