@@ -14,6 +14,7 @@ use super::tasks::{
     apply_landed_checkpoint, extract_task_plan, select_targeted_tasks,
     task_list_json_shape_example, validate_task_plan, TaskPlan,
 };
+use super::CheckpointResume;
 use crate::adapters::step_executor::artifacts::{
     resolve_attached_artifacts, resolve_attached_user_attachments,
 };
@@ -36,6 +37,13 @@ impl ExecutionDriver {
     /// * **attempt 2+** — the targeted fix did not stick. Re-resolve the full
     ///   plan; when it comes from an artifact, a gate redirect may have
     ///   revised the spec in the meantime, so re-reading picks that up.
+    ///
+    /// Cutting across the ladder: whenever `resume` carries landed tasks, the
+    /// **cached** plan wins over re-resolving. A checkpoint identifies work
+    /// by task id, so a plan whose ids differ from the one that produced it
+    /// matches nothing — and a planner-sourced plan re-decomposed from
+    /// scratch produces exactly that. Re-planning would keep the landed
+    /// commits but re-pay for every one of them.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn resolve_task_plan(
         &mut self,
@@ -49,6 +57,7 @@ impl ExecutionDriver {
         machine_str: &str,
         step_execs: &[StepExecution],
         step_index: usize,
+        resume: &CheckpointResume,
     ) -> Result<TaskPlan, StepOutcome> {
         // Is the *previous* attempt's implementation still on the feature
         // branch? It is exactly when this step's last attempt merged — i.e.
@@ -88,31 +97,60 @@ impl ExecutionDriver {
                     total = cached.tasks.len(),
                     "sequence step: targeted retry"
                 );
-                return Ok(self.skip_checkpointed_tasks(&step_exec.step_id.0, targeted));
+                return Ok(self.skip_checkpointed_tasks(&step_exec.step_id.0, targeted, resume));
             }
         }
 
-        let mut plan = match step_conf
-            .task_list_from
-            .as_ref()
-            .filter(|s| !s.0.is_empty())
-        {
-            Some(source_step) => {
-                self.load_task_list_artifact(source_step.0.as_str(), step_execs)?
+        // A checkpoint names the work it is skipping by task id, so this
+        // attempt has to speak the same ids as the attempt that landed it.
+        // Re-reading an artifact usually does (the upstream step's output is
+        // stable), but a *planner* pass re-decomposes from scratch and its
+        // ids are new — the checkpoint would then match nothing and every
+        // landed task would be re-implemented on top of itself. The cached
+        // plan is the one those ids came from.
+        let cached_plan: Option<TaskPlan> = if resume.landed_ids().is_empty() {
+            None
+        } else {
+            self.features
+                .plan_cache_get(&self.f_id, step_exec.step_id.0.as_str())
+                .ok()
+                .flatten()
+                .and_then(|json| serde_json::from_str(&json).ok())
+        };
+
+        let mut plan = match cached_plan {
+            Some(cached) => {
+                tracing::info!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    tasks = cached.tasks.len(),
+                    "sequence step: resuming against the cached plan the checkpoint was \
+                     recorded against"
+                );
+                cached
             }
-            None => {
-                self.run_planner_pass(
-                    accumulated_cost,
-                    accumulated_tokens,
-                    agent_kind,
-                    override_model,
-                    self.resolve_step_effort(step_conf),
-                    machine_str,
-                    step_execs,
-                    step_index,
-                )
-                .await?
-            }
+            None => match step_conf
+                .task_list_from
+                .as_ref()
+                .filter(|s| !s.0.is_empty())
+            {
+                Some(source_step) => {
+                    self.load_task_list_artifact(source_step.0.as_str(), step_execs)?
+                }
+                None => {
+                    self.run_planner_pass(
+                        accumulated_cost,
+                        accumulated_tokens,
+                        agent_kind,
+                        override_model,
+                        self.resolve_step_effort(step_conf),
+                        machine_str,
+                        step_execs,
+                        step_index,
+                    )
+                    .await?
+                }
+            },
         };
 
         // The plan is agent-authored whichever source it came from, so gate it
@@ -166,41 +204,44 @@ impl ExecutionDriver {
         // A full re-plan still runs against whatever the last attempt left on
         // the branch, so it carries the same warning a targeted retry does.
         plan.resumes_landed_work = previous_attempt_landed;
-        Ok(self.skip_checkpointed_tasks(&step_exec.step_id.0, plan))
+        Ok(self.skip_checkpointed_tasks(&step_exec.step_id.0, plan, resume))
     }
 
-    /// Drop the tasks a mid-list checkpoint already merged to the feature
-    /// branch (see `handle_sequence_step`'s failure path), so no attempt —
-    /// targeted retry, full re-plan, or an environmental in-place re-run at
-    /// iteration 0 — re-runs and re-pays for work that already landed. A
-    /// no-op unless this step checkpointed.
-    fn skip_checkpointed_tasks(&self, step_id: &str, plan: TaskPlan) -> TaskPlan {
-        // Durable (V32): hydrated from the repo, so a restarted driver
-        // resumes from the exact task, not the step head. A read failure
-        // degrades to "no checkpoint" — the pre-V32 restart behavior.
-        let landed = self
-            .features
-            .sequence_checkpoint_get(&self.f_id, step_id)
-            .unwrap_or_default();
-        match &landed {
-            landed if !landed.is_empty() => {
-                let mut filtered = apply_landed_checkpoint(plan, landed);
-                // The checkpoint exists exactly because a prefix *merged* —
-                // so even when none of its ids match this plan (a legacy
-                // planner re-decomposed with fresh ids), the branch is not
-                // pristine and the tasks must be told so.
-                filtered.resumes_landed_work = true;
-                tracing::info!(
-                    feature_id = %self.f_id,
-                    step_id = %step_id,
-                    remaining = filtered.tasks.len(),
-                    landed = landed.len(),
-                    "sequence step: resuming after a mid-list checkpoint"
-                );
-                filtered
-            }
-            _ => plan,
+    /// Drop the tasks a checkpoint already accounted for — merged to the
+    /// feature branch by the mid-list failure path, or committed on the step
+    /// branch by an attempt that was interrupted — so no attempt (targeted
+    /// retry, full re-plan, or an environmental in-place re-run at iteration
+    /// 0) re-runs and re-pays for work that already landed.
+    ///
+    /// Takes the resume the caller already resolved rather than reading the
+    /// checkpoint again: [`CheckpointResume`] is where "can this work be put
+    /// back?" was decided, and a second, independent read could answer that
+    /// question differently — dropping tasks whose commits nothing is going
+    /// to restore. A no-op for [`CheckpointResume::None`].
+    fn skip_checkpointed_tasks(
+        &self,
+        step_id: &str,
+        plan: TaskPlan,
+        resume: &CheckpointResume,
+    ) -> TaskPlan {
+        let landed = resume.landed_ids();
+        if landed.is_empty() {
+            return plan;
         }
+        let mut filtered = apply_landed_checkpoint(plan, landed);
+        // The checkpoint exists exactly because a prefix landed — so even
+        // when none of its ids match this plan (a planner re-decomposed with
+        // fresh ids), the tree is not pristine and the tasks must be told so.
+        filtered.resumes_landed_work = true;
+        tracing::info!(
+            feature_id = %self.f_id,
+            step_id = %step_id,
+            remaining = filtered.tasks.len(),
+            landed = landed.len(),
+            restored = matches!(resume, CheckpointResume::Restore { .. }),
+            "sequence step: resuming after a checkpoint"
+        );
+        filtered
     }
 
     /// Read the `task-list` artifact produced by step `source_step_id`.

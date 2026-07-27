@@ -161,13 +161,35 @@ fn subtask_runs(app_data_dir: &Path, feature_id: &FeatureId) -> Vec<(String, Str
     rows
 }
 
-/// The P1.9 exit test: a fresh driver life resumes a checkpointed
-/// sequence step from the exact task, not the step head.
-#[tokio::test]
-async fn restart_resumes_sequence_from_the_exact_task() {
+/// Run a `git` command in `dir`, asserting success.
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("run git");
+    assert!(
+        out.status.success(),
+        "git {:?} in {} failed: {}",
+        args,
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Everything both exit tests need: a bootstrapped project running the
+/// plan + sequence workflow once to completion, proving on the way that a
+/// pristine run executes both stub tasks.
+///
+/// Returned as owned handles rather than a fixture struct because each
+/// test rewinds the same state differently — one to the V32 shape (prefix
+/// merged), one to the V35 shape (prefix stranded on the step branch).
+async fn control_run(tag: &str) -> (std::path::PathBuf, AppContext, String, FeatureId) {
     std::env::set_var(STUB_AGENT_ENV, "1");
     let tmp = std::env::temp_dir().join(format!(
-        "demeteo-durable-ckpt-{}",
+        "demeteo-durable-ckpt-{}-{}",
+        tag,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -263,11 +285,20 @@ async fn restart_resumes_sequence_from_the_exact_task() {
         "control run must execute both stub tasks; ran: {life1_tasks:?}"
     );
 
+    (tmp, ctx, project.id.0.clone(), feature.id)
+}
+
+/// The P1.9 exit test: a fresh driver life resumes a checkpointed
+/// sequence step from the exact task, not the step head.
+#[tokio::test]
+async fn restart_resumes_sequence_from_the_exact_task() {
+    let (tmp, ctx, _project_id, feature_id) = control_run("merged").await;
+
     // ── Rewind: forge the exact on-disk state a driver killed
     // mid-sequence leaves behind — sequence step interrupted, feature
     // failed, and the V32 checkpoint recording task 1's prefix as
     // already merged. ──
-    let steps = ctx.features.steps_for_feature(&feature.id).expect("steps");
+    let steps = ctx.features.steps_for_feature(&feature_id).expect("steps");
     let impl_step = steps
         .iter()
         .find(|s| s.step_id.0 == "s-impl")
@@ -284,7 +315,7 @@ async fn restart_resumes_sequence_from_the_exact_task() {
         .expect("reset sequence step");
     ctx.features
         .update(
-            &feature.id,
+            &feature_id,
             &FeaturePatch {
                 status: Some("running".to_string()),
                 ..Default::default()
@@ -293,13 +324,18 @@ async fn restart_resumes_sequence_from_the_exact_task() {
         .expect("reset feature status");
     ctx.features
         .sequence_checkpoint_record(
-            &feature.id,
+            &feature_id,
             "s-impl",
             &["stub-task-1".to_string()],
+            // No anchor: a V32-shaped row, which means "the prefix is
+            // already merged to the feature branch" — the state this test
+            // forges. The V35 crash shape (prefix on the step branch, with
+            // an anchor to restore it from) is covered separately.
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
-    let baseline_rows = subtask_runs(&tmp, &feature.id).len();
+    let baseline_rows = subtask_runs(&tmp, &feature_id).len();
 
     // ── Life 2: a genuine app restart — a second composition over the
     // same data dir, holding none of the first life's memory — retries
@@ -316,9 +352,9 @@ async fn restart_resumes_sequence_from_the_exact_task() {
         .step_retry(impl_step.id.0.as_str(), None, None, None)
         .await
         .expect("retry the interrupted sequence step");
-    assert_eq!(poll_terminal(&ctx2, &feature.id).await, "awaiting_mr");
+    assert_eq!(poll_terminal(&ctx2, &feature_id).await, "awaiting_mr");
 
-    let life2: Vec<(String, String)> = subtask_runs(&tmp, &feature.id)
+    let life2: Vec<(String, String)> = subtask_runs(&tmp, &feature_id)
         .into_iter()
         .skip(baseline_rows)
         .collect();
@@ -339,10 +375,170 @@ async fn restart_resumes_sequence_from_the_exact_task() {
     // not exempt tasks from a future full re-run.
     assert!(
         ctx2.features
-            .sequence_checkpoint_get(&feature.id, "s-impl")
+            .sequence_checkpoint_get(&feature_id, "s-impl")
             .expect("read checkpoint")
             .is_empty(),
         "completing the step must clear the durable checkpoint"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The V35 exit test: an *interrupted* attempt's committed work survives
+/// the restart and ends up on the feature branch.
+///
+/// This is the shape V32 could not express. A killed process never
+/// reaches the mid-list failure path, so nothing merges: the finished
+/// tasks are left committed on the step branch alone. The next attempt
+/// then re-provisions that worktree — `worktree remove` + `rm -rf` +
+/// `worktree add`, which resets the step branch back to the feature
+/// branch — so unless something says otherwise, hours of paid work are
+/// discarded and the list re-runs from task one.
+///
+/// The forge below reproduces that state exactly, including the part that
+/// makes it dangerous: the step branch is *deleted*, and only the
+/// checkpoint ref still holds the commit. The assertion is not just that
+/// the finished task is skipped (a skip that dropped its work would be
+/// worse than re-running it) but that its file is on the feature branch
+/// when the step completes.
+#[tokio::test]
+async fn restart_restores_an_interrupted_attempt_committed_work() {
+    let (tmp, ctx, project_id, feature_id) = control_run("stranded").await;
+
+    let repo_dir = paths::repo_target_dir_local(&ctx.workspace_dir, &project_id, REPO_PATH);
+    let branch = format!(
+        "{}{}",
+        crate::adapters::step_executor::setup::fetch_default_settings()
+            .worktree_strategy
+            .branch_prefix,
+        feature_id.0
+    );
+
+    // ── Forge the stranded prefix: a commit made on a step branch that
+    // was never merged, whose branch is then deleted — exactly what
+    // `cleanup_subtask_worktree` leaves behind — with only the checkpoint
+    // ref keeping it reachable. ──
+    let forge_wt = tmp.join("forge-wt");
+    let forge_branch = format!("{}_subtask_forge", branch);
+    git_in(
+        &repo_dir,
+        &[
+            "worktree",
+            "add",
+            forge_wt.to_str().unwrap(),
+            "-b",
+            &forge_branch,
+            &branch,
+        ],
+    );
+    std::fs::write(
+        forge_wt.join("stub-task-1-work.txt"),
+        "work the interrupted attempt committed and was paid for\n",
+    )
+    .expect("write forged task output");
+    git_in(&forge_wt, &["add", "-A"]);
+    git_in(&forge_wt, &["commit", "-m", "chore: stub-task-1"]);
+    let anchor = git_in(&forge_wt, &["rev-parse", "HEAD"]);
+
+    let checkpoint_ref = format!("refs/demeteo/seq/{}/{}", feature_id.0, "s-impl");
+    git_in(&repo_dir, &["update-ref", &checkpoint_ref, &anchor]);
+    git_in(
+        &repo_dir,
+        &["worktree", "remove", "--force", forge_wt.to_str().unwrap()],
+    );
+    git_in(&repo_dir, &["branch", "-D", &forge_branch]);
+
+    // The commit is now unreachable from any branch — only the checkpoint
+    // ref holds it. That is the whole point of writing the ref.
+    assert!(
+        !git_in(&repo_dir, &["branch", "--contains", &anchor])
+            .lines()
+            .any(|l| l.trim_start_matches('*').trim() == branch),
+        "the forged prefix must NOT be on the feature branch; that is the V32 shape"
+    );
+
+    let steps = ctx.features.steps_for_feature(&feature_id).expect("steps");
+    let impl_step = steps
+        .iter()
+        .find(|s| s.step_id.0 == "s-impl")
+        .expect("sequence step exists");
+    ctx.features
+        .step_update(
+            &impl_step.id,
+            &StepExecutionPatch {
+                status: Some("interrupted".to_string()),
+                error_message: Some(None),
+                ..Default::default()
+            },
+        )
+        .expect("reset sequence step");
+    ctx.features
+        .update(
+            &feature_id,
+            &FeaturePatch {
+                status: Some("running".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("reset feature status");
+    ctx.features
+        .sequence_checkpoint_record(
+            &feature_id,
+            "s-impl",
+            &["stub-task-1".to_string()],
+            Some(anchor.as_str()),
+            paths::now_ms(),
+        )
+        .expect("seed checkpoint");
+    let baseline_rows = subtask_runs(&tmp, &feature_id).len();
+
+    // ── Life 2: a genuine app restart retries the interrupted step. ──
+    let ctx2 = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotif),
+        tokio::runtime::Handle::current(),
+    );
+    ctx2.executor
+        .step_retry(impl_step.id.0.as_str(), None, None, None)
+        .await
+        .expect("retry the interrupted sequence step");
+    let status = poll_terminal(&ctx2, &feature_id).await;
+    let step_debug: Vec<String> = ctx2
+        .features
+        .steps_for_feature(&feature_id)
+        .unwrap_or_default()
+        .iter()
+        .map(|s| format!("{}={} err={:?}", s.step_id.0, s.status, s.error_message))
+        .collect();
+    assert_eq!(
+        status, "awaiting_mr",
+        "resume failed; steps: {step_debug:#?}"
+    );
+
+    let life2: Vec<(String, String)> = subtask_runs(&tmp, &feature_id)
+        .into_iter()
+        .skip(baseline_rows)
+        .collect();
+    assert!(
+        life2.iter().all(|(id, _)| !id.contains("stub-task-1")),
+        "the interrupted attempt's finished task must not re-run; life 2 ran: {life2:?}"
+    );
+    assert!(
+        life2.iter().any(|(id, _)| id.contains("stub-task-2")),
+        "resume must run the remaining task; life 2 ran: {life2:?}"
+    );
+
+    // The assertion that matters: skipping the task kept its work rather
+    // than dropping it. A resume that skips *and* discards is the failure
+    // mode this whole mechanism exists to prevent.
+    let tree = git_in(&repo_dir, &["ls-tree", "-r", "--name-only", &branch]);
+    assert!(
+        tree.lines().any(|f| f == "stub-task-1-work.txt"),
+        "the interrupted attempt's committed work must reach the feature branch; \
+         branch holds: {tree}"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);

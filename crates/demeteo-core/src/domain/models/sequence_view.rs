@@ -18,6 +18,37 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A sequence step's durable resume point: which tasks are done, and the
+/// commit their work ends at.
+///
+/// The two fields answer different questions and only the first is always
+/// available. `landed_task_ids` says *what not to re-run*. `anchor_sha`
+/// says *where that work is*, and is `None` for a checkpoint written
+/// before V35 or one whose `rev-parse` failed — in which case the resume
+/// falls back to V32's assumption that the prefix is already merged to the
+/// feature branch, which is what the only V32 writer guaranteed.
+///
+/// Note that an anchor does **not** by itself mean "unmerged": the graceful
+/// mid-list failure path records both, having merged the prefix. Only a
+/// git query at resume time can tell the two apart — see
+/// `handle_sequence_step`'s `restore_checkpointed_prefix`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SequenceCheckpoint {
+    /// Task ids already done, in landed order. Empty when the step never
+    /// checkpointed (or completed and cleared).
+    pub landed_task_ids: Vec<String>,
+    /// The commit the landed prefix ends at, pinned by
+    /// `refs/demeteo/seq/<feature>/<step>` so `git gc` cannot reclaim it.
+    pub anchor_sha: Option<String>,
+}
+
+impl SequenceCheckpoint {
+    /// Nothing to resume from.
+    pub fn is_empty(&self) -> bool {
+        self.landed_task_ids.is_empty()
+    }
+}
+
 /// One `subtask_runs` row, projected to the fields the task drill-down reads.
 /// Keyed to a task by [`subtask_id`](Self::subtask_id) (== `PlannedTask::id`).
 #[derive(Debug, Clone, Serialize, Deserialize)]

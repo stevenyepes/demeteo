@@ -662,7 +662,9 @@ impl StepExecutor for DagStepExecutor {
             )));
         }
 
-        self.replay_steps_from(execution_id, new_model, new_agent, new_effort, true)
+        // Keep any landed sequence prefix: a retry resumes from the task
+        // that broke, which is the whole point of checkpointing it.
+        self.replay_steps_from(execution_id, new_model, new_agent, new_effort, true, false)
             .await
             .map_err(AppError::from)
     }
@@ -674,7 +676,9 @@ impl StepExecutor for DagStepExecutor {
         new_agent: Option<&str>,
         new_effort: Option<crate::domain::models::EffortLevel>,
     ) -> Result<(), String> {
-        self.replay_steps_from(execution_id, new_model, new_agent, new_effort, true)
+        // An explicit redo: drop any landed sequence prefix so the step runs
+        // its whole task list, rather than silently skipping to the tail.
+        self.replay_steps_from(execution_id, new_model, new_agent, new_effort, true, true)
             .await
     }
 

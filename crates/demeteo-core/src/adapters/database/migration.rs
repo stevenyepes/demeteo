@@ -137,6 +137,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // Schema-v2 definition document (V34, P3.6). Same defensive pattern.
     add_column_if_missing(conn, "workflow_versions", "definition_json", "TEXT")?;
 
+    // Where a sequence step's landed prefix is committed (V35). Defensive
+    // for databases that ran V32 before the column joined the table.
+    add_column_if_missing(conn, "sequence_checkpoints", "anchor_sha", "TEXT")?;
+
     Ok(())
 }
 

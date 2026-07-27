@@ -1,0 +1,23 @@
+-- Where a sequence step's landed prefix actually *is* (RELIABILITY_PLAN
+-- §"crash-resume"). V32 recorded which task ids landed, which was enough
+-- for the only writer it had: the graceful mid-list failure path, which
+-- merges the prefix to the feature branch before recording it. "Skip
+-- these ids" is a complete instruction when the work is on the branch the
+-- next attempt's worktree is cut from.
+--
+-- It is not complete after a *crash*. Nothing merges, so the prefix is
+-- left committed on the step branch alone, and skipping the ids without
+-- restoring those commits would open a worktree missing the work — worse
+-- than re-running it. So the checkpoint now also records the commit the
+-- prefix ends at.
+--
+-- Nullable: rows written by V32's path (and any row whose `rev-parse`
+-- failed) carry no anchor and keep the original meaning — already merged,
+-- skip the ids, touch nothing. `handle_sequence_step` distinguishes the
+-- two at resume with `merge-base --is-ancestor`, so the column is a hint
+-- about *where*, never an instruction on its own.
+--
+-- The commit is kept alive against `git gc` by a companion ref the task
+-- loop writes (`refs/demeteo/seq/<feature>/<step>`); this column is only
+-- the durable name for it.
+ALTER TABLE sequence_checkpoints ADD COLUMN anchor_sha TEXT;

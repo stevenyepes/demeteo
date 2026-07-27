@@ -63,6 +63,57 @@ enum FailureDisposition {
     PrefixLanded { landed: usize, total: usize },
 }
 
+/// What this attempt should do about the tasks a previous one finished.
+///
+/// Resolved *before* the task plan, because the two decisions are one
+/// decision: dropping a task from the plan is only safe if its work will
+/// actually be in the worktree the remaining tasks open. Deciding them
+/// apart is how a resume ends up implementing task 21 on top of a hole
+/// where tasks 1-20 should be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CheckpointResume {
+    /// No checkpoint, or one that can no longer be trusted (its anchor
+    /// commit is gone, or a probe failed and we cannot tell). Run the full
+    /// plan — the pre-V32 behaviour, and the only safe default.
+    None,
+    /// The prefix is already on the feature branch, so the freshly-cut
+    /// worktree carries it. Skip the ids and touch nothing. This is what
+    /// every V32-era checkpoint meant, and what the mid-list failure path
+    /// still produces.
+    Merged { landed_ids: Vec<String> },
+    /// The prefix is committed on the step branch only — the signature of
+    /// an *interrupted* attempt, which never reached the merge. Skip the
+    /// ids, but move the worktree onto `sha` first.
+    Restore {
+        landed_ids: Vec<String>,
+        sha: String,
+    },
+}
+
+impl CheckpointResume {
+    /// The tasks this attempt must not re-run. Empty for [`Self::None`].
+    fn landed_ids(&self) -> &[String] {
+        match self {
+            Self::None => &[],
+            Self::Merged { landed_ids } | Self::Restore { landed_ids, .. } => landed_ids,
+        }
+    }
+}
+
+/// Whether an `ExecutionPort` error means the command never reached a
+/// verdict (the machine was unreachable, or we stopped waiting) as opposed
+/// to running and exiting non-zero.
+///
+/// The distinction decides real behaviour here, not just a log line:
+/// `merge-base --is-ancestor` answers "no" with exit 1, so a bare
+/// `is_err()` would read a dropped SSH channel as a confident "not
+/// merged" — and act on it by resetting the worktree backwards past work
+/// that *was* merged. An unreachable machine has to mean "unknown".
+fn probe_inconclusive(err: &str) -> bool {
+    err.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX)
+        || err.starts_with(crate::ports::execution::TIMEOUT_ERROR_PREFIX)
+}
+
 impl FailureDisposition {
     fn from_rollback(rolled_back: bool) -> Self {
         if rolled_back {
@@ -163,6 +214,13 @@ impl ExecutionDriver {
             }
         };
 
+        // 0. What did a previous attempt already finish? Resolved before the
+        //    plan because it decides which tasks the plan may drop, and
+        //    before the worktree because it is a question about the repo.
+        let resume = self
+            .resolve_checkpoint_resume(step_exec, &machine_str, &base_sha)
+            .await;
+
         // 1. Resolve the ordered task list.
         let retry_iteration = self.retry_ctx.as_ref().map(|rc| rc.iteration).unwrap_or(0);
         let plan = match self
@@ -177,6 +235,7 @@ impl ExecutionDriver {
                 &machine_str,
                 step_execs,
                 step_index,
+                &resume,
             )
             .await
         {
@@ -222,6 +281,49 @@ impl ExecutionDriver {
                 ))
             }
         };
+
+        // 2b. Put the interrupted attempt's work back. Provisioning cuts the
+        //     worktree from the feature branch — and its leftover-state path
+        //     explicitly resets the step branch there — so a prefix that only
+        //     ever lived on the step branch is *gone from the tree* by now,
+        //     though still reachable through the checkpoint ref. Move onto it
+        //     before the scope fence chmods anything read-only, since the
+        //     reset writes files.
+        if let CheckpointResume::Restore { landed_ids, sha } = &resume {
+            if let Err(e) = self
+                .exec
+                .run_command(
+                    &machine_str,
+                    &format!(
+                        "git -C {} reset --hard {}",
+                        paths::shell_escape_posix(&wt_path),
+                        paths::shell_escape_posix(sha),
+                    ),
+                )
+                .await
+            {
+                // The plan has already dropped these tasks, so running on
+                // would implement the remainder against a tree missing
+                // their work. Environmental: a retry re-probes, and if the
+                // anchor is genuinely gone it resolves to a full re-run.
+                self.cleanup_sequence_worktree(&wt_id).await;
+                return StepOutcome::Environmental(format!(
+                    "sequence step: could not restore the {} task(s) an interrupted \
+                     attempt completed (checkpoint commit {}): {}",
+                    landed_ids.len(),
+                    sha,
+                    e
+                ));
+            }
+            tracing::info!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                restored = landed_ids.len(),
+                remaining = plan.tasks.len(),
+                anchor = %sha,
+                "sequence step: restored an interrupted attempt's committed work"
+            );
+        }
 
         // Scope fence. A no-op for `Implement` capability (whole worktree
         // writable), which is what a sequence step normally carries.
@@ -288,12 +390,23 @@ impl ExecutionDriver {
                         // in-attempt count; the retry then re-runs tasks whose
                         // agents will find (and be told about) the committed
                         // work, which is the pre-V32 restart behavior.
+                        //
+                        // The task loop has usually recorded each of these
+                        // already; this write is what closes the gap for a
+                        // task whose own checkpoint failed. The anchor is
+                        // re-stamped rather than left alone because the merge
+                        // above just made it an *ancestor* of the feature
+                        // branch — which is precisely how the next attempt
+                        // tells "already merged, skip the ids" from "still
+                        // only on the step branch, restore it first".
                         let landed_ids: Vec<String> =
                             landed_this_attempt.iter().map(|t| t.id.clone()).collect();
+                        let anchor = landed_this_attempt.last().map(|t| t.sha.as_str());
                         let landed_total = match self.features.sequence_checkpoint_record(
                             &self.f_id,
                             &step_exec.step_id.0,
                             &landed_ids,
+                            anchor,
                             crate::paths::now_ms(),
                         ) {
                             Ok(total) => total as usize,
@@ -584,10 +697,11 @@ impl ExecutionDriver {
         // The step is done, so any mid-list checkpoint is spent: from here on
         // the ordinary "previous attempt landed" retry logic covers the
         // branch's contents, and a stale skip-list would silently exempt
-        // tasks from a future full re-run.
-        let _ = self
-            .features
-            .sequence_checkpoint_clear(&self.f_id, &step_exec.step_id.0);
+        // tasks from a future full re-run. Unpinning the prefix here is also
+        // what eventually collects a ref left behind by a replay, which
+        // drops the row without a repo context to delete the ref from.
+        self.clear_sequence_checkpoint(&step_exec.step_id.0, &machine_str)
+            .await;
 
         let wall = step_start.elapsed().as_secs();
         let primary = refs.first().cloned();
@@ -746,6 +860,215 @@ impl ExecutionDriver {
     /// already failing; spending more agent budget to salvage a partial
     /// prefix inverts that trade, so a conflict falls back to the ordinary
     /// full rollback in the caller.
+    /// Decide what a previous attempt's landed prefix means for this one.
+    ///
+    /// Runs against the main repo, before any worktree exists, because
+    /// `resolve_task_plan` needs the answer: the ids it drops and the
+    /// commits this restores have to be the same set.
+    ///
+    /// The two recovery modes are told apart by a git question rather than
+    /// by remembering which code path wrote the row — the row itself cannot
+    /// say, since the mid-list failure path and the task loop both write
+    /// one and only the former merges. `merge-base --is-ancestor` asks the
+    /// repo directly, and the repo is the thing that actually knows.
+    ///
+    /// Every uncertainty resolves to [`CheckpointResume::None`]: a full
+    /// re-run wastes money, while a wrong skip loses work.
+    async fn resolve_checkpoint_resume(
+        &self,
+        step_exec: &StepExecution,
+        machine_str: &str,
+        base_sha: &str,
+    ) -> CheckpointResume {
+        let checkpoint = match self
+            .features
+            .sequence_checkpoint_get(&self.f_id, &step_exec.step_id.0)
+        {
+            Ok(cp) if !cp.is_empty() => cp,
+            Ok(_) => return CheckpointResume::None,
+            Err(e) => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    error = %e,
+                    "sequence step: could not read the landed checkpoint; running the \
+                     full task list"
+                );
+                return CheckpointResume::None;
+            }
+        };
+
+        // A row with no anchor predates V35, and only one writer existed
+        // then — the one that merges the prefix before recording it.
+        let Some(anchor) = checkpoint.anchor_sha.clone() else {
+            return CheckpointResume::Merged {
+                landed_ids: checkpoint.landed_task_ids,
+            };
+        };
+
+        let repo = paths::shell_escape_posix(&self.target_dir);
+        let safe_anchor = paths::shell_escape_posix(&anchor);
+
+        // Is the prefix still there to restore? The companion ref keeps it
+        // reachable, so a miss means the ref was deleted or the repo was
+        // replaced under us — either way there is nothing to resume onto.
+        if let Err(e) = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!("git -C {} cat-file -e {}^{{commit}}", repo, safe_anchor),
+            )
+            .await
+        {
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                anchor = %anchor,
+                error = %e,
+                "sequence step: the landed checkpoint's anchor commit is unreachable; \
+                 running the full task list"
+            );
+            return CheckpointResume::None;
+        }
+
+        match self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} merge-base --is-ancestor {} {}",
+                    repo,
+                    safe_anchor,
+                    paths::shell_escape_posix(base_sha),
+                ),
+            )
+            .await
+        {
+            // Exit 0: the anchor is behind the branch tip, so the merge
+            // already happened and the fresh worktree carries the prefix.
+            Ok(_) => CheckpointResume::Merged {
+                landed_ids: checkpoint.landed_task_ids,
+            },
+            // Exit 1: a real "no" — the prefix lives on the step branch
+            // alone. An attempt was interrupted between committing a task
+            // and merging its prefix.
+            Err(e) if !probe_inconclusive(&e) => CheckpointResume::Restore {
+                landed_ids: checkpoint.landed_task_ids,
+                sha: anchor,
+            },
+            Err(e) => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    error = %e,
+                    "sequence step: could not tell whether the landed prefix is merged; \
+                     running the full task list"
+                );
+                CheckpointResume::None
+            }
+        }
+    }
+
+    /// The shared git ref pinning this step's landed prefix.
+    ///
+    /// The prefix lives on the step branch until the step completes, and
+    /// `provision_subtask_worktree`'s leftover-state path resets that branch
+    /// back to the feature branch — which would orphan every commit an
+    /// interrupted attempt made, leaving them one `git gc` from
+    /// unrecoverable. A ref outside `refs/heads` keeps them reachable
+    /// without adding a branch to the user's `git branch` output. It is a
+    /// *shared* ref (git's per-worktree namespaces are `HEAD`,
+    /// `refs/bisect/*`, `refs/worktree/*` and `refs/rewritten/*`), so the
+    /// step worktree and the main checkout resolve the same one, and it
+    /// outlives the worktree that wrote it.
+    fn checkpoint_ref(&self, step_id: &str) -> String {
+        format!("refs/demeteo/seq/{}/{}", self.f_id_str, step_id)
+    }
+
+    /// Record one task as landed, durably, the moment its commit exists.
+    ///
+    /// This is the difference between a crash costing one task and costing
+    /// the whole list. The mid-list failure path below also checkpoints, but
+    /// only when `run_tasks_loop` *returns* — a killed process never gets
+    /// there, so before this existed the ids of twenty finished tasks died
+    /// with the driver and the next attempt re-planned from task one.
+    ///
+    /// Both writes are best-effort, and the order between them is not: the
+    /// row names a commit a later attempt will `reset --hard` to, so the
+    /// commit is pinned *first*. A failed pin means the task goes
+    /// unrecorded and re-runs — wasteful, but not wrong. A row naming an
+    /// unpinned commit would be worse than either.
+    async fn checkpoint_landed_task(
+        &self,
+        step_exec: &StepExecution,
+        machine_str: &str,
+        task_id: &str,
+        sha: &str,
+    ) {
+        let git_ref = self.checkpoint_ref(&step_exec.step_id.0);
+        if let Err(e) = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} update-ref {} {}",
+                    paths::shell_escape_posix(&self.target_dir),
+                    paths::shell_escape_posix(&git_ref),
+                    paths::shell_escape_posix(sha),
+                ),
+            )
+            .await
+        {
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                task_id = %task_id,
+                error = %e,
+                "sequence task: could not pin the landed prefix; it will not be \
+                 checkpointed and will re-run if this attempt is interrupted"
+            );
+            return;
+        }
+
+        if let Err(e) = self.features.sequence_checkpoint_record(
+            &self.f_id,
+            &step_exec.step_id.0,
+            &[task_id.to_string()],
+            Some(sha),
+            crate::paths::now_ms(),
+        ) {
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                task_id = %task_id,
+                error = %e,
+                "sequence task: could not persist the landed checkpoint"
+            );
+        }
+    }
+
+    /// Spend the checkpoint: drop the row and unpin the prefix.
+    ///
+    /// Called wherever the prefix stops being the thing a resume should
+    /// restore — the step completed, or the branch was rolled back past it.
+    /// The row goes first: a leftover pinned commit is inert, while a
+    /// surviving row pointing at an unpinned commit is a resume that can
+    /// fail its `cat-file` probe for no reason.
+    async fn clear_sequence_checkpoint(&self, step_id: &str, machine_str: &str) {
+        let _ = self.features.sequence_checkpoint_clear(&self.f_id, step_id);
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} update-ref -d {}",
+                    paths::shell_escape_posix(&self.target_dir),
+                    paths::shell_escape_posix(&self.checkpoint_ref(step_id)),
+                ),
+            )
+            .await;
+    }
+
     async fn checkpoint_landed_prefix(
         &self,
         wt_id: &str,
@@ -805,6 +1128,19 @@ impl ExecutionDriver {
     /// a rollback they did not get: if the worktree could not be removed (a
     /// locked file — the case `provision_subtask_worktree` explicitly warns
     /// about), the reset fails and the step's commits are still on the branch.
+    ///
+    /// **Deliberately does not clear the landed checkpoint**, which looks
+    /// like an omission and is not. The two touch disjoint commits: this
+    /// resets the *feature* branch to where this attempt found it, while the
+    /// checkpoint anchors commits on the *step* branch. And `base_sha` is
+    /// captured after any earlier attempt's prefix merged, so the rollback
+    /// can never move the branch back past work the checkpoint claims — the
+    /// row stays true either way. Dropping it here would instead re-run, and
+    /// re-pay for, every task an earlier attempt finished.
+    ///
+    /// `cleanup_sequence_worktree` does delete the step branch, but the
+    /// checkpoint ref keeps those commits reachable, so the next attempt can
+    /// still restore them.
     async fn cleanup_and_rollback(&self, wt_id: &str, machine_str: &str, base_sha: &str) -> bool {
         self.cleanup_sequence_worktree(wt_id).await;
 
