@@ -30,8 +30,11 @@ fn broadcast_to_multiple_channels() {
         sessions.insert(session_id.clone(), session);
     }
 
-    let (channel_a, captured_a) = capturing_channel();
-    let (channel_b, captured_b) = capturing_channel();
+    // Appending, not replacing: the PTY is free to deliver `hello\r\n` in more
+    // than one chunk, and each side has to be judged on everything it received
+    // rather than on whichever fragment landed last.
+    let (channel_a, captured_a) = appending_capturing_channel();
+    let (channel_b, captured_b) = appending_capturing_channel();
     let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_a).expect("attach A");
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_b).expect("attach B");
@@ -42,23 +45,19 @@ fn broadcast_to_multiple_channels() {
         w.flush().expect("flush hello");
     }
 
+    // Wait for the whole payload, not merely for the first byte of it. Waiting
+    // on `!is_empty()` and then asserting the full contents is a race the test
+    // lost under load: a chunk boundary after "he" satisfies "not empty", and
+    // the assertion then compared a half-delivered buffer.
     assert!(
-        wait_until(|| !captured_a.lock().expect("a lock").is_empty()),
-        "channel A never received the chunk"
+        wait_until(|| captured_a.lock().expect("a lock").as_slice() == b"hello\r\n"),
+        "channel A never received the full chunk, got {:?}",
+        captured_a.lock().expect("a lock"),
     );
     assert!(
-        wait_until(|| !captured_b.lock().expect("b lock").is_empty()),
-        "channel B never received the chunk"
-    );
-    assert_eq!(
-        *captured_a.lock().expect("a lock"),
-        b"hello\r\n".to_vec(),
-        "channel A payload mismatch"
-    );
-    assert_eq!(
-        *captured_b.lock().expect("b lock"),
-        b"hello\r\n".to_vec(),
-        "channel B payload mismatch"
+        wait_until(|| captured_b.lock().expect("b lock").as_slice() == b"hello\r\n"),
+        "channel B never received the full chunk, got {:?}",
+        captured_b.lock().expect("b lock"),
     );
 }
 
