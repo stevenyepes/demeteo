@@ -143,7 +143,9 @@ describe('J3 — build "bugfix + security-scan branch"', () => {
     //    (Friction 1: the node arrives promptless and Save stays blocked until
     //    this is done — the lint gate doing its job.)
     const palette = screen.getByTestId('node-palette');
-    fireEvent.click(within(palette).getByText('Agent'));
+    // The rail renders before `node_types_list` resolves, so wait for the
+    // catalog to land rather than racing the entry we mean to click.
+    fireEvent.click(await within(palette).findByText('Agent'));
 
     await waitFor(() => expect(screen.getByTestId('config-panel')).toBeTruthy());
     const panel = screen.getByTestId('config-panel');
