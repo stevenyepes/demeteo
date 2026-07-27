@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import catalog from './__fixtures__/node_catalog.json';
 import {
   defaultRetryRule,
+  enumLiteral,
   fieldsFromSchema,
   humanizeKey,
   jsonFieldText,
@@ -58,7 +59,11 @@ describe('fieldsFromSchema over the live registry catalog', () => {
   it('renders an enum as a select whose first option is "unset"', () => {
     const effort = byKey(fieldsFor('agent'), 'effort');
     expect(effort.control).toBe('enum');
-    expect(effort.options?.[0]).toEqual({ value: null, label: 'Inherit / unset' });
+    expect(effort.options?.[0]).toEqual({
+      value: null,
+      label: 'Inherit / unset',
+      literal: null,
+    });
     expect(effort.options?.map((o) => o.value)).toEqual([
       null,
       'low',
@@ -206,6 +211,50 @@ describe('retry policy', () => {
       { id: 'b', type: 'agent', title: 'B' },
     ] as NodeConfigV2[];
     expect(redirectTargets(nodes, 'a').map((n) => n.id)).toEqual(['b']);
+  });
+});
+
+describe('enumLiteral', () => {
+  // The panel's promise is that it renders a node type it has never heard of.
+  // Every enum in today's catalog happens to be strings, so a `String(v)`
+  // round-trip looked harmless — until a type publishes a numeric or boolean
+  // one, whose stringified value then fails the published schema at the save
+  // boundary. These schemas are hand-written for exactly that future.
+  const numeric = fieldsFromSchema({
+    type: 'object',
+    properties: {
+      parallelism: { type: 'integer', enum: [1, 2, 4] },
+      strict: { type: ['boolean', 'null'], enum: [true, false, null] },
+    },
+  });
+  const byName = (key: string) => numeric.find((f) => f.key === key)!;
+
+  it('writes a numeric enum back as a number, not its label', () => {
+    const field = byName('parallelism');
+    expect(field.control).toBe('enum');
+    expect(field.options?.map((o) => o.value)).toEqual(['1', '2', '4']);
+    expect(enumLiteral(field, '2')).toBe(2);
+    expect(setConfigValue({}, field, enumLiteral(field, '4'))).toEqual({ parallelism: 4 });
+  });
+
+  it('writes a boolean enum back as a boolean', () => {
+    const field = byName('strict');
+    expect(enumLiteral(field, 'true')).toBe(true);
+    expect(enumLiteral(field, 'false')).toBe(false);
+  });
+
+  it('maps the unset choice to null', () => {
+    expect(enumLiteral(byName('strict'), null)).toBeNull();
+  });
+
+  it('passes through a stored value the schema no longer enumerates', () => {
+    // Silently rewriting it would lose an author's config on an unrelated edit.
+    expect(enumLiteral(byName('parallelism'), '8')).toBe('8');
+  });
+
+  it('leaves string enums exactly as they were', () => {
+    const capability = byKey(fieldsFor('agent'), 'capability');
+    expect(enumLiteral(capability, 'verify')).toBe('verify');
   });
 });
 

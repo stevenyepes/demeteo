@@ -105,6 +105,9 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
       return;
     }
     let live = true;
+    // Drop the old shape before fetching the new one: holding it would render
+    // the previously selected workflow's graph beside this one's name.
+    setGraph(null);
     invoke<WorkflowDefinitionV2>('workflow_version_graph', {
       workflowId: selectedWorkflow.id,
       versionId: selectedWorkflow.version_id,

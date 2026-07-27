@@ -367,36 +367,44 @@ pub fn save_definition(
 ) -> Result<WorkflowWithSteps, AppError> {
     let now = paths::now_ms();
 
-    // Resolve (or create) the workflow row first: the definition's own `id`
-    // field is normalized to it below, so a template's placeholder id or a
-    // graph copied from another workflow can't travel into storage.
-    let (wf_id, created_at, is_starter, schedule) = match workflow_id {
-        Some(id) => {
-            let w = workflows
-                .get(&id)
+    // Resolve the workflow row first: the definition's own `id` field is
+    // normalized to it below, so a template's placeholder id or a graph copied
+    // from another workflow can't travel into storage.
+    let existing = match &workflow_id {
+        Some(id) => Some(
+            workflows
+                .get(id)
                 .map_err(AppError::from)?
-                .ok_or_else(|| AppError::not_found(format!("Workflow not found: {id}")))?;
-            (id, w.created_at, w.is_starter, w.schedule)
-        }
-        None => {
-            let id = WorkflowId::from(format!("wf-{}", paths::new_id()));
-            workflows.create(Workflow {
-                id: id.clone(),
-                name: name.to_string(),
-                description: description.to_string(),
-                is_starter: false,
-                created_at: now,
-                updated_at: now,
-                schedule: None,
-            })?;
-            (id, now, false, None)
-        }
+                .ok_or_else(|| AppError::not_found(format!("Workflow not found: {id}")))?,
+        ),
+        None => None,
     };
+    let wf_id = workflow_id.unwrap_or_else(|| WorkflowId::from(format!("wf-{}", paths::new_id())));
 
     let mut definition = definition;
     definition.id = wf_id.clone();
     definition.name = name.to_string();
     ensure_valid_definition(&definition)?;
+
+    // Only now mint the row for a *new* workflow. Creating it before validation
+    // left an orphan behind whenever a save or import was rejected: a row with
+    // zero versions, which `workflow_list` reports as `version: 0` with an empty
+    // version id — a library entry that can neither be opened nor exported.
+    if existing.is_none() {
+        workflows.create(Workflow {
+            id: wf_id.clone(),
+            name: name.to_string(),
+            description: description.to_string(),
+            is_starter: false,
+            created_at: now,
+            updated_at: now,
+            schedule: None,
+        })?;
+    }
+    let (created_at, is_starter, schedule) = match existing {
+        Some(w) => (w.created_at, w.is_starter, w.schedule),
+        None => (now, false, None),
+    };
 
     let steps = project_v2_to_v1(&definition);
     let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;

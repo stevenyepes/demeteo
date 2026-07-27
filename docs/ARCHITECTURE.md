@@ -467,10 +467,15 @@ are grouped by bounded context. All return `Result<T, String>` (or
 
 ### Workflows
 
-- `workflow_list`, `workflow_get`, `workflow_create`, `workflow_update`,
-  `workflow_delete`, `workflow_versions`, `workflow_export`,
-  `workflow_import`, `workflow_revert_to_default`,
-  `workflow_save_schedule`
+- `workflow_list`, `workflow_get`, `workflow_save`, `workflow_delete`,
+  `workflow_versions`, `workflow_version_graph`, `workflow_lint`,
+  `workflow_export`, `workflow_import`, `workflow_revert_to_default`,
+  `workflow_save_schedule`, `node_types_list`, `feature_workflow_graph`
+
+`workflow_save` replaced the separate `workflow_create` / `workflow_update`
+pair in P3.6: both minted a version row from a v1 step list, and the builder
+needs one write that stores the schema-v2 document (V34 `definition_json`)
+alongside its v1 projection.
 
 ### Pricing + MR publisher + notifications
 
