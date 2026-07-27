@@ -17,18 +17,70 @@ fn checkpoint_records_union_in_landed_order() {
     let db = db();
     let f = fid("f-1");
     assert_eq!(
-        sequence_checkpoint_record(&db, &f, "s-impl", &["a".into(), "b".into()], 100).unwrap(),
+        sequence_checkpoint_record(&db, &f, "s-impl", &["a".into(), "b".into()], None, 100)
+            .unwrap(),
         2
     );
     // Second mid-list failure lands more tasks; duplicates fold away.
     assert_eq!(
-        sequence_checkpoint_record(&db, &f, "s-impl", &["b".into(), "c".into()], 200).unwrap(),
+        sequence_checkpoint_record(&db, &f, "s-impl", &["b".into(), "c".into()], None, 200)
+            .unwrap(),
         3
     );
     assert_eq!(
-        sequence_checkpoint_get(&db, &f, "s-impl").unwrap(),
+        sequence_checkpoint_get(&db, &f, "s-impl")
+            .unwrap()
+            .landed_task_ids,
         vec!["a".to_string(), "b".to_string(), "c".to_string()]
     );
+}
+
+/// The anchor names the *tip* of the landed prefix, so unlike the id list
+/// it is replaced rather than merged — each task that lands moves it
+/// forward.
+#[test]
+fn checkpoint_anchor_advances_with_the_prefix() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["b".into()], Some("sha-b"), 200).unwrap();
+
+    let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
+    assert_eq!(cp.landed_task_ids, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(cp.anchor_sha.as_deref(), Some("sha-b"));
+}
+
+/// A caller that could not read a HEAD knows less than the row does, so
+/// `None` must not blank an anchor an earlier task already recorded —
+/// that would silently downgrade the row to "already merged, skip the
+/// ids", which is a resume that drops work.
+#[test]
+fn recording_without_an_anchor_keeps_the_stored_one() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["b".into()], None, 200).unwrap();
+
+    assert_eq!(
+        sequence_checkpoint_get(&db, &f, "s-impl")
+            .unwrap()
+            .anchor_sha
+            .as_deref(),
+        Some("sha-a")
+    );
+}
+
+/// A V32-era row carries no anchor, and must read back as one rather than
+/// as an empty string the resume would try to `cat-file`.
+#[test]
+fn a_pre_v35_row_reads_back_without_an_anchor() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], None, 100).unwrap();
+
+    let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
+    assert!(!cp.is_empty());
+    assert_eq!(cp.anchor_sha, None);
 }
 
 /// The whole point of V32: a second driver life (fresh in-memory state,
@@ -49,16 +101,23 @@ fn checkpoint_survives_across_driver_lives() {
     // Life 1 writes the checkpoint, then the process "dies".
     {
         let db = SqliteAdapter::new(Connection::open(&path).unwrap()).unwrap();
-        sequence_checkpoint_record(&db, &fid("f-1"), "s-impl", &["stub-task-1".into()], 100)
-            .unwrap();
+        sequence_checkpoint_record(
+            &db,
+            &fid("f-1"),
+            "s-impl",
+            &["stub-task-1".into()],
+            Some("stub-sha"),
+            100,
+        )
+        .unwrap();
     }
-    // Life 2 (fresh adapter over the same file) hydrates it.
+    // Life 2 (fresh adapter over the same file) hydrates it — ids *and*
+    // the anchor, which is what tells life 2 where the work actually is.
     {
         let db = SqliteAdapter::new(Connection::open(&path).unwrap()).unwrap();
-        assert_eq!(
-            sequence_checkpoint_get(&db, &fid("f-1"), "s-impl").unwrap(),
-            vec!["stub-task-1".to_string()]
-        );
+        let cp = sequence_checkpoint_get(&db, &fid("f-1"), "s-impl").unwrap();
+        assert_eq!(cp.landed_task_ids, vec!["stub-task-1".to_string()]);
+        assert_eq!(cp.anchor_sha.as_deref(), Some("stub-sha"));
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -66,32 +125,34 @@ fn checkpoint_survives_across_driver_lives() {
 #[test]
 fn checkpoints_are_scoped_per_feature_and_node() {
     let db = db();
-    sequence_checkpoint_record(&db, &fid("f-1"), "s-a", &["t1".into()], 100).unwrap();
-    sequence_checkpoint_record(&db, &fid("f-1"), "s-b", &["t2".into()], 100).unwrap();
-    sequence_checkpoint_record(&db, &fid("f-2"), "s-a", &["t3".into()], 100).unwrap();
-    assert_eq!(
-        sequence_checkpoint_get(&db, &fid("f-1"), "s-a").unwrap(),
-        vec!["t1".to_string()]
-    );
-    assert_eq!(
-        sequence_checkpoint_get(&db, &fid("f-1"), "s-b").unwrap(),
-        vec!["t2".to_string()]
-    );
-    assert_eq!(
-        sequence_checkpoint_get(&db, &fid("f-2"), "s-a").unwrap(),
-        vec!["t3".to_string()]
-    );
+    sequence_checkpoint_record(&db, &fid("f-1"), "s-a", &["t1".into()], Some("sha-1"), 100)
+        .unwrap();
+    sequence_checkpoint_record(&db, &fid("f-1"), "s-b", &["t2".into()], Some("sha-2"), 100)
+        .unwrap();
+    sequence_checkpoint_record(&db, &fid("f-2"), "s-a", &["t3".into()], Some("sha-3"), 100)
+        .unwrap();
+    for (feature, step, task, sha) in [
+        ("f-1", "s-a", "t1", "sha-1"),
+        ("f-1", "s-b", "t2", "sha-2"),
+        ("f-2", "s-a", "t3", "sha-3"),
+    ] {
+        let cp = sequence_checkpoint_get(&db, &fid(feature), step).unwrap();
+        assert_eq!(cp.landed_task_ids, vec![task.to_string()]);
+        // The anchor is scoped with the ids: handing one node's commit to
+        // another would reset a worktree onto an unrelated task list.
+        assert_eq!(cp.anchor_sha.as_deref(), Some(sha));
+    }
 }
 
 #[test]
 fn clear_spends_the_checkpoint() {
     let db = db();
     let f = fid("f-1");
-    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], 100).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
     sequence_checkpoint_clear(&db, &f, "s-impl").unwrap();
-    assert!(sequence_checkpoint_get(&db, &f, "s-impl")
-        .unwrap()
-        .is_empty());
+    let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
+    assert!(cp.is_empty());
+    assert_eq!(cp.anchor_sha, None);
     // Clearing a non-existent row is a no-op, not an error.
     sequence_checkpoint_clear(&db, &f, "s-impl").unwrap();
 }

@@ -6,6 +6,23 @@ use crate::ports::notification::DomainEvent;
 use crate::ports::step_executor::StepExecutor;
 
 impl DagStepExecutor {
+    /// Rewind a step (and its graph descendants) to `pending` and re-arm the
+    /// driver.
+    ///
+    /// `clear_sequence_checkpoints` decides what happens to a sequence
+    /// node's landed prefix in that range, and the two callers want opposite
+    /// things. A **retry** is "carry on from where this broke" — the prefix
+    /// is the point, and re-running twenty paid tasks to reach the one that
+    /// failed is the behaviour checkpointing exists to prevent. A **replay**
+    /// is an explicit redo, so it drops the prefix and the step runs its
+    /// whole list again.
+    ///
+    /// Only the durable row is dropped, not the git ref pinning the prefix's
+    /// commits: deleting that would need a resolved execution context (repo
+    /// path + machine) purely to tidy up. The row is the authority — with it
+    /// gone the resume reads "no checkpoint" and re-runs everything — and
+    /// the ref name is deterministic, so the step's own completion path
+    /// deletes it next time round.
     pub(crate) async fn replay_steps_from(
         &self,
         execution_id: &str,
@@ -13,6 +30,7 @@ impl DagStepExecutor {
         new_agent: Option<&str>,
         new_effort: Option<crate::domain::models::EffortLevel>,
         include_target: bool,
+        clear_sequence_checkpoints: bool,
     ) -> Result<(), String> {
         let se_id = StepExecutionId::from(execution_id.to_string());
         let step_exec = self
@@ -184,6 +202,14 @@ impl DagStepExecutor {
                 });
                 if s.step_kind == "gate" {
                     let _ = self.gates.reset_for_step_execution(&s.id);
+                }
+                // A no-op for any node that never checkpointed, so this
+                // needs no step-kind branch (and `sequence` answers to two
+                // kind strings anyway).
+                if clear_sequence_checkpoints {
+                    let _ = self
+                        .features
+                        .sequence_checkpoint_clear(feature_id, &s.step_id.0);
                 }
             }
         }

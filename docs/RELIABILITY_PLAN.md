@@ -22,7 +22,12 @@
    feature, and **build output (`node_modules`, `target`, `.venv`) must never be
    shared across features** — only content-addressed download caches may be.
 2. **Per-step checkpoints are atomic** — a step is "complete" only when its
-   artifact is written and, if it's a gate, its decision is recorded.
+   artifact is written and, if it's a gate, its decision is recorded. Inside a
+   `sequence` step the unit is finer: a **task** is durably landed the moment
+   its commit exists, not when the step returns. Anything that records landed
+   work only on a code path the process has to *survive* to reach is not a
+   checkpoint — a kill lands between any two instructions, and the twenty
+   finished tasks it forgets get re-run and re-paid for.
 3. **Cost and duration are computed at step completion, never estimated
    mid-step** (Decision 15).
 4. **Step transitions are the UI contract, not agent transcripts.**
@@ -51,6 +56,31 @@ Everything from the DAG rework (durable checkpoints, `step_attempts`,
 declarative retry policy, unified `run_events`) landed under
 [`PRD_DAG_WORKFLOWS.md`](PRD_DAG_WORKFLOWS.md) Phase 1 and superseded the
 in-memory checkpoint items this plan originally carried.
+
+**Sequence crash-resume (V35)** completes that work for the case Phase 1 could
+not express. V32 recorded landed task ids, but only from the mid-list *failure*
+path — which merges the prefix to the feature branch before recording it, so
+"skip these ids" was a complete instruction. A killed process never reaches that
+path: its finished tasks stay committed on the step branch, which the next
+attempt's `provision_subtask_worktree` resets away. So a 25-task step
+interrupted at task 21 restarted at task 1, and the UI's `0/25 landed` was
+correctly reporting an empty checkpoint next to twenty `COMPLETED` rows.
+
+Now the task loop checkpoints each task as it commits, pinning the prefix with
+`refs/demeteo/seq/<feature>/<step>` (a shared ref, so `git gc` cannot reclaim
+it and provisioning cannot orphan it) and storing that commit as the row's
+`anchor_sha`. At resume `merge-base --is-ancestor` asks the repo which shape it
+is looking at — prefix already merged (skip the ids) or stranded on the step
+branch (restore the worktree onto the anchor first, *then* skip them) — because
+the row itself cannot say, both writers produce one, and guessing wrong either
+re-runs paid work or drops it. Every uncertainty, including an unreachable
+machine, resolves to a full re-run.
+
+Two consequences worth knowing before touching this: `cleanup_and_rollback`
+deliberately does *not* clear the checkpoint (it moves the feature branch, the
+anchor lives on the step branch, and `base_sha` is always captured after any
+earlier merge), and `step_retry` keeps the prefix while `replay_from_step`
+drops it — a retry resumes, an explicit redo starts over.
 
 ---
 

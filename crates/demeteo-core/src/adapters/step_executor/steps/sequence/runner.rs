@@ -216,10 +216,15 @@ impl ExecutionDriver {
                 )
                 .await
             {
-                Ok(sha) if !sha.trim().is_empty() => landed.push(LandedTask {
-                    id: task.id.clone(),
-                    sha: sha.trim().to_string(),
-                }),
+                Ok(sha) if !sha.trim().is_empty() => {
+                    let sha = sha.trim().to_string();
+                    self.checkpoint_landed_task(step_exec, machine_str, &task.id, &sha)
+                        .await;
+                    landed.push(LandedTask {
+                        id: task.id.clone(),
+                        sha,
+                    });
+                }
                 _ => {
                     tracing::warn!(
                         feature_id = %self.f_id,

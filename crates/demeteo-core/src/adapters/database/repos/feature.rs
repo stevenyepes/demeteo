@@ -416,7 +416,7 @@ impl FeatureRepository for SqliteAdapter {
         &self,
         feature_id: &FeatureId,
         step_id: &str,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<crate::domain::models::SequenceCheckpoint, String> {
         super::sequence_state::sequence_checkpoint_get(self, feature_id, step_id)
     }
 
@@ -425,6 +425,7 @@ impl FeatureRepository for SqliteAdapter {
         feature_id: &FeatureId,
         step_id: &str,
         landed_task_ids: &[String],
+        anchor_sha: Option<&str>,
         now: i64,
     ) -> Result<u32, String> {
         super::sequence_state::sequence_checkpoint_record(
@@ -432,6 +433,7 @@ impl FeatureRepository for SqliteAdapter {
             feature_id,
             step_id,
             landed_task_ids,
+            anchor_sha,
             now,
         )
     }

@@ -319,21 +319,25 @@ pub trait FeatureRepository: Send + Sync {
     // exact task instead of the step head. Keyed per (feature, node):
     // a workflow may hold several sequence nodes.
 
-    /// Landed task ids for a (feature, node) mid-list checkpoint, in
-    /// landed order; empty when the step never checkpointed.
+    /// The (feature, node) resume point: landed task ids in landed
+    /// order plus the commit they end at. Empty when the step never
+    /// checkpointed.
     fn sequence_checkpoint_get(
         &self,
         feature_id: &FeatureId,
         step_id: &str,
-    ) -> Result<Vec<String>, String>;
+    ) -> Result<crate::domain::models::SequenceCheckpoint, String>;
 
     /// Union `landed_task_ids` into the checkpoint (order-preserving,
-    /// deduplicated). Returns the total landed count after the merge.
+    /// deduplicated) and move the anchor to `anchor_sha`; `None` leaves
+    /// the stored anchor alone. Returns the total landed count after the
+    /// merge.
     fn sequence_checkpoint_record(
         &self,
         feature_id: &FeatureId,
         step_id: &str,
         landed_task_ids: &[String],
+        anchor_sha: Option<&str>,
         now: i64,
     ) -> Result<u32, String>;
 

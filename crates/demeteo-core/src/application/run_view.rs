@@ -130,6 +130,7 @@ impl RunView {
         let landed: std::collections::HashSet<String> = self
             .features
             .sequence_checkpoint_get(feature_id, node_id)?
+            .landed_task_ids
             .into_iter()
             .collect();
 
