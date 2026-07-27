@@ -515,6 +515,10 @@ export function FeatureDetail() {
   // to draw. An *awaiting* gate node opens the existing full-screen `GateView`
   // (the actionable HITL path); every other node opens the drill-down panel.
   const canShowGraph = graphDef !== null && steps.length > 0;
+  /** The graph is the one child of this column that *wants* the whole window:
+   *  it's a canvas, not prose, so it drops the reading-width cap and flexes to
+   *  the column's height instead of sitting in a fixed box. */
+  const graphMode = canShowGraph && viewMode === 'graph';
   const onNodeActivate = useCallback(
     (nodeId: string) => {
       const run = runStatusByNode[nodeId];
@@ -1396,14 +1400,18 @@ export function FeatureDetail() {
       ) : (
         <div className="flex-1 flex flex-row overflow-hidden w-full h-full">
           {/* Left Column: Timeline */}
-          <div className={`overflow-y-auto p-8 transition-all duration-500 ${
-            selectedArtifactPath ? 'w-[40%] border-r border-white/5 bg-[#08090c]/40' : 'w-full max-w-6xl mx-auto'
+          <div className={`flex min-h-0 flex-col overflow-y-auto p-8 transition-all duration-500 ${
+            selectedArtifactPath
+              ? 'w-[40%] border-r border-white/5 bg-[#08090c]/40'
+              // Prose and step cards keep the 72rem reading cap; the graph
+              // takes the window, however wide it is.
+              : `w-full mx-auto ${graphMode ? '' : 'max-w-6xl'}`
           }`}>
             {remoteRun && (
               /* Activity feed for a detached run: the runner's own event
                  log (submitted → cloned → gates → pushed → PR), inline
                  where the run lives instead of a separate modal. */
-              <div className="mb-6 space-y-1.5">
+              <div className="mb-6 w-full max-w-6xl shrink-0 space-y-1.5">
                 <RunEventTimeline
                   run={remoteRun}
                   machineName={remoteMachineName ?? remoteRun.machine_id}
@@ -1427,12 +1435,16 @@ export function FeatureDetail() {
                 </div>
               </div>
             )}
-            {showBootstrap && <BootstrapStepper phases={orderedBootstrapPhases} />}
+            {showBootstrap && (
+              <div className="w-full max-w-6xl shrink-0">
+                <BootstrapStepper phases={orderedBootstrapPhases} />
+              </div>
+            )}
             {canShowGraph && (
               /* Graph | Timeline toggle (PRD §6.1). List stays default; the
                  graph is the same pinned-version definition with the live
                  `run_events`-driven overlay. */
-              <div className="mb-6 inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1">
+              <div className="mb-6 inline-flex shrink-0 self-start items-center gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1">
                 <button
                   onClick={() => setViewMode('graph')}
                   className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
@@ -1455,8 +1467,11 @@ export function FeatureDetail() {
                 </button>
               </div>
             )}
-            {canShowGraph && viewMode === 'graph' ? (
-              <div className="flex h-[600px] w-full overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
+            {graphMode ? (
+              /* Grows into whatever height the column has left rather than a
+                 fixed box, with a floor so a short window still shows a
+                 usable canvas instead of a sliver. */
+              <div className="flex min-h-[28rem] w-full flex-1 overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
                 <div className="min-w-0 flex-1">
                   <WorkflowCanvas
                     definition={graphDef!}
@@ -1507,7 +1522,7 @@ export function FeatureDetail() {
                 )}
               </div>
             ) : (
-            <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
+            <div className="relative shrink-0 border-l border-white/5 ml-4 pl-8 space-y-6">
               {remoteRun && steps.length === 0 && bootstrapPhases.size === 0 && (
                 /* Eager shadow, pre-hydration: the run was submitted a
                    moment ago and the runner hasn't bootstrapped a

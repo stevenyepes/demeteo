@@ -36,7 +36,14 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   diff?: NodeDiffMark;
   /** Fields that differ, when `diff` is `changed` — the card's tooltip. */
   diffFields?: string[];
+  /** Which edge of the card the handles sit on. Follows the elk direction so
+   *  a left-to-right layout doesn't route its edges bottom-to-top. */
+  orientation?: GraphOrientation;
 }
+
+/** `vertical` = handles top/bottom (elk `DOWN`); `horizontal` = left/right
+ *  (elk `RIGHT`). */
+export type GraphOrientation = 'vertical' | 'horizontal';
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
 
@@ -59,6 +66,8 @@ export interface ToFlowGraphOptions {
    *  `mergeForDiff` as the definition, so removed nodes have a card to be
    *  drawn on. */
   diff?: GraphDiff;
+  /** Handle placement; defaults to `vertical`, the migrated column's shape. */
+  orientation?: GraphOrientation;
 }
 
 /** Edge stroke per worst anchored finding — a broken edge has to be findable
@@ -100,6 +109,7 @@ export function toFlowGraph(
         // a compare view should draw the eye to what moved.
         diff: diff && diff.status !== 'unchanged' ? diff.status : undefined,
         diffFields: diff?.fields.length ? diff.fields : undefined,
+        orientation: opts.orientation ?? 'vertical',
       },
     };
   });

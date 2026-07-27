@@ -29,6 +29,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
   type Connection,
@@ -40,7 +41,13 @@ import { LayoutGrid, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import '@xyflow/react/dist/style.css';
 
 import { WorkflowNode } from './nodes/WorkflowNode';
-import { toFlowGraph, type WorkflowFlowNode } from './flowGraph';
+import { toFlowGraph, type GraphOrientation, type WorkflowFlowNode } from './flowGraph';
+import {
+  isUnarranged,
+  pickDirection,
+  type ContainerSize,
+  type LayoutDirection,
+} from './layoutDirection';
 import { useElkLayout } from './useElkLayout';
 import { NodeTypePicker, Palette, NODE_TYPE_MIME, type PaletteEntry } from './Palette';
 import { atInstanceCap, canConnect, connectableTypesFrom } from './connectRules';
@@ -54,6 +61,9 @@ import type { NodeRunStatus, PositionV2, WorkflowDefinitionV2 } from './types';
 const MINIMAP_THRESHOLD = 8;
 
 const NODE_TYPES = { workflow: WorkflowNode };
+
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 1.75;
 
 export type CanvasMode = 'run' | 'design';
 
@@ -116,6 +126,10 @@ function CanvasInner({
   const catalog = useMemo(() => nodeTypes ?? [], [nodeTypes]);
   const typesByKind = useMemo(() => byKind(catalog), [catalog]);
   const [picker, setPicker] = useState<PickerState | null>(null);
+  // Handle placement, and so the card's flow direction. Owned as state rather
+  // than derived at render time: it's an *output* of the layout pass, and
+  // deriving it from the nodes it feeds would be circular.
+  const [orientation, setOrientation] = useState<GraphOrientation>('vertical');
   const base = useMemo(
     () =>
       toFlowGraph(definition, {
@@ -124,23 +138,66 @@ function CanvasInner({
         showEssence: design,
         lint,
         diff,
+        orientation,
       }),
-    [definition, statusByNode, highlightedNodeIds, design, lint, diff],
+    [definition, statusByNode, highlightedNodeIds, design, lint, diff, orientation],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(base.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(base.edges);
-  const { fitView, getNodes, screenToFlowPosition, zoomIn, zoomOut } = useReactFlow();
+  const { fitView, getEdges, getNodes, screenToFlowPosition, zoomIn, zoomOut } = useReactFlow();
   const { layout, running } = useElkLayout();
+  const nodesInitialized = useNodesInitialized();
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  // Re-seed when the definition (or its overlay) changes identity. Positions
-  // come from the definition, so this also discards any prior elk layout —
-  // intended: a new definition owns its own layout.
+  /** Positions from the last auto-layout, so a re-seed from `base` — the live
+   *  status overlay ticks one out on every event — doesn't yank the graph back
+   *  into the migrated column a second after we laid it out. Cleared whenever
+   *  the definition changes, so an edit can't resurrect stale coordinates. */
+  const laidOutRef = useRef<Map<string, PositionV2> | null>(null);
+  /** The direction already applied, so a resize that doesn't change the
+   *  verdict doesn't re-run elk. */
+  const appliedDirRef = useRef<LayoutDirection | null>(null);
+
+  // A new definition owns its own layout — drop what we computed for the old
+  // one. Declared before the re-seed effect so the drop lands first.
   useEffect(() => {
-    setNodes(base.nodes);
+    laidOutRef.current = null;
+    appliedDirRef.current = null;
+  }, [definition]);
+
+  // Re-seed when the definition (or its overlay) changes identity, carrying
+  // any auto-layout positions across.
+  useEffect(() => {
+    const laid = laidOutRef.current;
+    setNodes(
+      laid
+        ? base.nodes.map((n) => {
+            const p = laid.get(n.id);
+            return p ? { ...n, position: p } : n;
+          })
+        : base.nodes,
+    );
     setEdges(base.edges);
   }, [base, setNodes, setEdges]);
+
+  // The canvas measures itself so the layout can suit the space it actually
+  // has — the whole point being that a 4K window and a laptop window want
+  // different graph shapes. Rounded to damp the resize-drag firehose.
+  const [containerSize, setContainerSize] = useState<ContainerSize | null>(null);
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry.contentRect;
+      const next = { width: Math.round(box.width / 8) * 8, height: Math.round(box.height / 8) * 8 };
+      setContainerSize((prev) =>
+        prev && prev.width === next.width && prev.height === next.height ? prev : next,
+      );
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Reflect externally-controlled selection onto the node `selected` flag.
   // Only touches nodes whose flag disagrees, so it's a no-op reconcile after a
@@ -158,23 +215,81 @@ function CanvasInner({
 
   const showMiniMap = nodes.length >= MINIMAP_THRESHOLD;
 
-  const runAutoLayout = useCallback(async () => {
-    const current = getNodes() as WorkflowFlowNode[];
-    const positions = await layout(
-      current.map((n) => ({ id: n.id, measured: n.measured })),
-      edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+  /** Lay the graph out, choosing the orientation that renders largest in the
+   *  space the canvas currently has. Reads nodes/edges imperatively so it
+   *  doesn't change identity on every status tick. */
+  const runAutoLayout = useCallback(
+    async (opts: { duration?: number } = {}) => {
+      const current = getNodes() as WorkflowFlowNode[];
+      const layoutNodes = current.map((n) => ({ id: n.id, measured: n.measured }));
+      const layoutEdges = getEdges().map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+      }));
+      const direction = pickDirection(layoutNodes, layoutEdges, containerSize, MAX_ZOOM);
+
+      const positions = await layout(layoutNodes, layoutEdges, direction);
+      if (positions.length === 0) return;
+      const byId = new Map(positions.map((p) => [p.id, { x: p.x, y: p.y }]));
+      appliedDirRef.current = direction;
+      // Held before the state updates below: changing the orientation
+      // invalidates `base`, and the re-seed it triggers has to find these
+      // positions or it would drop the layout it just asked for.
+      laidOutRef.current = byId;
+      setOrientation(direction === 'RIGHT' ? 'horizontal' : 'vertical');
+      setNodes((prev) =>
+        prev.map((n) => {
+          const p = byId.get(n.id);
+          return p ? { ...n, position: p } : n;
+        }),
+      );
+      // Let React Flow commit the new positions before fitting the viewport.
+      window.requestAnimationFrame(() => void fitView({ duration: opts.duration ?? 300 }));
+    },
+    [containerSize, getEdges, getNodes, layout, setNodes, fitView],
+  );
+
+  /** Nobody arranged this graph, so the canvas may arrange it for the window.
+   *  A hand-positioned graph is shown the way its author left it. */
+  const autoArrange = useMemo(
+    () => !design && isUnarranged(definition.nodes.map((n) => n.position)),
+    [design, definition],
+  );
+
+  // Orient an unarranged graph for the space available, and re-orient when a
+  // resize actually changes the verdict — `runAutoLayout` no-ops the rest of
+  // the time via `appliedDirRef`, so dragging a window edge doesn't thrash elk.
+  useEffect(() => {
+    if (!autoArrange || !nodesInitialized || !containerSize) return;
+    const layoutNodes = (getNodes() as WorkflowFlowNode[]).map((n) => ({
+      id: n.id,
+      measured: n.measured,
+    }));
+    const next = pickDirection(
+      layoutNodes,
+      getEdges().map((e) => ({ id: e.id, source: e.source, target: e.target })),
+      containerSize,
+      MAX_ZOOM,
     );
-    if (positions.length === 0) return;
-    const byId = new Map(positions.map((p) => [p.id, p]));
-    setNodes((prev) =>
-      prev.map((n) => {
-        const p = byId.get(n.id);
-        return p ? { ...n, position: { x: p.x, y: p.y } } : n;
-      }),
-    );
-    // Let React Flow commit the new positions before fitting the viewport.
-    window.requestAnimationFrame(() => void fitView({ duration: 300 }));
-  }, [edges, getNodes, layout, setNodes, fitView]);
+    if (next === appliedDirRef.current) {
+      // Same shape, more (or less) room: just re-fit into it.
+      void fitView({ duration: 200 });
+      return;
+    }
+    void runAutoLayout({ duration: appliedDirRef.current ? 300 : 0 });
+  }, [
+    autoArrange,
+    // A new definition resets both refs above, so this has to run again to
+    // re-derive the layout — the booleans alone wouldn't have changed.
+    definition,
+    nodesInitialized,
+    containerSize,
+    getEdges,
+    getNodes,
+    fitView,
+    runAutoLayout,
+  ]);
 
   const activate = useCallback(
     (id: string) => {
@@ -433,8 +548,8 @@ function CanvasInner({
         elementsSelectable
         fitView
         proOptions={{ hideAttribution: true }}
-        minZoom={0.2}
-        maxZoom={1.75}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#334155" />
         <Panel position="bottom-left">
@@ -491,7 +606,7 @@ function CanvasInner({
         <Panel position="top-right">
           <button
             type="button"
-            onClick={runAutoLayout}
+            onClick={() => void runAutoLayout()}
             disabled={running}
             className="flex items-center gap-1.5 rounded-lg border border-slate-700/60 bg-slate-900/80 px-2.5 py-1.5 text-xs font-medium text-slate-200 backdrop-blur-sm transition-colors hover:border-slate-600 hover:text-white disabled:opacity-50"
             title="Auto-layout"
