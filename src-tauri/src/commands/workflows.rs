@@ -387,25 +387,8 @@ pub fn workflow_update(
         .update_meta(&wf_id, &name, &description)
         .map_err(AppError::from)?;
 
-    // Calculate next version number
-    let existing_versions = workflows.versions(&wf_id).map_err(AppError::from)?;
-    let next_version = existing_versions
-        .iter()
-        .map(|v| v.version)
-        .max()
-        .unwrap_or(0)
-        + 1;
     let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
-    let version_id = WorkflowVersionId::from(format!("{}-v{}", workflow_id, next_version));
-    let version = WorkflowVersion {
-        id: version_id.clone(),
-        workflow_id: wf_id.clone(),
-        version: next_version,
-        steps_json,
-        note,
-        created_at: now,
-    };
-    workflows.save_version(version)?;
+    let (next_version, version_id) = append_version(workflows, &wf_id, steps_json, note, now)?;
 
     Ok(WorkflowWithSteps {
         id: workflow_id,
@@ -436,6 +419,157 @@ pub fn workflow_versions(
     ctx.workflows
         .versions(&WorkflowId::from(workflow_id))
         .map_err(AppError::from)
+}
+
+/// The **schema-v2 graph** for one stored version — what the builder's version
+/// drawer renders and diffs (P3.4).
+///
+/// The run-mode twin of this is `feature_workflow_graph`, which resolves the
+/// version a *run* pinned. Design mode needs the same projection for a version
+/// the author picked out of history instead, and migration is Rust-only, so the
+/// drawer cannot derive it from the `steps_json` string `workflow_versions`
+/// already hands it.
+#[tauri::command]
+pub fn workflow_version_graph(
+    workflow_id: String,
+    version_id: String,
+    ctx: State<'_, AppContext>,
+) -> Result<WorkflowDefinitionV2, AppError> {
+    version_graph(
+        &ctx.workflows,
+        &WorkflowId::from(workflow_id),
+        &WorkflowVersionId::from(version_id),
+    )
+}
+
+/// Restore a stored version as a **new** version (P3.4): the row it copies is
+/// left exactly where it was, so history only ever grows.
+///
+/// The copy is of `steps_json` **verbatim**, deliberately: the builder holds a
+/// schema-v2 graph and storage is still the v1 step list, so routing a restore
+/// through the editor's model would rewrite the restored version through a
+/// lossy projection — an author asking for v3 back would get something that
+/// merely migrates to the same graph. Content-preserving history operations
+/// belong at the storage layer, below that seam. (The same reasoning applies to
+/// `workflow_revert_to_default`, which has always copied the bundled starter's
+/// steps directly.)
+///
+/// Name and description are not versioned, so they are left untouched.
+#[tauri::command]
+pub fn workflow_restore_version(
+    workflow_id: String,
+    version_id: String,
+    ctx: State<'_, AppContext>,
+) -> Result<WorkflowWithSteps, AppError> {
+    restore_version(
+        &ctx.workflows,
+        &WorkflowId::from(workflow_id),
+        &WorkflowVersionId::from(version_id),
+    )
+}
+
+/// The command core, split out so the tests drive the same code the
+/// `#[tauri::command]` wrapper does rather than a local mirror of it.
+pub fn version_graph(
+    workflows: &Arc<dyn WorkflowRepository>,
+    workflow_id: &WorkflowId,
+    version_id: &WorkflowVersionId,
+) -> Result<WorkflowDefinitionV2, AppError> {
+    let w = workflows
+        .get(workflow_id)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("Workflow not found: {workflow_id}")))?;
+    let version = version_of(workflows, workflow_id, version_id)?;
+    let steps: Vec<StepConfig> = serde_json::from_str(&version.steps_json).unwrap_or_default();
+    Ok(migrate_v1_to_v2(workflow_id.clone(), w.name, &steps))
+}
+
+/// See `workflow_restore_version`.
+pub fn restore_version(
+    workflows: &Arc<dyn WorkflowRepository>,
+    workflow_id: &WorkflowId,
+    version_id: &WorkflowVersionId,
+) -> Result<WorkflowWithSteps, AppError> {
+    let w = workflows
+        .get(workflow_id)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("Workflow not found: {workflow_id}")))?;
+    let source = version_of(workflows, workflow_id, version_id)?;
+    let now = paths::now_ms();
+    let (version, new_version_id) = append_version(
+        workflows,
+        workflow_id,
+        source.steps_json.clone(),
+        Some(format!("Restored from v{}", source.version)),
+        now,
+    )?;
+
+    Ok(WorkflowWithSteps {
+        id: workflow_id.0.clone(),
+        name: w.name,
+        description: w.description,
+        is_starter: w.is_starter,
+        created_at: w.created_at,
+        updated_at: now,
+        steps: serde_json::from_str(&source.steps_json).unwrap_or_default(),
+        version,
+        version_id: new_version_id.0,
+        schedule: w.schedule,
+    })
+}
+
+/// Load a version row and prove it belongs to the workflow the caller named.
+/// Version ids are guessable by construction (`<workflow-id>-v3`), so the
+/// pairing is checked rather than assumed — a mismatched pair would otherwise
+/// let one workflow's history be restored onto another.
+fn version_of(
+    workflows: &Arc<dyn WorkflowRepository>,
+    workflow_id: &WorkflowId,
+    version_id: &WorkflowVersionId,
+) -> Result<WorkflowVersion, AppError> {
+    let version = workflows
+        .version_get(version_id)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found(format!("Workflow version not found: {version_id}")))?;
+    if &version.workflow_id != workflow_id {
+        return Err(AppError::validation(format!(
+            "Version {version_id} belongs to workflow {}, not {workflow_id}.",
+            version.workflow_id
+        )));
+    }
+    Ok(version)
+}
+
+/// One past the highest version that exists. Numbering never reuses a value,
+/// so a version id derived from it is unique for the life of the workflow.
+fn next_version_number(existing: &[WorkflowVersion]) -> u32 {
+    existing.iter().map(|v| v.version).max().unwrap_or(0) + 1
+}
+
+/// Append an immutable version row and report what it became.
+///
+/// Every path that produces a version — an edit, a revert-to-default, a restore
+/// from history — goes through here, so "saving is an append, never an edit"
+/// stays one fact instead of three copies of the same numbering arithmetic.
+fn append_version(
+    workflows: &Arc<dyn WorkflowRepository>,
+    workflow_id: &WorkflowId,
+    steps_json: String,
+    note: Option<String>,
+    now: i64,
+) -> Result<(u32, WorkflowVersionId), AppError> {
+    let existing = workflows.versions(workflow_id).map_err(AppError::from)?;
+    let version = next_version_number(&existing);
+    let id = WorkflowVersionId::from(format!("{}-v{}", workflow_id.as_str(), version));
+    workflows.save_version(WorkflowVersion {
+        id: id.clone(),
+        workflow_id: workflow_id.clone(),
+        version,
+        steps_json,
+        note,
+        created_at: now,
+    })?;
+    Ok((version, id))
 }
 
 #[tauri::command]
@@ -585,26 +719,16 @@ pub fn workflow_revert_to_default(
                 let description = v["description"].as_str().unwrap_or("").to_string();
                 let steps: Vec<StepConfig> =
                     serde_json::from_value(v["steps"].clone()).unwrap_or_default();
-                let existing_versions = workflows.versions(&wf_id)?;
-                let next_version = existing_versions
-                    .iter()
-                    .map(|v| v.version)
-                    .max()
-                    .unwrap_or(0)
-                    + 1;
                 let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
                 let now = paths::now_ms();
-                let version_id =
-                    WorkflowVersionId::from(format!("{}-v{}", workflow_id, next_version));
                 workflows.update_meta(&wf_id, &name, &description)?;
-                workflows.save_version(WorkflowVersion {
-                    id: version_id.clone(),
-                    workflow_id: wf_id.clone(),
-                    version: next_version,
+                let (next_version, version_id) = append_version(
+                    workflows,
+                    &wf_id,
                     steps_json,
-                    note: Some("Reverted to default".to_string()),
-                    created_at: now,
-                })?;
+                    Some("Reverted to default".to_string()),
+                    now,
+                )?;
                 return Ok(WorkflowWithSteps {
                     id: workflow_id,
                     name,

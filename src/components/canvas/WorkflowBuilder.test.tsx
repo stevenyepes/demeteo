@@ -14,9 +14,17 @@
  * app is blocked — the whole point of guarding the context rather than a
  * component's own Back button.
  */
-import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react';
+import {
+  render,
+  screen,
+  cleanup,
+  fireEvent,
+  waitFor,
+  within,
+  act,
+} from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
 
 import { NavigationProvider, useNavigation } from '../../context/NavigationContext';
 import { WorkflowBuilder } from './WorkflowBuilder';
@@ -45,11 +53,38 @@ const DEF: WorkflowDefinitionV2 = {
   edges: [{ from: 'plan', to: 'ship' }],
 };
 
+/** Stored history for the version drawer: v1 predates the finalize node. */
+const VERSION_ROWS = [
+  {
+    id: 'wf-b-v1',
+    workflow_id: 'wf-b',
+    version: 1,
+    steps_json: '[]',
+    note: 'Initial version',
+    created_at: 1,
+  },
+  {
+    id: 'wf-b-v3',
+    workflow_id: 'wf-b',
+    version: 3,
+    steps_json: '[]',
+    note: 'Added the finalize step',
+    created_at: 3,
+  },
+];
+
+const VERSION_GRAPHS: Record<string, WorkflowDefinitionV2> = {
+  'wf-b-v1': { ...DEF, nodes: [DEF.nodes[0]], edges: [] },
+  'wf-b-v3': DEF,
+  // What a restore of v1 lands as.
+  'wf-b-v4': { ...DEF, nodes: [DEF.nodes[0]], edges: [] },
+};
+
 /** Findings the mocked `workflow_lint` returns; per-test. */
 let findings: LintFinding[] = [];
 
 function mockBackend() {
-  vi.mocked(invoke).mockImplementation((cmd: string) => {
+  vi.mocked(invoke).mockImplementation((cmd: string, args?: InvokeArgs) => {
     switch (cmd) {
       case 'node_types_list':
         return Promise.resolve(CATALOG);
@@ -57,6 +92,19 @@ function mockBackend() {
         return Promise.resolve(findings);
       case 'list_agents':
         return Promise.resolve([]);
+      // Version history (P3.4). v1 is the graph without the finalize node, so
+      // comparing it against the working copy has something to report.
+      case 'workflow_versions':
+        return Promise.resolve(VERSION_ROWS);
+      case 'workflow_version_graph':
+        return Promise.resolve(VERSION_GRAPHS[String((args as Record<string, string>).versionId)]);
+      case 'workflow_restore_version':
+        return Promise.resolve({
+          name: 'Builder Test',
+          description: '',
+          version: 4,
+          version_id: 'wf-b-v4',
+        });
       default:
         return Promise.resolve(undefined);
     }
@@ -139,6 +187,89 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.mocked(invoke).mockReset();
+});
+
+describe('version history (P3.4)', () => {
+  /** Open the drawer and wait for its rows. */
+  async function openHistory() {
+    fireEvent.click(screen.getByRole('button', { name: 'Version history' }));
+    await screen.findByTestId('version-row-1');
+  }
+
+  it('renders the diff between a stored version and the working copy', async () => {
+    renderBuilder();
+    await ready();
+    await openHistory();
+
+    const v1 = screen.getByTestId('version-row-1');
+    fireEvent.click(within(v1).getByRole('button', { name: 'Compare' }));
+
+    const banner = await screen.findByTestId('compare-banner');
+    expect(banner).toHaveTextContent('Comparing v1 → Working copy');
+    expect(banner).toHaveTextContent('1 added');
+
+    // The finalize node the working copy has and v1 didn't is marked on the
+    // canvas itself — the Done-when for this task.
+    expect(await screen.findByTestId('node-diff-added')).toBeInTheDocument();
+    // …and the merged graph is read-only while comparing: no palette, no
+    // config panel to edit a version that no longer exists.
+    expect(screen.queryByTestId('node-palette')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Exit compare' }));
+    await waitFor(() => expect(screen.getByTestId('node-palette')).toBeInTheDocument());
+    expect(screen.queryByTestId('node-diff-added')).not.toBeInTheDocument();
+  });
+
+  it('adopts a restored version: new graph, new version, clean editor', async () => {
+    const onWorkflowReplaced = vi.fn();
+    render(
+      <NavigationProvider>
+        <div style={{ width: 900, height: 700 }}>
+          <WorkflowBuilder
+            workflowId="wf-b"
+            definition={DEF}
+            name="Builder Test"
+            version={3}
+            onSave={() => Promise.resolve()}
+            onWorkflowReplaced={onWorkflowReplaced}
+            onClose={() => {}}
+          />
+        </div>
+      </NavigationProvider>,
+    );
+    await ready();
+    // Dirty the editor, then clean it, so the restore isn't fighting the guard.
+    await openHistory();
+
+    fireEvent.click(screen.getByTitle('Restore v1 as a new version'));
+
+    await waitFor(() => expect(onWorkflowReplaced).toHaveBeenCalledWith({
+      version: 4,
+      name: 'Builder Test',
+      description: '',
+    }));
+    // The canvas now shows the restored graph…
+    await waitFor(() =>
+      expect(screen.queryByText('Publish Branch')).not.toBeInTheDocument(),
+    );
+    // …the header follows the version that landed, and nothing is unsaved:
+    // the restore is already a stored version.
+    expect(screen.getByRole('button', { name: 'Version history' })).toHaveTextContent('v4');
+    expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument();
+  });
+
+  it('refuses to restore over unsaved edits', async () => {
+    renderBuilder();
+    await ready();
+    fireEvent.click(screen.getByRole('option', { name: /Gate/ }));
+    expect(screen.getByTestId('dirty-indicator')).toBeInTheDocument();
+
+    await openHistory();
+    for (const button of screen.getAllByTitle(/Save or discard your unsaved edits/)) {
+      expect(button).toBeDisabled();
+    }
+    expect(invoke).not.toHaveBeenCalledWith('workflow_restore_version', expect.anything());
+  });
 });
 
 describe('save gating', () => {

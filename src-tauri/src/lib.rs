@@ -498,6 +498,8 @@ pub fn run() {
             commands::workflows::workflow_update,
             commands::workflows::workflow_delete,
             commands::workflows::workflow_versions,
+            commands::workflows::workflow_version_graph,
+            commands::workflows::workflow_restore_version,
             commands::workflows::workflow_export,
             commands::workflows::workflow_import,
             commands::workflows::workflow_revert_to_default,

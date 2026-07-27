@@ -47,6 +47,7 @@ import { NodeTypePicker, Palette, NODE_TYPE_MIME, type PaletteEntry } from './Pa
 import { atInstanceCap, canConnect, connectableTypesFrom } from './connectRules';
 import { addNode, connectNodes, moveNodes, removeEdge, removeNode } from './graphEdits';
 import { byKind, type NodeTypeInfo } from './nodeCatalog';
+import type { GraphDiff } from './graphDiff';
 import type { LintIndex } from './lint';
 import type { NodeRunStatus, PositionV2, WorkflowDefinitionV2 } from './types';
 
@@ -86,6 +87,10 @@ export interface WorkflowCanvasProps {
    *  owning screen runs `useWorkflowLint` and passes the result, keeping the
    *  canvas IPC-free. */
   lint?: LintIndex;
+  /** Version comparison overlay (P3.4). Pass alongside the *merged* graph
+   *  from `mergeForDiff` — and in `run` mode, since the merged graph is a
+   *  read-only view of two versions, not something to edit. */
+  diff?: GraphDiff;
   className?: string;
 }
 
@@ -105,6 +110,7 @@ function CanvasInner({
   selectedNodeId,
   highlightedNodeIds,
   lint,
+  diff,
   className = '',
 }: WorkflowCanvasProps) {
   const design = mode === 'design';
@@ -118,8 +124,9 @@ function CanvasInner({
         highlightedNodeIds,
         showEssence: design,
         lint,
+        diff,
       }),
-    [definition, statusByNode, highlightedNodeIds, design, lint],
+    [definition, statusByNode, highlightedNodeIds, design, lint, diff],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(base.nodes);

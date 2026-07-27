@@ -8,6 +8,7 @@
  * map — design mode (P2.1) simply passes nothing.
  */
 import type { Edge, Node } from '@xyflow/react';
+import type { EdgeDiffStatus, GraphDiff, NodeDiffMark } from './graphDiff';
 import { edgeKey, type LintIndex } from './lint';
 import { isEssenceEmpty, nodeEssence, type NodeEssence } from './nodeSummary';
 import type { NodeRunStatus, WorkflowDefinitionV2 } from './types';
@@ -31,6 +32,10 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   essence?: NodeEssence;
   /** Structural-lint badge (P3.3); undefined when the node is clean. */
   lint?: NodeLint;
+  /** Version-diff verdict (P3.4); undefined outside compare mode. */
+  diff?: NodeDiffMark;
+  /** Fields that differ, when `diff` is `changed` — the card's tooltip. */
+  diffFields?: string[];
 }
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
@@ -50,12 +55,23 @@ export interface ToFlowGraphOptions {
   showEssence?: boolean;
   /** Structural-lint findings (P3.3) to badge nodes and tint edges with. */
   lint?: LintIndex;
+  /** Version comparison (P3.4). Expects the *merged* graph from
+   *  `mergeForDiff` as the definition, so removed nodes have a card to be
+   *  drawn on. */
+  diff?: GraphDiff;
 }
 
 /** Edge stroke per worst anchored finding — a broken edge has to be findable
  *  on the canvas, not only in the save-blocked list. */
 const EDGE_ERROR_STROKE = '#f43f5e'; // rose-500
 const EDGE_WARNING_STROKE = '#f59e0b'; // amber-500
+
+/** Diff stroke per edge verdict — same color language as the node cards. */
+const EDGE_DIFF_STROKE: Partial<Record<EdgeDiffStatus, string>> = {
+  added: '#10b981', // emerald-500
+  removed: '#f43f5e', // rose-500
+  changed: '#f59e0b', // amber-500
+};
 
 export function toFlowGraph(
   def: WorkflowDefinitionV2,
@@ -68,6 +84,7 @@ export function toFlowGraph(
       errors: findings.filter((f) => f.severity === 'error').map((f) => f.message),
       warnings: findings.filter((f) => f.severity === 'warning').map((f) => f.message),
     };
+    const diff = opts.diff?.nodes.get(n.id);
     return {
       id: n.id,
       type: 'workflow' as const,
@@ -79,19 +96,28 @@ export function toFlowGraph(
         highlighted: opts.highlightedNodeIds?.has(n.id) ?? false,
         essence: essence && !isEssenceEmpty(essence) ? essence : undefined,
         lint: findings.length > 0 ? lint : undefined,
+        // `unchanged` carries no signal, so it stays off the card entirely —
+        // a compare view should draw the eye to what moved.
+        diff: diff && diff.status !== 'unchanged' ? diff.status : undefined,
+        diffFields: diff?.fields.length ? diff.fields : undefined,
       },
     };
   });
 
   const edges: Edge[] = def.edges.map((e) => {
-    const findings = opts.lint?.byEdge.get(edgeKey(e.from, e.to)) ?? [];
+    const key = edgeKey(e.from, e.to);
+    const findings = opts.lint?.byEdge.get(key) ?? [];
     const worst = findings.some((f) => f.severity === 'error')
       ? 'error'
       : findings.length > 0
         ? 'warning'
         : null;
+    // Lint wins the stroke where both apply: a broken edge is the one you must
+    // act on. In practice compare mode passes no lint, so they don't collide.
+    const diffStatus = opts.diff?.edges.get(key);
+    const diffStroke = diffStatus ? EDGE_DIFF_STROKE[diffStatus] : undefined;
     return {
-      id: edgeKey(e.from, e.to),
+      id: key,
       source: e.from,
       target: e.to,
       // A conditional edge (a `when` guard) reads as a labeled branch.
@@ -107,7 +133,12 @@ export function toFlowGraph(
               lint: findings.map((f) => f.message),
             },
           }
-        : {}),
+        : diffStroke
+          ? {
+              style: { stroke: diffStroke, strokeWidth: 2 },
+              data: { ...(e.when ? { when: e.when } : {}), diff: diffStatus },
+            }
+          : {}),
     };
   });
 
