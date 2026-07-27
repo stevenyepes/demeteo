@@ -74,7 +74,7 @@ fn os_notification_for(event: &DomainEvent) -> Option<(String, String)> {
         )),
         // A terminal agent blocked on an approval prompt is a needs-a-decision
         // event: fire the gated OS notification so the user hears about it while
-        // demeteo is backgrounded/unfocused (TERMINAL_ACTIVITY_UX §3 item 4).
+        // demeteo is backgrounded/unfocused (TERMINAL_ACTIVITY §3 item 4).
         DomainEvent::TerminalAwaitingApproval { label, .. } => Some((
             "Agent needs a decision".to_string(),
             match label {

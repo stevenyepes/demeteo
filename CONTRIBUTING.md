@@ -17,7 +17,7 @@ Open a GitHub issue with:
 
 ## Feature requests
 
-Open a GitHub issue describing the use case, not just the feature. If a feature requires a new `npm` or `cargo` dependency, say so up front — dependency additions require explicit approval (see [§7 of AGENTS.md](AGENTS.md)).
+Open a GitHub issue describing the use case, not just the feature. If a feature requires a new `npm` or `cargo` dependency, say so up front — dependency additions require explicit approval (see [§6 of AGENTS.md](AGENTS.md)).
 
 ## Pull requests
 
@@ -39,7 +39,7 @@ git checkout -b your-name/short-description
 
 ### Code conventions
 
-Follow the conventions in [§4 of AGENTS.md](AGENTS.md). Key points:
+Follow the conventions in [§3 of AGENTS.md](AGENTS.md). Key points:
 
 **TypeScript / React**
 - Named exports only — no default exports
@@ -51,19 +51,87 @@ Follow the conventions in [§4 of AGENTS.md](AGENTS.md). Key points:
 - Run `cargo fmt` and `cargo clippy -- -D warnings` before committing
 - DB access goes through `src-tauri/src/db.rs` — no raw `rusqlite` calls in commands
 
-### Verification checklist
+### Commit messages
 
-Before opening a PR, confirm all three pass:
+Every commit must follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/).
+This is enforced twice: the `commit-msg` git hook (wired by `npm install` via
+`core.hooksPath .githooks`) rejects a bad message locally, and the
+[`Lint Commits`](.github/workflows/lint-commits.yml) workflow runs commitlint in CI.
+
+```
+<type>(<optional-scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+- **Subject** ≤ 72 chars, lower-case first letter, imperative mood, no trailing period.
+- **Type** is mandatory and lower-case. **Scope** is optional and lower-case (`orchestrator`, `settings`, `ci`).
+- **Body** explains *why*, wrapped at 100 cols, separated from the subject by a blank line.
+- **Footer** carries `BREAKING CHANGE: <note>` for any non-backwards-compatible change.
+
+Release automation reads these to infer the next version, so the type matters:
+
+| Type | Bump | When to use |
+|------|------|-------------|
+| `feat` | minor | A new user-facing feature |
+| `fix` | patch | A bug fix |
+| `perf` | patch | Performance improvement, no behaviour change |
+| `revert` | patch | Reverts a previous commit |
+| `refactor` | none | Internal change, no behaviour shift |
+| `docs` | none | Documentation only |
+| `style` | none | Formatting / whitespace |
+| `test` | none | Adding or fixing tests |
+| `build` | none | Build system, dependencies, external tooling |
+| `ci` | none | CI / GitHub Actions configuration |
+| `chore` | none | Tooling, scripts, maintenance, release bumps |
+
+A commit signals a **major** bump when the type carries a `!`
+(`feat(api)!: drop legacy v0 endpoints`) or the body/footer has a `BREAKING CHANGE:`
+line. Across a range the highest bump wins; an unrecognized type defaults to patch.
+
+```
+✅ feat(orchestrator): add parallel step fan-out
+✅ fix(settings): guard against null provider url
+✅ feat(api)!: drop legacy v0 endpoints
+❌ Fix bug                        — wrong case, vague
+❌ Updated stuff                  — no type
+❌ feat: Added a thing.           — past tense + trailing period
+❌ feat(remote): P0 multi-client runner
+     — subject starts with a capitalized token; commitlint's `subject-case`
+       rejects it. A leading acronym, ticket id, or TypeName trips this too.
+       Start with a lower-case word: `feat(remote): multi-client runner P0`.
+```
+
+Check a message before committing:
 
 ```bash
-# Frontend type-check
-npx tsc --noEmit
+echo "<your commit message>" | npx commitlint
+```
 
-# Rust format + lint
-cd src-tauri && cargo fmt && cargo clippy -- -D warnings && cd ..
+### Verification checklist
 
-# App boots without console errors
-npm run dev:tauri
+Before opening a PR, run the full gate:
+
+```bash
+npm run checks
+```
+
+This is the same script CI runs (`scripts/checks.sh`, invoked by
+[`pr-checks.yml`](.github/workflows/pr-checks.yml)), so a green run locally means a
+green run inline on the PR. It covers `tsc --noEmit`, `cargo fmt --check`, `cargo clippy
+--all-targets -D warnings` on the pinned toolchain, the demeteo + core + runner test
+suites, the gate-feedback repro, and commitlint over `origin/master..HEAD`. Running a
+subset — `cargo test` alone, say — will not tell you whether CI is green.
+
+The `pre-push` hook runs it for you; `git push --no-verify` bypasses it for a
+deliberate WIP push.
+
+If your change has UI or runtime surface, also confirm the app boots clean:
+
+```bash
+npm run dev:tauri   # no console errors
 ```
 
 ### Opening the PR
@@ -71,7 +139,7 @@ npm run dev:tauri
 - Keep the title short (under 70 characters) and use the description for context
 - Reference any related issue with `Closes #N`
 - If your change touches a Gate-policy area (migrations, Tauri capabilities, agent spawn logic, worktree merge), say so explicitly in the PR description
-- Every PR automatically runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml), which executes the same `npx tsc --noEmit`, `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, and `tests/repro/gate-feedback-rerender.mjs` commands listed above. Running these locally before pushing will reproduce any failure you see inline on the PR.
+- Every PR runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml) — the same `scripts/checks.sh` as `npm run checks` above, so any failure you see inline on the PR reproduces locally.
 
 ## What we won't merge
 

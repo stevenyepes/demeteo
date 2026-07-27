@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 //
 // A second background poller — modelled on `spawn_agent_detector` — resolves
 // the universal working/waiting floor from the byte cadence the drain already
-// records in `ActiveSession.last_output_at` (TERMINAL_ACTIVITY_PLAN §3, §4).
+// records in `ActiveSession.last_output_at` (TERMINAL_ACTIVITY §3, §4).
 // Every tick it snapshots each session under the lock, releases it, then for
 // each session WITH an agent present resolves `working` (output within the
 // cadence window) vs `awaiting_input` (gone quiet) and emits
@@ -21,12 +21,12 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Cadence window: output seen within this of a sweep tick reads as
 /// `working`; quieter than this reads as `awaiting_input`
-/// (TERMINAL_ACTIVITY_PLAN §7.2 — start at ~1s, tune against real agents).
+/// (TERMINAL_ACTIVITY §7.2 — start at ~1s, tune against real agents).
 pub(crate) const CADENCE_WINDOW: Duration = Duration::from_millis(1000);
 
 /// Time between activity sweeps. ~250ms keeps `working` appearing within one
 /// tick of the first byte and `awaiting_input` settling ≤ ~1s after silence
-/// (TERMINAL_ACTIVITY_PLAN §5).
+/// (TERMINAL_ACTIVITY §5).
 const ACTIVITY_SWEEP_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Pure cadence read for a single session, factored out of the sweep loop so it
@@ -43,7 +43,7 @@ pub(crate) fn cadence_state(since_last_output: Duration) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Activity precedence resolver (TERMINAL_ACTIVITY_PLAN §2)
+// Activity precedence resolver (TERMINAL_ACTIVITY §2)
 // ---------------------------------------------------------------------------
 //
 // Both signal sources fold their reading into a session's `SessionActivity`
@@ -117,7 +117,7 @@ pub(crate) fn resolve(sa: &SessionActivity) -> &'static str {
 /// as the new last-emitted); otherwise return `None` (dedup). On `exit` the
 /// record is REMOVED after emitting once, so a reused session id starts clean.
 /// Pure over the map — no `AppHandle` — so the precedence/dedup logic is
-/// unit-testable in isolation (TERMINAL_ACTIVITY_PLAN §6).
+/// unit-testable in isolation (TERMINAL_ACTIVITY §6).
 pub(crate) fn decide_and_record(
     map: &mut HashMap<String, SessionActivity>,
     id: &str,
@@ -232,7 +232,7 @@ pub(crate) fn resolve_and_emit<R: Runtime>(
 /// through the SAME resolver as the hook scanner and the cadence sweep, so the
 /// §2 precedence, dedup, and the OS notification are reused verbatim — a
 /// screen-sourced approval "behaves exactly like the hook-sourced one"
-/// (TERMINAL_ACTIVITY_PLAN §Phase 3).
+/// (TERMINAL_ACTIVITY §Phase 3).
 ///
 /// Agent-gated (defence in depth; the frontend already scans only agent tabs):
 /// a session with no agent present — or an unknown/closed one — is ignored, so
@@ -344,7 +344,7 @@ pub(crate) fn sweep_activity_once<R: Runtime>(app: &AppHandle<R>) {
         // false spinner in the window before/between hook events. Skipping it
         // means the session shows NO activity mark until a hook actually fires
         // (`UserPromptSubmit`→working, `Stop`→awaiting_input, …), which is the
-        // honest signal (TERMINAL_ACTIVITY_PLAN §2/§3).
+        // honest signal (TERMINAL_ACTIVITY §2/§3).
         if *hooked {
             continue;
         }

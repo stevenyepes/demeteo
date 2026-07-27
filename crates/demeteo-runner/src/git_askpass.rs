@@ -1,4 +1,4 @@
-//! Per-run git askpass (docs/REMOTE_EXECUTION_PLAN.md M4.3,
+//! Per-run git askpass (docs/REMOTE_EXECUTION.md M4.3,
 //! docs/REMOTE_EXECUTION.md §6.2 hardening).
 //!
 //! The M1 stopgap embedded the PAT straight into the clone/push URL

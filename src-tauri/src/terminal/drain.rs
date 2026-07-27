@@ -71,7 +71,7 @@ pub(crate) fn spawn_drain<R: Runtime>(
 /// stripped `forward` bytes (our OSC removed) and hand back the parsed activity
 /// states for the caller to emit. Factored out of the drain loop so the
 /// feed→forward→events wiring is unit-testable without a live Tauri `emit`
-/// (TERMINAL_ACTIVITY_PLAN §6). The drain calls this, then emits one
+/// (TERMINAL_ACTIVITY §6). The drain calls this, then emits one
 /// `terminal-session-activity` per returned state.
 pub(crate) fn drain_scan_and_forward(
     scanner: &mut ActivityScanner,

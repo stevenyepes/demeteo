@@ -1,5 +1,5 @@
 // Unit tests for the ActivityIndicator presentational primitive (spec
-// `TERMINAL_ACTIVITY_UX` §2). One assertion per state, including that the
+// `TERMINAL_ACTIVITY` §2). One assertion per state, including that the
 // null state renders nothing at all.
 
 import { render, screen } from '@testing-library/react';

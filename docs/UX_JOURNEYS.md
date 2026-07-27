@@ -91,7 +91,7 @@ The application functions within a single unified shell (no multi-window popouts
 ### Journey 6: Orchestration Monitoring (Feature Detail)
 *Watching the fleet of agents work without chat.*
 - **UI State:** `FeatureDetail` (Main Pane).
-- **Visualization:** A list-style timeline of the steps (e.g., `research` → `spec` → `plan` → `tasks` → `implement-stub`). A circular-node DAG visualization is deferred.
+- **Visualization:** `WorkflowCanvas` in run mode — a node graph with live status overlay, node drill-down panel (Overview / Output / Live / Actions), sequence-node task expansion, and remote runs on the same surface. A `Graph | Timeline` toggle keeps the original list-style timeline available. (Superseded the "DAG visualization is deferred" position — see `PRD_DAG_WORKFLOWS.md` §6.)
 - **Telemetry:** Per-step cost ($) and duration (time) metrics. *(Note: No pre-launch cost estimates, only real-time accrued cost).*
 - **Status Indicators:** Steps use the color language (Emerald=Running, Ruby=Failed, Violet=Active).
 - **Actions:** Pause, Resume, Cancel, Sync, Resolve Sync Conflicts. Each failed/interrupted step card exposes "Retry Step" — disabled when a predecessor is in `pending | running | verifying | awaiting_gate`, with a rose-bordered banner naming the blocker.
@@ -124,9 +124,9 @@ The application functions within a single unified shell (no multi-window popouts
 
 ### Journey 10: Workflow Authoring
 *Creating the templates that agents follow.*
-- **UI State:** `WorkflowEditor` View.
-- **Content:** Form-first builder (v1.0) allowing users to piece together `agent`, `parallel`, and `gate` steps.
-- **Configuration:** Users set conditional edges (e.g., `on_failure -> goto`), max iterations, and artifact outputs (`full`, `summary_only`, `none`).
+- **UI State:** `WorkflowCanvas` design mode. (Replaced the form-first `WorkflowEditor`, which was deleted — Decision 19 is superseded; see `DECISIONS.md` §2.)
+- **Content:** Visual DAG builder — palette driven by the node-type registry, connect-time validation, schema-driven config panel, live lint surface, dirty guard, undo/redo, templates and v2 import/export, read-only Monaco source tab (Decision 42).
+- **Configuration:** Node config from the registry's JSON Schema; conditional `when` edges exist in the engine but are **not yet exposed in the builder** (task P4.3).
 - **Versioning:** Every save creates a new `WorkflowVersion` row; `workflow_versions` and `workflow_revert_to_default` round-trip the history.
 
 ## 5. UI Views & Screens to Design

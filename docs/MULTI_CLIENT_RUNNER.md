@@ -1,13 +1,15 @@
 # Demeteo: Multi-Client Runner — Design & P0 Plan
 
-> **Extends [`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md) / [`REMOTE_EXECUTION_PLAN.md`](REMOTE_EXECUTION_PLAN.md).**
-> Those docs cover a *single* trusted laptop driving one `demeteo-runner`.
+> **Extends [`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md)**, which covers a
+> *single* trusted laptop driving one `demeteo-runner` and is fully built.
 > This doc covers the next step: **one shared runner serving multiple Demeteo
 > clients concurrently, with each client's runs isolated from the others.**
 >
-> Design decisions are tagged `MC-Dn`; build phases `P0`–`P3`. Tasks follow the
-> `BACKEND_REFACTOR_TASKS.md` **What / Where / Why / Definition of Done** format.
-> Ground truth is code — verify file paths against the branch when picking up a task.
+> **Status: designed, not built.** Nothing below has shipped.
+>
+> Design decisions are tagged `MC-Dn`; build phases `P0`–`P3`. Each task states
+> **What / Where / Why / Definition of Done**. Ground truth is code — verify
+> file paths against the branch when picking up a task.
 
 ## Guiding principles (inherited, non-negotiable)
 

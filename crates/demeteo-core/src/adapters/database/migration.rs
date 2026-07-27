@@ -38,7 +38,7 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "machines", "use_login_shell", "INTEGER")?;
     add_column_if_missing(conn, "machines", "setup_commands", "TEXT")?;
     // Optional per-machine "away" notification webhook (docs/
-    // REMOTE_EXECUTION_PLAN.md M6.3 follow-up) — makes the channel
+    // REMOTE_EXECUTION.md M6.3 follow-up) — makes the channel
     // configurable in-app instead of requiring a shell env var set on
     // the remote host with zero UI discoverability. Injected into the
     // runner's systemd unit environment at install time.
@@ -93,7 +93,7 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         "cache_creation_input_tokens",
         "INTEGER",
     )?;
-    // Harness-failure triage (C6, docs/EXECUTION_CONSISTENCY_PLAN.md). A
+    // Harness-failure triage (C6, docs/EXECUTION_PARITY.md). A
     // normalized fingerprint of the previous attempt's failing harness/prepare
     // output, so the driver can tell a *persistent* (reproduces unchanged)
     // failure from one that is still changing across retries — the signal that

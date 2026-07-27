@@ -72,7 +72,7 @@ interface StartFeatureModalProps {
     attachments?: LaunchStageEntry[];
     /**
      * Run this feature on a remote `demeteo-runner` instead of locally
-     * (docs/REMOTE_EXECUTION_PLAN.md M6.1). `undefined`/`'local'` means
+     * (docs/REMOTE_EXECUTION.md M6.1). `undefined`/`'local'` means
      * "run here" — the existing `start_feature` path. Any other value
      * is a machine id the parent resolves via `remote_submit_run`.
      */
@@ -690,7 +690,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             </select>
           </div>
 
-          {/* Where to run (docs/REMOTE_EXECUTION_PLAN.md M6.1). Surfaced
+          {/* Where to run (docs/REMOTE_EXECUTION.md M6.1). Surfaced
               beside the workflow instead of inside Customize: where a run
               executes is as fundamental as what it runs, and burying the
               remote/unattended entry point made it invisible. */}

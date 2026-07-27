@@ -1,5 +1,5 @@
 //! "Runner-push while away" notification channel
-//! (docs/REMOTE_EXECUTION_PLAN.md M6.3, design §8). Fired from `run.rs`
+//! (docs/REMOTE_EXECUTION.md M6.3, design §8). Fired from `run.rs`
 //! at terminal/actionable points in a run's lifecycle — failed, parked,
 //! needs-credentials, PR-ready — independent of whether a laptop is
 //! currently connected: "the moment a run reaches a terminal/actionable

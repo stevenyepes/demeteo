@@ -1,4 +1,4 @@
-//! Headless runner (docs/REMOTE_EXECUTION_PLAN.md M1/M3):
+//! Headless runner (docs/REMOTE_EXECUTION.md M1/M3):
 //!
 //! ```text
 //! demeteo-runner submit <spec.json>   # one-shot, in-process (M1)

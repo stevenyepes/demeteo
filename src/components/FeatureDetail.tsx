@@ -350,7 +350,7 @@ export function FeatureDetail() {
 
   useEffect(() => { loadFeatureData(); }, [featureId]);
 
-  // Remote (shadow) run live refresh (docs/REMOTE_EXECUTION_PLAN.md
+  // Remote (shadow) run live refresh (docs/REMOTE_EXECUTION.md
   // M6.4). A feature that ran on a remote machine receives none of the
   // local `step_progress` / `feature_status_changed` Tauri events — those
   // fire on the runner, not this laptop — so without this its timeline

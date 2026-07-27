@@ -1,5 +1,5 @@
 //! Topology-equivalence conformance gate (C5,
-//! `docs/EXECUTION_CONSISTENCY_PLAN.md`).
+//! `docs/EXECUTION_PARITY.md`).
 //!
 //! The by-construction guarantee at the top level: one workflow, run through
 //! every transport, must yield an equivalent [`RunView`]. This is the

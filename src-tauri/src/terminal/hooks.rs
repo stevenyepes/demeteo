@@ -124,8 +124,8 @@ pub(crate) fn cmd_double_quote(value: &str) -> String {
 
 /// The reporter command injected under one hook: a shell command that prints
 /// the `terminalSequence` hook-JSON to stdout, which Claude then writes to the
-/// PTY verbatim (transport verified in `docs/spikes/terminal-activity-
-/// transport.md`). `` / `` are LITERAL 6-char JSON escapes in the
+/// PTY verbatim (transport verified — see `docs/TERMINAL_ACTIVITY.md`).
+/// `` / `` are LITERAL 6-char JSON escapes in the
 /// printed payload — Claude's JSON parse of the hook stdout turns them into
 /// ESC / BEL as it emits the sequence, so the drain scanner sees
 /// `ESC ]777;demeteo;…BEL`. `printf '%s'` over a single-quoted literal keeps
@@ -138,7 +138,7 @@ fn activity_reporter_command(nonce: &str, state: &str) -> String {
 }
 
 /// Build the compact `--settings` JSON injecting Claude's activity reporter
-/// hooks for `nonce` (TERMINAL_ACTIVITY_PLAN §2c/§2d). Returns `None` for any
+/// hooks for `nonce` (TERMINAL_ACTIVITY §2c/§2d). Returns `None` for any
 /// non-Claude kind. serde_json guarantees correct escaping of the nested
 /// quotes/backslashes in each reporter command.
 ///

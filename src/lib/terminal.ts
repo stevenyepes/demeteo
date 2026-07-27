@@ -33,7 +33,7 @@ import type { SessionInfo } from "../types";
  *   agent kinds, it can return an augmented launch line (base +
  *   `--settings '<reporter hooks>'`). The caller then writes the returned
  *   `launchCommand` instead of its own — the single-write contract that stops
- *   the agent launching twice (TERMINAL_ACTIVITY_PLAN §2c).
+ *   the agent launching twice (TERMINAL_ACTIVITY §2c).
  * @returns A promise resolving to `{ sessionId, launchCommand }`. `launchCommand`
  *   is the backend's augmented launch line for hooked kinds, else `null`.
  */
@@ -209,7 +209,7 @@ export async function reconnectTerminalSession(
  * The backend folds this into the same activity record as the cadence sweep and
  * the Claude hook scanner, so precedence, dedup, and the OS notification are
  * reused — a screen-sourced approval behaves exactly like the hook-sourced one
- * (TERMINAL_ACTIVITY_PLAN §Phase 3). Fire-and-forget from the recognizer's
+ * (TERMINAL_ACTIVITY §Phase 3). Fire-and-forget from the recognizer's
  * debounce; the resolved state comes back over `terminal-session-activity`.
  *
  * @param sessionId The backend terminal session identifier.

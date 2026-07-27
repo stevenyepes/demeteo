@@ -75,7 +75,7 @@ jobs:
   # `exec_contract` against `SshClientAdapter` pointed at a throwaway
   # loopback sshd. Separate job: it needs Docker but none of the Tauri/
   # webkit toolchain the `verify` job installs.
-  # (docs/EXECUTION_CONSISTENCY_PLAN.md)
+  # (docs/EXECUTION_PARITY.md)
   ssh-conformance:
     runs-on: ubuntu-22.04
     steps:
@@ -104,7 +104,7 @@ jobs:
   # in-container git host). Uses the deterministic `stub` agent so a run
   # reaches a terminal state with no real LLM CLI. Separate job for the same
   # reason as ssh-conformance: it needs Docker, not the Tauri toolchain.
-  # (docs/EXECUTION_CONSISTENCY_PLAN.md)
+  # (docs/EXECUTION_PARITY.md)
   topology-conformance:
     runs-on: ubuntu-22.04
     steps:

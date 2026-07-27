@@ -844,7 +844,7 @@ fn format_produced_artifacts_summary(
 /// (the machine could not be reached, the channel broke, or the drain timed
 /// out) rather than a *command* failure (it ran and exited non-zero). Keyed
 /// off the [`TRANSPORT_ERROR_PREFIX`](crate::ports::execution::TRANSPORT_ERROR_PREFIX)
-/// contract (C0.2, `docs/EXECUTION_CONSISTENCY_PLAN.md`) so the verifier can
+/// contract (C0.2, `docs/EXECUTION_PARITY.md`) so the verifier can
 /// route transport failures to `Infrastructure` (non-retryable) instead of a
 /// `Verdict` that would re-run a build that never actually failed.
 fn is_transport_failure(err: &str) -> bool {

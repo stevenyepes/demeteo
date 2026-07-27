@@ -1,5 +1,5 @@
 //! Shared behavioural conformance suite for `ExecutionPort` (C2.1,
-//! `docs/EXECUTION_CONSISTENCY_PLAN.md`).
+//! `docs/EXECUTION_PARITY.md`).
 //!
 //! This is the single place that defines "correct" for *every* transport
 //! (`LocalSubprocessAdapter`, `SshClientAdapter`, `RouterExecutionPort`).
@@ -147,7 +147,7 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
     // socket". Locally there is no socket timeout so this passes trivially;
     // on SSH it reproduces the reported drift where `cargo test` compiles
     // silently for >10s and the prepare command spuriously "fails"
-    // (`docs/EXECUTION_CONSISTENCY_PLAN.md`, leak #1). The 13s silence clears
+    // (`docs/EXECUTION_PARITY.md`, leak #1). The 13s silence clears
     // the 10s timeout with margin. This is the failing assertion that the
     // shared timeout-tolerant drain helper (B) must turn green on SSH.
     let out = port

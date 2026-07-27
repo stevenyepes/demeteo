@@ -8,7 +8,7 @@ pub mod tray;
 
 // `domain`, `ports`, `application`, `shared`, `error`, `infrastructure`,
 // `paths`, `ssh_util`, `credential_cache`, and `state` live in `demeteo-core`
-// (see docs/REMOTE_EXECUTION_PLAN.md M0.1) — re-exported under their old
+// (see docs/REMOTE_EXECUTION.md M0.1) — re-exported under their old
 // names so every existing `crate::domain::X` / `demeteo_lib::domain::X` call
 // site keeps working unchanged. `state` (`AppContext`) moved with them
 // despite the design doc's original plan to keep it local, because
@@ -309,7 +309,7 @@ pub fn run() {
 
             // Background cadence sweep that resolves working ↔ awaiting_input
             // from each agent session's output timing and emits
-            // `terminal-session-activity` on change (TERMINAL_ACTIVITY_PLAN §4).
+            // `terminal-session-activity` on change (TERMINAL_ACTIVITY §4).
             terminal::spawn_activity_sweep(app.handle().clone());
 
             // Build the system tray (Show / Hide / Quit). A tray-backend

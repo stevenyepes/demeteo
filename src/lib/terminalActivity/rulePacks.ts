@@ -4,7 +4,7 @@
 // via injected hooks (Codex, OpenCode, hand-started). The recognizer
 // (`recognizer.ts`) matches the *rendered* bottom rows of a terminal against a
 // per-agent rule pack; a match promotes `awaiting_input → awaiting_approval`
-// (strict approval-only — see docs/TERMINAL_ACTIVITY_PLAN.md §Phase 3).
+// (strict approval-only — see docs/TERMINAL_ACTIVITY.md §Phase 3).
 //
 // The packs are DATA, not code: adding an agent (or re-tuning a drifted prompt
 // UI) is authoring an entry in `DEFAULT_RULE_PACKS`, not touching the engine.

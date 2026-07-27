@@ -774,7 +774,7 @@ The legacy `agent_prompt` returned a `Channel<AgentEvent>` for per-turn UI strea
 
 ## 9. File Layout (post-pivot, post-refactor)
 
-The files touched by the agent integration work, organized by phase. Existing files modified are marked with `(modified)`; new files are marked with `(new)`. Paths reflect the current backend refactor layout (Phases A–G of `docs/BACKEND_REFACTOR_TASKS.md`).
+The files touched by the agent integration work, organized by phase. Existing files modified are marked with `(modified)`; new files are marked with `(new)`. Paths reflect the post-refactor hexagon layout — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### Phase R1 — Port + domain skeleton
 

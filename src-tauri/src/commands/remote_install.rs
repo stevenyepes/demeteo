@@ -1,4 +1,4 @@
-//! One-click "Enable remote runs" (docs/REMOTE_EXECUTION_PLAN.md M7.1):
+//! One-click "Enable remote runs" (docs/REMOTE_EXECUTION.md M7.1):
 //! detect → provision → supervise `demeteo-runner` on a machine,
 //! entirely as the SSH user, no `sudo`.
 //!

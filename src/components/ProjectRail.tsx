@@ -32,7 +32,7 @@ function ProjectRail() {
   const { state: terminalState } = useTerminalPanel();
   const terminalCount = terminalState.tabs.length;
   // Terminals blocked on a permission/confirmation gate — the app-wide
-  // "needs you" signal (spec `TERMINAL_ACTIVITY_UX` §3). Structurally 0 in
+  // "needs you" signal (spec `TERMINAL_ACTIVITY` §3). Structurally 0 in
   // Phase 1; lights up once the backend emits `awaiting_approval`.
   const attentionCount = terminalState.tabs.filter(
     (t) => t.activity === 'awaiting_approval',

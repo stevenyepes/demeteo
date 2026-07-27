@@ -16,7 +16,7 @@ pub const RUNNER_SERVICE_UNIT: &str =
     include_str!("../../../../demeteo-runner/packaging/systemd/demeteo-runner.service");
 
 /// Build the unit file text for `machine_id`, optionally injecting its
-/// "away" notification webhook (docs/REMOTE_EXECUTION_PLAN.md M6.3
+/// "away" notification webhook (docs/REMOTE_EXECUTION.md M6.3
 /// follow-up) as an `Environment=` line. Without a webhook, returns the
 /// template verbatim.
 pub fn unit_for(

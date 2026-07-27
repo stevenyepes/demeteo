@@ -26,7 +26,7 @@ import type { TerminalTabDescriptor } from '../types';
 // renderer-less `Terminal`, and scans that buffer's bottom rows. A debounced
 // approval reading is reported to the backend, which folds it into the same
 // activity state as the Claude hooks (screen-sourced == hook-sourced;
-// TERMINAL_ACTIVITY_PLAN §Phase 3). Because the source is just "a buffer", the
+// TERMINAL_ACTIVITY §Phase 3). Because the source is just "a buffer", the
 // recognizer, debouncer, and backend feed are reused verbatim from the
 // focused-surface wiring — this component only supplies the background buffers.
 

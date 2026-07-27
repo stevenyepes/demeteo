@@ -314,7 +314,7 @@ pub fn detach_terminal_session(
 /// through the SAME resolver as the hook scanner and the cadence sweep, so the
 /// §2 precedence, dedup, and the OS notification are reused verbatim — a
 /// screen-sourced approval "behaves exactly like the hook-sourced one"
-/// (TERMINAL_ACTIVITY_PLAN §Phase 3).
+/// (TERMINAL_ACTIVITY §Phase 3).
 ///
 /// Agent-gated (defence in depth; the frontend already scans only agent tabs):
 /// a session with no agent present — or an unknown/closed one — is ignored, so
