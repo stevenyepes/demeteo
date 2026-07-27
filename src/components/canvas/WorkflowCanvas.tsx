@@ -24,7 +24,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
-  Controls,
   MiniMap,
   Panel,
   ReactFlow,
@@ -37,7 +36,7 @@ import {
   type FinalConnectionState,
   type NodeMouseHandler,
 } from '@xyflow/react';
-import { LayoutGrid } from 'lucide-react';
+import { LayoutGrid, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import '@xyflow/react/dist/style.css';
 
 import { WorkflowNode } from './nodes/WorkflowNode';
@@ -131,7 +130,7 @@ function CanvasInner({
 
   const [nodes, setNodes, onNodesChange] = useNodesState(base.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(base.edges);
-  const { fitView, getNodes, screenToFlowPosition } = useReactFlow();
+  const { fitView, getNodes, screenToFlowPosition, zoomIn, zoomOut } = useReactFlow();
   const { layout, running } = useElkLayout();
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -438,14 +437,47 @@ function CanvasInner({
         maxZoom={1.75}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#334155" />
-        <Controls showInteractive={false} />
+        <Panel position="bottom-left">
+          <div className="flex flex-col overflow-hidden rounded-lg border border-slate-700/60 bg-slate-900/80 backdrop-blur-sm">
+            <button
+              type="button"
+              onClick={() => void zoomIn({ duration: 150 })}
+              className="flex h-7 w-7 items-center justify-center border-b border-slate-700/60 text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-white"
+              title="Zoom in"
+              aria-label="Zoom in"
+            >
+              <ZoomIn className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void zoomOut({ duration: 150 })}
+              className="flex h-7 w-7 items-center justify-center border-b border-slate-700/60 text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-white"
+              title="Zoom out"
+              aria-label="Zoom out"
+            >
+              <ZoomOut className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void fitView({ duration: 300 })}
+              className="flex h-7 w-7 items-center justify-center text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-white"
+              title="Fit view"
+              aria-label="Fit view"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </Panel>
         {showMiniMap && (
           <MiniMap
             pannable
             zoomable
             nodeColor="#1e293b"
             maskColor="rgba(2,6,23,0.6)"
-            className="!bg-slate-900/80 !border !border-slate-700/60"
+            // Tailwind v4 takes the important modifier as a suffix; the v3-style
+            // `!bg-...` prefix silently emits nothing, so these would be dropped
+            // and React Flow's own white panel styling would win.
+            className="rounded-lg! border! border-slate-700/60! bg-slate-900/80! backdrop-blur-sm"
           />
         )}
         {design && (
