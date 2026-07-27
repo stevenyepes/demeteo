@@ -67,10 +67,14 @@ pub(super) struct SessionPool {
     sessions: Mutex<HashMap<String, Arc<SftpSession>>>,
     /// Resolved remote HOME per machine_id. The remote HOME is stable
     /// for the lifetime of the user's account, so we cache it after the
-    /// first successful resolve to avoid an extra `echo $HOME` round-trip
-    /// on every path computation. Cleared on `disconnect_all` (which
-    /// isn't called today, but the cache is keyed by `machine_id` so
-    /// reconnects naturally pick up the cached value).
+    /// first successful resolve to avoid an extra `printf %s "$HOME"`
+    /// round-trip on every path computation.
+    ///
+    /// Never invalidated: there is no eviction path for this map, so an
+    /// entry lives for the rest of the process. That is deliberate given
+    /// how stable the value is — a machine whose HOME genuinely changed
+    /// needs an app restart. (An earlier version of this comment named a
+    /// `disconnect_all` as the invalidator; no such function exists.)
     ///
     /// `pub(super)` because [`SessionPool::resolve_home`] — the only reader —
     /// lives in the sibling `home` module with the rest of the HOME concern.
