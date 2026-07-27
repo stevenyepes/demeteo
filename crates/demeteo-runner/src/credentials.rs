@@ -1,5 +1,5 @@
 //! In-memory, run-scoped git-provider credential store
-//! (docs/REMOTE_EXECUTION_PLAN.md M4.2, docs/REMOTE_EXECUTION.md §6.2).
+//! (docs/REMOTE_EXECUTION.md M4.2, docs/REMOTE_EXECUTION.md §6.2).
 //!
 //! Holds the PAT the laptop injects via `inject_credentials` keyed by
 //! `run_id`. Deliberately the *only* place this process holds a git

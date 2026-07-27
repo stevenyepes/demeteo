@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 /// Git plumbing shared by local, desktop-over-SSH, and runner execution.
 ///
-/// **Shell-context audit (C1.3, `docs/EXECUTION_CONSISTENCY_PLAN.md`).** Every
+/// **Shell-context audit (C1.3, `docs/EXECUTION_PARITY.md`).** Every
 /// `exec.run_command` here deliberately uses the *non-login* default
 /// [`ShellOptions`](crate::ports::execution::ShellOptions): these commands
 /// invoke the system `git` binary, which lives on the default `PATH` of both a

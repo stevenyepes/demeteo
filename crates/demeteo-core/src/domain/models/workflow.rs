@@ -139,7 +139,7 @@ pub struct StepConfig {
     /// remains the backstop for any write a shell escape attempts.
     #[serde(default)]
     pub allow_shell: bool,
-    /// Blast-radius classification for `gate` steps (docs/REMOTE_EXECUTION_PLAN.md
+    /// Blast-radius classification for `gate` steps (docs/REMOTE_EXECUTION.md
     /// M5.1, docs/REMOTE_EXECUTION.md §5). `"dangerous"` marks a gate as
     /// merge-to-default / push-to-protected / deploy / delete — an
     /// unattended run parks these for a human instead of auto-approving.
@@ -184,7 +184,7 @@ pub struct StepConfig {
     /// For a `command` step: names of environment variables forwarded
     /// from Demeteo's own process environment into the command's shell.
     ///
-    /// An *allowlist*, not a map: decision D2 (`EXECUTION_CONSISTENCY_PLAN`)
+    /// An *allowlist*, not a map: decision D2 (`EXECUTION_PARITY`)
     /// forbids a command inheriting ambient process state, so nothing
     /// crosses unless the workflow author names it. Variables that aren't
     /// set in the host process are skipped silently.

@@ -338,13 +338,21 @@ then fires `onSaved` (refreshing the parent list). A user who fills half the for
 clicks "Test", then "Cancel" has still created a machine. A button labeled "Test" must
 be read-only, or the save side-effect must be stated on the button.
 
-### F38. WorkflowEditor discards edits with zero warning
+### F38. WorkflowEditor discards edits with zero warning — **RESOLVED (2026-07-26, task P3.3)**
+Closed by construction: `WorkflowEditor.tsx` was deleted and replaced by the v2 canvas
+builder, which ships a dirty guard (`useNavigationGuard`) covering the Back arrow,
+Escape/`Cmd+W`, and mouse-back. Original finding below, kept for traceability.
+
 `WorkflowEditor.tsx` has no dirty-state guard: the Back arrow (`:204`), the global
 Escape/`Cmd+W` (navigate-back), and mouse-back all silently drop every unsaved step,
 prompt-template, and schedule edit. Prompt templates are exactly the kind of long-form
 text a user cannot re-create from memory.
 
-### F39. WorkflowEditor: dangling `on_failure` targets and other authoring traps
+### F39. WorkflowEditor: dangling `on_failure` targets and other authoring traps — **RESOLVED (2026-07-26, tasks P3.1/P3.3/P3.4)**
+Closed by construction with the editor's deletion: the canvas validates at connect time
+(`connectRules.ts`) so a dangling edge cannot be drawn, the lint surface blocks invalid
+saves, and the version-history drawer ships diff/restore. Original finding below.
+
 - Deleting or reordering a step (`:100-118`) does not touch other steps' `on_failure`
   loopback pointers — a saved workflow can reference a step id that no longer exists.
 - New agent/parallel steps are seeded with `agent_kind: 'opencode'` (`:92`) instead of

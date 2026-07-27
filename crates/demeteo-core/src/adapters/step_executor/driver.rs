@@ -34,8 +34,8 @@ use crate::ports::pricing::PricingTable;
 // hand-roll an 11-arg `update_step_status` signature each. The natural next
 // step is a `StepStatusWriter` port trait with named transition methods
 // (`mark_running`, `mark_completed`, `mark_failed`, `mark_interrupted`,
-// `mark_pending`, `finish_feature`) — same D6 in `docs/BACKEND_REFACTOR_TASKS.md`,
-// never landed. Out of scope for this PR.
+// `mark_pending`, `finish_feature`) — proposed as D6 in the backend refactor
+// plan, never landed. Out of scope for this PR.
 
 pub(crate) mod failure;
 pub(crate) mod publish;

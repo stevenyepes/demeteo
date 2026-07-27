@@ -1,4 +1,4 @@
-//! Phase-2 drain OSC scanner (TERMINAL_ACTIVITY_PLAN §2b).
+//! Phase-2 drain OSC scanner (TERMINAL_ACTIVITY §2b).
 //!
 //! A small **stateful** scanner that sits between a PTY/SSH read and the
 //! broadcast, watching the byte stream for our private, namespaced activity
@@ -8,15 +8,14 @@
 //! ESC ] 777 ; demeteo ; v=1 ; nonce=<hex> ; state=<…> (BEL | ESC \)
 //! ```
 //!
-//! (Wire format verified empirically in `docs/spikes/terminal-activity-
-//! transport.md`: Claude passes an arbitrary OSC 777 payload through
-//! `terminalSequence` **verbatim**, so our namespaced signal rides the PTY
-//! intact.)
+//! (Wire format verified empirically — see `docs/TERMINAL_ACTIVITY.md`:
+//! Claude passes an arbitrary OSC 777 payload through `terminalSequence`
+//! **verbatim**, so our namespaced signal rides the PTY intact.)
 //!
 //! On [`feed`](ActivityScanner::feed) it returns the byte stream with every
 //! complete demeteo sequence **stripped** (`forward`) plus the parsed `state`
 //! strings for the sequences whose `nonce` matched this launch (`events`).
-//! Design constraints (TERMINAL_ACTIVITY_PLAN §5):
+//! Design constraints (TERMINAL_ACTIVITY §5):
 //!
 //! * **Engages only on `ESC`** — a run of ordinary output is bulk-copied in one
 //!   `extend_from_slice`, never inspected byte-by-byte (the fast path).
@@ -43,7 +42,7 @@ const BEL: u8 = 0x07;
 /// buffered like any other collecting-phase byte; this closes it.
 const ST_FINAL: u8 = b'\\';
 
-/// Hard cap on the mid-sequence residual (TERMINAL_ACTIVITY_PLAN §5). A
+/// Hard cap on the mid-sequence residual (TERMINAL_ACTIVITY §5). A
 /// well-formed sequence is tens of bytes; anything that keeps buffering past
 /// this without terminating is not ours, so we fail open and flush it.
 const MAX_RESIDUAL_BYTES: usize = 128;

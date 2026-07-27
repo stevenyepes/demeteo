@@ -7,36 +7,39 @@
 > [`RELIABILITY_PLAN.md`](RELIABILITY_PLAN.md) for the durable-state machinery
 > reused here, and [`DECISIONS.md`](DECISIONS.md) for the master decision table.
 > This doc is the source of truth for the **Remote Runner** feature.
-
-## Phase Placement Key
-
-- **v1.x** — any 1.x release; no specific commit promised.
-- **v2+** — major version; not before the remote runner is stable.
-
-This feature targets **v2+**: it moves the control plane, which is a larger
-change than the incremental remote-*execution* plumbing that already exists.
+>
+> **Status: built.** Milestones M0–M7 shipped — engine extraction, the headless
+> `demeteo-runner`, systemd supervision and reboot resume, the control channel,
+> credential injection, unattended gate policy, laptop UX, and deployment
+> hardening. The milestone-by-milestone build plan has been retired; this design
+> doc and the code are the record. The next step — one runner serving several
+> Demeteo clients — is [`MULTI_CLIENT_RUNNER.md`](MULTI_CLIENT_RUNNER.md), which
+> is **designed but not built**.
+>
+> Source comments tag code with the retired plan's milestone ids (`M0`–`M7`).
+> Read those as historical provenance — the milestone map lived in
+> `REMOTE_EXECUTION_PLAN.md`, recoverable from git history; the decisions those
+> milestones implemented are the `R1`–`R11` table in §2 below.
 
 ---
 
-## 1. The core problem: today the laptop *is* the control plane
+## 1. The core problem this solved: the laptop was the control plane
 
-The `ExecutionDriver` (`adapters/step_executor/driver.rs`) runs as an
-**in-process `tokio` task inside the desktop app**. It holds `Arc`s to the
-SQLite repos, the in-memory `GateWaiter` (`tokio::sync::Notify`), the agent
-registry, and the execution ports. Remote **Machines** today are only
-*execution hands*: the driver stays on the laptop and reaches out per-command
-over SSH (`ExecutionPort::run_command(machine_id, cmd)`, sftp for files).
+The `ExecutionDriver` runs as an **in-process `tokio` task inside the desktop
+app**, holding `Arc`s to the SQLite repos, the in-memory `GateWaiter`
+(`tokio::sync::Notify`), the agent registry, and the execution ports. Remote
+**Machines** were only *execution hands*: the driver stayed on the laptop and
+reached out per-command over SSH (`ExecutionPort::run_command`, sftp for files).
 
 Consequence: **close the laptop → the tokio task dies → the run stops.** The DB
-persists state and the driver is respawned + reconciled on next launch
-(`driver_registry`, `impl_traits/replay.rs`; the `GateWaiter` doc explicitly
-handles "app restart"), but **nothing advances while the app is closed.**
+persisted state and the driver was respawned and reconciled on next launch, but
+**nothing advanced while the app was closed.**
 
-So "run workflows without demeteo always open" is *not* an increment on top of
-the remote-machine plumbing. It requires **moving the brain, not just the
-hands.** The hexagonal ports/adapters layout is almost purpose-built for this,
-and the hard parts — durable state, gate reconciliation, driver respawn —
-already exist.
+So "run workflows without demeteo always open" was never an increment on top of
+the remote-machine plumbing — it required **moving the brain, not just the
+hands.** The hexagonal layout was almost purpose-built for it, and the hard
+parts (durable state, gate reconciliation, driver respawn) already existed.
+That is what the runner does; the sections below specify how.
 
 ---
 

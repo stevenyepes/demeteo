@@ -1,510 +1,190 @@
 # Demeteo — Agent Constitution
 
-> **You are working on a fleet-style multi-agent orchestrator** built with
-> Tauri v2 (Rust) + React 19 (TypeScript). Read this file top-to-bottom
-> before writing any code. Every section is mandatory unless marked *(optional)*.
->
-> **Before writing a single line of code, you must complete the thinking
-> protocol in Section 0.** Skipping it is not allowed.
+> Fleet-style multi-agent orchestrator: Tauri v2 (Rust) + React 19 (TypeScript).
+> This file carries only what is **not** discoverable by reading the code —
+> invariants, Gate policy, the commit contract, the verification gate. Anything
+> structural lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); §8 maps the rest.
 
----
-
-## 0. Mandatory Thinking Protocol
-
-> **Complete this before opening any file to edit.**
-
-For every task, reason through the following in order — write your answers
-as a short scratchpad response before producing any code:
-
-1. **Locate the layer.** Which layer does this change live in?
-   - `domain/` (pure logic, no I/O)
-   - `ports/` (trait definitions)
-   - `adapters/` (port implementations)
-   - `commands/` (thin IPC handlers)
-   - `src/lib/` (typed frontend wrappers)
-   - `src/components/` (React UI)
-
-2. **Map the ripple.** List every file that will need to change as a
-   consequence — including types, IPC wrappers, and tests.
-
-3. **Check the hexagon.** Confirm the change does not:
-   - Put business logic in a `commands/` handler
-   - Call an adapter directly from a React component
-   - Cross a layer boundary that ports are meant to abstract
-
-4. **Identify the Gate.** Does this touch a Gate-policy area
-   (migrations, capabilities, agent spawn, worktree merge)?
-   If yes, stop and ask the user before proceeding.
-
-5. **State your plan.** One sentence per file: what changes and why.
-
-Only after completing steps 1–5 may you write or modify code.
-
----
-
-## Quick Reference
-
-| What                    | Command                                      |
-|-------------------------|----------------------------------------------|
-| Start dev app           | `npm run tauri dev`                          |
-| Build demeteo-runner    | `npm run build:runner`                       |
-| Frontend only           | `npm run dev`                                |
-| Build frontend          | `npm run build`                              |
-| Type-check              | `npx tsc --noEmit`                           |
-| Rust check              | `cargo check` (inside `src-tauri/`)          |
-| Rust fmt                | `cargo fmt` (inside `src-tauri/`)            |
-| Rust clippy             | `cargo clippy -- -D warnings`               |
-
-**Done means:** `tsc --noEmit` exits 0, `cargo clippy` exits 0, the app boots without console errors.
+Scripts are in `package.json`; run `npm run` to list them.
 
 ---
 
 ## 1. Project Identity
 
-**Demeteo** is a premium desktop app that lets a developer describe a feature in plain language; the app decomposes it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes), manages Git worktrees per Step, and presents human-approval Gates before merging.
+**Demeteo** lets a developer describe a feature in plain language; the app decomposes
+it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes),
+manages a Git worktree per Step, and presents human-approval Gates before merging.
+**Current phase: V1** — core orchestrator, fully implemented.
 
-> **Current phase: V1 — Core fleet-style multi-agent orchestrator** (fully implemented).
-
-**Core vocabulary** *(use these exact names in code and comments)*:
-
-| Term               | Meaning                                                                 |
-|--------------------|-------------------------------------------------------------------------|
-| `Project`          | A local or remote Git repo tracked by Demeteo                          |
-| `Feature`          | A user-described piece of work decomposed by a Workflow                |
-| `Workflow`         | Reusable, versioned DAG of Steps                                        |
-| `Step`             | One node in the DAG: `agent`, `parallel`, or `gate`                    |
-| `Subtask`          | Work assigned to one agent in one worktree                             |
-| `Gate`             | Human-approval checkpoint before the orchestrator continues            |
-| `ProviderInstance` | A configured AI provider (model + key + endpoint)                      |
+Use these exact names in code and comments: **Project** (a Git repo Demeteo tracks) ·
+**Feature** (user-described work, decomposed by a Workflow) · **Workflow** (reusable,
+versioned DAG of Steps) · **Step** (one DAG node: `agent`, `parallel`, or `gate`) ·
+**Subtask** (work for one agent in one worktree) · **Gate** (human-approval checkpoint) ·
+**ProviderInstance** (a configured AI provider: model + key + endpoint).
 
 ---
 
-## 2. Tech Stack
+## 2. Architectural Invariants
 
-### Key constraints
-- `external_directory: "deny"` on opencode (the worktree scope fence) — combined with the OS-level chmod fence in `adapters/worktree/git_ops/scope.rs`, agents are scoped to their worktree; never allow FS access outside it
+Decisions, not descriptions — several are about what deliberately *isn't* here, which
+leaves no trace in the code to discover. **None of these have an approved workaround.**
+If a task appears to require violating one, stop and say so rather than asking to
+proceed; that distinguishes them from the Gate items in §6.
+
 - Agent integration is **one-shot CLI + JSON only** — no ACP, no JSON-RPC, no tool-call bridge
-- The compiled `PermissionProfile` is **complete** and only uses `allow` / `deny` (never `ask`); no real-time human-in-the-loop prompts at the tool level
-- Secrets live in the OS keyring only — never write credentials to SQLite or disk files
+- **`ExecutionPort` is the one behavioural contract every transport satisfies identically** — local subprocess, desktop-over-SSH, and `demeteo-runner`. A feature must behave and render the same regardless of which one ran it. Never branch on transport in calling code: if the transports differ, the adapter or the contract is wrong, not the caller. The contract is specified in the trait's own rustdoc (`crates/demeteo-core/src/ports/execution.rs`) → [docs/EXECUTION_PARITY.md](docs/EXECUTION_PARITY.md)
+- The compiled `PermissionProfile` is **complete** and uses only `allow` / `deny`, never `ask` — there is no real-time human-in-the-loop at the tool level
+- Never bypass `PermissionPolicyPort` when spawning agent processes
+- Agents are fenced to their worktree by `external_directory: "deny"` plus the OS-level chmod fence in `adapters/worktree/git_ops/scope.rs` — never widen it
+- Secrets live in the OS keyring only — never write credentials, tokens, or secrets to SQLite or any file
+- `demeteo-runner` ships as a Linux x86_64 musl static binary — build it with `npm run build:runner`, never a bare `cargo build` → [docs/RUNNER_DEV.md](docs/RUNNER_DEV.md)
+- Never mutate a harness's own persisted config (`~/.codex/config.toml`, `$HERMES_HOME/config.yaml`, `~/.claude`, shell rc files). What Demeteo tells a harness is **per-invocation** — CLI flags or child-process env, never written to disk. Run shape persists only in Demeteo's own SQLite (`ProjectSettings.default_effort`, `Feature.effort`). If a harness exposes a setting *only* through its config file (as Hermes does for reasoning effort), declare the capability unsupported and degrade honestly rather than reaching into that file.
 
 ---
 
-## 3. Architecture in 30 Seconds
+## 3. Code Conventions
+
+Match the surrounding code for anything not listed here — naming, file layout, export
+style, and formatting are evident from neighbouring files. These are only what a reader
+of one file would *not* infer:
+
+- Don't break the hexagon — no business logic in `commands/`, no adapters called from the frontend
+- All Tauri commands called through typed wrappers in `src/lib/` — never `invoke()` raw in a component
+- No `any` — use `unknown` + a type guard when the shape is uncertain
+- One component per file; extract when a file passes ~400 LOC
+- `#[tauri::command]` returns `Result<T, String>` — map with `.map_err(|e| e.to_string())`
+- `thiserror` for domain error enums in `src-tauri/src/domain/`
+- All DB access through `src-tauri/src/db.rs` — no raw `rusqlite` in commands
+- Never `.unwrap()` / `.expect()` in production paths — use `?` or match
+- Never hard-code `localhost`, port numbers, or paths — read them from config/state
+
+### Cross-OS
+
+The desktop app ships on **Linux x86_64, macOS aarch64, and Windows x86_64**
+(the `build.yml` matrix). The remote runner is always Linux. So: host-side code
+must work on all three; only remote-side code may assume Linux and systemd.
+
+PR checks run on `ubuntu-22.04` only — **green locally and in CI does not prove
+macOS or Windows even compiles.** That breakage surfaces on master or a tag,
+after merge. When you touch host-side paths, shells, or process handling, reason
+about all three targets before you finish, and say which ones you couldn't verify.
+
+- Build paths with `Path`/`PathBuf::join` — never string-concatenate separators
+- Resolve data/config/cache dirs through the platform API — never hard-code `~/.local/share`, `$TMPDIR`, or `/tmp`
+- Don't assume a POSIX shell host-side; put shell invocation behind `cfg`
+- macOS filesystems are case-insensitive by default — a wrong-case import compiles on a Mac and fails on Linux CI
+
+---
+
+## 4. Visual Design
+
+Token *values* live in `src/App.css` — read them from there, never hard-code hex.
+Their semantics, which the stylesheet doesn't record: **violet** = active connections
+and primary actions · **cyan** = terminal streams and interactive states · **emerald** =
+running agents and healthy statuses · **ruby** = errors, stopped tasks, failures.
+
+Cards are glassmorphism — `backdrop-filter: blur(12px)` over the card-surface token.
+Headings `Outfit`, UI `Inter`, terminal/code `Fira Code` / `JetBrains Mono`. Status dots
+pulse; view switches transition smoothly. **Never** plain system colors, `style=` props
+for design tokens, or flat grey cards with no depth.
+
+---
+
+## 5. Commit Convention
+
+[Conventional Commits 1.0.0](https://www.conventionalcommits.org/), enforced by the
+`commit-msg` hook and the `Lint Commits` workflow. Release automation infers the semver
+bump from the type, so the type is load-bearing.
 
 ```
-React Webview ──IPC──► Tauri Commands ──► StepExecutor
-                                              │
-                          ┌───────────────────┤
-                          ▼                   ▼
-                    AgentRuntime        WorktreeOpsPort
-                    (UnifiedCliRuntime)  + Merge / Conflict
-                          │               + MrPublisher
-                  opencode / hermes     Git worktrees
-                  claude-code / ag      SSH/SFTP repos
+<type>(<scope>): <subject>     # ≤72 chars, imperative, no trailing period
 ```
 
-Frontend components → Tauri IPC → Rust core → SQLite + OS + Agents
+Types: `feat fix perf revert refactor docs style test build ci chore`. `feat` → minor,
+`fix`/`perf`/`revert` → patch, rest → no bump; `!` or a `BREAKING CHANGE:` footer → major.
 
-For the full hexagon, port catalogue, and directory layout → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+**The trap:** `subject-case` rejects a subject starting with a capitalized token — a
+ticket id, acronym, or `TypeName`. `feat(remote): P0 multi-client runner` fails;
+`feat(remote): multi-client runner P0` passes.
 
----
-
-## 4. Code Conventions
-
-### TypeScript / React
-- Named exports only — no default exports
-- File names: `PascalCase.tsx` for components, `camelCase.ts` for utilities
-- One component per file; keep files under ~400 LOC — extract when larger
-- All Tauri commands called through typed wrappers in `src/lib/` — never call `invoke()` raw in components
-- `async/await` everywhere — no raw `.then()` chains
-- No `any` types — use `unknown` + a type guard if the shape is uncertain
-- Prefer `interface` over `type` for object shapes; use `type` for unions/aliases
-
-### Rust
-- Return `Result<T, String>` from `#[tauri::command]` functions — map errors with `.map_err(|e| e.to_string())`
-- Use `thiserror` for domain error enums in `src-tauri/src/domain/`
-- All DB access goes through `src-tauri/src/db.rs` — no raw `rusqlite` calls in commands
-- Never use `.unwrap()` or `.expect()` in production paths — use `?` or match
-- Format: `cargo fmt` before every commit; lint: `cargo clippy -- -D warnings` must be clean
-
-### Naming
-- Rust structs/enums: `PascalCase`; functions/variables: `snake_case`
-- React components: `PascalCase`; hooks: `useCamelCase`; event handlers: `handleCamelCase`
-- Tauri command names: `snake_case` (e.g., `create_project`, `start_feature`)
+Verify before committing: `echo "<message>" | npx commitlint`
 
 ---
 
-## 5. Visual Design Rules
+## 6. Gate Policy (Human Approval)
 
-> Every UI change **must** follow these rules without exception.
+Stop and ask the user before doing any of these. Unlike §2 these are permitted —
+they just aren't yours to decide alone.
 
-| Token        | Value                      | Semantic use                          |
-|--------------|----------------------------|---------------------------------------|
-| Background   | `#08090c` / `#0d0f14`      | App shell, page backgrounds           |
-| Card surface | `rgba(18,22,30,0.75)`      | Glassmorphism panels                  |
-| Border glow  | `rgba(255,255,255,0.05)`   | Card borders                          |
-| Violet       | `#8b5cf6`                  | Active connections, primary actions   |
-| Cyan         | `#06b6d4`                  | Terminal streams, interactive states  |
-| Emerald      | `#10b981`                  | Running agents, healthy statuses      |
-| Ruby         | `#ef4444`                  | Errors, stopped tasks, failures       |
-
-- **Cards**: `backdrop-filter: blur(12px)` + `rgba(18,22,30,0.75)` background
-- **Typography**: headings → `Outfit`; UI text → `Inter`; terminal/code → `Fira Code` / `JetBrains Mono`
-- **Motion**: pulsing glows for status dots; smooth transitions on view switches — no jarring snaps
-- **Never**: plain system colors, `style=` props for design tokens, static grey cards with no depth
-
----
-
-## 6. File Layout (active code)
-
-```
-demeteo/
-├── Cargo.toml                   # Cargo workspace root
-│                                # members: src-tauri, crates/demeteo-core, crates/demeteo-runner
-├── Cargo.lock                   # Workspace lockfile — single file, lives at the WORKSPACE root
-│                                # (NOT src-tauri/Cargo.lock). promote.yml updates this path.
-├── crates/                      # Cargo workspace members
-│   ├── demeteo-core/
-│   └── demeteo-runner/
-├── src/                        # React frontend
-│   ├── components/             # One file = one component
-│   ├── hooks/                  # Custom React hooks
-│   ├── lib/                    # Tauri IPC wrappers, utilities
-│   ├── types.ts                # Shared TypeScript types
-│   └── App.tsx                 # Root router / layout
-├── src-tauri/
-│   ├── src/
-│   │   ├── commands/           # #[tauri::command] handlers (thin)
-│   │   ├── application/        # Use cases / application services (NEW)
-│   │   ├── domain/             # Domain structs, enums, errors
-│   │   ├── ports/              # Trait definitions (hexagon ports)
-│   │   ├── adapters/           # Port implementations
-│   │   ├── infrastructure/     # Infrastructure code (e.g., SSH resolver, agent event stream)
-│   │   ├── db.rs               # DB connection + query helpers
-│   │   ├── state.rs            # AppState (Mutex-wrapped shared state)
-│   │   └── lib.rs              # Plugin registration, command registration
-│   └── migrations/             # SQL migration files (refinery)
-├── scripts/                    # Local build/packaging tooling (host-side)
-│   ├── test-aur-install.sh     # Local AUR package build + installer (Arch host)
-│   └── aur/
-│       └── demeteo/
-│           └── PKGBUILD        # Canonical AUR PKGBUILD template (single source of truth)
-├── mkdocs.yml                  # Public wiki config (MkDocs Material)
-├── docs-site/                  # Public wiki source (MkDocs docs_dir)
-└── docs/                       # Architecture & design docs (read-only for agents)
-```
-
-> **Do not** create files outside this structure without first updating this layout map.
-
----
-
-## 7. Negative Constraints
-
-Things an agent must **never** do without explicit user approval:
-
-- ❌ Add a new `npm` or `cargo` dependency
-- ❌ Delete or rename existing migration files in `crates/demeteo-core/migrations/`
-- ❌ Write credentials, tokens, or secrets to SQLite or any file
-- ❌ Call `invoke()` directly in a React component — use a typed wrapper in `src/lib/`
-- ❌ Use `unwrap()` / `expect()` in Rust command handlers or domain logic
-- ❌ Hard-code `localhost`, port numbers, or paths — read from config/state
-- ❌ Break the hexagon: commands must not contain business logic; adapters must not be called from the frontend directly
-- ❌ Skip `cargo fmt` + `cargo clippy` before finalizing Rust changes
-- ❌ Bypass the `PermissionPolicyPort` when spawning agent processes
-- ❌ Mutate a harness's own persisted configuration (e.g. `~/.codex/config.toml`,
-  `$HERMES_HOME/config.yaml`, `~/.claude`, or shell rc files). Everything Demeteo
-  tells a harness is **per-invocation and ephemeral** — CLI flags or child-process
-  env vars scoped to the spawned process, never written to disk. The only place
-  Demeteo persists a run's shape is **its own SQLite database**
-  (`ProjectSettings.default_effort`, `Feature.effort`, etc.), which is Demeteo's
-  config, not the harness's. If a harness only exposes a setting through its own
-  config file (as Hermes does for reasoning effort), Demeteo declares the
-  capability unsupported and degrades honestly rather than reaching into that file.
-- ❌ Create a git commit whose message does not conform to the Conventional Commits format
-  in **Section 8** — no free-form messages, no past tense, no trailing period, no missing type
-
----
-
-## 8. Commit Convention (mandatory)
-
-All commits on `master` **MUST** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/).
-This rule is enforced by the [`Lint Commits`](.github/workflows/lint-commits.yml)
-GitHub Actions workflow using commitlint, and by the release automation that
-reads commit messages to infer the next version bump.
-
-### Format
-
-```
-<type>(<optional-scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-- **Subject** ≤ 72 chars, lower-case first letter, imperative mood, no trailing period.
-- **Type** is mandatory and lower-case.
-- **Scope** is optional and lower-case (e.g. `orchestrator`, `settings`, `ci`).
-- **Body** explains *why*, wraps at 100 cols, separated from subject by a blank line.
-- **Footer** carries `BREAKING CHANGE: <note>` for any non-backwards-compatible change.
-
-### Allowed types and their semver effect
-
-| Type       | Bump   | When to use                                                |
-|------------|--------|------------------------------------------------------------|
-| `feat`     | minor  | A new user-facing feature                                  |
-| `fix`      | patch  | A bug fix                                                  |
-| `perf`     | patch  | Performance improvement with no behaviour change           |
-| `revert`   | patch  | Reverts a previous commit                                  |
-| `refactor` | none   | Internal change, no behaviour shift                        |
-| `docs`     | none   | Documentation only                                         |
-| `style`    | none   | Formatting / whitespace; no logic change                   |
-| `test`     | none   | Adding or fixing tests                                     |
-| `build`    | none   | Build system, dependencies, or external tooling            |
-| `ci`       | none   | CI / GitHub Actions configuration                          |
-| `chore`    | none   | Tooling, scripts, repository maintenance, release bumps    |
-
-A commit also signals a **major** bump when:
-
-- the type is suffixed with `!` → `feat(api)!: drop legacy v0 endpoints`, **or**
-- the body / footer contains a `BREAKING CHANGE:` line.
-
-When several types appear in the range, the **highest** bump wins
-(major > minor > patch). If nothing matches a known type, the release
-defaults to **patch** (something clearly changed).
-
-### Examples
-
-- ✅ `feat(orchestrator): add parallel step fan-out`
-- ✅ `fix(settings): guard against null provider url`
-- ✅ `perf(terminal): debounce xterm output writes`
-- ✅ `docs(readme): clarify macOS quarantine workaround`
-- ✅ `feat(api)!: drop legacy v0 endpoints`
-- ✅ `feat(settings): redesign preferences screen`
-- ❌ `Fix bug` — wrong case, no scope, vague
-- ❌ `Updated stuff` — no type
-- ❌ `feat: Added a thing.` — past tense + trailing period
-- ❌ `feat(remote): P0 multi-client runner` — subject starts with a capital
-  token (`P0`); commitlint's `subject-case` rejects sentence/upper-case. A
-  leading acronym, ticket id, or `TypeName` trips this too — start the subject
-  with a lower-case word (`feat(remote): multi-client runner P0 …`).
-
-> The `commit-msg` git hook (wired by `npm install` via `core.hooksPath
-> .githooks`) runs commitlint on every commit, so a bad message is rejected
-> locally instead of in CI. Don't rely on the hook alone — write it right.
-
-### Release automation that depends on this
-
-| Workflow                              | What it reads from commits              |
-|---------------------------------------|------------------------------------------|
-| `Lint Commits`                        | Subject format (commitlint)              |
-| `Build & Release` (master pushes)     | Triggers an rc counter bump              |
-| `Promote Release` (manual dispatch)   | Infers the next semver from commit types  |
-
-The `Promote Release` workflow **suggests** a version (e.g.
-`0.1.0 → 0.2.0 (minor) · feat=3 · fix=7 · breaking=1`) and
-auto-applies it; an `override_bump_type` input is available as a safety valve.
-
----
-
-## 9. Gate Policy (Human Approval)
-
-Any task that touches the items below requires a **Gate** (pause and ask the user) before executing:
-
-- Schema migrations that drop or rename columns
-- Changes to `src-tauri/capabilities/` (Tauri permission surfaces)
-- Changes to agent spawn logic or `OPENCODE_PERMISSION` env construction
+- Adding an `npm` or `cargo` dependency
+- Any migration that deletes or renames an existing file in `crates/demeteo-core/migrations/`, or that drops or renames a column
+- Changing `src-tauri/capabilities/` (Tauri permission surfaces)
+- Changing agent spawn logic or `OPENCODE_PERMISSION` env construction
 - Merging worktrees back to a feature branch when conflicts are detected
-- **Re-running the `Promote Release` workflow** — releases are not reversible; confirm the inferred bump matches intent (use the override input only when justified)
+- Re-running `Promote Release` — releases are irreversible; confirm the inferred bump matches intent
 
 ---
 
-## 9.1 Remote-Runner Dev Workflow
+## 7. Verification
 
-> The `demeteo-runner` binary runs on **every** remote machine. CI ships
-> it as a Linux x86_64 musl static binary (`x86_64-unknown-linux-musl`).
-> Anything else will fail with `Exec format error` on the remote —
-> see the `Mach-O on Linux` failure mode at the end of this section.
-
-### The three-tier lookup (in priority order)
-
-`crates/demeteo-core/src/infrastructure/runner/binary.rs::locate_local()` checks each source in this order and stops at the first one that resolves to an existing file:
-
-| Tier | Source | Use case |
-|------|--------|----------|
-| 1    | Dev cache: `$TMPDIR/demeteo-runner-cache/dev/demeteo-runner-x86_64-unknown-linux-musl` | Written by `npm run build:runner`. **Preferred for dev.** |
-| 2    | `$DEMETEO_RUNNER_BIN` env var | Explicit per-shell override. Useful for pointing at a CI-built artifact you downloaded manually. |
-| 3    | `<app-dir>/demeteo-runner` — sibling of the running Tauri binary | Whatever plain `cargo build --release -p demeteo-runner` produced on this laptop. **Often the wrong arch on Mac devs** — see the arch guard below. |
-
-If none of the three resolve, `remote_runner_local_check` returns `Missing` and the UI prompts the user to download the release asset (`adapters/tauri_ui/runner_download.rs::download_release`) — which works on any host with internet, no toolchain needed.
-
-### Building locally — `npm run build:runner`
-
-```bash
-npm run build:runner
-```
-
-The script (`scripts/build-runner.sh`) detects `uname -s`/`uname -m` and:
-
-| Host | Action |
-|------|--------|
-| Linux x86_64 | Native `cargo build --release -p demeteo-runner` (already ELF). No cross-compile. |
-| macOS (arm64 or x86_64) | `rustup target add x86_64-unknown-linux-musl` (one-time), then cross-build. Requires a **musl C cross-compiler** for `ring`/libcrypto to link — see the next sub-section. |
-| Anything else | Refuses with a clear error. |
-
-The result is copied to the dev cache path above. After that, click *Enable remote runs* on any machine in `Settings → Machines` and the app pushes that binary.
-
-#### macOS musl-cross setup (one-time)
-
-The `ring` crate (Rust crypto, used by reqwest) needs a real C cross-compiler when building for `x86_64-unknown-linux-musl`. The cross-target alone isn't enough on macOS — install one:
-
-```bash
-brew install messense/macos-cross-toolchains/x86_64-unknown-linux-musl
-```
-
-Then point Cargo at it (the build script does this automatically once it's installed):
-
-```bash
-export CC_x86_64-unknown-linux-musl=/opt/homebrew/bin/x86_64-unknown-linux-musl-gcc
-```
-
-Without this, `cargo build --release -p demeteo-runner --target x86_64-unknown-linux-musl` fails with `failed to find tool "x86_64-linux-musl-gcc"`.
-
-### The arch guard (defense in depth)
-
-Even if the dev cache is empty and `$DEMETEO_RUNNER_BIN` points at a stale Mach-O from a previous `cargo build`, the push-time guard catches it:
-
-- `crates/demeteo-core/src/infrastructure/runner/binary.rs::RunnerBinary::arch()` — single source of truth for magic-byte classification (`RunnerArch::{LinuxX86_64, LinuxOther, MacOs, Windows, Unknown}`).
-- `src-tauri/src/commands/remote_install.rs::reject_non_linux_x86_64` — constructs a `RunnerBinary` and refuses anything that isn't `LinuxX86_64`, with an error message that points the dev at `npm run build:runner`.
-
-Tests cover the classification:
-
-```bash
-cargo test -p demeteo-core --lib infrastructure::runner::binary
-```
-
-7 tests, covering ELF x86_64, ELF 32-bit, ELF big-endian, Mach-O arm64 LE, Windows PE, missing file, short file.
-
-### Mach-O on Linux — what you just hit
-
-If the runner was installed on the remote but won't start, the systemd journal will show:
-
-```
-demeteo-runner.service: Failed to execute /home/<user>/.local/bin/demeteo-runner: Exec format error
-demeteo-runner.service: Main process exited, code=exited, status=203/EXEC
-```
-
-Diagnose:
-
-```bash
-ssh <user>@<machine> 'systemctl --user status demeteo-runner.service -l --no-pager; \
-  echo ---; \
-  journalctl --user -xeu demeteo-runner.service --no-pager -n 50'
-```
-
-`203/EXEC` = kernel rejected `execve(2)` on the binary. Confirm the file's actual format:
-
-```bash
-ssh <user>@<machine> 'file ~/.local/bin/demeteo-runner'
-```
-
-Fix:
-
-```bash
-npm run build:runner                                # rebuild + cache
-# OR — for the rest of this session, point the app at a Linux x86_64 build
-DEMETEO_RUNNER_BIN=/path/to/linux-x86_64-binary npm run tauri dev
-# OR — quickest: delete the Mach-O sibling and let the app download the release
-rm -f src-tauri/target/{debug,release}/demeteo-runner
-```
-
-### When the runner is running but still won't serve runs
-
-| Symptom (UI) | Remote cause | Fix |
-|--------------|--------------|-----|
-| Green "Running · v0.1.0" + amber linger warning | `loginctl enable-linger` needs admin/polkit | Ask an admin to run `sudo loginctl enable-linger <user>` on the box |
-| Slate "Installed, stopped" | systemd `--user` unit isn't active | `ssh <user>@<machine> 'systemctl --user start demeteo-runner'` or re-click *Upgrade runner* in the UI |
-| Slate "Remote runner not installed" | No push has happened yet | Click *Enable remote runs* |
-
-### Cross-cutting change map
-
-When editing the runner binary location/arch logic, these four files move together:
-
-| File | What it owns |
-|------|--------------|
-| `crates/demeteo-core/src/infrastructure/runner/binary.rs` | `locate_local`, `RunnerArch::arch()`, `dev_cache_path`, `release_cache_path`, `stale_version_warning`, `probe_version` + 7 unit tests |
-| `crates/demeteo-core/src/infrastructure/runner/install.rs` | `unit_for(machines, machine_id)` — systemd unit template + webhook injection |
-| `crates/demeteo-core/src/infrastructure/runner/status.rs` | `probe(exec, machine_id)` — remote state probe (binary + service + linger) |
-| `src-tauri/src/adapters/tauri_ui/runner_download.rs` | `download_release`, `cancel`, `reset_cancel` + the two `#[tauri::command]` entry points |
-| `src-tauri/src/commands/remote_install.rs` | Thin Tauri command layer; `reject_non_linux_x86_64` is the only logic here, reuses `RunnerBinary::arch()` (no duplicated parsing) |
-| `scripts/build-runner.sh` | Host-side build script; produces `LinuxX86_64` for all three OS branches |
-
----
-
-## 10. Documentation Index
-
-> Read the relevant doc before modifying the corresponding area.
-
-| Area                        | Document                                                                              |
-|-----------------------------|---------------------------------------------------------------------------------------|
-| Domain model (ubiquitous language, aggregates) | [docs/DDD_MODEL.md](docs/DDD_MODEL.md)                              |
-| Ports, adapters, directory layout | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                       |
-| 36 locked decisions         | [docs/DECISIONS.md](docs/DECISIONS.md)                                                 |
-| Open & deferred questions   | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)                                       |
-| Agent CLI integration spec  | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)                                           |
-| Reliability & DAG pipeline  | [docs/RELIABILITY_PLAN.md](docs/RELIABILITY_PLAN.md)                                   |
-| User stories & agent tasks  | [docs/USER_STORIES.md](docs/USER_STORIES.md)                                           |
-| UX spec & journeys          | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md)                                             |
-| Known platform issues       | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)                                           |
-| Backend refactor history    | [docs/BACKEND_REFACTOR_TASKS.md](docs/BACKEND_REFACTOR_TASKS.md)                       |
-
----
-
-## 11. Verification Checklist
-
-**Before pushing (and before marking any task done), run the PR gate:**
+**Done means** `npm run checks` exits 0 and the app boots without console errors.
 
 ```bash
 npm run checks        # === scripts/checks.sh ===
 ```
 
-This is the **single source of truth** for the CI PR checks — `pr-checks.yml`
-runs the identical script. It covers tsc, `cargo fmt --check`, `cargo clippy
---all-targets -D warnings` (on the toolchain pinned in `rust-toolchain.toml`,
-so local clippy == CI clippy — no version drift), the demeteo **+ core +
-runner** test suites, the gate-feedback repro, and commitlint on
-`origin/master..HEAD`. It fails fast on the first red gate.
+Covers tsc, `cargo fmt --check`, clippy `--all-targets -D warnings` on the toolchain
+pinned in `rust-toolchain.toml` (so local clippy == CI clippy), the demeteo + core +
+runner test suites, the gate-feedback repro, and commitlint on `origin/master..HEAD`.
+Fails fast. "`cargo test` passed" is **not** "CI is green" — run the whole script, not
+a subset. The `pre-push` hook runs it automatically (`git push --no-verify` for a
+deliberate WIP).
 
-"`cargo test` passed" is **not** the same as "CI is green": CI also gates on
-clippy, fmt, tsc, and commitlint. Run `npm run checks`, not a subset. The
-`pre-push` hook runs it automatically (bypass a deliberate WIP push with
-`git push --no-verify`).
+### The parity gates are not in `npm run checks`
 
-App-level smoke test when your change has UI/runtime surface:
-
-```bash
-npm run tauri dev   # open the app, confirm no console errors
-```
-
-If any step fails, fix it before handing back to the user.
-
-### Commit message (run before every `git commit`)
-
-Every commit **must** pass commitlint locally:
+`pr-checks.yml` runs **three** jobs: `scripts/checks.sh`, plus two conformance suites
+that `checks.sh` does not invoke. Both need Docker, and both are the only thing standing
+between you and a local/remote divergence:
 
 ```bash
-echo "<your commit message>" | npx commitlint
+crates/demeteo-core/tests/conformance/run-ssh-conformance.sh       # C2.2 — same exec_contract, local vs loopback sshd
+crates/demeteo-core/tests/conformance/run-topology-conformance.sh  # topology equivalence, local + SSH
 ```
 
-Use this exact shell form to commit — never free-form text:
+Run them when you touch an `ExecutionPort` impl, the step executor, or anything a
+transport observes. **The e2e suite will not catch this** — it drives a per-test
+`FakeExec` that passes while masking exactly the drift these suites exist to find.
 
-```bash
-git commit -m "<type>(<scope>): <subject>"
-# e.g.
-git commit -m "fix(orchestrator): handle null provider url on startup"
-```
+Fix any failure before handing back.
 
-If `npx commitlint` exits non-zero, rewrite the message before committing.
-Valid types: `feat fix perf revert refactor docs style test build ci chore`
+When your change has UI or runtime surface, smoke-test with `npm run dev:tauri` — **not**
+`npm run tauri dev`. Only `dev:tauri` passes `--config src-tauri/tauri.dev.conf.json`,
+which sets a separate app identifier (`com.stvcloud.demeteo.dev`) and keeps the dev
+database isolated from the installed app. Use `npm run dev:tauri:sw` if the GPU path
+misbehaves.
 
 ---
+
+## 8. Documentation Index
+
+Read the relevant doc before modifying that area.
+
+| Area | Document |
+|------|----------|
+| Ports, adapters, hexagon, directory layout | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Domain model, ubiquitous language | [docs/DDD_MODEL.md](docs/DDD_MODEL.md) |
+| 42 locked decisions (+ superseded) | [docs/DECISIONS.md](docs/DECISIONS.md) |
+| Open & deferred questions | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) |
+| Agent CLI integration spec | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) |
+| Workflow DAG model, registry, canvas | [docs/PRD_DAG_WORKFLOWS.md](docs/PRD_DAG_WORKFLOWS.md) · remaining work in [docs/TASKS_DAG_WORKFLOWS.md](docs/TASKS_DAG_WORKFLOWS.md) |
+| Local/remote execution parity | [docs/EXECUTION_PARITY.md](docs/EXECUTION_PARITY.md) |
+| Reliability invariants & open backlog | [docs/RELIABILITY_PLAN.md](docs/RELIABILITY_PLAN.md) |
+| Remote execution design | [docs/REMOTE_EXECUTION.md](docs/REMOTE_EXECUTION.md) |
+| Multi-client runner (designed, not built) | [docs/MULTI_CLIENT_RUNNER.md](docs/MULTI_CLIENT_RUNNER.md) |
+| Remote-runner dev workflow & triage | [docs/RUNNER_DEV.md](docs/RUNNER_DEV.md) |
+| Terminal agent activity | [docs/TERMINAL_ACTIVITY.md](docs/TERMINAL_ACTIVITY.md) |
+| User stories & agent tasks | [docs/USER_STORIES.md](docs/USER_STORIES.md) |
+| UX spec & journeys | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md) · as-built audit in [docs/ux-audit/](docs/ux-audit/README.md) |
+| Product roadmap & agent-ready stories | [docs/roadmap/](docs/roadmap/README.md) |
+| Known platform issues | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
+| Contributing, PR flow, full commit spec | [CONTRIBUTING.md](CONTRIBUTING.md) |

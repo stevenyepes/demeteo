@@ -129,7 +129,7 @@ pub struct AppContext {
     /// `workspace_base_dir` app-session key; takes effect after restart.
     pub workspace_dir: std::path::PathBuf,
 
-    /// Headless-runner run submissions (docs/REMOTE_EXECUTION_PLAN.md
+    /// Headless-runner run submissions (docs/REMOTE_EXECUTION.md
     /// M3.2), keyed by client-generated `run_id`. Unused by the Tauri app
     /// (the table exists in its database via the shared migration set,
     /// but nothing ever writes to it there).
@@ -146,7 +146,7 @@ pub struct AppContext {
 
     /// Single read model for a run's rendered surface — feature, steps,
     /// per-step artifacts, agent stream, cost (C3,
-    /// `docs/EXECUTION_CONSISTENCY_PLAN.md`). UI display commands read through
+    /// `docs/EXECUTION_PARITY.md`). UI display commands read through
     /// this instead of reaching for `features`/`threads`/`exec` directly, so a
     /// runner-owned feature can later be sourced from a shadow mirror (C4)
     /// transparently to the UI.

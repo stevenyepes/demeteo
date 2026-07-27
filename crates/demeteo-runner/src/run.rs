@@ -1,4 +1,4 @@
-//! The actual "do a run" pipeline (docs/REMOTE_EXECUTION_PLAN.md M1.2,
+//! The actual "do a run" pipeline (docs/REMOTE_EXECUTION.md M1.2,
 //! M4, M5): register the provider, clone via per-run askpass, bootstrap a
 //! project, ingest the workflow, drive a feature to a terminal state
 //! (applying the unattended gate policy + budget caps along the way),

@@ -14,7 +14,7 @@ export interface RailNavItemProps {
   /** When > 0, render a small count badge. */
   count?: number;
   /** When > 0, render a high-salience attention badge — terminals that
-   *  need a decision (spec `TERMINAL_ACTIVITY_UX` §3). Ships wired at 0 in
+   *  need a decision (spec `TERMINAL_ACTIVITY` §3). Ships wired at 0 in
    *  Phase 1 and lights up once the backend emits `awaiting_approval`. */
   attentionCount?: number;
   /** When true, show a small emerald pulse dot (e.g. live sessions). */

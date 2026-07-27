@@ -1,5 +1,5 @@
 //! `RunView` — the single read model for a run's rendered surface (C3,
-//! `docs/EXECUTION_CONSISTENCY_PLAN.md`).
+//! `docs/EXECUTION_PARITY.md`).
 //!
 //! The UI renders a feature from four reads: the feature row, its step
 //! executions (which carry per-step cost/tokens/artifact refs), the body of a

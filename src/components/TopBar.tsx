@@ -19,7 +19,7 @@ function TopBar({ connectedProvider }: TopBarProps) {
   // Ambient badge for the Remote Runs entry point — without this, a
   // parked/failed/needs-credentials run gives zero passive signal that
   // it needs attention unless the user thinks to open the inbox
-  // (docs/REMOTE_EXECUTION_PLAN.md M6.2/§8). Polls independently of
+  // (docs/REMOTE_EXECUTION.md M6.2/§8). Polls independently of
   // whether the inbox itself is mounted.
   const [actionableCount, setActionableCount] = useState(0);
   const [runningCount, setRunningCount] = useState(0);

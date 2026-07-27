@@ -51,7 +51,7 @@ pub struct ActiveSession {
     /// for a plain shell or a non-hooked agent. Minted at `start` and embedded
     /// in the reporter hooks injected via `--settings`; the drain's
     /// `ActivityScanner` accepts only sequences carrying exactly this nonce
-    /// (TERMINAL_ACTIVITY_PLAN §2b — anti-spoof + cross-session TTY-bleed
+    /// (TERMINAL_ACTIVITY §2b — anti-spoof + cross-session TTY-bleed
     /// gate). Retained so `reconnect_terminal_session` rebuilds the scanner
     /// with the SAME nonce the still-running agent's hooks emit.
     pub activity_nonce: Option<String>,
@@ -207,7 +207,7 @@ pub(crate) type SessionHandles = (
 );
 
 /// The per-session activity record both signal sources feed
-/// (TERMINAL_ACTIVITY_PLAN §2 precedence latch). Fields are folded in by
+/// (TERMINAL_ACTIVITY §2 precedence latch). Fields are folded in by
 /// `apply_cadence` (the sweep) and `apply_hook` (the scanner); the resolved
 /// state is computed by `resolve` and emitted (deduped) by `resolve_and_emit`.
 #[derive(Default)]
@@ -225,7 +225,7 @@ pub struct SessionActivity {
     /// falls quiet and would otherwise pin the session to `working` forever
     /// even after `Stop` fired `awaiting_input`. Latching to the hook lets the
     /// cheap universal floor and the precise hook layer coexist without the
-    /// floor clobbering the hook (TERMINAL_ACTIVITY_PLAN §2).
+    /// floor clobbering the hook (TERMINAL_ACTIVITY §2).
     pub(super) hook: Option<&'static str>,
     /// Latched `true` by a scanner `awaiting_approval`; cleared by any
     /// non-approval explicit hook (working / awaiting_input / exit). While set
@@ -239,7 +239,7 @@ pub struct SessionActivity {
     /// its own retraction (the prompt leaving the screen), exactly as the hook
     /// latch owns its `working`/`Stop` retraction — the two never fight because
     /// a given agent uses at most one source. Either being set resolves to
-    /// `awaiting_approval` (TERMINAL_ACTIVITY_PLAN §Phase 3: "screen-sourced
+    /// `awaiting_approval` (TERMINAL_ACTIVITY §Phase 3: "screen-sourced
     /// awaiting_approval behaves exactly like the hook-sourced one").
     pub(super) screen_approval: bool,
     /// A `SessionEnd` (`exit`) hook was seen — the top of the precedence order.
@@ -252,7 +252,7 @@ pub struct SessionActivity {
 #[derive(Default)]
 pub struct SessionState {
     pub sessions: Mutex<HashMap<String, ActiveSession>>,
-    /// Per-session resolved-activity records (TERMINAL_ACTIVITY_PLAN §2). The
+    /// Per-session resolved-activity records (TERMINAL_ACTIVITY §2). The
     /// single place the two signal sources — the cadence sweep and the hook
     /// scanner — meet: both fold their reading into the session's
     /// `SessionActivity` and let `resolve` apply the §2 precedence latch, so a
@@ -287,7 +287,7 @@ pub struct SessionInfo {
 }
 
 /// Payload for the additive `terminal-session-activity` event
-/// (TERMINAL_ACTIVITY_PLAN §2). `state` is one of `"working"`,
+/// (TERMINAL_ACTIVITY §2). `state` is one of `"working"`,
 /// `"awaiting_input"`, `"awaiting_approval"`, or `"exit"`. The Phase 1 cadence
 /// sweep emits the first two; the Phase 2 hook scanner (T2.3) additionally
 /// emits `awaiting_approval` and `exit` from a hooked session's reporter
@@ -305,7 +305,7 @@ pub struct ActivityInfo {
 /// agent kind (Claude) `launch_command` carries the backend-augmented launch
 /// line (base command + injected `--settings` reporter hooks); the frontend
 /// writes THAT instead of its own base command — the single-write contract
-/// that prevents Claude launching twice (TERMINAL_ACTIVITY_PLAN §2c). `None`
+/// that prevents Claude launching twice (TERMINAL_ACTIVITY §2c). `None`
 /// for plain shells and non-hooked agents (the frontend writes its own line,
 /// or nothing). serde serialises the fields snake_case (`session_id`,
 /// `launch_command`).

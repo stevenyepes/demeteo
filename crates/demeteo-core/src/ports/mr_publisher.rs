@@ -39,7 +39,7 @@ pub trait MrPublisher: Send + Sync {
 
     /// Variant of [`publish_mr`](Self::publish_mr) that uses a
     /// caller-supplied PAT instead of resolving one from the keyring
-    /// (docs/REMOTE_EXECUTION_PLAN.md M4.3/M5.3, docs/REMOTE_EXECUTION.md
+    /// (docs/REMOTE_EXECUTION.md M4.3/M5.3, docs/REMOTE_EXECUTION.md
     /// §6.2). The headless runner holds git-provider credentials
     /// memory-only and run-scoped — it must never seed a standing keyring
     /// entry just to open the terminal PR. Default implementation ignores

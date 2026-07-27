@@ -1,5 +1,5 @@
 //! `RunSpec` — the payload that drives a headless run
-//! (docs/REMOTE_EXECUTION_PLAN.md M1.2). Carries everything the runner
+//! (docs/REMOTE_EXECUTION.md M1.2). Carries everything the runner
 //! needs to bootstrap a project, ingest a workflow, and start a feature,
 //! without depending on any state already present in the runner's own
 //! (fresh) database — the laptop composes this from its own DB state and
@@ -39,7 +39,7 @@ pub struct RunSpecProvider {
     pub host: String,
 }
 
-/// Per-run hard caps on token cost and wall-clock time (docs/REMOTE_EXECUTION_PLAN.md
+/// Per-run hard caps on token cost and wall-clock time (docs/REMOTE_EXECUTION.md
 /// M5.2, docs/REMOTE_EXECUTION.md §5). Exceeding either cap cancels the run
 /// as `over-budget` — unattended never auto-approves more spend.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

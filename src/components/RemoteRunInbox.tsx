@@ -22,7 +22,7 @@ import { useNavigation } from '../context';
 import { formatError } from '../lib/errors';
 
 /**
- * Runs — the cross-machine attention hub (docs/REMOTE_EXECUTION_PLAN.md
+ * Runs — the cross-machine attention hub (docs/REMOTE_EXECUTION.md
  * M6.2, design §8). Groups every mirrored remote run into the taxonomy
  * from the design doc's table: PR ready / Failed / Parked / Needs
  * credentials / Running / Unreachable. `cancelled` isn't in that table
@@ -97,7 +97,7 @@ export function bucketFor(status: string): Bucket {
 }
 
 /**
- * "View branch diff" (docs/REMOTE_EXECUTION_PLAN.md M6.2 follow-up): a
+ * "View branch diff" (docs/REMOTE_EXECUTION.md M6.2 follow-up): a
  * run that pushed its feature branch but has no PR yet (failed/
  * cancelled/parked) still produced code worth looking at. Resolves the
  * compare/tree URL lazily per row rather than eagerly for every run in

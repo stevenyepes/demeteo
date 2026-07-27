@@ -1,5 +1,5 @@
 //! Deterministic, no-LLM agent runtime for the topology-equivalence gate
-//! (C5, `docs/EXECUTION_CONSISTENCY_PLAN.md`).
+//! (C5, `docs/EXECUTION_PARITY.md`).
 //!
 //! The three-transport conformance test (local / desktop-over-SSH /
 //! headless runner) needs a workflow to run to a terminal state *without*

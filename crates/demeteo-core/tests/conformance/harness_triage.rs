@@ -1,5 +1,5 @@
 //! Harness-failure triage driver-integration fixtures (C6,
-//! `docs/EXECUTION_CONSISTENCY_PLAN.md`).
+//! `docs/EXECUTION_PARITY.md`).
 //!
 //! The C6 pure helpers (fingerprint normalization both directions,
 //! `should_triage`, `parse_triage_text`, `build_environment_message`) are unit-

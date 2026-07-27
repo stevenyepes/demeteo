@@ -1,7 +1,7 @@
-//! Control RPC server (docs/REMOTE_EXECUTION_PLAN.md M3.1/M3.2/M4/M5).
+//! Control RPC server (docs/REMOTE_EXECUTION.md M3.1/M3.2/M4/M5).
 //!
 //! Listens on a Unix-domain socket at `<data_dir>/control.sock` with `0600`
-//! permissions. Per the design doc's decided fork (REMOTE_EXECUTION_PLAN.md
+//! permissions. Per the design doc's decided fork (REMOTE_EXECUTION.md
 //! M3.1): protection comes from OS file permissions alone — no bearer
 //! token, no listening TCP port. The laptop reaches this socket by
 //! forwarding it over SSH (`ssh -L <local>:<remote.sock>`); a second local

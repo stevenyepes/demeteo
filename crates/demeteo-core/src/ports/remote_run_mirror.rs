@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The laptop's cached view of one remote run submitted to a
-/// `demeteo-runner` (docs/REMOTE_EXECUTION_PLAN.md M6.1/M6.2, design R9).
+/// `demeteo-runner` (docs/REMOTE_EXECUTION.md M6.1/M6.2, design R9).
 /// Keyed by `(machine_id, run_id)` — the laptop never owns this state,
 /// it only mirrors what the runner's own `get_status`/`stream_events`
 /// report, reconciling by `last_offset` so a dropped SSH tunnel never

@@ -1,7 +1,7 @@
 //! Composition root. `build_core_context` is the only place in the engine
 //! that constructs concrete adapters and wires them into the `AppContext`
 //! dependency bag (which doubles as the design doc's `CoreContext` —
-//! see docs/REMOTE_EXECUTION_PLAN.md M0.2).
+//! see docs/REMOTE_EXECUTION.md M0.2).
 //!
 //! Both binaries call this: the Tauri app adapts the result into its own
 //! managed state (`app.manage(ctx)`), and the future headless runner

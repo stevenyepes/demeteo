@@ -123,15 +123,16 @@
 - **UX Journey:** [Journey 10](UX_JOURNEYS.md#journey-10-workflow-authoring)
 - **Architecture:** [docs/ARCHITECTURE.md](ARCHITECTURE.md) (`WorkflowRepository`)
 - **DDD Domain:** [docs/DDD_MODEL.md](DDD_MODEL.md) (Workflow Catalog)
-- **UI Areas:** `WorkflowList`, `WorkflowEditor`
+- **UI Areas:** `WorkflowList`, `WorkflowCanvas` design mode (`src/components/canvas/`)
 
-**Status:** Implemented.
+**Status:** Implemented — rebuilt as a visual DAG builder (`PRD_DAG_WORKFLOWS.md` Phase 3, 2026-07-26). The form-first `WorkflowEditor` was deleted; Decision 19 is superseded.
 
 **Tasks:**
 - [x] Create `WorkflowList` view displaying bundled starter packs.
-- [x] Build `WorkflowEditor` form for adding/reordering `agent`, `parallel`, and `gate` steps.
-- [x] Implement export/import functionality via JSON (`workflow_export` / `workflow_import`).
-- [x] Implement version history (immutable `WorkflowVersion` rows, `workflow_versions`, `workflow_revert_to_default`).
+- [x] ~~Build `WorkflowEditor` form~~ → visual canvas builder: registry-driven palette, connect-time validation, schema-driven config panel, lint surface, dirty guard, undo/redo.
+- [x] Implement export/import functionality via JSON (`workflow_export` / `workflow_import`, schema v2 with v1 auto-migration).
+- [x] Implement version history (immutable `WorkflowVersion` rows + history drawer with diff/restore/revert).
+- [ ] Expose conditional `when` edges in the builder (engine supports them; task P4.3).
 
 ## Story 9: Global Shell & Project Rail
 **Description:** As a user, I want to easily switch between projects and access global settings via a command palette and left rail.

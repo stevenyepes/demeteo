@@ -82,7 +82,7 @@ export type AppView =
   | { kind: 'remote-inbox' }
   | { kind: 'terminals' };
 
-/** Laptop-side mirror of one remote run (docs/REMOTE_EXECUTION_PLAN.md
+/** Laptop-side mirror of one remote run (docs/REMOTE_EXECUTION.md
  *  M6.1/M6.2), keyed by `(machine_id, run_id)` — mirrors
  *  `demeteo_core::ports::remote_run_mirror::RemoteRunMirror`. */
 export interface RemoteRunMirror {
@@ -348,7 +348,7 @@ export type StepConfig = {
   /** Opt a non-shell capability into the shell (e.g. an Artifacts step that wants `git log`). */
   allow_shell?: boolean;
   /**
-   * Blast-radius classification for `gate` steps (docs/REMOTE_EXECUTION_PLAN.md M5.1).
+   * Blast-radius classification for `gate` steps (docs/REMOTE_EXECUTION.md M5.1).
    * `"dangerous"` (merge-to-default / push-protected / deploy / delete) parks under an
    * unattended remote run instead of auto-approving; anything else is the `safe` default.
    */
@@ -759,7 +759,7 @@ export interface SessionInfo {
  * What the agent in a terminal is doing right now, layered on top of
  * presence (`agentKind`). Sourced live from the backend activity sweep
  * (`terminal-session-activity`). `null` means no activity signal — a
- * plain shell, or an agent we can't read yet (spec `TERMINAL_ACTIVITY_UX`
+ * plain shell, or an agent we can't read yet (spec `TERMINAL_ACTIVITY`
  * §2): the row shows the agent badge and no activity mark.
  */
 export type TerminalActivity =

@@ -1,6 +1,6 @@
 //! Declared-artifact capture (git snapshot/diff/commit of a step's output).
 //!
-//! **Shell-context audit (C1.3, `docs/EXECUTION_CONSISTENCY_PLAN.md`).** The
+//! **Shell-context audit (C1.3, `docs/EXECUTION_PARITY.md`).** The
 //! `exec.run_command` calls in this module all shell out to the system `git`
 //! binary with an explicit `git -C <worktree>` cwd, so the non-login default
 //! [`ShellOptions`](crate::ports::execution::ShellOptions) is intended: `git`

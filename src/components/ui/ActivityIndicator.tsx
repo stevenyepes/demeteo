@@ -12,7 +12,7 @@ export interface ActivityIndicatorProps {
 
 /** Human-readable label per state — surfaced via `title` + `aria-label` so
  *  the mark is legible to a hover and to a screen reader (spec
- *  `TERMINAL_ACTIVITY_UX` §2). */
+ *  `TERMINAL_ACTIVITY` §2). */
 const ACTIVITY_LABEL: Record<'working' | 'awaiting_input' | 'awaiting_approval', string> = {
   working: 'Working',
   awaiting_input: 'Waiting for you',
@@ -21,7 +21,7 @@ const ACTIVITY_LABEL: Record<'working' | 'awaiting_input' | 'awaiting_approval',
 
 /**
  * The at-a-glance activity mark that sits beside the `AgentBadge` (spec
- * `TERMINAL_ACTIVITY_UX` §2/§3). Pure presentational — keyed only on
+ * `TERMINAL_ACTIVITY` §2/§3). Pure presentational — keyed only on
  * `activity`, it renders nothing for `null`. The visual weight is
  * deliberately ordered so *needs a decision* out-shouts *waiting*, which
  * out-shouts *working*:

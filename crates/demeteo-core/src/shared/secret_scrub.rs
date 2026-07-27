@@ -1,7 +1,7 @@
 //! Defence-in-depth secret scrubbing for anything that leaves the
 //! process as human-/machine-readable text — the runner's append-only
 //! event log (`run_events`) and its away-channel notifications
-//! (docs/REMOTE_EXECUTION_PLAN.md M7.2, docs/REMOTE_EXECUTION.md §6).
+//! (docs/REMOTE_EXECUTION.md M7.2, docs/REMOTE_EXECUTION.md §6).
 //!
 //! The credential design already keeps the git PAT out of argv, git
 //! config, and the URL (M4.3's askpass helper), so nothing is *supposed*

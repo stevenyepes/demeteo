@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// One entry in a run's append-only event log
-/// (docs/REMOTE_EXECUTION_PLAN.md M3.3). `offset` is the log position a
+/// (docs/REMOTE_EXECUTION.md M3.3). `offset` is the log position a
 /// resumed `stream_events(run_id, from_offset)` call pages from — it's
 /// the SQLite rowid, so it's monotonic per table, not just per run.
 ///

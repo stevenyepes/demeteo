@@ -16,7 +16,7 @@ pub struct Machine {
     pub use_login_shell: Option<bool>, // null/false = no login shell; true = bash -l -c
     #[serde(default)]
     pub setup_commands: Option<String>, // JSON array of shell commands run after clone
-    /// Optional "away" notification webhook (docs/REMOTE_EXECUTION_PLAN.md
+    /// Optional "away" notification webhook (docs/REMOTE_EXECUTION.md
     /// M6.3) — a plain HTTP(S) endpoint receiving `{"text": "..."}`, same
     /// minimal shape Slack incoming webhooks and ntfy.sh both accept.
     /// Injected into the runner's systemd unit environment on install.

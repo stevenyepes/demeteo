@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// A run submitted to a headless runner (docs/REMOTE_EXECUTION_PLAN.md
+/// A run submitted to a headless runner (docs/REMOTE_EXECUTION.md
 /// M3.2). `run_id` is client-generated (a laptop-side UUID) — that's the
 /// idempotency key: re-submitting the same `run_id` returns the existing
 /// row instead of starting a duplicate.
@@ -20,7 +20,7 @@ pub struct RunnerRun {
     /// The feature branch pushed to origin at completion (R3), if any —
     /// set even when the run then failed/was cancelled after the push,
     /// so the laptop can offer a diff/branch deep link before a PR
-    /// exists (docs/REMOTE_EXECUTION_PLAN.md M6.2 follow-up).
+    /// exists (docs/REMOTE_EXECUTION.md M6.2 follow-up).
     pub pushed_branch: Option<String>,
     /// Owning client's stable `install_id` (docs/MULTI_CLIENT_RUNNER.md
     /// MC-D2 / P0.2). Stamped at `submit_run` from the request's

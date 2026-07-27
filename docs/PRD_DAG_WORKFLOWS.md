@@ -1,24 +1,32 @@
 # PRD — True DAG Workflows: Engine, Run Visibility & Visual Builder
 
-**Status:** Draft for review
+**Status:** **Built through Phase 3** (2026-07-26). Phase 4 remains — see [`TASKS_DAG_WORKFLOWS.md`](TASKS_DAG_WORKFLOWS.md).
 **Date:** 2026-07-23
 **Author:** Steven Yepes (drafted with Claude)
-**Supersedes / revises:** Decision 19 (form-first authoring), parts of USER_STORIES Story "Workflow Authoring", UX_JOURNEYS Journey 6/10 ("circular-node DAG visualization is deferred")
-**Related docs:** `DDD_MODEL.md`, `RELIABILITY_PLAN.md`, `EXECUTION_CONSISTENCY_PLAN.md`, `DECISIONS.md`, `OPEN_QUESTIONS.md`, `docs-site/workflows.md`, `docs/ux-audit/findings.md`
+**Supersedes / revises:** Decision 19 (form-first authoring) — already recorded in `DECISIONS.md` §2; parts of USER_STORIES Story 8 "Workflow Authoring"; UX_JOURNEYS Journey 6/10.
+**Related docs:** `DDD_MODEL.md`, `RELIABILITY_PLAN.md`, `EXECUTION_PARITY.md`, `DECISIONS.md`, `OPEN_QUESTIONS.md`, `docs-site/workflows.md`, `docs/ux-audit/findings.md`
+
+> **How to read this doc now.** Sections 5 and 6 are the **specification of the
+> system as built** — the definition model, the registry seam, the scheduler,
+> the retry policy, and the two-mode canvas. They stay because they carry the
+> *reasoning*, which the code does not. Sections 1–3 are the original
+> motivation, kept as the record of why the linear-list model was abandoned.
+> Section 7 describes the starter migration, whose parallel shapes are the
+> unbuilt P4.2.
 
 ---
 
-## 1. Why now
+## 1. Why now (the state this replaced)
 
-Demeteo's public positioning is: *"Demeteo plans the work as a directed acyclic graph of steps, runs multiple agents in parallel worktrees, and keeps you in control of what gets merged, and when"* (`docs-site/index.md`). The implementation does not match the promise:
+Demeteo's public positioning is: *"Demeteo plans the work as a directed acyclic graph of steps, runs multiple agents in parallel worktrees, and keeps you in control of what gets merged, and when"* (`docs-site/index.md`). Before this work the implementation did not match the promise:
 
-- **The "DAG" is a linear list.** `WorkflowVersion.steps_json` is an ordered `Vec<StepConfig>`; the executor (`DagStepExecutor`, ironically named) walks `step_index` forward one at a time (`crates/demeteo-core/src/adapters/step_executor/driver.rs`). The only edges are backward `on_failure` retry redirects and the advisory `blocked_by` on planned tasks, which execution ignores.
-- **Step kinds are a hardcoded `match`.** `agent | gate | sequence(+parallel alias) | sync | finalize` are dispatched in `driver.rs:810-884`. Adding a step kind means editing the engine. There is no registry, no plugin seam, and the deferred `command` step (Decision 8) has nowhere clean to land.
-- **Reliability state is partly in-memory.** Sequence checkpoints, cached task plans, the env-retry set, gate waiters, and the driver registry all evaporate on restart (`driver.rs:235,254,260`). A crash mid-sequence re-runs committed work (safe but wasteful); recovery leans on a startup watchdog that converts interruptions into synthetic gates.
-- **Visibility is a flat timeline.** `FeatureDetail.tsx` renders a vertical list with per-step chips. Structure inside a step (sequence tasks, verifier passes, harness runs, retry loops) is invisible or bolted on. Remote runs poll a separate event log with a different component (`RunEventTimeline.tsx`).
-- **The editor is a stacked form.** `WorkflowEditor.tsx` reorders with up/down chevrons, has no dirty-state guard (audit F38), leaves dangling `on_failure` pointers after delete/reorder (F39), has no version history UI despite versions existing in the DB, and cannot express anything the engine can't run — which today means: nothing non-linear.
+- **The "DAG" was a linear list.** `WorkflowVersion.steps_json` was an ordered `Vec<StepConfig>` and the executor walked `step_index` forward one at a time. The only edges were backward `on_failure` retry redirects and the advisory `blocked_by` on planned tasks, which execution ignored.
+- **Step kinds were a hardcoded `match`.** `agent | gate | sequence(+parallel alias) | sync | finalize` were dispatched inline in the driver. Adding a step kind meant editing the engine — no registry, no plugin seam, and the deferred `command` step (Decision 8) had nowhere clean to land.
+- **Reliability state was partly in-memory.** Sequence checkpoints, cached task plans, the env-retry set, gate waiters, and the driver registry all evaporated on restart. A crash mid-sequence re-ran committed work (safe but wasteful); recovery leaned on a startup watchdog that converted interruptions into synthetic gates.
+- **Visibility was a flat timeline.** `FeatureDetail.tsx` rendered a vertical list with per-step chips; structure inside a step (sequence tasks, verifier passes, harness runs, retry loops) was invisible. Remote runs polled a separate event log with a different component.
+- **The editor was a stacked form.** `WorkflowEditor.tsx` reordered with chevrons, had no dirty-state guard (audit F38), left dangling `on_failure` pointers after delete/reorder (F39), had no version-history UI despite versions existing in the DB, and could not express anything the engine couldn't run — which meant: nothing non-linear.
 
-Meanwhile the roadmap bets on workflows as the moat ("*Vibe Kanban runs an agent per task; Demeteo runs a governed pipeline per task*"), Kanban cards will carry pinned workflow versions (Epic C1), and the CLI (Epic D) will run workflows headless. All three bets get stronger if the workflow model is a real, well-defined, extensible DAG — and weaker if we keep stretching a linear list.
+Meanwhile the roadmap bets on workflows as the moat ("*Vibe Kanban runs an agent per task; Demeteo runs a governed pipeline per task*"), Kanban cards will carry pinned workflow versions (Epic C1), and the CLI (Epic D) will run workflows headless. All three bets get stronger with a real, well-defined, extensible DAG — and weaker if we keep stretching a linear list.
 
 ## 2. Product goals
 
@@ -43,19 +51,17 @@ Same persona as today (terminal-native power users running CLI coding agents), t
 - **J2 — Diagnose fast:** when a run fails or a verdict is BLOCKED, see *which node*, *which attempt*, *what the agent saw and said*, and *what the harness printed* in ≤3 clicks.
 - **J3 — Author and evolve:** clone a starter, reshape it (add a security-scan branch, a second verifier, a command step), validate it, and version it — visually, without hand-editing JSON.
 
-## 4. Current state (summary of findings)
+## 4. What must be preserved
 
-| Area | Today | Gap |
-|---|---|---|
-| Definition | `steps_json` blob, ordered list, `on_failure` back-edges | No forward dependencies, no branches, no join semantics, no typed data flow |
-| Dispatch | Hardcoded `match` on 5 string kinds | No registry; unknown kind = feature failure |
-| State machine | String statuses on `step_executions`; `StepOutcome` enum in engine | Statuses/transitions not schema-enforced; no `skipped`-with-reason for branches; attempt history flattened onto one row |
-| Reliability | Harness-first validation, C6 triage, keep-the-prefix checkpoints, env one-shot retry, startup watchdog, durable gates | Checkpoints/plans/env-retry in memory only; retry policy scattered across engine defaults, project settings, step config; no per-class declarative policy |
-| Visibility | `StepProgress`/`AgentStream` Tauri events + flat list UI; separate polling path for remote | No node-level graph view, no attempt drill-down, no unified local/remote run event model in UI |
-| Authoring | Form list, chevron reorder, no dirty guard, dangling refs, no version UI | Cannot express DAGs; validation happens at save, weakly |
-| Versioning | `workflow_versions` immutable rows; features reference `workflow_id` (RunSpec carries `workflow_json` for remote) | Local features don't pin a version row explicitly end-to-end; no version history/diff/restore UI |
-
-What already matches industry best practice and must be **preserved**: harness-first validation (red harness fails at zero token cost), C6 regression-vs-environment triage with failure fingerprints, keep-the-prefix + targeted-retry semantics for task lists (Decision 13), durable DB-first gates with waiter fast-path, the predecessor-running guard, per-step cost/duration telemetry, one-shot CLI agent invocation (Decision 34), and the allow/deny-only permission model with gates as the sole human-in-the-loop surface (Decision 35).
+The gap table that sat here described the pre-DAG system and no longer holds —
+§1 keeps the summary. What survives, and is **load-bearing for anything built on
+top**: harness-first validation (a red harness fails at zero token cost),
+regression-vs-environment triage with failure fingerprints
+([`EXECUTION_PARITY.md`](EXECUTION_PARITY.md)), keep-the-prefix +
+targeted-retry semantics for task lists (Decision 13), durable DB-first gates
+with a waiter fast-path, the predecessor-running guard, per-step cost/duration
+telemetry, one-shot CLI agent invocation (Decision 34), and the allow/deny-only
+permission model with gates as the sole human-in-the-loop surface (Decision 35).
 
 ## 5. The target: a real DAG system
 
@@ -241,19 +247,17 @@ The other five ship as straight chains (a chain is a valid DAG); their behavior 
 
 ## 8. Phasing
 
-Each phase ships independently and is feature-flagged where it touches the run path.
+**Phases 1–3 shipped** 2026-07-24 → 2026-07-26: schema v2 + auto-migration,
+`NodeTypeRegistry` with all five handlers re-homed and the dispatch `match`
+deleted, ready-set scheduler, `step_attempts`, durable checkpoints, declarative
+retry policy, unified `run_events`, the two-mode `WorkflowCanvas` (run overlay
++ drill-down panel + design-mode builder with lint/undo/version history), and
+the `command` node type as the registry seam proof.
 
-**Phase 1 — Engine core (backend only, no UX change):**
-Schema v2 + auto-migration; `NodeTypeRegistry` + re-homed five handlers; ready-set scheduler with `max_parallel_nodes=1`; `step_attempts` table; durable sequence checkpoints/plans; declarative retry policy (with legacy `on_failure` mapped onto it); unified `run_events` for local transport. Exit: all seven starters byte-equivalent behavior vs. baseline integration suite; crash-mid-sequence resumes from exact task.
-
-**Phase 2 — Run visibility:**
-`WorkflowCanvas` run mode in `FeatureDetail` (list stays default until parity confirmed, then graph becomes default with toggle); node drill-down panel; attempt history; remote runs on the same canvas. Exit: J2 measurable — failure → root-cause artifact in ≤3 clicks on a seeded failing run.
-
-**Phase 3 — Builder:**
-Design mode replaces `WorkflowEditor`; validation/lint surface; dirty guard + undo/redo; version history/diff/restore; `command` node type end-to-end; palette from registry. Exit: J3 usability test — 3 target users build "bugfix + security-scan branch" unaided in <10 min; zero invalid-definition saves possible.
-
-**Phase 4 — DAG payoff:**
-`max_parallel_nodes>1` behind write-scope exclusion lint; migrated parallel shapes for Standard Feature + Refactor starters; conditional edges (`when`) exposed in builder; `subworkflow` node.
+**Phase 4 — DAG payoff — remains:** `max_parallel_nodes>1` behind write-scope
+exclusion lint; parallel shapes for the Standard Feature + Refactor starters;
+conditional edges (`when`) exposed in the builder; `subworkflow` node. Task
+breakdown in [`TASKS_DAG_WORKFLOWS.md`](TASKS_DAG_WORKFLOWS.md).
 
 ## 9. Success metrics
 
@@ -274,13 +278,18 @@ Design mode replaces `WorkflowEditor`; validation/lint surface; dirty guard + un
 | Schema v2 breaks exported/community workflows | v1 import auto-migrates forever; JSON Schema published in docs-site |
 | Expression language scope creep | Ship only `nodes.<id>.outputs.<name>` + equality/comparison; anything more requires a new decision record |
 
-## 11. Open questions (for decision records before Phase 1)
+## 11. Open questions — all resolved
 
-1. Does `Feature` gain an explicit `workflow_version_id` column (recommended), or continue resolving latest-at-start? Pinning end-to-end is required for run-mode rendering of historical graphs.
-2. Join-semantics default for gates with multiple incoming verify branches: `all_success` (strict) vs `all_done` + verdict inspection. Recommendation: `all_success`, with the critic's PASS_WITH_NOTES mapped to success.
-3. Does `conflict_policy` (currently decorative — Decision 20 loose end) become a per-node setting on `sync`/`sequence` nodes in schema v2, or get removed? This PRD is the natural vehicle; recommendation: make it a `sync`-node config field.
-4. Cron scheduling currently lives on the workflow (`WorkflowSchedule`); with Kanban (C1) becoming the origin of work, does scheduling move to the card/board layer? Out of scope here but schema v2 should not entrench it — keep `schedule` outside `nodes/edges`.
-5. Monaco YAML/JSON source view of a workflow (Decision 19's v1.1 promise): ship read-only source tab in Phase 3, editable later?
+The five questions this PRD opened were answered as decision records in P0.1
+and are locked in [`DECISIONS.md`](DECISIONS.md):
+
+| Q | Resolved by | Answer |
+|---|---|---|
+| 1 — Pin the workflow version on `Feature`? | Decision 38 | Yes — `features.workflow_version_id` (V33) |
+| 2 — Join semantics for multi-branch gates | Decision 39 | `all_success`; `PASS_WITH_NOTES` maps to success |
+| 3 — Fate of `conflict_policy` | Decision 40 | Becomes a `sync`-node config field |
+| 4 — Where cron scheduling lives | Decision 41 | Stays a workflow-level sibling of `nodes`/`edges` |
+| 5 — Monaco source view | Decision 42 | Read-only source tab; editable binding still deferred |
 
 ---
 

@@ -42,7 +42,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
   const [testState, setTestState] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'err'>>({});
   const [testErrors, setTestErrors] = useState<Record<string, string>>({});
 
-  // Remote runner install (docs/REMOTE_EXECUTION_PLAN.md M7.1) — the
+  // Remote runner install (docs/REMOTE_EXECUTION.md M7.1) — the
   // status pill below is auto-probed on mount + after every enable, so
   // every machine card shows "running / installed-stopped / not yet
   // installed" the moment the view opens, without the user having to

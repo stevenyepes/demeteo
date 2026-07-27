@@ -65,7 +65,7 @@ Local terminals open under `cmd.exe` (from `%COMSPEC%`, falling back to `cmd.exe
 Agent-activity hooks are not injected into local Windows terminals — local agents
 run unhooked, and their live working/waiting/needs-a-decision indicators come only
 from the on-screen output scanner. (Agents on remote SSH hosts still run hooked;
-that path is always POSIX.) See [`docs/TERMINAL_ACTIVITY_PLAN.md`](docs/TERMINAL_ACTIVITY_PLAN.md#windows-support).
+that path is always POSIX.) See [`docs/TERMINAL_ACTIVITY.md`](docs/TERMINAL_ACTIVITY.md#windows-support).
 
 ---
 

@@ -81,7 +81,7 @@ export function useLaunchRun(options: {
         );
 
         if (params.machineId) {
-          // Detached run (docs/REMOTE_EXECUTION_PLAN.md M6.1): the
+          // Detached run (docs/REMOTE_EXECUTION.md M6.1): the
           // runner drives it; the laptop keeps an eager shadow Feature
           // (inserted by `remote_submit_run` before the RPC) that the
           // reconcile loop hydrates as the runner reports progress.

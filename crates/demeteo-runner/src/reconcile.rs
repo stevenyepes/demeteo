@@ -1,5 +1,5 @@
 //! Restart reconciliation + bounded reboot-retry budget
-//! (docs/REMOTE_EXECUTION_PLAN.md M2.3).
+//! (docs/REMOTE_EXECUTION.md M2.3).
 //!
 //! The engine's own restart reconciliation (`startup_watchdog` +
 //! `resume_interrupted_features`, both already invoked unconditionally by

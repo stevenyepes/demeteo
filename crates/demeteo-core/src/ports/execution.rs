@@ -23,7 +23,7 @@ pub const TIMEOUT_ERROR_PREFIX: &str = "timeout: ";
 /// Explicit shell context for [`ExecutionPort::run_command_with`]. Every
 /// field is data the caller supplies; **no adapter may fall back to ambient
 /// process state** (the GUI's `PATH`/`HOME`/cwd). This is decision **D2** in
-/// `docs/EXECUTION_CONSISTENCY_PLAN.md`: two adapters given the *same*
+/// `docs/EXECUTION_PARITY.md`: two adapters given the *same*
 /// `ShellOptions` must produce equivalent behaviour, so a command that
 /// "works local, silently wrong on remote" can no longer exist.
 ///
@@ -152,7 +152,7 @@ pub trait InteractiveHandle: Send + Sync {
 /// command that called `run_command`. The synchronous `ssh2`/`std::fs`
 /// calls now live inside the impl, where they belong.
 ///
-/// # Behavioural contract (C0, `docs/EXECUTION_CONSISTENCY_PLAN.md`)
+/// # Behavioural contract (C0, `docs/EXECUTION_PARITY.md`)
 ///
 /// This trait is the single behavioural contract every transport
 /// (`LocalSubprocessAdapter`, `SshClientAdapter`, `RouterExecutionPort`)
@@ -267,7 +267,7 @@ pub trait ExecutionPort: Send + Sync {
     async fn resolve_user(&self, machine_id: &str) -> Result<String, String>;
 
     /// Call the `demeteo-runner` control RPC on `machine_id`
-    /// (docs/REMOTE_EXECUTION_PLAN.md M6.1). Reaches
+    /// (docs/REMOTE_EXECUTION.md M6.1). Reaches
     /// `<home>/.local/share/demeteo-runner/control.sock` via OpenSSH
     /// Unix-socket forwarding (`channel_direct_streamlocal`, R4) — no new
     /// listening port, authz inherited from the SSH session. `method` /
