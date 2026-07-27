@@ -12,6 +12,7 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { AlertTriangle, OctagonAlert, ShieldCheck } from 'lucide-react';
 import { nodeTypeMeta } from '../types';
+import type { NodeDiffMark } from '../graphDiff';
 import type { EssenceKind } from '../nodeSummary';
 import {
   runStatusMeta,
@@ -44,6 +45,23 @@ const ESSENCE_CHIP: Record<EssenceKind, string> = {
   effort: 'border-slate-600/40 bg-slate-700/20 text-slate-300',
   capability: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300/90',
   flag: 'border-slate-600/40 bg-slate-800/40 text-slate-400',
+};
+
+/** Card treatment per version-diff verdict (P3.4). Compare mode has no run
+ *  overlay competing for the border, so the diff owns it outright; a removed
+ *  node is dimmed as well, since it isn't part of the graph on the right. */
+const DIFF_CARD: Record<NodeDiffMark, string> = {
+  added: 'border-emerald-400/70 shadow-[0_0_0_1px_rgba(52,211,153,0.4),0_0_18px_rgba(16,185,129,0.22)]',
+  removed:
+    'border-rose-400/60 border-dashed opacity-60 shadow-[0_0_18px_rgba(244,63,94,0.15)]',
+  changed:
+    'border-amber-400/70 shadow-[0_0_0_1px_rgba(251,191,36,0.35),0_0_18px_rgba(245,158,11,0.2)]',
+};
+
+const DIFF_CHIP: Record<NodeDiffMark, string> = {
+  added: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  removed: 'border-rose-500/30 bg-rose-500/10 text-rose-300',
+  changed: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
 };
 
 /** Solid status dot per run tone. */
@@ -90,6 +108,7 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
   const Icon = meta.icon;
   const lint = data.lint;
 
+  const diff = data.diff;
   const run = data.run;
   const runMeta = run ? runStatusMeta(run.status) : null;
   const tone = runMeta?.tone ?? null;
@@ -111,14 +130,18 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
           ? 'border-violet-400/60 shadow-[0_0_0_2px_rgba(167,139,250,0.45),0_0_18px_rgba(139,92,246,0.25)]'
           : selected
             ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]'
-            : tone
-              ? TONE_CARD[tone]
-              : 'border-slate-700/60 shadow-lg shadow-black/30 hover:border-slate-600',
+            : diff
+              ? DIFF_CARD[diff]
+              : tone
+                ? TONE_CARD[tone]
+                : 'border-slate-700/60 shadow-lg shadow-black/30 hover:border-slate-600',
       ].join(' ')}
       title={
         isSkipped
           ? `Skipped${run?.errorClass ? `: ${run.errorClass.replace(/_/g, ' ')}` : ''}`
-          : undefined
+          : diff === 'changed' && data.diffFields?.length
+            ? `Changed: ${data.diffFields.join(', ')}`
+            : undefined
       }
     >
       <Handle type="target" position={Position.Top} className={HANDLE_CLASS} />
@@ -149,6 +172,19 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
               {data.title}
             </div>
             {lint && <LintBadge errors={lint.errors} warnings={lint.warnings} />}
+            {diff && (
+              <span
+                data-testid={`node-diff-${diff}`}
+                title={
+                  diff === 'changed' && data.diffFields?.length
+                    ? `Changed: ${data.diffFields.join(', ')}`
+                    : undefined
+                }
+                className={`shrink-0 rounded border px-1 py-px text-[9px] font-bold uppercase tracking-wide ${DIFF_CHIP[diff]}`}
+              >
+                {diff}
+              </span>
+            )}
           </div>
           <div
             className={`text-[11px] font-medium uppercase tracking-wide ${

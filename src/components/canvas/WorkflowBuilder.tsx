@@ -22,6 +22,10 @@
  *   cannot see.
  * - **Undo/redo** over whole-definition snapshots, `⌘Z` / `⇧⌘Z`, suppressed
  *   while a text field has focus so it never fights the browser's own undo.
+ * - **Version history** (P3.4): the `VersionDrawer` lists the immutable
+ *   `workflow_versions` rows, and comparing one swaps the canvas into a
+ *   read-only diff of the two graphs. Restoring is the drawer's own write —
+ *   this screen only adopts the result.
  *
  * Persistence is the owner's, via `onSave`: this screen produces a v2
  * definition and knows nothing about how workflows are stored. P3.6 wires the
@@ -32,6 +36,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  GitCompare,
   History,
   OctagonAlert,
   Redo2,
@@ -44,6 +49,12 @@ import { useNavigationGuard } from '../../hooks/useNavigationGuard';
 import type { NavigationIntent } from '../../context/NavigationContext';
 import { ConfigPanel } from './ConfigPanel';
 import { WorkflowCanvas } from './WorkflowCanvas';
+import {
+  VersionDrawer,
+  type RestoredWorkflow,
+  type VersionComparison,
+} from './VersionDrawer';
+import { diffGraphs, diffSummary, mergeForDiff } from './graphDiff';
 import { useGraphHistory } from './graphHistory';
 import { describeFinding, lintSummary } from './lint';
 import { useNodeTypes } from './nodeCatalog';
@@ -73,9 +84,18 @@ export interface WorkflowBuilderProps {
   description?: string;
   /** Latest saved version number, for the header chip. */
   version?: number;
+  /** Starters can be reverted to their bundled definition from history. */
+  isStarter?: boolean;
   /** Persist the definition. Rejecting surfaces as an error toast and leaves
    *  the editor dirty; resolving marks it clean and clears the draft. */
   onSave: (request: WorkflowSaveRequest) => Promise<void>;
+  /** A restore or revert wrote a new version *without* going through `onSave`
+   *  — the owner's copy of the workflow is now stale. */
+  onWorkflowReplaced?: (next: {
+    version: number;
+    name: string;
+    description: string;
+  }) => void;
   /** Leave the builder. Called only once it is safe to do so. */
   onClose: () => void;
   className?: string;
@@ -114,7 +134,9 @@ export function WorkflowBuilder({
   name: initialName,
   description: initialDescription = '',
   version,
+  isStarter = false,
   onSave,
+  onWorkflowReplaced,
   onClose,
   className = '',
 }: WorkflowBuilderProps) {
@@ -134,6 +156,15 @@ export function WorkflowBuilder({
   const [saving, setSaving] = useState(false);
   const [pendingExit, setPendingExit] = useState<PendingExit | null>(null);
   const [draftOffer, setDraftOffer] = useState<WorkflowDraft | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [comparison, setComparison] = useState<VersionComparison | null>(null);
+  /** The version on disk. Tracked locally because a save or a restore moves it
+   *  and the prop is only the number the owner loaded with. */
+  const [savedVersion, setSavedVersion] = useState(version);
+  /** Bumped whenever a write lands, so the drawer re-reads the version list. */
+  const [historyEpoch, setHistoryEpoch] = useState(0);
+
+  useEffect(() => setSavedVersion(version), [version]);
 
   const dirty =
     history.dirty || name !== savedMeta.name || description !== savedMeta.description;
@@ -216,6 +247,9 @@ export function WorkflowBuilder({
       history.markSaved();
       setSavedMeta({ name: name.trim(), description });
       clearDraft(workflowId);
+      // A save mints a version row; whatever the number turns out to be, the
+      // drawer's list is now one short.
+      setHistoryEpoch((n) => n + 1);
       return true;
     } catch (err) {
       reportError(err, { kind: 'validation' });
@@ -233,6 +267,43 @@ export function WorkflowBuilder({
     workflowId,
     reportError,
   ]);
+
+  // ── Version history (P3.4) ──────────────────────────────────────────────
+
+  /** The read-only view a comparison puts on the canvas: the union of both
+   *  graphs (so removed nodes have somewhere to be drawn) plus the verdicts to
+   *  tint it with. The working copy is resolved here — the drawer holds a
+   *  `null` graph for it, because only this screen has one. */
+  const compareView = useMemo(() => {
+    if (!comparison) return null;
+    const to = comparison.to.graph ?? history.definition;
+    return {
+      definition: mergeForDiff(comparison.from.graph, to),
+      diff: diffGraphs(comparison.from.graph, to),
+    };
+  }, [comparison, history.definition]);
+
+  /** Adopt a restored (or reverted) version. The graph came from storage and
+   *  is already a version row, so the editor lands clean — and history resets,
+   *  since undoing "back past" a persisted restore would only be confusing. */
+  const adoptRestored = useCallback(
+    (restored: RestoredWorkflow) => {
+      history.reset(restored.definition);
+      setName(restored.name);
+      setDescription(restored.description);
+      setSavedMeta({ name: restored.name, description: restored.description });
+      setSavedVersion(restored.version);
+      setSelectedNodeId(null);
+      clearDraft(workflowId);
+      setHistoryEpoch((n) => n + 1);
+      onWorkflowReplaced?.({
+        version: restored.version,
+        name: restored.name,
+        description: restored.description,
+      });
+    },
+    [history, workflowId, onWorkflowReplaced],
+  );
 
   // ── Exit guard (audit F38) ──────────────────────────────────────────────
 
@@ -324,10 +395,31 @@ export function WorkflowBuilder({
           className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-base font-medium text-slate-100 outline-none transition-colors hover:border-slate-700/60 focus:border-cyan-500/50"
         />
 
-        {typeof version === 'number' && version > 0 && (
-          <span className="flex items-center gap-1 rounded border border-slate-700/60 px-1.5 py-0.5 text-[10px] font-mono text-slate-400">
-            <History className="h-3 w-3" />v{version}
-          </span>
+        {/* The version chip is the history affordance once there is a stored
+            workflow to have history *of* — an unsaved new one has none. */}
+        {workflowId ? (
+          <button
+            type="button"
+            onClick={() => setShowHistory((open) => !open)}
+            aria-label="Version history"
+            title="Version history"
+            className={[
+              'flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+              showHistory
+                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                : 'border-slate-700/60 text-slate-400 hover:border-slate-600 hover:text-slate-200',
+            ].join(' ')}
+          >
+            <History className="h-3 w-3" />
+            {typeof savedVersion === 'number' && savedVersion > 0 ? `v${savedVersion}` : 'History'}
+          </button>
+        ) : (
+          typeof savedVersion === 'number' &&
+          savedVersion > 0 && (
+            <span className="flex items-center gap-1 rounded border border-slate-700/60 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+              <History className="h-3 w-3" />v{savedVersion}
+            </span>
+          )
         )}
 
         {dirty && (
@@ -426,6 +518,30 @@ export function WorkflowBuilder({
         </div>
       )}
 
+      {comparison && compareView && (
+        <div
+          className="flex items-center gap-3 border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-200"
+          data-testid="compare-banner"
+        >
+          <GitCompare className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">
+            Comparing <strong className="font-semibold">{comparison.from.label}</strong> →{' '}
+            <strong className="font-semibold">{comparison.to.label}</strong> ·{' '}
+            {diffSummary(compareView.diff)}
+          </span>
+          <span className="text-[10px] uppercase tracking-wide text-amber-300/70">
+            read-only
+          </span>
+          <button
+            type="button"
+            onClick={() => setComparison(null)}
+            className="rounded border border-amber-500/40 px-2 py-0.5 font-medium transition-colors hover:bg-amber-500/10"
+          >
+            Exit compare
+          </button>
+        </div>
+      )}
+
       {lint.hasErrors && (
         <ul
           className="border-b border-rose-500/20 bg-rose-500/5 px-4 py-2 text-xs text-rose-200"
@@ -442,26 +558,48 @@ export function WorkflowBuilder({
 
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1">
+          {/* Comparing renders the *merged* graph read-only: it is a view of two
+              versions, one of which no longer exists to be edited. Design mode —
+              with its palette, lint badges and config panel — comes back the
+              moment the comparison is dismissed. */}
           <WorkflowCanvas
-            definition={history.definition}
-            mode="design"
+            definition={compareView ? compareView.definition : history.definition}
+            mode={compareView ? 'run' : 'design'}
             nodeTypes={nodeTypes}
-            lint={lint}
-            selectedNodeId={selectedNodeId}
-            onDefinitionChange={history.commit}
+            lint={compareView ? undefined : lint}
+            diff={compareView?.diff}
+            selectedNodeId={compareView ? null : selectedNodeId}
+            onDefinitionChange={compareView ? undefined : history.commit}
             onConnectRejected={(message) => reportError(message, { kind: 'validation' })}
-            onNodeActivate={(nodeId) =>
-              setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId))
+            onNodeActivate={
+              compareView
+                ? undefined
+                : (nodeId) => setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId))
             }
           />
         </div>
-        {selectedNodeId && selectedExists && (
+        {!compareView && selectedNodeId && selectedExists && (
           <ConfigPanel
             definition={history.definition}
             nodeId={selectedNodeId}
             nodeTypes={nodeTypes}
             onChange={history.commit}
             onClose={() => setSelectedNodeId(null)}
+          />
+        )}
+        {showHistory && workflowId && (
+          <VersionDrawer
+            workflowId={workflowId}
+            isStarter={isStarter}
+            dirty={dirty}
+            reloadToken={historyEpoch}
+            comparison={comparison}
+            onCompare={setComparison}
+            onRestored={adoptRestored}
+            onClose={() => {
+              setComparison(null);
+              setShowHistory(false);
+            }}
           />
         )}
       </div>
