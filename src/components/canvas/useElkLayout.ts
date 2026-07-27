@@ -22,12 +22,14 @@ import ElkWorker from 'elkjs/lib/elk-worker.min.js?worker';
 const DEFAULT_NODE = { width: 240, height: 64 };
 
 /**
- * Direction is top-to-bottom to match the migration's vertical column and the
- * DAG's natural flow.
+ * Everything except the direction, which the caller picks from the space the
+ * canvas actually has (`layoutDirection.ts`) — top-to-bottom matches the
+ * migration's vertical column, left-to-right uses the width of a landscape
+ * window. Spacing here is mirrored by the direction estimate; keep them in
+ * step.
  */
 const LAYOUT_OPTIONS: Record<string, string> = {
   'elk.algorithm': 'layered',
-  'elk.direction': 'DOWN',
   'elk.layered.spacing.nodeNodeBetweenLayers': '64',
   'elk.spacing.nodeNode': '48',
   'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
@@ -60,7 +62,11 @@ export function useElkLayout() {
   );
 
   const layout = useCallback(
-    async (nodes: LayoutNode[], edges: LayoutEdge[]): Promise<ElkLayoutResult> => {
+    async (
+      nodes: LayoutNode[],
+      edges: LayoutEdge[],
+      direction: 'DOWN' | 'RIGHT' = 'DOWN',
+    ): Promise<ElkLayoutResult> => {
       if (!elkRef.current) {
         elkRef.current = new ELK({
           workerFactory: () => new ElkWorker(),
@@ -69,7 +75,7 @@ export function useElkLayout() {
 
       const graph: ElkNode = {
         id: 'root',
-        layoutOptions: LAYOUT_OPTIONS,
+        layoutOptions: { ...LAYOUT_OPTIONS, 'elk.direction': direction },
         children: nodes.map((n) => ({
           id: n.id,
           width: n.measured?.width ?? DEFAULT_NODE.width,

@@ -103,8 +103,16 @@ function LintBadge({ errors, warnings }: { errors: string[]; warnings: string[] 
   );
 }
 
+/** Handles sit across the flow direction, so edges leave and arrive on the
+ *  sides elk actually stacked the layers along. */
+const HANDLE_SIDES = {
+  vertical: { target: Position.Top, source: Position.Bottom },
+  horizontal: { target: Position.Left, source: Position.Right },
+} as const;
+
 export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
   const meta = nodeTypeMeta(data.nodeType);
+  const handles = HANDLE_SIDES[data.orientation ?? 'vertical'];
   const Icon = meta.icon;
   const lint = data.lint;
 
@@ -144,7 +152,7 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
             : undefined
       }
     >
-      <Handle type="target" position={Position.Top} className={HANDLE_CLASS} />
+      <Handle type="target" position={handles.target} className={HANDLE_CLASS} />
 
       <div className="flex items-center gap-3">
         <div
@@ -243,7 +251,7 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
         </div>
       )}
 
-      <Handle type="source" position={Position.Bottom} className={HANDLE_CLASS} />
+      <Handle type="source" position={handles.source} className={HANDLE_CLASS} />
     </div>
   );
 }
