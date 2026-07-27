@@ -89,6 +89,42 @@ pub fn sequence_checkpoint_record(
     Ok(merged.len() as u32)
 }
 
+/// Replace the (feature, node) checkpoint wholesale — the row becomes
+/// exactly `landed_task_ids` + `anchor_sha`, and `None` *clears* the
+/// anchor rather than leaving it.
+///
+/// Where `sequence_checkpoint_record` only ever grows the checkpoint,
+/// this is the one write that can shrink it, which is what a discarded
+/// attempt needs: the rollback moves the branch back, and a checkpoint
+/// still naming that attempt's commits would tell the next one to
+/// `reset --hard` onto work that no longer exists as anything but a
+/// pinned ref. One statement rather than clear-then-record, so a crash
+/// mid-rewind cannot drop an *earlier* attempt's merged prefix.
+pub fn sequence_checkpoint_set(
+    adapter: &SqliteAdapter,
+    feature_id: &FeatureId,
+    step_id: &str,
+    landed_task_ids: &[String],
+    anchor_sha: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
+    let json = serde_json::to_string(landed_task_ids).map_err(|e| e.to_string())?;
+    let anchor = anchor_sha
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty());
+    let conn = adapter.conn.lock()?;
+    conn.execute(
+        "INSERT INTO sequence_checkpoints
+             (feature_id, step_id, landed_task_ids, anchor_sha, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(feature_id, step_id)
+         DO UPDATE SET landed_task_ids = ?3, anchor_sha = ?4, updated_at = ?5",
+        params![feature_id.0, step_id, json, anchor, now],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Delete the (feature, node) checkpoint — called when the step finally
 /// completes, because a stale skip-list would silently exempt tasks
 /// from a future full re-run.

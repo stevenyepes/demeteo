@@ -38,12 +38,15 @@ impl ExecutionDriver {
     ///   plan; when it comes from an artifact, a gate redirect may have
     ///   revised the spec in the meantime, so re-reading picks that up.
     ///
-    /// Cutting across the ladder: whenever `resume` carries landed tasks, the
-    /// **cached** plan wins over re-resolving. A checkpoint identifies work
-    /// by task id, so a plan whose ids differ from the one that produced it
-    /// matches nothing — and a planner-sourced plan re-decomposed from
-    /// scratch produces exactly that. Re-planning would keep the landed
-    /// commits but re-pay for every one of them.
+    /// Cutting across the ladder, and only for **planner-sourced** steps:
+    /// when `resume` carries landed tasks, the cached plan wins over
+    /// re-resolving. A checkpoint identifies work by task id, so a plan whose
+    /// ids differ from the one that produced it matches nothing — and a
+    /// planner pass re-decomposed from scratch produces exactly that.
+    /// Re-planning would keep the landed commits but re-pay for every one of
+    /// them. A `task_list_from` step needs no such rescue (its ids are the
+    /// upstream artifact's, stable across a re-read) and must not get one, or
+    /// attempt 2+ would stop seeing gate revisions.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn resolve_task_plan(
         &mut self,
@@ -103,12 +106,24 @@ impl ExecutionDriver {
 
         // A checkpoint names the work it is skipping by task id, so this
         // attempt has to speak the same ids as the attempt that landed it.
-        // Re-reading an artifact usually does (the upstream step's output is
-        // stable), but a *planner* pass re-decomposes from scratch and its
-        // ids are new — the checkpoint would then match nothing and every
-        // landed task would be re-implemented on top of itself. The cached
-        // plan is the one those ids came from.
-        let cached_plan: Option<TaskPlan> = if resume.landed_ids().is_empty() {
+        // A *planner* pass re-decomposes from scratch and its ids are new,
+        // so the checkpoint would match nothing and every landed task would
+        // be re-implemented on top of itself. The cached plan is the one
+        // those ids came from, so it wins for planner-sourced steps.
+        //
+        // Deliberately *not* extended to `task_list_from` steps. Their ids
+        // come from an upstream artifact and are stable across a re-read, so
+        // the checkpoint keeps matching — and re-reading is load-bearing: a
+        // gate redirect may have revised the task list since the attempt that
+        // checkpointed, and preferring the cache would drop that revision on
+        // the floor with nothing in the log to say so. Stability is the
+        // reason to use the cache; where the artifact already provides it,
+        // the artifact is the fresher source.
+        let planner_sourced = !step_conf
+            .task_list_from
+            .as_ref()
+            .is_some_and(|s| !s.0.is_empty());
+        let cached_plan: Option<TaskPlan> = if resume.landed_ids().is_empty() || !planner_sourced {
             None
         } else {
             self.features
@@ -227,6 +242,22 @@ impl ExecutionDriver {
         let landed = resume.landed_ids();
         if landed.is_empty() {
             return plan;
+        }
+        // Ids that name no task in this plan buy nothing: the work stays on
+        // the branch (or gets restored) but every task re-runs on top of it.
+        // Silent before — the `remaining` count below looks identical to a
+        // healthy resume — and it is the shape that sends a 25-task step
+        // through 25 agents it had already paid for, so it says so.
+        if !plan.tasks.iter().any(|t| landed.contains(&t.id)) {
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_id,
+                landed = landed.len(),
+                tasks = plan.tasks.len(),
+                "sequence step: the checkpoint's landed task ids match nothing in this plan, so \
+                 every task will re-run over work that is already committed — the plan was \
+                 likely re-decomposed with fresh ids"
+            );
         }
         let mut filtered = apply_landed_checkpoint(plan, landed);
         // The checkpoint exists exactly because a prefix landed — so even

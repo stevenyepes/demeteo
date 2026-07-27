@@ -48,6 +48,10 @@ pub(crate) mod tasks;
 #[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/disposition.rs"]
 mod disposition_tests;
 
+#[cfg(test)]
+#[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/checkpoint.rs"]
+mod checkpoint_tests;
+
 /// What happened to the feature branch on the way out of a failed sequence
 /// step. Folded into the stored error message, because the user has to know
 /// the branch's state before they retry or ship — each variant leaves it
@@ -98,20 +102,59 @@ impl CheckpointResume {
             Self::Merged { landed_ids } | Self::Restore { landed_ids, .. } => landed_ids,
         }
     }
+
+    /// The checkpoint row this resume was read from — what the row has to
+    /// be put back to when the attempt that grew it is discarded.
+    ///
+    /// [`Self::Merged`] rewinds to an anchor-less row on purpose: the
+    /// prefix is on the feature branch, so "skip these ids, touch nothing"
+    /// is the whole instruction, and an anchor would only invite a restore
+    /// nobody needs. The next `resolve_checkpoint_resume` reads that row
+    /// back as `Merged`, so the rewind is idempotent.
+    fn as_stored(&self) -> (&[String], Option<&str>) {
+        match self {
+            Self::None => (&[], None),
+            Self::Merged { landed_ids } => (landed_ids, None),
+            Self::Restore { landed_ids, sha } => (landed_ids, Some(sha.as_str())),
+        }
+    }
 }
 
-/// Whether an `ExecutionPort` error means the command never reached a
-/// verdict (the machine was unreachable, or we stopped waiting) as opposed
-/// to running and exiting non-zero.
+/// What a rollback should do to the landed checkpoint.
 ///
-/// The distinction decides real behaviour here, not just a log line:
-/// `merge-base --is-ancestor` answers "no" with exit 1, so a bare
-/// `is_err()` would read a dropped SSH channel as a confident "not
-/// merged" — and act on it by resetting the worktree backwards past work
-/// that *was* merged. An unreachable machine has to mean "unknown".
-fn probe_inconclusive(err: &str) -> bool {
-    err.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX)
-        || err.starts_with(crate::ports::execution::TIMEOUT_ERROR_PREFIX)
+/// Every caller of [`ExecutionDriver::cleanup_and_rollback`] is discarding
+/// this attempt, so the default is [`Self::RewindTo`]: the checkpoint moves
+/// back with the branch, to exactly the row this attempt started from. The
+/// one exception states itself.
+pub(crate) enum CheckpointDisposition<'a> {
+    /// Put the checkpoint back to the state this attempt found it in.
+    RewindTo(&'a CheckpointResume),
+    /// Leave this attempt's checkpoint standing.
+    ///
+    /// Only for the mid-list failure whose prefix *merge* failed: the tasks
+    /// finished and their commits are pinned, so the next attempt restoring
+    /// and resuming from them beats re-running and re-paying for them. The
+    /// rollback here is about the feature branch, not about disowning the
+    /// work.
+    Keep,
+}
+
+/// Read a `git merge-base <anchor> <base>` result as a verdict on whether
+/// the anchor is already contained in the base.
+///
+/// The question is deliberately asked in a form whose answer arrives on
+/// **stdout**. `merge-base --is-ancestor` puts its verdict in the exit code
+/// — `0` yes, `1` no, `128` "git could not answer" — and `ExecutionPort`
+/// flattens every non-zero exit into the same bare-stderr `Err`, so a
+/// corrupt object or a vanished ref would be indistinguishable from a
+/// confident "no" and would send the caller down the arm that resets a
+/// worktree backwards. Asking for the merge base itself removes the class:
+/// git prints it and exits 0, or it fails and we know nothing. Every `Err`,
+/// transport or otherwise, is then honestly "unknown" — no error-string
+/// classification required.
+fn anchor_is_merged(merge_base_stdout: &str, anchor: &str) -> bool {
+    let base = merge_base_stdout.trim();
+    !base.is_empty() && base.eq_ignore_ascii_case(anchor.trim())
 }
 
 impl FailureDisposition {
@@ -377,7 +420,12 @@ impl ExecutionDriver {
             // continue-and-report intent, adapted to ordered tasks — the
             // tail may depend on the failed task, so it is not run, but the
             // completed prefix is kept). Cancellation is not a failure:
-            // the user asked to stop, so the branch rolls back as before.
+            // the user asked to stop, so the branch rolls back as before —
+            // and, since V35, so does the checkpoint the task loop grew on
+            // the way here. Without that rewind, "stop" would leave a resume
+            // point that restores the stopped attempt's commits, which is
+            // the opposite of what the rollback below is for.
+            let mut checkpoint = CheckpointDisposition::RewindTo(&resume);
             if !*self.cancel_watch.borrow() && !landed_this_attempt.is_empty() {
                 match self
                     .checkpoint_landed_prefix(&wt_id, &wt_path, &machine_str, &landed_this_attempt)
@@ -438,18 +486,34 @@ impl ExecutionDriver {
                             .await;
                     }
                     Err(e) => {
+                        // The merge failed, so the prefix is still on the step
+                        // branch — but it is finished, paid-for work, and the
+                        // task loop already pinned and recorded it. Keep that
+                        // claim: the next attempt restores those commits and
+                        // runs only the remainder, which is strictly better
+                        // than re-running them into the same conflict. This is
+                        // the one rollback that is about the feature branch
+                        // rather than about disowning the attempt.
                         tracing::warn!(
                             feature_id = %self.f_id,
                             step_id = %step_exec.step_id.0,
                             error = %e,
                             "sequence step: could not merge the completed task prefix; \
-                             falling back to a full rollback"
+                             falling back to a full rollback, keeping the prefix pinned for \
+                             the next attempt to restore"
                         );
+                        checkpoint = CheckpointDisposition::Keep;
                     }
                 }
             }
             let rolled_back = self
-                .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                .cleanup_and_rollback(
+                    &wt_id,
+                    &machine_str,
+                    &base_sha,
+                    &step_exec.step_id.0,
+                    checkpoint,
+                )
                 .await;
             return self
                 .fail_sequence_step(
@@ -486,7 +550,13 @@ impl ExecutionDriver {
             .collect();
         if !never_produced.is_empty() {
             let rolled_back = self
-                .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                .cleanup_and_rollback(
+                    &wt_id,
+                    &machine_str,
+                    &base_sha,
+                    &step_exec.step_id.0,
+                    CheckpointDisposition::RewindTo(&resume),
+                )
                 .await;
             let names = never_produced.join(", ");
             return self
@@ -534,7 +604,13 @@ impl ExecutionDriver {
                     .kill(&format!("{}-verifier", self.f_id.as_str()))
                     .await;
                 let rolled_back = self
-                    .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                    .cleanup_and_rollback(
+                        &wt_id,
+                        &machine_str,
+                        &base_sha,
+                        &step_exec.step_id.0,
+                        CheckpointDisposition::RewindTo(&resume),
+                    )
                     .await;
                 // A failed rollback leaves the rejected attempt's commits on
                 // the feature branch. Fold the warning into the verdict so it
@@ -605,7 +681,13 @@ impl ExecutionDriver {
                 ),
             });
             let rolled_back = self
-                .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                .cleanup_and_rollback(
+                    &wt_id,
+                    &machine_str,
+                    &base_sha,
+                    &step_exec.step_id.0,
+                    CheckpointDisposition::RewindTo(&resume),
+                )
                 .await;
             return self
                 .fail_sequence_step(
@@ -673,7 +755,13 @@ impl ExecutionDriver {
                 // to undo it — otherwise a retry starts from a branch carrying
                 // an empty merge commit.
                 let rolled_back = self
-                    .cleanup_and_rollback(&wt_id, &machine_str, &base_sha)
+                    .cleanup_and_rollback(
+                        &wt_id,
+                        &machine_str,
+                        &base_sha,
+                        &step_exec.step_id.0,
+                        CheckpointDisposition::RewindTo(&resume),
+                    )
                     .await;
                 return self
                     .fail_sequence_step(
@@ -849,17 +937,6 @@ impl ExecutionDriver {
         }
     }
 
-    /// Preserve the completed task prefix after a mid-list failure: reset the
-    /// worktree to the last completed task's commit — discarding the failed
-    /// task's debris, both uncommitted writes and any commits its agent made
-    /// itself — and merge the step's task branch into the feature branch.
-    ///
-    /// Only the *merge conflict* recovery is deliberately absent here. On the
-    /// success path a conflicting merge is worth an agent turn, because the
-    /// worktree holds a complete verified implementation. Here the step is
-    /// already failing; spending more agent budget to salvage a partial
-    /// prefix inverts that trade, so a conflict falls back to the ordinary
-    /// full rollback in the caller.
     /// Decide what a previous attempt's landed prefix means for this one.
     ///
     /// Runs against the main repo, before any worktree exists, because
@@ -869,11 +946,13 @@ impl ExecutionDriver {
     /// The two recovery modes are told apart by a git question rather than
     /// by remembering which code path wrote the row — the row itself cannot
     /// say, since the mid-list failure path and the task loop both write
-    /// one and only the former merges. `merge-base --is-ancestor` asks the
-    /// repo directly, and the repo is the thing that actually knows.
+    /// one and only the former merges. `git merge-base` asks the repo
+    /// directly, and the repo is the thing that actually knows.
     ///
     /// Every uncertainty resolves to [`CheckpointResume::None`]: a full
-    /// re-run wastes money, while a wrong skip loses work.
+    /// re-run wastes money, while a wrong skip loses work. See
+    /// [`anchor_is_merged`] for why the probe is shaped to put its verdict
+    /// on stdout rather than in an exit code.
     async fn resolve_checkpoint_resume(
         &self,
         step_exec: &StepExecution,
@@ -936,7 +1015,7 @@ impl ExecutionDriver {
             .run_command(
                 machine_str,
                 &format!(
-                    "git -C {} merge-base --is-ancestor {} {}",
+                    "git -C {} merge-base {} {}",
                     repo,
                     safe_anchor,
                     paths::shell_escape_posix(base_sha),
@@ -944,18 +1023,24 @@ impl ExecutionDriver {
             )
             .await
         {
-            // Exit 0: the anchor is behind the branch tip, so the merge
-            // already happened and the fresh worktree carries the prefix.
-            Ok(_) => CheckpointResume::Merged {
+            // The merge base *is* the anchor: it is contained in the branch
+            // tip, so the merge already happened and the fresh worktree
+            // carries the prefix.
+            Ok(out) if anchor_is_merged(&out, &anchor) => CheckpointResume::Merged {
                 landed_ids: checkpoint.landed_task_ids,
             },
-            // Exit 1: a real "no" — the prefix lives on the step branch
-            // alone. An attempt was interrupted between committing a task
-            // and merging its prefix.
-            Err(e) if !probe_inconclusive(&e) => CheckpointResume::Restore {
+            // A different (earlier) merge base — the prefix lives on the
+            // step branch alone. An attempt was interrupted between
+            // committing a task and merging its prefix.
+            Ok(_) => CheckpointResume::Restore {
                 landed_ids: checkpoint.landed_task_ids,
                 sha: anchor,
             },
+            // git never answered: unreachable machine, timeout, corrupt
+            // object, unrelated histories. All of them mean the same thing
+            // here, and it is not "not merged" — a wrong `Restore` resets a
+            // worktree backwards past work that *was* merged, where a wrong
+            // `None` only re-runs.
             Err(e) => {
                 tracing::warn!(
                     feature_id = %self.f_id,
@@ -1049,26 +1134,103 @@ impl ExecutionDriver {
 
     /// Spend the checkpoint: drop the row and unpin the prefix.
     ///
-    /// Called wherever the prefix stops being the thing a resume should
-    /// restore — the step completed, or the branch was rolled back past it.
-    /// The row goes first: a leftover pinned commit is inert, while a
-    /// surviving row pointing at an unpinned commit is a resume that can
-    /// fail its `cat-file` probe for no reason.
+    /// Called when the prefix stops being the thing a resume should restore
+    /// because the step *completed*. The row goes first: a leftover pinned
+    /// commit is inert, while a surviving row pointing at an unpinned commit
+    /// is a resume that can fail its `cat-file` probe for no reason.
     async fn clear_sequence_checkpoint(&self, step_id: &str, machine_str: &str) {
         let _ = self.features.sequence_checkpoint_clear(&self.f_id, step_id);
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} update-ref -d {}",
-                    paths::shell_escape_posix(&self.target_dir),
-                    paths::shell_escape_posix(&self.checkpoint_ref(step_id)),
-                ),
-            )
-            .await;
+        self.unpin_checkpoint_prefix(step_id, machine_str).await;
     }
 
+    /// Point the checkpoint ref at `sha`, or delete it when `sha` is `None`.
+    async fn move_checkpoint_ref(&self, step_id: &str, machine_str: &str, sha: Option<&str>) {
+        let git_ref = paths::shell_escape_posix(&self.checkpoint_ref(step_id));
+        let repo = paths::shell_escape_posix(&self.target_dir);
+        let cmd = match sha {
+            Some(sha) => format!(
+                "git -C {} update-ref {} {}",
+                repo,
+                git_ref,
+                paths::shell_escape_posix(sha)
+            ),
+            None => format!("git -C {} update-ref -d {}", repo, git_ref),
+        };
+        let _ = self.exec.run_command(machine_str, &cmd).await;
+    }
+
+    /// Unpin the prefix entirely.
+    async fn unpin_checkpoint_prefix(&self, step_id: &str, machine_str: &str) {
+        self.move_checkpoint_ref(step_id, machine_str, None).await;
+    }
+
+    /// Put the checkpoint back to the row this attempt started from.
+    ///
+    /// The counterpart to `cleanup_and_rollback`'s branch reset, and the
+    /// reason the two are called together: a rollback that moved the feature
+    /// branch back while leaving the checkpoint pointing at this attempt's
+    /// commits would not be a rollback at all. The next attempt reads that
+    /// row, finds an anchor that is not an ancestor of the (rewound) branch,
+    /// and `reset --hard`s the fresh worktree onto exactly the commits the
+    /// rollback set out to discard — so a verifier's rejection, or a cancel,
+    /// would quietly reinstate the work it rejected.
+    ///
+    /// Rewinding to [`CheckpointResume`] rather than clearing outright is
+    /// what keeps an *earlier* attempt's merged prefix: that work is on the
+    /// feature branch, `base_sha` was captured after it, and this attempt
+    /// never had any claim on it.
+    ///
+    /// The ref moves back too. The task loop advanced it once per landed
+    /// task, so leaving it at the tip would keep this attempt's discarded
+    /// commits reachable forever — and, worse, would survive a later
+    /// `Merged` rewind that expects no pin at all.
+    async fn rewind_checkpoint_to(
+        &self,
+        step_id: &str,
+        machine_str: &str,
+        resume: &CheckpointResume,
+    ) {
+        let (landed_ids, anchor) = resume.as_stored();
+        if landed_ids.is_empty() {
+            self.clear_sequence_checkpoint(step_id, machine_str).await;
+        } else {
+            if let Err(e) = self.features.sequence_checkpoint_set(
+                &self.f_id,
+                step_id,
+                landed_ids,
+                anchor,
+                crate::paths::now_ms(),
+            ) {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_id,
+                    error = %e,
+                    "sequence step: could not rewind the landed checkpoint after a rollback; \
+                     the next attempt may restore commits this one discarded"
+                );
+            }
+            self.move_checkpoint_ref(step_id, machine_str, anchor).await;
+        }
+        tracing::info!(
+            feature_id = %self.f_id,
+            step_id = %step_id,
+            landed = landed_ids.len(),
+            anchor = anchor.unwrap_or("-"),
+            "sequence step: rewound the landed checkpoint with the branch"
+        );
+    }
+
+    /// Preserve the completed task prefix after a mid-list failure: reset the
+    /// worktree to the last completed task's commit — discarding the failed
+    /// task's debris, both uncommitted writes and any commits its agent made
+    /// itself — and merge the step's task branch into the feature branch.
+    ///
+    /// Only the *merge conflict* recovery is deliberately absent here. On the
+    /// success path a conflicting merge is worth an agent turn, because the
+    /// worktree holds a complete verified implementation. Here the step is
+    /// already failing; spending more agent budget to salvage a partial
+    /// prefix inverts that trade, so a conflict falls back to the ordinary
+    /// full rollback in the caller.
     async fn checkpoint_landed_prefix(
         &self,
         wt_id: &str,
@@ -1129,20 +1291,39 @@ impl ExecutionDriver {
     /// locked file — the case `provision_subtask_worktree` explicitly warns
     /// about), the reset fails and the step's commits are still on the branch.
     ///
-    /// **Deliberately does not clear the landed checkpoint**, which looks
-    /// like an omission and is not. The two touch disjoint commits: this
-    /// resets the *feature* branch to where this attempt found it, while the
-    /// checkpoint anchors commits on the *step* branch. And `base_sha` is
-    /// captured after any earlier attempt's prefix merged, so the rollback
-    /// can never move the branch back past work the checkpoint claims — the
-    /// row stays true either way. Dropping it here would instead re-run, and
-    /// re-pay for, every task an earlier attempt finished.
+    /// **The checkpoint rolls back with the branch**, per `checkpoint`. That
+    /// is not tidying: since V35 the row does not merely say *skip these
+    /// ids*, it names a commit the next attempt will `reset --hard` onto. A
+    /// rollback that moved the branch back and left the row alone would hand
+    /// the retry the very commits it just discarded — a verifier's rejection
+    /// reinstated, an explicit cancel undone.
     ///
-    /// `cleanup_sequence_worktree` does delete the step branch, but the
-    /// checkpoint ref keeps those commits reachable, so the next attempt can
-    /// still restore them.
-    async fn cleanup_and_rollback(&self, wt_id: &str, machine_str: &str, base_sha: &str) -> bool {
+    /// [`CheckpointDisposition::RewindTo`] is the answer rather than a clear,
+    /// because only *this attempt's* claim is being dropped: an earlier
+    /// attempt's merged prefix is on the feature branch, `base_sha` was
+    /// captured after it, and re-running it would be re-paying for work this
+    /// rollback never touched. See [`ExecutionDriver::rewind_checkpoint_to`].
+    ///
+    /// `cleanup_sequence_worktree` does delete the step branch; whatever the
+    /// rewound checkpoint still pins stays reachable through its ref, so the
+    /// next attempt can restore it.
+    async fn cleanup_and_rollback(
+        &self,
+        wt_id: &str,
+        machine_str: &str,
+        base_sha: &str,
+        step_id: &str,
+        checkpoint: CheckpointDisposition<'_>,
+    ) -> bool {
         self.cleanup_sequence_worktree(wt_id).await;
+
+        match checkpoint {
+            CheckpointDisposition::RewindTo(resume) => {
+                self.rewind_checkpoint_to(step_id, machine_str, resume)
+                    .await
+            }
+            CheckpointDisposition::Keep => {}
+        }
 
         let reset = self
             .exec
