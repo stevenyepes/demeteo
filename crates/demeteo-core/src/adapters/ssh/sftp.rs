@@ -165,23 +165,21 @@ fn entry_from_stat(path: &Path, stat: &FileStat) -> SftpEntry {
     }
 }
 
-/// Filter `.`/`..`, map, and order: directories first, then by name. Pure.
+/// Map and order: directories first, then by name. Pure.
+///
+/// Dot entries need no filtering here. `Sftp::readdir` drops `.` and `..`
+/// before it joins them onto the directory path (ssh2 0.9.5, `src/sftp.rs`),
+/// so they never reach us — and the guard this replaced could not have caught
+/// them regardless, because it compared `Path::file_name`, which resolves
+/// `dir/.` to `"dir"` and `dir/..` to `None` and so never yields either name.
+/// A correct guard isn't even expressible at this layer: `readdir` hands back
+/// already-joined paths, so the raw filename it would have to test is gone by
+/// the time we see it. The invariant belongs upstream, where it already lives.
 fn entries_from_readdir(raw: Vec<(PathBuf, FileStat)>) -> Vec<SftpEntry> {
-    let mut list = Vec::new();
-    for (p, stat) in raw {
-        let entry = entry_from_stat(&p, &stat);
-
-        // Kept verbatim from the pre-split code, but note it is a belt-and-
-        // braces guard rather than the thing keeping dot entries out of the
-        // browser: `Sftp::readdir` already drops `.`/`..` upstream, and
-        // `Path::file_name` never yields either name anyway (it resolves
-        // `dir/.` to "dir" and `dir/..` to `None`). See the tests below.
-        if entry.name == "." || entry.name == ".." {
-            continue;
-        }
-
-        list.push(entry);
-    }
+    let mut list: Vec<SftpEntry> = raw
+        .iter()
+        .map(|(p, stat)| entry_from_stat(p, stat))
+        .collect();
 
     list.sort_by(|a, b| {
         if a.is_dir != b.is_dir {
@@ -229,14 +227,15 @@ mod tests {
         )
     }
 
-    /// `readdir` reports `.` and `..` on most servers and surfacing them would
-    /// put bogus rows in the file browser — but what keeps them out is
-    /// `Sftp::readdir`, which drops both before we ever see them. The
-    /// name-based guard here can never fire, because `Path::file_name`
-    /// resolves `dir/.` to "dir" and `dir/..` to `None`. Pin that so nobody
-    /// deletes the upstream reliance believing this guard covers it.
+    /// Dot entries are kept out of the file browser by `Sftp::readdir`, which
+    /// drops `.` and `..` before we ever see them — not by anything here. This
+    /// pins what happens if that upstream filter ever stops: the paths do NOT
+    /// get skipped, they surface as bogus rows named after the parent
+    /// directory (or unnamed), because `Path::file_name` resolves `dir/.` to
+    /// "dir" and `dir/..` to `None`. That is why the reliance is load-bearing
+    /// and why a name-based guard at this layer could never have covered it.
     #[test]
-    fn the_dot_guard_never_fires_because_file_name_never_yields_a_dot() {
+    fn dot_paths_would_surface_as_bogus_rows_if_readdir_stopped_dropping_them() {
         let entries = entries_from_readdir(vec![
             (PathBuf::from("/remote/."), stat(DIR_PERM, None, None)),
             (PathBuf::from("/remote/.."), stat(DIR_PERM, None, None)),
@@ -245,7 +244,7 @@ mod tests {
         assert_eq!(
             entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
             vec!["", "remote", "a.txt"],
-            "dot paths pass the guard with a resolved or empty name",
+            "dot paths survive with a resolved or empty name",
         );
     }
 
