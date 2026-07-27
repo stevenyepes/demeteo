@@ -123,6 +123,11 @@ pub enum ScheduleError {
     /// Nothing active, nothing newly ready/skipped, pending nodes remain
     /// (see module docs). Carries the stuck node ids.
     Deadlock(Vec<StepId>),
+    /// A decided skip could not be made durable. Not a scheduling decision
+    /// but a scheduling *blocker*: the driver re-derives its state view from
+    /// the persisted rows, so an unwritten skip is re-decided every iteration
+    /// and the run can never advance past it.
+    UnpersistableSkip { node: String, error: String },
 }
 
 impl std::fmt::Display for ScheduleError {
@@ -140,6 +145,11 @@ impl std::fmt::Display for ScheduleError {
                     .map(|s| s.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
+            ),
+            ScheduleError::UnpersistableSkip { node, error } => write!(
+                f,
+                "could not record the skip of node '{node}' ({error}) — the run would \
+                 re-decide it forever"
             ),
         }
     }

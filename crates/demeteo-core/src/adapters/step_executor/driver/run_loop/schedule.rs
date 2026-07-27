@@ -94,6 +94,25 @@ pub(crate) fn redirect_reset_set(graph: &WorkflowGraph, target: &StepId) -> Vec<
         .collect()
 }
 
+/// The `step_executions` row a skip must be recorded against.
+///
+/// Split out from [`ExecutionDriver::persist_skip`] so the "no row" decision
+/// is testable without a fully wired driver — and because it is a *decision*,
+/// not a lookup: returning `Ok(None)` here (what the code used to do
+/// implicitly) hands the run loop a skip it will re-decide on every following
+/// iteration.
+pub(crate) fn skip_target<'a>(
+    step_execs: &'a [StepExecution],
+    node_id: &StepId,
+) -> Result<&'a StepExecution, String> {
+    step_execs
+        .iter()
+        .find(|s| s.step_id == *node_id)
+        .ok_or_else(|| {
+            format!("no step_executions row for node '{node_id}' to record its skip against")
+        })
+}
+
 impl ExecutionDriver {
     /// Persist a redirect rewind: park `target` and its descendants back
     /// at `pending` so the next ready-set evaluation re-schedules them,
@@ -133,16 +152,22 @@ impl ExecutionDriver {
     /// Persist one scheduler-decided skip (durable before the loop acts),
     /// carrying the reason in `error_message` — the dim-with-tooltip
     /// rendering source (PRD §6.1).
+    ///
+    /// **Fallible on purpose.** The run loop re-derives its whole state view
+    /// from these rows every iteration, so a skip that doesn't land is not a
+    /// dropped notification — it is a decision the next evaluation will make
+    /// again, from the same inputs, forever, with nothing awaited in between.
+    /// Both ways that can happen (no row for the node, a repository error)
+    /// return `Err` so the caller can fail the run loudly, exactly as the
+    /// *ready* path already does for a node with no row.
     pub(crate) fn persist_skip(
         &self,
         step_execs: &[StepExecution],
         node_id: &StepId,
         reason: &str,
-    ) {
-        let Some(row) = step_execs.iter().find(|s| s.step_id == *node_id) else {
-            return;
-        };
-        super::super::super::updates::update_step_status(
+    ) -> Result<(), String> {
+        let row = skip_target(step_execs, node_id)?;
+        super::super::super::updates::try_update_step_status(
             &*self.features,
             &*self.notif,
             row,
@@ -155,7 +180,7 @@ impl ExecutionDriver {
             Some(reason.to_string()),
             None,
             None,
-        );
+        )
     }
 }
 

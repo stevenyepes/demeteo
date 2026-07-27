@@ -176,3 +176,38 @@ fn redirect_to_unknown_node_resets_nothing() {
     let g = graph(&["a"], &[]);
     assert!(redirect_reset_set(&g, &StepId::from("ghost")).is_empty());
 }
+
+#[test]
+fn a_skip_with_no_row_is_an_error_not_a_silent_no_op() {
+    // The run loop `continue`s after persisting skips, without awaiting
+    // anything. A skip that quietly fails to persist is therefore re-decided
+    // identically on every following iteration — a hot spin with no exit. The
+    // *ready* path already fails loudly for a node with no row; this is the
+    // same decision for the skip path.
+    let rows = vec![exec("a", 0, "pending", None)];
+    let err = skip_target(&rows, &StepId::from("ghost"))
+        .expect_err("a node with no row cannot record a skip");
+    assert!(err.contains("ghost"), "the message names the node: {err}");
+    assert!(err.contains("step_executions"), "{err}");
+}
+
+#[test]
+fn a_skip_with_a_row_resolves_to_it() {
+    let rows = vec![exec("a", 0, "pending", None), exec("b", 1, "pending", None)];
+    let row = skip_target(&rows, &StepId::from("b")).expect("row b exists");
+    assert_eq!(row.step_id, StepId::from("b"));
+}
+
+#[test]
+fn an_unpersistable_skip_reads_as_a_run_blocker() {
+    use crate::adapters::step_executor::scheduler::ScheduleError;
+    let err = ScheduleError::UnpersistableSkip {
+        node: "check".into(),
+        error: "database is locked".into(),
+    };
+    let rendered = err.to_string();
+    assert!(rendered.contains("check"), "{rendered}");
+    assert!(rendered.contains("database is locked"), "{rendered}");
+    // The point of the message: this is why the run stopped, not a warning.
+    assert!(rendered.contains("forever"), "{rendered}");
+}
