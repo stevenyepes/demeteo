@@ -173,7 +173,14 @@ impl ExecutionDriver {
     /// died with "cargo: not found" — while the *implement* step sailed through,
     /// because the agent binary is resolved to an absolute path up front and so
     /// never needed `PATH` at all.
-    fn harness_shell_options(&self, wt_path: &str) -> crate::ports::execution::ShellOptions {
+    ///
+    /// `pub(crate)` because the `command` node type (P3.5) runs
+    /// user-authored shell for the same reason under the same
+    /// constraints — sharing the decision beats re-deriving it there.
+    pub(crate) fn harness_shell_options(
+        &self,
+        wt_path: &str,
+    ) -> crate::ports::execution::ShellOptions {
         crate::ports::execution::ShellOptions {
             cwd: Some(wt_path.to_string()),
             ..crate::ports::execution::ShellOptions::login_interactive()

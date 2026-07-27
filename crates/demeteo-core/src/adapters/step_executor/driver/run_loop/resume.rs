@@ -25,6 +25,13 @@
 //! * **unknown** (no recorded fingerprint / probe failed) — proceed;
 //!   missing telemetry must never block a run.
 //!
+//! The comparison is only *sound* for a node whose entire effect is the
+//! worktree, so the node type gets a say first: a handler answering
+//! [`ResumePolicy::AlwaysAsk`] (the `command` type's `idempotent: false`
+//! case — a deploy leaves no trace a fingerprint could see) parks
+//! unconditionally. The guard asks the registry rather than the node's
+//! kind, so a future type opts in without touching this file.
+//!
 //! Decision semantics on the parked gate: `approve` re-dispatches the
 //! node (the new attempt records the *current* fingerprint, so the
 //! blessed state becomes the new baseline); anything else — reject /
@@ -34,8 +41,9 @@
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::gate_waiter::GateWaiter;
+use crate::adapters::step_executor::registry::{NodeTypeRegistry, ResumePolicy};
 use crate::domain::ids::GateDecisionId;
-use crate::domain::models::{GateDecision, StepExecution};
+use crate::domain::models::{GateDecision, StepConfig, StepExecution};
 use crate::paths;
 use crate::ports::notification::DomainEvent;
 
@@ -54,37 +62,57 @@ pub(crate) enum GuardVerdict {
 impl ExecutionDriver {
     /// Run the guard for one watchdog-`interrupted` node. See the module
     /// docs for the decision table.
-    pub(crate) async fn resume_fingerprint_guard(&self, step_exec: &StepExecution) -> GuardVerdict {
+    pub(crate) async fn resume_fingerprint_guard(
+        &self,
+        step_exec: &StepExecution,
+        step_conf: &StepConfig,
+    ) -> GuardVerdict {
+        // Does the fingerprint get a vote at all? A node type that can act
+        // outside the worktree answers `AlwaysAsk` and skips straight to
+        // the gate — the fingerprint would say "unchanged" about a deploy
+        // that already went out.
+        let always_ask = NodeTypeRegistry::global()
+            .handler_for(&step_conf.kind)
+            .map(|h| h.resume_policy(step_conf))
+            == Some(ResumePolicy::AlwaysAsk);
+
         // The comparison baseline: the most recent attempt that recorded
         // a fingerprint. Rows predating P1.14 (or opened while the probe
         // failed) yield no baseline — proceed.
-        let recorded = match self.features.attempts_for_step(&step_exec.id) {
-            Ok(rows) => rows
-                .iter()
-                .rev()
-                .find_map(|a| a.workspace_fingerprint.clone()),
-            Err(_) => None,
+        let mismatch = if always_ask {
+            format!(
+                "Step '{}' was interrupted mid-run and is not safe to repeat \
+                 automatically",
+                step_exec.step_id.0
+            )
+        } else {
+            let recorded = match self.features.attempts_for_step(&step_exec.id) {
+                Ok(rows) => rows
+                    .iter()
+                    .rev()
+                    .find_map(|a| a.workspace_fingerprint.clone()),
+                Err(_) => None,
+            };
+            let Some(recorded) = recorded else {
+                return GuardVerdict::Proceed;
+            };
+            let Some(current) = self.current_workspace_fingerprint().await else {
+                return GuardVerdict::Proceed;
+            };
+            if recorded == current {
+                return GuardVerdict::Proceed;
+            }
+            format!(
+                "Workspace changed while the run was stopped \
+                 (recorded {recorded}, now {current})"
+            )
         };
-        let Some(recorded) = recorded else {
-            return GuardVerdict::Proceed;
-        };
-        let Some(current) = self.current_workspace_fingerprint().await else {
-            return GuardVerdict::Proceed;
-        };
-        if recorded == current {
-            return GuardVerdict::Proceed;
-        }
 
         tracing::warn!(
             feature_id = %self.f_id,
             step_id = %step_exec.step_id.0,
-            recorded = %recorded,
-            current = %current,
-            "workspace changed under an interrupted node; parking at the synthetic gate"
-        );
-        let mismatch = format!(
-            "Workspace changed while the run was stopped \
-             (recorded {recorded}, now {current})"
+            reason = %mismatch,
+            "interrupted node cannot be resumed blindly; parking at the synthetic gate"
         );
 
         // The watchdog usually created the synthetic row at boot; create

@@ -12,6 +12,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { Palette, NodeTypePicker, NODE_TYPE_MIME } from './Palette';
 import { WorkflowCanvas } from './WorkflowCanvas';
+import catalogFixture from './__fixtures__/node_catalog.json';
 import type { NodeTypeInfo } from './nodeCatalog';
 import type { WorkflowDefinitionV2 } from './types';
 
@@ -94,6 +95,23 @@ describe('Palette', () => {
 
     fireEvent.click(screen.getByText('Command'));
     expect(onSelect).toHaveBeenCalledWith(future);
+  });
+
+  it('offers the `command` type from the real registry, with no frontend edit', () => {
+    // The P3.5 acceptance test for real: `node_catalog.json` is emitted from
+    // the live Rust registry, so this fails if the type is ever registered
+    // without introducing itself — and it passed the day the type landed,
+    // with no change to `Palette.tsx` or `types.ts`.
+    const command = (catalogFixture as unknown as NodeTypeInfo[]).find(
+      (t) => t.kind === 'command',
+    );
+    expect(command).toBeTruthy();
+
+    const onSelect = vi.fn();
+    render(<Palette entries={[{ type: command! }]} onSelect={vi.fn().mockImplementation(onSelect)} />);
+    expect(screen.getByText('Command')).toBeTruthy();
+    // It produces something, so an edge may leave it (unlike `finalize`).
+    expect(command!.outputs.length).toBeGreaterThan(0);
   });
 
   it('disables a type at its instance cap and says why', () => {

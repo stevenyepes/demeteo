@@ -152,7 +152,7 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
         // blessing for the rest of this life.
         if step_exec.status == "interrupted" && !driver.resume_guard_done {
             driver.resume_guard_done = true;
-            match driver.resume_fingerprint_guard(step_exec).await {
+            match driver.resume_fingerprint_guard(step_exec, &step_conf).await {
                 resume::GuardVerdict::Proceed => {}
                 resume::GuardVerdict::Cancelled => {
                     driver.cancel_feature().await;

@@ -39,9 +39,12 @@ use crate::domain::models::workflow_v2::{
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-/// Node types the engine dispatches today. P1.6's `NodeTypeRegistry`
-/// becomes the authority; until then, boundary callers pass this.
-pub const CORE_NODE_TYPES: [&str; 5] = ["agent", "gate", "sequence", "sync", "finalize"];
+/// Node types the engine dispatches today. The authority is the
+/// `NodeTypeRegistry` (P1.6) — `node_lint::lint_definition` feeds it in
+/// from there, and a `registry.rs` test keeps this constant in lockstep;
+/// it survives as the pure domain module's default for callers that have
+/// no registry handy (tests, boundary code).
+pub const CORE_NODE_TYPES: [&str; 6] = ["agent", "gate", "sequence", "sync", "finalize", "command"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -86,7 +89,11 @@ impl LintFinding {
         }
     }
 
-    fn node_error(code: &'static str, node: &StepId, message: String) -> Self {
+    /// `pub(crate)` so a [`NodeHandler`](crate::adapters::step_executor::registry::NodeHandler)
+    /// can anchor its own per-type findings to a node (the `lint` seam,
+    /// PRD §5.2) without re-implementing the shape. Still crate-private:
+    /// `code` is a `&'static str` from this module's fixed vocabulary.
+    pub(crate) fn node_error(code: &'static str, node: &StepId, message: String) -> Self {
         Self {
             severity: LintSeverity::Error,
             code,
@@ -96,7 +103,9 @@ impl LintFinding {
         }
     }
 
-    fn node_warning(code: &'static str, node: &StepId, message: String) -> Self {
+    /// Peer of [`node_error`](Self::node_error) for advisory findings —
+    /// warnings never block a save (PRD §6.3).
+    pub(crate) fn node_warning(code: &'static str, node: &StepId, message: String) -> Self {
         Self {
             severity: LintSeverity::Warning,
             code,

@@ -35,7 +35,17 @@ pub struct WorkflowVersion {
     pub created_at: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+/// One step of a v1 workflow definition — the union of every node kind's
+/// settings, because v1 storage is a single `steps_json` blob with no
+/// per-kind shape. Fields not meaningful for a step's `kind` are ignored
+/// (`gate_class` on an agent step, `command` on a gate).
+///
+/// [`Default`] is derived so a construction site names only the fields it
+/// cares about (`StepConfig { id: .., kind: .., ..Default::default() }`).
+/// Adding a field for a new node type is otherwise a mechanical edit to
+/// every literal in the test suite, which is friction the extensibility
+/// seam (PRD §5.2) exists to remove.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct StepConfig {
     pub id: StepId,
     pub kind: String,
@@ -93,6 +103,58 @@ pub struct StepConfig {
     /// migration is required.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_list_from: Option<StepId>,
+
+    // ── `command` node fields (P3.5, Decision 8) ────────────────────────
+    //
+    // These live on `StepConfig` for the same reason `gate_class` and
+    // `task_list_from` do: v1 `steps_json` is still the only storage
+    // (v2 persistence is the P3.6 prerequisite), and `migrate_v1_to_v2`
+    // builds a node's opaque v2 `config` by serializing this struct — so
+    // a field that isn't here cannot survive a save. They are ignored on
+    // every other kind, and `skip_serializing_if` keeps them out of the
+    // migrated config of nodes that don't set them.
+    /// For a `command` step: the shell command to run, verbatim, in the
+    /// step's worktree. Required — a `command` node without it is a lint
+    /// error ([`CommandNodeHandler::lint`]).
+    ///
+    /// [`CommandNodeHandler::lint`]: crate::adapters::step_executor::steps::command::CommandNodeHandler
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// For a `command` step: **worktree-relative** working directory.
+    /// Unset runs at the worktree root. Absolute paths and `..` segments
+    /// are refused — the step's cwd may not leave the tree it was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// For a `command` step: names of environment variables forwarded
+    /// from Demeteo's own process environment into the command's shell.
+    ///
+    /// An *allowlist*, not a map: decision D2 (`EXECUTION_CONSISTENCY_PLAN`)
+    /// forbids a command inheriting ambient process state, so nothing
+    /// crosses unless the workflow author names it. Variables that aren't
+    /// set in the host process are skipped silently.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_allowlist: Vec<String>,
+    /// For a `command` step: wall-clock ceiling in seconds. Unset means
+    /// no ceiling. Expiry is classified `environment` (the process hung;
+    /// re-running the implementation cannot fix it), matching how an
+    /// agent turn's timeout is classified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// For a `command` step: whether re-running this command after an
+    /// interruption is safe (PRD §5.4 idempotency rule).
+    ///
+    /// `Some(true)` — a build, a test harness, a formatter: the P1.14
+    /// resume guard treats it like any other node (auto-resume when the
+    /// workspace fingerprint still matches).
+    ///
+    /// `Some(false)` / unset — a deploy, a publish, a migration: an
+    /// interrupted attempt **always** parks at the synthetic gate, because
+    /// the fingerprint only describes the worktree and can say nothing
+    /// about what the command did to the world outside it. Unset is
+    /// deliberately the cautious reading; the schema asks authors to
+    /// declare it explicitly and the node's lint warns when they don't.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotent: Option<bool>,
 }
 
 impl StepConfig {

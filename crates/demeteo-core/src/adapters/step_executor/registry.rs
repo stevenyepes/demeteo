@@ -46,6 +46,26 @@ pub(crate) enum CancelBehavior {
     Immediate,
 }
 
+/// Whether an interrupted dispatch of a node may be re-run automatically.
+///
+/// The P1.14 resume guard compares the workspace fingerprint recorded at
+/// the interrupted attempt's start against the live worktree, and
+/// re-dispatches when they match. That inference is only sound for a node
+/// whose entire effect *is* the worktree. A node with side effects outside
+/// it — the `command` type's `idempotent: false` case (a deploy, a
+/// publish, a migration) — leaves no fingerprint to compare, so it must
+/// ask a human instead of guessing (PRD §5.4, idempotency rule).
+///
+/// Asked per node, not per type, because the answer is config-dependent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResumePolicy {
+    /// Re-dispatch when the workspace fingerprint still matches (the
+    /// default, and what every agent-shaped node wants).
+    WhenUnchanged,
+    /// Always park at the synthetic gate, fingerprint or not.
+    AlwaysAsk,
+}
+
 /// The coarse typed ports a node type accepts and produces (PRD §5.1).
 ///
 /// These are *type-level defaults*: the editor uses them for connect-time
@@ -189,6 +209,14 @@ pub(crate) trait NodeHandler: Send + Sync {
     fn cancel_grace(&self) -> CancelBehavior {
         CancelBehavior::Graceful
     }
+
+    /// Whether an interrupted dispatch of *this node* may be re-run
+    /// automatically after a crash. Read by the P1.14 resume guard
+    /// (`run_loop::resume`). Defaults to the fingerprint-driven behavior
+    /// every node had before the `command` type existed.
+    fn resume_policy(&self, _step_conf: &StepConfig) -> ResumePolicy {
+        ResumePolicy::WhenUnchanged
+    }
 }
 
 /// Exact-match lookup table of [`NodeHandler`]s.
@@ -222,6 +250,9 @@ impl NodeTypeRegistry {
                 Arc::new(super::steps::sequence::SequenceNodeHandler),
                 Arc::new(super::steps::sync::SyncNodeHandler),
                 Arc::new(super::steps::finalize::FinalizeNodeHandler),
+                // P3.5: the whole `command` node type, added here and
+                // nowhere else in the engine.
+                Arc::new(super::steps::command::CommandNodeHandler),
             ])
         });
         &GLOBAL
@@ -262,9 +293,9 @@ impl NodeTypeRegistry {
 mod tests {
     use super::*;
 
-    /// Every canonical launch kind — must stay in lockstep with
+    /// Every canonical kind — must stay in lockstep with
     /// [`crate::domain::workflow_graph::CORE_NODE_TYPES`].
-    const ALL_KINDS: [&str; 5] = ["agent", "gate", "sequence", "sync", "finalize"];
+    const ALL_KINDS: [&str; 6] = ["agent", "gate", "sequence", "sync", "finalize", "command"];
 
     #[test]
     fn global_registry_resolves_all_core_kinds() {
@@ -274,7 +305,15 @@ mod tests {
                 .handler_for(kind)
                 .unwrap_or_else(|| panic!("{kind} must be registered"));
             assert_eq!(handler.kind(), kind);
-            assert_eq!(handler.cancel_grace(), CancelBehavior::Graceful);
+            // Every node type that hands work to an agent session has
+            // something to wind down; `command` owns a child process the
+            // transport kills outright.
+            let expected = if kind == "command" {
+                CancelBehavior::Immediate
+            } else {
+                CancelBehavior::Graceful
+            };
+            assert_eq!(handler.cancel_grace(), expected);
         }
         // The registry and the graph lint's boundary constant must agree
         // on what a known type is, until P3.1 makes the registry the
@@ -308,7 +347,7 @@ mod tests {
     fn kinds_lists_registration_order() {
         assert_eq!(
             NodeTypeRegistry::global().kinds(),
-            vec!["agent", "gate", "sequence", "sync", "finalize"]
+            vec!["agent", "gate", "sequence", "sync", "finalize", "command"]
         );
     }
 
@@ -379,12 +418,26 @@ mod tests {
     }
 
     #[test]
+    fn resume_policy_defaults_to_the_fingerprint_rule() {
+        // Only a node type that can act outside the worktree overrides
+        // this; everything else must keep P1.14's auto-resume.
+        let conf = StepConfig::default();
+        for kind in ["agent", "gate", "sequence", "sync", "finalize"] {
+            let handler = NodeTypeRegistry::global().handler_for(kind).unwrap();
+            assert_eq!(handler.resume_policy(&conf), ResumePolicy::WhenUnchanged);
+        }
+    }
+
+    #[test]
     fn lint_defaults_to_no_findings() {
         use crate::domain::models::workflow_v2::WorkflowDefinitionV2;
 
         // A minimal single-node definition per kind: the launch
         // handlers add no type-specific rules yet, so lint is empty.
-        for kind in ALL_KINDS {
+        // `command` is excluded — it is the first type with real
+        // per-type rules, and an empty config trips them by design
+        // (see the handler's own tests).
+        for kind in ALL_KINDS.iter().filter(|k| **k != "command") {
             let def: WorkflowDefinitionV2 = serde_json::from_value(serde_json::json!({
                 "schema_version": 2,
                 "id": "wf-lint-default",

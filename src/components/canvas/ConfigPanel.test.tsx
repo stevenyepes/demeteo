@@ -92,25 +92,13 @@ describe('schema-derived rendering', () => {
     expect(screen.getAllByTestId('monaco-editor').length).toBeGreaterThan(0);
   });
 
-  it('renders a node type it has never heard of', () => {
-    // Exactly P3.5's `command` node, arriving via the registry with no
-    // frontend edit. If this needs a code change, the seam has failed.
-    const unknownType: NodeTypeInfo = {
-      kind: 'command',
-      label: 'Command',
-      summary: 'Run a deterministic shell command.',
-      config_schema: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'The shell command.' },
-          timeout_secs: { type: ['integer', 'null'], minimum: 1 },
-          idempotent: { type: 'boolean', default: true },
-        },
-      },
-      inputs: ['any'],
-      outputs: ['text'],
-      max_instances: null,
-    };
+  it('renders a node type the panel was never written for', () => {
+    // P3.5's `command` node, taken from the **live registry fixture** rather
+    // than a stand-in: the backend added a node type and the panel has to
+    // configure it with no frontend edit. If this ever needs a code change,
+    // the seam has failed.
+    const commandType = CATALOG.find((t) => t.kind === 'command')!;
+    expect(commandType).toBeTruthy();
     const def: WorkflowDefinitionV2 = {
       schema_version: 2,
       id: 'wf',
@@ -118,19 +106,32 @@ describe('schema-derived rendering', () => {
       nodes: [{ id: 'c1', type: 'command', title: 'Baseline', config: {} }],
       edges: [],
     };
+    const onChange = vi.fn();
     render(
       <ConfigPanel
         definition={def}
         nodeId="c1"
-        nodeTypes={[unknownType]}
-        onChange={vi.fn()}
+        nodeTypes={[commandType]}
+        onChange={onChange}
         onClose={vi.fn()}
       />,
     );
-    expect(screen.getByLabelText('Command')).toBeTruthy();
-    expect(screen.getByLabelText('Timeout secs')).toBeTruthy();
-    expect(screen.getByLabelText('Idempotent')).toBeTruthy();
-    expect(screen.getByText('Run a deterministic shell command.')).toBeTruthy();
+
+    // Every field the schema publishes gets a control, derived — not listed.
+    for (const field of fieldsFromSchema(commandType.config_schema)) {
+      if (field.control === 'code') {
+        expect(screen.getByTestId(`code-${field.key}`), field.key).toBeTruthy();
+      } else {
+        expect(screen.getByLabelText(field.label), field.key).toBeTruthy();
+      }
+    }
+    // And the controls match the types: a shell string, a number, a checkbox.
+    fireEvent.change(screen.getByLabelText('Command'), {
+      target: { value: 'cargo test --all' },
+    });
+    expect(lastDef(onChange).nodes[0].config?.command).toBe('cargo test --all');
+    fireEvent.click(screen.getByLabelText('Idempotent'));
+    expect(lastDef(onChange).nodes[0].config?.idempotent).toBe(true);
   });
 
   it('offers no verifier sub-form for a type whose schema omits it', () => {

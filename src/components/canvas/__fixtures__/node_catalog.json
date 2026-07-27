@@ -342,5 +342,85 @@
     ],
     "outputs": [],
     "max_instances": 1
+  },
+  {
+    "kind": "command",
+    "label": "Command",
+    "summary": "Run a deterministic shell command (harness, build, script) at zero token cost.",
+    "config_schema": {
+      "additionalProperties": true,
+      "description": "Configuration for a `command` node: run a deterministic shell command in a disposable worktree off the feature branch, at zero token cost. Its stdout is captured as an artifact and a non-zero exit fails the step as a verdict. The worktree is NOT merged back — a command that must change tracked files needs an agent step.",
+      "properties": {
+        "artifacts": {
+          "description": "Declared deliverables. Only `last_write_to` captures apply: each path is read back off the worktree after the command exits, and a missing one fails the step.",
+          "items": {
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "capability": {
+          "description": "Write-scope classification. Only used by the parallel-scheduling lint (PRD §5.6) — a command node enforces no fence of its own.",
+          "enum": [
+            "read_only",
+            "artifacts",
+            "verify",
+            "implement",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command": {
+          "description": "Shell command to run, verbatim, under an interactive login shell (so the user's PATH and any mise/asdf/nvm shims are active). Required.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Worktree-relative working directory. Unset runs at the worktree root; absolute paths and `..` segments are refused.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env_allowlist": {
+          "description": "Names of environment variables forwarded from Demeteo's process into the command. Nothing crosses unless named here; unset names are skipped.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "idempotent": {
+          "description": "True when re-running this command after a crash is safe (a build, a test run). Leave false for anything with outside side effects (deploy, publish, migration): an interrupted attempt then always parks at the synthetic gate instead of re-running.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "timeout_secs": {
+          "description": "Wall-clock ceiling. Expiry is classified as an environment failure. Unset means no ceiling.",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "inputs": [
+      "any"
+    ],
+    "outputs": [
+      "text",
+      "file"
+    ],
+    "max_instances": null
   }
 ]
