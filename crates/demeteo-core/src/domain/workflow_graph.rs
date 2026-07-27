@@ -12,11 +12,17 @@
 //!   is expressed as [`LintFinding`]s so the editor renders the same
 //!   message the engine refuses on.
 //! - [`lint_workflow_v2`] — the full rule set: everything `build`
-//!   rejects, plus reachability/sink shape, redirect-target-must-be-
-//!   ancestor, typed-port compatibility, join/guard interaction, unknown
-//!   node types, missing prompts. Save is blocked only by
-//!   [`LintSeverity::Error`] findings (PRD §6.3); warnings surface but
-//!   don't block.
+//!   rejects, plus sink shape (finalize count, dead-end branches),
+//!   redirect-target-must-be-ancestor, typed-port compatibility,
+//!   join/guard interaction, unknown node types, missing prompts. Save is
+//!   blocked only by [`LintSeverity::Error`] findings (PRD §6.3); warnings
+//!   surface but don't block.
+//!
+//! One rule is deliberately *not* here: port compatibility for nodes that
+//! declare no ports of their own falls back to the node type's defaults,
+//! which live on the registry. That half runs in
+//! `adapters::step_executor::node_lint`, which can see it; this module owns
+//! only what a node's own config states.
 //!
 //! On the "deadlock detection" rule (PRD §5.3 step 4): in this model the
 //! definition graph is acyclic by construction, and an acyclic join can
@@ -115,7 +121,15 @@ impl LintFinding {
         }
     }
 
-    fn edge_error(code: &'static str, from: &StepId, to: &StepId, message: String) -> Self {
+    /// `pub(crate)` for the registry-aware port pass in `node_lint`, which
+    /// emits the same `port-type-mismatch` code for the edges this module
+    /// cannot judge without the node-type catalog.
+    pub(crate) fn edge_error(
+        code: &'static str,
+        from: &StepId,
+        to: &StepId,
+        message: String,
+    ) -> Self {
         Self {
             severity: LintSeverity::Error,
             code,
@@ -551,7 +565,12 @@ pub fn has_errors(findings: &[LintFinding]) -> bool {
 /// Parse the declared port types under `config.outputs` / `config.inputs`
 /// (`[{ "name": …, "type": … }]`). Undeclared or unparseable → empty, and
 /// the port check stays silent for that side.
-fn declared_ports(node: &NodeConfig, key: &str) -> Vec<PortType> {
+///
+/// `pub(crate)` so the registry-aware pass (`node_lint`) reads a node's
+/// declaration through *this* function rather than its own copy: the two
+/// halves of the port rule have to agree on what "declared" means, or an edge
+/// could be judged by both or by neither.
+pub(crate) fn declared_ports(node: &NodeConfig, key: &str) -> Vec<PortType> {
     let Some(entries) = node.config.get(key).and_then(|v| v.as_array()) else {
         return Vec::new();
     };

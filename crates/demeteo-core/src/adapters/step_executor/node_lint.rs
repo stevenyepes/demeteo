@@ -22,8 +22,8 @@
 //! today*, so flagging it would make a workflow cloned before the rename
 //! unsavable in the builder it is meant to be edited in.
 
-use crate::domain::models::workflow_v2::WorkflowDefinitionV2;
-use crate::domain::workflow_graph::{lint_workflow_v2, LintFinding, WorkflowGraph};
+use crate::domain::models::workflow_v2::{NodeConfig, PortType, WorkflowDefinitionV2};
+use crate::domain::workflow_graph::{declared_ports, lint_workflow_v2, LintFinding, WorkflowGraph};
 
 use super::registry::NodeTypeRegistry;
 
@@ -44,6 +44,7 @@ pub fn lint_definition(def: &WorkflowDefinitionV2) -> Vec<LintFinding> {
     // graph-level pass has already said so and a handler asking about
     // ancestors would be answering about a graph the engine will never build.
     if let Ok(graph) = WorkflowGraph::build(def) {
+        findings.extend(type_default_port_findings(def, registry));
         for node in &def.nodes {
             if let Some(handler) = registry.handler_for(&node.node_type) {
                 findings.extend(handler.lint(node, &graph));
@@ -51,6 +52,77 @@ pub fn lint_definition(def: &WorkflowDefinitionV2) -> Vec<LintFinding> {
         }
     }
 
+    findings
+}
+
+/// The half of the port rule the pure domain module cannot express.
+///
+/// [`lint_workflow_v2`] only judges an edge when **both** endpoints declare
+/// ports in their `config`, because it has no way to learn a node type's
+/// default ports — those live on [`NodeHandler::ports`](super::registry::NodeHandler::ports),
+/// behind the registry. A freshly dropped node declares nothing, so without
+/// this pass every edge between two fresh nodes went unchecked in Rust while
+/// the builder's `connectRules.ts` — which *does* read the type defaults, off
+/// `node_types_list` — refused it at connect time. The editor was therefore
+/// stricter than the engine, the exact inversion of the guarantee both files
+/// claim ("the editor refuses exactly the shapes the engine refuses").
+///
+/// Fires only where the domain rule stayed silent, so an edge is never judged
+/// twice, and defers to `finalize-not-sink` for the one case that already has
+/// a dedicated, better-worded rule.
+fn type_default_port_findings(
+    def: &WorkflowDefinitionV2,
+    registry: &'static NodeTypeRegistry,
+) -> Vec<LintFinding> {
+    let node_by_id = |id: &crate::domain::ids::StepId| def.nodes.iter().find(|n| n.id == *id);
+    let effective = |node: &NodeConfig, key: &str| -> Vec<PortType> {
+        let declared = declared_ports(node, key);
+        if !declared.is_empty() {
+            return declared;
+        }
+        match registry.handler_for(&node.node_type) {
+            Some(h) if key == "outputs" => h.ports().outputs.to_vec(),
+            Some(h) => h.ports().inputs.to_vec(),
+            // An unknown type is already an `unknown-node-type` error; don't
+            // pile a port complaint on top of it.
+            None => vec![PortType::Any],
+        }
+    };
+
+    let mut findings = Vec::new();
+    for edge in &def.edges {
+        let (Some(from), Some(to)) = (node_by_id(&edge.from), node_by_id(&edge.to)) else {
+            continue;
+        };
+        // Both sides declared: `lint_workflow_v2` has already ruled on this.
+        if !declared_ports(from, "outputs").is_empty() && !declared_ports(to, "inputs").is_empty() {
+            continue;
+        }
+        let outputs = effective(from, "outputs");
+        let inputs = effective(to, "inputs");
+        // `finalize` produces nothing by design; `finalize-not-sink` says so
+        // in words an author can act on.
+        if outputs.is_empty() && from.node_type == "finalize" {
+            continue;
+        }
+        let compatible = !outputs.is_empty()
+            && !inputs.is_empty()
+            && outputs
+                .iter()
+                .any(|o| inputs.iter().any(|i| o.compatible_with(*i)));
+        if !compatible {
+            findings.push(LintFinding::edge_error(
+                "port-type-mismatch",
+                &edge.from,
+                &edge.to,
+                format!(
+                    "edge '{}' → '{}' connects no compatible ports (outputs {:?} vs \
+                     inputs {:?})",
+                    edge.from, edge.to, outputs, inputs
+                ),
+            ));
+        }
+    }
     findings
 }
 
@@ -178,6 +250,89 @@ mod tests {
         assert_eq!(codes(&findings), vec!["no-finalize"]);
         assert_eq!(findings[0].severity, LintSeverity::Warning);
         assert!(!has_errors(&findings));
+    }
+
+    #[test]
+    fn a_stray_task_list_from_is_caught_before_the_run() {
+        // v2 puts the binding on an edge, so the builder can never write this
+        // — but a hand-edited or imported document can, and the schema allows
+        // additional properties. Left unlinted it surfaces as a mid-run
+        // `NonRetryable` from `load_task_list_artifact`.
+        let findings = lint_definition(&def(serde_json::json!({
+            "schema_version": 2,
+            "id": "wf-tl",
+            "name": "tl",
+            "nodes": [
+                { "id": "plan", "type": "agent", "title": "Plan",
+                  "config": { "prompt_template": "p" } },
+                { "id": "work", "type": "sequence", "title": "Work",
+                  "config": { "task_list_from": "ghost" } }
+            ],
+            "edges": [{ "from": "plan", "to": "work" }]
+        })));
+        assert!(
+            codes(&findings).contains(&"task-list-unknown-source"),
+            "{findings:?}"
+        );
+        assert!(has_errors(&findings));
+    }
+
+    #[test]
+    fn a_task_list_from_naming_a_real_node_is_only_a_warning() {
+        // It still runs — it just acts as a dependency the canvas never draws,
+        // which is an observation, not a reason to block the save (PRD §6.3).
+        let findings = lint_definition(&def(serde_json::json!({
+            "schema_version": 2,
+            "id": "wf-tl2",
+            "name": "tl2",
+            "nodes": [
+                { "id": "plan", "type": "agent", "title": "Plan",
+                  "config": { "prompt_template": "p" } },
+                { "id": "work", "type": "sequence", "title": "Work",
+                  "config": { "task_list_from": "plan" } }
+            ],
+            "edges": [{ "from": "plan", "to": "work" }]
+        })));
+        assert!(
+            codes(&findings).contains(&"task-list-legacy-binding"),
+            "{findings:?}"
+        );
+        assert!(!has_errors(&findings));
+    }
+
+    #[test]
+    fn type_default_ports_are_enforced_so_the_editor_is_not_stricter_than_the_engine() {
+        // `connectRules.ts` reads the registry's type-level ports and refuses a
+        // `finalize → x` edge at connect time. Before this pass the Rust lint
+        // only judged edges where *both* nodes declared ports in their config,
+        // so a definition the builder wouldn't let you draw could still be
+        // imported and saved.
+        let findings = lint_definition(&def(serde_json::json!({
+            "schema_version": 2,
+            "id": "wf-ports",
+            "name": "ports",
+            "nodes": [
+                { "id": "publish", "type": "finalize", "title": "Publish", "config": {} },
+                { "id": "after", "type": "agent", "title": "After",
+                  "config": { "prompt_template": "p" } }
+            ],
+            "edges": [{ "from": "publish", "to": "after" }]
+        })));
+        // `finalize-not-sink` is the better-worded rule for this shape and
+        // still owns it; the port pass must not double-report.
+        assert!(
+            codes(&findings).contains(&"finalize-not-sink"),
+            "{findings:?}"
+        );
+        assert_eq!(
+            codes(&findings)
+                .iter()
+                .filter(|c| **c == "port-type-mismatch")
+                .count(),
+            0,
+            "the dedicated finalize rule owns this edge: {findings:?}"
+        );
+        assert!(has_errors(&findings));
     }
 
     #[test]
