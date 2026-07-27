@@ -157,6 +157,64 @@ fn clear_spends_the_checkpoint() {
     sequence_checkpoint_clear(&db, &f, "s-impl").unwrap();
 }
 
+/// `set` is the only write that can make a checkpoint *smaller*, which is
+/// what rewinding a discarded attempt needs. `record` would union the ids
+/// straight back in and the rollback would achieve nothing.
+#[test]
+fn set_replaces_the_checkpoint_rather_than_unioning_it() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(
+        &db,
+        &f,
+        "s-impl",
+        &["a".into(), "b".into(), "c".into()],
+        Some("sha-c"),
+        100,
+    )
+    .unwrap();
+
+    // The attempt that landed b and c is discarded; only a survives.
+    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 200).unwrap();
+
+    let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
+    assert_eq!(cp.landed_task_ids, vec!["a".to_string()]);
+    assert_eq!(cp.anchor_sha.as_deref(), Some("sha-a"));
+}
+
+/// Where `record`'s `None` means "I know less than the row does", `set`'s
+/// means "there is no anchor" — the shape a rewind to an already-merged
+/// prefix has to write, since an anchor left behind would send the next
+/// attempt into a `reset --hard` it does not need.
+#[test]
+fn set_with_no_anchor_clears_the_stored_one() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
+
+    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], None, 200).unwrap();
+
+    let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
+    assert_eq!(cp.landed_task_ids, vec!["a".to_string()]);
+    assert_eq!(
+        cp.anchor_sha, None,
+        "a merged prefix must rewind to the anchor-less V32 shape"
+    );
+}
+
+/// A rewind can be the first write this (feature, node) ever sees — the
+/// attempt read a row, the row was cleared elsewhere, the rollback still
+/// has to land somewhere. Insert, don't fail.
+#[test]
+fn set_inserts_when_no_row_exists() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
+    let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
+    assert_eq!(cp.landed_task_ids, vec!["a".to_string()]);
+    assert_eq!(cp.anchor_sha.as_deref(), Some("sha-a"));
+}
+
 #[test]
 fn plan_cache_roundtrips_and_upserts() {
     let db = db();
