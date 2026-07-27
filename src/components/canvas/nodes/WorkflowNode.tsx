@@ -10,7 +10,7 @@
  * static box-shadows) to honor the webview battery rule; no infinite transforms.
  */
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { ShieldCheck } from 'lucide-react';
+import { AlertTriangle, OctagonAlert, ShieldCheck } from 'lucide-react';
 import { nodeTypeMeta } from '../types';
 import type { EssenceKind } from '../nodeSummary';
 import {
@@ -56,9 +56,39 @@ const TONE_DOT: Record<RunStatusTone, string> = {
   slate: 'bg-slate-500',
 };
 
+/**
+ * Structural-lint badge (P3.3). Errors win: a node with both shows the ruby
+ * octagon, because that is the one blocking the save. The messages are the
+ * tooltip — the same strings the blocked-save list names, so the badge and the
+ * bar can't tell different stories.
+ */
+function LintBadge({ errors, warnings }: { errors: string[]; warnings: string[] }) {
+  const blocking = errors.length > 0;
+  const messages = blocking ? errors : warnings;
+  if (messages.length === 0) return null;
+  const Icon = blocking ? OctagonAlert : AlertTriangle;
+  return (
+    <span
+      title={messages.join('\n')}
+      data-testid={blocking ? 'node-lint-error' : 'node-lint-warning'}
+      className="shrink-0"
+    >
+      <Icon
+        className={`h-3.5 w-3.5 ${blocking ? 'text-rose-400' : 'text-amber-400'}`}
+        aria-label={
+          blocking
+            ? `${errors.length} lint error${errors.length === 1 ? '' : 's'}`
+            : `${warnings.length} lint warning${warnings.length === 1 ? '' : 's'}`
+        }
+      />
+    </span>
+  );
+}
+
 export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
   const meta = nodeTypeMeta(data.nodeType);
   const Icon = meta.icon;
+  const lint = data.lint;
 
   const run = data.run;
   const runMeta = run ? runStatusMeta(run.status) : null;
@@ -114,8 +144,11 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium text-slate-100" title={data.title}>
-            {data.title}
+          <div className="flex items-center gap-1.5">
+            <div className="truncate text-sm font-medium text-slate-100" title={data.title}>
+              {data.title}
+            </div>
+            {lint && <LintBadge errors={lint.errors} warnings={lint.warnings} />}
           </div>
           <div
             className={`text-[11px] font-medium uppercase tracking-wide ${

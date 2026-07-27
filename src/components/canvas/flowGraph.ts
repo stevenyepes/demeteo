@@ -8,8 +8,15 @@
  * map — design mode (P2.1) simply passes nothing.
  */
 import type { Edge, Node } from '@xyflow/react';
+import { edgeKey, type LintIndex } from './lint';
 import { isEssenceEmpty, nodeEssence, type NodeEssence } from './nodeSummary';
 import type { NodeRunStatus, WorkflowDefinitionV2 } from './types';
+
+/** Lint messages anchored to one node, split by severity (P3.3). */
+export interface NodeLint {
+  errors: string[];
+  warnings: string[];
+}
 
 /** Data carried on each React Flow node into the `WorkflowNode` card. */
 export interface WorkflowNodeData extends Record<string, unknown> {
@@ -22,6 +29,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   /** Config-essence badges for design mode (P3.2); undefined in run mode,
    *  where the card's second row belongs to cost/duration instead. */
   essence?: NodeEssence;
+  /** Structural-lint badge (P3.3); undefined when the node is clean. */
+  lint?: NodeLint;
 }
 
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
@@ -39,7 +48,14 @@ export interface ToFlowGraphOptions {
   /** Design mode (P3.2): put each node's config essence on its card, so the
    *  graph is scannable without opening the config panel (PRD §6.3). */
   showEssence?: boolean;
+  /** Structural-lint findings (P3.3) to badge nodes and tint edges with. */
+  lint?: LintIndex;
 }
+
+/** Edge stroke per worst anchored finding — a broken edge has to be findable
+ *  on the canvas, not only in the save-blocked list. */
+const EDGE_ERROR_STROKE = '#f43f5e'; // rose-500
+const EDGE_WARNING_STROKE = '#f59e0b'; // amber-500
 
 export function toFlowGraph(
   def: WorkflowDefinitionV2,
@@ -47,6 +63,11 @@ export function toFlowGraph(
 ): { nodes: WorkflowFlowNode[]; edges: Edge[] } {
   const nodes: WorkflowFlowNode[] = def.nodes.map((n, i) => {
     const essence = opts.showEssence ? nodeEssence(n) : null;
+    const findings = opts.lint?.byNode.get(n.id) ?? [];
+    const lint: NodeLint = {
+      errors: findings.filter((f) => f.severity === 'error').map((f) => f.message),
+      warnings: findings.filter((f) => f.severity === 'warning').map((f) => f.message),
+    };
     return {
       id: n.id,
       type: 'workflow' as const,
@@ -57,17 +78,38 @@ export function toFlowGraph(
         run: opts.statusByNode?.[n.id],
         highlighted: opts.highlightedNodeIds?.has(n.id) ?? false,
         essence: essence && !isEssenceEmpty(essence) ? essence : undefined,
+        lint: findings.length > 0 ? lint : undefined,
       },
     };
   });
 
-  const edges: Edge[] = def.edges.map((e) => ({
-    id: `${e.from}->${e.to}`,
-    source: e.from,
-    target: e.to,
-    // A conditional edge (a `when` guard) reads as a labeled branch.
-    ...(e.when ? { label: 'when', data: { when: e.when } } : {}),
-  }));
+  const edges: Edge[] = def.edges.map((e) => {
+    const findings = opts.lint?.byEdge.get(edgeKey(e.from, e.to)) ?? [];
+    const worst = findings.some((f) => f.severity === 'error')
+      ? 'error'
+      : findings.length > 0
+        ? 'warning'
+        : null;
+    return {
+      id: edgeKey(e.from, e.to),
+      source: e.from,
+      target: e.to,
+      // A conditional edge (a `when` guard) reads as a labeled branch.
+      ...(e.when ? { label: 'when', data: { when: e.when } } : {}),
+      ...(worst
+        ? {
+            style: {
+              stroke: worst === 'error' ? EDGE_ERROR_STROKE : EDGE_WARNING_STROKE,
+              strokeWidth: 2,
+            },
+            data: {
+              ...(e.when ? { when: e.when } : {}),
+              lint: findings.map((f) => f.message),
+            },
+          }
+        : {}),
+    };
+  });
 
   return { nodes, edges };
 }

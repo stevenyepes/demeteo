@@ -1,7 +1,26 @@
-import { createContext, useCallback, useContext, useMemo, useReducer } from 'react';
+import { createContext, useCallback, useContext, useMemo, useReducer, useRef } from 'react';
 import type { AppView } from '../types';
 
 export type NavigationMode = 'push' | 'replace';
+
+/**
+ * A navigation someone asked for, in a form that can be held and replayed
+ * (task P3.3). Every route change in the app funnels through one of these
+ * three, which is what lets a single guard cover the Back arrow, `Escape`,
+ * `Cmd+W`, and the mouse back button at once — audit F38 is precisely the bug
+ * of guarding one path and forgetting the rest.
+ */
+export type NavigationIntent =
+  | { kind: 'navigate'; view: AppView; mode?: NavigationMode }
+  | { kind: 'back' }
+  | { kind: 'forward' };
+
+/**
+ * Return `false` to block an intent. A blocking guard **owns the follow-up**:
+ * it must prompt the user and then either drop the intent or replay it via
+ * `proceed`, or the app is stuck.
+ */
+export type NavigationGuard = (intent: NavigationIntent) => boolean;
 
 export interface NavigationState {
   current: AppView;
@@ -100,6 +119,12 @@ interface NavigationContextValue {
   navigate: (view: AppView, mode?: NavigationMode) => void;
   goBack: () => void;
   goForward: () => void;
+  /** Install a guard that can veto navigations; returns its unregister.
+   *  Prefer the `useNavigationGuard` hook, which handles the lifecycle. */
+  registerGuard: (guard: NavigationGuard) => () => void;
+  /** Perform an intent without consulting guards — how a guard replays the
+   *  navigation it blocked once the user has resolved it. */
+  proceed: (intent: NavigationIntent) => void;
 }
 
 const NavigationContext = createContext<NavigationContextValue | null>(null);
@@ -113,12 +138,53 @@ const initialState: NavigationState = {
 export function NavigationProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(navigationReducer, initialState);
 
+  // Guards live in a ref, newest last: a screen mounted on top of another gets
+  // the first say. Held outside React state on purpose — installing a guard
+  // must not re-render the whole app under the provider.
+  const guards = useRef<NavigationGuard[]>([]);
+
+  const registerGuard = useCallback((guard: NavigationGuard) => {
+    guards.current = [...guards.current, guard];
+    return () => {
+      guards.current = guards.current.filter((g) => g !== guard);
+    };
+  }, []);
+
+  /** Ask every guard, innermost first. Any veto stops the intent. */
+  const allowed = useCallback((intent: NavigationIntent): boolean => {
+    for (let i = guards.current.length - 1; i >= 0; i -= 1) {
+      if (!guards.current[i](intent)) return false;
+    }
+    return true;
+  }, []);
+
+  const proceed = useCallback((intent: NavigationIntent) => {
+    switch (intent.kind) {
+      case 'navigate':
+        dispatch({ type: 'NAVIGATE', view: intent.view, mode: intent.mode });
+        break;
+      case 'back':
+        dispatch({ type: 'BACK' });
+        break;
+      case 'forward':
+        dispatch({ type: 'FORWARD' });
+        break;
+    }
+  }, []);
+
   const navigate = useCallback(
-    (view: AppView, mode?: NavigationMode) => dispatch({ type: 'NAVIGATE', view, mode }),
-    [],
+    (view: AppView, mode?: NavigationMode) => {
+      const intent: NavigationIntent = { kind: 'navigate', view, mode };
+      if (allowed(intent)) proceed(intent);
+    },
+    [allowed, proceed],
   );
-  const goBack = useCallback(() => dispatch({ type: 'BACK' }), []);
-  const goForward = useCallback(() => dispatch({ type: 'FORWARD' }), []);
+  const goBack = useCallback(() => {
+    if (allowed({ kind: 'back' })) proceed({ kind: 'back' });
+  }, [allowed, proceed]);
+  const goForward = useCallback(() => {
+    if (allowed({ kind: 'forward' })) proceed({ kind: 'forward' });
+  }, [allowed, proceed]);
 
   const value = useMemo<NavigationContextValue>(
     () => ({
@@ -128,8 +194,19 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
       navigate,
       goBack,
       goForward,
+      registerGuard,
+      proceed,
     }),
-    [state.current, state.backStack.length, state.forwardStack.length, navigate, goBack, goForward],
+    [
+      state.current,
+      state.backStack.length,
+      state.forwardStack.length,
+      navigate,
+      goBack,
+      goForward,
+      registerGuard,
+      proceed,
+    ],
   );
 
   return (

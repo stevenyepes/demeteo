@@ -169,10 +169,12 @@ pub(crate) trait NodeHandler: Send + Sync {
     }
 
     /// Per-type structural lint, run alongside the graph-level rules in
-    /// [`lint_workflow_v2`](crate::domain::workflow_graph::lint_workflow_v2).
-    /// Default: nothing type-specific to say. Handlers grow rules here
+    /// [`lint_workflow_v2`](crate::domain::workflow_graph::lint_workflow_v2)
+    /// — the two are joined by
+    /// [`node_lint::lint_definition`](super::node_lint::lint_definition),
+    /// which the `workflow_lint` command and the workflow write paths both
+    /// call. Default: nothing type-specific to say. Handlers grow rules here
     /// as the v2 config payloads formalize (P3.x).
-    #[allow(dead_code)] // First runtime caller is the `workflow_lint` command (P3.3).
     fn lint(&self, _node: &NodeConfig, _graph: &WorkflowGraph) -> Vec<LintFinding> {
         Vec::new()
     }
@@ -238,12 +240,12 @@ impl NodeTypeRegistry {
     /// Registered kinds, in registration order — the "known types" input
     /// of
     /// [`lint_workflow_v2`](crate::domain::workflow_graph::lint_workflow_v2),
-    /// which still takes
+    /// supplied by
+    /// [`node_lint::lint_definition`](super::node_lint::lint_definition)
+    /// (P3.3) so no boundary caller has to maintain the list by hand.
     /// [`CORE_NODE_TYPES`](crate::domain::workflow_graph::CORE_NODE_TYPES)
-    /// from its boundary callers. The `workflow_lint` command (P3.3) is
-    /// what finally routes lint through the registry and retires that
-    /// constant; the test below keeps the two in lockstep until then.
-    #[allow(dead_code)] // First non-test caller: `workflow_lint` (P3.3).
+    /// survives as the pure domain module's default; the test below keeps
+    /// the two in lockstep.
     pub(crate) fn kinds(&self) -> Vec<&'static str> {
         self.handlers.iter().map(|h| h.kind()).collect()
     }

@@ -1,8 +1,10 @@
 use crate::adapters::step_executor::node_catalog::{node_type_catalog, NodeTypeInfo};
+use crate::adapters::step_executor::node_lint::lint_definition;
 use crate::domain::ids::{FeatureId, WorkflowId, WorkflowVersionId};
 use crate::domain::models::workflow_migrate::migrate_v1_to_v2;
-use crate::domain::models::workflow_v2::validate_workflow_v2;
+use crate::domain::models::workflow_v2::{validate_workflow_v2, WorkflowDefinitionV2};
 use crate::domain::models::{StepConfig, Workflow, WorkflowVersion};
+use crate::domain::workflow_graph::{has_errors, LintFinding, LintSeverity};
 use crate::error::AppError;
 use crate::paths;
 use crate::ports::db::WorkflowRepository;
@@ -202,7 +204,7 @@ pub fn workflow_get(
 pub fn feature_workflow_graph(
     feature_id: String,
     ctx: State<'_, AppContext>,
-) -> Result<crate::domain::models::workflow_v2::WorkflowDefinitionV2, AppError> {
+) -> Result<WorkflowDefinitionV2, AppError> {
     let feature = ctx
         .run_view
         .feature(&FeatureId::from(feature_id.clone()))
@@ -246,6 +248,13 @@ pub fn feature_workflow_graph(
 /// have a schema-valid v2 projection (`migrate_v1_to_v2` is pure/total,
 /// so this can only fire if the v2 model and its published JSON Schema
 /// drift apart — surface that loudly at the write, not at run time).
+///
+/// P3.3 adds the second half: the projection must also pass the structural
+/// lint at **error** severity. The builder disables Save while an error
+/// finding stands, but a UI-only rule is a convention; enforcing it here is
+/// what makes "an invalid definition cannot be stored" true of every write
+/// path — including import of a hand-edited file. Warnings never block
+/// (PRD §6.3).
 fn ensure_valid_v2_projection(
     id: &WorkflowId,
     name: &str,
@@ -257,7 +266,55 @@ fn ensure_valid_v2_projection(
         AppError::validation(format!(
             "workflow definition failed schema-v2 validation:\n{e}"
         ))
-    })
+    })?;
+
+    let findings = lint_definition(&projection);
+    if has_errors(&findings) {
+        let detail = findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Error)
+            .map(|f| {
+                let anchor = f
+                    .node
+                    .as_ref()
+                    .map(|n| format!("{n}: "))
+                    .or_else(|| f.edge.as_ref().map(|(a, b)| format!("{a} → {b}: ")))
+                    .unwrap_or_default();
+                format!("  - [{}] {anchor}{}", f.code, f.message)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(AppError::validation(format!(
+            "workflow definition has structural errors:\n{detail}"
+        )));
+    }
+    Ok(())
+}
+
+/// Structural lint for a schema-v2 definition the builder holds in memory
+/// (task P3.3, PRD §6.3) — the source of the canvas's per-node lint badges
+/// and of the reason list shown when Save is blocked.
+///
+/// Takes the raw payload rather than a typed definition so a definition the
+/// v2 model can't even read comes back as a renderable `schema-invalid`
+/// finding instead of an opaque IPC deserialization error — the builder needs
+/// something to *show*, and it is the same surface either way.
+///
+/// The rule set is the engine's own (`node_lint::lint_definition`): the
+/// registry supplies the known node types, so this command never needs
+/// editing when a node type is added.
+#[tauri::command]
+pub fn workflow_lint(definition: serde_json::Value) -> Vec<LintFinding> {
+    let def: WorkflowDefinitionV2 = match serde_json::from_value(definition) {
+        Ok(def) => def,
+        Err(e) => {
+            return vec![LintFinding::workflow_error(
+                "schema-invalid",
+                format!("definition is not a readable schema-v2 workflow: {e}"),
+            )]
+        }
+    };
+    lint_definition(&def)
 }
 
 #[tauri::command]
