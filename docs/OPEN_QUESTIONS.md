@@ -111,13 +111,13 @@ Plus the budget and scheduling machinery that was always part of this: per-proje
 
 ---
 
-## 8. `command` step type (Q8-B → **picked up 2026-07-23**)
+## 8. `command` step type (Q8-B → **closed 2026-07-26**)
 
 **The question:** Can a workflow step be a deterministic shell command instead of an LLM agent?
 
 **The v1.0 answer:** No. The three step types are `agent`, `parallel`, `gate`. `command` is a useful type but is really a special case of `agent` (spawn an agent and have it run commands).
 
-**Now in the active plan:** `PRD_DAG_WORKFLOWS.md` §5.2 un-defers this — a first-class `command` node type (command, cwd, env allowlist, timeout, `idempotent: true|false`) runs via the existing `ExecutionPort` and lands in builder Phase 3 as the node-type-registry extensibility proof (task P3.5 in `TASKS_DAG_WORKFLOWS.md`). Zero-token harness/build/script steps stop being emulated by agent prompts.
+**Shipped (task P3.5, 2026-07-26):** a first-class `command` node type — `command`, `cwd`, `env_allowlist`, `timeout_secs`, `idempotent` — running via the existing `ExecutionPort` in a disposable worktree at zero token cost. Zero-token harness/build/script steps no longer need an agent prompt to emulate them. It landed as the node-type-registry extensibility proof: one registration line, no scheduler or dispatch edit, and no frontend source change at all (the palette and config panel derive from the registry). Two boundaries it deliberately keeps: it never merges its worktree back (a step that changes tracked files is an `agent` step), and a command not declared `idempotent` always parks at the Decision-14 synthetic gate when interrupted rather than being re-run. See `docs/TASKS_DAG_WORKFLOWS.md` P3.5 and `steps/command.rs`.
 
 ---
 

@@ -22,6 +22,7 @@ fn step(id: &str, capability: StepCapability, on_failure: Option<&str>) -> StepC
         allow_shell: false,
         gate_class: None,
         task_list_from: None,
+        ..Default::default()
     }
 }
 

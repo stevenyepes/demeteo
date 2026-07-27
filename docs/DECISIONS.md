@@ -16,7 +16,7 @@
 | 5  | Planner selection                  | Per-project planner via `ProjectSettings::default_agent_kind` + `default_model`; overrideable per-workflow (`ProjectWorkflowOverride` with `step_id = None`) and per-step (`step_id = Some(...)`); loses to a run-time override chosen in `StartFeatureModal`. | Interview Q6     |
 | 6  | Project structure                  | One host per project (local or remote SSH); repos cloned via PAT               | Interview Q7/C   |
 | 7  | Workflows as templates             | First-class, versioned, importable; starter pack shipped in binary              | Interview Q8     |
-| 8  | Step execution model               | Typed: `agent` / `parallel` / `gate`; `command` deferred                        | Interview Q8     |
+| 8  | Step execution model               | Typed node types behind the `NodeTypeRegistry`: `agent` / `gate` / `sequence` (superseding `parallel`) / `sync` / `finalize` / `command`. **`command` un-deferred 2026-07-26** (task P3.5): a deterministic shell command through the `ExecutionPort`, run in a disposable worktree at zero token cost, non-zero exit classified `verdict`. It does **not** merge back — a step that changes tracked files is an agent step. | Interview Q8; PRD_DAG_WORKFLOWS §5.2 |
 | 9  | Context propagation                | Artifact pointer (C) + planner-summary fallback for chat-shaped (B)             | Interview Q10    |
 | 10 | Workflow versioning                | Local + versioned + importable, JSON format, starter pack in binary             | Interview Q11    |
 | 11 | Project bootstrap depth            | Clone + detect (B) + propose worktree strategy (C); no repo writes (D deferred)| Interview Q12    |

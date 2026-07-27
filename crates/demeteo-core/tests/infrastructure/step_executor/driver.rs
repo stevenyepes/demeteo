@@ -31,6 +31,7 @@ fn step_with_effort(
         allow_shell: false,
         gate_class: None,
         task_list_from: None,
+        ..Default::default()
     }
 }
 

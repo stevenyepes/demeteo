@@ -320,6 +320,14 @@ mod starter_baseline;
 #[path = "../../tests/conformance/run_event_parity.rs"]
 mod run_event_parity;
 
+/// `command` node gate (P3.5): a starter-shaped workflow with a command
+/// node runs under the stub harness, fails like a harness on a non-zero
+/// exit, and honors the PRD §5.4 idempotency rule on resume. Included the
+/// same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/command_node.rs"]
+mod command_node;
+
 /// Resume fingerprint guard gate (P1.14): a workspace mutated between
 /// crash and resume parks the interrupted node at the Decision-14
 /// synthetic gate instead of blind re-execution; an untouched workspace
