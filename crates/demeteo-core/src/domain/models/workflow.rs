@@ -25,14 +25,70 @@ pub struct Workflow {
     pub schedule: Option<WorkflowSchedule>,
 }
 
+/// One immutable saved revision of a workflow.
+///
+/// Carries the definition **twice**, on purpose (V34, task P3.6):
+///
+/// - `steps_json` — the v1 ordered `Vec<StepConfig>`. Still what the engine,
+///   the runner, replay, and export read, so a version written by this build
+///   stays runnable by an older one.
+/// - `definition_json` — the schema-v2 document, and the **authority** where
+///   present. It is the only representation that can hold node positions,
+///   join semantics, per-class retry, and edge `when` guards, so the visual
+///   builder round-trips through it losslessly.
+///
+/// `None` on `definition_json` means a pre-P3.6 row: readers migrate
+/// `steps_json` on the fly, which is exactly what every reader did before the
+/// column existed. Use [`WorkflowVersion::definition`] rather than reaching
+/// for either field, so that fallback lives in one place.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WorkflowVersion {
     pub id: WorkflowVersionId,
     pub workflow_id: WorkflowId,
     pub version: u32,
     pub steps_json: String,
+    /// The schema-v2 definition document; see the struct docs. `None` for
+    /// rows written before V34.
+    #[serde(default)]
+    pub definition_json: Option<String>,
     pub note: Option<String>,
     pub created_at: i64,
+}
+
+impl WorkflowVersion {
+    /// This version's schema-v2 definition: the stored document when the row
+    /// has one, otherwise the pure migration of its v1 step list.
+    ///
+    /// The single seam every graph reader goes through — the run-mode canvas,
+    /// the builder, the version drawer, the scheduler — so "where does a
+    /// definition come from" is one fact rather than five copies of a
+    /// fallback. A stored document that no longer parses degrades to the
+    /// migration rather than failing the read: `steps_json` is always present
+    /// and always valid, so there is a good answer available and refusing to
+    /// render a workflow over a bad layout blob would be the worse trade.
+    pub fn definition(
+        &self,
+        name: &str,
+    ) -> crate::domain::models::workflow_v2::WorkflowDefinitionV2 {
+        if let Some(raw) = self.definition_json.as_deref() {
+            if let Ok(def) = serde_json::from_str::<
+                crate::domain::models::workflow_v2::WorkflowDefinitionV2,
+            >(raw)
+            {
+                return def;
+            }
+            tracing::warn!(
+                version_id = %self.id,
+                "stored schema-v2 definition is unreadable; falling back to the v1 step list"
+            );
+        }
+        let steps: Vec<StepConfig> = serde_json::from_str(&self.steps_json).unwrap_or_default();
+        crate::domain::models::workflow_migrate::migrate_v1_to_v2(
+            self.workflow_id.clone(),
+            name,
+            &steps,
+        )
+    }
 }
 
 /// One step of a v1 workflow definition — the union of every node kind's

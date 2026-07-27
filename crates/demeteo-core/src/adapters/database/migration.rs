@@ -134,6 +134,9 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // migrated between the V-file landing and this branch merging.
     add_column_if_missing(conn, "features", "workflow_version_id", "TEXT")?;
 
+    // Schema-v2 definition document (V34, P3.6). Same defensive pattern.
+    add_column_if_missing(conn, "workflow_versions", "definition_json", "TEXT")?;
+
     Ok(())
 }
 

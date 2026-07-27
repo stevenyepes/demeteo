@@ -38,10 +38,17 @@
 //! run time today (nothing consumes it outside the on-failure path), but it
 //! is author intent, so it stays in `config` rather than being dropped.
 //!
-//! This module is still **unused by the runtime** — wiring happens in
-//! P1.12 (driver) and P1.15 (version pinning).
+//! The reverse direction ([`project_v2_to_v1`], task P3.6) exists because
+//! storage carries **both** representations: `workflow_versions` gained a
+//! `definition_json` column (V34) holding the v2 document, while `steps_json`
+//! keeps holding a v1 projection so the runner, replay, and export keep
+//! working unchanged. The projection is lossy by construction — v1 has no
+//! place for positions, joins, per-class retry, or edge guards — which is
+//! exactly why the v2 document is stored beside it rather than derived from
+//! it. For a *chain*, the two functions are inverses, and the round-trip over
+//! all seven starters is a test.
 
-use crate::domain::ids::WorkflowId;
+use crate::domain::ids::{StepId, WorkflowId};
 use crate::domain::models::workflow::StepConfig;
 use crate::domain::models::workflow_v2::{
     EdgeConfig, NodeConfig, Position, RetryPolicy, RetryRule, RetryStrategy, WorkflowDefaults,
@@ -165,6 +172,170 @@ fn migrate_step(step: &StepConfig, index: usize) -> NodeConfig {
             y: index as f64 * VERTICAL_SPACING,
         }),
     }
+}
+
+/// Project a v2 graph back onto the v1 ordered step list (task P3.6).
+///
+/// This is what keeps `workflow_versions.steps_json` meaningful now that the
+/// builder authors v2 documents: the runner, replay, `workflow_list`, and the
+/// export path all still read the v1 list, and a version written by this build
+/// must stay runnable by a build that has never heard of `definition_json`.
+///
+/// **Lossy on purpose, and only in the ways v1 cannot express**: node
+/// positions, `join`, per-class retry beyond the single `on_failure` redirect,
+/// and edge `when` guards have no v1 form. What survives:
+///
+/// - **Order** is the graph's topological order, so a chain keeps its authored
+///   sequence and a branchy graph produces an order the v1 engine can walk.
+/// - **`config`** merges straight back onto the step (it *is* a serialized
+///   `StepConfig` minus the lifted fields — see [`migrate_step`]).
+/// - **`retry.verdict` / `retry.agent_failure` redirect** → `on_failure` +
+///   `max_iterations`, the v1 shape it came from.
+/// - **A `task_list` dependency** → `task_list_from`, recovered from the
+///   incoming edge whose source declares a `task-list` artifact — the same
+///   rule the forward migration used to *create* that edge.
+///
+/// Pure and total: an unreadable `config` yields a step with default fields
+/// rather than an error, because refusing to project would make a workflow
+/// unsavable over a payload the engine would have ignored anyway.
+pub fn project_v2_to_v1(def: &WorkflowDefinitionV2) -> Vec<StepConfig> {
+    let order = topological_order(def);
+    order
+        .into_iter()
+        .map(|i| project_node(&def.nodes[i], def))
+        .collect()
+}
+
+/// Definition-order-stable topological sort. Falls back to definition order
+/// for anything left over, so a cyclic document (which lint refuses, but which
+/// this total function may still be handed) still projects every node exactly
+/// once.
+fn topological_order(def: &WorkflowDefinitionV2) -> Vec<usize> {
+    let index: std::collections::HashMap<&StepId, usize> = def
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (&n.id, i))
+        .collect();
+    let mut indegree = vec![0usize; def.nodes.len()];
+    let mut out: Vec<Vec<usize>> = vec![Vec::new(); def.nodes.len()];
+    for edge in &def.edges {
+        if let (Some(&f), Some(&t)) = (index.get(&edge.from), index.get(&edge.to)) {
+            out[f].push(t);
+            indegree[t] += 1;
+        }
+    }
+    // Definition order breaks ties, so a chain projects back to exactly the
+    // list it was migrated from and an unchanged save is a no-op diff.
+    let mut ready: Vec<usize> = (0..def.nodes.len()).filter(|i| indegree[*i] == 0).collect();
+    let mut order = Vec::with_capacity(def.nodes.len());
+    let mut emitted = vec![false; def.nodes.len()];
+    while !ready.is_empty() {
+        ready.sort_unstable();
+        let next = ready.remove(0);
+        emitted[next] = true;
+        order.push(next);
+        for &t in &out[next] {
+            indegree[t] -= 1;
+            if indegree[t] == 0 {
+                ready.push(t);
+            }
+        }
+    }
+    for (i, done) in emitted.iter().enumerate() {
+        if !done {
+            order.push(i);
+        }
+    }
+    order
+}
+
+fn project_node(node: &NodeConfig, def: &WorkflowDefinitionV2) -> StepConfig {
+    // `config` is a serialized `StepConfig` minus the lifted fields, so
+    // putting those back yields the original step. A payload that isn't an
+    // object (or won't deserialize) degrades to defaults rather than failing.
+    let mut value = match node.config.clone() {
+        serde_json::Value::Object(map) => serde_json::Value::Object(map),
+        _ => serde_json::Value::Object(Default::default()),
+    };
+    let obj = value.as_object_mut().expect("object by construction");
+    obj.insert("id".into(), serde_json::json!(node.id));
+    obj.insert("kind".into(), serde_json::json!(node.node_type));
+    obj.insert("title".into(), serde_json::json!(node.title));
+
+    // The redirect rule is where v1's `on_failure` went; bring it back. Either
+    // class carries it (the forward migration writes both), so read whichever
+    // is present.
+    let redirect = node
+        .retry
+        .as_ref()
+        .and_then(|p| p.verdict.as_ref().or(p.agent_failure.as_ref()))
+        .filter(|r| r.strategy == RetryStrategy::Redirect);
+    if let Some(rule) = redirect {
+        if let Some(target) = rule.redirect_to.as_ref() {
+            obj.insert("on_failure".into(), serde_json::json!(target));
+        }
+        if let Some(max) = rule.max_attempts {
+            obj.insert("max_iterations".into(), serde_json::json!(max));
+        }
+    }
+
+    // `task_list_from` is recoverable from the graph: the incoming edge whose
+    // source declares the `task-list` artifact. Same rule that created it.
+    if let Some(source) = task_list_source(node, def) {
+        obj.insert("task_list_from".into(), serde_json::json!(source));
+    }
+
+    serde_json::from_value(value).unwrap_or_else(|_| StepConfig {
+        id: node.id.clone(),
+        kind: node.node_type.clone(),
+        title: node.title.clone(),
+        ..Default::default()
+    })
+}
+
+/// The predecessor that feeds `node` a task list, if any.
+///
+/// Only a `sequence` node can *have* a task-list binding — `task_list_from` is
+/// meaningless on every other kind — and restricting it here is load-bearing,
+/// not cosmetic: a gate sitting between a planner and its sequence node has an
+/// incoming edge from a `task-list` producer too, and without the kind check
+/// the gate would come back from the projection carrying a binding its author
+/// never wrote (the `refactor` starter is exactly that shape).
+///
+/// Residual ambiguity, deliberately resolved toward v2: a sequence node whose
+/// predecessor declares a `task-list` artifact reads as *bound*, even if the v1
+/// step it came from left `task_list_from` unset and used the planner fallback.
+/// In v2 the edge **is** the binding (see the module docs), so this is the v2
+/// reading of that graph — but it means such a workflow gains an explicit
+/// binding the first time it is re-saved through the builder. No bundled
+/// starter has that shape; both sequence-bearing starters name their source.
+fn task_list_source<'a>(node: &NodeConfig, def: &'a WorkflowDefinitionV2) -> Option<&'a StepId> {
+    if node.node_type != "sequence" {
+        return None;
+    }
+    def.edges
+        .iter()
+        .filter(|e| e.to == node.id)
+        .map(|e| &e.from)
+        .find(|from| {
+            def.nodes
+                .iter()
+                .find(|n| n.id == **from)
+                .is_some_and(declares_task_list)
+        })
+}
+
+/// Does this node's config declare an artifact named `task-list`?
+fn declares_task_list(node: &NodeConfig) -> bool {
+    node.config
+        .get("artifacts")
+        .and_then(|a| a.as_array())
+        .is_some_and(|decls| {
+            decls
+                .iter()
+                .any(|d| d.get("name").and_then(|n| n.as_str()) == Some("task-list"))
+        })
 }
 
 /// Migrate a raw definition document of either schema version.

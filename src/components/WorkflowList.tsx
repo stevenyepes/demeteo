@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { WorkflowWithSteps } from '../types';
-import { Play, Pencil, Download, Trash, RefreshCw, Plus, Cpu, GitBranch, ShieldAlert, Clock } from 'lucide-react';
+import { Play, Pencil, Download, Upload, Trash, RefreshCw, Plus, Cpu, GitBranch, ShieldAlert, Clock } from 'lucide-react';
 import { useErrorBus } from '../lib/errorBus';
 import { formatError } from '../lib/errors';
+import { MiniGraph } from './canvas/MiniGraph';
+import type { WorkflowDefinitionV2 } from './canvas/types';
 
 interface WorkflowListProps {
   onEdit: (id: string) => void;
@@ -60,6 +62,20 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
     }
   };
 
+  /** Import a workflow file. Both schema versions are accepted: v2 documents
+   *  keep their layout, v1 step lists migrate on the way in (P3.6). */
+  const handleImportFile = async (file: File) => {
+    try {
+      const imported = await invoke<WorkflowWithSteps>('workflow_import', {
+        json: await file.text(),
+      });
+      await loadWorkflows();
+      setSelectedId(imported.id);
+    } catch (err) {
+      reportError(err);
+    }
+  };
+
   const handleExport = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -77,6 +93,29 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
   };
 
   const selectedWorkflow = workflows.find((w) => w.id === selectedId);
+  const importInput = useRef<HTMLInputElement>(null);
+
+  // The selected workflow's graph, for the shape preview. The step list below
+  // is flat — a branch or a fan-in simply isn't in it — so the library would
+  // otherwise describe every workflow as a line no matter what it is (P3.6).
+  const [graph, setGraph] = useState<WorkflowDefinitionV2 | null>(null);
+  useEffect(() => {
+    if (!selectedWorkflow) {
+      setGraph(null);
+      return;
+    }
+    let live = true;
+    invoke<WorkflowDefinitionV2>('workflow_version_graph', {
+      workflowId: selectedWorkflow.id,
+      versionId: selectedWorkflow.version_id,
+    })
+      .then((def) => live && setGraph(def))
+      // Informational: a failure hides the preview, never the workflow.
+      .catch(() => live && setGraph(null));
+    return () => {
+      live = false;
+    };
+  }, [selectedWorkflow?.id, selectedWorkflow?.version_id]);
 
   return (
     <div className="flex h-full w-full bg-[#08090c] text-slate-100 font-sans">
@@ -84,12 +123,34 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
       <div className="w-1/3 border-r border-white/5 bg-[#0d0f14]/50 flex flex-col h-full">
         <div className="p-6 flex items-center justify-between border-b border-white/5">
           <h2 className="text-xl font-bold font-display text-white tracking-wide">Workflow Library</h2>
-          <button
-            onClick={onNew}
-            className="flex items-center gap-2 px-3 py-1.5 bg-violet-600/80 hover:bg-violet-600 hover:shadow-[0_0_15px_rgba(139,92,246,0.5)] rounded-md text-sm font-semibold transition-all duration-300 border border-violet-500/30"
-          >
-            <Plus className="w-4 h-4" /> New
-          </button>
+          <div className="flex items-center gap-2">
+            <input
+              ref={importInput}
+              type="file"
+              accept="application/json,.json"
+              aria-label="Import workflow file"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                // Clear the value so re-picking the same file fires again.
+                e.target.value = '';
+                if (file) void handleImportFile(file);
+              }}
+            />
+            <button
+              onClick={() => importInput.current?.click()}
+              title="Import a workflow JSON file"
+              className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-md text-sm font-semibold transition-all duration-300 border border-white/5 text-slate-300"
+            >
+              <Upload className="w-4 h-4" /> Import
+            </button>
+            <button
+              onClick={onNew}
+              className="flex items-center gap-2 px-3 py-1.5 bg-violet-600/80 hover:bg-violet-600 hover:shadow-[0_0_15px_rgba(139,92,246,0.5)] rounded-md text-sm font-semibold transition-all duration-300 border border-violet-500/30"
+            >
+              <Plus className="w-4 h-4" /> New
+            </button>
+          </div>
         </div>
 
         {loading ? (
@@ -256,6 +317,16 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Graph shape — what the run will actually follow. */}
+            {graph && graph.nodes.length > 0 && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold font-display text-white tracking-wide">Shape</h3>
+                <div className="rounded-xl border border-white/5 bg-white/[0.02] p-5">
+                  <MiniGraph definition={graph} />
+                </div>
               </div>
             )}
 

@@ -291,16 +291,12 @@ impl DagStepExecutor {
             return Ok(());
         }
 
-        // Derive the scheduling topology (P1.12) before registering: the
-        // v1 step list migrates to a schema-v2 chain and must build into a
-        // walkable graph. Migrated v1 lists cannot cycle (chain + forward
-        // task_list edges), so a failure here means corrupt input — refuse
-        // to start rather than spawn a driver that can never schedule.
-        let def_v2 = crate::domain::models::workflow_migrate::migrate_v1_to_v2(
-            ctx.workflow_id.clone(),
-            ctx.workflow_id.as_str(),
-            &ctx.steps,
-        );
+        // The scheduling topology (P1.12), resolved on the context: either the
+        // version's stored v2 document (V34, P3.6) or the migration of its step
+        // list. Must build into a walkable graph — a failure here means corrupt
+        // input, so refuse to start rather than spawn a driver that can never
+        // schedule.
+        let def_v2 = ctx.definition.clone();
         let graph =
             crate::domain::workflow_graph::WorkflowGraph::build(&def_v2).map_err(|findings| {
                 format!(
@@ -879,9 +875,10 @@ impl DagStepExecutor {
     }
 
     /// Best-effort resolution of a feature's scheduling graph: pinned
-    /// workflow version → v1 step list → migrated v2 chain → graph. Any
-    /// miss (no workflow, unparseable steps, unbuildable graph) yields
-    /// `None` and callers fall back to v1 index ordering.
+    /// workflow version → its schema-v2 definition (stored document, or the
+    /// migration of its step list) → graph. Any miss (no workflow,
+    /// unbuildable graph) yields `None` and callers fall back to v1 index
+    /// ordering.
     fn resolve_feature_graph(
         &self,
         feature_id: &FeatureId,
@@ -891,13 +888,7 @@ impl DagStepExecutor {
         let version = self
             .resolve_pinned_version(feature_id.as_str(), &wf_id)
             .ok()?;
-        let steps: Vec<crate::domain::models::StepConfig> =
-            serde_json::from_str(&version.steps_json).ok()?;
-        let def = crate::domain::models::workflow_migrate::migrate_v1_to_v2(
-            wf_id.clone(),
-            wf_id.as_str(),
-            &steps,
-        );
+        let def = version.definition(wf_id.as_str());
         crate::domain::workflow_graph::WorkflowGraph::build(&def).ok()
     }
 

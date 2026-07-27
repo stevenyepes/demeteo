@@ -43,6 +43,10 @@ pub fn create_from_json(
         workflow_id: id.clone(),
         version: 1,
         steps_json,
+        // v1 ingestion path (the runner's `RunSpec::workflow_json`): no
+        // authored v2 document exists, so readers migrate the step list on
+        // the fly — the pre-V34 behavior, unchanged.
+        definition_json: None,
         note: Some("Initial version".to_string()),
         created_at: now,
     })?;

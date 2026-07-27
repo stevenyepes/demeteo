@@ -9,6 +9,8 @@ import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
 import { reconcileEffort } from '../lib/effortLevels';
 import { HarnessModelPicker, type ModelOption } from './ui/HarnessModelPicker';
 import type { AgentConfigView } from './settings/ProjectSettingsContext';
+import { MiniGraph } from './canvas/MiniGraph';
+import type { WorkflowDefinitionV2 } from './canvas/types';
 
 interface StartFeatureModalProps {
   isOpen: boolean;
@@ -158,6 +160,9 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // Steps of the selected workflow + per-step agent/model overrides.
   // A blank entry means "inherit" the workflow/project default for that step.
   const [steps, setSteps] = useState<StepRow[]>([]);
+  // The pinned version's graph, for the shape preview (P3.6). `null` while
+  // loading or when the read failed — the preview is informational.
+  const [graph, setGraph] = useState<WorkflowDefinitionV2 | null>(null);
   const [stepOverrides, setStepOverrides] = useState<Record<string, { agent_kind: string; model: string; effort: EffortLevel | '' }>>({});
   // Per-run loop budget. Empty string = inherit project/engine default.
   const [loopIterations, setLoopIterations] = useState<string>('');
@@ -315,6 +320,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   useEffect(() => {
     if (!isOpen || !workflowId) {
       setSteps([]);
+      setGraph(null);
       return;
     }
     let cancelled = false;
@@ -326,9 +332,23 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           .filter((s: any) => s.kind !== 'gate')
           .map((s: any) => ({ id: s.id, title: s.title, kind: s.kind }));
         setSteps(rows);
+        // The graph the run will follow (P3.6). Fetched separately because the
+        // override list is a flat list of agent steps and cannot show shape —
+        // a fan-out or a gate is exactly what a launcher wants to confirm.
+        // Best-effort: a failure leaves the preview off, never blocks launch.
+        try {
+          const def = await invoke<WorkflowDefinitionV2>('workflow_version_graph', {
+            workflowId,
+            versionId: w.version_id,
+          });
+          if (!cancelled) setGraph(def);
+        } catch {
+          if (!cancelled) setGraph(null);
+        }
       } catch (e) {
         console.warn('failed to load workflow steps for per-step overrides:', e);
         setSteps([]);
+        setGraph(null);
       }
     })();
     return () => {
@@ -865,6 +885,21 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   effortPlaceholder="project default"
                 />
               </div>
+
+              {/* The shape of the pipeline this launch will follow (P3.6).
+                  The override list below is flat by nature, so a gate or a
+                  fan-out is invisible there — this is where "did I pick the
+                  reviewed pipeline?" gets answered before spending anything. */}
+              {graph && graph.nodes.length > 0 && (
+                <div>
+                  <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+                    Pipeline shape
+                  </label>
+                  <div className="rounded-lg border border-white/5 bg-black/20 p-3 max-h-48 overflow-y-auto">
+                    <MiniGraph definition={graph} />
+                  </div>
+                </div>
+              )}
 
               {/* Per-step agent/model overrides. Blank row = inherit the
                   default above → the workflow step → the project default. */}

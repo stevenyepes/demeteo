@@ -1,0 +1,17 @@
+-- Store the schema-v2 definition document alongside the v1 step list
+-- (task P3.6 of docs/PRD_DAG_WORKFLOWS.md; the prerequisite P3.3 flagged).
+--
+-- The visual builder produces a v2 graph, and four things it holds have no
+-- v1 representation at all: node `position` (co-persisted layout, PRD §5.1),
+-- `join` semantics, per-failure-class `retry`, and edge `when` guards. Saving
+-- a builder graph through `steps_json` alone would silently discard the
+-- author's layout on every save, which is why the builder route was blocked
+-- on this column.
+--
+-- `steps_json` is deliberately NOT replaced. It stays the v1 projection of
+-- the same definition, so every existing reader (the runner, replay, the
+-- workflow list, export) keeps working untouched, and a version saved by this
+-- build still runs on an older one. `definition_json` is the *authority* where
+-- present; NULL means "pre-P3.6 row" and the reader migrates `steps_json` on
+-- the fly, exactly as it did before this column existed.
+ALTER TABLE workflow_versions ADD COLUMN definition_json TEXT;

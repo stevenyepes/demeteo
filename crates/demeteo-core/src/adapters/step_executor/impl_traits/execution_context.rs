@@ -14,6 +14,16 @@ pub struct ExecutionContext {
     pub target_dir: String,
     pub branch_name: String,
     pub steps: Vec<StepConfig>,
+    /// The pinned version's **schema-v2 definition** — the run's scheduling
+    /// topology (P1.12), taken from the stored document when the version has
+    /// one (V34, P3.6) and migrated from `steps` when it doesn't.
+    ///
+    /// Carried beside `steps` rather than derived from it because a graph the
+    /// builder authored has edges a chain projection cannot reproduce: read a
+    /// diamond back through `steps` alone and the engine would silently run it
+    /// as a line. `steps` stays the *config* source every node handler reads;
+    /// this owns the edges, joins, and per-class retry.
+    pub definition: crate::domain::models::workflow_v2::WorkflowDefinitionV2,
     pub base_ctx: PromptContext,
     pub machine_id_opt: Option<String>,
     /// Repo-relative folder under the worktree root where agents
@@ -284,6 +294,39 @@ impl DagStepExecutor {
             }
         };
 
+        // The run's topology. Prefers the version's stored v2 document (V34,
+        // P3.6) so a graph authored in the builder runs the edges it was
+        // drawn with; falls back to migrating `steps` for every pre-P3.6 row.
+        //
+        // The two representations are written together and so agree by
+        // construction — but a hand-edited row could disagree, and a graph
+        // naming nodes the step list doesn't have would fail the whole run at
+        // schedule time. Rather than trust it, check the id sets match and
+        // fall back to the migration when they don't: `steps` is what the
+        // engine can actually execute, so it is the safer authority for a
+        // definition that has already lost their agreement.
+        let definition = {
+            let stored = version.definition(wf_id.as_str());
+            let ids: std::collections::HashSet<&str> =
+                steps.iter().map(|s| s.id.as_str()).collect();
+            let matches = stored.nodes.len() == steps.len()
+                && stored.nodes.iter().all(|n| ids.contains(n.id.as_str()));
+            if matches {
+                stored
+            } else {
+                tracing::warn!(
+                    version_id = %version.id,
+                    "stored v2 definition does not match the version's step list; \
+                     scheduling from the migrated step list instead"
+                );
+                crate::domain::models::workflow_migrate::migrate_v1_to_v2(
+                    wf_id.clone(),
+                    wf_id.as_str(),
+                    &steps,
+                )
+            }
+        };
+
         if steps.is_empty() {
             let e = "Workflow has no steps.".to_string();
             emit(bp::PREPARING, "failed", Some(e.clone()));
@@ -422,6 +465,7 @@ impl DagStepExecutor {
             target_dir,
             branch_name,
             steps,
+            definition,
             base_ctx,
             machine_id_opt,
             artifact_subdir,

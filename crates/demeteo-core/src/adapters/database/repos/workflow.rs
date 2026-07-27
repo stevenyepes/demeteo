@@ -171,13 +171,15 @@ impl WorkflowRepository for SqliteAdapter {
     fn save_version(&self, v: WorkflowVersion) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
-            "INSERT INTO workflow_versions (id,workflow_id,version,steps_json,note,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO workflow_versions
+               (id,workflow_id,version,steps_json,definition_json,note,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![
                 v.id,
                 v.workflow_id,
                 v.version,
                 v.steps_json,
+                v.definition_json,
                 v.note,
                 v.created_at
             ],
@@ -190,7 +192,7 @@ impl WorkflowRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id,workflow_id,version,steps_json,note,created_at
+                "SELECT id,workflow_id,version,steps_json,definition_json,note,created_at
                  FROM workflow_versions WHERE workflow_id=?1
                  ORDER BY version DESC LIMIT 1",
             )
@@ -202,8 +204,9 @@ impl WorkflowRepository for SqliteAdapter {
                     workflow_id: row.get(1)?,
                     version: row.get::<_, u32>(2)?,
                     steps_json: row.get(3)?,
-                    note: row.get(4)?,
-                    created_at: row.get(5)?,
+                    definition_json: row.get(4)?,
+                    note: row.get(5)?,
+                    created_at: row.get(6)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -221,7 +224,7 @@ impl WorkflowRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id,workflow_id,version,steps_json,note,created_at
+                "SELECT id,workflow_id,version,steps_json,definition_json,note,created_at
                  FROM workflow_versions WHERE id=?1",
             )
             .map_err(|e| e.to_string())?;
@@ -232,8 +235,9 @@ impl WorkflowRepository for SqliteAdapter {
                     workflow_id: row.get(1)?,
                     version: row.get::<_, u32>(2)?,
                     steps_json: row.get(3)?,
-                    note: row.get(4)?,
-                    created_at: row.get(5)?,
+                    definition_json: row.get(4)?,
+                    note: row.get(5)?,
+                    created_at: row.get(6)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -248,7 +252,7 @@ impl WorkflowRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id,workflow_id,version,steps_json,note,created_at
+                "SELECT id,workflow_id,version,steps_json,definition_json,note,created_at
                  FROM workflow_versions WHERE workflow_id=?1 ORDER BY version ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -259,8 +263,9 @@ impl WorkflowRepository for SqliteAdapter {
                     workflow_id: row.get(1)?,
                     version: row.get::<_, u32>(2)?,
                     steps_json: row.get(3)?,
-                    note: row.get(4)?,
-                    created_at: row.get(5)?,
+                    definition_json: row.get(4)?,
+                    note: row.get(5)?,
+                    created_at: row.get(6)?,
                 })
             })
             .map_err(|e| e.to_string())?;

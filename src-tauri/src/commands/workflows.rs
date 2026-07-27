@@ -1,7 +1,9 @@
 use crate::adapters::step_executor::node_catalog::{node_type_catalog, NodeTypeInfo};
 use crate::adapters::step_executor::node_lint::lint_definition;
 use crate::domain::ids::{FeatureId, WorkflowId, WorkflowVersionId};
-use crate::domain::models::workflow_migrate::migrate_v1_to_v2;
+use crate::domain::models::workflow_migrate::{
+    migrate_definition, migrate_v1_to_v2, project_v2_to_v1,
+};
 use crate::domain::models::workflow_v2::{validate_workflow_v2, WorkflowDefinitionV2};
 use crate::domain::models::{StepConfig, Workflow, WorkflowVersion};
 use crate::domain::workflow_graph::{has_errors, LintFinding, LintSeverity};
@@ -78,6 +80,10 @@ pub fn seed_starter_workflows(workflows: &Arc<dyn WorkflowRepository>) {
                                 workflow_id: id.clone(),
                                 version: next_version,
                                 steps_json,
+                                // Starters ship as v1 files; readers migrate
+                                // them on the fly (V34 fallback), which keeps
+                                // the bundled definitions the single source.
+                                definition_json: None,
                                 note: Some(
                                     "System auto-update to latest starter template".to_string(),
                                 ),
@@ -103,6 +109,7 @@ pub fn seed_starter_workflows(workflows: &Arc<dyn WorkflowRepository>) {
                         workflow_id: id,
                         version: 1,
                         steps_json,
+                        definition_json: None,
                         note: Some("Initial version".to_string()),
                         created_at: now,
                     };
@@ -230,45 +237,44 @@ pub fn feature_workflow_graph(
             .map_err(AppError::from)?,
     };
 
-    let steps: Vec<StepConfig> = version
-        .as_ref()
-        .map(|v| serde_json::from_str(&v.steps_json).unwrap_or_default())
-        .unwrap_or_default();
-
     let name = workflows
         .get(&workflow_id)
         .map_err(AppError::from)?
         .map(|w| w.name)
         .unwrap_or_default();
 
-    Ok(migrate_v1_to_v2(workflow_id, name, &steps))
+    // `WorkflowVersion::definition` is the single seam: the stored v2 document
+    // when the version has one (V34), the migration of its step list when it
+    // doesn't — so a run launched before P3.6 still renders.
+    Ok(match version {
+        Some(v) => v.definition(&name),
+        None => migrate_v1_to_v2(workflow_id, name, &[]),
+    })
 }
 
-/// P1.3 boundary invariant: every definition accepted for storage must
-/// have a schema-valid v2 projection (`migrate_v1_to_v2` is pure/total,
-/// so this can only fire if the v2 model and its published JSON Schema
-/// drift apart — surface that loudly at the write, not at run time).
+/// The boundary invariant every write path enforces.
 ///
-/// P3.3 adds the second half: the projection must also pass the structural
-/// lint at **error** severity. The builder disables Save while an error
-/// finding stands, but a UI-only rule is a convention; enforcing it here is
-/// what makes "an invalid definition cannot be stored" true of every write
-/// path — including import of a hand-edited file. Warnings never block
-/// (PRD §6.3).
-fn ensure_valid_v2_projection(
-    id: &WorkflowId,
-    name: &str,
-    steps: &[StepConfig],
-) -> Result<(), AppError> {
-    let projection = migrate_v1_to_v2(id.clone(), name, steps);
-    let value = serde_json::to_value(&projection).map_err(|e| e.to_string())?;
+/// **P1.3:** the definition must satisfy the published JSON Schema — surfaced
+/// loudly at the write rather than at run time.
+///
+/// **P3.3:** it must also pass the structural lint at **error** severity. The
+/// builder disables Save while an error finding stands, but a UI-only rule is
+/// a convention; enforcing it here is what makes "an invalid definition cannot
+/// be stored" true of *every* write, including the import of a hand-edited
+/// file. Warnings never block (PRD §6.3).
+///
+/// P3.6 made this v2-native: with the builder authoring graphs directly, there
+/// is no longer a v1 step list to project first — the definition being checked
+/// is the definition being stored.
+fn ensure_valid_definition(def: &WorkflowDefinitionV2) -> Result<(), AppError> {
+    let value = serde_json::to_value(def).map_err(|e| e.to_string())?;
     validate_workflow_v2(&value).map_err(|e| {
         AppError::validation(format!(
             "workflow definition failed schema-v2 validation:\n{e}"
         ))
     })?;
 
-    let findings = lint_definition(&projection);
+    let findings = lint_definition(def);
     if has_errors(&findings) {
         let detail = findings
             .iter()
@@ -317,90 +323,108 @@ pub fn workflow_lint(definition: serde_json::Value) -> Vec<LintFinding> {
     lint_definition(&def)
 }
 
+/// Save a **schema-v2 graph** as a new version — the builder's only write
+/// path (task P3.6), replacing the v1 `workflow_create` / `workflow_update`
+/// pair the retired form editor used.
+///
+/// `workflow_id: None` creates the workflow first, so "new from a template"
+/// and "edit an existing one" are the same call and the builder needs no
+/// branch. Both mint a version through [`append_version`], because a save is
+/// always an append.
+///
+/// The definition is stored **verbatim** in `definition_json` (V34) — layout,
+/// joins, per-class retry, and edge guards intact — alongside its v1
+/// projection in `steps_json`, which is what the runner and export still read.
+/// The projection round-trips exactly for a chain (a test over all seven
+/// starters pins that), and is a valid topological order for anything else.
 #[tauri::command]
-pub fn workflow_create(
+pub fn workflow_save(
+    workflow_id: Option<String>,
     name: String,
     description: String,
-    steps: Vec<StepConfig>,
-    ctx: State<'_, AppContext>,
-) -> Result<WorkflowWithSteps, AppError> {
-    let workflows = &ctx.workflows;
-    let now = paths::now_ms();
-    let id = WorkflowId::from(format!("wf-{}", paths::new_id()));
-    ensure_valid_v2_projection(&id, &name, &steps)?;
-    let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
-
-    let workflow = Workflow {
-        id: id.clone(),
-        name: name.clone(),
-        description: description.clone(),
-        is_starter: false,
-        created_at: now,
-        updated_at: now,
-        schedule: None,
-    };
-    workflows.create(workflow)?;
-
-    let version_id = WorkflowVersionId::from(format!("{}-v1", id.as_str()));
-    let version = WorkflowVersion {
-        id: version_id.clone(),
-        workflow_id: id.clone(),
-        version: 1,
-        steps_json,
-        note: Some("Initial version".to_string()),
-        created_at: now,
-    };
-    workflows.save_version(version)?;
-
-    Ok(WorkflowWithSteps {
-        id: id.0,
-        name,
-        description,
-        is_starter: false,
-        created_at: now,
-        updated_at: now,
-        steps,
-        version: 1,
-        version_id: version_id.0,
-        schedule: None,
-    })
-}
-
-#[tauri::command]
-pub fn workflow_update(
-    workflow_id: String,
-    name: String,
-    description: String,
-    steps: Vec<StepConfig>,
+    definition: WorkflowDefinitionV2,
     note: Option<String>,
     ctx: State<'_, AppContext>,
 ) -> Result<WorkflowWithSteps, AppError> {
-    let workflows = &ctx.workflows;
-    let now = paths::now_ms();
-    let wf_id = WorkflowId::from(workflow_id.clone());
-    let w = workflows
-        .get(&wf_id)
-        .map_err(AppError::from)?
-        .ok_or_else(|| AppError::not_found(format!("Workflow not found: {}", workflow_id)))?;
-    ensure_valid_v2_projection(&wf_id, &name, &steps)?;
-    workflows
-        .update_meta(&wf_id, &name, &description)
-        .map_err(AppError::from)?;
+    save_definition(
+        &ctx.workflows,
+        workflow_id.map(WorkflowId::from),
+        &name,
+        &description,
+        definition,
+        note,
+    )
+}
 
+/// The command core, so tests drive the same code the wrapper does.
+pub fn save_definition(
+    workflows: &Arc<dyn WorkflowRepository>,
+    workflow_id: Option<WorkflowId>,
+    name: &str,
+    description: &str,
+    definition: WorkflowDefinitionV2,
+    note: Option<String>,
+) -> Result<WorkflowWithSteps, AppError> {
+    let now = paths::now_ms();
+
+    // Resolve (or create) the workflow row first: the definition's own `id`
+    // field is normalized to it below, so a template's placeholder id or a
+    // graph copied from another workflow can't travel into storage.
+    let (wf_id, created_at, is_starter, schedule) = match workflow_id {
+        Some(id) => {
+            let w = workflows
+                .get(&id)
+                .map_err(AppError::from)?
+                .ok_or_else(|| AppError::not_found(format!("Workflow not found: {id}")))?;
+            (id, w.created_at, w.is_starter, w.schedule)
+        }
+        None => {
+            let id = WorkflowId::from(format!("wf-{}", paths::new_id()));
+            workflows.create(Workflow {
+                id: id.clone(),
+                name: name.to_string(),
+                description: description.to_string(),
+                is_starter: false,
+                created_at: now,
+                updated_at: now,
+                schedule: None,
+            })?;
+            (id, now, false, None)
+        }
+    };
+
+    let mut definition = definition;
+    definition.id = wf_id.clone();
+    definition.name = name.to_string();
+    ensure_valid_definition(&definition)?;
+
+    let steps = project_v2_to_v1(&definition);
     let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
-    let (next_version, version_id) = append_version(workflows, &wf_id, steps_json, note, now)?;
+    let definition_json = serde_json::to_string(&definition).map_err(|e| e.to_string())?;
+
+    workflows
+        .update_meta(&wf_id, name, description)
+        .map_err(AppError::from)?;
+    let (version, version_id) = append_version(
+        workflows,
+        &wf_id,
+        steps_json,
+        Some(definition_json),
+        note,
+        now,
+    )?;
 
     Ok(WorkflowWithSteps {
-        id: workflow_id,
-        name,
-        description,
-        is_starter: false,
-        created_at: w.created_at,
+        id: wf_id.0,
+        name: name.to_string(),
+        description: description.to_string(),
+        is_starter,
+        created_at,
         updated_at: now,
         steps,
-        version: next_version,
+        version,
         version_id: version_id.0,
-        schedule: w.schedule,
+        schedule,
     })
 }
 
@@ -480,8 +504,7 @@ pub fn version_graph(
         .map_err(AppError::from)?
         .ok_or_else(|| AppError::not_found(format!("Workflow not found: {workflow_id}")))?;
     let version = version_of(workflows, workflow_id, version_id)?;
-    let steps: Vec<StepConfig> = serde_json::from_str(&version.steps_json).unwrap_or_default();
-    Ok(migrate_v1_to_v2(workflow_id.clone(), w.name, &steps))
+    Ok(version.definition(&w.name))
 }
 
 /// See `workflow_restore_version`.
@@ -496,10 +519,14 @@ pub fn restore_version(
         .ok_or_else(|| AppError::not_found(format!("Workflow not found: {workflow_id}")))?;
     let source = version_of(workflows, workflow_id, version_id)?;
     let now = paths::now_ms();
+    // Both representations are copied verbatim, so a restore reproduces the
+    // stored version exactly — layout included — rather than a graph that
+    // merely migrates to the same shape.
     let (version, new_version_id) = append_version(
         workflows,
         workflow_id,
         source.steps_json.clone(),
+        source.definition_json.clone(),
         Some(format!("Restored from v{}", source.version)),
         now,
     )?;
@@ -551,10 +578,14 @@ fn next_version_number(existing: &[WorkflowVersion]) -> u32 {
 /// Every path that produces a version — an edit, a revert-to-default, a restore
 /// from history — goes through here, so "saving is an append, never an edit"
 /// stays one fact instead of three copies of the same numbering arithmetic.
+/// `definition_json` is `None` for writes that have no authored v2 document —
+/// a starter revert, a v1 import — and readers migrate `steps_json` for those,
+/// exactly as they did before V34.
 fn append_version(
     workflows: &Arc<dyn WorkflowRepository>,
     workflow_id: &WorkflowId,
     steps_json: String,
+    definition_json: Option<String>,
     note: Option<String>,
     now: i64,
 ) -> Result<(u32, WorkflowVersionId), AppError> {
@@ -566,12 +597,20 @@ fn append_version(
         workflow_id: workflow_id.clone(),
         version,
         steps_json,
+        definition_json,
         note,
         created_at: now,
     })?;
     Ok((version, id))
 }
 
+/// Export the latest version as a **schema-v2 document, positions included**
+/// (P3.6). Pre-P3.6 versions migrate on the way out, so every workflow
+/// exports as v2 regardless of when it was saved.
+///
+/// `description` rides alongside the definition: it lives on the workflow row,
+/// not in the graph (the v2 schema has no place for it), and dropping it would
+/// make export → import lose the workflow's own summary.
 #[tauri::command]
 pub fn workflow_export(
     workflow_id: String,
@@ -587,19 +626,26 @@ pub fn workflow_export(
         .latest_version(&wf_id)
         .map_err(AppError::from)?
         .ok_or_else(|| AppError::not_found("No versions found"))?;
-    let steps: Vec<StepConfig> =
-        serde_json::from_str(&latest.steps_json).map_err(|e| AppError::from(e.to_string()))?;
 
-    let export = serde_json::json!({
-        "id": w.id,
-        "name": w.name,
-        "description": w.description,
-        "is_starter": w.is_starter,
-        "steps": steps
-    });
+    let definition = latest.definition(&w.name);
+    let mut export = serde_json::to_value(&definition).map_err(|e| e.to_string())?;
+    if let Some(obj) = export.as_object_mut() {
+        obj.insert("description".into(), serde_json::json!(w.description));
+    }
     serde_json::to_string_pretty(&export).map_err(|e| e.to_string().into())
 }
 
+/// Import a workflow file of **either schema version** (P3.6).
+///
+/// A v2 document is stored as-is, positions and all — the other half of
+/// `workflow_export` now emitting v2. A v1 steps-list file still imports: it
+/// migrates on the way in, so files exported by older builds (and the
+/// community's hand-written ones) keep working forever, which is the promise
+/// PRD §10 makes about v1 documents.
+///
+/// The workflow always gets a **fresh id** so importing a file twice, or
+/// importing one exported from this same install, can never overwrite an
+/// existing workflow.
 #[tauri::command]
 pub fn workflow_import(
     json: String,
@@ -607,70 +653,34 @@ pub fn workflow_import(
 ) -> Result<WorkflowWithSteps, AppError> {
     let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
 
-    // Schema-v2 documents are checked against the published JSON Schema
-    // (docs-site/workflow-schema-v2.json) so hand-authored v2 files get
-    // located, readable errors today. Storage + execution of v2 graphs
-    // arrives with the DAG engine (P1.15/P3.6); until then even a valid
-    // v2 document cannot be imported, and we say so instead of silently
-    // storing something the engine can't run.
-    if v.get("schema_version").and_then(|s| s.as_u64()) == Some(2) {
+    // A v2 document is validated against the published JSON Schema first, so a
+    // hand-edited file gets located, readable errors rather than a serde
+    // message about a missing field somewhere in a hundred-node graph.
+    let is_v2 = v.get("schema_version").and_then(|s| s.as_u64()) == Some(2);
+    if is_v2 {
         validate_workflow_v2(&v).map_err(|e| {
             AppError::validation(format!("schema-v2 workflow failed validation:\n{e}"))
         })?;
-        return Err(AppError::validation(
-            "this is a valid schema-v2 workflow definition, but importing v2 graphs lands with \
-             the DAG engine — export/import currently uses the v1 steps-list format",
-        ));
     }
 
-    let name = v["name"]
-        .as_str()
-        .unwrap_or("Imported Workflow")
-        .to_string();
+    let definition = migrate_definition(&v).map_err(AppError::validation)?;
+    let name = if definition.name.trim().is_empty() {
+        "Imported Workflow".to_string()
+    } else {
+        definition.name.clone()
+    };
+    // The v2 schema has no `description`; export writes it alongside, and a v1
+    // file has always carried one at the top level.
     let description = v["description"].as_str().unwrap_or("").to_string();
-    let steps: Vec<StepConfig> =
-        serde_json::from_value(v["steps"].clone()).map_err(|e| format!("Invalid steps: {}", e))?;
 
-    // Always create a new ID on import to avoid conflicts
-    let workflows = &ctx.workflows;
-    let now = paths::now_ms();
-    let id = WorkflowId::from(format!("wf-imported-{}", paths::new_id()));
-    ensure_valid_v2_projection(&id, &name, &steps)?;
-    let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
-
-    let workflow = Workflow {
-        id: id.clone(),
-        name: name.clone(),
-        description: description.clone(),
-        is_starter: false,
-        created_at: now,
-        updated_at: now,
-        schedule: None,
-    };
-    workflows.create(workflow)?;
-    let version_id = WorkflowVersionId::from(format!("{}-v1", id.as_str()));
-    let version = WorkflowVersion {
-        id: version_id.clone(),
-        workflow_id: id.clone(),
-        version: 1,
-        steps_json,
-        note: Some("Imported".to_string()),
-        created_at: now,
-    };
-    workflows.save_version(version)?;
-
-    Ok(WorkflowWithSteps {
-        id: id.0,
-        name,
-        description,
-        is_starter: false,
-        created_at: now,
-        updated_at: now,
-        steps,
-        version: 1,
-        version_id: version_id.0,
-        schedule: None,
-    })
+    save_definition(
+        &ctx.workflows,
+        None,
+        &name,
+        &description,
+        definition,
+        Some("Imported".to_string()),
+    )
 }
 
 /// Every node type this build can dispatch, with the display metadata,
@@ -726,6 +736,10 @@ pub fn workflow_revert_to_default(
                     workflows,
                     &wf_id,
                     steps_json,
+                    // The bundled starter is a v1 file and has no authored
+                    // layout; readers migrate it, so a revert lands the same
+                    // graph the starter has always produced.
+                    None,
                     Some("Reverted to default".to_string()),
                     now,
                 )?;

@@ -12,7 +12,7 @@ import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen, Ser
 import ProjectHome from "./components/ProjectHome";
 import ProjectSettings from "./components/ProjectSettings";
 import { WorkflowList } from "./components/WorkflowList";
-import { WorkflowEditor } from "./components/WorkflowEditor";
+import { WorkflowBuilderScreen } from "./components/canvas/WorkflowBuilderScreen";
 import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
 import { CodeEditorView } from "./components/CodeEditorView";
@@ -493,10 +493,9 @@ function AppInner() {
           )}
 
           {view.kind === 'workflow-editor' && (
-            <WorkflowEditor
+            <WorkflowBuilderScreen
               workflowId={view.workflowId}
               onBack={() => navigate({ kind: 'workflows' })}
-              onSaved={() => navigate({ kind: 'workflows' })}
             />
           )}
 
