@@ -36,13 +36,15 @@ use crate::domain::ids::StepId;
 use crate::domain::models::workflow_v2::{
     JoinSemantics, NodeConfig, PortType, RetryStrategy, WorkflowDefinitionV2,
 };
+use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Node types the engine dispatches today. P1.6's `NodeTypeRegistry`
 /// becomes the authority; until then, boundary callers pass this.
 pub const CORE_NODE_TYPES: [&str; 5] = ["agent", "gate", "sequence", "sync", "finalize"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LintSeverity {
     /// Structurally broken — save/schedule must refuse.
     Error,
@@ -52,7 +54,13 @@ pub enum LintSeverity {
 
 /// One lint result, addressable to a node or an edge so the editor can
 /// badge the offender and the engine can log a precise refusal.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Serialize` only, deliberately: `code` is a `&'static str` drawn from
+/// this module's fixed vocabulary, so a finding can travel *out* to the
+/// builder (the `workflow_lint` command, P3.3) but can never be minted by
+/// something outside the crate and handed back as if it were ours. The
+/// edge anchor serializes as a `[from, to]` pair.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LintFinding {
     pub severity: LintSeverity,
     /// Stable machine code (`cycle`, `redirect-not-ancestor`, …).
@@ -65,6 +73,19 @@ pub struct LintFinding {
 }
 
 impl LintFinding {
+    /// A finding about the definition as a whole, anchored to neither a node
+    /// nor an edge — used when the payload can't even be read as a v2
+    /// definition, so no rule below can run.
+    pub fn workflow_error(code: &'static str, message: String) -> Self {
+        Self {
+            severity: LintSeverity::Error,
+            code,
+            node: None,
+            edge: None,
+            message,
+        }
+    }
+
     fn node_error(code: &'static str, node: &StepId, message: String) -> Self {
         Self {
             severity: LintSeverity::Error,
@@ -507,6 +528,15 @@ pub fn lint_workflow_v2(def: &WorkflowDefinitionV2, known_types: &[&str]) -> Vec
     }
 
     findings
+}
+
+/// Does this finding set block a save? PRD §6.3: *"Save is blocked only by
+/// errors, not warnings."* One predicate, shared by the editor's save button
+/// (via the `workflow_lint` command) and the write-path guard in
+/// `commands::workflows`, so the two can't drift into disagreeing about what
+/// "invalid" means.
+pub fn has_errors(findings: &[LintFinding]) -> bool {
+    findings.iter().any(|f| f.severity == LintSeverity::Error)
 }
 
 /// Parse the declared port types under `config.outputs` / `config.inputs`

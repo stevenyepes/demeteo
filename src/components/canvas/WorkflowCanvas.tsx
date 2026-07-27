@@ -47,6 +47,7 @@ import { NodeTypePicker, Palette, NODE_TYPE_MIME, type PaletteEntry } from './Pa
 import { atInstanceCap, canConnect, connectableTypesFrom } from './connectRules';
 import { addNode, connectNodes, moveNodes, removeEdge, removeNode } from './graphEdits';
 import { byKind, type NodeTypeInfo } from './nodeCatalog';
+import type { LintIndex } from './lint';
 import type { NodeRunStatus, PositionV2, WorkflowDefinitionV2 } from './types';
 
 /** Below this node count the minimap is noise, so it auto-hides (PRD §6.1). */
@@ -81,6 +82,10 @@ export interface WorkflowCanvasProps {
   selectedNodeId?: string | null;
   /** Node ids in the replay cone to ring before confirming (P2.4). */
   highlightedNodeIds?: Set<string> | null;
+  /** Structural-lint findings to badge nodes / tint edges with (P3.3). The
+   *  owning screen runs `useWorkflowLint` and passes the result, keeping the
+   *  canvas IPC-free. */
+  lint?: LintIndex;
   className?: string;
 }
 
@@ -99,6 +104,7 @@ function CanvasInner({
   onNodeActivate,
   selectedNodeId,
   highlightedNodeIds,
+  lint,
   className = '',
 }: WorkflowCanvasProps) {
   const design = mode === 'design';
@@ -106,8 +112,14 @@ function CanvasInner({
   const typesByKind = useMemo(() => byKind(catalog), [catalog]);
   const [picker, setPicker] = useState<PickerState | null>(null);
   const base = useMemo(
-    () => toFlowGraph(definition, { statusByNode, highlightedNodeIds, showEssence: design }),
-    [definition, statusByNode, highlightedNodeIds, design],
+    () =>
+      toFlowGraph(definition, {
+        statusByNode,
+        highlightedNodeIds,
+        showEssence: design,
+        lint,
+      }),
+    [definition, statusByNode, highlightedNodeIds, design, lint],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(base.nodes);

@@ -493,6 +493,7 @@ pub fn run() {
             commands::workflows::workflow_get,
             commands::workflows::feature_workflow_graph,
             commands::workflows::node_types_list,
+            commands::workflows::workflow_lint,
             commands::workflows::workflow_create,
             commands::workflows::workflow_update,
             commands::workflows::workflow_delete,

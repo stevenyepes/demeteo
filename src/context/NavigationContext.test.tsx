@@ -1,10 +1,21 @@
 // Unit tests for the navigation reducer in `src/context/NavigationContext.tsx`.
 //
 // The reducer is pure, so it is exercised directly — no provider mount needed.
+// The guard registry (task P3.3) is provider state, so its suite at the bottom
+// mounts one.
 
-import { describe, expect, it } from 'vitest';
+import { useEffect, useState } from 'react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { MAX_BACK_STACK, type NavigationState, navigationReducer } from './NavigationContext';
+import {
+  MAX_BACK_STACK,
+  NavigationProvider,
+  navigationReducer,
+  useNavigation,
+  type NavigationIntent,
+  type NavigationState,
+} from './NavigationContext';
 import type { AppView } from '../types';
 
 function initial(current: AppView = { kind: 'empty-state' }): NavigationState {
@@ -167,5 +178,105 @@ describe('DROP_INVALID', () => {
     expect(dropped.current.kind).toBe('home');
     expect(dropped.backStack).toEqual([]);
     expect(dropped.forwardStack.map((v) => v.kind)).toEqual(['settings']);
+  });
+});
+
+// ── Navigation guards (task P3.3) ─────────────────────────────────────────────
+//
+// The guard registry lives on the provider rather than the reducer, so these
+// mount it. What matters is that *every* route change is vetoable from one
+// place (audit F38 is the bug of guarding one exit and missing three), that
+// guards stack innermost-first, and that a blocked intent can be replayed
+// verbatim once the screen has resolved it.
+
+describe('navigation guards', () => {
+  function Probe({
+    guard,
+    label = 'go',
+  }: {
+    guard?: (intent: NavigationIntent) => boolean;
+    label?: string;
+  }) {
+    const { view, navigate, goBack, registerGuard, proceed } = useNavigation();
+    const [held, setHeld] = useState<NavigationIntent | null>(null);
+
+    useEffect(() => {
+      if (!guard) return;
+      return registerGuard((intent) => {
+        setHeld(intent);
+        return guard(intent);
+      });
+    }, [guard, registerGuard]);
+
+    return (
+      <div>
+        <span data-testid="view">{view.kind}</span>
+        <button type="button" onClick={() => navigate({ kind: 'settings' })}>
+          {label}
+        </button>
+        <button type="button" onClick={goBack}>
+          back
+        </button>
+        <button type="button" onClick={() => held && proceed(held)}>
+          replay
+        </button>
+      </div>
+    );
+  }
+
+  afterEach(cleanup);
+
+  it('lets navigation through when no guard is installed', () => {
+    render(
+      <NavigationProvider>
+        <Probe />
+      </NavigationProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'go' }));
+    expect(screen.getByTestId('view')).toHaveTextContent('settings');
+  });
+
+  it('blocks navigate and goBack alike, then replays the held intent', () => {
+    render(
+      <NavigationProvider>
+        <Probe guard={() => false} />
+      </NavigationProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'go' }));
+    expect(screen.getByTestId('view')).toHaveTextContent('empty-state');
+
+    // The same veto covers the back stack — no second opt-in needed.
+    fireEvent.click(screen.getByRole('button', { name: 'back' }));
+    expect(screen.getByTestId('view')).toHaveTextContent('empty-state');
+
+    // `proceed` is the escape hatch a guard owns: replay what it blocked.
+    // (Ask again first — the last blocked intent was the `back`, and going
+    // back from the initial view is a no-op by design.)
+    fireEvent.click(screen.getByRole('button', { name: 'go' }));
+    fireEvent.click(screen.getByRole('button', { name: 'replay' }));
+    expect(screen.getByTestId('view')).toHaveTextContent('settings');
+  });
+
+  it('stops guarding once the screen unmounts', () => {
+    const { unmount } = render(
+      <NavigationProvider>
+        <Probe guard={() => false} />
+        <Probe label="outer" />
+      </NavigationProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'outer' }));
+    expect(screen.getAllByTestId('view')[0]).toHaveTextContent('empty-state');
+    unmount();
+
+    // A fresh tree with no guard navigates freely — the old guard did not
+    // outlive its component.
+    render(
+      <NavigationProvider>
+        <Probe />
+      </NavigationProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'go' }));
+    expect(screen.getByTestId('view')).toHaveTextContent('settings');
   });
 });
