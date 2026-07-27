@@ -7,7 +7,7 @@ use crate::ports::execution::TRANSPORT_ERROR_PREFIX;
 #[test]
 fn transport_prefixed_error_is_transport() {
     let err = format!(
-        "{}Timed out after the transport wall cap (1800s)",
+        "{}Timed out after the 1800s drain budget waiting for command stdout",
         TRANSPORT_ERROR_PREFIX
     );
     assert!(is_transport_failure(&err));

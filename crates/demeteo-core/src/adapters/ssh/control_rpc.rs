@@ -5,9 +5,8 @@
 //! contract is unit-testable without a runner or a socket.
 
 use super::session::SessionPool;
-use super::transport::{drain_stream, TRANSPORT_WALL_CAP};
+use super::transport::{drain_stream, DrainBudget, TRANSPORT_WALL_CAP};
 use std::io::Write;
-use std::time::Instant;
 
 #[derive(serde::Deserialize)]
 struct RpcResponse {
@@ -74,13 +73,13 @@ pub(super) fn call(
         .send_eof()
         .map_err(|e| format!("Failed to send EOF on control-RPC channel: {}", e))?;
 
-    let deadline = Instant::now() + TRANSPORT_WALL_CAP;
+    let budget = DrainBudget::starting_now(TRANSPORT_WALL_CAP);
     let mut raw_bytes = Vec::new();
     drain_stream(
         &mut channel,
         &sftp_sess.session,
         &mut raw_bytes,
-        deadline,
+        budget,
         "control-RPC response",
     )?;
     let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
