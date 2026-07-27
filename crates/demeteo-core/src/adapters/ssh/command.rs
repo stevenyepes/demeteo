@@ -6,12 +6,11 @@
 //! socket.
 
 use super::session::SessionPool;
-use super::transport::{drain_stream, transport_err, TRANSPORT_WALL_CAP};
+use super::transport::{drain_stream, transport_err, DrainBudget, TRANSPORT_WALL_CAP};
 use crate::paths;
 use crate::ports::execution::ShellOptions;
 use crate::shared::shell;
 use ssh2::Session;
-use std::time::Instant;
 
 /// Assemble the exact shell invocation sent over the channel. Pure — no
 /// session, no I/O — so the login/non-login and interactive wrapper choices
@@ -92,13 +91,16 @@ pub(super) fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<Str
     // Timeout-tolerant drain: a long silent command (e.g. `cargo test`
     // compiling) must not be aborted by the session's 10s blocking-call
     // timeout. See `drain_stream` / `TRANSPORT_WALL_CAP`.
-    let deadline = Instant::now() + TRANSPORT_WALL_CAP;
+    //
+    // One budget for both streams: stdout and stderr share it, so a command
+    // cannot spend the full cap draining each in turn.
+    let budget = DrainBudget::starting_now(TRANSPORT_WALL_CAP);
     let mut stdout_bytes = Vec::new();
     drain_stream(
         &mut channel,
         session,
         &mut stdout_bytes,
-        deadline,
+        budget,
         "command stdout",
     )?;
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
@@ -112,7 +114,7 @@ pub(super) fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<Str
             &mut err_stream,
             session,
             &mut stderr_bytes,
-            deadline,
+            budget,
             "command stderr",
         );
     }

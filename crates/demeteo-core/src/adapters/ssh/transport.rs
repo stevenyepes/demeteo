@@ -38,6 +38,52 @@ fn no_progress_expired(since_last_life: Duration) -> bool {
     since_last_life >= NO_PROGRESS_ABORT
 }
 
+/// The wall-clock allowance for a drain: the instant it must finish by, and the
+/// cap that instant was derived from.
+///
+/// Both, because they answer different questions. The deadline decides *when*
+/// to give up; the cap is what an expiry message can honestly name. Passing a
+/// bare `Instant` is what let the timeout error hard-code
+/// [`TRANSPORT_WALL_CAP`] — fine while every caller used that constant, a lie
+/// the moment one drains on a shorter budget.
+///
+/// A budget can also span several drains: a one-shot command drains stdout and
+/// then stderr against **one** budget, so it cannot spend the full cap twice.
+/// That is why this carries a deadline rather than a duration to start from.
+#[derive(Clone, Copy)]
+pub(super) struct DrainBudget {
+    deadline: Instant,
+    cap: Duration,
+}
+
+impl DrainBudget {
+    /// A budget of `cap`, running from now.
+    pub(super) fn starting_now(cap: Duration) -> Self {
+        Self {
+            deadline: Instant::now() + cap,
+            cap,
+        }
+    }
+
+    fn expired_at(&self, now: Instant) -> bool {
+        now >= self.deadline
+    }
+}
+
+#[cfg(test)]
+impl DrainBudget {
+    /// A budget of `cap` whose deadline has already passed — the state a shared
+    /// budget is in when a second stream drains against it after the first used
+    /// the allowance up. Constructing it directly is the only way to observe
+    /// that the deadline and the cap are independent without real sleeping.
+    fn already_spent(cap: Duration) -> Self {
+        Self {
+            deadline: Instant::now() - Duration::from_secs(1),
+            cap,
+        }
+    }
+}
+
 /// Tag `msg` as a *transport/connection* failure (the machine could not be
 /// reached or the channel broke) rather than a *command* failure (it ran and
 /// exited non-zero). Callers distinguish the two via
@@ -56,14 +102,14 @@ pub(super) fn transport_err(msg: impl std::fmt::Display) -> String {
 /// the moment a keepalive comes due (~30s after handshake) even while the
 /// command is alive and simply quiet. Send the keepalive it's waiting on and
 /// retry, so a long silent compile drains to real EOF instead of failing with
-/// "Timed out waiting on socket". `deadline` bounds the whole drain so a
+/// "Timed out waiting on socket". `budget` bounds the whole drain so a
 /// wedged remote is still killable. Bytes are accumulated raw and decoded once
 /// by the caller — decoding per chunk could split a multibyte UTF-8 sequence.
 pub(super) fn drain_stream<R: Read>(
     reader: &mut R,
     session: &Session,
     buf_out: &mut Vec<u8>,
-    deadline: Instant,
+    budget: DrainBudget,
     what: &str,
 ) -> Result<(), String> {
     // The liveness signal (`keepalive_send`) and the clock (`Instant::now`) are
@@ -75,7 +121,7 @@ pub(super) fn drain_stream<R: Read>(
         || session.keepalive_send().is_ok(),
         Instant::now,
         buf_out,
-        deadline,
+        budget,
         what,
     )
 }
@@ -91,7 +137,7 @@ fn drain_loop<R, K, C>(
     mut keepalive_ok: K,
     mut clock: C,
     buf_out: &mut Vec<u8>,
-    deadline: Instant,
+    budget: DrainBudget,
     what: &str,
 ) -> Result<(), String>
 where
@@ -114,10 +160,10 @@ where
             }
             Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
                 let now = clock();
-                if now >= deadline {
+                if budget.expired_at(now) {
                     return Err(transport_err(format!(
-                        "Timed out after the transport wall cap ({}s) waiting for {}",
-                        TRANSPORT_WALL_CAP.as_secs(),
+                        "Timed out after the {}s drain budget waiting for {}",
+                        budget.cap.as_secs(),
                         what
                     )));
                 }
@@ -220,13 +266,13 @@ mod tests {
         // Wall cap far in the future so the abort we assert is the no-progress
         // one, not the wall-cap timeout. Clock advances 10s per read (the real
         // blocking-read timeout cadence).
-        let deadline = Instant::now() + TRANSPORT_WALL_CAP;
+        let budget = DrainBudget::starting_now(TRANSPORT_WALL_CAP);
         let err = drain_loop(
             &mut SilentReader,
             || false, // keepalive always fails → transport is dead
             stepping_clock(Duration::from_secs(10)),
             &mut buf,
-            deadline,
+            budget,
             "command stdout",
         )
         .expect_err("a black-holed transport must abort, not hang");
@@ -258,19 +304,73 @@ mod tests {
         }
 
         let mut buf = Vec::new();
-        let deadline = Instant::now() + TRANSPORT_WALL_CAP;
+        let budget = DrainBudget::starting_now(TRANSPORT_WALL_CAP);
         // 30 timeouts × 10s = 300s of silence, > NO_PROGRESS_ABORT (120s).
         let out = drain_loop(
             &mut SilentThenEof(30),
             || true, // keepalive always succeeds → still alive
             stepping_clock(Duration::from_secs(10)),
             &mut buf,
-            deadline,
+            budget,
             "command stdout",
         );
         assert!(
             out.is_ok(),
             "a silent-but-alive command must drain to EOF, got: {out:?}",
+        );
+    }
+
+    /// An expiry must name the budget it actually blew. This used to read the
+    /// `TRANSPORT_WALL_CAP` constant directly, which was accurate only while
+    /// every caller drained on that cap — the HOME probe now runs on a much
+    /// shorter one, and an error announcing "1800s" for a drain that gave up
+    /// after 60 would send whoever reads the log looking for the wrong problem.
+    #[test]
+    fn the_timeout_names_the_budget_that_expired_not_the_transport_cap() {
+        let cap = Duration::from_secs(60);
+        let mut buf = Vec::new();
+        let err = drain_loop(
+            &mut SilentReader,
+            || true, // alive, so only the wall budget can end this
+            stepping_clock(Duration::from_secs(10)),
+            &mut buf,
+            DrainBudget::starting_now(cap),
+            "HOME probe output",
+        )
+        .expect_err("a drain past its budget must fail");
+        assert!(
+            err.contains("60s drain budget") && err.contains("HOME probe output"),
+            "expected the 60s budget to be named, got: {err}",
+        );
+        assert!(
+            !err.contains(&TRANSPORT_WALL_CAP.as_secs().to_string()),
+            "must not report the transport cap it was never given: {err}",
+        );
+    }
+
+    /// A budget is a deadline carried between calls, not an allowance renewed
+    /// on each: a one-shot command drains stdout and then stderr against the
+    /// same one, so it cannot spend the full cap twice. What makes that
+    /// expressible is that the deadline and the cap are independent — here a
+    /// 30-minute cap whose deadline has already passed still fails at once,
+    /// while the message names the full cap. A design that derived the deadline
+    /// from the cap on every call could not represent this state at all, and
+    /// the second stream would silently get a fresh half hour.
+    #[test]
+    fn a_shared_budget_stays_spent_across_streams() {
+        let mut buf = Vec::new();
+        let err = drain_loop(
+            &mut SilentReader,
+            || true,
+            Instant::now,
+            &mut buf,
+            DrainBudget::already_spent(TRANSPORT_WALL_CAP),
+            "command stderr",
+        )
+        .expect_err("a spent budget must not hand out a fresh allowance");
+        assert!(
+            err.contains(&format!("{}s drain budget", TRANSPORT_WALL_CAP.as_secs())),
+            "the cap survives independently of the deadline: {err}",
         );
     }
 }

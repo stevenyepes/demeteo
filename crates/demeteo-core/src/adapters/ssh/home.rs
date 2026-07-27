@@ -4,9 +4,30 @@
 //! whole HOME concern is one file.
 
 use super::session::SessionPool;
-use super::transport::{drain_stream, TRANSPORT_WALL_CAP};
+use super::transport::{drain_stream, DrainBudget};
 use ssh2::Session;
-use std::time::Instant;
+use std::time::Duration;
+
+/// Wall-clock allowance for the HOME probe, deliberately far below the
+/// transport's 30-minute [`TRANSPORT_WALL_CAP`].
+///
+/// That cap is sized for a one-shot command that may legitimately go quiet for
+/// half an hour — `cargo test` compiling in silence. This probe is a single
+/// `printf` on a non-login, non-interactive shell, so it sources no profile and
+/// has nothing to be slow about; a second is generous and 60s is pure headroom
+/// for a loaded box or a stalled network home directory. Borrowing the
+/// transport cap meant a remote that connected but never answered — a hung
+/// login profile, an NFS-wedged `$HOME` — kept acking keepalives, so the
+/// dead-connection abort never fired and the probe rode all 30 minutes.
+///
+/// Below [`NO_PROGRESS_ABORT`] on purpose, which inverts the usual ordering:
+/// for a probe this small, waiting two minutes to *distinguish* a dead
+/// connection from a quiet one is itself the failure. Whichever it is, 60s of
+/// silence is already an answer.
+///
+/// [`TRANSPORT_WALL_CAP`]: super::transport::TRANSPORT_WALL_CAP
+/// [`NO_PROGRESS_ABORT`]: super::transport::NO_PROGRESS_ABORT
+const HOME_PROBE_CAP: Duration = Duration::from_secs(60);
 
 /// Probe `$HOME` over a fresh channel on an already-connected session.
 /// `printf %s` avoids trailing newlines and respects quoting.
@@ -17,13 +38,12 @@ fn probe_home_over_channel(session: &Session) -> Result<String, String> {
     channel
         .exec("printf %s \"$HOME\"")
         .map_err(|e| format!("Failed to exec HOME probe over SSH: {}", e))?;
-    let deadline = Instant::now() + TRANSPORT_WALL_CAP;
     let mut raw_bytes = Vec::new();
     drain_stream(
         &mut channel,
         session,
         &mut raw_bytes,
-        deadline,
+        DrainBudget::starting_now(HOME_PROBE_CAP),
         "HOME probe output",
     )?;
     let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
@@ -100,6 +120,25 @@ impl SessionPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The probe's budget has to stay below both transport thresholds, and the
+    /// reason differs for each. Below the wall cap is the whole point — a
+    /// `printf` must not be allowed the half hour a silent `cargo test` needs.
+    /// Below the no-progress abort matters because that abort only fires when
+    /// keepalives *fail*: the case this cap exists for is a remote that keeps
+    /// acking them while its shell never answers, which the abort cannot see.
+    #[test]
+    fn the_home_probe_budget_stays_under_both_transport_thresholds() {
+        use super::super::transport::{NO_PROGRESS_ABORT, TRANSPORT_WALL_CAP};
+        assert!(
+            HOME_PROBE_CAP < TRANSPORT_WALL_CAP,
+            "a one-line probe must not inherit the silent-compile allowance",
+        );
+        assert!(
+            HOME_PROBE_CAP < NO_PROGRESS_ABORT,
+            "a keepalive-acking remote that never answers must still fail fast",
+        );
+    }
 
     /// A non-zero exit means the remote shell never got far enough to print a
     /// HOME — caching whatever bytes came back would poison every later path
