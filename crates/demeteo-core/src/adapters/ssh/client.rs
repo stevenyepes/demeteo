@@ -628,7 +628,8 @@ impl ExecutionPort for SshClientAdapter {
         let cmd = cmd.to_string();
         let machines = self.machines.clone();
         let sessions = self.sessions.clone();
-        tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let limit = opts.timeout;
+        let work = tokio::task::spawn_blocking(move || -> Result<String, String> {
             // A failure to establish/reuse the session is a transport failure,
             // not a command failure — tag it so callers (e.g. the verifier)
             // don't misclassify an unreachable machine as a red build.
@@ -645,7 +646,11 @@ impl ExecutionPort for SshClientAdapter {
             // sources its profile) so the caller's env wins; `cd` is baked
             // into the body so a failed `cd` aborts before the command runs.
             let exports = shell::export_prefix(&opts.env);
-            let body = shell::command_body(opts.cwd.as_deref(), &exports, &cmd);
+            let body = format!(
+                "{}{}",
+                shell::job_control_prefix(opts.interactive),
+                shell::command_body(opts.cwd.as_deref(), &exports, &cmd)
+            );
             let full_cmd = if opts.login_shell {
                 // `-i` (interactive) sources `~/.bashrc`, where tool-managers
                 // (mise/asdf/nvm) put their PATH activation behind the standard
@@ -662,9 +667,27 @@ impl ExecutionPort for SshClientAdapter {
             };
 
             exec_over_channel(&sftp_sess.session, &full_cmd)
-        })
-        .await
-        .map_err(|e| format!("blocking task panicked: {}", e))?
+        });
+
+        // `ShellOptions::timeout`, to the extent this transport can honour it.
+        // ssh2 is a synchronous API driving a channel we cannot signal from
+        // here, so the deadline bounds *our* wait; the remote process keeps
+        // running until it exits on its own. Documented on the field, and the
+        // error is the same one the local adapter returns, so callers classify
+        // an expiry identically on both transports.
+        match limit {
+            Some(limit) => match tokio::time::timeout(limit, work).await {
+                Ok(joined) => joined.map_err(|e| format!("blocking task panicked: {}", e))?,
+                Err(_) => Err(format!(
+                    "{}command exceeded its {}s ceiling",
+                    crate::ports::execution::TIMEOUT_ERROR_PREFIX,
+                    limit.as_secs()
+                )),
+            },
+            None => work
+                .await
+                .map_err(|e| format!("blocking task panicked: {}", e))?,
+        }
     }
 
     async fn read_file(&self, machine_id: &str, path: &str) -> Result<String, String> {

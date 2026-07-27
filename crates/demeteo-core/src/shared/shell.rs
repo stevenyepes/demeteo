@@ -47,6 +47,30 @@ pub fn command_body(cwd: Option<&str>, exports: &str, cmd: &str) -> String {
     }
 }
 
+/// Prefix that turns **job control off** for an interactive shell.
+///
+/// `bash -i` enables monitor mode, which puts every background job in a
+/// *process group of its own*. That quietly defeats killing a command's tree:
+/// `ShellOptions::timeout` signals the child's process group, and with monitor
+/// mode on a `sleep 60 &` sits in a different group and survives — the exact
+/// orphaned-process case the deadline exists to prevent.
+///
+/// We only ever pass `-i` so the user's `~/.bashrc` is sourced, because that is
+/// where `mise`/`asdf`/`nvm` put their PATH activation (see
+/// `ShellOptions::interactive`). A batch `-c` invocation has no use for job
+/// control, so switching it back off costs nothing and keeps the whole command
+/// in one signalable group.
+///
+/// Applied by both adapters so the body stays byte-identical across transports
+/// for the same options (D2).
+pub fn job_control_prefix(interactive: bool) -> &'static str {
+    if interactive {
+        "set +m; "
+    } else {
+        ""
+    }
+}
+
 /// Escape `s` so it is safe to interpolate into a POSIX shell command
 /// line as a single argument.
 pub fn escape_posix(s: &str) -> String {

@@ -11,6 +11,15 @@ use std::collections::BTreeMap;
 /// message. A plain command failure carries stderr with no prefix.
 pub const TRANSPORT_ERROR_PREFIX: &str = "transport: ";
 
+/// Prefix on the `Err` string when the command was **abandoned at its
+/// [`ShellOptions::timeout`]** rather than having run to a verdict. Kept
+/// distinct from [`TRANSPORT_ERROR_PREFIX`] and from a bare non-zero exit
+/// for the same reason D3 separates those two: a caller that treated a
+/// timeout as a command verdict would redirect an agent to "fix" code that
+/// never finished being tested. Both prefixes classify as an *environment*
+/// failure; only an actual non-zero exit is a verdict.
+pub const TIMEOUT_ERROR_PREFIX: &str = "timeout: ";
+
 /// Explicit shell context for [`ExecutionPort::run_command_with`]. Every
 /// field is data the caller supplies; **no adapter may fall back to ambient
 /// process state** (the GUI's `PATH`/`HOME`/cwd). This is decision **D2** in
@@ -65,6 +74,25 @@ pub struct ShellOptions {
     /// export order is deterministic (matters for conformance assertions
     /// and reproducible remote command strings).
     pub env: BTreeMap<String, String>,
+    /// Wall-clock ceiling on the command. `None` (the default) means no
+    /// ceiling.
+    ///
+    /// Enforced **by the adapter**, not by wrapping the returned future in
+    /// `tokio::time::timeout`: both adapters do their work on the blocking
+    /// pool, where dropping the future abandons the *wait* and leaves the
+    /// process running. Owning the deadline is what lets an adapter actually
+    /// stop the work — the local one kills the child's whole process group,
+    /// so a `bash -c "npm test"` that hangs takes `npm` with it instead of
+    /// orphaning it into a worktree that is about to be torn down.
+    ///
+    /// On expiry the call returns `Err` prefixed with
+    /// [`TIMEOUT_ERROR_PREFIX`].
+    ///
+    /// Transport note: the SSH adapter can only abandon the wait — ssh2's
+    /// API is synchronous and the remote process outlives the channel — so
+    /// there the deadline bounds *demeteo's* wait, not the command. The
+    /// error is identical either way.
+    pub timeout: Option<std::time::Duration>,
 }
 
 impl ShellOptions {
