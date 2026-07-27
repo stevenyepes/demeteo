@@ -25,6 +25,7 @@ import { RefreshCw } from 'lucide-react';
 
 import { formatError } from '../../lib/errors';
 import { WorkflowBuilder, type WorkflowSaveRequest } from './WorkflowBuilder';
+import type { WorkflowScheduleValue } from './ScheduleDrawer';
 import { TemplatePicker, type TemplateChoice } from './TemplatePicker';
 import type { WorkflowDefinitionV2 } from './types';
 
@@ -36,6 +37,7 @@ interface WorkflowRow {
   is_starter: boolean;
   version: number;
   version_id: string;
+  schedule: WorkflowScheduleValue | null;
 }
 
 export interface WorkflowBuilderScreenProps {
@@ -51,6 +53,8 @@ interface Loaded {
   description: string;
   version: number;
   isStarter: boolean;
+  /** Off the workflow row, not the graph — see `ScheduleDrawer`. */
+  schedule: WorkflowScheduleValue | null;
 }
 
 export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScreenProps) {
@@ -71,6 +75,7 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
       description: row.description,
       version: row.version,
       isStarter: row.is_starter,
+      schedule: row.schedule ?? null,
     };
   }, []);
 
@@ -107,6 +112,7 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
           description: '',
           version: 0,
           isStarter: false,
+          schedule: null,
         });
         return;
       }
@@ -121,6 +127,9 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
           version: 0,
           isStarter: false,
           name: `${source.name} (copy)`,
+          // A clone copies the *graph*, not the cron: two workflows firing on
+          // the same schedule is never what "duplicate this" meant.
+          schedule: null,
         });
         setError(null);
       } catch (err) {
@@ -139,13 +148,20 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
         name,
         description,
         definition,
-        note: null,
+        // The version drawer lists every row with its note; sending `null`
+        // left each builder save as a blank line in history, where the form
+        // this replaced wrote "Updated to version N". A first save is a
+        // creation, so say which it was.
+        note: loaded?.workflowId ? 'Edited in the builder' : 'Created in the builder',
       });
       // A first save mints the workflow row, so adopt its id — the version
-      // drawer, the draft slot, and the next save all key off it.
+      // drawer, the draft slot, and the next save all key off it. The saved
+      // graph comes along too: it is what storage now holds, so anything that
+      // re-seeds from this state (a remount, a reopen) starts from it rather
+      // than from the template the author began with.
       setLoaded((prev) =>
         prev
-          ? { ...prev, workflowId: row.id, version: row.version, name, description }
+          ? { ...prev, workflowId: row.id, version: row.version, name, description, definition }
           : prev,
       );
     },
@@ -182,14 +198,18 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
   return (
     <WorkflowBuilder
       // Remounting on identity change resets history and the draft slot, which
-      // is what "opened a different workflow" should mean.
-      key={loaded.workflowId ?? 'new'}
+      // is what "opened a different workflow" should mean. Key off what was
+      // *opened*, not off `loaded.workflowId`: that one flips `null → wf-…` on
+      // a new workflow's first save, and remounting mid-session would throw
+      // away the author's undo history for what is still the same edit.
+      key={workflowId ?? 'new'}
       workflowId={loaded.workflowId}
       definition={loaded.definition}
       name={loaded.name}
       description={loaded.description}
       version={loaded.version}
       isStarter={loaded.isStarter}
+      schedule={loaded.schedule}
       onSave={save}
       onWorkflowReplaced={({ version, name, description }) =>
         setLoaded((prev) => (prev ? { ...prev, version, name, description } : prev))

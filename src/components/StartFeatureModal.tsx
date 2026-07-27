@@ -323,6 +323,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setGraph(null);
       return;
     }
+    // Clear before fetching, not only when the selection empties: otherwise
+    // *switching* workflows leaves the previous one's shape on screen under
+    // the new one's name until the fetch resolves — on the surface whose whole
+    // job is "is this the pipeline I meant?".
+    setSteps([]);
+    setGraph(null);
     let cancelled = false;
     (async () => {
       try {

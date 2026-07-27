@@ -42,6 +42,7 @@ import {
   FAILURE_CLASS_LABELS,
   RETRY_STRATEGY_LABELS,
   defaultRetryRule,
+  enumLiteral,
   fieldsFromSchema,
   jsonFieldText,
   parseJsonField,
@@ -406,8 +407,11 @@ function FieldControlView({
       return (
         <select
           id={id}
-          value={typeof value === 'string' ? value : ''}
-          onChange={(evt) => onChange(evt.target.value || null)}
+          value={value == null ? '' : String(value)}
+          // Through `enumLiteral` rather than the raw `<option>` string: a
+          // schema may enumerate numbers or booleans, and the DOM only ever
+          // hands back a string.
+          onChange={(evt) => onChange(enumLiteral(field, evt.target.value || null))}
           className={INPUT_CLASS}
         >
           {options.map((o) => (

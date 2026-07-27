@@ -29,9 +29,15 @@ export type FieldControl =
   | 'json'; // object/array with no published inner shape
 
 export interface EnumOption {
-  /** `null` is a real, distinct choice: "inherit / unset". */
+  /** The `<option>` value — always a string, because that is what the DOM
+   *  gives back on change. Use `literal` to write the edit through. */
   value: string | null;
   label: string;
+  /** The schema's own value for this choice, at its original type. A schema
+   *  may enumerate numbers or booleans (`enum: [1, 2, 3]`), and writing the
+   *  stringified `"1"` back into `config` would fail the published schema at
+   *  the save boundary. `null` for the "inherit / unset" choice. */
+  literal: unknown;
 }
 
 export interface SchemaField {
@@ -82,12 +88,22 @@ function enumOptions(schema: Record<string, unknown>, nullable: boolean): EnumOp
       sawNull = true;
       continue;
     }
-    options.push({ value: String(v), label: humanizeKey(String(v)) });
+    options.push({ value: String(v), label: humanizeKey(String(v)), literal: v });
   }
   // The "unset" choice leads, so the inherit-by-default posture is the first
   // thing the author sees rather than something they scroll past.
-  if (sawNull || nullable) options.unshift({ value: null, label: 'Inherit / unset' });
+  if (sawNull || nullable) {
+    options.unshift({ value: null, label: 'Inherit / unset', literal: null });
+  }
   return options;
+}
+
+/** The schema value behind an `<option>`'s string, for writing an edit back at
+ *  its original type. Unknown strings pass through unchanged — a stored value
+ *  the schema no longer enumerates must not be silently rewritten. */
+export function enumLiteral(field: SchemaField, selected: string | null): unknown {
+  const match = field.options?.find((o) => o.value === selected);
+  return match ? match.literal : selected;
 }
 
 function controlFor(
