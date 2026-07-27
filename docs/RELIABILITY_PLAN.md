@@ -3,7 +3,7 @@
 > **Scope:** silent-failure modes, lost work on crash / network drop, and
 > accumulated state drift in the `StepExecutor` pipeline and the SSH transport.
 > Most of the original plan shipped; what remains here is the **invariant set**
-> (which constrains anything new) and the **four items still open**.
+> (which constrains anything new) and the **items still open**.
 >
 > Cross-references: [`DECISIONS.md`](DECISIONS.md) decisions 14, 15 (feature
 > re-entry, telemetry) · [`DDD_MODEL.md`](DDD_MODEL.md) §4 Feature Orchestration
@@ -60,7 +60,7 @@ in-memory checkpoint items this plan originally carried.
 
 ### S1. Stale sessions stay in cache — **[Partial]**
 
-**Where:** `adapters/ssh/`
+**Where:** `adapters/ssh/session.rs` (`SessionPool`)
 
 The session cache evicts on the next probe failure. A half-open connection (TCP
 up, SSH dropped) still serves commands that time out rather than reconnecting
@@ -73,13 +73,23 @@ before returning a cached session; add a background reaper for sessions idle
 
 ### S2. `Sftp` is serialized by a single `Mutex<Sftp>` — **[Partial]**
 
-**Where:** `adapters/ssh/`
+**Where:** `adapters/ssh/sftp.rs` (`with_sftp`), `adapters/ssh/session.rs` (`SessionPool::get`)
 
 `ssh2::Sftp` is not thread-safe; the mutex-per-session design serializes SFTP
 ops for one machine across the whole app.
 
+The lock is held for the **whole** operation, not just the `ssh2` call:
+`with_sftp` takes the guard and hands it to the closure, which then runs the
+entire transfer under it. Pushing the `demeteo-runner` binary therefore blocks
+every other SFTP op on that machine for the duration of the upload, with no
+ceiling — and because `SessionPool::get`'s liveness probe is itself a `readdir`
+on the same mutex, a large transfer also delays the health check that decides
+whether to reconnect. That is the head-of-line blocking behind S1's symptom.
+
 **Fix:** `tokio::sync::Mutex` plus a "never hold across awaits" lint;
-longer-term, migrate to `russh`.
+longer-term, migrate to `russh`. Narrowing the guard to the individual `ssh2`
+call is not sufficient on its own — `File` borrows the session, so the read/write
+loop genuinely needs it held; the transfer has to move off the shared handle.
 
 ### S4. Retry on transient SSH drops — **[Open]**
 
@@ -110,6 +120,47 @@ Symptom: deleted-machine forwards keep accepting connections until app restart.
 Resolves `auth_type` via `match` with a default branch. Audit before changing
 anything; the fix, if one is needed, is a typed
 `RouterError::UnknownAuthType(String)` bubbled up.
+
+### S7. `control_rpc` drains on the 30-minute transport cap — **[Open]**
+
+**Where:** `adapters/ssh/control_rpc.rs`
+
+`TRANSPORT_WALL_CAP` is sized for a one-shot command that may legitimately go
+quiet for half an hour while a build compiles in silence. A control-socket
+round-trip to `demeteo-runner` is a single request/response and has no such
+excuse, but it still drains on that cap.
+
+The 30 minutes is reachable: `NO_PROGRESS_ABORT` only fires once keepalives stop
+being acked, so it does not cover a runner that holds the socket open while
+never answering. `remote_runner_status` is on this path, and the Machines view
+probes every configured machine on mount — so the visible symptom is a status
+row that spins indefinitely rather than reporting a dead runner.
+
+**Fix:** give it its own `DrainBudget`, the way the HOME probe now has
+`HOME_PROBE_CAP` (`adapters/ssh/home.rs`). The budget type already carries the
+cap alongside the deadline, so the timeout message names whichever budget
+actually expired; only the constant and the call site need to change. Pick the
+value against the runner's slowest legitimate control method, not against the
+status probe.
+
+### S8. `RouterExecutionPort::resolve` hits the DB on every forwarded call — **[Open]**
+
+**Where:** `adapters/router.rs`
+
+Every method the router forwards first calls `resolve(machine_id)`, which is a
+synchronous `MachineRepository` query behind the connection mutex — so it is
+paid per `run_command`, per `read_file`, per `resolve_user`, on whichever thread
+the caller is on. The router is the impl actually wired into the app, so this is
+on every remote call, not a corner case.
+
+Unlike the HOME lookup there is no cache in front of it, and unlike the SSH
+adapter's own methods the router does not put it on the blocking pool.
+
+**Fix:** cache the resolved `Machine` per `machine_id` with invalidation on
+machine update/delete (the same commands S5 needs a hook in), or hand the router
+a pre-resolved handle at composition time. Whichever way, the lookup should not
+be a synchronous DB hit on a runtime thread — see the `spawn_blocking` treatment
+`SshClientAdapter::resolve_user` now gets.
 
 ---
 
