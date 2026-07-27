@@ -138,7 +138,11 @@ export function Palette({ entries, onSelect, className = '' }: PaletteProps) {
           />
         ))}
         {shown.length === 0 && (
-          <p className="px-1 py-2 text-[11px] text-slate-500">No node type matches “{query}”.</p>
+          <p className="px-1 py-2 text-[11px] text-slate-500">
+            {/* An empty catalog is the load still in flight, not a failed
+                search — saying "no match" for a query nobody typed is a lie. */}
+            {entries.length === 0 ? 'Loading node types…' : `No node type matches “${query}”.`}
+          </p>
         )}
       </div>
     </div>
