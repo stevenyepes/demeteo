@@ -37,6 +37,7 @@ import Editor from '@monaco-editor/react';
 import {
   AlertTriangle,
   ArrowLeft,
+  CalendarClock,
   Check,
   Code2,
   GitCompare,
@@ -51,6 +52,7 @@ import { useErrorBus } from '../../lib/errorBus';
 import { useNavigationGuard } from '../../hooks/useNavigationGuard';
 import type { NavigationIntent } from '../../context/NavigationContext';
 import { ConfigPanel } from './ConfigPanel';
+import { ScheduleDrawer, type WorkflowScheduleValue } from './ScheduleDrawer';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import {
   VersionDrawer,
@@ -89,6 +91,9 @@ export interface WorkflowBuilderProps {
   version?: number;
   /** Starters can be reverted to their bundled definition from history. */
   isStarter?: boolean;
+  /** The workflow row's saved schedule, if it has one. Lives outside the graph
+   *  (decision 41) and is edited through its own drawer. */
+  schedule?: WorkflowScheduleValue | null;
   /** Persist the definition. Rejecting surfaces as an error toast and leaves
    *  the editor dirty; resolving marks it clean and clears the draft. */
   onSave: (request: WorkflowSaveRequest) => Promise<void>;
@@ -138,6 +143,7 @@ export function WorkflowBuilder({
   description: initialDescription = '',
   version,
   isStarter = false,
+  schedule: initialSchedule = null,
   onSave,
   onWorkflowReplaced,
   onClose,
@@ -160,6 +166,14 @@ export function WorkflowBuilder({
   const [pendingExit, setPendingExit] = useState<PendingExit | null>(null);
   const [draftOffer, setDraftOffer] = useState<WorkflowDraft | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
+  /** The workflow row's schedule. Tracked here because the drawer writes it
+   *  directly (`workflow_save_schedule`) rather than through `onSave` — a cron
+   *  change mints no version. */
+  const [schedule, setSchedule] = useState<WorkflowScheduleValue | null>(
+    initialSchedule ?? null,
+  );
+  useEffect(() => setSchedule(initialSchedule ?? null), [initialSchedule]);
   /** Read-only JSON view of the graph (decision 42 / PRD §11.5). Read-only on
    *  purpose: an editable source pane is a second authoring surface that can
    *  disagree with the canvas, and Decision 42 scoped v1 to "show me what this
@@ -439,6 +453,26 @@ export function WorkflowBuilder({
           </span>
         )}
 
+        {/* Scheduling lives on the workflow row, not in the graph (decision
+            41), so it needs a saved workflow to attach to and writes on its
+            own rather than through `onSave`. */}
+        {workflowId ? (
+          <button
+            type="button"
+            onClick={() => setShowSchedule((open) => !open)}
+            aria-label="Schedule"
+            title={schedule ? `Scheduled: ${schedule.cron}` : 'Schedule this workflow'}
+            className={[
+              'rounded-lg border p-1.5 transition-colors',
+              showSchedule || schedule
+                ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
+                : 'border-slate-700/60 text-slate-300 hover:border-slate-600 hover:text-white',
+            ].join(' ')}
+          >
+            <CalendarClock className="h-4 w-4" />
+          </button>
+        ) : null}
+
         <button
           type="button"
           onClick={() => setShowSource((open) => !open)}
@@ -661,6 +695,14 @@ export function WorkflowBuilder({
               setComparison(null);
               setShowHistory(false);
             }}
+          />
+        )}
+        {showSchedule && workflowId && (
+          <ScheduleDrawer
+            workflowId={workflowId}
+            schedule={schedule}
+            onSaved={setSchedule}
+            onClose={() => setShowSchedule(false)}
           />
         )}
       </div>
