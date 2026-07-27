@@ -1,2 +1,18 @@
+# Build tuning for constrained-RAM machines (16 GB, 8 cores).
+#
+# Why: the full dep tree (tokio, tauri, reqwest, bundled SQLite via rusqlite,
+# libssh2 via ssh2) launches one rustc/cc per core by default. Eight parallel
+# codegen jobs at 1-2 GB each blow past 16 GB of RAM, forcing swap and making
+# the whole machine crawl during builds. Capping jobs keeps the working set
+# under the RAM ceiling; the profile tweak cuts debug-info RAM and disk.
+
 [build]
 target-dir = "src-tauri/target"
+# Fewer parallel rustc/cc processes -> lower peak memory. Bump to 6 if builds
+# comfortably stay out of swap on your machine.
+jobs = 4
+
+[profile.dev]
+# Line tables keep usable backtraces/panics but skip full DWARF debug info,
+# which is the main driver of both compile-time memory and target/ disk bloat.
+debug = "line-tables-only"
