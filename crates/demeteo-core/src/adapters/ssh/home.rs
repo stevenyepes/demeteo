@@ -66,9 +66,12 @@ fn validate_home(raw: &str, exit_code: i32) -> Result<String, String> {
 
 impl SessionPool {
     /// Resolve the remote user's HOME, serving it from `home_cache` when we've
-    /// already paid for the round-trip on this machine. Blocking, like every
-    /// other `ssh2` call: the async `ExecutionPort` methods reach it from
-    /// inside `spawn_blocking` through the shared `Arc<SessionPool>`.
+    /// already paid for the round-trip on this machine.
+    ///
+    /// Blocking, like every other `ssh2` call, and on a cache miss it can cost
+    /// a connect and an auth handshake on top of the probe itself — so every
+    /// caller must reach it from inside `spawn_blocking`. Both do today:
+    /// `ExecutionPort::resolve_home` and `control_rpc::call`.
     pub(super) fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
         if let Ok(cache) = self.home_cache.lock() {
             if let Some(home) = cache.get(machine_id) {
