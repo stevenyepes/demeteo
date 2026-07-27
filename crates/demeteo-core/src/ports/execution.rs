@@ -320,6 +320,13 @@ mod starter_baseline;
 #[path = "../../tests/conformance/run_event_parity.rs"]
 mod run_event_parity;
 
+/// Stored-topology gate (P3.6): a version carrying a schema-v2 document
+/// (V34) schedules the edges that document draws, not the chain its v1
+/// projection flattens to. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/stored_graph_topology.rs"]
+mod stored_graph_topology;
+
 /// `command` node gate (P3.5): a starter-shaped workflow with a command
 /// node runs under the stub harness, fails like a harness on a non-zero
 /// exit, and honors the PRD §5.4 idempotency rule on resume. Included the

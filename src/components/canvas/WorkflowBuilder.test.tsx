@@ -505,3 +505,30 @@ describe('draft recovery', () => {
     }
   });
 });
+
+// ── Read-only source view (task P3.6, decision 42) ───────────────────────
+
+describe('source view', () => {
+  it('shows the graph as schema-v2 JSON, read-only', async () => {
+    render(
+      <NavigationProvider>
+        <Harness />
+      </NavigationProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('workflow-builder')).toBeTruthy());
+
+    expect(screen.queryByTestId('source-view')).toBeNull();
+    fireEvent.click(screen.getByLabelText('View source'));
+
+    const pane = screen.getByTestId('source-view');
+    expect(within(pane).getByText(/read-only/i)).toBeTruthy();
+    // The Monaco stub renders its value as a textarea's content.
+    const editor = within(pane).getByTestId('monaco-editor') as HTMLTextAreaElement;
+    const parsed = JSON.parse(editor.value);
+    expect(parsed.schema_version).toBe(2);
+    expect(parsed.nodes.map((n: { id: string }) => n.id)).toEqual(['plan', 'ship']);
+
+    fireEvent.click(within(pane).getByLabelText('Close source view'));
+    expect(screen.queryByTestId('source-view')).toBeNull();
+  });
+});

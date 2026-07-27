@@ -36,7 +36,7 @@
 
 The hexagonal pattern is preserved. The driver side is a small set of
 focused React views (`ProjectRail`, `ProjectHome`, `FeatureDetail`,
-`GateView`, `WorkflowEditor`, `Settings`) that consume step transitions,
+`GateView`, `WorkflowBuilderScreen`, `Settings`) that consume step transitions,
 not agent transcripts. The port side is split into narrow,
 bounded-context-aligned traits (see §2). The core domain holds the
 step executor driver, the agent session lifecycle, and the worktree
@@ -376,7 +376,6 @@ src/                              # React frontend
 │   ├── TerminalWindow.tsx
 │   ├── TopBar.tsx
 │   ├── ui/
-│   ├── WorkflowEditor.tsx
 │   └── WorkflowList.tsx
 ├── lib/                           # Typed Tauri IPC wrappers (no raw invoke() in components)
 │   ├── agentModels.ts
@@ -531,7 +530,7 @@ transitions as events, not streams.
 │ Rail     │   - ProjectHome (default)                       │
 │          │   - FeatureDetail (when a feature is active)    │
 │ [search] │   - GateView (when a gate is active)            │
-│ • Proj A │   - WorkflowEditor (when editing a workflow)    │
+│ • Proj A │   - WorkflowBuilderScreen (editing a workflow)  │
 │ • Proj B │   - PreferencesScreen (when opened)             │
 │ • Proj C │                                                  │
 │          │                                                  │

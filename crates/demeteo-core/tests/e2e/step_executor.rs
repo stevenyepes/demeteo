@@ -1764,6 +1764,7 @@ async fn test_feature_start_pins_workflow_version() {
                 { "id": "s2", "kind": "sync", "title": "S2" }
             ])
             .to_string(),
+            definition_json: None,
             note: None,
             created_at: paths::now_ms(),
         })

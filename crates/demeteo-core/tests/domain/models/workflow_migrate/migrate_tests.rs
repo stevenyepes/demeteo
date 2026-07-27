@@ -324,3 +324,148 @@ fn canvas_fixtures_are_current() {
         }
     }
 }
+
+// ── v2 → v1 projection (task P3.6) ───────────────────────────────────────────
+
+/// The load-bearing property of two-representation storage: for a chain — which
+/// every starter is — projecting the migrated graph back must reproduce the
+/// author's step list *exactly*. If it didn't, saving a workflow through the
+/// builder would silently rewrite the definition the runner executes.
+#[test]
+fn every_starter_round_trips_through_the_v2_projection() {
+    for name in STARTERS {
+        let doc = load_starter(name);
+        let original = steps_of(&doc);
+        let def = migrate_definition(&doc).expect("migrates");
+        let projected = project_v2_to_v1(&def);
+        assert_eq!(
+            projected, original,
+            "starter '{name}' did not survive the v1 → v2 → v1 round trip"
+        );
+    }
+}
+
+/// Order is the graph's, not the definition array's: a builder that appends a
+/// node writes it at the end of `nodes` regardless of where it was wired in,
+/// so the projection has to sort or the v1 list would claim the wrong sequence.
+#[test]
+fn projection_orders_by_dependency_not_by_node_array_order() {
+    let def: WorkflowDefinitionV2 = serde_json::from_value(serde_json::json!({
+        "schema_version": 2,
+        "id": "wf-order",
+        "name": "Order",
+        // Deliberately authored back-to-front.
+        "nodes": [
+            { "id": "c", "type": "finalize", "title": "Ship", "config": {} },
+            { "id": "b", "type": "agent", "title": "Build", "config": {} },
+            { "id": "a", "type": "agent", "title": "Plan", "config": {} }
+        ],
+        "edges": [ { "from": "a", "to": "b" }, { "from": "b", "to": "c" } ]
+    }))
+    .unwrap();
+
+    let ids: Vec<String> = project_v2_to_v1(&def).into_iter().map(|s| s.id.0).collect();
+    assert_eq!(ids, vec!["a", "b", "c"]);
+}
+
+/// A diamond has no single correct v1 order, but it must have a *valid* one:
+/// every node appears exactly once, after all of its dependencies.
+#[test]
+fn a_branching_graph_projects_to_a_valid_linear_order() {
+    let def: WorkflowDefinitionV2 = serde_json::from_value(serde_json::json!({
+        "schema_version": 2,
+        "id": "wf-diamond",
+        "name": "Diamond",
+        "nodes": [
+            { "id": "plan", "type": "agent", "title": "Plan", "config": {} },
+            { "id": "left", "type": "agent", "title": "Left", "config": {} },
+            { "id": "right", "type": "agent", "title": "Right", "config": {} },
+            { "id": "ship", "type": "finalize", "title": "Ship", "config": {} }
+        ],
+        "edges": [
+            { "from": "plan", "to": "left" },
+            { "from": "plan", "to": "right" },
+            { "from": "left", "to": "ship" },
+            { "from": "right", "to": "ship" }
+        ]
+    }))
+    .unwrap();
+
+    let ids: Vec<String> = project_v2_to_v1(&def).into_iter().map(|s| s.id.0).collect();
+    assert_eq!(ids.len(), 4, "every node projects exactly once");
+    let at = |id: &str| ids.iter().position(|s| s == id).expect("present");
+    assert!(at("plan") < at("left") && at("plan") < at("right"));
+    assert!(at("left") < at("ship") && at("right") < at("ship"));
+}
+
+/// What v1 cannot hold is dropped from the projection — and only from the
+/// projection. This is the whole reason `definition_json` is stored beside it.
+#[test]
+fn the_projection_drops_exactly_what_v1_cannot_express() {
+    let def: WorkflowDefinitionV2 = serde_json::from_value(serde_json::json!({
+        "schema_version": 2,
+        "id": "wf-lossy",
+        "name": "Lossy",
+        "nodes": [
+            {
+                "id": "a", "type": "agent", "title": "A", "config": { "prompt_template": "go" },
+                "position": { "x": 120.0, "y": 40.0 }
+            },
+            {
+                "id": "b", "type": "agent", "title": "B", "config": {},
+                "join": "any_success",
+                "retry": { "environment": { "strategy": "in_place", "max_attempts": 2 } }
+            }
+        ],
+        "edges": [ { "from": "a", "to": "b", "when": "${{ nodes.a.outputs.verdict != 'FAIL' }}" } ]
+    }))
+    .unwrap();
+
+    let steps = project_v2_to_v1(&def);
+    assert_eq!(steps.len(), 2);
+    // The prompt (v1-expressible) survives…
+    assert_eq!(steps[0].prompt_template.as_deref(), Some("go"));
+    // …while the in-place environment rule leaves no v1 trace: only a
+    // *redirect* maps onto `on_failure`.
+    assert_eq!(steps[1].on_failure, None);
+    // And the stored document keeps every one of them for the builder.
+    assert_eq!(def.nodes[0].position.map(|p| p.x), Some(120.0));
+    assert!(def.edges[0].when.is_some());
+}
+
+/// `WorkflowVersion::definition` is the one seam every graph reader uses.
+#[test]
+fn a_version_prefers_its_stored_document_and_falls_back_to_migration() {
+    use crate::domain::ids::{WorkflowId, WorkflowVersionId};
+    use crate::domain::models::WorkflowVersion;
+
+    let doc = load_starter("simple-task");
+    let steps = steps_of(&doc);
+    let migrated = migrate_definition(&doc).expect("migrates");
+
+    let row = |definition_json: Option<String>| WorkflowVersion {
+        id: WorkflowVersionId::from("wf-x-v1"),
+        workflow_id: WorkflowId::from("wf-x"),
+        version: 1,
+        steps_json: serde_json::to_string(&steps).unwrap(),
+        definition_json,
+        note: None,
+        created_at: 0,
+    };
+
+    // No stored document → migrate the step list (every pre-P3.6 row).
+    let fallback = row(None).definition("Simple Task");
+    assert_eq!(fallback.nodes.len(), migrated.nodes.len());
+
+    // Stored document wins, layout and all.
+    let mut authored = migrated.clone();
+    authored.nodes[0].position =
+        Some(crate::domain::models::workflow_v2::Position { x: 999.0, y: 111.0 });
+    let stored = row(Some(serde_json::to_string(&authored).unwrap())).definition("Simple Task");
+    assert_eq!(stored.nodes[0].position.map(|p| p.x), Some(999.0));
+
+    // An unreadable document degrades to the migration rather than failing:
+    // `steps_json` is always valid, so there is a good answer available.
+    let broken = row(Some("{not json".to_string())).definition("Simple Task");
+    assert_eq!(broken.nodes.len(), migrated.nodes.len());
+}

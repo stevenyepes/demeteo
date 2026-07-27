@@ -28,14 +28,17 @@
  *   this screen only adopts the result.
  *
  * Persistence is the owner's, via `onSave`: this screen produces a v2
- * definition and knows nothing about how workflows are stored. P3.6 wires the
- * route (and retires `WorkflowEditor`).
+ * definition and knows nothing about how workflows are stored. Its owner is
+ * `WorkflowBuilderScreen` (P3.6), which loads the graph and writes it back
+ * through `workflow_save`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Editor from '@monaco-editor/react';
 import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  Code2,
   GitCompare,
   History,
   OctagonAlert,
@@ -157,6 +160,11 @@ export function WorkflowBuilder({
   const [pendingExit, setPendingExit] = useState<PendingExit | null>(null);
   const [draftOffer, setDraftOffer] = useState<WorkflowDraft | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  /** Read-only JSON view of the graph (decision 42 / PRD §11.5). Read-only on
+   *  purpose: an editable source pane is a second authoring surface that can
+   *  disagree with the canvas, and Decision 42 scoped v1 to "show me what this
+   *  actually is". */
+  const [showSource, setShowSource] = useState(false);
   const [comparison, setComparison] = useState<VersionComparison | null>(null);
   /** The version on disk. Tracked locally because a save or a restore moves it
    *  and the prop is only the number the owner loaded with. */
@@ -431,6 +439,21 @@ export function WorkflowBuilder({
           </span>
         )}
 
+        <button
+          type="button"
+          onClick={() => setShowSource((open) => !open)}
+          aria-label="View source"
+          title="View the schema-v2 source (read-only)"
+          className={[
+            'rounded-lg border p-1.5 transition-colors',
+            showSource
+              ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+              : 'border-slate-700/60 text-slate-300 hover:border-slate-600 hover:text-white',
+          ].join(' ')}
+        >
+          <Code2 className="h-4 w-4" />
+        </button>
+
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -586,6 +609,44 @@ export function WorkflowBuilder({
             onChange={history.commit}
             onClose={() => setSelectedNodeId(null)}
           />
+        )}
+        {showSource && (
+          <aside
+            className="flex h-full w-[420px] shrink-0 flex-col border-l border-white/5 bg-[#0d0f14]/80"
+            data-testid="source-view"
+          >
+            <div className="flex items-center justify-between border-b border-white/5 px-3 py-2">
+              <span className="text-xs font-semibold text-slate-200">
+                Source
+                <span className="ml-2 font-normal text-[10px] uppercase tracking-wide text-slate-500">
+                  read-only
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowSource(false)}
+                aria-label="Close source view"
+                className="rounded border border-slate-700/60 px-1.5 py-0.5 text-[10px] text-slate-300 hover:border-slate-600 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+            <div className="min-h-0 flex-1" data-testid="source-json">
+              <Editor
+                height="100%"
+                language="json"
+                theme="vs-dark"
+                value={JSON.stringify(compareView ? compareView.definition : history.definition, null, 2)}
+                options={{
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  fontSize: 12,
+                  scrollBeyondLastLine: false,
+                  wordWrap: 'on',
+                }}
+              />
+            </div>
+          </aside>
         )}
         {showHistory && workflowId && (
           <VersionDrawer
