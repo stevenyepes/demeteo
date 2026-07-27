@@ -97,7 +97,23 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
                     reason = %reason,
                     "step skipped"
                 );
-                driver.persist_skip(&step_execs, node_id, reason);
+                // A skip that doesn't persist is re-decided identically on
+                // every following iteration — and this branch `continue`s
+                // without awaiting anything, so the loop would spin hot
+                // forever. Fail the run instead, the same way an unschedulable
+                // ready set does.
+                if let Err(e) = driver.persist_skip(&step_execs, node_id, reason) {
+                    fail_unschedulable(
+                        &driver,
+                        &step_execs,
+                        &ScheduleError::UnpersistableSkip {
+                            node: node_id.to_string(),
+                            error: e,
+                        },
+                    )
+                    .await;
+                    return;
+                }
             }
             continue;
         }
