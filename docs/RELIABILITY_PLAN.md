@@ -69,18 +69,38 @@ correctly reporting an empty checkpoint next to twenty `COMPLETED` rows.
 Now the task loop checkpoints each task as it commits, pinning the prefix with
 `refs/demeteo/seq/<feature>/<step>` (a shared ref, so `git gc` cannot reclaim
 it and provisioning cannot orphan it) and storing that commit as the row's
-`anchor_sha`. At resume `merge-base --is-ancestor` asks the repo which shape it
-is looking at — prefix already merged (skip the ids) or stranded on the step
+`anchor_sha`. At resume `git merge-base` asks the repo which shape it is
+looking at — prefix already merged (skip the ids) or stranded on the step
 branch (restore the worktree onto the anchor first, *then* skip them) — because
 the row itself cannot say, both writers produce one, and guessing wrong either
-re-runs paid work or drops it. Every uncertainty, including an unreachable
-machine, resolves to a full re-run.
+re-runs paid work or drops it.
 
-Two consequences worth knowing before touching this: `cleanup_and_rollback`
-deliberately does *not* clear the checkpoint (it moves the feature branch, the
-anchor lives on the step branch, and `base_sha` is always captured after any
-earlier merge), and `step_retry` keeps the prefix while `replay_from_step`
-drops it — a retry resumes, an explicit redo starts over.
+**Every uncertainty resolves to a full re-run**, and the probe is shaped so that
+this needs no judgement: `merge-base --is-ancestor` returns its verdict in the
+*exit code*, which `ExecutionPort` flattens into one indistinguishable `Err` for
+"no", "unreachable machine" and "corrupt object" alike — so the plain
+`merge-base` is asked instead and the answer read off stdout. Anything that is
+not a printed SHA is unknown, and unknown re-runs.
+
+Three consequences worth knowing before touching this:
+
+- **The checkpoint rolls back with the branch.** Since the row now names a commit
+  the next attempt will `reset --hard` onto, a rollback that left it standing
+  would hand the retry the very work it discarded — a verifier's rejection
+  reinstated, a cancel undone. `cleanup_and_rollback` therefore rewinds the row
+  and the ref to the state the attempt *started* from, which keeps an earlier
+  attempt's merged prefix (that work is on the feature branch and this rollback
+  never touched it) while dropping this attempt's claim. The single exception is
+  the mid-list failure whose prefix *merge* failed: those tasks finished, their
+  commits are pinned, and restoring them beats re-paying for them.
+- **`step_retry` keeps the prefix while `replay_from_step` drops it** — a retry
+  resumes, an explicit redo starts over.
+- **Only planner-sourced steps prefer their cached plan on resume.** The cache
+  exists to keep task *ids* stable, and a planner pass re-decomposing from
+  scratch is the only thing that breaks them. A `task_list_from` step re-reads
+  its artifact, because that artifact is both the id source and the thing a gate
+  redirect revises — answering from cache there would silently run a superseded
+  task list.
 
 ---
 

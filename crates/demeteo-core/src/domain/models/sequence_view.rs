@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 /// Note that an anchor does **not** by itself mean "unmerged": the graceful
 /// mid-list failure path records both, having merged the prefix. Only a
 /// git query at resume time can tell the two apart — see
-/// `handle_sequence_step`'s `restore_checkpointed_prefix`.
+/// `resolve_checkpoint_resume`, which asks it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SequenceCheckpoint {
     /// Task ids already done, in landed order. Empty when the step never

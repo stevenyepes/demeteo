@@ -341,6 +341,26 @@ pub trait FeatureRepository: Send + Sync {
         now: i64,
     ) -> Result<u32, String>;
 
+    /// **Replace** the checkpoint outright: `landed_task_ids` and
+    /// `anchor_sha` become the row, dropping anything not named here.
+    ///
+    /// The counterpart to `sequence_checkpoint_record`'s union, and the
+    /// only way to make the checkpoint *smaller*. A discarded attempt
+    /// needs exactly that: its rollback moves the branch back, and the
+    /// checkpoint has to move back with it or it will hand the next
+    /// attempt a `reset --hard` onto commits that were just thrown away.
+    /// Atomic on purpose — clear-then-record would leave a window where
+    /// a crash loses an *earlier* attempt's merged prefix, which is real
+    /// work and not this attempt's to spend.
+    fn sequence_checkpoint_set(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        landed_task_ids: &[String],
+        anchor_sha: Option<&str>,
+        now: i64,
+    ) -> Result<(), String>;
+
     /// Delete the checkpoint once the step completes — a stale
     /// skip-list would silently exempt tasks from a future full re-run.
     fn sequence_checkpoint_clear(

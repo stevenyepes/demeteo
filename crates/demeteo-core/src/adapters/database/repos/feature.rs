@@ -438,6 +438,24 @@ impl FeatureRepository for SqliteAdapter {
         )
     }
 
+    fn sequence_checkpoint_set(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        landed_task_ids: &[String],
+        anchor_sha: Option<&str>,
+        now: i64,
+    ) -> Result<(), String> {
+        super::sequence_state::sequence_checkpoint_set(
+            self,
+            feature_id,
+            step_id,
+            landed_task_ids,
+            anchor_sha,
+            now,
+        )
+    }
+
     fn sequence_checkpoint_clear(
         &self,
         feature_id: &FeatureId,
