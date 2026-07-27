@@ -356,14 +356,21 @@ pub fn migrate_definition(value: &serde_json::Value) -> Result<WorkflowDefinitio
             .map_err(|e| format!("invalid schema-v2 workflow definition: {e}"));
     }
 
+    // `steps` is the only field a v1 file must carry. `id` and `name` default
+    // because the import path mints a fresh workflow id and takes the name
+    // from the workflow row anyway — requiring them would reject the
+    // hand-written `{ "name": …, "steps": [...] }` files PRD §10 promises keep
+    // working, and buy nothing, since `save_definition` overwrites both.
     #[derive(serde::Deserialize)]
     struct V1File {
+        #[serde(default)]
         id: WorkflowId,
+        #[serde(default)]
         name: String,
         steps: Vec<StepConfig>,
     }
     let v1: V1File = serde_json::from_value(value.clone())
-        .map_err(|e| format!("not a v1 workflow definition (id/name/steps): {e}"))?;
+        .map_err(|e| format!("not a v1 workflow definition (needs `steps`): {e}"))?;
     Ok(migrate_v1_to_v2(v1.id, v1.name, &v1.steps))
 }
 

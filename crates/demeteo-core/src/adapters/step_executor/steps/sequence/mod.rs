@@ -1027,11 +1027,62 @@ impl crate::adapters::step_executor::registry::NodeHandler for SequenceNodeHandl
         crate::adapters::step_executor::registry::NodePorts {
             // A sequence *consumes* a task list, but not necessarily from
             // every predecessor: the shipped starters also wire a gate
-            // straight into one. Input stays `Any`; the task-list source is
-            // the node's own `task_list_from` config, not an edge constraint.
+            // straight into one. Input stays `Any`; in v2 the task-list
+            // binding is the incoming edge, not a config field.
             inputs: &[PortType::Any],
             outputs: &[PortType::Text, PortType::File],
         }
+    }
+
+    /// Catch a **stray `task_list_from` in the config** before it costs a run.
+    ///
+    /// v2 expresses the binding as an edge — `migrate_v1_to_v2` lifts the
+    /// field out and `project_v2_to_v1` recovers it from the graph — so the
+    /// builder can never produce one. A hand-edited or imported v2 document
+    /// can: the schema allows additional properties, and `project_node` only
+    /// overwrites the key when the graph actually has a task-list edge to
+    /// derive it from. Left alone, a bad value surfaces as a mid-run
+    /// `NonRetryable` from `load_task_list_artifact`, which is the latest
+    /// possible moment to learn about it.
+    fn lint(
+        &self,
+        node: &crate::domain::models::workflow_v2::NodeConfig,
+        graph: &crate::domain::workflow_graph::WorkflowGraph,
+    ) -> Vec<crate::domain::workflow_graph::LintFinding> {
+        use crate::domain::ids::StepId;
+        use crate::domain::workflow_graph::LintFinding;
+
+        let Some(source) = node
+            .config
+            .get("task_list_from")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return Vec::new();
+        };
+
+        if !graph.contains(&StepId::from(source)) {
+            return vec![LintFinding::node_error(
+                "task-list-unknown-source",
+                &node.id,
+                format!(
+                    "sequence node '{}' reads its task list from '{source}', which this \
+                     workflow does not contain",
+                    node.id
+                ),
+            )];
+        }
+        vec![LintFinding::node_warning(
+            "task-list-legacy-binding",
+            &node.id,
+            format!(
+                "sequence node '{}' carries a v1 `task_list_from` pointing at '{source}'. \
+                 Schema v2 expresses that as an edge — draw one from '{source}' and delete \
+                 the field, or it acts as a dependency the canvas never shows.",
+                node.id
+            ),
+        )]
     }
 
     async fn execute(

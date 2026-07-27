@@ -271,6 +271,35 @@ fn migrate_definition_rejects_garbage_with_a_readable_error() {
 }
 
 #[test]
+fn a_v1_file_needs_only_its_steps() {
+    // PRD §10 promises hand-written v1 files keep importing. Requiring `id`
+    // and `name` broke that for the commonest hand-written shape, and bought
+    // nothing: `save_definition` overwrites both from the workflow row it
+    // mints.
+    let def = migrate_definition(&serde_json::json!({
+        "name": "Hand written",
+        "steps": [
+            { "id": "s1", "kind": "agent", "title": "Do it",
+              "prompt_template": "go" }
+        ]
+    }))
+    .expect("a file with no `id` still imports");
+    assert_eq!(def.nodes.len(), 1);
+    assert_eq!(def.name, "Hand written");
+
+    // Not even a name is required — the import path defaults it.
+    let def = migrate_definition(&serde_json::json!({
+        "steps": [{ "id": "s1", "kind": "agent", "title": "T", "prompt_template": "go" }]
+    }))
+    .expect("a file with only `steps` still imports");
+    assert_eq!(def.nodes.len(), 1);
+
+    // `steps` remains the one thing that makes a document a v1 workflow.
+    let err = migrate_definition(&serde_json::json!({ "id": "x", "name": "n" })).unwrap_err();
+    assert!(err.contains("steps"), "{err}");
+}
+
+#[test]
 fn dangling_task_list_from_is_tolerated_not_fatal() {
     // Total function: a broken reference is a lint finding (P1.4), not a
     // migration crash. The edge is simply not synthesized.
