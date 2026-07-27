@@ -21,8 +21,10 @@
 //!    build`) resolve binaries off the user's `PATH`, which only a login
 //!    shell establishes and only an interactive one activates `mise` /
 //!    `asdf` / `nvm` shims for.
-//! 3. Captures stdout as the [`STDOUT_ARTIFACT`] artifact and reads back
-//!    every declared `last_write_to` artifact from the worktree.
+//! 3. Captures the command's output — stdout **and** stderr, merged, since
+//!    the harnesses this node exists to run report on the latter — as the
+//!    [`STDOUT_ARTIFACT`] artifact, and reads back every declared
+//!    `last_write_to` artifact from the worktree.
 //! 4. Tears the worktree down and reports.
 //!
 //! # What it deliberately does not do
@@ -64,7 +66,7 @@ use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::verifier::VerdictFailure;
 use crate::domain::workflow_graph::{LintFinding, WorkflowGraph};
 use crate::ports::db::StepExecutionPatch;
-use crate::ports::execution::{ShellOptions, TRANSPORT_ERROR_PREFIX};
+use crate::ports::execution::{ShellOptions, TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 use crate::ports::notification::DomainEvent;
 
 use super::StepOutcome;
@@ -72,11 +74,11 @@ use super::StepOutcome;
 /// Registry key.
 pub(crate) const KIND: &str = "command";
 
-/// Logical name of the artifact holding the command's stdout. Always
-/// written (even on failure, and even when empty) so the node panel's
-/// Output tab has something to show for every attempt — a command step
-/// whose output vanished on failure would be the opposite of the
-/// visibility this phase is for.
+/// Logical name of the artifact holding the command's merged stdout+stderr.
+/// Always written (even on failure, even on a cancel that raced the exit,
+/// and even when empty) so the node panel's Output tab has something to show
+/// for every attempt — a command step whose output vanished on failure would
+/// be the opposite of the visibility this phase is for.
 const STDOUT_ARTIFACT: &str = "command-output";
 
 /// Head/tail budget for the stdout carried into a failure message. The
@@ -248,43 +250,71 @@ impl ExecutionDriver {
             Some(dir) => format!("{}/{}", wt_path.trim_end_matches('/'), dir),
             None => wt_path.to_string(),
         };
+        // The deadline is the adapter's to enforce, not ours to wrap: a
+        // `tokio::time::timeout` here would only stop *waiting*, leaving the
+        // command running inside a worktree we are about to delete. See
+        // `ShellOptions::timeout`.
         let opts = ShellOptions {
             cwd: Some(cwd),
             env: resolve_env(&spec.env_allowlist),
+            timeout: spec.timeout,
             ..self.harness_shell_options(wt_path)
         };
 
-        let run = self.exec.run_command_with(machine_str, &spec.command, opts);
-        let result = match spec.timeout {
-            Some(limit) => match tokio::time::timeout(limit, run).await {
-                Ok(r) => r,
-                Err(_) => {
-                    return (
-                        StepOutcome::Environmental(format!(
-                            "command '{}' exceeded its {}s timeout",
-                            spec.command,
-                            limit.as_secs()
-                        )),
-                        Vec::new(),
-                    )
-                }
-            },
-            None => run.await,
+        // Race the command against cancellation. Dropping the run future is
+        // what stops the work — the local adapter kills the command's process
+        // group on drop — so this is also the mechanism behind
+        // `CancelBehavior::Immediate`.
+        let mut cancel_watch = self.cancel_watch.clone();
+        let cancelled = async move {
+            // `wait_for` also resolves — as `Err` — when the sender is
+            // dropped. That is "nobody can cancel this any more", not "this
+            // was cancelled", so park forever and let the command decide the
+            // outcome; treating it as a cancel would kill a healthy step
+            // during feature teardown.
+            if cancel_watch.wait_for(|c| *c).await.is_err() {
+                std::future::pending::<()>().await;
+            }
         };
+        // Merge stderr into stdout. The execution port's contract is "stdout on
+        // success, stdout+stderr on failure" (D3), which for a command node
+        // means a green `cargo test` or `npm run build` — both of which report
+        // almost entirely on stderr — files an artifact named
+        // `command-output` containing nothing. Redirecting in a subshell keeps
+        // the exit status (it is the group's last command's) and makes the
+        // artifact the same shape whether the command passed or failed.
+        //
+        // The newlines matter: a command whose last line is a `#` comment
+        // would otherwise swallow the closing paren and turn a valid command
+        // into a syntax error.
+        let captured = format!("(\n{}\n) 2>&1", spec.command);
 
-        if *self.cancel_watch.borrow() {
-            return (StepOutcome::Cancelled, Vec::new());
-        }
+        let result = tokio::select! {
+            biased;
+            _ = cancelled => return (StepOutcome::Cancelled, Vec::new()),
+            r = self.exec.run_command_with(machine_str, &captured, opts) => r,
+        };
 
         // A transport failure is the machine, not the command: it never
         // ran, so classifying it as a verdict would redirect an agent step
-        // to "fix" code that was never tested (C0.2 / D3).
+        // to "fix" code that was never tested (C0.2 / D3). A timeout is the
+        // same call for the same reason — the command was abandoned, not
+        // judged.
         let (output, exit_ok) = match result {
             Ok(out) => (out, true),
             Err(err) if err.starts_with(TRANSPORT_ERROR_PREFIX) => {
                 return (
                     StepOutcome::Environmental(format!(
                         "command '{}' could not run: {err}",
+                        spec.command
+                    )),
+                    Vec::new(),
+                )
+            }
+            Err(err) if err.starts_with(TIMEOUT_ERROR_PREFIX) => {
+                return (
+                    StepOutcome::Environmental(format!(
+                        "command '{}' timed out: {err}",
                         spec.command
                     )),
                     Vec::new(),
@@ -307,6 +337,13 @@ impl ExecutionDriver {
             },
         ) {
             refs.push(r);
+        }
+
+        // Checked *after* the artifact is stored: a command that finished
+        // just as the run was cancelled still produced evidence, and throwing
+        // it away is the opposite of what the Output tab is for.
+        if *self.cancel_watch.borrow() {
+            return (StepOutcome::Cancelled, refs);
         }
 
         if !exit_ok {
@@ -638,8 +675,12 @@ impl NodeHandler for CommandNodeHandler {
         findings
     }
 
-    /// A shell command holds no session to say goodbye to — the child is
-    /// killed with the transport.
+    /// A shell command holds no session to say goodbye to. Locally the kill
+    /// is real: `run_command_in_worktree` races the run against the cancel
+    /// watch and the local adapter kills the command's process group when the
+    /// abandoned future drops. Over SSH only demeteo's wait ends — ssh2 gives
+    /// us no way to signal the remote process — so the step reports cancelled
+    /// while the remote command finishes on its own.
     fn cancel_grace(&self) -> CancelBehavior {
         CancelBehavior::Immediate
     }

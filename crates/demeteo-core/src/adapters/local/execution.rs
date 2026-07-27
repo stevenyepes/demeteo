@@ -80,35 +80,42 @@ impl InteractiveHandle for LocalChildProcess {
     }
 }
 
-/// Run `cmd` locally honouring `opts` (see [`ShellOptions`]). Honours the
-/// same login/non-login + cwd + env contract the SSH adapter does, so both
-/// transports behave identically for identical options (D2):
+/// The `(program, args)` a set of [`ShellOptions`] resolves to. Shared by the
+/// sync and async run paths so the two can never drift into invoking different
+/// shells for the same options.
+///
 /// * login shell ⇒ `bash -l -c <body>` (profile sourced), else `sh -c <body>`;
-/// * `cwd` is applied via the child's working directory;
 /// * `env` is exported *inside* the body so it wins over a login profile,
-///   matching the SSH construction exactly.
-fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, String> {
+///   matching the SSH construction exactly (D2).
+///
+/// `cwd` is deliberately not baked into the body: the local adapter has a
+/// `current_dir` channel the SSH one lacks.
+fn shell_invocation(cmd: &str, opts: &ShellOptions) -> (&'static str, Vec<String>) {
     let exports = shell::export_prefix(&opts.env);
-    // cwd is applied via `current_dir` below, so it is not baked into the
-    // body here (unlike the SSH adapter, which has no separate cwd channel).
-    let body = shell::command_body(None, &exports, cmd);
+    let body = format!(
+        "{}{}",
+        shell::job_control_prefix(opts.interactive),
+        shell::command_body(None, &exports, cmd)
+    );
 
-    let mut command = if opts.login_shell {
-        let mut c = Command::new("bash");
-        c.arg("-l");
+    if opts.login_shell {
+        let mut args = vec!["-l".to_string()];
         // Interactive login also sources `~/.bashrc` (mise/asdf/nvm tool
         // activation); see `ShellOptions::interactive`. Kept in lockstep with
         // the SSH adapter so both transports resolve the same PATH (D2).
         if opts.interactive {
-            c.arg("-i");
+            args.push("-i".to_string());
         }
-        c.arg("-c").arg(&body);
-        c
+        args.push("-c".to_string());
+        args.push(body);
+        ("bash", args)
     } else {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(&body);
-        c
-    };
+        ("sh", vec!["-c".to_string(), body])
+    }
+}
+
+/// Apply the non-argument half of `opts` to a spawned child.
+fn configure_child(command: &mut Command, opts: &ShellOptions) {
     if let Some(cwd) = &opts.cwd {
         command.current_dir(cwd);
     }
@@ -119,28 +126,159 @@ fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, Stri
     // child into its own session so it has no controlling TTY. Harmless for the
     // non-interactive paths. See `detach_from_controlling_tty`.
     if opts.interactive {
-        crate::shared::proc::detach_from_controlling_tty(&mut command);
+        crate::shared::proc::detach_from_controlling_tty(command);
     }
-    sanitize_child_env(&mut command);
-    let output = command
-        .output()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
+    sanitize_child_env(command);
+}
 
-    let mut result = String::from_utf8_lossy(&output.stdout).to_string();
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+/// Assemble the D3 result shape from a finished child: stdout on success,
+/// `Err(stdout + stderr)` on a non-zero exit — never `Ok("")`.
+fn command_result(
+    status_code: Option<i32>,
+    ok: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<String, String> {
+    let mut result = String::from_utf8_lossy(stdout).to_string();
+    if !ok {
+        let stderr = String::from_utf8_lossy(stderr);
         if !result.is_empty() {
             result.push('\n');
         }
         result.push_str(&stderr);
         return Err(format!(
             "Command failed (exit code: {:?}): {}",
-            output.status.code(),
-            result
+            status_code, result
         ));
     }
-
     Ok(result)
+}
+
+/// Kill a spawned child's whole **process group** on drop.
+///
+/// `kill_on_drop` alone is not enough for this adapter: every command runs as
+/// `bash -c <body>`, so killing the direct child reaps the shell and orphans
+/// whatever it spawned — the `npm test` inside a hung `bash -c "npm test"`
+/// would keep running (and keep writing into a worktree that is about to be
+/// torn down). Killing the group takes the tree.
+///
+/// Armed **only** when the child called `setsid` (the `interactive` path,
+/// which is what `harness_shell_options` — and therefore every `command` node
+/// — uses). A child that did not `setsid` shares *demeteo's own* process
+/// group, and `killpg` on that would kill the app. When disarmed the caller
+/// still gets `kill_on_drop`'s direct-child kill, which is the correct floor.
+struct KillGroupOnDrop {
+    pid: Option<u32>,
+    own_session: bool,
+}
+
+impl KillGroupOnDrop {
+    /// The child exited on its own; there is no group left to signal (and a
+    /// recycled pid must never be).
+    fn disarm(&mut self) {
+        self.pid = None;
+    }
+}
+
+impl Drop for KillGroupOnDrop {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            if let (Some(pid), true) = (self.pid, self.own_session) {
+                // SAFETY: `pid` is a child we spawned with `setsid`, so it is
+                // its own session and process-group leader — the group can
+                // contain nothing but its descendants. ESRCH (already gone) is
+                // the expected benign error and is ignored.
+                unsafe {
+                    libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+/// Run `cmd` locally honouring `opts`, **owning the deadline** so an expiry
+/// actually stops the work (see [`ShellOptions::timeout`]).
+///
+/// Cancel-safe by construction: the group kill hangs off `Drop`, so abandoning
+/// this future — a timeout, a cancelled step, an aborted task — kills the
+/// command tree just as the deadline does. That is what lets the `command`
+/// node treat "cancelled" as immediate.
+async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+
+    let (program, args) = shell_invocation(cmd, opts);
+    let mut command = tokio::process::Command::new(program);
+    command.args(&args);
+    configure_child(command.as_std_mut(), opts);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // The floor when the group kill is disarmed (non-`setsid` children).
+        .kill_on_drop(true);
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
+    let mut guard = KillGroupOnDrop {
+        pid: child.id(),
+        own_session: opts.interactive,
+    };
+
+    let mut out_pipe = child.stdout.take().expect("stdout piped above");
+    let mut err_pipe = child.stderr.take().expect("stderr piped above");
+    // Drain both pipes *while* waiting. Waiting first and reading after would
+    // deadlock the moment a build fills the 64K pipe buffer.
+    let run = async {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let (_, _, status) = tokio::join!(
+            out_pipe.read_to_end(&mut stdout),
+            err_pipe.read_to_end(&mut stderr),
+            child.wait(),
+        );
+        (stdout, stderr, status)
+    };
+
+    let (stdout, stderr, status) = match opts.timeout {
+        Some(limit) => match tokio::time::timeout(limit, run).await {
+            Ok(finished) => finished,
+            Err(_) => {
+                // `guard` drops on return and takes the process group with it.
+                return Err(format!(
+                    "{}command exceeded its {}s ceiling",
+                    crate::ports::execution::TIMEOUT_ERROR_PREFIX,
+                    limit.as_secs()
+                ));
+            }
+        },
+        None => run.await,
+    };
+
+    guard.disarm();
+    let status = status.map_err(|e| format!("Failed to await command: {}", e))?;
+    command_result(status.code(), status.success(), &stdout, &stderr)
+}
+
+/// Blocking twin of [`local_run_command_async`] for the adapter's own
+/// synchronous helpers (`setup_worktree`, `resolve_home`), which run short
+/// fixed commands and need no deadline. `opts.timeout` is not honoured here —
+/// [`ExecutionPort::run_command_with`] routes through the async path.
+fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, String> {
+    let (program, args) = shell_invocation(cmd, opts);
+    let mut command = Command::new(program);
+    command.args(&args);
+    configure_child(&mut command, opts);
+    let output = command
+        .output()
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
+    command_result(
+        output.status.code(),
+        output.status.success(),
+        &output.stdout,
+        &output.stderr,
+    )
 }
 
 /// Non-login, default-cwd, no-extra-env convenience used by the adapter's
@@ -162,16 +300,16 @@ impl ExecutionPort for LocalSubprocessAdapter {
         cmd: &str,
         opts: ShellOptions,
     ) -> Result<String, String> {
-        // The underlying `std::process::Command` is sync; run it on
-        // the blocking pool so we don't stall the tokio worker
-        // thread. The error type stays `String` to match the port
-        // signature; the `?` conversions happen inside the closure.
-        // `run_command` (no override) delegates here via the trait
-        // default with `ShellOptions::default()`.
-        let cmd = cmd.to_string();
-        tokio::task::spawn_blocking(move || local_run_command_with(&cmd, &opts))
-            .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
+        // Natively async (`tokio::process`) rather than a `spawn_blocking`
+        // around `Command::output()`. The blocking form could not be stopped:
+        // dropping its `JoinHandle` — on a `ShellOptions::timeout`, on a
+        // cancelled step — detaches the task and leaves the child running,
+        // holding open a worktree the driver was about to delete. This path
+        // owns the deadline and kills the process group.
+        //
+        // `run_command` (no override) delegates here via the trait default
+        // with `ShellOptions::default()`.
+        local_run_command_async(cmd, &opts).await
     }
 
     async fn read_file(&self, _machine_id: &str, path: &str) -> Result<String, String> {
@@ -408,3 +546,7 @@ impl ExecutionPort for LocalSubprocessAdapter {
         Ok(Box::new(LocalChildProcess::new(child)))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/infrastructure/local_execution.rs"]
+mod local_execution_tests;
