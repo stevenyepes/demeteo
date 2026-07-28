@@ -1,4 +1,4 @@
-// Tests extracted from `crates/demeteo-core/src/adapters/step_executor/steps/sequence/mod.rs` (mirrored-tests convention). `super` = that module.
+// Tests extracted from `crates/demeteo-core/src/adapters/step_executor/steps/sequence/resume.rs` (mirrored-tests convention). `super` = that module.
 //
 // What `probe_anchor` reports for each thing git can say, driven through
 // the real async path against a scripted `ExecutionPort`.
