@@ -358,7 +358,7 @@ async fn restart_resumes_sequence_from_the_exact_task() {
             },
         )
         .expect("reset feature status");
-    ctx.features
+    ctx.sequence_resume
         .sequence_checkpoint_record(
             &feature_id,
             "s-impl",
@@ -413,7 +413,7 @@ async fn restart_resumes_sequence_from_the_exact_task() {
     // The completed step spends its checkpoint — a stale skip-list must
     // not exempt tasks from a future full re-run.
     assert!(
-        ctx2.features
+        ctx2.sequence_resume
             .sequence_checkpoint_get(&feature_id, "s-impl")
             .expect("read checkpoint")
             .is_empty(),
@@ -520,7 +520,7 @@ async fn restart_restores_an_interrupted_attempt_committed_work() {
             },
         )
         .expect("reset feature status");
-    ctx.features
+    ctx.sequence_resume
         .sequence_checkpoint_record(
             &feature_id,
             "s-impl",
@@ -650,7 +650,7 @@ async fn a_rollback_after_the_task_list_lands_rewinds_the_checkpoint() {
     // The assertion that matters: nothing is left telling the next attempt
     // to restore what was just discarded.
     let checkpoint = ctx
-        .features
+        .sequence_resume
         .sequence_checkpoint_get(&feature_id, "s-impl")
         .expect("read checkpoint");
     assert!(
@@ -752,7 +752,7 @@ async fn a_resume_re_reads_a_revised_task_list_artifact() {
             },
         )
         .expect("reset feature status");
-    ctx.features
+    ctx.sequence_resume
         .sequence_checkpoint_record(
             &feature_id,
             "s-impl",
@@ -900,7 +900,7 @@ async fn a_kill_after_the_last_task_resumes_without_re_running_any() {
         .expect("reset feature status");
     // The whole plan, checkpointed — what the task loop leaves behind once
     // the last task commits.
-    ctx.features
+    ctx.sequence_resume
         .sequence_checkpoint_record(
             &feature_id,
             "s-impl",
@@ -1038,7 +1038,7 @@ async fn a_verdict_against_a_fully_landed_resume_judges_it_and_drops_the_checkpo
     // `verification-report`, because no task ever produces it. An
     // anchor-less (V32) row keeps the resume off the restore path — what is
     // under test is the judgement and the disposition, not the git work.
-    ctx.features
+    ctx.sequence_resume
         .sequence_checkpoint_record(
             &feature_id,
             "s-impl",
@@ -1096,7 +1096,7 @@ async fn a_verdict_against_a_fully_landed_resume_judges_it_and_drops_the_checkpo
     // The termination half. A rewound row would name both ids again and the
     // next attempt would skip the list a second time.
     let checkpoint = ctx2
-        .features
+        .sequence_resume
         .sequence_checkpoint_get(&feature_id, "s-impl")
         .expect("read checkpoint");
     assert!(

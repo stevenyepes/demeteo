@@ -2,8 +2,10 @@
 //! `sequence_checkpoints` + `sequence_plan_cache`. Replaces the
 //! in-memory `ExecutionDriver::{sequence_checkpoints, cached_plans}`
 //! maps so a restart resumes a sequence step from the exact task, not
-//! the step head. Exposed through `FeatureRepository` (see
-//! `repos/feature.rs`), peer of the `step_attempts.rs` SQL.
+//! the step head. Exposed through
+//! [`SequenceResumeRepository`](crate::ports::db::SequenceResumeRepository),
+//! whose `impl` for `SqliteAdapter` is at the foot of this file; peer of
+//! the `step_attempts.rs` SQL.
 //!
 //! V35 adds `anchor_sha`: the commit the landed prefix ends at. V32
 //! stored ids alone because its only writer merged the prefix to the
@@ -16,6 +18,7 @@ use rusqlite::OptionalExtension;
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{CheckpointProduced, SequenceCheckpoint};
+use crate::ports::db::SequenceResumeRepository;
 
 use super::super::SqliteAdapter;
 
@@ -250,6 +253,86 @@ pub fn plan_cache_put(
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// The port face of this module. Every method delegates to the free
+/// function above it — those take `&SqliteAdapter` so the SQL stays
+/// callable (and unit-testable) without going through `dyn`.
+impl SequenceResumeRepository for SqliteAdapter {
+    fn sequence_checkpoint_get(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<SequenceCheckpoint, String> {
+        sequence_checkpoint_get(self, feature_id, step_id)
+    }
+
+    fn sequence_checkpoint_record(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        landed_task_ids: &[String],
+        anchor_sha: Option<&str>,
+        produced: Option<&CheckpointProduced>,
+        now: i64,
+    ) -> Result<u32, String> {
+        sequence_checkpoint_record(
+            self,
+            feature_id,
+            step_id,
+            landed_task_ids,
+            anchor_sha,
+            produced,
+            now,
+        )
+    }
+
+    fn sequence_checkpoint_set(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        landed_task_ids: &[String],
+        anchor_sha: Option<&str>,
+        produced: Option<&CheckpointProduced>,
+        now: i64,
+    ) -> Result<(), String> {
+        sequence_checkpoint_set(
+            self,
+            feature_id,
+            step_id,
+            landed_task_ids,
+            anchor_sha,
+            produced,
+            now,
+        )
+    }
+
+    fn sequence_checkpoint_clear(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<(), String> {
+        sequence_checkpoint_clear(self, feature_id, step_id)
+    }
+
+    fn plan_cache_get(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Option<String>, String> {
+        plan_cache_get(self, feature_id, step_id)
+    }
+
+    fn plan_cache_put(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+        plan_json: &str,
+        attempt_no: Option<u32>,
+        now: i64,
+    ) -> Result<(), String> {
+        plan_cache_put(self, feature_id, step_id, plan_json, attempt_no, now)
+    }
 }
 
 #[cfg(test)]

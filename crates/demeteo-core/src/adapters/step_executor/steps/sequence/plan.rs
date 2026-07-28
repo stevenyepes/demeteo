@@ -85,7 +85,7 @@ impl ExecutionDriver {
             // works identically after a restart. An unparsable row (schema
             // drift) degrades to a full re-plan, same as a cache miss.
             let cached_for_this_step: Option<TaskPlan> = self
-                .features
+                .sequence_resume
                 .plan_cache_get(&self.f_id, step_exec.step_id.0.as_str())
                 .ok()
                 .flatten()
@@ -126,7 +126,7 @@ impl ExecutionDriver {
         let cached_plan: Option<TaskPlan> = if resume.landed_ids().is_empty() || !planner_sourced {
             None
         } else {
-            self.features
+            self.sequence_resume
                 .plan_cache_get(&self.f_id, step_exec.step_id.0.as_str())
                 .ok()
                 .flatten()
@@ -191,7 +191,7 @@ impl ExecutionDriver {
             .and_then(|rows| rows.last().map(|a| a.attempt_no));
         match serde_json::to_string(&plan) {
             Ok(json) => {
-                if let Err(e) = self.features.plan_cache_put(
+                if let Err(e) = self.sequence_resume.plan_cache_put(
                     &self.f_id,
                     &step_exec.step_id.0,
                     &json,

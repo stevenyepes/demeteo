@@ -22,7 +22,8 @@ use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
-    NotificationRepository, ProjectRepository, ThreadRepository, WorkflowRepository,
+    NotificationRepository, ProjectRepository, SequenceResumeRepository, ThreadRepository,
+    WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;
@@ -54,6 +55,9 @@ pub struct AppContext {
     pub projects: Arc<dyn ProjectRepository>,
     /// Feature + step execution persistence.
     pub features: Arc<dyn FeatureRepository>,
+    /// Durable `sequence`-step resume state: the crash checkpoint and the
+    /// plan cache, keyed per (feature, node).
+    pub sequence_resume: Arc<dyn SequenceResumeRepository>,
     /// Workflow + workflow version persistence.
     pub workflows: Arc<dyn WorkflowRepository>,
     /// Gate decision persistence.

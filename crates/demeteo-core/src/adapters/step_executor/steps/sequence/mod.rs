@@ -425,7 +425,7 @@ impl ExecutionDriver {
                         // step-wide totals are exactly the landed tasks'
                         // output. The union deduplicates the rest.
                         let produced = tally.produced();
-                        let landed_total = match self.features.sequence_checkpoint_record(
+                        let landed_total = match self.sequence_resume.sequence_checkpoint_record(
                             &self.f_id,
                             &step_exec.step_id.0,
                             &landed_ids,
@@ -971,7 +971,7 @@ impl ExecutionDriver {
         base_sha: &str,
     ) -> CheckpointResume {
         let checkpoint = match self
-            .features
+            .sequence_resume
             .sequence_checkpoint_get(&self.f_id, &step_exec.step_id.0)
         {
             Ok(cp) => cp,
@@ -1078,7 +1078,7 @@ impl ExecutionDriver {
             return;
         }
 
-        if let Err(e) = self.features.sequence_checkpoint_record(
+        if let Err(e) = self.sequence_resume.sequence_checkpoint_record(
             &self.f_id,
             &step_exec.step_id.0,
             &[task_id.to_string()],
@@ -1103,7 +1103,9 @@ impl ExecutionDriver {
     /// commit is inert, while a surviving row pointing at an unpinned commit
     /// is a resume that can fail its `cat-file` probe for no reason.
     async fn clear_sequence_checkpoint(&self, step_id: &str, machine_str: &str) {
-        let _ = self.features.sequence_checkpoint_clear(&self.f_id, step_id);
+        let _ = self
+            .sequence_resume
+            .sequence_checkpoint_clear(&self.f_id, step_id);
         self.unpin_checkpoint_prefix(step_id, machine_str).await;
     }
 
@@ -1158,7 +1160,7 @@ impl ExecutionDriver {
         if landed_ids.is_empty() {
             self.clear_sequence_checkpoint(step_id, machine_str).await;
         } else {
-            if let Err(e) = self.features.sequence_checkpoint_set(
+            if let Err(e) = self.sequence_resume.sequence_checkpoint_set(
                 &self.f_id,
                 step_id,
                 landed_ids,

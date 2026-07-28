@@ -80,6 +80,7 @@ pub fn build_core_context(
     let machines_repo: Arc<dyn ports::db::MachineRepository> = db_adapter.clone();
     let projects_repo: Arc<dyn ports::db::ProjectRepository> = db_adapter.clone();
     let features_repo: Arc<dyn ports::db::FeatureRepository> = db_adapter.clone();
+    let sequence_resume_repo: Arc<dyn ports::db::SequenceResumeRepository> = db_adapter.clone();
     let workflows_repo: Arc<dyn ports::db::WorkflowRepository> = db_adapter.clone();
     let gates_repo: Arc<dyn ports::db::GateRepository> = db_adapter.clone();
     let app_settings_repo: Arc<dyn ports::db::AppSettingsRepository> = db_adapter.clone();
@@ -217,6 +218,7 @@ pub fn build_core_context(
             exec_inner.clone(),
             merge_executor.clone(),
             db_adapter.clone(),
+            sequence_resume_repo.clone(),
             artifact_store,
             attachment_store.clone(),
             attachment_json.clone(),
@@ -280,6 +282,7 @@ pub fn build_core_context(
     // laptop repos for local/SSH runs; the C4 runner mirror plugs in here.
     let run_view = Arc::new(crate::application::run_view::RunView::new(
         features_repo.clone(),
+        sequence_resume_repo.clone(),
         threads_repo.clone(),
         exec_inner.clone(),
     ));
@@ -289,6 +292,7 @@ pub fn build_core_context(
         threads: threads_repo,
         projects: projects_repo,
         features: features_repo,
+        sequence_resume: sequence_resume_repo,
         workflows: workflows_repo,
         gates: gates_repo,
         app_settings: app_settings_repo,

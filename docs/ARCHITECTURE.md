@@ -57,6 +57,7 @@ into eight narrow sub-ports aligned with the bounded contexts in
 | `ThreadRepository`        | threads         | `ThreadSession`, `Message`, `AgentConfig`, `WorkingMemoryEntry` |
 | `ProjectRepository`       | projects        | `Project`, `Repository`, `ProjectSettings`, `ProjectWorkflowOverride` |
 | `FeatureRepository`       | features        | `Feature`, `StepExecution`                   |
+| `SequenceResumeRepository`| sequence resume | `SequenceCheckpoint` + the sequence plan cache — a `sequence` step's durable resume point, keyed per (feature, node) |
 | `WorkflowRepository`      | workflows       | `Workflow`, `WorkflowVersion`, `WorkflowSchedule` |
 | `GateRepository`          | gates           | `GateDecision`                               |
 | `AppSettingsRepository`   | app settings    | `ProviderInstance`, app-session KV, first-launch flags |
