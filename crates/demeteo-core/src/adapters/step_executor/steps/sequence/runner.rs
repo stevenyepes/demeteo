@@ -737,28 +737,17 @@ impl ExecutionDriver {
             .retry_note
             .as_ref()
             .filter(|s| !s.trim().is_empty())
-            .map(
-                |note| crate::adapters::step_executor::driver::RetryContext {
+            .map(|note| match &self.retry_ctx {
+                Some(rc) => rc.with_feedback(note.clone()),
+                // A note without a step-wide context: a hand-authored task
+                // list, or a cached plan replayed at iteration 0. The note
+                // is then the whole of the feedback, and the attempt
+                // counters fall back to the not-a-retry default.
+                None => crate::adapters::step_executor::driver::RetryContext {
                     feedback: note.clone(),
-                    iteration: self.retry_ctx.as_ref().map_or(1, |rc| rc.iteration),
-                    max: self.retry_ctx.as_ref().map_or(1, |rc| rc.max),
-                    failing_tests: self
-                        .retry_ctx
-                        .as_ref()
-                        .map(|rc| rc.failing_tests.clone())
-                        .unwrap_or_default(),
-                    implicated_files: self
-                        .retry_ctx
-                        .as_ref()
-                        .map(|rc| rc.implicated_files.clone())
-                        .unwrap_or_default(),
-                    failing_step_id: self
-                        .retry_ctx
-                        .as_ref()
-                        .map(|rc| rc.failing_step_id.clone())
-                        .unwrap_or_default(),
+                    ..Default::default()
                 },
-            )
+            })
             .or_else(|| self.retry_ctx.clone());
 
         let (iteration, max_iterations) = match &self.retry_ctx {
