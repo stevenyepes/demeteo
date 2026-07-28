@@ -426,6 +426,7 @@ impl FeatureRepository for SqliteAdapter {
         step_id: &str,
         landed_task_ids: &[String],
         anchor_sha: Option<&str>,
+        produced: Option<&crate::domain::models::CheckpointProduced>,
         now: i64,
     ) -> Result<u32, String> {
         super::sequence_state::sequence_checkpoint_record(
@@ -434,6 +435,7 @@ impl FeatureRepository for SqliteAdapter {
             step_id,
             landed_task_ids,
             anchor_sha,
+            produced,
             now,
         )
     }
@@ -444,6 +446,7 @@ impl FeatureRepository for SqliteAdapter {
         step_id: &str,
         landed_task_ids: &[String],
         anchor_sha: Option<&str>,
+        produced: Option<&crate::domain::models::CheckpointProduced>,
         now: i64,
     ) -> Result<(), String> {
         super::sequence_state::sequence_checkpoint_set(
@@ -452,6 +455,7 @@ impl FeatureRepository for SqliteAdapter {
             step_id,
             landed_task_ids,
             anchor_sha,
+            produced,
             now,
         )
     }

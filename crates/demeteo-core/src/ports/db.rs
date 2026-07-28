@@ -320,8 +320,8 @@ pub trait FeatureRepository: Send + Sync {
     // a workflow may hold several sequence nodes.
 
     /// The (feature, node) resume point: landed task ids in landed
-    /// order plus the commit they end at. Empty when the step never
-    /// checkpointed.
+    /// order, the commit they end at, and what they produced. Empty when
+    /// the step never checkpointed.
     fn sequence_checkpoint_get(
         &self,
         feature_id: &FeatureId,
@@ -332,32 +332,41 @@ pub trait FeatureRepository: Send + Sync {
     /// deduplicated) and move the anchor to `anchor_sha`; `None` leaves
     /// the stored anchor alone. Returns the total landed count after the
     /// merge.
+    ///
+    /// `produced` unions the same way, and `None` likewise adds nothing.
+    /// It stays absent — meaning *unknown*, never *empty* — on a row that
+    /// already names tasks but predates V36, since a partial payload
+    /// there would read as a complete one.
     fn sequence_checkpoint_record(
         &self,
         feature_id: &FeatureId,
         step_id: &str,
         landed_task_ids: &[String],
         anchor_sha: Option<&str>,
+        produced: Option<&crate::domain::models::CheckpointProduced>,
         now: i64,
     ) -> Result<u32, String>;
 
-    /// **Replace** the checkpoint outright: `landed_task_ids` and
-    /// `anchor_sha` become the row, dropping anything not named here.
+    /// **Replace** the checkpoint outright: `landed_task_ids`,
+    /// `anchor_sha` and `produced` become the row, dropping anything not
+    /// named here.
     ///
     /// The counterpart to `sequence_checkpoint_record`'s union, and the
     /// only way to make the checkpoint *smaller*. A discarded attempt
     /// needs exactly that: its rollback moves the branch back, and the
     /// checkpoint has to move back with it or it will hand the next
-    /// attempt a `reset --hard` onto commits that were just thrown away.
-    /// Atomic on purpose — clear-then-record would leave a window where
-    /// a crash loses an *earlier* attempt's merged prefix, which is real
-    /// work and not this attempt's to spend.
+    /// attempt a `reset --hard` onto commits that were just thrown away
+    /// — and artifact references belonging to them. Atomic on purpose —
+    /// clear-then-record would leave a window where a crash loses an
+    /// *earlier* attempt's merged prefix, which is real work and not
+    /// this attempt's to spend.
     fn sequence_checkpoint_set(
         &self,
         feature_id: &FeatureId,
         step_id: &str,
         landed_task_ids: &[String],
         anchor_sha: Option<&str>,
+        produced: Option<&crate::domain::models::CheckpointProduced>,
         now: i64,
     ) -> Result<(), String>;
 

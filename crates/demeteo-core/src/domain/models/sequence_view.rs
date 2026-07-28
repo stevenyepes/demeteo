@@ -18,15 +18,35 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A sequence step's durable resume point: which tasks are done, and the
-/// commit their work ends at.
+/// What the landed tasks emitted, carried on the checkpoint so an attempt
+/// that runs none of them can still answer the two questions the task loop
+/// would otherwise have answered in memory: *was the declared deliverable
+/// produced*, and *what does this step hand downstream*.
 ///
-/// The two fields answer different questions and only the first is always
+/// Scoped to the tasks the checkpoint names, which is what separates it
+/// from re-reading the artifact store: the store is keyed by (feature,
+/// step) and would also return an earlier, rolled-back attempt's files.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckpointProduced {
+    /// Artifact-store references the landed tasks wrote, in landed order.
+    pub artifact_refs: Vec<String>,
+    /// Names of the `StepConfig::artifacts` declarations those tasks
+    /// satisfied. Judged across the whole list, never per task — only one
+    /// task in a sequence may be the one that writes the report.
+    pub satisfied_decls: Vec<String>,
+}
+
+/// A sequence step's durable resume point: which tasks are done, where
+/// their work ends, and what it produced.
+///
+/// The fields answer different questions and only the first is always
 /// available. `landed_task_ids` says *what not to re-run*. `anchor_sha`
 /// says *where that work is*, and is `None` for a checkpoint written
 /// before V35 or one whose `rev-parse` failed — in which case the resume
 /// falls back to V32's assumption that the prefix is already merged to the
 /// feature branch, which is what the only V32 writer guaranteed.
+/// `produced` (V36) says *what came out of it*, and is `None` for a row
+/// written before V36 — which means **unknown**, not "produced nothing".
 ///
 /// Note that an anchor does **not** by itself mean "unmerged": the graceful
 /// mid-list failure path records both, having merged the prefix. Only a
@@ -40,6 +60,8 @@ pub struct SequenceCheckpoint {
     /// The commit the landed prefix ends at, pinned by
     /// `refs/demeteo/seq/<feature>/<step>` so `git gc` cannot reclaim it.
     pub anchor_sha: Option<String>,
+    /// What those tasks emitted, or `None` for a pre-V36 row.
+    pub produced: Option<CheckpointProduced>,
 }
 
 impl SequenceCheckpoint {

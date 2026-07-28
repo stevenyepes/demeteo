@@ -17,14 +17,30 @@ fn checkpoint_records_union_in_landed_order() {
     let db = db();
     let f = fid("f-1");
     assert_eq!(
-        sequence_checkpoint_record(&db, &f, "s-impl", &["a".into(), "b".into()], None, 100)
-            .unwrap(),
+        sequence_checkpoint_record(
+            &db,
+            &f,
+            "s-impl",
+            &["a".into(), "b".into()],
+            None,
+            None,
+            100
+        )
+        .unwrap(),
         2
     );
     // Second mid-list failure lands more tasks; duplicates fold away.
     assert_eq!(
-        sequence_checkpoint_record(&db, &f, "s-impl", &["b".into(), "c".into()], None, 200)
-            .unwrap(),
+        sequence_checkpoint_record(
+            &db,
+            &f,
+            "s-impl",
+            &["b".into(), "c".into()],
+            None,
+            None,
+            200
+        )
+        .unwrap(),
         3
     );
     assert_eq!(
@@ -42,8 +58,8 @@ fn checkpoint_records_union_in_landed_order() {
 fn checkpoint_anchor_advances_with_the_prefix() {
     let db = db();
     let f = fid("f-1");
-    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
-    sequence_checkpoint_record(&db, &f, "s-impl", &["b".into()], Some("sha-b"), 200).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), None, 100).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["b".into()], Some("sha-b"), None, 200).unwrap();
 
     let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
     assert_eq!(cp.landed_task_ids, vec!["a".to_string(), "b".to_string()]);
@@ -58,8 +74,8 @@ fn checkpoint_anchor_advances_with_the_prefix() {
 fn recording_without_an_anchor_keeps_the_stored_one() {
     let db = db();
     let f = fid("f-1");
-    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
-    sequence_checkpoint_record(&db, &f, "s-impl", &["b".into()], None, 200).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), None, 100).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["b".into()], None, None, 200).unwrap();
 
     assert_eq!(
         sequence_checkpoint_get(&db, &f, "s-impl")
@@ -76,7 +92,7 @@ fn recording_without_an_anchor_keeps_the_stored_one() {
 fn a_pre_v35_row_reads_back_without_an_anchor() {
     let db = db();
     let f = fid("f-1");
-    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], None, 100).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], None, None, 100).unwrap();
 
     let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
     assert!(!cp.is_empty());
@@ -107,6 +123,7 @@ fn checkpoint_survives_across_driver_lives() {
             "s-impl",
             &["stub-task-1".into()],
             Some("stub-sha"),
+            None,
             100,
         )
         .unwrap();
@@ -125,12 +142,36 @@ fn checkpoint_survives_across_driver_lives() {
 #[test]
 fn checkpoints_are_scoped_per_feature_and_node() {
     let db = db();
-    sequence_checkpoint_record(&db, &fid("f-1"), "s-a", &["t1".into()], Some("sha-1"), 100)
-        .unwrap();
-    sequence_checkpoint_record(&db, &fid("f-1"), "s-b", &["t2".into()], Some("sha-2"), 100)
-        .unwrap();
-    sequence_checkpoint_record(&db, &fid("f-2"), "s-a", &["t3".into()], Some("sha-3"), 100)
-        .unwrap();
+    sequence_checkpoint_record(
+        &db,
+        &fid("f-1"),
+        "s-a",
+        &["t1".into()],
+        Some("sha-1"),
+        None,
+        100,
+    )
+    .unwrap();
+    sequence_checkpoint_record(
+        &db,
+        &fid("f-1"),
+        "s-b",
+        &["t2".into()],
+        Some("sha-2"),
+        None,
+        100,
+    )
+    .unwrap();
+    sequence_checkpoint_record(
+        &db,
+        &fid("f-2"),
+        "s-a",
+        &["t3".into()],
+        Some("sha-3"),
+        None,
+        100,
+    )
+    .unwrap();
     for (feature, step, task, sha) in [
         ("f-1", "s-a", "t1", "sha-1"),
         ("f-1", "s-b", "t2", "sha-2"),
@@ -148,7 +189,7 @@ fn checkpoints_are_scoped_per_feature_and_node() {
 fn clear_spends_the_checkpoint() {
     let db = db();
     let f = fid("f-1");
-    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), None, 100).unwrap();
     sequence_checkpoint_clear(&db, &f, "s-impl").unwrap();
     let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
     assert!(cp.is_empty());
@@ -170,12 +211,13 @@ fn set_replaces_the_checkpoint_rather_than_unioning_it() {
         "s-impl",
         &["a".into(), "b".into(), "c".into()],
         Some("sha-c"),
+        None,
         100,
     )
     .unwrap();
 
     // The attempt that landed b and c is discarded; only a survives.
-    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 200).unwrap();
+    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], Some("sha-a"), None, 200).unwrap();
 
     let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
     assert_eq!(cp.landed_task_ids, vec!["a".to_string()]);
@@ -190,9 +232,9 @@ fn set_replaces_the_checkpoint_rather_than_unioning_it() {
 fn set_with_no_anchor_clears_the_stored_one() {
     let db = db();
     let f = fid("f-1");
-    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), None, 100).unwrap();
 
-    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], None, 200).unwrap();
+    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], None, None, 200).unwrap();
 
     let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
     assert_eq!(cp.landed_task_ids, vec!["a".to_string()]);
@@ -209,7 +251,7 @@ fn set_with_no_anchor_clears_the_stored_one() {
 fn set_inserts_when_no_row_exists() {
     let db = db();
     let f = fid("f-1");
-    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], Some("sha-a"), 100).unwrap();
+    sequence_checkpoint_set(&db, &f, "s-impl", &["a".into()], Some("sha-a"), None, 100).unwrap();
     let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
     assert_eq!(cp.landed_task_ids, vec!["a".to_string()]);
     assert_eq!(cp.anchor_sha.as_deref(), Some("sha-a"));
@@ -244,4 +286,150 @@ fn plan_cache_roundtrips_and_upserts() {
         .unwrap();
     assert_eq!(attempt_no, Some(2));
     assert_eq!(updated_at, 200);
+}
+
+/// The produced payload unions across the tasks that land, so the row
+/// always describes the whole landed prefix rather than the last task.
+#[test]
+fn produced_unions_across_landed_tasks() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(
+        &db,
+        &f,
+        "s-impl",
+        &["a".into()],
+        Some("sha-a"),
+        Some(&CheckpointProduced {
+            artifact_refs: vec!["/store/diff".into()],
+            satisfied_decls: vec!["notes".into()],
+        }),
+        100,
+    )
+    .unwrap();
+    sequence_checkpoint_record(
+        &db,
+        &f,
+        "s-impl",
+        &["b".into()],
+        Some("sha-b"),
+        Some(&CheckpointProduced {
+            // The diff reference repeats — a stable path the store returns
+            // again — and must fold away rather than accumulate.
+            artifact_refs: vec!["/store/diff".into(), "/store/report.md".into()],
+            satisfied_decls: vec!["report".into()],
+        }),
+        200,
+    )
+    .unwrap();
+
+    let produced = sequence_checkpoint_get(&db, &f, "s-impl")
+        .unwrap()
+        .produced
+        .expect("the row carries a payload");
+    assert_eq!(
+        produced.artifact_refs,
+        vec!["/store/diff".to_string(), "/store/report.md".to_string()]
+    );
+    assert_eq!(
+        produced.satisfied_decls,
+        vec!["notes".to_string(), "report".to_string()]
+    );
+}
+
+/// A pre-V36 row that already claims tasks cannot be completed from here:
+/// unioning one task's output into it yields a set that *looks* whole while
+/// omitting the earlier tasks' artifacts, and the declared-deliverable
+/// check would then fail a step for a deliverable that exists. Such a row
+/// stays unknown, and the resume keeps its pre-V36 behaviour.
+#[test]
+fn a_pre_v36_row_stays_unknown_rather_than_becoming_partial() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), None, 100).unwrap();
+
+    sequence_checkpoint_record(
+        &db,
+        &f,
+        "s-impl",
+        &["b".into()],
+        Some("sha-b"),
+        Some(&CheckpointProduced {
+            artifact_refs: vec!["/store/report.md".into()],
+            satisfied_decls: vec!["report".into()],
+        }),
+        200,
+    )
+    .unwrap();
+
+    assert_eq!(
+        sequence_checkpoint_get(&db, &f, "s-impl").unwrap().produced,
+        None,
+        "a partial payload must not be presented as a complete one"
+    );
+}
+
+/// A row whose payload will not parse reads back as unknown rather than
+/// failing the whole checkpoint read — the resume then re-runs at worst,
+/// where an error would abandon a row that could still shorten the list.
+#[test]
+fn an_unparseable_payload_degrades_to_unknown() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(&db, &f, "s-impl", &["a".into()], Some("sha-a"), None, 100).unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sequence_checkpoints SET produced_json = 'not json'
+             WHERE feature_id = 'f-1' AND step_id = 's-impl'",
+            [],
+        )
+        .unwrap();
+    }
+
+    let cp = sequence_checkpoint_get(&db, &f, "s-impl").unwrap();
+    assert_eq!(cp.landed_task_ids, vec!["a".to_string()]);
+    assert_eq!(cp.produced, None);
+}
+
+/// A rewind shrinks the payload with the ids. Leaving this attempt's
+/// artifact references behind would advertise output belonging to commits
+/// the rollback discarded.
+#[test]
+fn set_replaces_the_produced_payload_too() {
+    let db = db();
+    let f = fid("f-1");
+    sequence_checkpoint_record(
+        &db,
+        &f,
+        "s-impl",
+        &["a".into(), "b".into()],
+        Some("sha-b"),
+        Some(&CheckpointProduced {
+            artifact_refs: vec!["/store/a".into(), "/store/b".into()],
+            satisfied_decls: vec!["notes".into(), "report".into()],
+        }),
+        100,
+    )
+    .unwrap();
+
+    let kept = CheckpointProduced {
+        artifact_refs: vec!["/store/a".into()],
+        satisfied_decls: vec!["notes".into()],
+    };
+    sequence_checkpoint_set(
+        &db,
+        &f,
+        "s-impl",
+        &["a".into()],
+        Some("sha-a"),
+        Some(&kept),
+        200,
+    )
+    .unwrap();
+
+    assert_eq!(
+        sequence_checkpoint_get(&db, &f, "s-impl").unwrap().produced,
+        Some(kept)
+    );
 }
