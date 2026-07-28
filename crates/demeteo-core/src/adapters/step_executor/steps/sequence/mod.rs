@@ -36,6 +36,9 @@ use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, Conflic
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::artifact::Artifact;
 use crate::domain::models::{CheckpointProduced, StepConfig, StepExecution};
+use crate::domain::sequence::checkpoint::{
+    self, verdict_disposition, CheckpointDisposition, CheckpointResume,
+};
 use crate::domain::sequence::outcome::{FailureDisposition, SequenceError};
 use crate::paths;
 use crate::ports::db::StepExecutionPatch;
@@ -52,166 +55,86 @@ use schema::SEQUENCE_CONFIG_SCHEMA;
 mod disposition_tests;
 
 #[cfg(test)]
-#[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/checkpoint.rs"]
-mod checkpoint_tests;
+#[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/probe.rs"]
+mod probe_tests;
 
-/// What this attempt should do about the tasks a previous one finished.
-///
-/// Resolved *before* the task plan, because the two decisions are one
-/// decision: dropping a task from the plan is only safe if its work will
-/// actually be in the worktree the remaining tasks open. Deciding them
-/// apart is how a resume ends up implementing task 21 on top of a hole
-/// where tasks 1-20 should be.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CheckpointResume {
-    /// No checkpoint, or one that can no longer be trusted (its anchor
-    /// commit is gone, or a probe failed and we cannot tell). Run the full
-    /// plan — the pre-V32 behaviour, and the only safe default.
-    None,
-    /// The prefix is already on the feature branch, so the freshly-cut
-    /// worktree carries it. Skip the ids and touch nothing. This is what
-    /// every V32-era checkpoint meant, and what the mid-list failure path
-    /// still produces.
-    Merged {
-        landed_ids: Vec<String>,
-        produced: Option<CheckpointProduced>,
-    },
-    /// The prefix is committed on the step branch only — the signature of
-    /// an *interrupted* attempt, which never reached the merge. Skip the
-    /// ids, but move the worktree onto `sha` first.
-    Restore {
-        landed_ids: Vec<String>,
-        sha: String,
-        produced: Option<CheckpointProduced>,
-    },
+/// Which run a [`probe_anchor`] warning belongs to. Only ever read by
+/// `tracing`: the probe itself needs nothing from the driver, which is what
+/// lets a test drive it with a scripted `ExecutionPort` and no driver at all.
+pub(crate) struct ProbeLog<'a> {
+    pub feature_id: &'a str,
+    pub step_id: &'a str,
 }
 
-impl CheckpointResume {
-    /// The tasks this attempt must not re-run. Empty for [`Self::None`].
-    fn landed_ids(&self) -> &[String] {
-        match self {
-            Self::None => &[],
-            Self::Merged { landed_ids, .. } | Self::Restore { landed_ids, .. } => landed_ids,
+/// Ask git where the checkpoint's anchor commit stands relative to the
+/// feature branch.
+///
+/// Two questions and no decisions — the verdict is
+/// [`AnchorProbe`](crate::domain::sequence::checkpoint::AnchorProbe), and
+/// what it *means* is
+/// [`classify`](crate::domain::sequence::checkpoint::classify)'s to say.
+///
+/// A free function rather than a method because it needs an
+/// `ExecutionPort` and four strings, not a run: `ExecutionDriver` carries
+/// twenty-odd ports that a test would have to stub to reach a method here,
+/// which is the cost that left this logic uncovered.
+pub(crate) async fn probe_anchor(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_str: &str,
+    target_dir: &str,
+    anchor: &str,
+    base_sha: &str,
+    log: ProbeLog<'_>,
+) -> checkpoint::AnchorProbe {
+    let repo = paths::shell_escape_posix(target_dir);
+    let safe_anchor = paths::shell_escape_posix(anchor);
+
+    // Is the prefix still there to restore? The companion ref keeps it
+    // reachable, so a miss means the ref was deleted or the repo was
+    // replaced under us — either way there is nothing to resume onto.
+    if let Err(e) = exec
+        .run_command(
+            machine_str,
+            &format!("git -C {} cat-file -e {}^{{commit}}", repo, safe_anchor),
+        )
+        .await
+    {
+        tracing::warn!(
+            feature_id = %log.feature_id,
+            step_id = %log.step_id,
+            anchor = %anchor,
+            error = %e,
+            "sequence step: the landed checkpoint's anchor commit is unreachable; \
+             running the full task list"
+        );
+        return checkpoint::AnchorProbe::Missing;
+    }
+
+    match exec
+        .run_command(
+            machine_str,
+            &format!(
+                "git -C {} merge-base {} {}",
+                repo,
+                safe_anchor,
+                paths::shell_escape_posix(base_sha),
+            ),
+        )
+        .await
+    {
+        Ok(out) if checkpoint::anchor_is_merged(&out, anchor) => checkpoint::AnchorProbe::Merged,
+        Ok(_) => checkpoint::AnchorProbe::Stranded,
+        Err(e) => {
+            tracing::warn!(
+                feature_id = %log.feature_id,
+                step_id = %log.step_id,
+                error = %e,
+                "sequence step: could not tell whether the landed prefix is merged; \
+                 running the full task list"
+            );
+            checkpoint::AnchorProbe::Unknown
         }
     }
-
-    /// What those tasks emitted, or `None` when the row cannot say — a
-    /// pre-V36 checkpoint, or one whose payload would not parse.
-    ///
-    /// `None` means **unknown**, and callers must not read it as "they
-    /// produced nothing": the difference decides whether a step whose
-    /// deliverable is already on disk passes its declared-artifact check
-    /// or is failed for a deliverable it did produce.
-    fn produced(&self) -> Option<&CheckpointProduced> {
-        match self {
-            Self::None => Option::None,
-            Self::Merged { produced, .. } | Self::Restore { produced, .. } => produced.as_ref(),
-        }
-    }
-
-    /// The checkpoint row this resume was read from — what the row has to
-    /// be put back to when the attempt that grew it is discarded.
-    ///
-    /// [`Self::Merged`] rewinds to an anchor-less row on purpose: the
-    /// prefix is on the feature branch, so "skip these ids, touch nothing"
-    /// is the whole instruction, and an anchor would only invite a restore
-    /// nobody needs. The next `resolve_checkpoint_resume` reads that row
-    /// back as `Merged`, so the rewind is idempotent.
-    fn as_stored(&self) -> (&[String], Option<&str>, Option<&CheckpointProduced>) {
-        match self {
-            Self::None => (&[], Option::None, Option::None),
-            Self::Merged {
-                landed_ids,
-                produced,
-            } => (landed_ids, Option::None, produced.as_ref()),
-            Self::Restore {
-                landed_ids,
-                sha,
-                produced,
-            } => (landed_ids, Some(sha.as_str()), produced.as_ref()),
-        }
-    }
-}
-
-/// What a rollback should do to the landed checkpoint.
-///
-/// Every caller of [`ExecutionDriver::cleanup_and_rollback`] is discarding
-/// this attempt, so the default is [`Self::RewindTo`]: the checkpoint moves
-/// back with the branch, to exactly the row this attempt started from. The
-/// one exception states itself.
-pub(crate) enum CheckpointDisposition<'a> {
-    /// Put the checkpoint back to the state this attempt found it in.
-    RewindTo(&'a CheckpointResume),
-    /// Leave this attempt's checkpoint standing.
-    ///
-    /// Only for the mid-list failure whose prefix *merge* failed: the tasks
-    /// finished and their commits are pinned, so the next attempt restoring
-    /// and resuming from them beats re-running and re-paying for them. The
-    /// rollback here is about the feature branch, not about disowning the
-    /// work.
-    Keep,
-    /// Drop the checkpoint outright: clear the row and unpin the prefix.
-    ///
-    /// For the one failure [`Self::RewindTo`] cannot terminate. When every
-    /// task was already checkpointed, the attempt runs none of them and
-    /// goes straight to its tail — and if the *step's own verdict* then
-    /// rejects it (the verifier, a missing declared deliverable, an empty
-    /// diff), rewinding puts the row back to exactly the state that
-    /// produced the rejection. The retry reads it, again runs zero tasks,
-    /// again reaches the same verdict on the same tree: the budget is
-    /// spent on identical verifier passes, no agent ever sees the
-    /// feedback, and no code changes. Rewinding is right when the work is
-    /// sound and the *attempt* failed; here the work is what was judged,
-    /// so the claim on it has to go.
-    ///
-    /// Deliberately **not** used for an environmental failure on the same
-    /// path — a merge that could not run says nothing about the landed
-    /// work, and discarding there would re-run a list that is fine.
-    Discard,
-}
-
-/// What to do with the checkpoint when the step fails on **its own verdict**
-/// — the verifier rejected the work, a declared deliverable is missing, the
-/// branch carries no changes.
-///
-/// The ordinary answer is to rewind: the attempt is discarded, and the row
-/// goes back to what it was before it ran. That answer is wrong in exactly
-/// one case, and the parameter is the whole condition. When every task was
-/// already checkpointed, the attempt ran none of them, so the thing the
-/// verdict just rejected *is* the checkpoint — rewinding restores it, the
-/// retry skips every task again, and reaches the same verdict on the same
-/// tree until the budget runs out. Discarding is what lets the next attempt
-/// re-implement with the feedback in hand.
-///
-/// Callers on environmental failures must not use this: an unreachable
-/// machine or a failed merge is not a judgement on the work.
-fn verdict_disposition(
-    resumed_whole_list: bool,
-    resume: &CheckpointResume,
-) -> CheckpointDisposition<'_> {
-    if resumed_whole_list {
-        CheckpointDisposition::Discard
-    } else {
-        CheckpointDisposition::RewindTo(resume)
-    }
-}
-
-/// Read a `git merge-base <anchor> <base>` result as a verdict on whether
-/// the anchor is already contained in the base.
-///
-/// The question is deliberately asked in a form whose answer arrives on
-/// **stdout**. `merge-base --is-ancestor` puts its verdict in the exit code
-/// — `0` yes, `1` no, `128` "git could not answer" — and `ExecutionPort`
-/// flattens every non-zero exit into the same bare-stderr `Err`, so a
-/// corrupt object or a vanished ref would be indistinguishable from a
-/// confident "no" and would send the caller down the arm that resets a
-/// worktree backwards. Asking for the merge base itself removes the class:
-/// git prints it and exits 0, or it fails and we know nothing. Every `Err`,
-/// transport or otherwise, is then honestly "unknown" — no error-string
-/// classification required.
-fn anchor_is_merged(merge_base_stdout: &str, anchor: &str) -> bool {
-    let base = merge_base_stdout.trim();
-    !base.is_empty() && base.eq_ignore_ascii_case(anchor.trim())
 }
 
 impl ExecutionDriver {
@@ -1047,16 +970,14 @@ impl ExecutionDriver {
     /// `resolve_task_plan` needs the answer: the ids it drops and the
     /// commits this restores have to be the same set.
     ///
-    /// The two recovery modes are told apart by a git question rather than
-    /// by remembering which code path wrote the row — the row itself cannot
-    /// say, since the mid-list failure path and the task loop both write
-    /// one and only the former merges. `git merge-base` asks the repo
-    /// directly, and the repo is the thing that actually knows.
-    ///
-    /// Every uncertainty resolves to [`CheckpointResume::None`]: a full
-    /// re-run wastes money, while a wrong skip loses work. See
-    /// [`anchor_is_merged`] for why the probe is shaped to put its verdict
-    /// on stdout rather than in an exit code.
+    /// All this does is *observe* — read the row, ask git the two
+    /// questions — and hand both to
+    /// [`checkpoint::classify`](crate::domain::sequence::checkpoint::classify),
+    /// which owns the decision. A read that fails is
+    /// [`AnchorProbe::Unknown`] like any other unanswered question, and
+    /// classify resolves every uncertainty to
+    /// [`CheckpointResume::None`]: a full re-run wastes money, while a
+    /// wrong skip loses work.
     async fn resolve_checkpoint_resume(
         &self,
         step_exec: &StepExecution,
@@ -1067,8 +988,7 @@ impl ExecutionDriver {
             .features
             .sequence_checkpoint_get(&self.f_id, &step_exec.step_id.0)
         {
-            Ok(cp) if !cp.is_empty() => cp,
-            Ok(_) => return CheckpointResume::None,
+            Ok(cp) => cp,
             Err(e) => {
                 tracing::warn!(
                     feature_id = %self.f_id,
@@ -1081,84 +1001,27 @@ impl ExecutionDriver {
             }
         };
 
-        // A row with no anchor predates V35, and only one writer existed
-        // then — the one that merges the prefix before recording it.
-        let Some(anchor) = checkpoint.anchor_sha.clone() else {
-            return CheckpointResume::Merged {
-                landed_ids: checkpoint.landed_task_ids,
-                produced: checkpoint.produced,
-            };
+        // Only a row that carries an anchor has anything to probe; an
+        // anchor-less one is pre-V35 and classify reads it without asking.
+        let probe = match checkpoint.anchor_sha.as_deref() {
+            Some(anchor) if !checkpoint.is_empty() => {
+                probe_anchor(
+                    &*self.exec,
+                    machine_str,
+                    &self.target_dir,
+                    anchor,
+                    base_sha,
+                    ProbeLog {
+                        feature_id: self.f_id.as_str(),
+                        step_id: &step_exec.step_id.0,
+                    },
+                )
+                .await
+            }
+            _ => checkpoint::AnchorProbe::Unknown,
         };
 
-        let repo = paths::shell_escape_posix(&self.target_dir);
-        let safe_anchor = paths::shell_escape_posix(&anchor);
-
-        // Is the prefix still there to restore? The companion ref keeps it
-        // reachable, so a miss means the ref was deleted or the repo was
-        // replaced under us — either way there is nothing to resume onto.
-        if let Err(e) = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!("git -C {} cat-file -e {}^{{commit}}", repo, safe_anchor),
-            )
-            .await
-        {
-            tracing::warn!(
-                feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
-                anchor = %anchor,
-                error = %e,
-                "sequence step: the landed checkpoint's anchor commit is unreachable; \
-                 running the full task list"
-            );
-            return CheckpointResume::None;
-        }
-
-        match self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} merge-base {} {}",
-                    repo,
-                    safe_anchor,
-                    paths::shell_escape_posix(base_sha),
-                ),
-            )
-            .await
-        {
-            // The merge base *is* the anchor: it is contained in the branch
-            // tip, so the merge already happened and the fresh worktree
-            // carries the prefix.
-            Ok(out) if anchor_is_merged(&out, &anchor) => CheckpointResume::Merged {
-                landed_ids: checkpoint.landed_task_ids,
-                produced: checkpoint.produced,
-            },
-            // A different (earlier) merge base — the prefix lives on the
-            // step branch alone. An attempt was interrupted between
-            // committing a task and merging its prefix.
-            Ok(_) => CheckpointResume::Restore {
-                landed_ids: checkpoint.landed_task_ids,
-                sha: anchor,
-                produced: checkpoint.produced,
-            },
-            // git never answered: unreachable machine, timeout, corrupt
-            // object, unrelated histories. All of them mean the same thing
-            // here, and it is not "not merged" — a wrong `Restore` resets a
-            // worktree backwards past work that *was* merged, where a wrong
-            // `None` only re-runs.
-            Err(e) => {
-                tracing::warn!(
-                    feature_id = %self.f_id,
-                    step_id = %step_exec.step_id.0,
-                    error = %e,
-                    "sequence step: could not tell whether the landed prefix is merged; \
-                     running the full task list"
-                );
-                CheckpointResume::None
-            }
-        }
+        checkpoint::classify(checkpoint, probe)
     }
 
     /// The shared git ref pinning this step's landed prefix.
