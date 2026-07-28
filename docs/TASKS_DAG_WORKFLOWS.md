@@ -4,7 +4,7 @@
 
 Phases 0–3 shipped (P0.1 → P3.6, 2026-07-23 → 2026-07-26); their task bodies are
 retired — the code is the record, and `git log --grep='(dag)'` has the
-commit-by-commit trail. What survives here is **Phase 4**: the four tasks that
+commit-by-commit trail. What survives here is **Phase 4**: the five tasks that
 have not been built, plus the shared code coordinates each of them needs.
 
 ## How to run a task
@@ -24,7 +24,8 @@ depends on holding two subsystems in context at once.
 
 **Migrations:** V31 `step_attempts`, V32 durable checkpoints, V33
 `features.workflow_version_id`, V34 `workflow_versions.definition_json` are
-built — the next free number is **V35**.
+built, and V35/V36 (sequence checkpoint anchor + produced) have since landed —
+the next free number is **V37**.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -50,8 +51,9 @@ built — the next free number is **V35**.
 
 ## Phase 4 — DAG payoff
 
-Dependency order: `P4.1 ─▶ P4.2`. `P4.3` needs P1.5 + P3.2 (both shipped);
-`P4.4` is independent.
+Dependency order: `P4.1 ─▶ P4.2b`. `P4.2a` is independent — it is a
+correctness change that rides on P3.5's `command` node, not on the scheduler.
+`P4.3` needs P1.5 + P3.2 (both shipped); `P4.4` is independent.
 
 ### P4.1 — Write-scope exclusion lint + `max_parallel_nodes > 1`
 
@@ -61,13 +63,21 @@ Dependency order: `P4.1 ─▶ P4.2`. `P4.3` needs P1.5 + P3.2 (both shipped);
 - **Touch:** `scheduler.rs` (ceiling + exclusion), `workflow_graph.rs` (lint rule), driver concurrency plumbing (bounded join set); tests: two ReadOnly nodes run concurrently under the stub agent, two same-repo implement nodes provably serialize.
 - **Done when:** the invariant test cannot be defeated by config; default remains 1.
 
-### P4.2 — Parallel shapes for Standard Feature + Refactor starters
+### P4.2a — `baseline-harness` command node in the Standard + Refactor starters
 
-- **Goal:** Ship the PRD §7 shapes: Standard = `research ∥ baseline-harness(command)` → `tickets`; `validate ∥ critic` → `gate-ship`. Refactor = `baseline(command)`; `regression ∥ api-drift-review` → `gate-diff`. The other five starters stay chains and must remain **bit-identical** to the P0.2 baseline snapshots.
-- **Depends:** P4.1. **Size:** medium.
-- **Context:** PRD §7; `src-tauri/workflows/standard-feature-pipeline.json` + `refactor.json`; seeding drift logic in `src-tauri/src/commands/workflows.rs`; the P0.2 baseline harness.
-- **Touch:** the two starter JSONs (as v2), new baseline snapshots for those two, seeding test updates.
-- **Done when:** both run green under the stub agent with genuine concurrency observed in `run_events` ordering; the five untouched starters' snapshots are unchanged.
+- **Goal:** Run the project's harness *before* the implement budget is spent, not after. Standard gains a `baseline-harness(command)` node ahead of `s-research` on a plain chain edge; Refactor's existing `s-baseline` **agent** step becomes the PRD §7 zero-token `command` node. Today the only orchestrator-executed command in the Standard pipeline is `run_harness_first` at `s-validate` — so a misconfigured `test_command`/`prepare_command`, or a base branch that was already red, is discovered after the whole implement spend and is then attributed to the feature. This is a correctness change, not a topology one: no `∥`, no scheduler involvement.
+- **Depends:** none — P3.5's `command` node is the entire mechanism. **Size:** small.
+- **Context:** PRD §7; `steps/command.rs` (its doc comment is the spec: non-zero exit → `VerdictFailed`/`verdict`, transport → `Environmental`, timeout → `Environmental`, malformed config → `NonRetryable`; it already merges stderr via `( … ) 2>&1`, which `run_harness_first` does not); `src-tauri/workflows/standard-feature-pipeline.json` + `refactor.json`; seeding drift logic in `src-tauri/src/commands/workflows.rs`; the P0.2 baseline harness at `crates/demeteo-core/tests/conformance/starter_baseline.rs` — note it runs `ExecutionMode::LocalOnly` (a **real** shell; only the *agent* is stubbed) and pins `test_command` to `true`, so the committed snapshots exercise the green path only. Complement, not substitute: [`HARNESS_BASELINE.md`](HARNESS_BASELINE.md) specifies a workflow-independent bootstrap preflight — this node protects runs of *these two starters*, that phase protects every run whatever workflow the user picked. Neither makes the other redundant.
+- **Touch:** the two starter JSONs (as v2) and their canvas fixtures (`src/components/canvas/__fixtures__/standard-feature-pipeline.v2.json`, `refactor.v2.json`), regenerated snapshots for those two under `crates/demeteo-core/tests/conformance/snapshots/starter_baseline/`, seeding test updates.
+- **Done when:** the P0.2 harness gains two cases the stub agent cannot answer for, **each watched fail before it passes** (AGENTS.md §7) — (a) a fixture project whose configured `test_command` genuinely exits non-zero: the baseline node's `step_attempts` row records `error_class = verdict` and no `s-implement` step ever leaves `pending`; (b) the same fixture with a green command: the chain proceeds unchanged to the end. The red case needs its own project settings, not a snapshot edit — `test_command` is pinned to `true` for the existing snapshots. The five untouched starters' snapshots remain **bit-identical**.
+
+### P4.2b — Parallel shapes for Standard Feature + Refactor starters
+
+- **Goal:** Ship what is genuinely topological in the PRD §7 shapes: Standard = `research ∥ baseline-harness` fan-in to `tickets`, and `validate ∥ critic` fan-in to `gate-ship`; Refactor = `regression ∥ api-drift-review` fan-in to `gate-diff`. The baseline-node conversions themselves are P4.2a's; this task only rewires the edges. The other five starters stay chains and must remain **bit-identical** to the P0.2 baseline snapshots.
+- **Depends:** P4.1, P4.2a. **Size:** medium.
+- **Context:** PRD §7; `src-tauri/workflows/standard-feature-pipeline.json` + `refactor.json` as P4.2a leaves them; seeding drift logic in `src-tauri/src/commands/workflows.rs`; the P0.2 baseline harness.
+- **Touch:** edges in the two starter JSONs (as v2) and their canvas fixtures, regenerated snapshots for those two, seeding test updates.
+- **Done when:** both run green under the stub agent with genuine concurrency observed in `run_events` ordering (this task's own risk is scheduling, so the stub is the right instrument here — the harness-truthfulness cases are P4.2a's); the five untouched starters' snapshots are unchanged.
 
 ### P4.3 — Conditional edges in the builder
 
@@ -81,7 +91,7 @@ Dependency order: `P4.1 ─▶ P4.2`. `P4.3` needs P1.5 + P3.2 (both shipped);
 
 - **Goal:** Reference a saved workflow version as a node; child run linked to parent; nesting depth 1, enforced by lint. Registry-only backend diff — the same rule P3.5 proved.
 - **Size:** large-ish.
-- **Context:** PRD §5.2 (subworkflow row); `steps/command.rs` as the handler template; `repos/feature.rs` (parent/child linkage columns — next free migration is **V35**); `driver_registry.rs` (child driver spawn dedup).
+- **Context:** PRD §5.2 (subworkflow row); `steps/command.rs` as the handler template; `repos/feature.rs` (parent/child linkage columns — next free migration is **V37**); `driver_registry.rs` (child driver spawn dedup).
 - **Touch:** new `steps/subworkflow.rs`, registration, migration for parent-run linkage, run-mode canvas "enter child" affordance.
 - **Done when:** the parent run shows the child node with roll-up status; depth-2 nesting is rejected at lint.
 
@@ -93,6 +103,7 @@ Dependency order: `P4.1 ─▶ P4.2`. `P4.3` needs P1.5 + P3.2 (both shipped);
 |---|---|---|
 | P0.1 – P3.6 | Phases 0–3 (schema v2, engine, canvas, builder) | ✅ 2026-07-23 → 2026-07-26 |
 | P4.1 | Write-scope lint + parallelism | ☐ |
-| P4.2 | Parallel starter shapes | ☐ |
+| P4.2a | `baseline-harness` command node | ☐ |
+| P4.2b | Parallel starter shapes | ☐ |
 | P4.3 | Conditional edges UI | ☐ |
 | P4.4 | `subworkflow` node | ☐ |
