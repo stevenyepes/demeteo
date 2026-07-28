@@ -325,6 +325,14 @@ mod topology_equivalence;
 #[path = "../../tests/conformance/harness_triage.rs"]
 mod harness_triage;
 
+/// Bootstrap harness-preflight gate (HB1, `docs/HARNESS_BASELINE.md`): a
+/// project whose `test_command` names an unresolvable binary must be stopped at
+/// launch, before any step row is seeded — and a project whose commands resolve
+/// must be untouched. Runs a real shell for the false-positive leg.
+#[cfg(test)]
+#[path = "../../tests/conformance/preflight_gate.rs"]
+mod preflight_gate;
+
 /// Durable-checkpoint crash-resume gate (P1.9): a fresh driver life must
 /// resume a checkpointed `sequence` step from the exact task, not the step
 /// head. Included the same `#[path]` way.

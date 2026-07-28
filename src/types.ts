@@ -138,6 +138,7 @@ export const BOOTSTRAP_PHASE_ORDER: ReadonlyArray<string> = [
   'preparing_context',
   'syncing_origin',
   'creating_branch',
+  'harness_preflight',
   'registering',
   'starting_pipeline',
 ];

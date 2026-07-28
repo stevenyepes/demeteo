@@ -29,7 +29,7 @@ depends on holding two subsystems in context at once.
 **Migrations:** V35 `sequence_checkpoint_anchor` and V36
 `sequence_checkpoint_produced` are built — the next free number is **V37**.
 
-**Dependency order:** `HB1 ─▶ HB2`. `HB3` is independent and can land first.
+**Dependency order:** `HB1 ─▶ HB2`. `HB3` is independent. **HB1 is done**; HB2 and HB3 remain.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -39,7 +39,7 @@ depends on holding two subsystems in context at once.
 |---|---|
 | Bootstrap tail + phase vocabulary | `crates/demeteo-core/src/adapters/step_executor/impl_traits/mod.rs` (`bootstrap_phase`, `run_bootstrap_tail_inner`) |
 | Harness execution primitive | `.../step_executor/driver/verifier.rs` (`run_harness_first`, `harness_shell_options`) |
-| Throwaway worktree | `.../adapters/worktree/git_ops/worktree.rs` (`provision_subtask_worktree`) |
+| Preflight probe (HB1, built) | `.../step_executor/preflight.rs` |
 | Ecosystem detection | `.../adapters/worktree/git_ops/strategy.rs` (`detect_worktree_strategy`) |
 | Shell contract | `crates/demeteo-core/src/ports/execution.rs` (`ShellOptions`, `TRANSPORT_ERROR_PREFIX`, `TIMEOUT_ERROR_PREFIX`) |
 | Sequence prompt binding | `.../step_executor/steps/sequence/prompt.rs` |
@@ -113,7 +113,7 @@ tokens per cycle.
 
 ## 2. Tasks
 
-### HB1 — Bootstrap preflight phase
+### HB1 — Bootstrap preflight phase — **[Done]**
 
 - **Goal:** measure the project's configured commands **once, before the
   pipeline starts**, and surface the result on the bootstrap stepper. Runs for
@@ -149,17 +149,32 @@ tokens per cycle.
   `baseline-harness` node gets probes but no baseline, so HB2's pre-existing-red
   subtraction does not apply to it. Revisit if custom workflows become common.
 
-- **Execution:** a throwaway worktree off the just-cut feature branch via
-  `provision_subtask_worktree`, run under `harness_shell_options` — the same
-  interactive login shell the real harness uses, for the same `PATH`/shim
-  reasons. That primitive now carries a `ShellOptions::timeout` (S10, fixed), so
-  the probes inherit a deadline rather than needing their own.
+- **Execution:** *(as built — simpler than designed.)* No worktree. `command -v`
+  needs the login shell, not the repo, so the probe runs against the project's
+  existing target dir and the throwaway-worktree step disappeared. It runs under
+  an interactive login shell for the usual `PATH`/shim reason, with its own
+  `PREFLIGHT_PROBE_TIMEOUT_S` (20s) rather than the run's `wall_cap_s` — the two
+  answer different questions, and a `command -v` that takes 20s means the machine
+  is unwell, not that the binary is slow to find.
 
-- **What the probes are.** `command -v` on the head binary of each configured
-  command, plus a bounded `prepare_command` run — the install step is both cheap
-  relative to a suite and the thing whose absence makes everything downstream
-  fail. This is the 127-detection insight `classify_harness_failure` already
-  encodes, moved to where it costs nothing instead of one full implement budget.
+- **What the probes are.** `command -v` on every binary the configured
+  `test_command` names — every stage of an `&&`/`;`/`|` chain, not just the first,
+  since any one missing breaks the whole harness. This is the 127-detection
+  insight `classify_harness_failure` already encodes, moved to where it costs
+  nothing instead of one full implement budget.
+
+  **`prepare_command` is *not* run here**, contrary to the original design.
+  `npm i` is ~40s on every launch, and the P4.2a baseline node runs prepare at
+  the same point in the timeline (it is node 1, ahead of research) — so paying it
+  twice buys nothing but latency the user watches.
+
+- **The bias, and why it shapes everything.** A false negative is cheap: the user
+  lands in today's behaviour. A false positive blocks a legitimate launch. So
+  anything that cannot be resolved to a plain binary name without running a shell
+  is **skipped, not guessed at** — shell builtins, `VAR=value` assignments,
+  `$(…)`/backtick substitutions, globs. And a transport failure or probe timeout
+  is treated as *no evidence*, never as a missing binary: refusing to start work
+  over a network blip would be strictly worse than not checking at all.
 
 - **Classification and what each does to the launch:**
 
@@ -187,11 +202,14 @@ tokens per cycle.
   reached deterministically; the blocking rows leave no seeded step rows; the
   non-blocking rows leave the run identical to today's.
 
-- **Done when:** a project whose `test_command` names a binary that is not on the
-  login shell's `PATH` is rejected at bootstrap with that binary named, and a
-  project whose suite merely *fails* still launches — the probes must not become
-  a gate on repo hygiene, and a red suite is not knowable here anyway. Both
-  observable on the stepper and in `run_events`.
+- **Done:** `adapters/step_executor/preflight.rs` plus the phase in
+  `run_bootstrap_tail_inner` and one entry in `BOOTSTRAP_PHASE_ORDER`. 16 unit
+  tests over the pure decision (against a port double that errors on anything it
+  was not told to answer) and a two-leg conformance gate,
+  `tests/conformance/preflight_gate.rs`, which runs a **real** shell: one leg
+  proves an unresolvable binary blocks the launch *with zero step rows seeded*,
+  the other proves a resolvable one leaves the run untouched. Both were watched
+  fail — an inert gate reddens the first, an over-eager one reddens the second.
 
 ### HB2 — Persist the baseline and feed it forward
 
@@ -336,6 +354,6 @@ tokens per cycle.
 
 | Task | Title | Status |
 |---|---|---|
-| HB1 | Bootstrap preflight phase | ☐ |
+| HB1 | Bootstrap preflight phase | ✅ |
 | HB2 | Persist the baseline & feed it forward | ☐ |
 | HB3 | Ecosystem detection | ☐ |
