@@ -105,6 +105,18 @@ macro_rules! id_newtype {
     };
 }
 
+/// The machine id standing for the desktop host itself.
+///
+/// Not a real `Machine` row: every `ExecutionPort` adapter reads it as
+/// "run this here, not over SSH", and it is what a run with no remote
+/// host resolves to.
+///
+/// **Not** the same thing as `Project::compute_type == "local"`, which
+/// is a project setting that happens to share the spelling. That
+/// comparison asks where a project is hosted; this constant names the
+/// execution target. Do not use it for the former.
+pub const LOCAL_MACHINE: &str = "local";
+
 id_newtype!(MachineId);
 id_newtype!(ProjectId);
 id_newtype!(ThreadId);

@@ -323,7 +323,7 @@ impl DagStepExecutor {
             .map_err(|e| format!("Failed to resolve repo dir: {}", e))?;
         let machine_str = machine_id_opt
             .clone()
-            .unwrap_or_else(|| "local".to_string());
+            .unwrap_or_else(|| crate::domain::ids::LOCAL_MACHINE.to_string());
 
         // The merge executor's `sync_feature_with_upstream` left
         // the feature in a conflicted state. The conflict lives in

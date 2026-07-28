@@ -30,7 +30,7 @@ impl ExecutionDriver {
     /// (`<HEAD>:<dirty|clean>`, P1.14) on whatever machine hosts it.
     /// `None` = probe failed; never blocks the run.
     pub(crate) async fn current_workspace_fingerprint(&self) -> Option<String> {
-        let machine_str = self.machine_id_opt.as_deref().unwrap_or("local");
+        let machine_str = self.machine_id();
         crate::adapters::step_executor::setup::workspace_fingerprint(
             &*self.exec,
             machine_str,

@@ -15,6 +15,19 @@ use crate::domain::models::{EffortLevel, StepConfig};
 use super::ExecutionDriver;
 
 impl ExecutionDriver {
+    /// The machine every command in this run targets.
+    ///
+    /// `machine_id_opt` is `None` for a local run;
+    /// [`LOCAL_MACHINE`](crate::domain::ids::LOCAL_MACHINE) is the
+    /// sentinel the `ExecutionPort` adapters read as "this host". One
+    /// definition of that fallback, rather than the literal repeated at
+    /// every step that needs a `machine_str`.
+    pub(crate) fn machine_id(&self) -> &str {
+        self.machine_id_opt
+            .as_deref()
+            .unwrap_or(crate::domain::ids::LOCAL_MACHINE)
+    }
+
     /// Resolve the commit where `branch_name` most recently diverged from
     /// the project's default branch — the feature's true fork point,
     /// independent of how many `on_failure` retries have merged work back

@@ -263,7 +263,7 @@ impl HttpMrPublisher {
             .remote_host
             .as_ref()
             .map(|m| m.as_str())
-            .unwrap_or("local");
+            .unwrap_or(crate::domain::ids::LOCAL_MACHINE);
 
         // Point origin at a token-free URL — only a bare provider
         // username, never the PAT. The PAT itself is supplied to `git

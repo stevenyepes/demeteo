@@ -360,7 +360,7 @@ impl DagStepExecutor {
         let machine_id_opt = machine_id.map(|s| s.to_string());
         let machine_id_for_check = machine_id_opt
             .clone()
-            .unwrap_or_else(|| "local".to_string());
+            .unwrap_or_else(|| crate::domain::ids::LOCAL_MACHINE.to_string());
 
         // Path probe
         let parent_dir = std::path::Path::new(&target_dir)

@@ -54,7 +54,7 @@ impl GitOpsHelper {
         };
 
         // Ensure parent directory exists
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let path = std::path::Path::new(target_dir);
         if let Some(parent) = path.parent() {
             let parent_str = parent.to_str().unwrap_or("");

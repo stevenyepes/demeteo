@@ -181,11 +181,7 @@ impl ExecutionDriver {
             }
         };
 
-        let machine_str = self
-            .machine_id_opt
-            .as_deref()
-            .unwrap_or("local")
-            .to_string();
+        let machine_str = self.machine_id().to_string();
         let subtask_id = format!("{}-step-{}", self.f_id_str, step_exec.step_id.0);
         let wt_path = match self
             .git_ops

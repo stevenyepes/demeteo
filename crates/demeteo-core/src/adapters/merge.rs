@@ -127,7 +127,9 @@ impl MergeExecutor for SqliteMergeExecutor {
             .await
         {
             Ok(outcome) => {
-                let machine_str = machine_id_opt.as_deref().unwrap_or("local");
+                let machine_str = machine_id_opt
+                    .as_deref()
+                    .unwrap_or(crate::domain::ids::LOCAL_MACHINE);
                 let _ = self
                     .exec
                     .run_command(

@@ -9,7 +9,7 @@ impl GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
     ) -> Result<WorktreeStrategy, String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
 
         // 1. Detect Default Branch name
         // Try origin/HEAD first. Fallback to local HEAD, but reject feature/subtask branch names.

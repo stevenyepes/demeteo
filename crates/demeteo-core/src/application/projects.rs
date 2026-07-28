@@ -238,7 +238,7 @@ pub async fn health_check(
     for repo in repos {
         let target_dir = resolve_target_dir(ctx, &project, &project_id, &repo.repo_path).await?;
 
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let probe_cmd = format!(
             "git -C {} rev-parse --is-inside-work-tree",
             paths::shell_escape_posix(&target_dir)

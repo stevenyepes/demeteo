@@ -301,10 +301,7 @@ impl ExecutionDriver {
         }
 
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
-        let machine_str = self
-            .machine_id_opt
-            .clone()
-            .unwrap_or_else(|| "local".to_string());
+        let machine_str = self.machine_id().to_string();
 
         // Rollback anchor: the feature branch tip before this attempt. On
         // failure we reset the branch ref back to it so a retry starts clean.

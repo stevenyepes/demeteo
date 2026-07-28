@@ -69,7 +69,7 @@ async fn do_bootstrap_inner(
     };
 
     // Clean up any directories in the workspace repos/ folder that are no longer configured
-    let machine_str = machine_id.unwrap_or("local");
+    let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
     if project.compute_type.to_lowercase() == "local" {
         if repos_parent_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&repos_parent_dir) {
