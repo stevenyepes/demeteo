@@ -82,41 +82,72 @@ impl ExecutionDriver {
         let opts = self.harness_shell_options(wt_path);
 
         if let Some(ref cmd) = prepare_command {
-            if let Err(out) = self
-                .exec
-                .run_command_with(machine_str, cmd, opts.clone())
+            match self
+                .run_harness_command(machine_str, cmd, opts.clone())
                 .await
             {
-                // A transport failure (unreachable machine, dropped channel,
-                // drain timeout) is not a red build — surface it as
-                // Infrastructure (non-retryable) instead of a Verdict that
-                // would pointlessly re-run the same command. See C0.2 / D3.
-                if is_transport_failure(&out) {
-                    return Err(crate::domain::verifier::VerifierError::Infrastructure(
-                        format!("prepare command '{}' could not run: {}", cmd, out),
-                    ));
-                }
-                return Err(self
-                    .classify_harness_failure(step_exec, machine_str, wt_path, cmd, &out)
-                    .await);
+                None => return Err(crate::domain::verifier::VerifierError::Cancelled),
+                Some(Ok(_)) => {}
+                Some(Err(out)) => match classify_exec_failure(&out) {
+                    // A transport failure (unreachable machine, dropped
+                    // channel, drain timeout) is not a red build — surface it
+                    // as Infrastructure (non-retryable) instead of a Verdict
+                    // that would pointlessly re-run the same command. See
+                    // C0.2 / D3.
+                    HarnessExecFailure::Transport => {
+                        return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                            format!("prepare command '{}' could not run: {}", cmd, out),
+                        ))
+                    }
+                    // Abandoned at the ceiling: the command never reached a
+                    // verdict, so retrying the *code* cannot help. Terminal,
+                    // with remediation, exactly like the exit-127 path.
+                    HarnessExecFailure::Timeout => {
+                        let msg = build_timeout_message(
+                            machine_str,
+                            wt_path,
+                            cmd,
+                            self.harness_ceiling_s(),
+                        );
+                        self.notify_environment_not_ready(step_exec, &msg);
+                        return Err(crate::domain::verifier::VerifierError::Environment(msg));
+                    }
+                    HarnessExecFailure::NonZeroExit => {
+                        return Err(self
+                            .classify_harness_failure(step_exec, machine_str, wt_path, cmd, &out)
+                            .await)
+                    }
+                },
             }
         }
 
         let harness_result: Option<(String, bool)> = match harness_cmd {
             Some(ref cmd) => match self
-                .exec
-                .run_command_with(machine_str, cmd, opts.clone())
+                .run_harness_command(machine_str, cmd, opts.clone())
                 .await
             {
-                Ok(out) => Some((out, true)),
-                // A transport failure is infrastructure, not a red harness —
-                // don't gate a Verdict on it (C0.2 / D3).
-                Err(out) if is_transport_failure(&out) => {
-                    return Err(crate::domain::verifier::VerifierError::Infrastructure(
-                        format!("test harness '{}' could not run: {}", cmd, out),
-                    ))
-                }
-                Err(out) => Some((out, false)),
+                None => return Err(crate::domain::verifier::VerifierError::Cancelled),
+                Some(Ok(out)) => Some((out, true)),
+                Some(Err(out)) => match classify_exec_failure(&out) {
+                    // A transport failure is infrastructure, not a red harness —
+                    // don't gate a Verdict on it (C0.2 / D3).
+                    HarnessExecFailure::Transport => {
+                        return Err(crate::domain::verifier::VerifierError::Infrastructure(
+                            format!("test harness '{}' could not run: {}", cmd, out),
+                        ))
+                    }
+                    HarnessExecFailure::Timeout => {
+                        let msg = build_timeout_message(
+                            machine_str,
+                            wt_path,
+                            cmd,
+                            self.harness_ceiling_s(),
+                        );
+                        self.notify_environment_not_ready(step_exec, &msg);
+                        return Err(crate::domain::verifier::VerifierError::Environment(msg));
+                    }
+                    HarnessExecFailure::NonZeroExit => Some((out, false)),
+                },
             },
             None => None,
         };
@@ -177,13 +208,66 @@ impl ExecutionDriver {
     /// `pub(crate)` because the `command` node type (P3.5) runs
     /// user-authored shell for the same reason under the same
     /// constraints — sharing the decision beats re-deriving it there.
+    ///
+    /// # Deadline
+    ///
+    /// The options carry the run's `wall_cap_s` as an explicit
+    /// [`timeout`](crate::ports::execution::ShellOptions::timeout). Without one
+    /// the harness was the only unbounded wait in a step: `wall_cap_s` itself is
+    /// enforced inside `stream_agent_turn`, and the harness runs *before* any
+    /// turn starts, so a command that never exits hung the step until the app
+    /// restarted. It reuses the existing user-configurable cap rather than
+    /// introducing a second knob — a harness is bounded by the same "how long
+    /// may one step take" answer an agent turn is.
+    ///
+    /// The `command` node overrides this with its own `spec.timeout`, which is
+    /// why this is a default rather than a floor.
     pub(crate) fn harness_shell_options(
         &self,
         wt_path: &str,
     ) -> crate::ports::execution::ShellOptions {
         crate::ports::execution::ShellOptions {
             cwd: Some(wt_path.to_string()),
+            timeout: Some(std::time::Duration::from_secs(self.harness_ceiling_s())),
             ..crate::ports::execution::ShellOptions::login_interactive()
+        }
+    }
+
+    /// The wall-clock ceiling one prepare/harness command may consume, in
+    /// seconds. Read through the same resolver every agent-turn call site uses,
+    /// so one preferences change moves both.
+    pub(crate) fn harness_ceiling_s(&self) -> u64 {
+        crate::application::timeouts::resolve_effective(self.app_settings.as_ref()).wall_cap_s
+    }
+
+    /// Run one prepare/harness command, racing it against cancellation.
+    ///
+    /// Dropping the run future is what actually stops the work — the local
+    /// adapter kills the command's process group on drop — so the `biased`
+    /// select is the mechanism, not just a status check. Mirrors what
+    /// `steps/command.rs` already does for the `command` node type: both are
+    /// user-authored shell built from [`harness_shell_options`], and they must
+    /// not disagree about whether Stop works.
+    async fn run_harness_command(
+        &self,
+        machine_str: &str,
+        cmd: &str,
+        opts: crate::ports::execution::ShellOptions,
+    ) -> Option<Result<String, String>> {
+        let mut cancel_watch = self.cancel_watch.clone();
+        let cancelled = async move {
+            // `wait_for` also resolves — as `Err` — when the sender is dropped.
+            // That is "nobody can cancel this any more", not "this was
+            // cancelled", so park forever and let the command decide the
+            // outcome rather than killing a healthy step during teardown.
+            if cancel_watch.wait_for(|c| *c).await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = cancelled => None,
+            r = self.exec.run_command_with(machine_str, cmd, opts) => Some(r),
         }
     }
 
@@ -872,15 +956,65 @@ fn format_produced_artifacts_summary(
     summary
 }
 
-/// Whether an `ExecutionPort` error string denotes a *transport* failure
-/// (the machine could not be reached, the channel broke, or the drain timed
-/// out) rather than a *command* failure (it ran and exited non-zero). Keyed
-/// off the [`TRANSPORT_ERROR_PREFIX`](crate::ports::execution::TRANSPORT_ERROR_PREFIX)
-/// contract (C0.2, `docs/EXECUTION_PARITY.md`) so the verifier can
-/// route transport failures to `Infrastructure` (non-retryable) instead of a
-/// `Verdict` that would re-run a build that never actually failed.
-fn is_transport_failure(err: &str) -> bool {
-    err.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX)
+/// How a failed `ExecutionPort` call on a prepare/harness command must be
+/// answered. Pure over the error string, so the whole policy is decidable in a
+/// unit test without a port double.
+///
+/// The distinction that matters is **"did the command reach a verdict?"**
+/// Exactly one shape did: a non-zero exit. The other two were abandoned — the
+/// machine went away, or the deadline expired — and a build that never finished
+/// running is not a red build. Classifying either as a
+/// [`Verdict`](crate::domain::verifier::VerifierError::Verdict) would redirect
+/// an agent to "fix" code that was never tested, which is the exact failure
+/// mode [`TRANSPORT_ERROR_PREFIX`](crate::ports::execution::TRANSPORT_ERROR_PREFIX)
+/// and [`TIMEOUT_ERROR_PREFIX`](crate::ports::execution::TIMEOUT_ERROR_PREFIX)
+/// exist to prevent (D3, `docs/EXECUTION_PARITY.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HarnessExecFailure {
+    /// The machine could not be reached or the channel broke.
+    Transport,
+    /// The command was abandoned at its `ShellOptions::timeout`.
+    Timeout,
+    /// The command ran and exited non-zero — the only shape that is a verdict.
+    NonZeroExit,
+}
+
+pub(crate) fn classify_exec_failure(err: &str) -> HarnessExecFailure {
+    if err.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX) {
+        HarnessExecFailure::Transport
+    } else if err.starts_with(crate::ports::execution::TIMEOUT_ERROR_PREFIX) {
+        HarnessExecFailure::Timeout
+    } else {
+        HarnessExecFailure::NonZeroExit
+    }
+}
+
+/// User-facing remediation for a harness command that hit its ceiling.
+///
+/// A command that produces no exit status inside a generous wall-clock budget
+/// is overwhelmingly a runner left in **watch mode**, not a slow suite — and
+/// that is a configuration defect no retry can resolve, so the message leads
+/// with it. `detect_worktree_strategy` emits a bare `npm test` for any repo with
+/// a root `package.json`, and `scripts.test` is very often `vitest` or
+/// `jest --watch`, so this is the default path for a large class of projects,
+/// not an exotic one.
+fn build_timeout_message(machine_str: &str, wt_path: &str, cmd: &str, ceiling_s: u64) -> String {
+    build_environment_message(
+        machine_str,
+        wt_path,
+        cmd,
+        &format!(
+            "The command produced no exit status within {}s and was abandoned, so nothing was \
+             tested. This is not a verdict on the code — the suite never finished running.",
+            ceiling_s
+        ),
+        "The usual cause is a test runner left in **watch mode**, which never exits: `vitest` \
+         (use `vitest run`), `jest --watch` (use `jest --ci`), `cargo watch`. Check what the \
+         command actually resolves to — for an `npm test` that is the `scripts.test` entry in \
+         `package.json` — and change the project's test command to the one-shot form. If the \
+         suite is genuinely slower than the ceiling, raise the wall-clock cap in preferences \
+         instead.",
+    )
 }
 
 /// Detect "the shell could not find a binary the harness command invokes"
@@ -1207,8 +1341,8 @@ mod produced_artifacts_summary_tests;
 mod tail_chars_tests;
 
 #[cfg(test)]
-#[path = "../../../../tests/infrastructure/step_executor/verifier/is_transport_failure_tests.rs"]
-mod is_transport_failure_tests;
+#[path = "../../../../tests/infrastructure/step_executor/verifier/classify_exec_failure_tests.rs"]
+mod classify_exec_failure_tests;
 
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/verifier/parse_verdict_text_tests.rs"]

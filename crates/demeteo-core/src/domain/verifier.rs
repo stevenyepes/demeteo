@@ -108,4 +108,16 @@ pub enum VerifierError {
     /// budget. The inner string is user-facing remediation (what to install /
     /// fix, the failing command, and how to reproduce it), not a stack trace.
     Environment(String),
+    /// The user pressed Stop while a harness command was still running.
+    ///
+    /// Distinct from every variant above because it is not a failure: nothing
+    /// was judged, nothing is broken, and nothing should be persisted as an
+    /// error on the step. Callers map it to
+    /// [`StepOutcome::Cancelled`](crate::adapters::step_executor::steps::StepOutcome).
+    ///
+    /// It needs its own variant because the harness is the one place a step
+    /// spends unbounded wall-clock *outside* an agent turn, so the turn-level
+    /// cancel plumbing never covered it — Stop appeared to do nothing until the
+    /// command exited on its own.
+    Cancelled,
 }
