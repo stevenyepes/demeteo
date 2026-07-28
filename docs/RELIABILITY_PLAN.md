@@ -82,7 +82,18 @@ this needs no judgement: `merge-base --is-ancestor` returns its verdict in the
 `merge-base` is asked instead and the answer read off stdout. Anything that is
 not a printed SHA is unknown, and unknown re-runs.
 
-Three consequences worth knowing before touching this:
+Four consequences worth knowing before touching this:
+
+- **A checkpoint covering the whole plan means the whole plan is done.** The row
+  names every id from the moment the last task commits until the step completes,
+  and that window spans the declared-artifact check, the verifier's agent pass
+  and the final merge. `apply_landed_checkpoint` used to read all-ids-matched as
+  a stale row and put the full plan back — correct under V32, where the only
+  writer left a task unlanded by construction, and a 25-task re-run under V35. It
+  now leaves nothing to run and the step resumes into its own tail. Two things
+  there assume a task ran and are skipped accordingly: the `never_produced` gate
+  (nothing emitted anything this attempt) and the in-memory artifact refs, which
+  are recovered from the store instead.
 
 - **The checkpoint rolls back with the branch.** Since the row now names a commit
   the next attempt will `reset --hard` onto, a rollback that left it standing
@@ -211,6 +222,28 @@ machine update/delete (the same commands S5 needs a hook in), or hand the router
 a pre-resolved handle at composition time. Whichever way, the lookup should not
 be a synchronous DB hit on a runtime thread — see the `spawn_blocking` treatment
 `SshClientAdapter::resolve_user` now gets.
+
+### S9. `replay_from_step` leaks the sequence checkpoint ref — **[Open]**
+
+**Where:** `adapters/step_executor/impl_traits/replay.rs`, `steps/sequence/mod.rs`
+
+A replay drops the `sequence_checkpoints` row but not the
+`refs/demeteo/seq/<feature>/<step>` ref that pins the prefix's commits, because
+deleting the ref needs a resolved execution context (repo path + machine) purely
+to tidy up. The row is the authority — with it gone the resume reads "no
+checkpoint" and re-runs — so this is correctness-neutral, and the step's own
+completion path deletes the ref next time it runs.
+
+The gap is the feature that is **abandoned** rather than re-run: nothing ever
+runs that completion path, so the ref pins the discarded attempt's commits for
+the life of the repo and `git gc` can never reclaim them. Repo growth, not
+incorrect behaviour — but unbounded, and invisible to the user because the ref
+lives outside `refs/heads` and so never appears in `git branch`.
+
+**Fix:** sweep `refs/demeteo/seq/<feature>/*` where the feature is deleted or in
+a terminal state with no checkpoint row — either at feature deletion (which has
+the project context the replay path lacks) or as a periodic reaper alongside
+whatever eventually collects abandoned worktrees.
 
 ---
 

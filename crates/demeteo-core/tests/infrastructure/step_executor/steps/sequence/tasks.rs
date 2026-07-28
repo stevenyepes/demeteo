@@ -198,15 +198,26 @@ fn a_plan_with_no_checkpointed_tasks_is_untouched() {
     assert!(!out.resumes_landed_work);
 }
 
-/// A re-planned list whose ids all match the checkpoint means the skip-list
-/// is stale relative to the plan (e.g. a gate redirect rewrote the spec but
-/// kept the ids). Running nothing would complete the step without doing the
-/// work the retry was for — so the full plan runs, told to revise in place.
+/// A checkpoint covering every task means every task is done — the state a
+/// kill between the last task's commit and the step's merge leaves behind.
+///
+/// This used to put the whole plan back, on the premise that all-ids-matched
+/// could only mean a stale row. Under V35 it is the *fresh* state, and
+/// re-running it is the exact cost the checkpoint exists to avoid: a 25-task
+/// step killed during the verifier would re-pay for all 25. The caller has
+/// already verified the anchor against the repo, so the work is there.
 #[test]
-fn a_checkpoint_covering_every_task_is_ignored_but_still_marks_landed_work() {
+fn a_checkpoint_covering_every_task_leaves_nothing_to_run() {
     let out = apply_landed_checkpoint(plan_of(&["a", "b"]), &["a".into(), "b".into()]);
-    assert_eq!(out.tasks.len(), 2);
-    assert!(out.already_landed.is_empty());
+    assert!(
+        out.tasks.is_empty(),
+        "every task landed, so none may re-run; got {:?}",
+        out.tasks.iter().map(|t| &t.id).collect::<Vec<_>>()
+    );
+    // Still named, so the step's tail can tell "resumed, nothing to do" from
+    // "the task list was empty", which is a misconfiguration.
+    let landed: Vec<&str> = out.already_landed.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(landed, ["a", "b"]);
     assert!(out.resumes_landed_work);
 }
 

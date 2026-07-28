@@ -804,3 +804,163 @@ async fn a_resume_re_reads_a_revised_task_list_artifact() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// A kill *after* the last task commits must cost the merge, not the list.
+///
+/// This is the window the per-task checkpoint opens and, until the
+/// `apply_landed_checkpoint` fallback was retired, could not exploit. From
+/// the moment the last task lands until `clear_sequence_checkpoint` runs at
+/// step completion, the row names **every** id in the plan — and that span
+/// contains the declared-artifact check, the verifier's agent pass, and the
+/// final merge. The verifier alone can be minutes.
+///
+/// The old fallback read "every id matches" as a stale row and put the whole
+/// plan back, which under V32 was right (its only writer left a task
+/// unlanded by construction) and under V35 re-pays for a 25-task step killed
+/// during verification. Same bug the PR set out to fix, displaced from
+/// "interrupted at task 21" to "interrupted after task 25".
+///
+/// So: zero tasks may run, and the work must still reach the feature branch.
+#[tokio::test]
+async fn a_kill_after_the_last_task_resumes_without_re_running_any() {
+    let (tmp, ctx, project_id, feature_id) = control_run("merge-window").await;
+
+    let repo_dir = paths::repo_target_dir_local(&ctx.workspace_dir, &project_id, REPO_PATH);
+    let branch = format!(
+        "{}{}",
+        crate::adapters::step_executor::setup::fetch_default_settings()
+            .worktree_strategy
+            .branch_prefix,
+        feature_id.0
+    );
+
+    // ── Forge the merge-window crash: both tasks committed on a step branch
+    // that never merged, the branch then gone, the commit held only by the
+    // checkpoint ref. ──
+    let forge_wt = tmp.join("forge-wt");
+    let forge_branch = format!("{}_subtask_forge", branch);
+    git_in(
+        &repo_dir,
+        &[
+            "worktree",
+            "add",
+            forge_wt.to_str().unwrap(),
+            "-b",
+            &forge_branch,
+            &branch,
+        ],
+    );
+    std::fs::write(
+        forge_wt.join("merge-window-work.txt"),
+        "both tasks committed; the process died before the merge\n",
+    )
+    .expect("write forged task output");
+    git_in(&forge_wt, &["add", "-A"]);
+    git_in(&forge_wt, &["commit", "-m", "chore: the whole task list"]);
+    let anchor = git_in(&forge_wt, &["rev-parse", "HEAD"]);
+
+    let checkpoint_ref = format!("refs/demeteo/seq/{}/{}", feature_id.0, "s-impl");
+    git_in(&repo_dir, &["update-ref", &checkpoint_ref, &anchor]);
+    git_in(
+        &repo_dir,
+        &["worktree", "remove", "--force", forge_wt.to_str().unwrap()],
+    );
+    git_in(&repo_dir, &["branch", "-D", &forge_branch]);
+
+    let steps = ctx.features.steps_for_feature(&feature_id).expect("steps");
+    let impl_step = steps
+        .iter()
+        .find(|s| s.step_id.0 == "s-impl")
+        .expect("sequence step exists");
+    ctx.features
+        .step_update(
+            &impl_step.id,
+            &StepExecutionPatch {
+                status: Some("interrupted".to_string()),
+                error_message: Some(None),
+                ..Default::default()
+            },
+        )
+        .expect("reset sequence step");
+    ctx.features
+        .update(
+            &feature_id,
+            &FeaturePatch {
+                status: Some("running".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("reset feature status");
+    // The whole plan, checkpointed — what the task loop leaves behind once
+    // the last task commits.
+    ctx.features
+        .sequence_checkpoint_record(
+            &feature_id,
+            "s-impl",
+            &["stub-task-1".to_string(), "stub-task-2".to_string()],
+            Some(anchor.as_str()),
+            paths::now_ms(),
+        )
+        .expect("seed checkpoint");
+    let baseline_rows = subtask_runs(&tmp, &feature_id).len();
+
+    let ctx2 = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotif),
+        tokio::runtime::Handle::current(),
+    );
+    ctx2.executor
+        .step_retry(impl_step.id.0.as_str(), None, None, None)
+        .await
+        .expect("retry the interrupted sequence step");
+    let status = poll_terminal(&ctx2, &feature_id).await;
+    let step_debug: Vec<String> = ctx2
+        .features
+        .steps_for_feature(&feature_id)
+        .unwrap_or_default()
+        .iter()
+        .map(|s| format!("{}={} err={:?}", s.step_id.0, s.status, s.error_message))
+        .collect();
+    assert_eq!(
+        status, "awaiting_mr",
+        "resume failed; steps: {step_debug:#?}"
+    );
+
+    let life2: Vec<(String, String)> = subtask_runs(&tmp, &feature_id)
+        .into_iter()
+        .skip(baseline_rows)
+        .collect();
+    assert!(
+        life2.is_empty(),
+        "a fully-landed checkpoint must run no tasks at all; life 2 ran: {life2:?}"
+    );
+
+    // Skipping is only right if the work survives — the same assertion the
+    // partial-resume test makes, for the case where the whole list landed.
+    let tree = git_in(&repo_dir, &["ls-tree", "-r", "--name-only", &branch]);
+    assert!(
+        tree.lines().any(|f| f == "merge-window-work.txt"),
+        "the killed attempt's committed work must reach the feature branch; \
+         branch holds: {tree}"
+    );
+
+    // The step still has to hand its declared deliverable downstream, even
+    // though no task ran to re-produce it.
+    let impl_after = ctx2
+        .features
+        .steps_for_feature(&feature_id)
+        .expect("steps")
+        .into_iter()
+        .find(|s| s.step_id.0 == "s-impl")
+        .expect("sequence step exists");
+    assert!(
+        !impl_after.artifact_paths.is_empty(),
+        "a resumed step must still carry artifacts; the declared deliverables were \
+         produced by the attempt that landed the tasks"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
