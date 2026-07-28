@@ -266,6 +266,12 @@ impl ExecutionDriver {
                         crate::domain::verifier::VerifierError::Environment(msg) => {
                             StepOutcome::NonRetryable(msg)
                         }
+                        // Stop was pressed while the harness was running. Not
+                        // a failure — the worktree is already cleaned up above
+                        // and nothing should be persisted as an error.
+                        crate::domain::verifier::VerifierError::Cancelled => {
+                            StepOutcome::Cancelled
+                        }
                     };
                 }
             }

@@ -227,6 +227,10 @@ impl ExecutionDriver {
             crate::domain::verifier::VerifierError::Environment(msg) => {
                 StepOutcome::NonRetryable(decorate(&msg))
             }
+            // Stop was pressed while the harness was running. Undecorated on
+            // purpose: `decorate` explains a *failed* step's rollback state,
+            // and a cancel is not a failure.
+            crate::domain::verifier::VerifierError::Cancelled => StepOutcome::Cancelled,
         }
     }
 
