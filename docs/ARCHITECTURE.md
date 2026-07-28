@@ -12,7 +12,7 @@
 +-----------------+     +-----------------------------------------------+     +------------------+
 |  DRIVERS (UI)   |     |                  PORTS                        |     | DRIVEN ADAPTERS  |
 |                 |     |                                               |     |                  |
-|  React (Tauri   | ==> |  DatabasePort (split into 8 sub-traits)      | <== |  SqliteAdapter   |
+|  React (Tauri   | ==> |  DatabasePort (split into 11 sub-traits)     | <== |  SqliteAdapter   |
 |  webview)       |     |  StepExecutor / GatePresenter                 |     |  SshClientAdapt. |
 |  - ProjectRail  |     |  WorktreeOps / Merge / Conflict / MrPublisher |     |  LocalFsAdapter  |
 |  - ProjectHome  |     |  AgentRuntime / AgentExecutionPort            |     |  CliRuntime      |
@@ -48,7 +48,7 @@ merge/sync machinery.
 
 The original `DatabasePort` trait carried 66 methods spanning 13 domains.
 It is split in [`src-tauri/src/ports/db.rs`](../../src-tauri/src/ports/db.rs)
-into eight narrow sub-ports aligned with the bounded contexts in
+into eleven narrow sub-ports aligned with the bounded contexts in
 [`DDD_MODEL.md`](DDD_MODEL.md):
 
 | Sub-port                  | Bounded context | Owns                                         |
@@ -62,6 +62,7 @@ into eight narrow sub-ports aligned with the bounded contexts in
 | `GateRepository`          | gates           | `GateDecision`                               |
 | `AppSettingsRepository`   | app settings    | `ProviderInstance`, app-session KV, first-launch flags |
 | `MergeAuditRepository`    | merge audit     | `record_merge_outcome`, `record_sync_outcome`, worktree/repo context lookup |
+| `SubtaskRunRepository`    | subtask runs    | `SubtaskRunRow` — per-task run telemetry for a `sequence` step (`subtask_run_start` / `_finish` / `_interrupt_stale`) |
 | `NotificationRepository`  | notifications   | `Notification` (bell cache)                  |
 
 Each sub-port is small (≤ 12 methods), cohesive, and takes strongly-typed
@@ -188,7 +189,7 @@ src-tauri/src/
 │   └── verifier.rs
 ├── ports/
 │   ├── mod.rs
-│   ├── db.rs                      # Eight sub-ports + Patch value objects
+│   ├── db.rs                      # Eleven sub-ports + Patch value objects
 │   ├── execution.rs
 │   ├── agent_runtime.rs           # AgentRuntime + AgentSession + opencode_permission_env / no_permission_env
 │   ├── agent_execution.rs         # AgentExecutionPort + CommandOutcome + ActionError
@@ -207,7 +208,7 @@ src-tauri/src/
 │   └── notification.rs
 ├── adapters/
 │   ├── mod.rs
-│   ├── database/                  # SQLite-backed implementations of the eight sub-ports
+│   ├── database/                  # SQLite-backed implementations of the eleven sub-ports
 │   ├── ssh/                       # SSH transport (keyring, ssh2)
 │   ├── local/                     # Local FS + subprocess adapters
 │   ├── agent/
