@@ -40,6 +40,7 @@ use crate::domain::sequence::checkpoint::{
     self, verdict_disposition, CheckpointDisposition, CheckpointResume,
 };
 use crate::domain::sequence::outcome::{FailureDisposition, SequenceError};
+use crate::domain::sequence::progress::{LandedTask, StepTally};
 use crate::paths;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
@@ -347,7 +348,7 @@ impl ExecutionDriver {
 
         // 3. Run the tasks in order.
         //
-        // The accumulators do not start empty on a resume. Both are
+        // The tally does not start empty on a resume. Its totals are
         // step-wide judgements — what this step hands downstream, and which
         // declared deliverables exist — and a task that landed under an
         // earlier attempt contributed to both. Its contribution lived only
@@ -359,14 +360,7 @@ impl ExecutionDriver {
         // `None` from `produced()` is a pre-V36 row and means *unknown* —
         // handled at 3b, not here, because the two halves degrade
         // differently.
-        let mut all_artifact_refs: Vec<String> = Vec::new();
-        let mut satisfied_decls: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        if let Some(produced) = resume.produced() {
-            all_artifact_refs.extend(produced.artifact_refs.iter().cloned());
-            satisfied_decls.extend(produced.satisfied_decls.iter().cloned());
-        }
-        let mut landed_this_attempt: Vec<runner::LandedTask> = Vec::new();
+        let mut tally = StepTally::resuming(resume.produced());
         let tasks_res = self
             .run_tasks_loop(
                 step_exec,
@@ -382,9 +376,7 @@ impl ExecutionDriver {
                 &wt_path,
                 &agent_kind,
                 override_model.as_deref(),
-                &mut all_artifact_refs,
-                &mut satisfied_decls,
-                &mut landed_this_attempt,
+                &mut tally,
             )
             .await;
 
@@ -402,9 +394,9 @@ impl ExecutionDriver {
             // point that restores the stopped attempt's commits, which is
             // the opposite of what the rollback below is for.
             let mut checkpoint = CheckpointDisposition::RewindTo(&resume);
-            if !*self.cancel_watch.borrow() && !landed_this_attempt.is_empty() {
+            if !*self.cancel_watch.borrow() && !tally.landed().is_empty() {
                 match self
-                    .checkpoint_landed_prefix(&wt_id, &wt_path, &machine_str, &landed_this_attempt)
+                    .checkpoint_landed_prefix(&wt_id, &wt_path, &machine_str, tally.landed())
                     .await
                 {
                     Ok(()) => {
@@ -424,18 +416,15 @@ impl ExecutionDriver {
                         // tells "already merged, skip the ids" from "still
                         // only on the step branch, restore it first".
                         let landed_ids: Vec<String> =
-                            landed_this_attempt.iter().map(|t| t.id.clone()).collect();
-                        let anchor = landed_this_attempt.last().map(|t| t.sha.as_str());
+                            tally.landed().iter().map(|t| t.id.clone()).collect();
+                        let anchor = tally.landed().last().map(|t| t.sha.as_str());
                         // The same gap-closing for the produced payload: a
-                        // task whose own checkpoint write failed contributed
-                        // to these accumulators anyway, and the failed task
-                        // did not (it returns before its artifacts resolve),
-                        // so the step-wide totals are exactly the landed
-                        // tasks' output. The union deduplicates the rest.
-                        let produced = CheckpointProduced {
-                            artifact_refs: all_artifact_refs.clone(),
-                            satisfied_decls: satisfied_decls.iter().cloned().collect(),
-                        };
+                        // task whose own checkpoint write failed folded into
+                        // the tally anyway, and the failed task did not (it
+                        // returns before its artifacts resolve), so the
+                        // step-wide totals are exactly the landed tasks'
+                        // output. The union deduplicates the rest.
+                        let produced = tally.produced();
                         let landed_total = match self.features.sequence_checkpoint_record(
                             &self.f_id,
                             &step_exec.step_id.0,
@@ -467,18 +456,15 @@ impl ExecutionDriver {
                                     landed: landed_total,
                                     // Everything the checkpoint knows landed,
                                     // plus this attempt's plan minus what it
-                                    // ran. `landed_this_attempt` only ever
-                                    // accumulates tasks drawn from
-                                    // `plan.tasks`, so the difference cannot
-                                    // go negative — but the invariant lives a
-                                    // module away in `run_tasks_loop`, and a
-                                    // count in a user-facing message is not
-                                    // worth a panic if it ever moves.
+                                    // ran. The tally only ever lands tasks
+                                    // drawn from `plan.tasks`, so the
+                                    // difference cannot go negative — but the
+                                    // invariant lives a module away in
+                                    // `run_tasks_loop`, and a count in a
+                                    // user-facing message is not worth a
+                                    // panic if it ever moves.
                                     total: landed_total
-                                        + plan
-                                            .tasks
-                                            .len()
-                                            .saturating_sub(landed_this_attempt.len()),
+                                        + plan.tasks.len().saturating_sub(tally.landed().len()),
                                 },
                             )
                             .await;
@@ -562,7 +548,7 @@ impl ExecutionDriver {
                 .artifacts
                 .list_for_step(&self.f_id_str, &step_exec.step_id.0)
             {
-                Ok(stored) => all_artifact_refs.extend(stored),
+                Ok(stored) => tally.recover_refs(stored),
                 Err(e) => tracing::warn!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
@@ -577,7 +563,7 @@ impl ExecutionDriver {
             .as_deref()
             .unwrap_or(&[])
             .iter()
-            .filter(|d| !satisfied_decls.contains(&d.name))
+            .filter(|d| !tally.satisfies(&d.name))
             .map(|d| d.name.as_str())
             .collect();
         if !unjudgeable && !never_produced.is_empty() {
@@ -768,7 +754,7 @@ impl ExecutionDriver {
                 refs.push(reference);
             }
         }
-        refs.extend(all_artifact_refs);
+        refs.extend(tally.artifact_refs().iter().cloned());
         // A reference is a stable path, so the store's own listing can name
         // the artifact this attempt just wrote — `list_for_step` on the
         // resumed-whole-list path returns the previous attempt's `code-diff`
@@ -1215,7 +1201,7 @@ impl ExecutionDriver {
         wt_id: &str,
         wt_path: &str,
         machine_str: &str,
-        landed: &[runner::LandedTask],
+        landed: &[LandedTask],
     ) -> Result<(), String> {
         let last = landed
             .last()
