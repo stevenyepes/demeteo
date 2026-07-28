@@ -313,34 +313,28 @@ pub fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
         // --model`. Slugs must match codex's bundled model-metadata registry,
         // or the CLI emits a per-turn "Model metadata for `<slug>` not found.
         // Defaulting to fallback metadata" warning and mis-accounts tokens.
-        // The whole `gpt-5.1` family was retired from that registry by
-        // codex-cli 0.142.3; these slugs are the current metadata-backed set
-        // (coding-tuned `-codex` variants first). A user pointing Codex at a
-        // custom provider (e.g. a MiniMax endpoint in ~/.codex/config.toml)
-        // types their model id in the custom-override field instead. All
-        // GPT-5 Codex models are vision-capable.
+        // The GPT-5.3/5.2 Codex and GPT-5.4 model ids were retired from that
+        // registry. These GPT-5.6 variants are the current metadata-backed
+        // set. A user pointing Codex at a custom provider (e.g. a MiniMax
+        // endpoint in ~/.codex/config.toml) types their model id in the
+        // custom-override field instead. All GPT-5 Codex models are
+        // vision-capable.
         "codex" => vec![
             ConfigOptionValue {
-                value: "gpt-5.3-codex".into(),
-                name: "GPT-5.3 Codex".into(),
+                value: "gpt-5.6-terra".into(),
+                name: "GPT-5.6 Terra".into(),
                 description: None,
                 supports_images: true,
             },
             ConfigOptionValue {
-                value: "gpt-5.2-codex".into(),
-                name: "GPT-5.2 Codex".into(),
+                value: "gpt-5.6-sol".into(),
+                name: "GPT-5.6 Sol".into(),
                 description: None,
                 supports_images: true,
             },
             ConfigOptionValue {
-                value: "gpt-5.4".into(),
-                name: "GPT-5.4".into(),
-                description: None,
-                supports_images: true,
-            },
-            ConfigOptionValue {
-                value: "gpt-5.4-mini".into(),
-                name: "GPT-5.4 Mini".into(),
+                value: "gpt-5.6-luna".into(),
+                name: "GPT-5.6 Luna".into(),
                 description: None,
                 supports_images: true,
             },
