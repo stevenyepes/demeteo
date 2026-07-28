@@ -67,8 +67,20 @@ pub(crate) struct RetryContext {
     /// Effective max iterations for this loop.
     pub max: u32,
     /// Failing test identifiers from a structured verdict (empty for
-    /// plain failures). Lets the retried step's prompt name the exact
-    /// tests to fix and the sequence step target the owning tasks.
+    /// plain failures).
+    ///
+    /// **Populated but not yet consumed.** `run_loop/outcome.rs` copies
+    /// it off the verdict, and nothing reads it back: the tests reach
+    /// the retried prompt as *prose*, rendered into `feedback` by
+    /// [`VerdictFailure`](crate::domain::verifier::VerdictFailure), and
+    /// the sequence step's targeted retry keys off `implicated_files`
+    /// alone. Kept because the structured form is the input a prompt
+    /// that names the exact tests would need, and the verdict pipeline
+    /// already pays to parse it.
+    ///
+    /// Until then it is a write-only field; the `allow` is what says so
+    /// out loud rather than letting a stray read make it look load-bearing.
+    #[allow(dead_code)]
     pub failing_tests: Vec<String>,
     /// Repo-relative files a structured verdict implicated (empty for
     /// plain failures). The sequence step re-runs only the tasks
@@ -82,6 +94,40 @@ pub(crate) struct RetryContext {
     /// means "clear after the next completed step" (legacy behavior,
     /// used by synthesized per-subtask contexts).
     pub failing_step_id: String,
+}
+
+impl Default for RetryContext {
+    /// A context that is *not* a retry: no prior failure, one attempt.
+    ///
+    /// `iteration`/`max` are 1 rather than 0 because they are rendered
+    /// straight into a prompt as "attempt {iteration} of {max}", and
+    /// "attempt 0 of 0" describes a run that never happened.
+    fn default() -> Self {
+        Self {
+            feedback: String::new(),
+            iteration: 1,
+            max: 1,
+            failing_tests: Vec::new(),
+            implicated_files: Vec::new(),
+            failing_step_id: String::new(),
+        }
+    }
+}
+
+impl RetryContext {
+    /// This context with its `feedback` replaced.
+    ///
+    /// For a task-scoped `retry_note`, which overrides the step-wide
+    /// verdict for one task's prompt. Everything else in the context
+    /// describes the *attempt*, not the feedback, and has to survive
+    /// verbatim — a functional update so a field added to this struct
+    /// cannot silently arrive empty at the call site.
+    pub(crate) fn with_feedback(&self, feedback: String) -> Self {
+        Self {
+            feedback,
+            ..self.clone()
+        }
+    }
 }
 
 /// Holds all shared state for a single feature execution run.
