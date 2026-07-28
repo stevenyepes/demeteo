@@ -283,7 +283,9 @@ impl ExecutionDriver {
         // The newlines matter: a command whose last line is a `#` comment
         // would otherwise swallow the closing paren and turn a valid command
         // into a syntax error.
-        let captured = format!("(\n{}\n) 2>&1", spec.command);
+        let captured = crate::adapters::step_executor::driver::verifier::merge_stderr_into_stdout(
+            &spec.command,
+        );
 
         let result = tokio::select! {
             biased;

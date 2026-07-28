@@ -297,7 +297,7 @@ The classifier's unit tests include the case that was watched fail first — a
 prefixes must *lead* the string, so a suite that prints the word `timeout: ` in
 its own output cannot rewrite its own classification.
 
-### S11. A green harness's stderr is discarded before it reaches the validate agent — **[Open]**
+### S11. A green harness's stderr is discarded before it reaches the validate agent — **[Fixed]**
 
 **Where:** `adapters/step_executor/driver/verifier.rs` (`run_harness_first`), `adapters/local/execution.rs` (`command_result`), `adapters/ssh/command.rs` (`run_blocking`)
 
@@ -314,12 +314,18 @@ prompt under a heading asserting the harness already ran, followed by a claim
 that the results are authoritative and a ban on re-running anything. The agent is
 handed nothing and told it is evidence.
 
-**Fix:** apply the same subshell redirect in `run_harness_first`. The exit status
-is the subshell group's last command's, so the pass/fail gate is unaffected, and
-the harness section becomes the same shape green or red — matching what
-`steps/command.rs` already guarantees for the node type.
+**Fixed by** extracting `merge_stderr_into_stdout` and routing *both* callers
+through it — `run_harness_first` and `steps/command.rs`, which previously carried
+its own copy of the same literal. Sharing it is the point: these two are the only
+places a user-authored command's output is shown to somebody, and they had
+already drifted once. The exit status is the subshell's last command's, so the
+pass/fail gate is unaffected, and the harness section is the same shape green or
+red. Its tests cover the two shapes that actually break: a command ending in a
+`#` comment (which would swallow the closing paren without the newlines) and the
+`set +e; …; exit $rc` accumulator `detect_worktree_strategy` emits for a polyglot
+repo.
 
-### S12. The no-harness fallback renders under an "already executed" heading — **[Open]**
+### S12. The no-harness fallback renders under an "already executed" heading — **[Fixed]**
 
 **Where:** `adapters/step_executor/driver/verifier.rs` (`run_harness_first`), `adapters/step_executor/steps/agent/mod.rs`
 
@@ -339,11 +345,16 @@ recorded the engine-side hole as an explicit follow-up. This entry is that
 follow-up; the prompt fix is a mitigation resting on the agent obeying prose that
 the surrounding template contradicts.
 
-**Fix:** make "no harness configured" a distinct return shape rather than a
-success string, so the caller can render its own heading (or omit the block and
-the ban entirely) instead of dressing an absence as a result.
+**Fixed by** `HarnessOutcome` — `run_harness_first` now returns `Ran { name,
+cmd, output }` or `NotConfigured` instead of a pre-rendered string, and the
+heading moved *into* `render_section` on the type. That coupling is the fix, not
+a detail: a caller that cannot choose the heading cannot put "already executed by
+the orchestrator" above an absence. The `NotConfigured` block names what did not
+happen, refuses the inference explicitly ("an absence of evidence, not a passing
+result"), drops the do-not-re-run ban that only makes sense for a real result,
+and points at the `environment` verdict — which is what S13 made reachable.
 
-### S13. The validate verdict schema omits `environment`, which its own instructions require — **[Open]**
+### S13. The validate verdict schema omits `environment`, which its own instructions require — **[Fixed]**
 
 **Where:** `adapters/step_executor/steps/agent/mod.rs`, `adapters/step_executor/driver/verifier.rs` (`parse_verdict_text`)
 
@@ -363,10 +374,15 @@ gave it. The resulting `verdict.redirect` rework cycle cost **$14.63 / 11.0M
 tokens**, with a second cycle still running when this was written, re-implementing
 a feature whose defect was a project setting.
 
-**Fix:** add the third option to both the appended contract and the correction
-prompt. Engine-side handling already exists and needs no change.
+**Fixed by** `verdict_contract`, a pure function that renders the menu with all
+three verdicts plus the discriminator for choosing `environment` over `fail`, and
+by giving the re-ask correction the same three options — a correction that
+silently dropped `environment` would push a correct judgement into `fail` on the
+retry. Engine-side parsing already accepted it and is unchanged. The contract
+honours a custom `verdict_key`, which a test pins: hard-coding `"verdict"` there
+would emit a contract `parse_verdict_text` cannot satisfy.
 
-### S14. A failing verdict skips the declared-artifact check — **[Open]**
+### S14. A failing verdict skips the declared-artifact check — **[Fixed]**
 
 **Where:** `adapters/step_executor/steps/agent/mod.rs`
 
@@ -383,10 +399,17 @@ work and rejected it" and "the agent never produced its deliverable" — are
 indistinguishable from the row, which is precisely the signal the check was added
 to give.
 
-**Fix:** evaluate `missing_artifacts` before the verdict block, and persist the
-produced paths on the verdict-failure path as the other terminal paths do. A step
-that failed still produced what it produced, and the next attempt's feedback is
-better for having it.
+**Fixed by** persisting `artifact_path`/`artifact_paths` on the verdict-failure
+path and appending an undelivered-artifact note to the verdict's reason via
+`note_undelivered_artifacts`.
+
+Deliberately *not* by reordering the two checks, which is what this entry
+originally proposed. Making a missing artifact win would replace the verdict's
+reason — the actionable part, and the thing the rework step decomposes into
+tickets — with a generic "declared artifact never produced". The verdict still
+leads; the missing report is appended, because the consuming step attaches the
+report by name and needs to know there is nothing there. A *passing* verdict
+still falls through to the ordinary check, which already covered it.
 
 ---
 

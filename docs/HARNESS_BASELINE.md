@@ -299,14 +299,18 @@ tokens per cycle.
 ## 3. Cross-references
 
 - **[`RELIABILITY_PLAN.md`](RELIABILITY_PLAN.md) S10–S14** — the engine-side
-  silent-failure fixes this design assumes are landing. **S10** (the missing
-  deadline and cancellation on the harness command) is **done** — it was HB1's
-  hard prerequisite, since a preflight that can hang forever is worse than no
-  preflight. Still open: the dropped stderr on a green harness, the
-  no-harness fallback rendering under an "already executed" heading, the
-  `environment` verdict missing from the JSON menu the agent is given, and the
-  missing-artifact check skipped on a failing verdict. **Do not restate them
-  here** — reference them by number and let that file stay their record.
+  silent-failure fixes in this subsystem, **all five now fixed**: the harness
+  deadline and cancellation (S10, HB1's hard prerequisite — a preflight that can
+  hang forever is worse than no preflight), the dropped stderr on a green
+  harness (S11), the no-harness fallback wearing an "already executed" heading
+  (S12), the `environment` verdict missing from the JSON menu (S13), and the
+  artifacts unrecorded on a failing verdict (S14). **Do not restate them here** —
+  reference them by number and let that file stay their record.
+
+  What they do *not* do is make the project well configured; they make a
+  misconfigured project fail honestly and cheaply instead of silently or
+  expensively. HB1–HB3 are the prevention half, and remain the reason this
+  document exists.
 
 - **[`TASKS_DAG_WORKFLOWS.md`](TASKS_DAG_WORKFLOWS.md) P4.2** — ships a
   `baseline-harness(command)` node inside the Standard starter's graph. That is
