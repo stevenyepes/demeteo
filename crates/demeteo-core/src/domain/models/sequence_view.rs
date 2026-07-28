@@ -40,6 +40,37 @@ pub struct SequenceCheckpoint {
     /// The commit the landed prefix ends at, pinned by
     /// `refs/demeteo/seq/<feature>/<step>` so `git gc` cannot reclaim it.
     pub anchor_sha: Option<String>,
+    /// What those tasks emitted (V36). `None` means **unknown** — a row
+    /// written before V36 — and never "they produced nothing"; see
+    /// [`SequenceProduced`].
+    pub produced: Option<SequenceProduced>,
+}
+
+/// What a sequence step's landed tasks produced, carried on the checkpoint
+/// so a resumed attempt can answer questions a fresh one answers from the
+/// task loop it did not run.
+///
+/// Both fields are accumulated *in memory* during an attempt and so die with
+/// a killed process. Recomputing them at resume is not possible — no agent
+/// runs — and recovering them by listing the step's artifact directory
+/// over-collects, because the store is keyed by `(feature, step)` with no
+/// attempt dimension and would hand a rolled-back attempt's files downstream
+/// as this step's output. Recording them beside the task ids keeps them to
+/// exactly the scope those ids describe.
+///
+/// The distinction that matters at read time: absent is *unknown*, not
+/// empty. Treating a pre-V36 row as "produced nothing" would fail every
+/// declared artifact on the first resume after an upgrade.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SequenceProduced {
+    /// Artifact references the landed tasks wrote, in production order —
+    /// what the step advertises downstream.
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+    /// Names of the `step_conf.artifacts` declarations some landed task
+    /// satisfied. The `never_produced` gate is judged against this.
+    #[serde(default)]
+    pub satisfied_decls: Vec<String>,
 }
 
 impl SequenceCheckpoint {

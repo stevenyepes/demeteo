@@ -141,6 +141,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // for databases that ran V32 before the column joined the table.
     add_column_if_missing(conn, "sequence_checkpoints", "anchor_sha", "TEXT")?;
 
+    // What the landed tasks produced (V36), so a resume can judge declared
+    // artifacts and advertise refs without having run the tasks.
+    add_column_if_missing(conn, "sequence_checkpoints", "produced_json", "TEXT")?;
+
     Ok(())
 }
 

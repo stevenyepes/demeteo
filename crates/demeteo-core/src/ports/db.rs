@@ -332,12 +332,17 @@ pub trait FeatureRepository: Send + Sync {
     /// deduplicated) and move the anchor to `anchor_sha`; `None` leaves
     /// the stored anchor alone. Returns the total landed count after the
     /// merge.
+    ///
+    /// `produced` is **replaced**, not merged, because the caller always
+    /// holds the attempt's running total; `None` leaves the stored payload
+    /// alone, for the same reason `None` does on the anchor.
     fn sequence_checkpoint_record(
         &self,
         feature_id: &FeatureId,
         step_id: &str,
         landed_task_ids: &[String],
         anchor_sha: Option<&str>,
+        produced: Option<&crate::domain::models::SequenceProduced>,
         now: i64,
     ) -> Result<u32, String>;
 
@@ -352,12 +357,17 @@ pub trait FeatureRepository: Send + Sync {
     /// Atomic on purpose — clear-then-record would leave a window where
     /// a crash loses an *earlier* attempt's merged prefix, which is real
     /// work and not this attempt's to spend.
+    /// `produced` shrinks with the ids: a rewind drops the discarded
+    /// attempt's task ids, so its artifact refs and satisfied declarations
+    /// must go with them or the step would advertise output belonging to
+    /// work it just disowned.
     fn sequence_checkpoint_set(
         &self,
         feature_id: &FeatureId,
         step_id: &str,
         landed_task_ids: &[String],
         anchor_sha: Option<&str>,
+        produced: Option<&crate::domain::models::SequenceProduced>,
         now: i64,
     ) -> Result<(), String>;
 
