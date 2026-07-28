@@ -1,6 +1,5 @@
 use std::time::Instant;
 
-use super::tasks::{PlannedTask, TaskPlan};
 use crate::adapters::step_executor::artifacts::{
     commit_worktree_changes, inject_artifact_contract, read_worktree_file,
     resolve_attached_artifacts, resolve_declared_artifacts, WorktreeSnapshot,
@@ -9,6 +8,7 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::artifact::Artifact;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::sequence::tasks::{PlannedTask, TaskPlan};
 use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::notification::DomainEvent;
@@ -45,8 +45,9 @@ pub(crate) struct LandedTask {
 /// Each task's own turn is capped by `role_max_budget_usd` (see
 /// `run_one_task`), but that ceiling resets for *every* task — nothing else
 /// bounds how much a long, or over-decomposed, task list spends in total
-/// (`validate_task_plan` in `tasks.rs` deliberately places no cap on task
-/// count). This is the actual backstop: generous enough that a legitimately
+/// ([`validate_task_plan`](crate::domain::sequence::tasks::validate_task_plan)
+/// deliberately places no cap on task count). This is the actual backstop:
+/// generous enough that a legitimately
 /// large, well-sized ticket list still completes, but it stops a runaway
 /// list before it burns through dozens of unattended paid sessions.
 const SEQUENCE_STEP_COST_CEILING_MULTIPLIER: f64 = 20.0;

@@ -129,7 +129,8 @@ pub(crate) fn task_list_json_shape_example(include_retry_note: bool) -> String {
 /// ticket rubric (one context window per task); a hard count limit only
 /// punished well-decomposed large features. Total cost is bounded instead, by
 /// the aggregate dollar ceiling `run_tasks_loop` enforces across the whole
-/// list (see `SEQUENCE_STEP_COST_CEILING_MULTIPLIER` in `runner.rs`) — the
+/// list (`SEQUENCE_STEP_COST_CEILING_MULTIPLIER`, in the sequence step's
+/// `runner.rs`) — the
 /// per-task budget alone resets every task and does not, on its own, bound
 /// anything about the list as a whole.
 ///
@@ -285,7 +286,8 @@ pub(crate) fn select_targeted_tasks(
 /// Drop the tasks a mid-list checkpoint already landed on the feature branch.
 ///
 /// When a task fails partway through the list, the step merges the completed
-/// prefix before failing (see `handle_sequence_step`), so the next attempt
+/// prefix before failing (see the adapter's `handle_sequence_step`), so the
+/// next attempt
 /// must not re-run — and re-pay for — tasks whose commits are already on the
 /// branch. The landed tasks move into [`TaskPlan::already_landed`] so the
 /// running tasks' prompts still describe the tree they open.
@@ -303,7 +305,7 @@ pub(crate) fn select_targeted_tasks(
 ///
 /// This used to put the full plan back, on the premise that all-ids-matched
 /// meant a stale row. That premise died with V32: the caller now resolves a
-/// [`CheckpointResume`](super::CheckpointResume) first, which verifies the
+/// [`CheckpointResume`](crate::adapters::step_executor::steps::sequence::CheckpointResume) first, which verifies the
 /// anchor against the repo, so by the time a plan reaches this filter the
 /// landed work is known to be either merged or about to be restored.
 ///
@@ -430,5 +432,5 @@ fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
 }
 
 #[cfg(test)]
-#[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/tasks.rs"]
+#[path = "../../../tests/domain/sequence/tasks.rs"]
 mod targeted_retry_tests;

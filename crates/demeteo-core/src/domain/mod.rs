@@ -12,6 +12,7 @@ pub mod models;
 pub mod permission;
 pub mod prompt_context;
 pub mod run_spec;
+pub mod sequence;
 pub mod text;
 pub mod usage;
 pub mod verifier;
