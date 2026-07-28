@@ -8,8 +8,8 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::agent::{
     append_retry_feedback_section, format_retry_feedback_section, template_uses_retry_section,
 };
-use crate::domain::models::{StepConfig, StepExecution};
-use crate::domain::sequence::tasks::PlannedTask;
+
+use super::context::{RunTarget, StepCtx, StepWorktree, TaskRun};
 
 /// What one finished task contributed, carried forward so the next task's
 /// agent — a *fresh* session with none of the previous conversation — can
@@ -26,20 +26,18 @@ impl ExecutionDriver {
     /// Build one task's prompt: the step's template with the task-scoped
     /// placeholders bound, plus the record of what earlier tasks already
     /// landed.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn build_task_prompt(
         &self,
-        step_conf: &StepConfig,
-        step_index: usize,
-        step_execs: &[StepExecution],
-        task: &PlannedTask,
-        task_idx: usize,
-        task_total: usize,
-        completed: &[CompletedTask],
-        resumes_landed_work: bool,
-        machine_str: &str,
-        wt_path: &str,
+        step: StepCtx<'_>,
+        target: RunTarget<'_>,
+        wt: StepWorktree<'_>,
+        run: TaskRun<'_>,
     ) -> String {
+        let step_conf = step.step_conf;
+        let task = run.task;
+        let completed = run.completed;
+        let resumes_landed_work = run.resumes_landed_work;
+
         let task_files_str = task.files.join(", ");
 
         // The fresh session has no memory of the earlier tasks, so spell out
@@ -137,8 +135,8 @@ impl ExecutionDriver {
             .set("task_description", &task.description)
             .set("task_files", &task_files_str)
             .set("task_acceptance", &acceptance_str)
-            .set("task_index", (task_idx + 1).to_string())
-            .set("task_total", task_total.to_string())
+            .set("task_index", (run.index + 1).to_string())
+            .set("task_total", run.total.to_string())
             .set("completed_tasks", &completed_str)
             .set("test_command", &test_command)
             // Legacy aliases: a workflow still carrying the old `parallel`
@@ -159,19 +157,19 @@ impl ExecutionDriver {
         let prompt = if rendered.trim().is_empty() {
             format!(
                 "Task {}/{}: {}. {}\nFiles: {}\nCode is in: {}\n\nAlready completed:\n{}",
-                task_idx + 1,
-                task_total,
+                run.index + 1,
+                run.total,
                 task.title,
                 task.description,
                 task_files_str,
-                wt_path,
+                wt.path,
                 completed_str,
             )
         } else {
             resolve_attached_artifacts(
                 &rendered,
-                step_execs,
-                step_index,
+                step.step_execs,
+                step.step_index,
                 &*self.artifacts,
                 &self.steps,
             )
@@ -186,9 +184,9 @@ impl ExecutionDriver {
 
         crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
             &prompt,
-            wt_path,
+            wt.path,
             &*self.exec,
-            machine_str,
+            target.machine,
         )
         .await
     }

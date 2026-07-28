@@ -133,8 +133,8 @@ async fn probe(exec: &ScriptedExec) -> checkpoint::AnchorProbe {
         exec,
         "local",
         "/repo",
-        ANCHOR,
-        BASE,
+        &Sha::new(ANCHOR),
+        &Sha::new(BASE),
         ProbeLog {
             feature_id: "f-1",
             step_id: "s-impl",

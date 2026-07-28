@@ -20,4 +20,5 @@
 pub mod checkpoint;
 pub mod outcome;
 pub mod progress;
+pub mod sha;
 pub mod tasks;

@@ -102,7 +102,7 @@ fn an_anchored_row_probed_stranded_restores_onto_the_anchor() {
         classify(anchored_row(), AnchorProbe::Stranded),
         CheckpointResume::Restore {
             landed_ids: ids(&["t-1", "t-2"]),
-            sha: ANCHOR.to_string(),
+            sha: Sha::new(ANCHOR),
             produced: None,
         }
     );
@@ -158,14 +158,14 @@ fn the_produced_payload_survives_classification() {
 /// evidence that the prefix already reached the feature branch.
 #[test]
 fn the_merge_base_being_the_anchor_means_merged() {
-    assert!(anchor_is_merged(&format!("{ANCHOR}\n"), ANCHOR));
+    assert!(anchor_is_merged(&format!("{ANCHOR}\n"), &Sha::new(ANCHOR)));
 }
 
 /// An *earlier* common ancestor means the anchor is off on the step branch:
 /// the crash shape, and the only case that may reset a worktree.
 #[test]
 fn an_earlier_merge_base_means_the_prefix_is_stranded() {
-    assert!(!anchor_is_merged(&format!("{OTHER}\n"), ANCHOR));
+    assert!(!anchor_is_merged(&format!("{OTHER}\n"), &Sha::new(ANCHOR)));
 }
 
 /// The failure this probe shape exists to prevent. `merge-base` answers on
@@ -174,9 +174,10 @@ fn an_earlier_merge_base_means_the_prefix_is_stranded() {
 /// unparseable output must not be mistaken for a match either.
 #[test]
 fn no_answer_is_never_read_as_merged() {
-    assert!(!anchor_is_merged("", ANCHOR));
-    assert!(!anchor_is_merged("   \n", ANCHOR));
-    assert!(!anchor_is_merged("fatal: not a git repository\n", ANCHOR));
+    let anchor = Sha::new(ANCHOR);
+    assert!(!anchor_is_merged("", &anchor));
+    assert!(!anchor_is_merged("   \n", &anchor));
+    assert!(!anchor_is_merged("fatal: not a git repository\n", &anchor));
 }
 
 /// Git prints lowercase hex; a checkpoint written from a differently-cased
@@ -186,11 +187,11 @@ fn no_answer_is_never_read_as_merged() {
 fn the_comparison_ignores_sha_case_and_whitespace() {
     assert!(anchor_is_merged(
         "  1111111111111111111111111111111111111111  \n",
-        "1111111111111111111111111111111111111111"
+        &Sha::new("1111111111111111111111111111111111111111")
     ));
     assert!(anchor_is_merged(
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        &Sha::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     ));
 }
 
@@ -229,12 +230,12 @@ fn rewinding_a_merged_prefix_drops_the_anchor() {
 fn rewinding_a_stranded_prefix_keeps_the_anchor() {
     let resume = CheckpointResume::Restore {
         landed_ids: vec!["t-1".into()],
-        sha: ANCHOR.to_string(),
+        sha: Sha::new(ANCHOR),
         produced: None,
     };
     let (ids, anchor, _) = resume.as_stored();
     assert_eq!(ids, ["t-1".to_string()]);
-    assert_eq!(anchor, Some(ANCHOR));
+    assert_eq!(anchor, Some(&Sha::new(ANCHOR)));
 }
 
 /// The rewind has to survive being applied twice — a retry that rolls back
@@ -270,7 +271,7 @@ fn a_rewound_merged_row_reclassifies_as_merged() {
     let (landed, anchor, produced) = original.as_stored();
     let rewritten = SequenceCheckpoint {
         landed_task_ids: landed.to_vec(),
-        anchor_sha: anchor.map(str::to_string),
+        anchor_sha: anchor.map(|s| s.as_str().to_string()),
         produced: produced.cloned(),
     };
     // No anchor was written, so no probe is consulted — which is exactly

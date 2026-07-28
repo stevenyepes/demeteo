@@ -21,6 +21,7 @@
 //! holds its `ExecutionPort` the same way.
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::domain::sequence::sha::Sha;
 use crate::paths::shell_escape_posix as esc;
 use crate::ports::execution::ExecutionPort;
 
@@ -42,28 +43,35 @@ impl<'a> SequenceGit<'a> {
         self.exec.run_command(self.machine, cmd).await
     }
 
-    /// Resolve `rev` to a commit SHA. Output is *not* trimmed — callers
-    /// differ on whether trailing whitespace matters to them.
-    pub(crate) async fn rev_parse(&self, repo: &str, rev: &str) -> Result<String, String> {
-        self.run(&rev_parse_cmd(repo, rev)).await
+    /// Resolve `rev` — a branch name, `HEAD`, anything git accepts — to the
+    /// commit it names.
+    ///
+    /// The answer arrives trimmed, via [`Sha::from_output`]; every caller
+    /// used to do that itself. An `Ok` carrying an *empty* `Sha` is still
+    /// possible and still the caller's to interpret.
+    pub(crate) async fn rev_parse(&self, repo: &str, rev: &str) -> Result<Sha, String> {
+        self.run(&rev_parse_cmd(repo, rev))
+            .await
+            .map(|out| Sha::from_output(&out))
     }
 
     /// Does `rev` name a commit that is still reachable? `Err` is the
     /// answer "no", not a transport failure — git exits non-zero for a
     /// missing object.
-    pub(crate) async fn commit_exists(&self, repo: &str, rev: &str) -> Result<String, String> {
-        self.run(&commit_exists_cmd(repo, rev)).await
+    pub(crate) async fn commit_exists(&self, repo: &str, rev: &Sha) -> Result<String, String> {
+        self.run(&commit_exists_cmd(repo, rev.as_str())).await
     }
 
     /// The best common ancestor of two commits.
-    pub(crate) async fn merge_base(&self, repo: &str, a: &str, b: &str) -> Result<String, String> {
-        self.run(&merge_base_cmd(repo, a, b)).await
+    pub(crate) async fn merge_base(&self, repo: &str, a: &Sha, b: &Sha) -> Result<String, String> {
+        self.run(&merge_base_cmd(repo, a.as_str(), b.as_str()))
+            .await
     }
 
     /// Move the worktree at `repo` — index and working tree included — onto
     /// `sha`.
-    pub(crate) async fn reset_hard(&self, repo: &str, sha: &str) -> Result<String, String> {
-        self.run(&reset_hard_cmd(repo, sha)).await
+    pub(crate) async fn reset_hard(&self, repo: &str, sha: &Sha) -> Result<String, String> {
+        self.run(&reset_hard_cmd(repo, sha.as_str())).await
     }
 
     /// Force `branch` to point at `sha`.
@@ -71,9 +79,10 @@ impl<'a> SequenceGit<'a> {
         &self,
         repo: &str,
         branch: &str,
-        sha: &str,
+        sha: &Sha,
     ) -> Result<String, String> {
-        self.run(&branch_force_cmd(repo, branch, sha)).await
+        self.run(&branch_force_cmd(repo, branch, sha.as_str()))
+            .await
     }
 
     /// Point `git_ref` at `sha`.
@@ -81,9 +90,9 @@ impl<'a> SequenceGit<'a> {
         &self,
         repo: &str,
         git_ref: &str,
-        sha: &str,
+        sha: &Sha,
     ) -> Result<String, String> {
-        self.run(&update_ref_cmd(repo, git_ref, sha)).await
+        self.run(&update_ref_cmd(repo, git_ref, sha.as_str())).await
     }
 
     /// Delete `git_ref`.
@@ -92,8 +101,8 @@ impl<'a> SequenceGit<'a> {
     }
 
     /// The paths that differ between `base` and the worktree at `repo`.
-    pub(crate) async fn diff_name_only(&self, repo: &str, base: &str) -> Result<String, String> {
-        self.run(&diff_name_only_cmd(repo, base)).await
+    pub(crate) async fn diff_name_only(&self, repo: &str, base: &Sha) -> Result<String, String> {
+        self.run(&diff_name_only_cmd(repo, base.as_str())).await
     }
 }
 

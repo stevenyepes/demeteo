@@ -33,6 +33,7 @@
 //! This file is the orchestration and nothing else — the stages in the order
 //! they run, with the judgement between them. Each stage is a module:
 //!
+//! * [`context`] — the parameter bundles the stages hand each other
 //! * [`plan`] / [`planner`] — where the ordered task list comes from
 //! * [`resume`] — what a previous attempt already landed, and the checkpoint
 //!   that records it
@@ -47,11 +48,8 @@
 //! synchronous policy in [`crate::domain::sequence`], reachable from a test
 //! without a port double.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sequence::checkpoint::{
     verdict_disposition, CheckpointDisposition, CheckpointResume,
 };
@@ -60,6 +58,7 @@ use crate::domain::sequence::progress::StepTally;
 use crate::ports::notification::DomainEvent;
 
 mod completion;
+mod context;
 mod git;
 mod handler;
 mod merge;
@@ -76,22 +75,30 @@ mod worktree;
 
 pub(crate) use handler::SequenceNodeHandler;
 
+use context::{RunTarget, StepCtx, StepSpend, StepWorktree};
+
 #[cfg(test)]
 #[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/disposition.rs"]
 mod disposition_tests;
 
 impl ExecutionDriver {
-    #[allow(clippy::too_many_arguments)]
+    /// Run the step's whole task list and put the result on the feature
+    /// branch.
+    ///
+    /// `&self`, not `&mut self`: nothing this step does changes the driver.
+    /// It reads the retry context and twenty-odd ports and writes through
+    /// them, but the only mutable state it owns is `spend`, which is the
+    /// feature's running totals and belongs to the caller. The `&mut` it
+    /// used to take came from `NodeCtx::driver` being `&mut` for handlers
+    /// that need it, and it hid that fact.
     pub(crate) async fn handle_sequence_step(
-        &mut self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
-        step_index: usize,
-        step_execs: &[StepExecution],
+        &self,
+        step: StepCtx<'_>,
+        spend: &mut StepSpend<'_>,
     ) -> StepOutcome {
+        let step_exec = step.step_exec;
+        let step_conf = step.step_conf;
+
         if *self.cancel_watch.borrow() {
             return StepOutcome::Cancelled;
         }
@@ -116,15 +123,23 @@ impl ExecutionDriver {
 
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
         let machine_str = self.machine_id().to_string();
+        // Resolved once for the whole step, so the planner turn, every task
+        // turn and the merge-conflict turn are spawned against one answer.
+        let target = RunTarget {
+            machine: &machine_str,
+            agent_kind: &agent_kind,
+            override_model: override_model.as_deref(),
+            effort: self.resolve_step_effort(step_conf),
+        };
 
         // Rollback anchor: the feature branch tip before this attempt. On
         // failure we reset the branch ref back to it so a retry starts clean.
         let base_sha = match self
-            .sequence_git(&machine_str)
+            .sequence_git(target.machine)
             .rev_parse(&self.target_dir, &self.branch_name)
             .await
         {
-            Ok(s) => s.trim().to_string(),
+            Ok(s) => s,
             Err(e) => {
                 return StepOutcome::Failed(format!(
                     "sequence step: could not capture base SHA for rollback anchor: {}",
@@ -137,25 +152,13 @@ impl ExecutionDriver {
         //    plan because it decides which tasks the plan may drop, and
         //    before the worktree because it is a question about the repo.
         let resume = self
-            .resolve_checkpoint_resume(step_exec, &machine_str, &base_sha)
+            .resolve_checkpoint_resume(step, target.machine, &base_sha)
             .await;
 
         // 1. Resolve the ordered task list.
         let retry_iteration = self.retry_ctx.as_ref().map(|rc| rc.iteration).unwrap_or(0);
         let plan = match self
-            .resolve_task_plan(
-                step_exec,
-                step_conf,
-                accumulated_cost,
-                accumulated_tokens,
-                retry_iteration,
-                &agent_kind,
-                override_model.as_deref(),
-                &machine_str,
-                step_execs,
-                step_index,
-                &resume,
-            )
+            .resolve_task_plan(step, spend, target, retry_iteration, &resume)
             .await
         {
             Ok(p) => p,
@@ -197,11 +200,15 @@ impl ExecutionDriver {
         //    interrupted attempt had already committed.
         let wt_id = format!("{}-step-{}", self.f_id_str, step_exec.step_id.0);
         let wt_path = match self
-            .open_step_worktree(step_exec, step_conf, &machine_str, &wt_id, &plan, &resume)
+            .open_step_worktree(step, target, &wt_id, &plan, &resume)
             .await
         {
             Ok(p) => p,
             Err(outcome) => return outcome,
+        };
+        let wt = StepWorktree {
+            id: &wt_id,
+            path: &wt_path,
         };
 
         // 3. Run the tasks in order.
@@ -220,22 +227,7 @@ impl ExecutionDriver {
         // differently.
         let mut tally = StepTally::resuming(resume.produced());
         let tasks_res = self
-            .run_tasks_loop(
-                step_exec,
-                step_conf,
-                accumulated_cost,
-                accumulated_tokens,
-                step_start,
-                step_index,
-                step_execs,
-                &plan,
-                &machine_str,
-                &wt_id,
-                &wt_path,
-                &agent_kind,
-                override_model.as_deref(),
-                &mut tally,
-            )
+            .run_tasks_loop(step, spend, target, wt, &plan, &mut tally)
             .await;
 
         if let Err(task_err) = tasks_res {
@@ -253,18 +245,13 @@ impl ExecutionDriver {
             // the opposite of what the rollback below is for.
             let mut checkpoint = CheckpointDisposition::RewindTo(&resume);
             if !*self.cancel_watch.borrow() && !tally.landed().is_empty() {
-                match self
-                    .salvage_landed_prefix(step_exec, &wt_id, &wt_path, &machine_str, &tally)
-                    .await
-                {
+                match self.salvage_landed_prefix(step, target, wt, &tally).await {
                     Some(landed_total) => {
                         self.cleanup_sequence_worktree(&wt_id).await;
                         return self
                             .fail_sequence_step(
-                                step_exec,
-                                step_start,
-                                *accumulated_cost,
-                                *accumulated_tokens,
+                                step,
+                                spend,
                                 task_err,
                                 FailureDisposition::PrefixLanded {
                                     landed: landed_total,
@@ -295,20 +282,12 @@ impl ExecutionDriver {
                 }
             }
             let rolled_back = self
-                .cleanup_and_rollback(
-                    &wt_id,
-                    &machine_str,
-                    &base_sha,
-                    &step_exec.step_id.0,
-                    checkpoint,
-                )
+                .cleanup_and_rollback(step, target, &wt_id, &base_sha, checkpoint)
                 .await;
             return self
                 .fail_sequence_step(
-                    step_exec,
-                    step_start,
-                    *accumulated_cost,
-                    *accumulated_tokens,
+                    step,
+                    spend,
                     task_err,
                     FailureDisposition::from_rollback(rolled_back),
                 )
@@ -373,20 +352,18 @@ impl ExecutionDriver {
         if !unjudgeable && !never_produced.is_empty() {
             let rolled_back = self
                 .cleanup_and_rollback(
+                    step,
+                    target,
                     &wt_id,
-                    &machine_str,
                     &base_sha,
-                    &step_exec.step_id.0,
                     verdict_disposition(resumed_whole_list, &resume),
                 )
                 .await;
             let names = never_produced.join(", ");
             return self
                 .fail_sequence_step(
-                    step_exec,
-                    step_start,
-                    *accumulated_cost,
-                    *accumulated_tokens,
+                    step,
+                    spend,
                     SequenceError::Failed(format!(
                         "sequence step: every task ran, but the declared artifact(s) {} were \
                          never produced by any task. Nothing downstream can consume this step — \
@@ -408,14 +385,14 @@ impl ExecutionDriver {
                 .run_verifier_logic(
                     step_exec,
                     verifier_cfg,
-                    &wt_path,
+                    wt.path,
                     &[],
-                    accumulated_cost,
-                    accumulated_tokens,
-                    step_start,
-                    &agent_kind,
-                    override_model.as_deref(),
-                    &machine_str,
+                    spend.cost,
+                    spend.tokens,
+                    spend.start,
+                    target.agent_kind,
+                    target.override_model,
+                    target.machine,
                 )
                 .await;
 
@@ -426,10 +403,10 @@ impl ExecutionDriver {
                     .await;
                 let rolled_back = self
                     .cleanup_and_rollback(
+                        step,
+                        target,
                         &wt_id,
-                        &machine_str,
                         &base_sha,
-                        &step_exec.step_id.0,
                         verdict_disposition(resumed_whole_list, &resume),
                     )
                     .await;
@@ -448,18 +425,7 @@ impl ExecutionDriver {
         //    re-running the whole task list. So we spend one agent turn
         //    resolving the conflict and retry the merge.
         let merge_res = self
-            .merge_with_conflict_recovery(
-                step_exec,
-                &wt_id,
-                &wt_path,
-                &machine_str,
-                &agent_kind,
-                override_model.as_deref(),
-                self.resolve_step_effort(step_conf),
-                accumulated_cost,
-                accumulated_tokens,
-                step_start,
-            )
+            .merge_with_conflict_recovery(step, spend, target, wt)
             .await;
 
         if let Err(merge_err) = merge_res {
@@ -472,19 +438,17 @@ impl ExecutionDriver {
             });
             let rolled_back = self
                 .cleanup_and_rollback(
+                    step,
+                    target,
                     &wt_id,
-                    &machine_str,
                     &base_sha,
-                    &step_exec.step_id.0,
                     CheckpointDisposition::RewindTo(&resume),
                 )
                 .await;
             return self
                 .fail_sequence_step(
-                    step_exec,
-                    step_start,
-                    *accumulated_cost,
-                    *accumulated_tokens,
+                    step,
+                    spend,
                     merge_err,
                     FailureDisposition::from_rollback(rolled_back),
                 )
@@ -494,7 +458,7 @@ impl ExecutionDriver {
         // 6. What the step hands downstream: the feature's diff plus every
         //    task's artifacts.
         let mut refs = self
-            .collect_step_refs(step_exec, &machine_str, &base_sha, &tally)
+            .collect_step_refs(step, target, &base_sha, &tally)
             .await;
 
         // Every task ran and committed, yet the branch carries nothing.
@@ -513,19 +477,17 @@ impl ExecutionDriver {
                 // an empty merge commit.
                 let rolled_back = self
                     .cleanup_and_rollback(
+                        step,
+                        target,
                         &wt_id,
-                        &machine_str,
                         &base_sha,
-                        &step_exec.step_id.0,
                         verdict_disposition(resumed_whole_list, &resume),
                     )
                     .await;
                 return self
                     .fail_sequence_step(
-                        step_exec,
-                        step_start,
-                        *accumulated_cost,
-                        *accumulated_tokens,
+                        step,
+                        spend,
                         SequenceError::Failed(
                             "sequence step: every task completed but the feature branch \
                              carries no changes — the implementation produced nothing."
@@ -546,15 +508,9 @@ impl ExecutionDriver {
         // tasks from a future full re-run. Unpinning the prefix here is also
         // what eventually collects a ref left behind by a replay, which
         // drops the row without a repo context to delete the ref from.
-        self.clear_sequence_checkpoint(&step_exec.step_id.0, &machine_str)
+        self.clear_sequence_checkpoint(step.step_id(), target.machine)
             .await;
 
-        self.mark_step_completed(
-            step_exec,
-            step_start,
-            *accumulated_cost,
-            *accumulated_tokens,
-            refs,
-        )
+        self.mark_step_completed(step, spend, refs)
     }
 }

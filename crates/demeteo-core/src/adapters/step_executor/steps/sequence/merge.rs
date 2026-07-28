@@ -1,13 +1,12 @@
 //! Getting the step's commits onto the feature branch — the one merge on the
 //! success path, and the partial one a mid-list failure salvages.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
-use crate::domain::models::StepExecution;
 use crate::domain::sequence::outcome::SequenceError;
 use crate::domain::sequence::progress::LandedTask;
+
+use super::context::{RunTarget, StepCtx, StepSpend, StepWorktree};
 
 impl ExecutionDriver {
     /// Merge the step's task branch into the feature branch, spending one
@@ -21,27 +20,20 @@ impl ExecutionDriver {
     ///
     /// `Err` when the merge could not be made to land; the caller rolls
     /// the feature branch back.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn merge_with_conflict_recovery(
         &self,
-        step_exec: &StepExecution,
-        wt_id: &str,
-        wt_path: &str,
-        machine_str: &str,
-        agent_kind: &str,
-        override_model: Option<&str>,
-        effort: crate::domain::models::EffortLevel,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
+        step: StepCtx<'_>,
+        spend: &mut StepSpend<'_>,
+        target: RunTarget<'_>,
+        wt: StepWorktree<'_>,
     ) -> Result<(), SequenceError> {
         let merge_err = match self
             .git_ops
             .merge_subtask(
                 self.machine_id_opt.as_deref(),
-                wt_path,
+                wt.path,
                 &self.branch_name,
-                wt_id,
+                wt.id,
             )
             .await
         {
@@ -49,29 +41,26 @@ impl ExecutionDriver {
             Err(e) => e,
         };
 
-        let conflict_thread_id = format!("{}-{}-merge", self.f_id_str, step_exec.step_id.0);
+        let conflict_thread_id = format!("{}-{}-merge", self.f_id_str, step.step_id());
         let session = self
             .spawn_sequence_session(
+                target,
+                wt.path,
                 &conflict_thread_id,
                 "resolve merge conflicts",
-                machine_str,
-                wt_path,
-                agent_kind,
-                override_model,
-                effort,
             )
             .await?;
 
         let pass = self
             .resolve_merge_conflicts_via_agent(
-                step_exec,
+                step.step_exec,
                 &*session,
-                machine_str,
-                wt_path,
-                override_model,
-                accumulated_cost,
-                accumulated_tokens,
-                step_start,
+                target.machine,
+                wt.path,
+                target.override_model,
+                spend.cost,
+                spend.tokens,
+                spend.start,
             )
             .await;
         let _ = self.registry.kill(&conflict_thread_id).await;
@@ -87,9 +76,9 @@ impl ExecutionDriver {
                 .git_ops
                 .merge_subtask(
                     self.machine_id_opt.as_deref(),
-                    wt_path,
+                    wt.path,
                     &self.branch_name,
-                    wt_id,
+                    wt.id,
                 )
                 .await
                 .map_err(|e| {
@@ -126,9 +115,8 @@ impl ExecutionDriver {
     /// full rollback in the caller.
     pub(crate) async fn checkpoint_landed_prefix(
         &self,
-        wt_id: &str,
-        wt_path: &str,
         machine_str: &str,
+        wt: StepWorktree<'_>,
         landed: &[LandedTask],
     ) -> Result<(), String> {
         let last = landed
@@ -136,7 +124,7 @@ impl ExecutionDriver {
             .ok_or_else(|| "no completed tasks to checkpoint".to_string())?;
 
         self.sequence_git(machine_str)
-            .reset_hard(wt_path, &last.sha)
+            .reset_hard(wt.path, &last.sha)
             .await
             .map_err(|e| {
                 format!(
@@ -148,9 +136,9 @@ impl ExecutionDriver {
         self.git_ops
             .merge_subtask(
                 self.machine_id_opt.as_deref(),
-                wt_path,
+                wt.path,
                 &self.branch_name,
-                wt_id,
+                wt.id,
             )
             .await
             .map_err(|e| {

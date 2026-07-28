@@ -8,9 +8,11 @@
 //! performs whatever it returns.
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
-use crate::domain::models::{CheckpointProduced, StepExecution};
+use crate::domain::models::CheckpointProduced;
 use crate::domain::sequence::checkpoint::{self, CheckpointResume};
+use crate::domain::sequence::sha::Sha;
 
+use super::context::StepCtx;
 use super::git::SequenceGit;
 
 #[cfg(test)]
@@ -41,8 +43,8 @@ pub(crate) async fn probe_anchor(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_str: &str,
     target_dir: &str,
-    anchor: &str,
-    base_sha: &str,
+    anchor: &Sha,
+    base_sha: &Sha,
     log: ProbeLog<'_>,
 ) -> checkpoint::AnchorProbe {
     let git = SequenceGit::new(exec, machine_str);
@@ -95,19 +97,20 @@ impl ExecutionDriver {
     /// wrong skip loses work.
     pub(crate) async fn resolve_checkpoint_resume(
         &self,
-        step_exec: &StepExecution,
+        step: StepCtx<'_>,
         machine_str: &str,
-        base_sha: &str,
+        base_sha: &Sha,
     ) -> CheckpointResume {
+        let step_id = step.step_id();
         let checkpoint = match self
             .sequence_resume
-            .sequence_checkpoint_get(&self.f_id, &step_exec.step_id.0)
+            .sequence_checkpoint_get(&self.f_id, step_id)
         {
             Ok(cp) => cp,
             Err(e) => {
                 tracing::warn!(
                     feature_id = %self.f_id,
-                    step_id = %step_exec.step_id.0,
+                    step_id = %step_id,
                     error = %e,
                     "sequence step: could not read the landed checkpoint; running the \
                      full task list"
@@ -124,11 +127,11 @@ impl ExecutionDriver {
                     &*self.exec,
                     machine_str,
                     &self.target_dir,
-                    anchor,
+                    &Sha::new(anchor),
                     base_sha,
                     ProbeLog {
                         feature_id: self.f_id.as_str(),
-                        step_id: &step_exec.step_id.0,
+                        step_id,
                     },
                 )
                 .await
@@ -176,13 +179,14 @@ impl ExecutionDriver {
     /// step has to show for itself.
     pub(crate) async fn checkpoint_landed_task(
         &self,
-        step_exec: &StepExecution,
+        step: StepCtx<'_>,
         machine_str: &str,
         task_id: &str,
-        sha: &str,
+        sha: &Sha,
         produced: &CheckpointProduced,
     ) {
-        let git_ref = self.checkpoint_ref(&step_exec.step_id.0);
+        let step_id = step.step_id();
+        let git_ref = self.checkpoint_ref(step_id);
         if let Err(e) = self
             .sequence_git(machine_str)
             .update_ref(&self.target_dir, &git_ref, sha)
@@ -190,7 +194,7 @@ impl ExecutionDriver {
         {
             tracing::warn!(
                 feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
+                step_id = %step_id,
                 task_id = %task_id,
                 error = %e,
                 "sequence task: could not pin the landed prefix; it will not be \
@@ -201,15 +205,15 @@ impl ExecutionDriver {
 
         if let Err(e) = self.sequence_resume.sequence_checkpoint_record(
             &self.f_id,
-            &step_exec.step_id.0,
+            step_id,
             &[task_id.to_string()],
-            Some(sha),
+            Some(sha.as_str()),
             Some(produced),
             crate::paths::now_ms(),
         ) {
             tracing::warn!(
                 feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
+                step_id = %step_id,
                 task_id = %task_id,
                 error = %e,
                 "sequence task: could not persist the landed checkpoint"
@@ -231,7 +235,7 @@ impl ExecutionDriver {
     }
 
     /// Point the checkpoint ref at `sha`, or delete it when `sha` is `None`.
-    async fn move_checkpoint_ref(&self, step_id: &str, machine_str: &str, sha: Option<&str>) {
+    async fn move_checkpoint_ref(&self, step_id: &str, machine_str: &str, sha: Option<&Sha>) {
         let git_ref = self.checkpoint_ref(step_id);
         let git = self.sequence_git(machine_str);
         let _ = match sha {
@@ -279,7 +283,7 @@ impl ExecutionDriver {
                 &self.f_id,
                 step_id,
                 landed_ids,
-                anchor,
+                anchor.map(Sha::as_str),
                 produced,
                 crate::paths::now_ms(),
             ) {
@@ -297,7 +301,7 @@ impl ExecutionDriver {
             feature_id = %self.f_id,
             step_id = %step_id,
             landed = landed_ids.len(),
-            anchor = anchor.unwrap_or("-"),
+            anchor = anchor.map(Sha::as_str).unwrap_or("-"),
             "sequence step: rewound the landed checkpoint with the branch"
         );
     }

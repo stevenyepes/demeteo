@@ -9,9 +9,10 @@ use crate::adapters::step_executor::artifacts::{
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::models::StepExecution;
 use crate::domain::sequence::tasks::{extract_task_plan, task_list_json_shape_example, TaskPlan};
 use crate::ports::agent_runtime::AgentContext;
+
+use super::context::{RunTarget, StepCtx, StepSpend};
 
 impl ExecutionDriver {
     /// Legacy fallback: decompose the feature with a planner agent turn.
@@ -19,17 +20,11 @@ impl ExecutionDriver {
     /// Only reached when the step declares no `task_list_from` — i.e. a
     /// workflow authored against the old `parallel` kind. New workflows put
     /// the task list in front of the gate instead; see the module docs.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_planner_pass(
         &self,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        agent_kind: &str,
-        override_model: Option<&str>,
-        effort: crate::domain::models::EffortLevel,
-        machine_str: &str,
-        step_execs: &[StepExecution],
-        step_index: usize,
+        step: StepCtx<'_>,
+        spend: &mut StepSpend<'_>,
+        target: RunTarget<'_>,
     ) -> Result<TaskPlan, StepOutcome> {
         let planner_thread_id = format!("{}-planner", self.f_id_str);
         let feature_desc = self.base_ctx.get("feature_description").to_string();
@@ -102,8 +97,8 @@ impl ExecutionDriver {
         );
         let planner_prompt = resolve_attached_artifacts(
             &planner_prompt,
-            step_execs,
-            step_index,
+            step.step_execs,
+            step.step_index,
             &*self.artifacts,
             &self.steps,
         );
@@ -124,24 +119,24 @@ impl ExecutionDriver {
         );
 
         let planner_env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), target.machine).await;
         let planner_binary = self
             .registry
-            .runtime_for(agent_kind)
+            .runtime_for(target.agent_kind)
             .map(|r| r.binary().to_string())
-            .unwrap_or_else(|| agent_kind.to_string());
+            .unwrap_or_else(|| target.agent_kind.to_string());
 
         let planner_ctx = AgentContext {
             thread_id: planner_thread_id.clone(),
-            machine_id: machine_str.to_string(),
+            machine_id: target.machine.to_string(),
             binary: planner_binary,
             args: vec![],
             env: planner_env,
             cwd: planner_wt_path.clone(),
-            model: override_model.map(str::to_string),
+            model: target.override_model.map(str::to_string),
             // Decomposing the spec into an ordered task list is real agent
             // work — it inherits the step's resolved effort.
-            effort: Some(effort),
+            effort: Some(target.effort),
             title: Some("plan".to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
@@ -153,7 +148,7 @@ impl ExecutionDriver {
                 false, // no network
                 true,  // allow shell for codebase exploration
             ),
-            bare_mode: agent_kind == "claude-code",
+            bare_mode: target.agent_kind == "claude-code",
             // Full toolset — the planner explores the codebase before
             // decomposing. The cap is anti-runaway only: decomposition
             // should never take 50 round trips.
@@ -165,7 +160,7 @@ impl ExecutionDriver {
 
         let mut cancel_watch = self.cancel_watch.clone();
         let spawn_res = tokio::select! {
-            res = self.registry.get_or_spawn(&planner_thread_id, agent_kind, planner_ctx) => Some(res),
+            res = self.registry.get_or_spawn(&planner_thread_id, target.agent_kind, planner_ctx) => Some(res),
             _ = cancel_watch.changed() => None,
         };
 
@@ -215,9 +210,9 @@ impl ExecutionDriver {
                 &prompt,
                 timeouts,
                 Some(self.cancel_watch.clone()),
-                machine_str,
+                target.machine,
                 &*self.exec,
-                override_model.map(str::to_string),
+                target.override_model.map(str::to_string),
                 self.pricing.clone(),
                 |_event| {},
             )
@@ -246,8 +241,8 @@ impl ExecutionDriver {
                     )));
                 }
                 crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
-                    *accumulated_cost += outcome.cost_usd;
-                    *accumulated_tokens += outcome.tokens;
+                    *spend.cost += outcome.cost_usd;
+                    *spend.tokens += outcome.tokens;
                     outcome.text
                 }
             };

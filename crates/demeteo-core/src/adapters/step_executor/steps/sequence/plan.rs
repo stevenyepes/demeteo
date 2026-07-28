@@ -11,10 +11,11 @@
 //! so we keep the old planner turn for them rather than breaking them
 //! ([`super::planner`]).
 
+use super::context::{RunTarget, StepCtx, StepSpend};
 use super::CheckpointResume;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::models::StepExecution;
 use crate::domain::sequence::tasks::{
     apply_landed_checkpoint, extract_task_plan, select_targeted_tasks,
     task_list_json_shape_example, validate_task_plan, TaskPlan,
@@ -44,21 +45,22 @@ impl ExecutionDriver {
     /// them. A `task_list_from` step needs no such rescue (its ids are the
     /// upstream artifact's, stable across a re-read) and must not get one, or
     /// attempt 2+ would stop seeing gate revisions.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `&self`: resolving a plan reads the retry context, the plan cache and
+    /// the attempt rows, and writes the cache back through its repository —
+    /// none of which is driver state. The `&mut self` it used to take was
+    /// inherited from its caller and constrained nothing.
     pub(crate) async fn resolve_task_plan(
-        &mut self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
+        &self,
+        step: StepCtx<'_>,
+        spend: &mut StepSpend<'_>,
+        target: RunTarget<'_>,
         retry_iteration: u32,
-        agent_kind: &str,
-        override_model: Option<&str>,
-        machine_str: &str,
-        step_execs: &[StepExecution],
-        step_index: usize,
         resume: &CheckpointResume,
     ) -> Result<TaskPlan, StepOutcome> {
+        let step_exec = step.step_exec;
+        let step_conf = step.step_conf;
+
         // Is the *previous* attempt's implementation still on the feature
         // branch? It is exactly when this step's last attempt merged — i.e.
         // the failure that sent us back here was raised by a *later* step (a
@@ -147,21 +149,9 @@ impl ExecutionDriver {
                 .filter(|s| !s.0.is_empty())
             {
                 Some(source_step) => {
-                    self.load_task_list_artifact(source_step.0.as_str(), step_execs)?
+                    self.load_task_list_artifact(source_step.0.as_str(), step.step_execs)?
                 }
-                None => {
-                    self.run_planner_pass(
-                        accumulated_cost,
-                        accumulated_tokens,
-                        agent_kind,
-                        override_model,
-                        self.resolve_step_effort(step_conf),
-                        machine_str,
-                        step_execs,
-                        step_index,
-                    )
-                    .await?
-                }
+                None => self.run_planner_pass(step, spend, target).await?,
             },
         };
 

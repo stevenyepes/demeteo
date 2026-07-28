@@ -122,11 +122,11 @@ fn landed_tasks_stay_in_the_order_they_committed() {
     let mut tally = StepTally::resuming(None);
     tally.land(LandedTask {
         id: "t-1".into(),
-        sha: "aaa".into(),
+        sha: Sha::new("aaa"),
     });
     tally.land(LandedTask {
         id: "t-2".into(),
-        sha: "bbb".into(),
+        sha: Sha::new("bbb"),
     });
 
     let ids: Vec<&str> = tally.landed().iter().map(|t| t.id.as_str()).collect();

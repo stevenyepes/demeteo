@@ -17,6 +17,7 @@
 //! and the rest were argued for in comments.
 
 use crate::domain::models::{CheckpointProduced, SequenceCheckpoint};
+use crate::domain::sequence::sha::Sha;
 
 /// What git said about the checkpoint's anchor commit.
 ///
@@ -54,9 +55,9 @@ pub enum AnchorProbe {
 /// git prints it and exits 0, or it fails and we know nothing. Every `Err`,
 /// transport or otherwise, is then honestly "unknown" — no error-string
 /// classification required.
-pub fn anchor_is_merged(merge_base_stdout: &str, anchor: &str) -> bool {
+pub fn anchor_is_merged(merge_base_stdout: &str, anchor: &Sha) -> bool {
     let base = merge_base_stdout.trim();
-    !base.is_empty() && base.eq_ignore_ascii_case(anchor.trim())
+    !base.is_empty() && base.eq_ignore_ascii_case(anchor.as_str().trim())
 }
 
 /// Decide what a previous attempt's landed prefix means for this one.
@@ -97,7 +98,7 @@ pub fn classify(checkpoint: SequenceCheckpoint, probe: AnchorProbe) -> Checkpoin
         },
         AnchorProbe::Stranded => CheckpointResume::Restore {
             landed_ids: landed_task_ids,
-            sha: anchor,
+            sha: Sha::new(anchor),
             produced,
         },
         AnchorProbe::Missing | AnchorProbe::Unknown => CheckpointResume::None,
@@ -130,7 +131,7 @@ pub enum CheckpointResume {
     /// ids, but move the worktree onto `sha` first.
     Restore {
         landed_ids: Vec<String>,
-        sha: String,
+        sha: Sha,
         produced: Option<CheckpointProduced>,
     },
 }
@@ -166,7 +167,7 @@ impl CheckpointResume {
     /// is the whole instruction, and an anchor would only invite a restore
     /// nobody needs. The next `resolve_checkpoint_resume` reads that row
     /// back as `Merged`, so the rewind is idempotent.
-    pub fn as_stored(&self) -> (&[String], Option<&str>, Option<&CheckpointProduced>) {
+    pub fn as_stored(&self) -> (&[String], Option<&Sha>, Option<&CheckpointProduced>) {
         match self {
             Self::None => (&[], Option::None, Option::None),
             Self::Merged {
@@ -177,7 +178,7 @@ impl CheckpointResume {
                 landed_ids,
                 sha,
                 produced,
-            } => (landed_ids, Some(sha.as_str()), produced.as_ref()),
+            } => (landed_ids, Some(sha), produced.as_ref()),
         }
     }
 }
