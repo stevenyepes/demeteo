@@ -10,10 +10,6 @@
 //! looks like (its steps predate the field, and we now dispatch them here),
 //! so we keep the old planner turn for them rather than breaking them.
 
-use super::tasks::{
-    apply_landed_checkpoint, extract_task_plan, select_targeted_tasks,
-    task_list_json_shape_example, validate_task_plan, TaskPlan,
-};
 use super::CheckpointResume;
 use crate::adapters::step_executor::artifacts::{
     resolve_attached_artifacts, resolve_attached_user_attachments,
@@ -21,6 +17,10 @@ use crate::adapters::step_executor::artifacts::{
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::sequence::tasks::{
+    apply_landed_checkpoint, extract_task_plan, select_targeted_tasks,
+    task_list_json_shape_example, validate_task_plan, TaskPlan,
+};
 use crate::ports::agent_runtime::AgentContext;
 
 impl ExecutionDriver {

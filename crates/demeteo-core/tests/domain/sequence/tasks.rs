@@ -1,4 +1,4 @@
-// Tests extracted from `crates/demeteo-core/src/adapters/step_executor/steps/sequence/tasks.rs` (mirrored-tests convention). `super` = that module.
+// Tests extracted from `crates/demeteo-core/src/domain/sequence/tasks.rs` (mirrored-tests convention). `super` = that module.
 
 use super::*;
 

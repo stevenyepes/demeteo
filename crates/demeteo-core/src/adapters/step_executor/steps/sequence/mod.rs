@@ -43,7 +43,6 @@ use crate::ports::notification::DomainEvent;
 pub(crate) mod plan;
 pub(crate) mod runner;
 mod schema;
-pub(crate) mod tasks;
 
 use schema::SEQUENCE_CONFIG_SCHEMA;
 
