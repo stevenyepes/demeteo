@@ -294,10 +294,23 @@ pub(crate) fn select_targeted_tasks(
 /// checkpoint only exists while its work is on the branch, and the caller
 /// clears it the moment the step completes or the branch is rolled back.
 ///
-/// If the filter would leave nothing to run — a re-planned list whose ids all
-/// match landed tasks — the checkpoint is stale and the full plan runs
-/// instead, marked as resuming landed work so each agent is told to revise in
-/// place rather than reimplement.
+/// A checkpoint covering *every* task leaves nothing to run, and that is a
+/// real state rather than a broken one: since V35 the task loop checkpoints
+/// each task as it commits, so the row names the whole plan from the moment
+/// the last task lands until the step completes — a window that spans the
+/// declared-artifact check, the verifier's agent pass, and the final merge.
+/// A kill in there must cost the *merge*, not twenty-five agents.
+///
+/// This used to put the full plan back, on the premise that all-ids-matched
+/// meant a stale row. That premise died with V32: the caller now resolves a
+/// [`CheckpointResume`](super::CheckpointResume) first, which verifies the
+/// anchor against the repo, so by the time a plan reaches this filter the
+/// landed work is known to be either merged or about to be restored.
+///
+/// What that trades away: a redirect that revises task *bodies* while keeping
+/// their ids is now indistinguishable from "already done" and will be skipped.
+/// `replay_from_step` is the escape hatch — it clears the checkpoint, which is
+/// exactly what an explicit redo should do.
 pub(crate) fn apply_landed_checkpoint(mut plan: TaskPlan, landed_ids: &[String]) -> TaskPlan {
     let landed_set: std::collections::HashSet<&str> =
         landed_ids.iter().map(|s| s.as_str()).collect();
@@ -309,11 +322,6 @@ pub(crate) fn apply_landed_checkpoint(mut plan: TaskPlan, landed_ids: &[String])
 
     if landed.is_empty() {
         plan.tasks = remaining;
-        return plan;
-    }
-    if remaining.is_empty() {
-        plan.tasks = landed;
-        plan.resumes_landed_work = true;
         return plan;
     }
 

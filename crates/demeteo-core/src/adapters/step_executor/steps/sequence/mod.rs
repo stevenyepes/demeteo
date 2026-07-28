@@ -286,10 +286,26 @@ impl ExecutionDriver {
             Err(outcome) => return outcome,
         };
 
-        if plan.tasks.is_empty() {
+        // Nothing to run splits two ways, and only one of them is a failure.
+        // A plan with no tasks *and* nothing landed is a misconfigured step.
+        // A plan whose every task is already checkpointed is a step resuming
+        // into its own tail — killed between the last task's commit and the
+        // merge — and it still has the artifact check, the verifier and that
+        // merge to do. Failing it here would re-run the whole list on the
+        // next attempt, which is the cost this checkpoint exists to avoid.
+        let resumed_whole_list = plan.tasks.is_empty() && !plan.already_landed.is_empty();
+        if plan.tasks.is_empty() && plan.already_landed.is_empty() {
             return StepOutcome::Failed(
                 "sequence step: the task list is empty — there is nothing to implement."
                     .to_string(),
+            );
+        }
+        if resumed_whole_list {
+            tracing::info!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                landed = plan.already_landed.len(),
+                "sequence step: every task already landed; resuming straight to verify and merge"
             );
         }
 
@@ -540,6 +556,29 @@ impl ExecutionDriver {
         //     `AllWrites` / `ChangedFiles` / `Diff` captures can never be
         //     missing (they describe whatever the agent touched), so an
         //     ordinary implement step never trips this.
+        //
+        //     Both halves of that judgement assume a task ran this attempt.
+        //     When every task was already landed, none did: `satisfied_decls`
+        //     is empty because nothing emitted anything, and the refs the
+        //     landed tasks *did* produce died in memory with the killed
+        //     process. So recover those refs from the store — which is where
+        //     the landed tasks actually wrote them — and skip the check,
+        //     rather than failing a step whose deliverables are on disk.
+        if resumed_whole_list {
+            match self
+                .artifacts
+                .list_for_step(&self.f_id_str, &step_exec.step_id.0)
+            {
+                Ok(stored) => all_artifact_refs.extend(stored),
+                Err(e) => tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    error = %e,
+                    "sequence step: could not recover the landed tasks' artifacts; the step \
+                     will complete carrying only its diff"
+                ),
+            }
+        }
         let never_produced: Vec<&str> = step_conf
             .artifacts
             .as_deref()
@@ -548,7 +587,7 @@ impl ExecutionDriver {
             .filter(|d| !satisfied_decls.contains(&d.name))
             .map(|d| d.name.as_str())
             .collect();
-        if !never_produced.is_empty() {
+        if !resumed_whole_list && !never_produced.is_empty() {
             let rolled_back = self
                 .cleanup_and_rollback(
                     &wt_id,
@@ -739,6 +778,14 @@ impl ExecutionDriver {
             }
         }
         refs.extend(all_artifact_refs);
+        // A reference is a stable path, so the store's own listing can name
+        // the artifact this attempt just wrote — `list_for_step` on the
+        // resumed-whole-list path returns the previous attempt's `code-diff`
+        // at the same path the `put` above returns. Keep the first mention.
+        {
+            let mut seen = std::collections::HashSet::new();
+            refs.retain(|r| seen.insert(r.clone()));
+        }
 
         // Every task ran and committed, yet the branch carries nothing.
         //
