@@ -119,10 +119,10 @@ impl ExecutionDriver {
         // the floor with nothing in the log to say so. Stability is the
         // reason to use the cache; where the artifact already provides it,
         // the artifact is the fresher source.
-        let planner_sourced = !step_conf
+        let planner_sourced = step_conf
             .task_list_from
             .as_ref()
-            .is_some_and(|s| !s.0.is_empty());
+            .is_none_or(|s| s.0.is_empty());
         let cached_plan: Option<TaskPlan> = if resume.landed_ids().is_empty() || !planner_sourced {
             None
         } else {

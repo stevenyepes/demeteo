@@ -28,7 +28,7 @@ use crate::adapters::agent::stub_runtime::STUB_AGENT_ENV;
 use crate::application::{bootstrap, projects, workflows};
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 use crate::domain::ids::{FeatureId, ProviderId};
-use crate::domain::models::ProviderInstance;
+use crate::domain::models::{CheckpointProduced, ProviderInstance};
 use crate::paths;
 use crate::ports::db::FeaturePatch;
 use crate::ports::db::StepExecutionPatch;
@@ -368,6 +368,9 @@ async fn restart_resumes_sequence_from_the_exact_task() {
             // forges. The V35 crash shape (prefix on the step branch, with
             // an anchor to restore it from) is covered separately.
             None,
+            // Pre-V36 shape too: the row says nothing about what the
+            // landed task produced, which is the compatibility path.
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
@@ -523,6 +526,7 @@ async fn restart_restores_an_interrupted_attempt_committed_work() {
             "s-impl",
             &["stub-task-1".to_string()],
             Some(anchor.as_str()),
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
@@ -754,6 +758,9 @@ async fn a_resume_re_reads_a_revised_task_list_artifact() {
             "s-impl",
             &["stub-task-1".to_string()],
             None,
+            // Pre-V36 shape too: the row says nothing about what the
+            // landed task produced, which is the compatibility path.
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
@@ -899,6 +906,7 @@ async fn a_kill_after_the_last_task_resumes_without_re_running_any() {
             "s-impl",
             &["stub-task-1".to_string(), "stub-task-2".to_string()],
             Some(anchor.as_str()),
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
@@ -960,6 +968,159 @@ async fn a_kill_after_the_last_task_resumes_without_re_running_any() {
         !impl_after.artifact_paths.is_empty(),
         "a resumed step must still carry artifacts; the declared deliverables were \
          produced by the attempt that landed the tasks"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Skipping the task list must not also skip the judgement of it, and a
+/// verdict against a fully-landed resume must not rewind to the very row
+/// that produced the verdict.
+///
+/// Both halves are the same attempt shape — every id checkpointed, so no
+/// task runs — and each fails a different way if handled naively:
+///
+/// * **Judgement.** The declared-artifact check reads what *this attempt's*
+///   tasks emitted. Exempting a zero-task attempt from it (the only option
+///   before the checkpoint carried a produced payload) reports `completed`
+///   for a step whose deliverable does not exist — and this fixture's
+///   `verification-report` never exists, so a green status is proof the
+///   check was skipped rather than passed.
+/// * **Termination.** Rewinding the checkpoint after that verdict restores
+///   the state that produced it. The retry then skips every task again,
+///   reaches the same verdict on the same tree, and burns the budget on
+///   identical passes with no agent ever seeing the feedback. The row and
+///   the ref are what the next attempt reads, so they are what is asserted.
+///
+/// Falsification: with `verdict_disposition` forced to `RewindTo`, the row
+/// survives naming both ids; with the produced payload ignored at 3b, the
+/// status is `awaiting_mr` instead of `failed`.
+#[tokio::test]
+async fn a_verdict_against_a_fully_landed_resume_judges_it_and_drops_the_checkpoint() {
+    let (tmp, ctx, project_id, feature_id, first_status) = start_run(
+        "livelock",
+        &plan_then_sequence_with_an_unproducible_artifact(),
+    )
+    .await;
+
+    // Life 1 fails on the unproducible artifact and rolls its checkpoint
+    // back — the precondition the sibling test above pins down, relied on
+    // here so the row seeded below is the only one in play.
+    assert_eq!(first_status, "failed");
+
+    let steps = ctx.features.steps_for_feature(&feature_id).expect("steps");
+    let impl_step = steps
+        .iter()
+        .find(|s| s.step_id.0 == "s-impl")
+        .expect("sequence step exists");
+    ctx.features
+        .step_update(
+            &impl_step.id,
+            &StepExecutionPatch {
+                status: Some("interrupted".to_string()),
+                error_message: Some(None),
+                ..Default::default()
+            },
+        )
+        .expect("reset sequence step");
+    ctx.features
+        .update(
+            &feature_id,
+            &FeaturePatch {
+                status: Some("running".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("reset feature status");
+
+    // The whole plan checkpointed, V36-shaped: the payload names what the
+    // landed tasks produced, and pointedly does *not* name
+    // `verification-report`, because no task ever produces it. An
+    // anchor-less (V32) row keeps the resume off the restore path — what is
+    // under test is the judgement and the disposition, not the git work.
+    ctx.features
+        .sequence_checkpoint_record(
+            &feature_id,
+            "s-impl",
+            &["stub-task-1".to_string(), "stub-task-2".to_string()],
+            None,
+            Some(&CheckpointProduced {
+                artifact_refs: vec![],
+                satisfied_decls: vec!["implemented-files".to_string()],
+            }),
+            paths::now_ms(),
+        )
+        .expect("seed checkpoint");
+    let baseline_rows = subtask_runs(&tmp, &feature_id).len();
+
+    let ctx2 = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotif),
+        tokio::runtime::Handle::current(),
+    );
+    ctx2.executor
+        .step_retry(impl_step.id.0.as_str(), None, None, None)
+        .await
+        .expect("retry the interrupted sequence step");
+    let status = poll_terminal(&ctx2, &feature_id).await;
+    let steps_after = ctx2
+        .features
+        .steps_for_feature(&feature_id)
+        .unwrap_or_default();
+    let step_debug: Vec<String> = steps_after
+        .iter()
+        .map(|s| format!("{}={} err={:?}", s.step_id.0, s.status, s.error_message))
+        .collect();
+
+    assert_eq!(
+        status, "failed",
+        "a resumed step whose declared deliverable does not exist must still be judged \
+         on it, not exempted for having run no tasks; steps: {step_debug:#?}"
+    );
+    let impl_after = steps_after
+        .iter()
+        .find(|s| s.step_id.0 == "s-impl")
+        .expect("sequence step exists");
+    assert!(
+        impl_after
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("verification-report"),
+        "the failure must name the missing deliverable; steps: {step_debug:#?}"
+    );
+
+    // The termination half. A rewound row would name both ids again and the
+    // next attempt would skip the list a second time.
+    let checkpoint = ctx2
+        .features
+        .sequence_checkpoint_get(&feature_id, "s-impl")
+        .expect("read checkpoint");
+    assert!(
+        checkpoint.is_empty(),
+        "the verdict rejected the checkpointed work itself, so the claim on it must go — \
+         otherwise the retry runs zero tasks and fails identically forever; found {:?}",
+        checkpoint.landed_task_ids
+    );
+    let repo_dir = paths::repo_target_dir_local(&ctx.workspace_dir, &project_id, REPO_PATH);
+    let checkpoint_ref = format!("refs/demeteo/seq/{}/{}", feature_id.0, "s-impl");
+    assert!(
+        !git_succeeds(&repo_dir, &["rev-parse", "--verify", &checkpoint_ref]),
+        "the discard must unpin the rejected prefix; {checkpoint_ref} still resolves"
+    );
+
+    // Whatever the retry policy did after the discard, it must not have been
+    // "skip everything again": either it re-ran tasks or it stopped.
+    let life2: Vec<(String, String)> = subtask_runs(&tmp, &feature_id)
+        .into_iter()
+        .skip(baseline_rows)
+        .collect();
+    assert!(
+        life2.is_empty() || life2.iter().any(|(id, _)| id.contains("stub-task-1")),
+        "a retry after the discard re-implements from the top; life 2 ran: {life2:?}"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);

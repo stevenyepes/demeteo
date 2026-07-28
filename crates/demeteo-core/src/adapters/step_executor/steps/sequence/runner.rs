@@ -155,6 +155,13 @@ impl ExecutionDriver {
 
             let cost_before = *accumulated_cost;
             let tokens_before = *accumulated_tokens;
+            // Both accumulators are step-wide, so this task's own
+            // contribution is only knowable as the difference across its
+            // run. Taken here rather than returned by `run_one_task`
+            // because the artifacts are resolved deep inside it, in the
+            // one place that knows which declarations they satisfied.
+            let refs_before = all_artifact_refs.len();
+            let decls_before = satisfied_decls.clone();
             let task_res = self
                 .run_one_task(
                     step_exec,
@@ -218,7 +225,14 @@ impl ExecutionDriver {
             {
                 Ok(sha) if !sha.trim().is_empty() => {
                     let sha = sha.trim().to_string();
-                    self.checkpoint_landed_task(step_exec, machine_str, &task.id, &sha)
+                    let produced = crate::domain::models::CheckpointProduced {
+                        artifact_refs: all_artifact_refs[refs_before..].to_vec(),
+                        satisfied_decls: satisfied_decls
+                            .difference(&decls_before)
+                            .cloned()
+                            .collect(),
+                    };
+                    self.checkpoint_landed_task(step_exec, machine_str, &task.id, &sha, &produced)
                         .await;
                     landed.push(LandedTask {
                         id: task.id.clone(),

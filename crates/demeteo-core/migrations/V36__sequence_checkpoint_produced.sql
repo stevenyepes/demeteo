@@ -1,0 +1,34 @@
+-- What the landed tasks *produced*, alongside which tasks landed (V35's
+-- `anchor_sha` said where the work is; this says what came out of it).
+--
+-- A step whose whole task list is already checkpointed resumes into its
+-- own tail — verify, merge, done — running no tasks at all. Two things
+-- downstream of the task loop were written against the assumption that a
+-- task ran this attempt, and both read the wrong answer without this
+-- column:
+--
+-- * The declared-deliverable check judges `step_conf.artifacts` against
+--   the declarations tasks satisfied *this attempt*. With no task running
+--   that set is empty, so a step whose deliverable is sitting in the
+--   artifact store looks like a step that never produced it.
+-- * The artifact references a step hands downstream accumulate in memory
+--   and die with a killed process, so the resumed attempt would complete
+--   carrying only its diff.
+--
+-- Recovering either from the artifact store's directory listing is not
+-- equivalent: the store is keyed by (feature, step) with no attempt
+-- dimension, so a listing also names files written by earlier, rolled-back
+-- attempts of this same step — advertising discarded work as this step's
+-- output. The checkpoint already scopes itself to the tasks whose commits
+-- it names; recording their output on the same row keeps the two in step
+-- and lets a rollback shrink both together.
+--
+-- Nullable, and absent means "unknown, not empty": rows written before
+-- V36 carry no payload, and the resume path treats them the way it did
+-- before this column existed rather than concluding the landed tasks
+-- produced nothing.
+--
+-- JSON object, not two columns, because the two halves are always read
+-- and written together and neither is ever queried on:
+--   {"artifact_refs": ["…"], "satisfied_decls": ["…"]}
+ALTER TABLE sequence_checkpoints ADD COLUMN produced_json TEXT;
