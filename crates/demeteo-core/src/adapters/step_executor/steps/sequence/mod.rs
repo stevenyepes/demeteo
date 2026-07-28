@@ -35,7 +35,7 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::artifact::Artifact;
-use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::models::{SequenceProduced, StepConfig, StepExecution};
 use crate::paths;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
@@ -84,13 +84,17 @@ pub(crate) enum CheckpointResume {
     /// worktree carries it. Skip the ids and touch nothing. This is what
     /// every V32-era checkpoint meant, and what the mid-list failure path
     /// still produces.
-    Merged { landed_ids: Vec<String> },
+    Merged {
+        landed_ids: Vec<String>,
+        produced: Option<SequenceProduced>,
+    },
     /// The prefix is committed on the step branch only — the signature of
     /// an *interrupted* attempt, which never reached the merge. Skip the
     /// ids, but move the worktree onto `sha` first.
     Restore {
         landed_ids: Vec<String>,
         sha: String,
+        produced: Option<SequenceProduced>,
     },
 }
 
@@ -99,7 +103,17 @@ impl CheckpointResume {
     fn landed_ids(&self) -> &[String] {
         match self {
             Self::None => &[],
-            Self::Merged { landed_ids } | Self::Restore { landed_ids, .. } => landed_ids,
+            Self::Merged { landed_ids, .. } | Self::Restore { landed_ids, .. } => landed_ids,
+        }
+    }
+
+    /// What the landed tasks emitted, or `None` when the row cannot say —
+    /// no checkpoint, or one written before V36. **Unknown, not empty**: the
+    /// difference decides whether the declared-artifact gate can run.
+    fn produced(&self) -> Option<&SequenceProduced> {
+        match self {
+            Self::None => None,
+            Self::Merged { produced, .. } | Self::Restore { produced, .. } => produced.as_ref(),
         }
     }
 
@@ -111,11 +125,18 @@ impl CheckpointResume {
     /// is the whole instruction, and an anchor would only invite a restore
     /// nobody needs. The next `resolve_checkpoint_resume` reads that row
     /// back as `Merged`, so the rewind is idempotent.
-    fn as_stored(&self) -> (&[String], Option<&str>) {
+    fn as_stored(&self) -> (&[String], Option<&str>, Option<&SequenceProduced>) {
         match self {
-            Self::None => (&[], None),
-            Self::Merged { landed_ids } => (landed_ids, None),
-            Self::Restore { landed_ids, sha } => (landed_ids, Some(sha.as_str())),
+            Self::None => (&[], None, None),
+            Self::Merged {
+                landed_ids,
+                produced,
+            } => (landed_ids, None, produced.as_ref()),
+            Self::Restore {
+                landed_ids,
+                sha,
+                produced,
+            } => (landed_ids, Some(sha.as_str()), produced.as_ref()),
         }
     }
 }
@@ -137,6 +158,41 @@ pub(crate) enum CheckpointDisposition<'a> {
     /// rollback here is about the feature branch, not about disowning the
     /// work.
     Keep,
+    /// Drop the checkpoint entirely: row and pinning ref.
+    ///
+    /// For a rollback caused by this step's own **verdict** on an attempt
+    /// that ran no tasks, which is the one shape where rewinding cannot
+    /// terminate. The attempt resumed a fully-landed checkpoint, ran zero
+    /// agents, and was judged on the tree those already-landed tasks left.
+    /// Rewinding writes back the identical row, so the next attempt resumes
+    /// the same way, runs zero agents again, and is judged the same way
+    /// again — the retry budget spent on repeated verifier passes with no
+    /// code change, and the feedback never reaching an agent that could act
+    /// on it.
+    ///
+    /// Discarding puts the tasks back in the plan, which is what a verdict
+    /// against their output should do. Rewinding stays right whenever the
+    /// work itself was not what failed.
+    Discard,
+}
+
+/// How a rollback should treat the checkpoint when the failure is a
+/// **verdict on the work** — the declared-artifact gate, the verifier, or an
+/// empty diff.
+///
+/// Only the zero-task case differs. An attempt that ran tasks makes progress
+/// on the next one either way: its remainder still runs, with the feedback.
+/// An attempt that ran none has nothing left to vary, so the checkpoint has
+/// to go or the step cannot move.
+fn verdict_disposition(
+    resumed_whole_list: bool,
+    resume: &CheckpointResume,
+) -> CheckpointDisposition<'_> {
+    if resumed_whole_list {
+        CheckpointDisposition::Discard
+    } else {
+        CheckpointDisposition::RewindTo(resume)
+    }
 }
 
 /// Read a `git merge-base <anchor> <base>` result as a verdict on whether
@@ -348,7 +404,10 @@ impl ExecutionDriver {
         //     though still reachable through the checkpoint ref. Move onto it
         //     before the scope fence chmods anything read-only, since the
         //     reset writes files.
-        if let CheckpointResume::Restore { landed_ids, sha } = &resume {
+        if let CheckpointResume::Restore {
+            landed_ids, sha, ..
+        } = &resume
+        {
             if let Err(e) = self
                 .exec
                 .run_command(
@@ -403,9 +462,30 @@ impl ExecutionDriver {
         }
 
         // 3. Run the tasks in order.
-        let mut all_artifact_refs = Vec::new();
+        // Seed from the checkpoint (V36). Both accumulators describe what
+        // *the step's tasks* produced, not what this attempt's did — the
+        // declared-artifact gate below and the refs handed downstream are
+        // judged across the whole list. A resumed attempt did not run the
+        // landed tasks, so without this the gate fails a step whose
+        // deliverable exists and the step advertises only its own diff.
+        //
+        // Applies to a partial resume too, not just a fully-landed one: a
+        // step whose deliverable was written by task 3 and which resumes at
+        // task 4 is the same situation.
+        let mut all_artifact_refs: Vec<String> = Vec::new();
         let mut satisfied_decls: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        if let Some(produced) = resume.produced() {
+            all_artifact_refs.extend(produced.artifact_refs.iter().cloned());
+            satisfied_decls.extend(produced.satisfied_decls.iter().cloned());
+            tracing::info!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                refs = produced.artifact_refs.len(),
+                decls = produced.satisfied_decls.len(),
+                "sequence step: seeded the landed tasks' outputs from the checkpoint"
+            );
+        }
         let mut landed_this_attempt: Vec<runner::LandedTask> = Vec::new();
         let tasks_res = self
             .run_tasks_loop(
@@ -466,11 +546,16 @@ impl ExecutionDriver {
                         let landed_ids: Vec<String> =
                             landed_this_attempt.iter().map(|t| t.id.clone()).collect();
                         let anchor = landed_this_attempt.last().map(|t| t.sha.as_str());
+                        let produced = SequenceProduced {
+                            artifact_refs: all_artifact_refs.clone(),
+                            satisfied_decls: satisfied_decls.iter().cloned().collect(),
+                        };
                         let landed_total = match self.features.sequence_checkpoint_record(
                             &self.f_id,
                             &step_exec.step_id.0,
                             &landed_ids,
                             anchor,
+                            Some(&produced),
                             crate::paths::now_ms(),
                         ) {
                             Ok(total) => total as usize,
@@ -557,14 +642,23 @@ impl ExecutionDriver {
         //     missing (they describe whatever the agent touched), so an
         //     ordinary implement step never trips this.
         //
-        //     Both halves of that judgement assume a task ran this attempt.
-        //     When every task was already landed, none did: `satisfied_decls`
-        //     is empty because nothing emitted anything, and the refs the
-        //     landed tasks *did* produce died in memory with the killed
-        //     process. So recover those refs from the store — which is where
-        //     the landed tasks actually wrote them — and skip the check,
-        //     rather than failing a step whose deliverables are on disk.
-        if resumed_whole_list {
+        //     A resumed attempt is judged on the same evidence as a fresh
+        //     one, because the checkpoint carries it (V36) and the
+        //     accumulators were seeded from it above. The gate is *not*
+        //     exempted just because no task ran this time: a step whose
+        //     deliverable was genuinely never written would otherwise
+        //     complete green here while a fresh run fails, and the mistake
+        //     would surface later as an unrelated error downstream.
+        //
+        //     The one exception is a checkpoint that predates V36 and so
+        //     cannot say what it produced. `None` there means *unknown*, and
+        //     failing a step on an absence we never recorded would be a
+        //     false negative every bit as bad. That case keeps the old
+        //     behaviour — skip the gate, and recover refs by listing the
+        //     step's artifact directory, over-collecting from rolled-back
+        //     attempts but at least not starving downstream.
+        let produced_unknown = resumed_whole_list && resume.produced().is_none();
+        if produced_unknown {
             match self
                 .artifacts
                 .list_for_step(&self.f_id_str, &step_exec.step_id.0)
@@ -578,6 +672,13 @@ impl ExecutionDriver {
                      will complete carrying only its diff"
                 ),
             }
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                "sequence step: resuming a pre-V36 checkpoint, which cannot say what its tasks \
+                 produced; skipping the declared-artifact check rather than failing on an \
+                 absence that was never recorded"
+            );
         }
         let never_produced: Vec<&str> = step_conf
             .artifacts
@@ -587,14 +688,14 @@ impl ExecutionDriver {
             .filter(|d| !satisfied_decls.contains(&d.name))
             .map(|d| d.name.as_str())
             .collect();
-        if !resumed_whole_list && !never_produced.is_empty() {
+        if !produced_unknown && !never_produced.is_empty() {
             let rolled_back = self
                 .cleanup_and_rollback(
                     &wt_id,
                     &machine_str,
                     &base_sha,
                     &step_exec.step_id.0,
-                    CheckpointDisposition::RewindTo(&resume),
+                    verdict_disposition(resumed_whole_list, &resume),
                 )
                 .await;
             let names = never_produced.join(", ");
@@ -648,7 +749,7 @@ impl ExecutionDriver {
                         &machine_str,
                         &base_sha,
                         &step_exec.step_id.0,
-                        CheckpointDisposition::RewindTo(&resume),
+                        verdict_disposition(resumed_whole_list, &resume),
                     )
                     .await;
                 // A failed rollback leaves the rejected attempt's commits on
@@ -807,7 +908,7 @@ impl ExecutionDriver {
                         &machine_str,
                         &base_sha,
                         &step_exec.step_id.0,
-                        CheckpointDisposition::RewindTo(&resume),
+                        verdict_disposition(resumed_whole_list, &resume),
                     )
                     .await;
                 return self
@@ -1029,6 +1130,7 @@ impl ExecutionDriver {
         let Some(anchor) = checkpoint.anchor_sha.clone() else {
             return CheckpointResume::Merged {
                 landed_ids: checkpoint.landed_task_ids,
+                produced: checkpoint.produced,
             };
         };
 
@@ -1075,6 +1177,7 @@ impl ExecutionDriver {
             // carries the prefix.
             Ok(out) if anchor_is_merged(&out, &anchor) => CheckpointResume::Merged {
                 landed_ids: checkpoint.landed_task_ids,
+                produced: checkpoint.produced,
             },
             // A different (earlier) merge base — the prefix lives on the
             // step branch alone. An attempt was interrupted between
@@ -1082,6 +1185,7 @@ impl ExecutionDriver {
             Ok(_) => CheckpointResume::Restore {
                 landed_ids: checkpoint.landed_task_ids,
                 sha: anchor,
+                produced: checkpoint.produced,
             },
             // git never answered: unreachable machine, timeout, corrupt
             // object, unrelated histories. All of them mean the same thing
@@ -1130,12 +1234,20 @@ impl ExecutionDriver {
     /// commit is pinned *first*. A failed pin means the task goes
     /// unrecorded and re-runs — wasteful, but not wrong. A row naming an
     /// unpinned commit would be worse than either.
+    ///
+    /// `produced` is the attempt's running total, not this task's delta, and
+    /// is stored replacing whatever the row held: the accumulators were
+    /// seeded from that same row at the start of the attempt, so the total
+    /// already contains everything the earlier tasks contributed. Writing it
+    /// on every task keeps the payload in step with the ids beside it, which
+    /// is what lets a resume answer the declared-artifact gate.
     async fn checkpoint_landed_task(
         &self,
         step_exec: &StepExecution,
         machine_str: &str,
         task_id: &str,
         sha: &str,
+        produced: &SequenceProduced,
     ) {
         let git_ref = self.checkpoint_ref(&step_exec.step_id.0);
         if let Err(e) = self
@@ -1167,6 +1279,7 @@ impl ExecutionDriver {
             &step_exec.step_id.0,
             &[task_id.to_string()],
             Some(sha),
+            Some(produced),
             crate::paths::now_ms(),
         ) {
             tracing::warn!(
@@ -1237,7 +1350,7 @@ impl ExecutionDriver {
         machine_str: &str,
         resume: &CheckpointResume,
     ) {
-        let (landed_ids, anchor) = resume.as_stored();
+        let (landed_ids, anchor, produced) = resume.as_stored();
         if landed_ids.is_empty() {
             self.clear_sequence_checkpoint(step_id, machine_str).await;
         } else {
@@ -1246,6 +1359,7 @@ impl ExecutionDriver {
                 step_id,
                 landed_ids,
                 anchor,
+                produced,
                 crate::paths::now_ms(),
             ) {
                 tracing::warn!(
@@ -1368,6 +1482,15 @@ impl ExecutionDriver {
             CheckpointDisposition::RewindTo(resume) => {
                 self.rewind_checkpoint_to(step_id, machine_str, resume)
                     .await
+            }
+            CheckpointDisposition::Discard => {
+                tracing::info!(
+                    feature_id = %self.f_id,
+                    step_id = %step_id,
+                    "sequence step: discarding the landed checkpoint — the verdict was against \
+                     the work it names, and an attempt that ran no tasks cannot vary without it"
+                );
+                self.clear_sequence_checkpoint(step_id, machine_str).await;
             }
             CheckpointDisposition::Keep => {}
         }

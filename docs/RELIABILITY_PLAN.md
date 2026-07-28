@@ -82,7 +82,31 @@ this needs no judgement: `merge-base --is-ancestor` returns its verdict in the
 `merge-base` is asked instead and the answer read off stdout. Anything that is
 not a printed SHA is unknown, and unknown re-runs.
 
-Four consequences worth knowing before touching this:
+**Sequence resume evidence (V36)** closes what V35 left implicit. Skipping the
+landed tasks is only half a resume; the step's *tail* — the declared-artifact
+gate and the refs handed downstream — is computed from what the tasks emitted,
+and a resumed attempt did not run them. Exempting the gate made a step whose
+deliverable was never written complete green where a fresh run fails, and
+recovering refs by listing the step's artifact directory over-collected from
+rolled-back attempts (the store is keyed by `(feature, step)`, with no attempt
+dimension). So the checkpoint now also carries `produced_json` —
+`{artifact_refs, satisfied_decls}` — written beside the ids it belongs to, and
+the resume seeds both accumulators from it. `NULL` means *unknown*, never
+"produced nothing": a pre-V36 row keeps the old skip, because failing a step on
+an absence that was never recorded is the same class of lie in the other
+direction.
+
+The other half is termination. A rollback rewinds the checkpoint, which is
+right whenever the work was sound and something around it failed — but an
+attempt that resumed a *fully-landed* checkpoint runs no agents, so a verdict
+against it (the artifact gate, the verifier, an empty diff) rewinds to the
+identical row and the next attempt is bit-for-bit the same. The retry budget
+buys nothing and the feedback never reaches an agent. Those three sites
+therefore **discard** rather than rewind, which puts the tasks back in the plan;
+`merge_subtask`'s failure still rewinds, because an environmental failure is not
+a judgement on the landed work.
+
+Five consequences worth knowing before touching this:
 
 - **A checkpoint covering the whole plan means the whole plan is done.** The row
   names every id from the moment the last task commits until the step completes,

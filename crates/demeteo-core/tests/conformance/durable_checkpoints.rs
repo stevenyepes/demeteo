@@ -368,6 +368,7 @@ async fn restart_resumes_sequence_from_the_exact_task() {
             // forges. The V35 crash shape (prefix on the step branch, with
             // an anchor to restore it from) is covered separately.
             None,
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
@@ -523,6 +524,7 @@ async fn restart_restores_an_interrupted_attempt_committed_work() {
             "s-impl",
             &["stub-task-1".to_string()],
             Some(anchor.as_str()),
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
@@ -754,6 +756,7 @@ async fn a_resume_re_reads_a_revised_task_list_artifact() {
             "s-impl",
             &["stub-task-1".to_string()],
             None,
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
@@ -899,6 +902,7 @@ async fn a_kill_after_the_last_task_resumes_without_re_running_any() {
             "s-impl",
             &["stub-task-1".to_string(), "stub-task-2".to_string()],
             Some(anchor.as_str()),
+            None,
             paths::now_ms(),
         )
         .expect("seed checkpoint");
@@ -960,6 +964,193 @@ async fn a_kill_after_the_last_task_resumes_without_re_running_any() {
         !impl_after.artifact_paths.is_empty(),
         "a resumed step must still carry artifacts; the declared deliverables were \
          produced by the attempt that landed the tasks"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A resumed step is judged on the same evidence as a fresh one, and a
+/// verdict against it must let the step move.
+///
+/// Two failures met here. **The gate**: skipping `never_produced` whenever
+/// no task ran meant a step whose declared deliverable was never written
+/// completed green on resume while a fresh run of the same workflow fails —
+/// the error then surfacing downstream as something unrelated. V36's
+/// `produced_json` lets the resume answer instead of being exempted.
+///
+/// **Termination**: a zero-task attempt rolled back with `RewindTo` writes
+/// the identical row back, so the next attempt resumes the same way, runs no
+/// agents, and is judged the same way — forever, with the feedback never
+/// reaching anything that could act on it. A verdict on a zero-task attempt
+/// discards the checkpoint instead, which puts the tasks back in the plan.
+#[tokio::test]
+async fn a_resumed_step_still_fails_its_missing_deliverable_and_can_recover() {
+    let (tmp, ctx, project_id, feature_id, _status) = start_run(
+        "resumed-gate",
+        &plan_then_sequence_with_an_unproducible_artifact(),
+    )
+    .await;
+
+    let repo_dir = paths::repo_target_dir_local(&ctx.workspace_dir, &project_id, REPO_PATH);
+    let branch = format!(
+        "{}{}",
+        crate::adapters::step_executor::setup::fetch_default_settings()
+            .worktree_strategy
+            .branch_prefix,
+        feature_id.0
+    );
+
+    // ── Forge a fully-landed checkpoint whose payload records what the
+    // tasks actually produced: `implemented-files`, and *not* the declared
+    // `verification-report`. That is the honest shape of a kill after the
+    // last task committed, in a workflow whose deliverable was never
+    // written. ──
+    let forge_wt = tmp.join("forge-wt");
+    let forge_branch = format!("{}_subtask_forge", branch);
+    git_in(
+        &repo_dir,
+        &[
+            "worktree",
+            "add",
+            forge_wt.to_str().unwrap(),
+            "-b",
+            &forge_branch,
+            &branch,
+        ],
+    );
+    std::fs::write(forge_wt.join("resumed-gate-work.txt"), "landed\n").expect("write forged work");
+    git_in(&forge_wt, &["add", "-A"]);
+    git_in(&forge_wt, &["commit", "-m", "chore: the whole task list"]);
+    let anchor = git_in(&forge_wt, &["rev-parse", "HEAD"]);
+    git_in(
+        &repo_dir,
+        &[
+            "update-ref",
+            &format!("refs/demeteo/seq/{}/{}", feature_id.0, "s-impl"),
+            &anchor,
+        ],
+    );
+    git_in(
+        &repo_dir,
+        &["worktree", "remove", "--force", forge_wt.to_str().unwrap()],
+    );
+    git_in(&repo_dir, &["branch", "-D", &forge_branch]);
+
+    let steps = ctx.features.steps_for_feature(&feature_id).expect("steps");
+    let impl_step = steps
+        .iter()
+        .find(|s| s.step_id.0 == "s-impl")
+        .expect("sequence step exists");
+    let reset_for_retry = |ctx: &AppContext| {
+        ctx.features
+            .step_update(
+                &impl_step.id,
+                &StepExecutionPatch {
+                    status: Some("interrupted".to_string()),
+                    error_message: Some(None),
+                    ..Default::default()
+                },
+            )
+            .expect("reset sequence step");
+        ctx.features
+            .update(
+                &feature_id,
+                &FeaturePatch {
+                    status: Some("running".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("reset feature status");
+    };
+    reset_for_retry(&ctx);
+    ctx.features
+        .sequence_checkpoint_record(
+            &feature_id,
+            "s-impl",
+            &["stub-task-1".to_string(), "stub-task-2".to_string()],
+            Some(anchor.as_str()),
+            Some(&crate::domain::models::SequenceProduced {
+                artifact_refs: vec![],
+                satisfied_decls: vec!["implemented-files".to_string()],
+            }),
+            paths::now_ms(),
+        )
+        .expect("seed checkpoint");
+    let before_resume = subtask_runs(&tmp, &feature_id).len();
+
+    let ctx2 = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotif),
+        tokio::runtime::Handle::current(),
+    );
+    ctx2.executor
+        .step_retry(impl_step.id.0.as_str(), None, None, None)
+        .await
+        .expect("retry the interrupted sequence step");
+    assert_eq!(poll_terminal(&ctx2, &feature_id).await, "failed");
+
+    // 1. The gate ran. Skipping it here reports `completed` with no
+    //    deliverable, which is worse than the cost it was avoiding.
+    let after = ctx2
+        .features
+        .steps_for_feature(&feature_id)
+        .expect("steps")
+        .into_iter()
+        .find(|s| s.step_id.0 == "s-impl")
+        .expect("sequence step exists");
+    assert!(
+        after
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("verification-report"),
+        "a resumed step must still fail its never-produced deliverable; got {:?}",
+        after.error_message
+    );
+    // The payload said `implemented-files` was produced, so the gate must
+    // not fail on *that* one — it is judging real evidence, not an absence.
+    assert!(
+        !after
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("implemented-files"),
+        "the checkpoint recorded implemented-files as satisfied; got {:?}",
+        after.error_message
+    );
+
+    // 2. The verdict discarded the checkpoint. Rewinding it would hand the
+    //    next attempt the same zero-task resume forever.
+    let checkpoint = ctx2
+        .features
+        .sequence_checkpoint_get(&feature_id, "s-impl")
+        .expect("read checkpoint");
+    assert!(
+        checkpoint.is_empty(),
+        "a verdict against a zero-task attempt must discard the checkpoint, not rewind to it; \
+         found {:?}",
+        checkpoint.landed_task_ids
+    );
+
+    // 3. Which means the step can actually move: the next attempt re-runs
+    //    the list, so an agent finally sees the feedback.
+    reset_for_retry(&ctx2);
+    ctx2.executor
+        .step_retry(impl_step.id.0.as_str(), None, None, None)
+        .await
+        .expect("retry again");
+    assert_eq!(poll_terminal(&ctx2, &feature_id).await, "failed");
+    let third: Vec<(String, String)> = subtask_runs(&tmp, &feature_id)
+        .into_iter()
+        .skip(before_resume)
+        .collect();
+    assert!(
+        third.iter().any(|(id, _)| id.contains("stub-task-1")),
+        "after the discard the tasks must run again, or the retry budget buys nothing; \
+         ran: {third:?}"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);

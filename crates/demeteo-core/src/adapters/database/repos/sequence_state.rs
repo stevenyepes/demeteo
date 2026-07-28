@@ -15,7 +15,7 @@ use rusqlite::params;
 use rusqlite::OptionalExtension;
 
 use crate::domain::ids::FeatureId;
-use crate::domain::models::SequenceCheckpoint;
+use crate::domain::models::{SequenceCheckpoint, SequenceProduced};
 
 use super::super::SqliteAdapter;
 
@@ -28,19 +28,25 @@ pub fn sequence_checkpoint_get(
     step_id: &str,
 ) -> Result<SequenceCheckpoint, String> {
     let conn = adapter.conn.lock()?;
-    let row: Option<(String, Option<String>)> = conn
+    let row: Option<(String, Option<String>, Option<String>)> = conn
         .query_row(
-            "SELECT landed_task_ids, anchor_sha FROM sequence_checkpoints
+            "SELECT landed_task_ids, anchor_sha, produced_json FROM sequence_checkpoints
              WHERE feature_id = ?1 AND step_id = ?2",
             params![feature_id.0, step_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
     match row {
-        Some((json, anchor_sha)) => Ok(SequenceCheckpoint {
+        Some((json, anchor_sha, produced_json)) => Ok(SequenceCheckpoint {
             landed_task_ids: serde_json::from_str(&json).map_err(|e| e.to_string())?,
             anchor_sha: anchor_sha.filter(|s| !s.trim().is_empty()),
+            // An unparseable payload degrades to `None` = unknown, which is
+            // the same honest answer a pre-V36 row gives. Failing the read
+            // would strand a resume that only needed the ids.
+            produced: produced_json
+                .filter(|s| !s.trim().is_empty())
+                .and_then(|s| serde_json::from_str(&s).ok()),
         }),
         None => Ok(SequenceCheckpoint::default()),
     }
@@ -62,9 +68,16 @@ pub fn sequence_checkpoint_record(
     step_id: &str,
     landed_task_ids: &[String],
     anchor_sha: Option<&str>,
+    produced: Option<&SequenceProduced>,
     now: i64,
 ) -> Result<u32, String> {
     let existing = sequence_checkpoint_get(adapter, feature_id, step_id)?;
+    let existing_produced = existing
+        .produced
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| e.to_string())?;
     let mut merged = existing.landed_task_ids;
     for id in landed_task_ids {
         if !merged.contains(id) {
@@ -75,15 +88,17 @@ pub fn sequence_checkpoint_record(
         .map(|s| s.to_string())
         .or(existing.anchor_sha)
         .filter(|s| !s.trim().is_empty());
+    let produced_json = encode_produced(produced)?.or(existing_produced);
     let json = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
     let conn = adapter.conn.lock()?;
     conn.execute(
         "INSERT INTO sequence_checkpoints
-             (feature_id, step_id, landed_task_ids, anchor_sha, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+             (feature_id, step_id, landed_task_ids, anchor_sha, produced_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(feature_id, step_id)
-         DO UPDATE SET landed_task_ids = ?3, anchor_sha = ?4, updated_at = ?5",
-        params![feature_id.0, step_id, json, anchor, now],
+         DO UPDATE SET landed_task_ids = ?3, anchor_sha = ?4, produced_json = ?5,
+                       updated_at = ?6",
+        params![feature_id.0, step_id, json, anchor, produced_json, now],
     )
     .map_err(|e| e.to_string())?;
     Ok(merged.len() as u32)
@@ -106,23 +121,36 @@ pub fn sequence_checkpoint_set(
     step_id: &str,
     landed_task_ids: &[String],
     anchor_sha: Option<&str>,
+    produced: Option<&SequenceProduced>,
     now: i64,
 ) -> Result<(), String> {
     let json = serde_json::to_string(landed_task_ids).map_err(|e| e.to_string())?;
+    let produced_json = encode_produced(produced)?;
     let anchor = anchor_sha
         .map(|s| s.to_string())
         .filter(|s| !s.trim().is_empty());
     let conn = adapter.conn.lock()?;
     conn.execute(
         "INSERT INTO sequence_checkpoints
-             (feature_id, step_id, landed_task_ids, anchor_sha, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+             (feature_id, step_id, landed_task_ids, anchor_sha, produced_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(feature_id, step_id)
-         DO UPDATE SET landed_task_ids = ?3, anchor_sha = ?4, updated_at = ?5",
-        params![feature_id.0, step_id, json, anchor, now],
+         DO UPDATE SET landed_task_ids = ?3, anchor_sha = ?4, produced_json = ?5,
+                       updated_at = ?6",
+        params![feature_id.0, step_id, json, anchor, produced_json, now],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Serialize a produced payload for storage. `None` in, `None` out — the
+/// callers distinguish "no payload to write" from "an empty payload", and
+/// so must the column.
+fn encode_produced(produced: Option<&SequenceProduced>) -> Result<Option<String>, String> {
+    produced
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| e.to_string())
 }
 
 /// Delete the (feature, node) checkpoint — called when the step finally

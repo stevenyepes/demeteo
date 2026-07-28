@@ -49,7 +49,8 @@ fn the_comparison_ignores_sha_case_and_whitespace() {
 /// Nothing to resume from means nothing to write back.
 #[test]
 fn rewinding_no_resume_clears_the_row() {
-    let (ids, anchor) = CheckpointResume::None.as_stored();
+    let (ids, anchor, produced) = CheckpointResume::None.as_stored();
+    assert_eq!(produced, None);
     assert!(ids.is_empty());
     assert_eq!(anchor, None);
 }
@@ -61,8 +62,9 @@ fn rewinding_no_resume_clears_the_row() {
 fn rewinding_a_merged_prefix_drops_the_anchor() {
     let resume = CheckpointResume::Merged {
         landed_ids: vec!["t-1".into(), "t-2".into()],
+        produced: None,
     };
-    let (ids, anchor) = resume.as_stored();
+    let (ids, anchor, _) = resume.as_stored();
     assert_eq!(ids, ["t-1".to_string(), "t-2".to_string()]);
     assert_eq!(
         anchor, None,
@@ -77,8 +79,9 @@ fn rewinding_a_stranded_prefix_keeps_the_anchor() {
     let resume = CheckpointResume::Restore {
         landed_ids: vec!["t-1".into()],
         sha: ANCHOR.to_string(),
+        produced: None,
     };
-    let (ids, anchor) = resume.as_stored();
+    let (ids, anchor, _) = resume.as_stored();
     assert_eq!(ids, ["t-1".to_string()]);
     assert_eq!(anchor, Some(ANCHOR));
 }
@@ -90,10 +93,12 @@ fn rewinding_a_stranded_prefix_keeps_the_anchor() {
 fn the_rewind_is_idempotent() {
     let first = CheckpointResume::Merged {
         landed_ids: vec!["t-1".into()],
+        produced: None,
     };
-    let (ids, anchor) = first.as_stored();
+    let (ids, anchor, produced) = first.as_stored();
     let second = CheckpointResume::Merged {
         landed_ids: ids.to_vec(),
+        produced: None,
     };
-    assert_eq!(second.as_stored(), (ids, anchor));
+    assert_eq!(second.as_stored(), (ids, anchor, produced));
 }

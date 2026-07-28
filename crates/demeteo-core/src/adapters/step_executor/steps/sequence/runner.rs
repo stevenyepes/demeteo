@@ -218,7 +218,15 @@ impl ExecutionDriver {
             {
                 Ok(sha) if !sha.trim().is_empty() => {
                     let sha = sha.trim().to_string();
-                    self.checkpoint_landed_task(step_exec, machine_str, &task.id, &sha)
+                    // `run_task` has already folded this task's outputs into
+                    // both accumulators, so they are the running total the
+                    // checkpoint should carry — the evidence a resumed
+                    // attempt judges its declared artifacts on.
+                    let produced = crate::domain::models::SequenceProduced {
+                        artifact_refs: all_artifact_refs.clone(),
+                        satisfied_decls: satisfied_decls.iter().cloned().collect(),
+                    };
+                    self.checkpoint_landed_task(step_exec, machine_str, &task.id, &sha, &produced)
                         .await;
                     landed.push(LandedTask {
                         id: task.id.clone(),

@@ -1,0 +1,36 @@
+-- What the landed tasks *produced*, so a resume can answer the same
+-- questions a fresh attempt can (RELIABILITY_PLAN §"crash-resume").
+--
+-- V35 made the checkpoint say which tasks are done and where their commits
+-- are. That is enough to skip them. It is not enough to finish the step,
+-- because two things after the task loop are computed from what the tasks
+-- emitted *in this process*:
+--
+--   * `satisfied_decls` — which declared artifacts some task produced. The
+--     `never_produced` gate fails the step when one was not. A resumed
+--     attempt runs no tasks (or only the tail), so the set is empty or
+--     partial and the gate either fires spuriously or has to be skipped.
+--     Skipping it is worse: a step whose deliverable genuinely was never
+--     written then completes green where a fresh run fails, and the error
+--     surfaces later as an unrelated failure in whatever consumed it.
+--   * `all_artifact_refs` — the references the step advertises downstream.
+--     Accumulated in memory, so a killed process loses them. Recovering
+--     them by listing the step's artifact directory over-collects: the
+--     store is keyed by (feature, step) with no attempt dimension, so a
+--     rolled-back attempt's files would be advertised as this step's
+--     output.
+--
+-- Both are answered by recording them on the checkpoint row, next to the
+-- task ids they came from — the same scope, written at the same moment.
+--
+-- Shape: {"artifact_refs": [...], "satisfied_decls": [...]}, replaced (not
+-- merged) on each write, because the writer always holds the running total
+-- for the attempt. A rewind shrinks it alongside the ids, so a discarded
+-- attempt's refs cannot outlive its task list.
+--
+-- Nullable, and `NULL` means **unknown**, never "produced nothing" — a row
+-- written before V36 carries no payload, and treating that as an empty set
+-- would fail every declared artifact on the first resume after upgrading.
+-- `handle_sequence_step` keeps the old skip-the-gate behaviour for exactly
+-- that case and no other.
+ALTER TABLE sequence_checkpoints ADD COLUMN produced_json TEXT;
