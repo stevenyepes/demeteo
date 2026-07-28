@@ -37,7 +37,7 @@ use serde::Deserialize;
 use crate::domain::ids::{FeatureId, StepExecutionId, ThreadId};
 use crate::domain::models::sequence_view::assemble_tasks;
 use crate::domain::models::{Feature, Message, SequenceState, StepAttempt, StepExecution};
-use crate::ports::db::{FeatureRepository, ThreadRepository};
+use crate::ports::db::{FeatureRepository, SequenceResumeRepository, ThreadRepository};
 use crate::ports::execution::ExecutionPort;
 
 /// Minimal projection of a persisted `TaskPlan` (`sequence_plan_cache`): just
@@ -57,10 +57,13 @@ struct PlanTaskRead {
     title: String,
 }
 
-/// Read model over a run's rendered surface. Cheap to clone (three `Arc`s);
+/// Read model over a run's rendered surface. Cheap to clone (four `Arc`s);
 /// construct one per `AppContext` and share it.
 pub struct RunView {
     features: Arc<dyn FeatureRepository>,
+    /// Read side of the sequence step's durable resume state — the plan
+    /// cache and the landed-task checkpoint the task drill-down joins.
+    sequence_resume: Arc<dyn SequenceResumeRepository>,
     threads: Arc<dyn ThreadRepository>,
     exec: Arc<dyn ExecutionPort>,
 }
@@ -68,11 +71,13 @@ pub struct RunView {
 impl RunView {
     pub fn new(
         features: Arc<dyn FeatureRepository>,
+        sequence_resume: Arc<dyn SequenceResumeRepository>,
         threads: Arc<dyn ThreadRepository>,
         exec: Arc<dyn ExecutionPort>,
     ) -> Self {
         Self {
             features,
+            sequence_resume,
             threads,
             exec,
         }
@@ -121,14 +126,14 @@ impl RunView {
         node_id: &str,
         execution_id: &StepExecutionId,
     ) -> Result<SequenceState, String> {
-        let Some(plan_json) = self.features.plan_cache_get(feature_id, node_id)? else {
+        let Some(plan_json) = self.sequence_resume.plan_cache_get(feature_id, node_id)? else {
             return Ok(SequenceState::unplanned());
         };
         let plan: PlanRead = serde_json::from_str(&plan_json)
             .map_err(|e| format!("sequence plan cache is not valid TaskPlan JSON: {e}"))?;
 
         let landed: std::collections::HashSet<String> = self
-            .features
+            .sequence_resume
             .sequence_checkpoint_get(feature_id, node_id)?
             .landed_task_ids
             .into_iter()

@@ -71,6 +71,10 @@ pub struct DagStepExecutor {
     /// row per (task, attempt). See
     /// [`SubtaskRunRepository`](crate::ports::db::SubtaskRunRepository).
     subtask_runs: Arc<dyn crate::ports::db::SubtaskRunRepository>,
+    /// Durable crash-resume state for `sequence` steps (checkpoint +
+    /// plan cache). See
+    /// [`SequenceResumeRepository`](crate::ports::db::SequenceResumeRepository).
+    sequence_resume: Arc<dyn crate::ports::db::SequenceResumeRepository>,
     /// Git operations helper for the resolver / sync flows. The
     /// step handlers (agent.rs, parallel.rs) own their own
     /// `GitOpsHelper` instances; this one is dedicated to the
@@ -163,6 +167,12 @@ impl DagStepExecutor {
         // sub-port so the driver's task loop can open/close
         // `subtask_runs` rows without seeing the rest of the schema.
         subtask_runs: Arc<dyn crate::ports::db::SubtaskRunRepository>,
+        // Durable crash-resume state for `sequence` steps: which tasks
+        // landed at which commit, and the cached plan. Same
+        // `SqliteAdapter` again; its own sub-port so the sequence step
+        // depends on six methods rather than all of
+        // `FeatureRepository` (docs/ARCHITECTURE.md §2).
+        sequence_resume: Arc<dyn crate::ports::db::SequenceResumeRepository>,
         artifacts: Arc<dyn ArtifactStore>,
         attachments: Arc<dyn AttachmentStore>,
         attachment_json: Arc<dyn AttachmentJsonPort>,
@@ -188,6 +198,7 @@ impl DagStepExecutor {
             exec,
             merge_executor,
             subtask_runs,
+            sequence_resume,
             git_ops,
             artifacts,
             attachments,

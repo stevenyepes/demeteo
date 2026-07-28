@@ -166,6 +166,12 @@ pub(crate) struct ExecutionDriver {
     /// task commits or fails, so the dashboard's live "nodes" count and the
     /// post-hoc audit of which tasks ran are both real.
     pub subtask_runs: Arc<dyn crate::ports::db::SubtaskRunRepository>,
+    /// Durable crash-resume state for `sequence` steps: the checkpoint
+    /// (which tasks landed, at which commit, having produced what) and
+    /// the plan cache. Its own port rather than a reach through
+    /// `features`, so the six methods the sequence step actually needs
+    /// are the whole surface it depends on.
+    pub sequence_resume: Arc<dyn crate::ports::db::SequenceResumeRepository>,
     /// Opens the PR once the last step finishes. The same publisher the
     /// Publish button has always used — an HTTP call to the provider's API,
     /// never the `gh` CLI. `None` under the headless runner, which opens its

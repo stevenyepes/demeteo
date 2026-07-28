@@ -208,7 +208,7 @@ impl DagStepExecutor {
                 // kind strings anyway).
                 if clear_sequence_checkpoints {
                     let _ = self
-                        .features
+                        .sequence_resume
                         .sequence_checkpoint_clear(feature_id, &s.step_id.0);
                 }
             }

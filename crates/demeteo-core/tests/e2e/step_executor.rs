@@ -190,6 +190,7 @@ async fn test_executor_instantiation_and_cancel() {
         exec,
         merge_executor,
         db.clone(), // subtask_runs — SqliteAdapter implements the port
+        db.clone(), // sequence_resume — SqliteAdapter implements the port
         artifacts,
         attachments,
         db.clone(), // attachment_json — SqliteAdapter implements both ports
@@ -262,6 +263,7 @@ async fn test_executor_gate_decide() {
         exec,
         merge_executor,
         db.clone(), // subtask_runs — SqliteAdapter implements the port
+        db.clone(), // sequence_resume — SqliteAdapter implements the port
         artifacts,
         attachments,
         db.clone(), // attachment_json — SqliteAdapter implements both ports
@@ -444,6 +446,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
         exec,
         merge_executor,
         db.clone(), // subtask_runs — SqliteAdapter implements the port
+        db.clone(), // sequence_resume — SqliteAdapter implements the port
         artifacts,
         attachments,
         db.clone(), // attachment_json — SqliteAdapter implements both ports
@@ -627,6 +630,7 @@ async fn build_test_executor_with_notif(
         exec,
         merge_executor,
         db.clone(), // subtask_runs — SqliteAdapter implements the port
+        db.clone(), // sequence_resume — SqliteAdapter implements the port
         artifacts,
         attachments,
         db.clone(), // attachment_json — SqliteAdapter implements both ports
@@ -1141,6 +1145,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         exec,
         merge_executor,
         db.clone(), // subtask_runs — SqliteAdapter implements the port
+        db.clone(), // sequence_resume — SqliteAdapter implements the port
         artifacts,
         attachments,
         db.clone(), // attachment_json — SqliteAdapter implements both ports

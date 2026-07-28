@@ -353,6 +353,7 @@ impl DagStepExecutor {
             git_ops: GitOpsHelper::new(self.app_settings.clone(), self.exec.clone()),
             merge_executor: self.merge_executor.clone(),
             subtask_runs: self.subtask_runs.clone(),
+            sequence_resume: self.sequence_resume.clone(),
             mr_publisher: self.mr_publisher.clone(),
             gate_waiters: self.gate_waiters.clone(),
             driver_registry: self.driver_registry.clone(),

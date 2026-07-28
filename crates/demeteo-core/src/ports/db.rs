@@ -14,6 +14,7 @@
 //! | [`ThreadRepository`]      | threads         | `ThreadSession`, `Message`, `AgentConfig`, `WorkingMemoryEntry` |
 //! | [`ProjectRepository`]     | projects        | `Project`, `Repository`, `ProjectSettings`   |
 //! | [`FeatureRepository`]     | features        | `Feature`, `StepExecution`                   |
+//! | [`SequenceResumeRepository`] | sequence resume | `SequenceCheckpoint`, the sequence plan cache |
 //! | [`WorkflowRepository`]    | workflows       | `Workflow`, `WorkflowVersion`                |
 //! | [`GateRepository`]        | gates           | `GateDecision`                               |
 //! | [`AppSettingsRepository`] | app settings    | provider instances, app-session KV, first-launch flags |
@@ -312,13 +313,44 @@ pub trait FeatureRepository: Send + Sync {
         step_execution_id: &StepExecutionId,
     ) -> Result<Vec<crate::domain::models::StepAttempt>, String>;
 
-    // --- Durable sequence run state (V32 / task P1.9) ---
-    //
-    // Replaces the driver's in-memory `sequence_checkpoints` and
-    // `cached_plans` maps so a restart resumes a sequence step from the
-    // exact task instead of the step head. Keyed per (feature, node):
-    // a workflow may hold several sequence nodes.
+    /// Every `subtask_runs` row for a step execution, in start order — the
+    /// per-task status/cost the sequence-node drill-down (P2.5) joins onto
+    /// the plan. Keyed by the *step execution*, unlike the (feature, node)
+    /// resume state on [`SequenceResumeRepository`], which is why it stays
+    /// here with the other `step_*` reads.
+    fn subtask_runs_for_step(
+        &self,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::SubtaskRunRow>, String>;
+}
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 4b. SequenceResumeRepository
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Durable sequence-step run state (V32 / task P1.9): the crash-resume
+/// checkpoint and the plan cache, keyed per (feature, node) because a
+/// workflow may hold several sequence nodes.
+///
+/// Replaces the driver's in-memory `sequence_checkpoints` and
+/// `cached_plans` maps so a restart resumes a sequence step from the
+/// exact task instead of the step head.
+///
+/// Split off [`FeatureRepository`] rather than added to it: these six
+/// methods are one self-contained bounded context — *where a sequence
+/// step got to* — with a single writer (the sequence step handler) and a
+/// single reader beyond it (`RunView`'s task drill-down). Folded in, they
+/// pushed `FeatureRepository` to 21 methods, past the ≤ 12-method budget
+/// the sub-port split exists to hold (`docs/ARCHITECTURE.md` §2), and
+/// made a test double for the sequence step cost twenty-odd irrelevant
+/// stubs. The same `SqliteAdapter` implements both.
+///
+/// The distinction that matters most to a caller is
+/// [`sequence_checkpoint_record`](Self::sequence_checkpoint_record)
+/// (union) versus
+/// [`sequence_checkpoint_set`](Self::sequence_checkpoint_set) (replace);
+/// it is pinned by the contract test both implementations run.
+pub trait SequenceResumeRepository: Send + Sync {
     /// The (feature, node) resume point: landed task ids in landed
     /// order, the commit they end at, and what they produced. Empty when
     /// the step never checkpointed.
@@ -397,15 +429,6 @@ pub trait FeatureRepository: Send + Sync {
         attempt_no: Option<u32>,
         now: i64,
     ) -> Result<(), String>;
-
-    /// Every `subtask_runs` row for a step execution, in start order — the
-    /// per-task status/cost the sequence-node drill-down (P2.5) joins onto
-    /// the plan. A read living beside the checkpoint/plan reads so `RunView`
-    /// assembles a sequence node's task list from one repo.
-    fn subtask_runs_for_step(
-        &self,
-        step_execution_id: &StepExecutionId,
-    ) -> Result<Vec<crate::domain::models::SubtaskRunRow>, String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -631,3 +654,11 @@ pub trait NotificationRepository: Send + Sync {
 // that appear in Patch struct docstrings but not the field list yet.
 #[allow(dead_code)]
 type _DocIdAliases = (MessageId, StepId, WorkflowVersionId, RepositoryId);
+
+/// Contract test for [`SequenceResumeRepository`]: one body, run against
+/// the real `SqliteAdapter` and an in-memory double, so the double cannot
+/// drift from the thing it stands in for. Lives with the trait rather than
+/// the adapter because it is the *port's* contract, not one impl's.
+#[cfg(test)]
+#[path = "../../tests/ports/sequence_resume_port.rs"]
+mod sequence_resume_port;
