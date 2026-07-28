@@ -35,18 +35,35 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::domain::ids::{FeatureId, StepExecutionId, ThreadId};
-use crate::domain::models::sequence_view::assemble_tasks;
+use crate::domain::models::sequence_view::{assemble_tasks, PlannedTaskRef};
 use crate::domain::models::{Feature, Message, SequenceState, StepAttempt, StepExecution};
 use crate::ports::db::{FeatureRepository, SequenceResumeRepository, ThreadRepository};
 use crate::ports::execution::ExecutionPort;
 
-/// Minimal projection of a persisted `TaskPlan` (`sequence_plan_cache`): just
-/// the ordered id + title the drill-down needs. Parsing it here rather than
-/// pulling in the adapter's full `TaskPlan` keeps the application layer free of
-/// the execution-only skip/landed fields (which never serialize anyway).
+/// Minimal projection of a persisted `TaskPlan` (`sequence_plan_cache`): the
+/// ordered id + title the drill-down needs, per cycle. Parsing it here rather
+/// than pulling in the domain's full `TaskPlan` keeps the application layer
+/// free of the execution-only skip/landed fields (which never serialize
+/// anyway).
+///
+/// `history` is absent from every row written before rework cycles existed,
+/// and from every greenfield row since — `#[serde(default)]` is what lets the
+/// same reader handle both without a migration.
 #[derive(Deserialize)]
 struct PlanRead {
     #[serde(alias = "subtasks")]
+    tasks: Vec<PlanTaskRead>,
+    #[serde(default)]
+    cycle: u32,
+    #[serde(default)]
+    history: Vec<PlanCycleRead>,
+}
+
+#[derive(Deserialize)]
+struct PlanCycleRead {
+    #[serde(default)]
+    cycle: u32,
+    #[serde(default)]
     tasks: Vec<PlanTaskRead>,
 }
 
@@ -55,6 +72,39 @@ struct PlanTaskRead {
     id: String,
     #[serde(default)]
     title: String,
+}
+
+impl PlanRead {
+    /// Every cycle's tasks, oldest first, each tagged with the cycle that
+    /// planned it and whether that cycle is behind the current one.
+    ///
+    /// Flattened rather than nested because the accordion renders one
+    /// ordered list and groups by `cycle` — and because a nested shape would
+    /// make "which cycle is this task in" a property of where it sits rather
+    /// than something the row states.
+    fn ordered_tasks(self) -> Vec<PlannedTaskRef> {
+        let current = self.cycle;
+        let mut out: Vec<PlannedTaskRef> = self
+            .history
+            .into_iter()
+            .flat_map(|c| {
+                let cycle = c.cycle;
+                c.tasks.into_iter().map(move |t| PlannedTaskRef {
+                    id: t.id,
+                    title: t.title,
+                    cycle,
+                    prior_cycle: true,
+                })
+            })
+            .collect();
+        out.extend(self.tasks.into_iter().map(|t| PlannedTaskRef {
+            id: t.id,
+            title: t.title,
+            cycle: current,
+            prior_cycle: false,
+        }));
+        out
+    }
 }
 
 /// Read model over a run's rendered surface. Cheap to clone (four `Arc`s);
@@ -115,6 +165,12 @@ impl RunView {
     /// id (== v1 `step_id`), which keys plan + checkpoint; `execution_id` keys
     /// the subtask rows.
     ///
+    /// A step that has been through a rework cycle has planned more than one
+    /// list, and both are on the branch — so the view carries every cycle,
+    /// oldest first, each task tagged with the cycle that planned it. The
+    /// alternative (show the list that ran last) would render a four-ticket
+    /// delta as if it were the whole feature.
+    ///
     /// Returns [`SequenceState::unplanned`] for a node that hasn't resolved a
     /// plan yet or for a non-sequence node (neither writes a plan-cache row),
     /// so the caller needs no node-type branch. Runner-owned features only
@@ -146,12 +202,9 @@ impl RunView {
             .map(|r| (r.subtask_id.clone(), r))
             .collect();
 
-        let plan_pairs: Vec<(String, String)> =
-            plan.tasks.into_iter().map(|t| (t.id, t.title)).collect();
-
         Ok(SequenceState {
             planned: true,
-            tasks: assemble_tasks(&plan_pairs, &landed, &runs),
+            tasks: assemble_tasks(&plan.ordered_tasks(), &landed, &runs),
         })
     }
 

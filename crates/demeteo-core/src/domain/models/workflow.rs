@@ -118,6 +118,24 @@ pub struct StepConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<EffortLevel>,
     pub prompt_template: Option<String>,
+    /// Prompt rendered instead of `prompt_template` when this step is
+    /// re-entered in [`ReworkMode::Rework`](crate::domain::rework::ReworkMode)
+    /// — a verdict from behind the step that consumed this one's task list,
+    /// meaning the previous cycle's code is already committed on the branch.
+    ///
+    /// A separate template rather than a branch inside one because
+    /// [`PromptContext`](crate::domain::prompt_context::PromptContext) is a
+    /// flat `{{key}}` substituter with no conditionals, and because the two
+    /// jobs genuinely differ: a greenfield decomposition prompt tells the
+    /// agent to cover the whole feature with no upper limit on tickets,
+    /// which is precisely the wrong instruction for a delta that must close
+    /// four defects and touch nothing else.
+    ///
+    /// `None` falls back to `prompt_template`, so a workflow that declares
+    /// none behaves exactly as it did before this field existed. Stored
+    /// inside `steps_json`, so no DB migration is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rework_prompt_template: Option<String>,
     pub on_failure: Option<StepId>,
     pub max_iterations: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

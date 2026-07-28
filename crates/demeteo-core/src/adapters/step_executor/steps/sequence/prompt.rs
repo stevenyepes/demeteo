@@ -10,6 +10,7 @@ use crate::adapters::step_executor::steps::agent::{
 };
 
 use super::context::{RunTarget, StepCtx, StepWorktree, TaskRun};
+use crate::domain::sequence::tasks::PlanKind;
 
 /// What one finished task contributed, carried forward so the next task's
 /// agent — a *fresh* session with none of the previous conversation — can
@@ -40,48 +41,7 @@ impl ExecutionDriver {
 
         let task_files_str = task.files.join(", ");
 
-        // The fresh session has no memory of the earlier tasks, so spell out
-        // what is already on the branch. This is the difference between an
-        // agent that builds on the previous task and one that reimplements
-        // it (or reports "already done" and writes nothing).
-        let completed_str = if completed.is_empty() {
-            if resumes_landed_work {
-                // A retry: nothing has been re-run yet, but the worktree was
-                // cut from a feature branch that already carries the previous
-                // attempt. Saying "this is the first task" here would send the
-                // agent to reimplement code it is looking at.
-                "None yet in this attempt — but the code from the previous attempt is already \
-                 committed on this branch. Read it first and revise it in place; do not start \
-                 over."
-                    .to_string()
-            } else {
-                "None — this is the first task.".to_string()
-            }
-        } else {
-            let mut lines: Vec<String> = completed
-                .iter()
-                .map(|c| {
-                    if c.files.is_empty() {
-                        format!("- [{}] {} (already committed)", c.id, c.title)
-                    } else {
-                        format!(
-                            "- [{}] {} (already committed; touched {})",
-                            c.id,
-                            c.title,
-                            c.files.join(", ")
-                        )
-                    }
-                })
-                .collect();
-            if resumes_landed_work {
-                lines.push(
-                    "\nThis is a retry: the tasks above are on the branch from the previous \
-                     attempt, and so is an earlier version of the task below. Revise it in place."
-                        .to_string(),
-                );
-            }
-            lines.join("\n")
-        };
+        let completed_str = format_completed_tasks(completed, run.plan_kind, resumes_landed_work);
 
         // A task's `retry_note` (stamped by the targeted-retry selection)
         // beats the step-wide feedback, so a re-run task sees the guidance
@@ -189,6 +149,98 @@ impl ExecutionDriver {
             target.machine,
         )
         .await
+    }
+}
+
+/// What the agent is told is already on the branch.
+///
+/// A fresh session has no memory of the tasks before it, so the prompt has
+/// to carry the branch's history itself — and *how* it carries it decides
+/// whether the agent builds on that work, revises it, or reimplements it.
+/// Three cases, and the wrong one is expensive in a different way each time:
+///
+/// * **Greenfield, nothing landed** — the honest "first task".
+/// * **A retry** — the tasks above are the previous attempt's, and so is an
+///   earlier version of the task below. Revise in place.
+/// * **A rework cycle** — the tasks above are the *finished feature*, and
+///   the task below is a defect fix that has no earlier version. The retry
+///   wording here sends the agent hunting for code nobody wrote; the
+///   greenfield wording sends it to reimplement a feature it is standing
+///   in.
+///
+/// Pulled out of `build_task_prompt` because it is a decision, not a call:
+/// it does no I/O, and reaching it inside an `async fn` that also
+/// provisions worktrees meant standing up an `ExecutionDriver` and its
+/// twenty-odd ports (AGENTS.md §3).
+pub(crate) fn format_completed_tasks(
+    completed: &[CompletedTask],
+    plan_kind: PlanKind,
+    resumes_landed_work: bool,
+) -> String {
+    let is_rework = plan_kind == PlanKind::Rework;
+    if completed.is_empty() {
+        if is_rework {
+            // A rework cycle whose landed list did not survive (a
+            // checkpoint rewind, a producer that named nothing). The
+            // branch still carries a whole implementation, so the
+            // "first task" line would be a lie — but this task is new
+            // work, so it is not told to revise itself in place.
+            "None named — but this branch already carries a complete previous \
+             implementation of the feature. Your ticket is a fix on top of it, not a \
+             reimplementation: read what is there before you write anything."
+                .to_string()
+        } else if resumes_landed_work {
+            // A retry: nothing has been re-run yet, but the worktree was
+            // cut from a feature branch that already carries the previous
+            // attempt. Saying "this is the first task" here would send the
+            // agent to reimplement code it is looking at.
+            "None yet in this attempt — but the code from the previous attempt is already \
+             committed on this branch. Read it first and revise it in place; do not start \
+             over."
+                .to_string()
+        } else {
+            "None — this is the first task.".to_string()
+        }
+    } else {
+        let mut lines: Vec<String> = completed
+            .iter()
+            .map(|c| {
+                if c.files.is_empty() {
+                    format!("- [{}] {} (already committed)", c.id, c.title)
+                } else {
+                    format!(
+                        "- [{}] {} (already committed; touched {})",
+                        c.id,
+                        c.title,
+                        c.files.join(", ")
+                    )
+                }
+            })
+            .collect();
+        if is_rework {
+            // The distinction that matters on a rework cycle: the tasks
+            // above are the *feature*, already built and committed. The
+            // ticket below is a defect fix a reviewer asked for, and it
+            // has no earlier version to revise — telling it to "revise
+            // in place" (the retry wording) sends it looking for code
+            // nobody wrote, and inviting it to redo the list above is
+            // exactly the cost this whole cycle exists to avoid.
+            lines.push(
+                "\nEverything above is already implemented and committed on this branch — \
+                 that is the feature, not a draft. Your ticket is a targeted fix a reviewer \
+                 asked for after reading it. Read the relevant code first, change only what \
+                 your ticket names, and do not redo, revert, or re-implement any ticket \
+                 above."
+                    .to_string(),
+            );
+        } else if resumes_landed_work {
+            lines.push(
+                "\nThis is a retry: the tasks above are on the branch from the previous \
+                 attempt, and so is an earlier version of the task below. Revise it in place."
+                    .to_string(),
+            );
+        }
+        lines.join("\n")
     }
 }
 

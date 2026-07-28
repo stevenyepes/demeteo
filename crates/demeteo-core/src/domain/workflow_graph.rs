@@ -414,6 +414,32 @@ pub fn lint_workflow_v2(def: &WorkflowDefinitionV2, known_types: &[&str]) -> Vec
                         node.id
                     ),
                 ));
+            } else if is_bare_task_list_producer(def, target) {
+                // Redirecting to the step that *writes* a task list is the
+                // shape that makes a rework cycle cheap: the producer reads
+                // the verdict and emits a delta, and only the tickets that
+                // close it re-run. It only works if the producer knows it is
+                // in a rework cycle, which is what `rework_prompt_template`
+                // tells it. Without one it answers with a whole fresh
+                // decomposition — so the redirect costs a planning turn *and*
+                // re-runs every task, which is strictly worse than the
+                // redirect-to-the-executor shape it was meant to improve on.
+                //
+                // A warning, not an error: the workflow runs, it is just
+                // expensive, and blocking a save on it would refuse a
+                // definition the engine executes fine (PRD §6.3).
+                findings.push(LintFinding::node_warning(
+                    "rework-target-without-template",
+                    &node.id,
+                    format!(
+                        "node '{}' retry.{class} redirects to '{target}', which produces a task \
+                         list but declares no `rework_prompt_template`. It will answer the \
+                         verdict with a whole fresh decomposition, so every task re-runs over \
+                         work already on the branch. Give '{target}' a rework prompt, or \
+                         redirect to the step that executes the list instead.",
+                        node.id
+                    ),
+                ));
             }
         }
     }
@@ -560,6 +586,60 @@ pub fn lint_workflow_v2(def: &WorkflowDefinitionV2, known_types: &[&str]) -> Vec
 /// "invalid" means.
 pub fn has_errors(findings: &[LintFinding]) -> bool {
     findings.iter().any(|f| f.severity == LintSeverity::Error)
+}
+
+/// Does `target` write a task list that some node consumes, without a
+/// `rework_prompt_template` to answer a verdict with?
+///
+/// "Produces a task list" is read the same way the v1↔v2 projection reads
+/// it, because they have to agree or the rule would fire on a migrated
+/// definition and go silent on the native v2 one it round-trips to:
+///
+/// * the v1 form — some node names `target` in its `task_list_from` config
+///   key; or
+/// * the v2 form — `target` declares a `task-list` artifact and has an edge
+///   into a `sequence` node. The kind check is what keeps a gate sitting
+///   between a producer and its sequence node from reading as a consumer
+///   (the `refactor` starter is exactly that shape).
+fn is_bare_task_list_producer(def: &WorkflowDefinitionV2, target: &StepId) -> bool {
+    let named_by_config = def.nodes.iter().any(|n| {
+        n.config
+            .get("task_list_from")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .is_some_and(|src| src == target.0)
+    });
+    let feeds_a_sequence_node = || {
+        let declares_task_list = def.nodes.iter().any(|n| {
+            n.id == *target
+                && n.config
+                    .get("artifacts")
+                    .and_then(|a| a.as_array())
+                    .is_some_and(|decls| {
+                        decls
+                            .iter()
+                            .any(|d| d.get("name").and_then(|v| v.as_str()) == Some("task-list"))
+                    })
+        });
+        declares_task_list
+            && def.edges.iter().any(|e| {
+                e.from == *target
+                    && def
+                        .nodes
+                        .iter()
+                        .any(|n| n.id == e.to && n.node_type == "sequence")
+            })
+    };
+    if !named_by_config && !feeds_a_sequence_node() {
+        return false;
+    }
+    !def.nodes.iter().any(|n| {
+        n.id == *target
+            && n.config
+                .get("rework_prompt_template")
+                .and_then(|v| v.as_str())
+                .is_some_and(|t| !t.trim().is_empty())
+    })
 }
 
 /// Parse the declared port types under `config.outputs` / `config.inputs`

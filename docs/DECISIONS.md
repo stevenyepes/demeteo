@@ -1,11 +1,11 @@
 # Demeteo: Locked Decisions Reference
 
-> **Standalone reference for the 42 locked design decisions** that emerged
+> **Standalone reference for the 43 locked design decisions** that emerged
 > from the multi-agent orchestrator design. This is the same
 > table that guides the project. If any conflicts ever arise, this
 > doc should be considered a source of truth; flag the conflict and re-align.
 
-## 1. The 42 Decisions
+## 1. The 43 Decisions
 
 | #  | Decision                           | Locked answer                                                                  | Source           |
 |----|------------------------------------|--------------------------------------------------------------------------------|------------------|
@@ -51,6 +51,7 @@
 | 40 | `conflict_policy` becomes sync-node config | The decorative `ProjectSettings.conflict_policy` (decision 20's known loose end) becomes a **config field on the `sync` node type** in schema v2, where the upstream-sync merge it governs actually happens. The project-settings dropdown is removed; v1→v2 migration seeds the node field from the project value. Resolves PRD DAG §11 Q3. | PRD DAG §11 (2026-07-23) |
 | 41 | Scheduling stays outside the graph | `WorkflowSchedule` (cron) remains a **workflow-level sibling of `nodes`/`edges`**, not a node type — schema v2 does not entrench scheduling in the graph, so it can move to the Kanban card/board layer (Epic C1) later without a schema break. Resolves PRD DAG §11 Q4. | PRD DAG §11 (2026-07-23) |
 | 42 | Workflow source view               | The DAG builder ships a **read-only Monaco JSON source tab in Phase 3** (fulfilling decision 19's deferred source-view promise in v2 form). Editable source with two-way canvas binding stays deferred — a later decision record is required to add it. Resolves PRD DAG §11 Q5. | PRD DAG §11 (2026-07-23) |
+| 43 | Rework is a decomposition, not a re-run | A verdict failure downstream of a `sequence` step redirects to the step that **produces** its task list, not the step that executes it. That producer, seeing it is in a rework cycle (`domain/rework.rs` — the failing step is a descendant of the consumer), renders its `rework_prompt_template` and emits a **delta**: one ticket per defect the verdict named. The sequence step runs that list whole against the branch the previous cycle already landed, and reports the earlier cycles as `already_landed`. The file-overlap `select_targeted_tasks` heuristic survives only where there is no producer to ask (legacy `parallel` workflows). Corollary: the decomposition step must come **after** the spec step, so a rework redirect cannot rewind the spec and move the acceptance criteria the validator judges against. | 2026-07-28 |
 
 ### 37 — Effort level (detail)
 
@@ -104,6 +105,49 @@ tunable.
 not an effort one. Effort deliberately does **not** copy that shape, and the bug
 was left unfixed here as out of scope — recorded so the next reader doesn't
 mistake the inconsistency for intent.
+
+### 43 — Rework cycles (detail)
+
+The shape this replaced cost a real feature **26.9M tokens**: a 25-ticket run
+whose validator flagged four defects re-ran the entire ticket list twice, and
+was on its third pass when it was stopped. Four things about the replacement
+are load-bearing.
+
+**The classification is a graph question, not a step-kind question.** "Has my
+output been implemented?" is answered by asking whether the failing step is a
+strict descendant of the *consumer* — the `sequence` node whose
+`task_list_from` names this producer. Not of the producer itself: the shipped
+pipeline puts `s-gate-review` between the two, so a reviewer rejecting the
+decomposition there is downstream of the producer while nothing has been built.
+Classifying that as rework would emit a delta against code that does not exist.
+
+**Uncertainty resolves to `Revision`, always.** Revision re-emits the whole
+list: correct, merely expensive. Rework skips work on the claim that it is
+already committed. A producer with no consumer, a failing step the graph does
+not contain, a synthesized retry context naming no step — all resolve to
+Revision.
+
+**`kind: "rework"` on the task-list artifact is the contract, with an evidence
+fallback.** The producer declares it; a producer that forgets is caught by id
+overlap (a delta names work that did not exist before; a revision reissues the
+same ticket ids). The fallback only runs when the graph already says this is a
+rework cycle, so the worst a wrong answer does is re-run a list — never the
+reverse.
+
+**Cycles accumulate in `plan_json`, not in a new column.** `sequence_plan_cache`
+keeps `(feature_id, step_id)`; the row's JSON grows `kind`, `cycle` and a
+`history` array. Serde ignores unknown fields, so pre-existing rows parse
+unchanged and new rows parse in older builds — no migration, and the drill-down
+can show "Original decomposition · 25 tickets / Rework 1 · 4 tickets" instead of
+silently replacing one with the other.
+
+**The loop still has to be able to converge.** A spec whose acceptance criteria
+demand a command the project harness does not run can never be satisfied, and
+before this change that burned the whole retry budget discovering it. The spec
+step is now told to phrase criteria against `{{test_command}}` / `{{build_command}}`,
+and the validator returns a third verdict — `environment` — which routes to
+`VerifierError::Environment` and terminates once with remediation instead of
+opening a rework loop no agent can close.
 
 ## 2. Superseded decisions
 

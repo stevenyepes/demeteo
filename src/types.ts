@@ -450,6 +450,13 @@ export interface SequenceTaskView {
   status: string;
   /** True when the task's commit is on the feature branch (won't re-run). */
   landed: boolean;
+  /** Which decomposition cycle planned this task: 0 for the original list,
+   *  incrementing once per rework cycle (a downstream verdict sending the
+   *  run back to the step that produces the list). */
+  cycle: number;
+  /** True for tasks planned by an earlier cycle — shown for context, not
+   *  part of what the current cycle runs. Always `landed`. */
+  prior_cycle: boolean;
   cost_usd?: number | null;
   tokens?: number | null;
   error_message?: string | null;

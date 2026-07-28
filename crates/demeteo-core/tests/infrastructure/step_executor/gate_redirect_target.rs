@@ -333,3 +333,105 @@ fn explicit_implement_step_id_still_wins_over_implement_fallback() {
     let target = resolve_redirect_target(&steps, None, 6, Some("s-implement-later"));
     assert_eq!(target, Some(5));
 }
+
+// --- the rework-producer hop -------------------------------------------------
+//
+// A `sequence` step cannot act on free-text feedback: it runs whatever list
+// it is handed. Landing a reviewer's "the empty state looks wrong" on it
+// means re-running the whole decomposition over its own output. Landing it
+// on the step that *writes* the list turns it into two tickets.
+
+/// The shipped shape: a producer, an implement-capable sequence step bound
+/// to it, and a ship gate behind them.
+fn pipeline_with_producer(rework_template: Option<&str>) -> Vec<StepConfig> {
+    let mut tickets = step("s-tickets");
+    tickets.rework_prompt_template = rework_template.map(str::to_string);
+
+    let mut implement = step("s-implement");
+    implement.kind = "sequence".to_string();
+    implement.capability = Some(crate::domain::permission::StepCapability::Implement);
+    implement.task_list_from = Some(StepId::from("s-tickets"));
+
+    vec![
+        step("s-spec"),
+        tickets,
+        implement,
+        step("s-validate"),
+        step("s-gate-ship"),
+    ]
+}
+
+#[test]
+fn feedback_at_a_ship_gate_lands_on_the_producer_not_the_sequence_step() {
+    let steps = pipeline_with_producer(Some("emit only what closes the verdict"));
+    let target = resolve_redirect_target(&steps, None, 4, Some("the empty state looks wrong"));
+    assert_eq!(
+        target,
+        Some(1),
+        "expected s-tickets (index 1), the step that can turn feedback into tickets"
+    );
+}
+
+#[test]
+fn a_producer_with_no_rework_template_keeps_the_old_target() {
+    // The opt-in. Without a rework template the producer would answer with
+    // a whole fresh decomposition, so hopping to it would re-run the entire
+    // feature *and* pay for a planning turn to decide to.
+    let steps = pipeline_with_producer(None);
+    let target = resolve_redirect_target(&steps, None, 4, Some("the empty state looks wrong"));
+    assert_eq!(target, Some(2), "expected s-implement (index 2), unchanged");
+}
+
+#[test]
+fn a_blank_rework_template_is_not_an_opt_in() {
+    // An author who cleared the field in the builder leaves `Some("")`.
+    let steps = pipeline_with_producer(Some("   "));
+    let target = resolve_redirect_target(&steps, None, 4, Some("the empty state looks wrong"));
+    assert_eq!(target, Some(2));
+}
+
+#[test]
+fn an_implement_step_with_no_producer_is_still_the_target() {
+    // `simple-task`'s shape: a plain agent implement step, nothing to hop to.
+    let mut implement = step("s-implement");
+    implement.capability = Some(crate::domain::permission::StepCapability::Implement);
+    let steps = vec![step("s-plan"), implement, step("s-gate")];
+    assert_eq!(
+        resolve_redirect_target(&steps, None, 2, Some("redo it")),
+        Some(1)
+    );
+}
+
+#[test]
+fn a_dangling_task_list_binding_falls_back_rather_than_dropping_the_redirect() {
+    let mut implement = step("s-implement");
+    implement.kind = "sequence".to_string();
+    implement.capability = Some(crate::domain::permission::StepCapability::Implement);
+    implement.task_list_from = Some(StepId::from("ghost"));
+    let steps = vec![step("s-spec"), implement, step("s-gate")];
+    assert_eq!(
+        resolve_redirect_target(&steps, None, 2, Some("redo it")),
+        Some(1)
+    );
+}
+
+#[test]
+fn an_explicitly_named_step_still_beats_the_producer_hop() {
+    // Priority 1 is untouched: a reviewer who names a step means it.
+    let steps = pipeline_with_producer(Some("delta only"));
+    let target = resolve_redirect_target(&steps, None, 4, Some("s-implement, just rerun it"));
+    assert_eq!(target, Some(2));
+}
+
+#[test]
+fn an_explicit_on_failure_still_beats_the_producer_hop() {
+    // Priority 2 is untouched.
+    let steps = pipeline_with_producer(Some("delta only"));
+    let target = resolve_redirect_target(
+        &steps,
+        Some(&StepId::from("s-spec")),
+        4,
+        Some("the empty state looks wrong"),
+    );
+    assert_eq!(target, Some(0));
+}

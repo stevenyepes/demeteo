@@ -40,6 +40,7 @@ use crate::ports::pricing::PricingTable;
 pub(crate) mod failure;
 pub(crate) mod publish;
 pub(crate) mod resolution;
+pub(crate) mod rework;
 pub(crate) mod run_loop;
 pub(crate) mod signals;
 pub(crate) mod status;
@@ -69,22 +70,17 @@ pub(crate) struct RetryContext {
     /// Failing test identifiers from a structured verdict (empty for
     /// plain failures).
     ///
-    /// **Populated but not yet consumed.** `run_loop/outcome.rs` copies
-    /// it off the verdict, and nothing reads it back: the tests reach
-    /// the retried prompt as *prose*, rendered into `feedback` by
-    /// [`VerdictFailure`](crate::domain::verifier::VerdictFailure), and
-    /// the sequence step's targeted retry keys off `implicated_files`
-    /// alone. Kept because the structured form is the input a prompt
-    /// that names the exact tests would need, and the verdict pipeline
-    /// already pays to parse it.
-    ///
-    /// Until then it is a write-only field; the `allow` is what says so
-    /// out loud rather than letting a stray read make it look load-bearing.
-    #[allow(dead_code)]
+    /// Reaches a prompt twice, and the two are not redundant: as *prose*
+    /// inside `feedback` (rendered by
+    /// [`VerdictFailure`](crate::domain::verifier::VerdictFailure), which
+    /// a template can only quote) and as the structured
+    /// `{{failing_tests}}` bullets a rework template acts on — see
+    /// [`bind_rework_context`](super::driver::rework::bind_rework_context).
     pub failing_tests: Vec<String>,
     /// Repo-relative files a structured verdict implicated (empty for
-    /// plain failures). The sequence step re-runs only the tasks
-    /// whose ownership intersects these.
+    /// plain failures). Bound as `{{implicated_files}}` for a rework
+    /// template, and — on the legacy planner-sourced path only — used to
+    /// select which of a cached plan's tasks re-run.
     pub implicated_files: Vec<String>,
     /// Step id of the step whose failure opened this loop iteration.
     /// The feedback stays alive for *every* step between the redirect

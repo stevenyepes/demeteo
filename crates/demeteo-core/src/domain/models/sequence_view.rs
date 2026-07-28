@@ -98,6 +98,19 @@ pub struct SequenceTaskView {
     /// True when the task id is in the checkpoint: its work is committed to the
     /// feature branch and a resume/retry will *not* re-run it.
     pub landed: bool,
+    /// Which decomposition cycle planned this task: `0` for the original
+    /// list, incrementing once per rework cycle.
+    ///
+    /// A rework cycle does not replace the decomposition it is a delta
+    /// against — both are on the branch and both cost money — so the
+    /// drill-down groups by this rather than showing whichever list ran
+    /// last and silently dropping the other.
+    #[serde(default)]
+    pub cycle: u32,
+    /// True for tasks planned by an earlier cycle. They are shown for
+    /// context and are not part of what the current cycle runs.
+    #[serde(default)]
+    pub prior_cycle: bool,
     pub cost_usd: Option<f64>,
     pub tokens: Option<i64>,
     pub error_message: Option<String>,
@@ -123,24 +136,43 @@ impl SequenceState {
     }
 }
 
-/// Merge the ordered plan (`(id, title)` pairs) with the landed-task set and
-/// the per-task run rows into the drill-down view. Pure so it can be tested
-/// without a DB; `RunView::sequence_state` supplies the three durable sources.
+/// One task as the plan cache records it, tagged with the cycle that planned
+/// it. The input `assemble_tasks` merges the durable run state onto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedTaskRef {
+    pub id: String,
+    pub title: String,
+    pub cycle: u32,
+    /// Planned by a cycle earlier than the current one.
+    pub prior_cycle: bool,
+}
+
+/// Merge the ordered plan with the landed-task set and the per-task run rows
+/// into the drill-down view. Pure so it can be tested without a DB;
+/// `RunView::sequence_state` supplies the three durable sources.
 ///
 /// The status precedence is deliberate: **landed wins**. A task whose commit
 /// is on the feature branch is done-and-committed (the Decision-13 prefix)
 /// regardless of its `subtask_runs` row — a rev-parse hiccup can leave a
 /// `completed` row uncheckpointed, but the checkpoint is the resume authority.
 /// A task with no run row and no checkpoint is `pending`.
+///
+/// One exception, and it is what makes a multi-cycle view readable: a task
+/// from a **prior cycle** reads `landed` whatever the checkpoint says. The
+/// checkpoint is cleared the moment a step completes, so by the time a rework
+/// cycle exists at all, the cycle it is a delta against has no checkpoint
+/// left — yet its commits are demonstrably on the branch, because the rework
+/// cycle is running against them. Reading those rows as `pending` would show
+/// twenty-five never-started tickets beside four running ones.
 pub fn assemble_tasks(
-    plan: &[(String, String)],
+    plan: &[PlannedTaskRef],
     landed: &std::collections::HashSet<String>,
     runs: &std::collections::HashMap<String, SubtaskRunRow>,
 ) -> Vec<SequenceTaskView> {
     plan.iter()
-        .map(|(id, title)| {
-            let is_landed = landed.contains(id);
-            let run = runs.get(id);
+        .map(|planned| {
+            let is_landed = planned.prior_cycle || landed.contains(&planned.id);
+            let run = runs.get(&planned.id);
             let status = if is_landed {
                 "landed".to_string()
             } else {
@@ -148,10 +180,12 @@ pub fn assemble_tasks(
                     .unwrap_or_else(|| "pending".to_string())
             };
             SequenceTaskView {
-                id: id.clone(),
-                title: title.clone(),
+                id: planned.id.clone(),
+                title: planned.title.clone(),
                 status,
                 landed: is_landed,
+                cycle: planned.cycle,
+                prior_cycle: planned.prior_cycle,
                 cost_usd: run.map(|r| r.cost_usd),
                 tokens: run.map(|r| r.tokens),
                 error_message: run.and_then(|r| r.error_message.clone()),
@@ -164,6 +198,16 @@ pub fn assemble_tasks(
 mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
+
+    /// A task planned by the current cycle.
+    fn planned(id: &str, title: &str) -> PlannedTaskRef {
+        PlannedTaskRef {
+            id: id.into(),
+            title: title.into(),
+            cycle: 0,
+            prior_cycle: false,
+        }
+    }
 
     fn run(id: &str, status: &str, cost: f64) -> SubtaskRunRow {
         SubtaskRunRow {
@@ -178,9 +222,9 @@ mod tests {
     #[test]
     fn landed_wins_over_run_row_and_pending_fills_the_rest() {
         let plan = vec![
-            ("t1".to_string(), "First".to_string()),
-            ("t2".to_string(), "Second".to_string()),
-            ("t3".to_string(), "Third".to_string()),
+            planned("t1", "First"),
+            planned("t2", "Second"),
+            planned("t3", "Third"),
         ];
         // t1 committed (landed) though its run row still says completed; t2 is
         // the live task; t3 never started.
@@ -211,7 +255,7 @@ mod tests {
 
     #[test]
     fn a_failed_uncheckpointed_task_keeps_its_failure() {
-        let plan = vec![("t1".to_string(), "Only".to_string())];
+        let plan = vec![planned("t1", "Only")];
         let landed = HashSet::new();
         let mut row = run("t1", "failed", 0.9);
         row.error_message = Some("boom".into());
@@ -221,5 +265,67 @@ mod tests {
         assert_eq!(out[0].status, "failed");
         assert!(!out[0].landed);
         assert_eq!(out[0].error_message.as_deref(), Some("boom"));
+    }
+
+    /// A prior cycle's tasks are on the branch — the current cycle is
+    /// running against them — but the checkpoint that named them was
+    /// cleared when their step completed. Reading them off the checkpoint
+    /// alone would render twenty-five finished tickets as never-started.
+    #[test]
+    fn a_prior_cycles_tasks_read_landed_without_a_checkpoint() {
+        let plan = vec![
+            PlannedTaskRef {
+                id: "ticket-01".into(),
+                title: "Original".into(),
+                cycle: 0,
+                prior_cycle: true,
+            },
+            planned("fix-1", "Rework"),
+        ];
+        // Deliberately empty: the step completed, so the checkpoint is gone.
+        let landed = HashSet::new();
+        let runs: HashMap<String, SubtaskRunRow> =
+            [("fix-1".to_string(), run("fix-1", "running", 0.1))]
+                .into_iter()
+                .collect();
+
+        let out = assemble_tasks(&plan, &landed, &runs);
+        assert_eq!(out[0].status, "landed");
+        assert!(out[0].landed);
+        assert!(out[0].prior_cycle);
+        assert_eq!(out[0].cycle, 0);
+
+        assert_eq!(out[1].status, "running");
+        assert!(!out[1].landed);
+        assert!(!out[1].prior_cycle);
+    }
+
+    /// The cycle tag is what the accordion groups by, so it has to survive
+    /// onto every row rather than being inferred from list position.
+    #[test]
+    fn every_row_carries_the_cycle_that_planned_it() {
+        let plan = vec![
+            PlannedTaskRef {
+                id: "a".into(),
+                title: "A".into(),
+                cycle: 0,
+                prior_cycle: true,
+            },
+            PlannedTaskRef {
+                id: "b".into(),
+                title: "B".into(),
+                cycle: 1,
+                prior_cycle: true,
+            },
+            PlannedTaskRef {
+                id: "c".into(),
+                title: "C".into(),
+                cycle: 2,
+                prior_cycle: false,
+            },
+        ];
+        let out = assemble_tasks(&plan, &HashSet::new(), &HashMap::new());
+        let cycles: Vec<u32> = out.iter().map(|t| t.cycle).collect();
+        assert_eq!(cycles, [0, 1, 2]);
     }
 }

@@ -185,6 +185,62 @@ Failure classes map 1:1 onto the existing `StepOutcome`/`VerifierError` taxonomy
 
 **Event log.** `run_events` (exists since V22, used mainly for remote) becomes the **single append-only source of truth for both transports**: every transition, retry decision, gate decision, harness verdict, and cost sample is an event row locally too. The UI consumes one stream shape; Tauri events become live push of the same records the remote path polls. This collapses the current local/remote split (`FeatureDetail` events vs `RunEventTimeline` polling) into one model.
 
+### 5.4b Rework cycles: a verdict re-decomposes, it does not re-run
+
+A `sequence` node executes a task list some other node **produces**
+(`task_list_from`, a typed `task_list` edge in v2). When a verdict step behind
+the sequence node fails, the redirect target is the **producer**, not the
+sequence node.
+
+```jsonc
+// s-validate
+"retry": { "verdict": { "strategy": "redirect", "to": "s-tickets", "feedback": true } }
+```
+
+The producer then renders `rework_prompt_template` instead of
+`prompt_template` and writes a *delta* — one ticket per defect the verdict
+named, marked `"kind": "rework"`. The sequence node runs that list whole
+(no selection: the producer already made it, holding the verdict, the spec
+and the diff) against the branch the previous cycle landed, reporting the
+earlier cycles as `already_landed` so each fresh agent is told the feature is
+already built and its ticket is a fix on top of it.
+
+**Why the producer and not the sequence node.** A sequence node cannot *act*
+on a verdict; it runs whatever list it is handed. Redirecting to it means
+re-running the list it already ran — the whole feature, re-implemented over
+itself. That is what this replaced.
+
+**Which re-entries count** (`domain/rework.rs`): the failing step must be a
+strict descendant of the **consumer**, not of the producer. A gate between
+the producer and the consumer is downstream of the producer while nothing has
+been implemented, so a reviewer rejecting the decomposition there gets a
+revised whole list, not a delta. Everything uncertain resolves the same way —
+re-running is merely expensive, skipping is wrong.
+
+**Placeholders** available to every agent node, empty on a fresh run:
+`{{rework_mode}}` · `{{retry_origin}}` · `{{implicated_files}}` ·
+`{{failing_tests}}` · `{{rework_cycle}}`.
+
+**Gate feedback follows the same route.** A reviewer's free text at a ship
+gate targets the producer rather than the sequence node whenever the producer
+declares a rework template (`resolve_redirect_target` priority 3) — turning
+"the empty state looks wrong" into two tickets instead of a full re-run.
+Explicitly naming a step, or a declared `on_failure`, still wins.
+
+**Cycle history** lives inside `sequence_plan_cache.plan_json` (`kind`,
+`cycle`, `history[]`) rather than a new column, so no migration is needed and
+old rows parse unchanged. The drill-down groups the accordion by cycle.
+
+**Lint:** `rework-target-without-template` (warning) fires when a redirect
+targets a task-list producer that declares no rework prompt — it will answer
+with a whole decomposition, which is strictly worse than not having redirected
+there at all.
+
+**Convergence.** A verdict step may return a third value, `environment`, when
+the only unsatisfied criteria demand a command the project is not configured
+to run. It routes to `VerifierError::Environment` and terminates once with
+remediation, instead of opening a rework loop no agent can close.
+
 ### 5.5 Visibility
 
 Every question in J2 answerable from data we now persist: node → attempts → per-attempt transcript ref, harness output ref, cost/tokens/cache, failure class, fingerprint, retry decision taken and why (policy rule id). Detailed UI in §6.

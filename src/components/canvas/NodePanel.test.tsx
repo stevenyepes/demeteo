@@ -186,6 +186,64 @@ describe('NodePanel — Overview: sequence task list (P2.5)', () => {
     });
   });
 
+  it('groups a reworked node by decomposition cycle', async () => {
+    // A downstream verdict sent the run back to the step that produces the
+    // task list, which emitted a delta. Both lists are on the branch, so both
+    // render — showing only the delta would present two tickets as the whole
+    // feature.
+    routed({
+      planned: true,
+      tasks: [
+        { id: 't1', title: 'Scaffold module', status: 'landed', landed: true, cycle: 0, prior_cycle: true },
+        { id: 't2', title: 'Wire the handler', status: 'landed', landed: true, cycle: 0, prior_cycle: true },
+        { id: 'fix-1', title: 'Debounce the search', status: 'running', landed: false, cycle: 1, prior_cycle: false },
+      ],
+    });
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node({ id: 'implement', type: 'sequence', title: 'Implement' })}
+        run={run}
+        step={step({ step_kind: 'sequence', status: 'running' })}
+        onClose={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Scaffold module')).toBeInTheDocument());
+    expect(screen.getByText('Original decomposition')).toBeInTheDocument();
+    expect(screen.getByText('Rework 1')).toBeInTheDocument();
+    expect(screen.getByText('2 tickets')).toBeInTheDocument();
+    expect(screen.getByText('1 ticket')).toBeInTheDocument();
+    expect(screen.getByText('Debounce the search')).toBeInTheDocument();
+  });
+
+  it('shows no cycle headers on a node that has only ever planned once', async () => {
+    // The common case. A "Cycle 0" header there names a distinction that
+    // does not exist yet.
+    routed({
+      planned: true,
+      tasks: [
+        { id: 't1', title: 'Scaffold module', status: 'landed', landed: true, cycle: 0, prior_cycle: false },
+        { id: 't2', title: 'Wire the handler', status: 'pending', landed: false, cycle: 0, prior_cycle: false },
+      ],
+    });
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node({ id: 'implement', type: 'sequence', title: 'Implement' })}
+        run={run}
+        step={step({ step_kind: 'sequence', status: 'running' })}
+        onClose={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Scaffold module')).toBeInTheDocument());
+    expect(screen.queryByText('Original decomposition')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Rework /)).not.toBeInTheDocument();
+  });
+
   it('stays silent for a sequence node that has not planned yet', async () => {
     routed({ planned: false, tasks: [] });
     const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
