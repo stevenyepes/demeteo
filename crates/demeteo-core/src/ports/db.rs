@@ -4,7 +4,7 @@
 //! domains (machines, threads, projects, features, workflows, gates,
 //! provider instances, app settings, …). Every consumer of that trait
 //! was coupled to the entire schema, the test surface was huge, and the
-//! adapter was 1300+ lines. This file splits the trait into 7 narrow
+//! adapter was 1300+ lines. This file splits the trait into 11 narrow
 //! sub-ports aligned with the bounded contexts defined in
 //! `docs/DDD_MODEL.md`:
 //!
@@ -18,6 +18,9 @@
 //! | [`WorkflowRepository`]    | workflows       | `Workflow`, `WorkflowVersion`                |
 //! | [`GateRepository`]        | gates           | `GateDecision`                               |
 //! | [`AppSettingsRepository`] | app settings    | provider instances, app-session KV, first-launch flags |
+//! | [`MergeAuditRepository`]  | merge audit     | merge / sync outcome rows, worktree + repo context |
+//! | [`SubtaskRunRepository`]  | subtask runs    | `SubtaskRunRow` — per-task run telemetry for a `sequence` step |
+//! | [`NotificationRepository`] | notifications  | `Notification` (bell cache)                  |
 //!
 //! Each sub-port is small (≤ 12 methods), cohesive, and takes
 //! strongly-typed ID newtypes. [`AppContext`](crate::state::AppContext)
