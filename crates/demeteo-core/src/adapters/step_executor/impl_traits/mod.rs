@@ -34,9 +34,20 @@ pub(crate) mod bootstrap_phase {
     pub const PREPARING_CONTEXT: (&str, &str) = ("preparing_context", "Preparing context & memory");
     pub const SYNCING_ORIGIN: (&str, &str) = ("syncing_origin", "Syncing with origin");
     pub const CREATING_BRANCH: (&str, &str) = ("creating_branch", "Creating feature branch");
+    pub const HARNESS_PREFLIGHT: (&str, &str) = ("harness_preflight", "Checking project commands");
     pub const REGISTERING: (&str, &str) = ("registering", "Registering feature & steps");
     pub const STARTING_PIPELINE: (&str, &str) = ("starting_pipeline", "Starting pipeline");
 }
+
+/// Per-probe ceiling for the harness preflight, in seconds.
+///
+/// Its own constant rather than the run's `wall_cap_s`, because the two answer
+/// different questions: `wall_cap_s` is "how long may a build take" (30 min by
+/// default), while this bounds a single `command -v` on an already-connected
+/// machine. Anything beyond a few seconds means the machine or the shell is
+/// unwell, not that the binary is slow to find — and an expiry is treated as
+/// *no evidence* rather than a missing binary, so erring short is safe.
+const PREFLIGHT_PROBE_TIMEOUT_S: u64 = 20;
 
 impl DagStepExecutor {
     /// Emit a single [`DomainEvent::BootstrapProgress`]. Best-effort: a
@@ -135,9 +146,10 @@ impl DagStepExecutor {
         let fid = feature_id.as_str();
         // Local aliases for the phases this fn owns (the first four are
         // emitted inside `resolve_execution_context`).
-        let (sync, branch, register, start) = (
+        let (sync, branch, preflight, register, start) = (
             bootstrap_phase::SYNCING_ORIGIN,
             bootstrap_phase::CREATING_BRANCH,
+            bootstrap_phase::HARNESS_PREFLIGHT,
             bootstrap_phase::REGISTERING,
             bootstrap_phase::STARTING_PIPELINE,
         );
@@ -187,6 +199,42 @@ impl DagStepExecutor {
             return Err(e);
         }
         self.emit_bootstrap(fid, branch, "completed", None);
+
+        // Phase 6a: harness preflight (HB1). Resolve the binaries the project's
+        // configured `test_command` names, on the machine that will run it,
+        // before a single token is spent.
+        //
+        // Here rather than in a graph node because it has to hold for *any*
+        // workflow, including one the user drew with no baseline node in it. A
+        // node protects only the graphs containing it.
+        //
+        // Before `registering` on purpose: a blocking verdict returns from this
+        // function, and `run_bootstrap_tail` then marks the feature failed. With
+        // no step rows seeded yet there is nothing half-registered to reconcile
+        // — the run simply never started, which is the honest description.
+        //
+        // Probes only. It does not run the suite or `prepare_command`: those
+        // belong to the `baseline-harness` node at the head of the graph, which
+        // reaches them at the same point in the timeline without charging every
+        // launch a minute of wall-clock before anything visible happens.
+        self.emit_bootstrap(fid, preflight, "running", None);
+        let verdict = crate::adapters::step_executor::preflight::probe_configured_commands(
+            self.exec.as_ref(),
+            ctx.machine_id_opt
+                .as_deref()
+                .unwrap_or(crate::domain::ids::LOCAL_MACHINE),
+            &ctx.target_dir,
+            ctx.settings.worktree_strategy.test_command.as_deref(),
+            std::time::Duration::from_secs(PREFLIGHT_PROBE_TIMEOUT_S),
+        )
+        .await;
+        self.emit_bootstrap(fid, preflight, verdict.phase_status(), verdict.detail());
+        if !verdict.permits_launch() {
+            let detail = verdict
+                .detail()
+                .unwrap_or_else(|| "harness preflight failed".to_string());
+            return Err(detail);
+        }
 
         // Phase 7: snapshot the resolved commit flag, seed the step rows, and
         // persist staged attachments before the driver reads them.
