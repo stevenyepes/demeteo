@@ -39,3 +39,12 @@ fn tolerates_single_quotes_and_tight_spacing() {
 fn empty_config_yields_nothing() {
     assert_eq!(parse_codex_config(""), (None, None));
 }
+
+#[test]
+fn fallback_codex_uses_current_gpt_5_6_variants_only() {
+    let models = fallback_models("codex");
+    let values: Vec<_> = models.iter().map(|model| model.value.as_str()).collect();
+
+    assert_eq!(values, ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"]);
+    assert!(models.iter().all(|model| model.supports_images));
+}
