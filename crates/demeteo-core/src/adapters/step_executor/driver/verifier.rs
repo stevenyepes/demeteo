@@ -26,13 +26,19 @@ impl ExecutionDriver {
     ///   previous attempt's failure unchanged, in which case a triage agent
     ///   (C6) may reclassify it as [`VerifierError::Environment`] (terminal).
     /// * a transport failure → [`VerifierError::Infrastructure`].
+    /// * a timeout → [`VerifierError::Environment`] (terminal, with remediation).
+    /// * cancellation → [`VerifierError::Cancelled`].
+    ///
+    /// Returns a [`HarnessOutcome`] rather than a pre-rendered string, so
+    /// "a harness ran and here is its output" and "no harness exists" cannot be
+    /// confused by a caller — see that type's docs for the bug that forced it.
     pub(crate) async fn run_harness_first(
         &self,
         step_exec: &StepExecution,
         verifier_cfg: &crate::domain::verifier::VerifierConfig,
         wt_path: &str,
         machine_str: &str,
-    ) -> Result<String, crate::domain::verifier::VerifierError> {
+    ) -> Result<HarnessOutcome, crate::domain::verifier::VerifierError> {
         let feature = self.features.get(&self.f_id).ok().flatten();
         let settings = feature
             .as_ref()
@@ -122,8 +128,20 @@ impl ExecutionDriver {
         }
 
         let harness_result: Option<(String, bool)> = match harness_cmd {
+            // Merge stderr into stdout for the harness run. The port contract
+            // is "stdout on success, stdout+stderr on failure" (D3) — correct
+            // for a port, wrong for this caller, because a *green* suite that
+            // reports on stderr would hand the validate agent an empty output
+            // block that the prompt then calls authoritative. `steps/command.rs`
+            // solves the identical problem the identical way; the two callers
+            // of `harness_shell_options` should not disagree about this either.
+            //
+            // The exit status survives (it is the subshell's last command's),
+            // so the pass/fail gate below is unchanged. The newlines matter: a
+            // command whose last line is a `#` comment would otherwise swallow
+            // the closing paren.
             Some(ref cmd) => match self
-                .run_harness_command(machine_str, cmd, opts.clone())
+                .run_harness_command(machine_str, &merge_stderr_into_stdout(cmd), opts.clone())
                 .await
             {
                 None => return Err(crate::domain::verifier::VerifierError::Cancelled),
@@ -164,18 +182,12 @@ impl ExecutionDriver {
         }
 
         Ok(match (&harness_cmd, &harness_result) {
-            (Some(cmd), Some((output, _))) => format!(
-                "We ran the test harness '{}' with the command '{}'.\n\
-                 The output of the test command was:\n\
-                 ```\n\
-                 {}\n\
-                 ```\n",
-                harness_name, cmd, output,
-            ),
-            _ => "No test harness was configured or detected for this project, so no test \
-                  command was run. Base your verdict on the instructions and the produced \
-                  artifacts below.\n"
-                .to_string(),
+            (Some(cmd), Some((output, _))) => HarnessOutcome::Ran {
+                name: harness_name,
+                cmd: cmd.clone(),
+                output: output.clone(),
+            },
+            _ => HarnessOutcome::NotConfigured,
         })
     }
 
@@ -561,7 +573,8 @@ impl ExecutionDriver {
             .unwrap_or_else(|| "default".to_string());
         let harness_section = self
             .run_harness_first(step_exec, verifier_cfg, wt_path, machine_str)
-            .await?;
+            .await?
+            .render_section();
 
         let produced_artifacts_summary = format_produced_artifacts_summary(produced_artifacts);
 
@@ -956,6 +969,113 @@ fn format_produced_artifacts_summary(
     summary
 }
 
+/// Wrap a user-authored command so its stderr is merged into stdout.
+///
+/// The `ExecutionPort` contract is "stdout on success, stdout+stderr on
+/// failure" (D3) — right for a port, wrong for any caller that shows a *green*
+/// run's output to somebody, because the suites this codebase runs report
+/// heavily on stderr. Both such callers (the harness-first pass and the
+/// `command` node) use this, so they cannot drift apart.
+///
+/// The exit status survives: it is the subshell's last command's. The newlines
+/// are load-bearing — a command whose final line is a `#` comment would
+/// otherwise swallow the closing paren and turn valid shell into a syntax
+/// error.
+pub(crate) fn merge_stderr_into_stdout(cmd: &str) -> String {
+    format!("(\n{}\n) 2>&1", cmd)
+}
+
+/// The verdict contract appended to a single-turn validate prompt.
+///
+/// Pure so the *set of verdicts offered* is assertable without building a
+/// driver. That set is the whole point: `environment` lived only in the
+/// verifier's prose instructions while this menu offered pass and fail, so an
+/// agent that correctly judged a criterion unprovable still had to answer
+/// `fail` — and `fail` opens a rework loop that re-implements a feature whose
+/// defect is a project setting (S13).
+pub(crate) fn verdict_contract(verdict_key: &str) -> String {
+    format!(
+        "After writing your report artifact, END your reply with a single JSON \
+         object (no other JSON after it). Choose exactly one of:\n\
+         {{ \"{key}\": \"pass\" }}\n\
+         or\n\
+         {{ \"{key}\": \"fail\", \"reason\": \"what exactly to fix\", \
+         \"failing_tests\": [\"test id\"], \"implicated_files\": [\"src/foo.rs\"] }}\n\
+         or\n\
+         {{ \"{key}\": \"environment\", \"reason\": \"which command is missing and \
+         which project setting configures it\" }}\n\n\
+         Use `environment` — NOT `fail` — when the criteria you could not confirm \
+         are ones this project is not configured to evidence, rather than ones the \
+         implementation got wrong. `fail` sends the work back to be \
+         re-implemented; nothing an agent writes can add a missing test command, \
+         so `fail` there burns the entire rework budget and ends no better \
+         informed.",
+        key = verdict_key,
+    )
+}
+
+/// What the harness-first pass actually established, before anyone words it.
+///
+/// This is an enum rather than the rendered string it used to be because the
+/// two cases are opposites and the old shape let a caller treat them alike. The
+/// "no test harness was configured" sentence was returned on the `Ok` path,
+/// indistinguishable from a real result, and the caller then printed it under
+/// `## Harness Results (already executed by the orchestrator)`, followed by
+/// "the results above are authoritative", followed by a ban on re-running
+/// anything. An agent told that nothing ran, that the nothing is authoritative,
+/// and that it may not check for itself has one coherent move left, and it
+/// certifies a feature nobody tested (S12).
+pub(crate) enum HarnessOutcome {
+    /// A harness ran and exited zero. `output` is merged stdout+stderr.
+    Ran {
+        name: String,
+        cmd: String,
+        output: String,
+    },
+    /// No `test_command` (and no named harness) is configured — **nothing was
+    /// executed**. Not a pass, not a fail: an absence of evidence.
+    NotConfigured,
+}
+
+impl HarnessOutcome {
+    /// Render the harness block for an agent prompt, **heading included**.
+    ///
+    /// The heading is deliberately part of this method rather than the caller's
+    /// format string: a caller that cannot choose the heading cannot put
+    /// "already executed by the orchestrator" above an empty result. That
+    /// coupling is the whole fix — the prompt-side mitigation in `2257ffb`
+    /// relied on the agent obeying prose that the surrounding template
+    /// contradicted.
+    pub(crate) fn render_section(&self) -> String {
+        match self {
+            HarnessOutcome::Ran { name, cmd, output } => format!(
+                "## Harness Results (already executed by the orchestrator)\n\
+                 We ran the '{name}' harness in this exact worktree:\n\n\
+                 \x20   {cmd}\n\n\
+                 Its combined stdout and stderr:\n\
+                 ```\n{output}\n```\n\n\
+                 This output is authoritative. Do NOT re-run the build or test \
+                 suite.\n",
+            ),
+            // Everything here is load-bearing. Naming the absence, refusing the
+            // inference, and pointing at the verdict that fits it are what stop
+            // the agent from filling the silence with a pass.
+            HarnessOutcome::NotConfigured => "## Harness Results — NOTHING RAN\n\
+                 This project has no test command configured, so the orchestrator \
+                 executed nothing and there is no test evidence for this step.\n\n\
+                 That is an absence of evidence, not a passing result. Do not \
+                 report any criterion as MET on the strength of a harness that \
+                 never ran, and do not describe tests as passing.\n\n\
+                 Judge only what you can establish by reading the diff. If the \
+                 acceptance criteria require a command this project is not \
+                 configured to run, no amount of re-implementation can satisfy \
+                 them — that is a project-configuration problem, so say so and \
+                 use the `environment` verdict rather than `fail`.\n"
+                .to_string(),
+        }
+    }
+}
+
 /// How a failed `ExecutionPort` call on a prepare/harness command must be
 /// answered. Pure over the error string, so the whole policy is decidable in a
 /// unit test without a port double.
@@ -1343,6 +1463,10 @@ mod tail_chars_tests;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/verifier/classify_exec_failure_tests.rs"]
 mod classify_exec_failure_tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/step_executor/verifier/harness_outcome_tests.rs"]
+mod harness_outcome_tests;
 
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/verifier/parse_verdict_text_tests.rs"]

@@ -222,7 +222,9 @@ impl ExecutionDriver {
         // cost; a green harness's output is injected into the step's single
         // agent turn, which writes the report artifact AND emits the verdict
         // JSON itself — no separate verifier session, no second test run.
-        let mut harness_section: Option<String> = None;
+        let mut harness_section: Option<
+            crate::adapters::step_executor::driver::verifier::HarnessOutcome,
+        > = None;
         if let Some(ref verifier_cfg) = step_conf.verifier {
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
@@ -238,7 +240,7 @@ impl ExecutionDriver {
                 .run_harness_first(step_exec, verifier_cfg, &wt_path, &machine_str)
                 .await
             {
-                Ok(section) => harness_section = Some(section),
+                Ok(outcome) => harness_section = Some(outcome),
                 Err(err) => {
                     let _ = self
                         .git_ops
@@ -269,9 +271,7 @@ impl ExecutionDriver {
                         // Stop was pressed while the harness was running. Not
                         // a failure — the worktree is already cleaned up above
                         // and nothing should be persisted as an error.
-                        crate::domain::verifier::VerifierError::Cancelled => {
-                            StepOutcome::Cancelled
-                        }
+                        crate::domain::verifier::VerifierError::Cancelled => StepOutcome::Cancelled,
                     };
                 }
             }
@@ -343,25 +343,30 @@ impl ExecutionDriver {
         // the end of its reply. The turn both writes the report artifact
         // and issues the verdict — replacing the old flow of (agent re-runs
         // tests) + (orchestrator re-runs tests) + (third verifier session).
+        // The harness block renders its own heading (`HarnessOutcome::
+        // render_section`) so this template cannot label an empty result
+        // "already executed by the orchestrator" — see S12.
+        //
+        // All three verdicts are offered. `environment` used to be described in
+        // the verifier's prose instructions while the JSON menu listed only
+        // pass and fail, so an agent that correctly judged a criterion
+        // *unprovable* still had to answer `fail` — which opens a rework loop
+        // that re-implements a feature whose defect is a project setting. That
+        // is not hypothetical: it cost $14.63 and 11M tokens in one observed
+        // run (S13).
         let prompt = match (&step_conf.verifier, &harness_section) {
-            (Some(verifier_cfg), Some(section)) => format!(
+            (Some(verifier_cfg), Some(outcome)) => format!(
                 "{prompt}\n\n\
-                 ## Harness Results (already executed by the orchestrator)\n\
                  {section}\n\
-                 Do NOT re-run the build or test suite — the results above are \
-                 authoritative and were produced from this exact worktree.\n\n\
                  ## Required Verdict\n\
                  {instructions}\n\
-                 After writing your report artifact, END your reply with a single \
-                 JSON object (no other JSON after it):\n\
-                 {{ \"{key}\": \"pass\" }}\n\
-                 or\n\
-                 {{ \"{key}\": \"fail\", \"reason\": \"what exactly to fix\", \
-                 \"failing_tests\": [\"test id\"], \"implicated_files\": [\"src/foo.rs\"] }}",
+                 {contract}",
                 prompt = prompt,
-                section = section,
+                section = outcome.render_section(),
                 instructions = verifier_cfg.instructions,
-                key = verifier_cfg.verdict_key,
+                contract = crate::adapters::step_executor::driver::verifier::verdict_contract(
+                    &verifier_cfg.verdict_key,
+                ),
             ),
             _ => prompt,
         };
@@ -613,12 +618,21 @@ impl ExecutionDriver {
             // one cheap resumed turn instead of a whole fresh verifier
             // session.
             if matches!(verdict, ParsedVerdict::Missing(_)) {
+                // Offers all three verdicts for the same reason the original
+                // contract does (S13): a correction that silently drops
+                // `environment` would push an agent that had correctly judged
+                // the criteria unprovable into `fail` on the retry.
                 let correction = format!(
                     "Your previous reply did not end with a usable verdict object. \
                      Reply with ONLY a single JSON object — no prose, no code fence — \
-                     of the form {{ \"{key}\": \"pass\" }} or \
+                     of one of these forms:\n\
+                     {{ \"{key}\": \"pass\" }}\n\
                      {{ \"{key}\": \"fail\", \"reason\": \"...\", \
-                     \"failing_tests\": [], \"implicated_files\": [] }}",
+                     \"failing_tests\": [], \"implicated_files\": [] }}\n\
+                     {{ \"{key}\": \"environment\", \"reason\": \"...\" }}\n\
+                     Use `environment` when what you could not confirm is something \
+                     this project is not configured to run, rather than something the \
+                     implementation got wrong.",
                     key = verifier_cfg.verdict_key,
                 );
                 let timeouts =
@@ -652,12 +666,40 @@ impl ExecutionDriver {
                         "verdict: pass"
                     );
                 }
-                ParsedVerdict::Fail(failure) => {
+                ParsedVerdict::Fail(mut failure) => {
                     tracing::warn!(
                         feature_id = %self.f_id,
                         step_id = %step_exec.step_id.0,
                         reason = %failure.reason,
                         "verdict: fail"
+                    );
+                    // S14: record what the turn *did* produce, and say so when
+                    // it didn't. This return used to jump the declared-artifact
+                    // check and the path persistence further down, so a
+                    // validate step that failed on a verdict left
+                    // `artifact_paths` empty even when its report existed on
+                    // disk — and "the agent judged the work and rejected it"
+                    // became indistinguishable from "the agent never wrote its
+                    // report" in the row.
+                    //
+                    // Deliberately not converted into an artifact *failure*:
+                    // the verdict is the more actionable outcome and its reason
+                    // is what the rework step reads. A missing report is
+                    // appended to that reason instead of replacing it, because
+                    // the step downstream attaches `[attached — s-validate]`
+                    // and will find nothing there.
+                    failure.reason =
+                        crate::adapters::step_executor::artifacts::note_undelivered_artifacts(
+                            &failure.reason,
+                            &missing_artifacts,
+                        );
+                    let _ = self.features.step_update(
+                        &step_exec.id,
+                        &StepExecutionPatch {
+                            artifact_path: Some(artifact_path),
+                            artifact_paths: Some(artifact_paths),
+                            ..Default::default()
+                        },
                     );
                     let _ = self
                         .git_ops
