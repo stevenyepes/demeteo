@@ -245,6 +245,149 @@ a terminal state with no checkpoint row — either at feature deletion (which ha
 the project context the replay path lacks) or as a periodic reaper alongside
 whatever eventually collects abandoned worktrees.
 
+### S10. The prepare/test harness has no deadline and cannot be cancelled — **[Fixed]**
+
+**Where:** `adapters/step_executor/driver/verifier.rs` (`run_harness_first`, `harness_shell_options`)
+
+`harness_shell_options` builds from `ShellOptions::login_interactive()`, whose
+`..Self::default()` leaves `timeout: None`, and `run_harness_first` then awaits
+`exec.run_command_with(..)` directly — no `tokio::select!` on `cancel_watch`. The
+one user-authored command the orchestrator ever executes therefore runs unbounded
+*and* uninterruptible: the step shows no progress, spends nothing, and survives
+Stop until the app restarts.
+
+Nothing upstream covers it. The 1800s `wall_cap_s`
+(`adapters/agent/event_stream/turn.rs`) bounds an agent *turn*, and the harness
+runs before the turn starts. The `command` node type — same user-authored shell,
+built from the same `harness_shell_options` — *does* wrap its call in a `biased`
+select on `cancel_watch` (`adapters/step_executor/steps/command.rs`), so today the
+two callers of one primitive disagree about whether Stop works.
+
+The trigger is the default, not an exotic config: `detect_worktree_strategy`
+(`adapters/worktree/git_ops/strategy.rs`) maps a root `package.json` to a bare
+`npm test`, which resolves to watch mode on a large class of projects — the
+Stratosbar project in the dev DB has `"test": "vitest"`.
+
+**Fixed by** three changes that only work together — shipping the deadline alone
+would have made things strictly worse than the hang:
+
+1. `harness_shell_options` now carries the run's `wall_cap_s` as an explicit
+   `ShellOptions::timeout`, reusing the existing preferences knob rather than
+   adding a second one. The `command` node keeps overriding it with
+   `spec.timeout`, so that path is unchanged.
+2. Both `run_command_with` calls in `run_harness_first` go through
+   `run_harness_command`, which races them against `cancel_watch` in a `biased`
+   select — the same mechanism `steps/command.rs` uses, so the two callers of
+   `harness_shell_options` no longer disagree about whether Stop works. Dropping
+   the future is what stops the work; the local adapter kills the process group.
+   A new `VerifierError::Cancelled` carries that outcome to
+   `StepOutcome::Cancelled` instead of dressing a cancel as a failure.
+3. `classify_exec_failure` replaces `is_transport_failure`. It is pure over the
+   error string and returns `Transport` / `Timeout` / `NonZeroExit`, which is the
+   distinction that matters: **only a non-zero exit reached a verdict.** Before
+   it, `verifier.rs` never mentioned `TIMEOUT_ERROR_PREFIX` at all, so a
+   newly-added deadline would have fallen through to `classify_harness_failure`
+   and opened a rework loop against code that was never tested. A `Timeout` now
+   terminates as `Environment` with remediation naming watch mode, mirroring the
+   exit-127 path; `Transport` keeps its existing `Infrastructure` routing, which
+   already avoided a verdict.
+
+The classifier's unit tests include the case that was watched fail first — a
+`timeout:`-prefixed error classifying as `NonZeroExit` — plus a guard that the
+prefixes must *lead* the string, so a suite that prints the word `timeout: ` in
+its own output cannot rewrite its own classification.
+
+### S11. A green harness's stderr is discarded before it reaches the validate agent — **[Open]**
+
+**Where:** `adapters/step_executor/driver/verifier.rs` (`run_harness_first`), `adapters/local/execution.rs` (`command_result`), `adapters/ssh/command.rs` (`run_blocking`)
+
+Both transports return stdout alone on success and merge stderr only on failure.
+That is the D3 contract, identically honoured, and not a bug in either adapter —
+the bug is that `run_harness_first` does not compensate for it. The `command` node
+type does, wrapping its command as `( … ) 2>&1` with a comment recording exactly
+why: a green `cargo test` or `npm run build` — both of which "report almost
+entirely on stderr" — would otherwise file an empty artifact.
+
+The validate path has the same problem with a worse consequence. An empty output
+block is not filed as an artifact nobody reads — it is injected into the agent's
+prompt under a heading asserting the harness already ran, followed by a claim
+that the results are authoritative and a ban on re-running anything. The agent is
+handed nothing and told it is evidence.
+
+**Fix:** apply the same subshell redirect in `run_harness_first`. The exit status
+is the subshell group's last command's, so the pass/fail gate is unaffected, and
+the harness section becomes the same shape green or red — matching what
+`steps/command.rs` already guarantees for the node type.
+
+### S12. The no-harness fallback renders under an "already executed" heading — **[Open]**
+
+**Where:** `adapters/step_executor/driver/verifier.rs` (`run_harness_first`), `adapters/step_executor/steps/agent/mod.rs`
+
+When `test_command` is unset, `run_harness_first` returns the "No test harness was
+configured or detected for this project" string on the `Ok` path, indistinguishable
+to its caller from a real result. `agent/mod.rs` then injects it under
+`## Harness Results (already executed by the orchestrator)`, followed by "the
+results above are authoritative" and "Do NOT re-run the build or test suite".
+
+An agent told that nothing ran, that the nothing is authoritative, and that it may
+not check for itself has one coherent move left, and it certifies a feature nobody
+tested.
+
+Commit `2257ffb` fixed the *prompt* side of this — the shipped verifier
+instructions now require the agent to read what the block actually says — and
+recorded the engine-side hole as an explicit follow-up. This entry is that
+follow-up; the prompt fix is a mitigation resting on the agent obeying prose that
+the surrounding template contradicts.
+
+**Fix:** make "no harness configured" a distinct return shape rather than a
+success string, so the caller can render its own heading (or omit the block and
+the ban entirely) instead of dressing an absence as a result.
+
+### S13. The validate verdict schema omits `environment`, which its own instructions require — **[Open]**
+
+**Where:** `adapters/step_executor/steps/agent/mod.rs`, `adapters/step_executor/driver/verifier.rs` (`parse_verdict_text`)
+
+`parse_verdict_text` accepts `"environment"` and routes it to a terminal
+`NonRetryable` — the deliberate escape hatch for criteria no amount of
+re-implementation can satisfy, because the project is not configured to run the
+command they demand. The shipped `s-validate` verifier instructions tell the agent
+to use it. But the JSON contract appended to the prompt offers only
+`{ "<key>": "pass" }` and `{ "<key>": "fail", … }`, and the re-ask correction
+issued on a `Missing` verdict repeats the same two-option schema. The escape hatch
+is described in prose and absent from the shape the agent is told to emit.
+
+It is not a theoretical gap. In feature `f-1785157902856` the validate agent's own
+report named criterion 1 unprovable — "The supplied harness proves only
+`cargo test`" — and returned `fail`, because that was the only option the schema
+gave it. The resulting `verdict.redirect` rework cycle cost **$14.63 / 11.0M
+tokens**, with a second cycle still running when this was written, re-implementing
+a feature whose defect was a project setting.
+
+**Fix:** add the third option to both the appended contract and the correction
+prompt. Engine-side handling already exists and needs no change.
+
+### S14. A failing verdict skips the declared-artifact check — **[Open]**
+
+**Where:** `adapters/step_executor/steps/agent/mod.rs`
+
+`missing_artifacts` is computed alongside the artifact paths early in the step and
+consumed much later, in the merge-result match. The verdict block sits between
+them and returns `StepOutcome::VerdictFailed` directly, so a step that fails on a
+verdict never reaches the check — and never records the artifact paths it did
+produce either.
+
+Observable in the dev DB: `step_executions.artifact_paths` is `[]` for
+`s-validate` on `f-1785157902856` even though `validation-report.md` exists on
+disk. The two failure modes the check exists to separate — "the agent judged the
+work and rejected it" and "the agent never produced its deliverable" — are
+indistinguishable from the row, which is precisely the signal the check was added
+to give.
+
+**Fix:** evaluate `missing_artifacts` before the verdict block, and persist the
+produced paths on the verdict-failure path as the other terminal paths do. A step
+that failed still produced what it produced, and the next attempt's feedback is
+better for having it.
+
 ---
 
 ## 4. Verifying reliability changes

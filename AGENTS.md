@@ -208,6 +208,7 @@ Read the relevant doc before modifying that area.
 | Workflow DAG model, registry, canvas | [docs/PRD_DAG_WORKFLOWS.md](docs/PRD_DAG_WORKFLOWS.md) · remaining work in [docs/TASKS_DAG_WORKFLOWS.md](docs/TASKS_DAG_WORKFLOWS.md) |
 | Local/remote execution parity | [docs/EXECUTION_PARITY.md](docs/EXECUTION_PARITY.md) |
 | Reliability invariants & open backlog | [docs/RELIABILITY_PLAN.md](docs/RELIABILITY_PLAN.md) |
+| Harness truthfulness & baseline preflight | [docs/HARNESS_BASELINE.md](docs/HARNESS_BASELINE.md) |
 | Remote execution design | [docs/REMOTE_EXECUTION.md](docs/REMOTE_EXECUTION.md) |
 | Multi-client runner (designed, not built) | [docs/MULTI_CLIENT_RUNNER.md](docs/MULTI_CLIENT_RUNNER.md) |
 | Remote-runner dev workflow & triage | [docs/RUNNER_DEV.md](docs/RUNNER_DEV.md) |
