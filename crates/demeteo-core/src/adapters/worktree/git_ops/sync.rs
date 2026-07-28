@@ -27,7 +27,7 @@ impl GitOpsHelper {
         repo_dir: &str,
         default_branch: &str,
     ) -> Result<(), String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_branch = paths::shell_escape_posix(default_branch);
         let safe_dir = paths::shell_escape_posix(repo_dir);
 
@@ -248,7 +248,7 @@ impl GitOpsHelper {
         feature_branch: &str,
         default_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_dir = paths::shell_escape_posix(repo_dir);
         let safe_default = paths::shell_escape_posix(default_branch);
 
@@ -471,7 +471,7 @@ impl GitOpsHelper {
         repo_dir: &str,
         feature_branch: &str,
     ) -> Result<String, String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
 
         // If the main repo already has the feature branch checked
         // out, we can merge in place — no worktree needed.

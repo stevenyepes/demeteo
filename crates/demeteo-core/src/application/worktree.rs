@@ -65,12 +65,12 @@ pub async fn resolve_feature_worktree(
 
     let is_local = project.compute_type.eq_ignore_ascii_case("local");
     let machine_id = if is_local {
-        "local".to_string()
+        crate::domain::ids::LOCAL_MACHINE.to_string()
     } else {
         project
             .remote_host
             .as_deref()
-            .unwrap_or("local")
+            .unwrap_or(crate::domain::ids::LOCAL_MACHINE)
             .to_string()
     };
 

@@ -154,10 +154,7 @@ impl ExecutionDriver {
             &prompt, capability, &profile,
         );
 
-        let machine_str = self
-            .machine_id_opt
-            .clone()
-            .unwrap_or_else(|| "local".to_string());
+        let machine_str = self.machine_id().to_string();
 
         // Subtask id must include the feature id so two features running on
         // the same project concurrently get distinct worktree directories

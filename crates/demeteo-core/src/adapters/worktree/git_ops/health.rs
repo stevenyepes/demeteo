@@ -8,7 +8,7 @@ impl GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
     ) -> Result<(bool, bool), String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
 
         // Check if directory exists
         let exists = self

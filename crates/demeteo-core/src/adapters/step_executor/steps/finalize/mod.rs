@@ -110,7 +110,7 @@ impl ExecutionDriver {
             0,
         );
 
-        let machine_str = self.machine_id_opt.as_deref().unwrap_or("local");
+        let machine_str = self.machine_id();
         let repo_dir = self.target_dir.clone();
 
         let Ok(Some(feature)) = self.features.get(&self.f_id) else {

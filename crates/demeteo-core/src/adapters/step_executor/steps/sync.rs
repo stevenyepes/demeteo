@@ -157,7 +157,7 @@ impl ExecutionDriver {
         worktree_path: Option<&str>,
         step_start: Instant,
     ) -> StepOutcome {
-        let machine_str = self.machine_id_opt.as_deref().unwrap_or("local");
+        let machine_str = self.machine_id();
         let repo_dir = &self.target_dir;
         let resolved_cwd = worktree_path.unwrap_or(repo_dir);
 

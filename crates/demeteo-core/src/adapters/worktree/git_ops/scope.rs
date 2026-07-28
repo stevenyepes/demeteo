@@ -236,7 +236,7 @@ impl GitOpsHelper {
         worktree_path: &str,
         writable_paths: &[PathBuf],
     ) -> Result<(), String> {
-        let machine = machine_id.unwrap_or("local");
+        let machine = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let wt = Path::new(worktree_path);
 
         // Full-write opt-out: do nothing. Used by `Implement` steps and
@@ -371,7 +371,7 @@ impl GitOpsHelper {
             .any(|p| p == &PathBuf::from(NONE_WRITABLE));
         let writable_paths: &[PathBuf] = if deny_all { &[] } else { writable_paths };
 
-        let machine = machine_id.unwrap_or("local");
+        let machine = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let wt = Path::new(worktree_path);
 
         let status = self

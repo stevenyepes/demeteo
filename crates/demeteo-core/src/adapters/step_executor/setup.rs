@@ -62,12 +62,12 @@ pub(crate) async fn resolve_path_probe(
     target_dir: &str,
 ) -> Result<(), String> {
     let machine_id_for_check = if project_info.compute_type.to_lowercase() == "local" {
-        "local".to_string()
+        crate::domain::ids::LOCAL_MACHINE.to_string()
     } else {
         project_info
             .remote_host
             .clone()
-            .unwrap_or_else(|| "local".to_string())
+            .unwrap_or_else(|| crate::domain::ids::LOCAL_MACHINE.to_string())
     };
 
     let parent_dir = std::path::Path::new(target_dir)

@@ -51,7 +51,7 @@ impl GitOpsHelper {
         repo_dir: &str,
         message: &str,
     ) -> Result<(), CommitMessageRejected> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_dir = paths::shell_escape_posix(repo_dir);
 
         // `--git-path` resolves through `core.hooksPath`, so this finds the
@@ -143,7 +143,7 @@ impl GitOpsHelper {
         default_branch: &str,
         message: &str,
     ) -> Result<SquashOutcome, String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_dir = paths::shell_escape_posix(repo_dir);
         let safe_fb = paths::shell_escape_posix(feature_branch);
 
@@ -338,7 +338,7 @@ impl GitOpsHelper {
         repo_dir: &str,
         feature_branch: &str,
     ) -> Result<(), String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_dir = paths::shell_escape_posix(repo_dir);
         let backup_ref = backup_ref_for(feature_branch);
         let safe_backup = paths::shell_escape_posix(&backup_ref);

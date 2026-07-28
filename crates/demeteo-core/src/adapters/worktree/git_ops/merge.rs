@@ -13,7 +13,7 @@ impl GitOpsHelper {
         feature_branch: &str,
         subtask_id: &str,
     ) -> Result<(), String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
         let safe_wt = paths::shell_escape_posix(wt_path);
         let safe_fb = paths::shell_escape_posix(feature_branch);

@@ -10,7 +10,7 @@ impl GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
     ) -> Option<String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         self.exec
             .run_command(
                 machine_str,
@@ -32,7 +32,7 @@ impl GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
     ) -> Result<Vec<WorktreeInfo>, String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let output = self
             .exec
             .run_command(
@@ -139,7 +139,7 @@ impl GitOpsHelper {
         default_branch: &str,
         branch_name: &str,
     ) -> Result<(), String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_dir = paths::shell_escape_posix(repo_dir);
         let safe_default = paths::shell_escape_posix(default_branch);
         let safe_tracking = paths::shell_escape_posix(&format!("origin/{}", default_branch));
@@ -224,7 +224,7 @@ impl GitOpsHelper {
         feature_branch: &str,
         subtask_id: &str,
     ) -> Result<String, String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
@@ -386,7 +386,7 @@ impl GitOpsHelper {
         feature_branch: &str,
         subtask_id: &str,
     ) -> Result<(), String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
@@ -453,7 +453,7 @@ impl GitOpsHelper {
         repo_dir: &str,
         branch: &str,
     ) -> Result<(), String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_dir = paths::shell_escape_posix(repo_dir);
         let safe_branch = paths::shell_escape_posix(branch);
 
@@ -571,7 +571,7 @@ impl GitOpsHelper {
             // No baseline captured — we can't tell, so allow validate.
             return true;
         };
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_dir = paths::shell_escape_posix(target_dir);
         // git rev-parse HEAD gives the current tip; compare it to the stored baseline SHA.
         let Ok(current_sha) = self
@@ -603,7 +603,7 @@ impl GitOpsHelper {
         default_branch: &str,
         branch: &str,
     ) -> Option<String> {
-        let machine_str = machine_id.unwrap_or("local");
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let cmd = format!(
             "git -C {} merge-base {} {}",
             paths::shell_escape_posix(repo_dir),
