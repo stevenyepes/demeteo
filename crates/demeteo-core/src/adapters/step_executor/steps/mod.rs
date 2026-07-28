@@ -26,6 +26,25 @@ pub(crate) enum StepOutcome {
     RedirectTo(usize),
 }
 
+impl From<crate::domain::sequence::outcome::SequenceError> for StepOutcome {
+    /// The literal mapping, variant for variant.
+    ///
+    /// Callers inside the sequence step do **not** use this directly: a
+    /// cancel can arrive while a git command is mid-flight and surface as
+    /// an ordinary-looking `Failed`, so the step consults its cancel watch
+    /// before converting (see `ExecutionDriver::fail_sequence_step`). This
+    /// impl is the mapping with no such context — correct wherever the
+    /// error is already known to be self-describing.
+    fn from(err: crate::domain::sequence::outcome::SequenceError) -> Self {
+        use crate::domain::sequence::outcome::SequenceError;
+        match err {
+            SequenceError::Cancelled => Self::Cancelled,
+            SequenceError::Failed(msg) => Self::Failed(msg),
+            SequenceError::Environmental(msg) => Self::Environmental(msg),
+        }
+    }
+}
+
 pub(crate) mod agent;
 pub(crate) mod command;
 pub(crate) mod conflict_pass;

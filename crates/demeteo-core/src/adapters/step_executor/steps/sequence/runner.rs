@@ -8,6 +8,7 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::artifact::Artifact;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::sequence::outcome::SequenceError;
 use crate::domain::sequence::tasks::{PlannedTask, TaskPlan};
 use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
@@ -61,8 +62,8 @@ impl ExecutionDriver {
     /// task commits before the next one starts; the caller merges the whole
     /// branch back once, after this returns.
     ///
-    /// `Err((message, environmental))` on the first task that fails. `landed`
-    /// then holds the tasks this attempt completed and committed before the
+    /// `Err` on the first task that fails. `landed` then holds the tasks
+    /// this attempt completed and committed before the
     /// failure — the caller merges that prefix to the feature branch and
     /// fails the step, or rolls the branch back when nothing landed.
     #[allow(clippy::too_many_arguments)]
@@ -84,7 +85,7 @@ impl ExecutionDriver {
         all_artifact_refs: &mut Vec<String>,
         satisfied_decls: &mut std::collections::HashSet<String>,
         landed: &mut Vec<LandedTask>,
-    ) -> Result<(), (String, bool)> {
+    ) -> Result<(), SequenceError> {
         let tasks = &plan.tasks;
 
         // A targeted retry runs a subset, but the worktree it opens is cut
@@ -104,7 +105,7 @@ impl ExecutionDriver {
 
         for (idx, task) in tasks.iter().enumerate() {
             if *self.cancel_watch.borrow() {
-                return Err(("Execution cancelled by user".to_string(), false));
+                return Err(SequenceError::Cancelled);
             }
 
             tracing::info!(
@@ -189,7 +190,7 @@ impl ExecutionDriver {
 
             let (status, err_msg) = match &task_res {
                 Ok(()) => ("completed", None),
-                Err((msg, _)) => ("failed", Some(msg.as_str())),
+                Err(e) => ("failed", e.message()),
             };
             if let Err(e) = self.subtask_runs.subtask_run_finish(
                 &run_id,
@@ -265,20 +266,17 @@ impl ExecutionDriver {
 
             let cost_ceiling = self.base_max_budget_usd() * SEQUENCE_STEP_COST_CEILING_MULTIPLIER;
             if *accumulated_cost > cost_ceiling {
-                return Err((
-                    format!(
-                        "sequence step: aggregate cost after {} of {} tasks reached \
-                         ${:.2}, over the ${:.2} step ceiling. Work already completed and \
-                         committed is preserved; the remaining tasks were not run — this \
-                         usually means the task list is far larger than the feature \
-                         warrants.",
-                        idx + 1,
-                        tasks.len(),
-                        *accumulated_cost,
-                        cost_ceiling
-                    ),
-                    false,
-                ));
+                return Err(SequenceError::Failed(format!(
+                    "sequence step: aggregate cost after {} of {} tasks reached \
+                     ${:.2}, over the ${:.2} step ceiling. Work already completed and \
+                     committed is preserved; the remaining tasks were not run — this \
+                     usually means the task list is far larger than the feature \
+                     warrants.",
+                    idx + 1,
+                    tasks.len(),
+                    *accumulated_cost,
+                    cost_ceiling
+                )));
             }
         }
 
@@ -309,7 +307,7 @@ impl ExecutionDriver {
         override_model: Option<&str>,
         all_artifact_refs: &mut Vec<String>,
         satisfied_decls: &mut std::collections::HashSet<String>,
-    ) -> Result<(), (String, bool)> {
+    ) -> Result<(), SequenceError> {
         let snapshot = WorktreeSnapshot::capture(&*self.exec, machine_str, wt_path).await;
         // The worktree's HEAD *before* the agent runs. The snapshot delta
         // misses work the agent committed itself, and diffing against the
@@ -358,12 +356,7 @@ impl ExecutionDriver {
                 self.resolve_step_effort(step_conf),
             )
             .await
-            .map_err(|(msg, environmental)| {
-                (
-                    format!("sequence task '{}': {}", task.id, msg),
-                    environmental,
-                )
-            })?;
+            .map_err(|e| e.with_context(format_args!("sequence task '{}'", task.id)))?;
 
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
         let base_cost = *accumulated_cost;
@@ -401,23 +394,27 @@ impl ExecutionDriver {
         .await;
 
         let mut produced_artifacts: Vec<Artifact> = Vec::new();
-        let turn_err: Option<(String, bool)> = match turn_res {
+        let turn_err: Option<SequenceError> = match turn_res {
             crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
                 *accumulated_cost += outcome.cost_usd;
                 *accumulated_tokens += outcome.tokens;
                 produced_artifacts = outcome.produced_artifacts;
                 None
             }
-            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => Some((
-                format!("sequence task '{}': agent error: {}", task.id, descriptive),
-                false,
-            )),
-            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => Some((
-                format!("sequence task '{}': agent error: {}", task.id, descriptive),
-                true,
-            )),
+            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+                Some(SequenceError::Failed(format!(
+                    "sequence task '{}': agent error: {}",
+                    task.id, descriptive
+                )))
+            }
+            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
+                Some(SequenceError::Environmental(format!(
+                    "sequence task '{}': agent error: {}",
+                    task.id, descriptive
+                )))
+            }
             crate::adapters::agent::event_stream::TurnResult::Interrupted => {
-                Some(("Execution cancelled by user".to_string(), false))
+                Some(SequenceError::Cancelled)
             }
         };
 
@@ -435,14 +432,11 @@ impl ExecutionDriver {
         // report it rather than capturing an empty delta and moving on. See
         // `WorktreeSnapshot::worktree_is_missing`.
         if WorktreeSnapshot::worktree_is_missing(&*self.exec, machine_str, wt_path).await {
-            return Err((
-                format!(
-                    "sequence task '{}': the step's worktree '{}' disappeared while the agent \
-                     was running — its uncommitted changes are unrecoverable.",
-                    task.id, wt_path
-                ),
-                true,
-            ));
+            return Err(SequenceError::Environmental(format!(
+                "sequence task '{}': the step's worktree '{}' disappeared while the agent \
+                 was running — its uncommitted changes are unrecoverable.",
+                task.id, wt_path
+            )));
         }
 
         // Artifact capture: snapshot delta, falling back to a diff against
@@ -520,14 +514,11 @@ impl ExecutionDriver {
                         reverted.join(", ")
                     ),
                 );
-                return Err((
-                    format!(
-                        "sequence task '{}' wrote outside declared artifacts; reverted: {}",
-                        task.id,
-                        reverted.join(", ")
-                    ),
-                    false,
-                ));
+                return Err(SequenceError::Failed(format!(
+                    "sequence task '{}' wrote outside declared artifacts; reverted: {}",
+                    task.id,
+                    reverted.join(", ")
+                )));
             }
         }
 
@@ -551,14 +542,11 @@ impl ExecutionDriver {
         )
         .await
         .map_err(|e| {
-            (
-                format!(
-                    "sequence task '{}': could not commit the agent's changes, so the task \
-                     produced nothing to merge: {}",
-                    task.id, e
-                ),
-                false,
-            )
+            SequenceError::Failed(format!(
+                "sequence task '{}': could not commit the agent's changes, so the task \
+                 produced nothing to merge: {}",
+                task.id, e
+            ))
         })?;
 
         // A declared deliverable missing from *this* task is not a failure —
@@ -591,8 +579,8 @@ impl ExecutionDriver {
     /// `thread_id` so the runtime can never hand back a cached session still
     /// carrying an earlier task's conversation, and killed by its caller.
     ///
-    /// `Err((message, environmental))`; a spawn failure is always
-    /// environmental, a cancellation never is.
+    /// A spawn failure is always environmental; a cancellation is neither
+    /// a failure nor environmental and says so in its own variant.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_sequence_session(
         &self,
@@ -603,7 +591,7 @@ impl ExecutionDriver {
         agent_kind: &str,
         override_model: Option<&str>,
         effort: crate::domain::models::EffortLevel,
-    ) -> Result<std::sync::Arc<dyn crate::ports::agent_runtime::AgentSession>, (String, bool)> {
+    ) -> Result<std::sync::Arc<dyn crate::ports::agent_runtime::AgentSession>, SequenceError> {
         let env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
         let binary = self
@@ -639,8 +627,11 @@ impl ExecutionDriver {
         };
         match spawn_res {
             Some(Ok(s)) => Ok(s),
-            Some(Err(e)) => Err((format!("agent spawn failed: {:?}", e), true)),
-            None => Err(("Execution cancelled by user".to_string(), false)),
+            Some(Err(e)) => Err(SequenceError::Environmental(format!(
+                "agent spawn failed: {:?}",
+                e
+            ))),
+            None => Err(SequenceError::Cancelled),
         }
     }
 

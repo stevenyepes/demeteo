@@ -36,6 +36,7 @@ use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, Conflic
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::artifact::Artifact;
 use crate::domain::models::{CheckpointProduced, StepConfig, StepExecution};
+use crate::domain::sequence::outcome::{FailureDisposition, SequenceError};
 use crate::paths;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
@@ -53,21 +54,6 @@ mod disposition_tests;
 #[cfg(test)]
 #[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/checkpoint.rs"]
 mod checkpoint_tests;
-
-/// What happened to the feature branch on the way out of a failed sequence
-/// step. Folded into the stored error message, because the user has to know
-/// the branch's state before they retry or ship — each variant leaves it
-/// somewhere different.
-enum FailureDisposition {
-    /// The branch was reset to its pre-attempt tip; a retry starts clean.
-    RolledBack,
-    /// The reset failed (usually an unremovable worktree) and the failed
-    /// attempt's commits are still on the branch.
-    RollbackFailed,
-    /// The tasks that completed before the failure were merged to the
-    /// feature branch; the retry resumes from the failed task.
-    PrefixLanded { landed: usize, total: usize },
-}
 
 /// What this attempt should do about the tasks a previous one finished.
 ///
@@ -226,43 +212,6 @@ fn verdict_disposition(
 fn anchor_is_merged(merge_base_stdout: &str, anchor: &str) -> bool {
     let base = merge_base_stdout.trim();
     !base.is_empty() && base.eq_ignore_ascii_case(anchor.trim())
-}
-
-impl FailureDisposition {
-    fn from_rollback(rolled_back: bool) -> Self {
-        if rolled_back {
-            Self::RolledBack
-        } else {
-            Self::RollbackFailed
-        }
-    }
-
-    /// Fold the branch's state into the failure message. A rollback that did
-    /// not happen leaves the failed attempt's commits on the feature branch,
-    /// and the user has to know that before they retry or ship — claiming a
-    /// clean slate we did not deliver is worse than the failure itself. A
-    /// checkpointed prefix is the deliberate version of the same situation:
-    /// commits on the branch, but kept on purpose and resumed from on retry.
-    fn decorate(&self, msg: &str, branch: &str) -> String {
-        match self {
-            Self::RolledBack => format!(
-                "{} (the step's task commits have been rolled back for a clean retry)",
-                msg
-            ),
-            Self::RollbackFailed => format!(
-                "{} (WARNING: the step's task commits could NOT be rolled back and are still on \
-                 branch '{}' — its worktree could not be removed. Inspect the branch before \
-                 retrying.)",
-                msg, branch
-            ),
-            Self::PrefixLanded { landed, total } => format!(
-                "{} ({} of {} tasks completed before the failure; their commits were kept and \
-                 merged to branch '{}', and a retry will resume from the failed task instead of \
-                 starting over)",
-                msg, landed, total, branch
-            ),
-        }
-    }
 }
 
 impl ExecutionDriver {
@@ -516,7 +465,7 @@ impl ExecutionDriver {
             )
             .await;
 
-        if let Err((msg, environmental)) = tasks_res {
+        if let Err(task_err) = tasks_res {
             // A mid-list failure does not forfeit the tasks that already
             // finished: their work is committed in the worktree and paid
             // for. Merge that prefix to the feature branch and record it, so
@@ -590,8 +539,7 @@ impl ExecutionDriver {
                                 step_start,
                                 *accumulated_cost,
                                 *accumulated_tokens,
-                                msg,
-                                environmental,
+                                task_err,
                                 FailureDisposition::PrefixLanded {
                                     landed: landed_total,
                                     // Everything the checkpoint knows landed,
@@ -648,8 +596,7 @@ impl ExecutionDriver {
                     step_start,
                     *accumulated_cost,
                     *accumulated_tokens,
-                    msg,
-                    environmental,
+                    task_err,
                     FailureDisposition::from_rollback(rolled_back),
                 )
                 .await;
@@ -727,14 +674,13 @@ impl ExecutionDriver {
                     step_start,
                     *accumulated_cost,
                     *accumulated_tokens,
-                    format!(
+                    SequenceError::Failed(format!(
                         "sequence step: every task ran, but the declared artifact(s) {} were \
                          never produced by any task. Nothing downstream can consume this step — \
                          the agent may have written to a different path, or been blocked by its \
                          model/config.",
                         names
-                    ),
-                    false,
+                    )),
                     FailureDisposition::from_rollback(rolled_back),
                 )
                 .await;
@@ -834,7 +780,7 @@ impl ExecutionDriver {
             )
             .await;
 
-        if let Err((msg, environmental)) = merge_res {
+        if let Err(merge_err) = merge_res {
             let _ = self.notif.emit(&DomainEvent::ConflictDetected {
                 feature_id: self.f_id.clone(),
                 subtask_id: crate::adapters::worktree::git_ops::subtask_branch_name(
@@ -857,8 +803,7 @@ impl ExecutionDriver {
                     step_start,
                     *accumulated_cost,
                     *accumulated_tokens,
-                    msg,
-                    environmental,
+                    merge_err,
                     FailureDisposition::from_rollback(rolled_back),
                 )
                 .await;
@@ -939,10 +884,11 @@ impl ExecutionDriver {
                         step_start,
                         *accumulated_cost,
                         *accumulated_tokens,
-                        "sequence step: every task completed but the feature branch carries no \
-                         changes — the implementation produced nothing."
-                            .to_string(),
-                        false,
+                        SequenceError::Failed(
+                            "sequence step: every task completed but the feature branch \
+                             carries no changes — the implementation produced nothing."
+                                .to_string(),
+                        ),
                         FailureDisposition::from_rollback(rolled_back),
                     )
                     .await;
@@ -1001,8 +947,8 @@ impl ExecutionDriver {
     /// fresh session in the step's worktree. It only ever sees the conflicted
     /// files, which is all it needs.
     ///
-    /// `Err((message, environmental))` when the merge could not be made to
-    /// land; the caller rolls the feature branch back.
+    /// `Err` when the merge could not be made to land; the caller rolls
+    /// the feature branch back.
     #[allow(clippy::too_many_arguments)]
     async fn merge_with_conflict_recovery(
         &self,
@@ -1016,7 +962,7 @@ impl ExecutionDriver {
         accumulated_cost: &mut f64,
         accumulated_tokens: &mut i64,
         step_start: Instant,
-    ) -> Result<(), (String, bool)> {
+    ) -> Result<(), SequenceError> {
         let merge_err = match self
             .git_ops
             .merge_subtask(
@@ -1061,13 +1007,10 @@ impl ExecutionDriver {
         match pass {
             // Not a content conflict — an agent cannot help. Report the
             // original merge error, which says what actually went wrong.
-            Ok(ConflictPass::NothingToResolve) => Err((
-                format!(
-                    "sequence step: merging the completed task branch into '{}' failed: {}",
-                    self.branch_name, merge_err
-                ),
-                false,
-            )),
+            Ok(ConflictPass::NothingToResolve) => Err(SequenceError::Failed(format!(
+                "sequence step: merging the completed task branch into '{}' failed: {}",
+                self.branch_name, merge_err
+            ))),
             Ok(ConflictPass::Resolved(_)) => self
                 .git_ops
                 .merge_subtask(
@@ -1078,32 +1021,23 @@ impl ExecutionDriver {
                 )
                 .await
                 .map_err(|e| {
-                    (
-                        format!(
-                            "sequence step: merging into '{}' still failed after the agent \
-                             resolved the conflicts: {}",
-                            self.branch_name, e
-                        ),
-                        false,
-                    )
+                    SequenceError::Failed(format!(
+                        "sequence step: merging into '{}' still failed after the agent \
+                         resolved the conflicts: {}",
+                        self.branch_name, e
+                    ))
                 }),
-            Err(ConflictPassError::Cancelled) => {
-                Err(("Execution cancelled by user".to_string(), false))
-            }
-            Err(ConflictPassError::Failed(msg)) => Err((
-                format!(
-                    "sequence step: could not resolve the conflicts merging into '{}': {}",
-                    self.branch_name, msg
-                ),
-                false,
-            )),
-            Err(ConflictPassError::Environmental(msg)) => Err((
-                format!(
+            Err(ConflictPassError::Cancelled) => Err(SequenceError::Cancelled),
+            Err(ConflictPassError::Failed(msg)) => Err(SequenceError::Failed(format!(
+                "sequence step: could not resolve the conflicts merging into '{}': {}",
+                self.branch_name, msg
+            ))),
+            Err(ConflictPassError::Environmental(msg)) => {
+                Err(SequenceError::Environmental(format!(
                     "sequence step: agent error while resolving the merge conflicts: {}",
                     msg
-                ),
-                true,
-            )),
+                )))
+            }
         }
     }
 
@@ -1574,27 +1508,33 @@ impl ExecutionDriver {
             .await;
     }
 
-    /// Persist the failure and translate it into the right outcome. Honors
-    /// cancellation: a step the user interrupted is not a failure.
-    #[allow(clippy::too_many_arguments)]
+    /// Persist the failure and translate it into the right outcome.
+    ///
+    /// Cancellation wins over whatever the error says, and that is not
+    /// belt-and-braces. A cancel that lands while an agent turn is in
+    /// flight comes back as [`SequenceError::Cancelled`] — but one that
+    /// lands a moment later, while the task is committing or the step is
+    /// merging, surfaces as an ordinary `Failed` from a git command whose
+    /// worktree is being torn down underneath it. Only the watch can tell
+    /// that apart from a real failure, so it is consulted first and the
+    /// error variant decides the rest.
     async fn fail_sequence_step(
         &self,
         step_exec: &StepExecution,
         step_start: Instant,
         cost: f64,
         tokens: i64,
-        msg: String,
-        environmental: bool,
+        err: SequenceError,
         disposition: FailureDisposition,
     ) -> StepOutcome {
-        let is_cancelled = *self.cancel_watch.borrow();
+        let is_cancelled = matches!(err, SequenceError::Cancelled) || *self.cancel_watch.borrow();
         let status_str = if is_cancelled {
             "interrupted"
         } else {
             "failed"
         };
         let wall = step_start.elapsed().as_secs();
-        let stored = disposition.decorate(&msg, &self.branch_name);
+        let stored = disposition.decorate(&err.to_string(), &self.branch_name);
         let _ = self.features.step_update(
             &step_exec.id,
             &StepExecutionPatch {
@@ -1625,10 +1565,7 @@ impl ExecutionDriver {
         if is_cancelled {
             return StepOutcome::Cancelled;
         }
-        if environmental {
-            return StepOutcome::Environmental(msg);
-        }
-        StepOutcome::Failed(msg)
+        err.into()
     }
 }
 
