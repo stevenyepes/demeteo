@@ -2,16 +2,16 @@
 //! that did land, put the feature branch back where it was, and report the
 //! failure as the outcome the caller must return.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::models::StepExecution;
 use crate::domain::sequence::checkpoint::CheckpointDisposition;
 use crate::domain::sequence::outcome::{FailureDisposition, SequenceError};
 use crate::domain::sequence::progress::StepTally;
+use crate::domain::sequence::sha::Sha;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
+
+use super::context::{RunTarget, StepCtx, StepSpend, StepWorktree};
 
 impl ExecutionDriver {
     /// Merge the prefix this attempt completed to the feature branch and
@@ -23,19 +23,18 @@ impl ExecutionDriver {
     /// decides what that is worth.
     pub(crate) async fn salvage_landed_prefix(
         &self,
-        step_exec: &StepExecution,
-        wt_id: &str,
-        wt_path: &str,
-        machine_str: &str,
+        step: StepCtx<'_>,
+        target: RunTarget<'_>,
+        wt: StepWorktree<'_>,
         tally: &StepTally,
     ) -> Option<usize> {
         if let Err(e) = self
-            .checkpoint_landed_prefix(wt_id, wt_path, machine_str, tally.landed())
+            .checkpoint_landed_prefix(target.machine, wt, tally.landed())
             .await
         {
             tracing::warn!(
                 feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
+                step_id = %step.step_id(),
                 error = %e,
                 "sequence step: could not merge the completed task prefix; \
                  falling back to a full rollback, keeping the prefix pinned for \
@@ -61,6 +60,7 @@ impl ExecutionDriver {
         // only on the step branch, restore it first".
         let landed_ids: Vec<String> = tally.landed().iter().map(|t| t.id.clone()).collect();
         let anchor = tally.landed().last().map(|t| t.sha.as_str());
+        let step_id = step.step_id();
         // The same gap-closing for the produced payload: a
         // task whose own checkpoint write failed folded into
         // the tally anyway, and the failed task did not (it
@@ -70,7 +70,7 @@ impl ExecutionDriver {
         let produced = tally.produced();
         match self.sequence_resume.sequence_checkpoint_record(
             &self.f_id,
-            &step_exec.step_id.0,
+            step_id,
             &landed_ids,
             anchor,
             Some(&produced),
@@ -80,7 +80,7 @@ impl ExecutionDriver {
             Err(e) => {
                 tracing::warn!(
                     feature_id = %self.f_id,
-                    step_id = %step_exec.step_id.0,
+                    step_id = %step_id,
                     error = %e,
                     "failed to persist sequence checkpoint"
                 );
@@ -131,12 +131,15 @@ impl ExecutionDriver {
     /// next attempt can restore it.
     pub(crate) async fn cleanup_and_rollback(
         &self,
+        step: StepCtx<'_>,
+        target: RunTarget<'_>,
         wt_id: &str,
-        machine_str: &str,
-        base_sha: &str,
-        step_id: &str,
+        base_sha: &Sha,
         checkpoint: CheckpointDisposition<'_>,
     ) -> bool {
+        let machine_str = target.machine;
+        let step_id = step.step_id();
+
         self.cleanup_sequence_worktree(wt_id).await;
 
         let reset = self
@@ -239,20 +242,21 @@ impl ExecutionDriver {
     /// error variant decides the rest.
     pub(crate) async fn fail_sequence_step(
         &self,
-        step_exec: &StepExecution,
-        step_start: Instant,
-        cost: f64,
-        tokens: i64,
+        step: StepCtx<'_>,
+        spend: &StepSpend<'_>,
         err: SequenceError,
         disposition: FailureDisposition,
     ) -> StepOutcome {
+        let step_exec = step.step_exec;
+        let (cost, tokens) = (*spend.cost, *spend.tokens);
+
         let is_cancelled = matches!(err, SequenceError::Cancelled) || *self.cancel_watch.borrow();
         let status_str = if is_cancelled {
             "interrupted"
         } else {
             "failed"
         };
-        let wall = step_start.elapsed().as_secs();
+        let wall = spend.start.elapsed().as_secs();
         let stored = disposition.decorate(&err.to_string(), &self.branch_name);
         let _ = self.features.step_update(
             &step_exec.id,

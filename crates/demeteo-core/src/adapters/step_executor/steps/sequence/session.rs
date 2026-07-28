@@ -6,6 +6,8 @@ use crate::domain::models::StepConfig;
 use crate::domain::sequence::outcome::SequenceError;
 use crate::ports::agent_runtime::AgentContext;
 
+use super::context::RunTarget;
+
 impl ExecutionDriver {
     /// Spawn a session in the step's worktree.
     ///
@@ -16,39 +18,35 @@ impl ExecutionDriver {
     ///
     /// A spawn failure is always environmental; a cancellation is neither
     /// a failure nor environmental and says so in its own variant.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_sequence_session(
         &self,
+        target: RunTarget<'_>,
+        wt_path: &str,
         thread_id: &str,
         title: &str,
-        machine_str: &str,
-        wt_path: &str,
-        agent_kind: &str,
-        override_model: Option<&str>,
-        effort: crate::domain::models::EffortLevel,
     ) -> Result<std::sync::Arc<dyn crate::ports::agent_runtime::AgentSession>, SequenceError> {
         let env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), target.machine).await;
         let binary = self
             .registry
-            .runtime_for(agent_kind)
+            .runtime_for(target.agent_kind)
             .map(|r| r.binary().to_string())
-            .unwrap_or_else(|| agent_kind.to_string());
+            .unwrap_or_else(|| target.agent_kind.to_string());
         let ctx = AgentContext {
             thread_id: thread_id.to_string(),
-            machine_id: machine_str.to_string(),
+            machine_id: target.machine.to_string(),
             binary,
             args: vec![],
             env,
             cwd: wt_path.to_string(),
-            model: override_model.map(str::to_string),
+            model: target.override_model.map(str::to_string),
             // A task turn is real agent work: it inherits the step's effort.
-            effort: Some(effort),
+            effort: Some(target.effort),
             title: Some(title.to_string()),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
-            bare_mode: agent_kind == "claude-code",
+            bare_mode: target.agent_kind == "claude-code",
             tool_allowlist: None,
             max_turns: None,
             // A sequence task is a primary coding turn: full base budget.
@@ -57,7 +55,7 @@ impl ExecutionDriver {
 
         let mut cancel_watch = self.cancel_watch.clone();
         let spawn_res = tokio::select! {
-            res = self.registry.get_or_spawn(thread_id, agent_kind, ctx) => Some(res),
+            res = self.registry.get_or_spawn(thread_id, target.agent_kind, ctx) => Some(res),
             _ = cancel_watch.changed() => None,
         };
         match spawn_res {

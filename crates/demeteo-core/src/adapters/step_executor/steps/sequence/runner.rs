@@ -2,14 +2,12 @@
 //! one worktree — plus the per-task bookkeeping (telemetry row, checkpoint,
 //! tally) that has to happen whether the next task runs or not.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::driver::ExecutionDriver;
-use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sequence::outcome::SequenceError;
 use crate::domain::sequence::progress::{LandedTask, StepTally};
 use crate::domain::sequence::tasks::TaskPlan;
 
+use super::context::{RunTarget, StepCtx, StepSpend, StepWorktree, TaskRun};
 use super::prompt::CompletedTask;
 
 /// Aggregate dollar ceiling for one `sequence` step's whole task list, as a
@@ -42,24 +40,16 @@ impl ExecutionDriver {
     /// tasks this attempt completed and committed before the
     /// failure — the caller merges that prefix to the feature branch and
     /// fails the step, or rolls the branch back when nothing landed.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_tasks_loop(
         &self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
-        step_index: usize,
-        step_execs: &[StepExecution],
+        step: StepCtx<'_>,
+        spend: &mut StepSpend<'_>,
+        target: RunTarget<'_>,
+        wt: StepWorktree<'_>,
         plan: &TaskPlan,
-        machine_str: &str,
-        wt_id: &str,
-        wt_path: &str,
-        agent_kind: &str,
-        override_model: Option<&str>,
         tally: &mut StepTally,
     ) -> Result<(), SequenceError> {
+        let step_exec = step.step_exec;
         let tasks = &plan.tasks;
 
         // A targeted retry runs a subset, but the worktree it opens is cut
@@ -97,6 +87,14 @@ impl ExecutionDriver {
             // task id so the runtime can never hand us a cached session
             // still holding the previous task's conversation.
             let thread_id = format!("{}-{}-{}", self.f_id_str, step_exec.step_id.0, task.id);
+            let run = TaskRun {
+                task,
+                index: idx,
+                total: tasks.len(),
+                completed: &completed,
+                resumes_landed_work: plan.resumes_landed_work,
+                thread_id: &thread_id,
+            };
 
             // Telemetry row for this (task, attempt). Best-effort — a DB
             // hiccup must not fail a task whose agent work is fine — but the
@@ -110,14 +108,14 @@ impl ExecutionDriver {
                 crate::paths::now_ms()
             );
             let subtask_branch =
-                crate::adapters::worktree::git_ops::subtask_branch_name(&self.branch_name, wt_id);
+                crate::adapters::worktree::git_ops::subtask_branch_name(&self.branch_name, wt.id);
             if let Err(e) = self.subtask_runs.subtask_run_start(
                 &run_id,
                 &self.f_id,
                 &step_exec.id,
                 &task.id,
                 &thread_id,
-                wt_path,
+                wt.path,
                 &subtask_branch,
                 crate::paths::now_ms(),
             ) {
@@ -133,29 +131,9 @@ impl ExecutionDriver {
             // step of the feature, so this task's own spend is only knowable
             // as the difference across its run — which is what the
             // `subtask_runs` row below wants.
-            let cost_before = *accumulated_cost;
-            let tokens_before = *accumulated_tokens;
-            let task_res = self
-                .run_one_task(
-                    step_exec,
-                    step_conf,
-                    accumulated_cost,
-                    accumulated_tokens,
-                    step_start,
-                    step_index,
-                    step_execs,
-                    task,
-                    idx,
-                    tasks.len(),
-                    &completed,
-                    plan.resumes_landed_work,
-                    &thread_id,
-                    machine_str,
-                    wt_path,
-                    agent_kind,
-                    override_model,
-                )
-                .await;
+            let cost_before = *spend.cost;
+            let tokens_before = *spend.tokens;
+            let task_res = self.run_one_task(step, spend, target, wt, run).await;
 
             let (status, err_msg) = match &task_res {
                 Ok(_) => ("completed", None),
@@ -164,8 +142,8 @@ impl ExecutionDriver {
             if let Err(e) = self.subtask_runs.subtask_run_finish(
                 &run_id,
                 status,
-                *accumulated_cost - cost_before,
-                *accumulated_tokens - tokens_before,
+                *spend.cost - cost_before,
+                *spend.tokens - tokens_before,
                 err_msg,
                 crate::paths::now_ms(),
             ) {
@@ -184,14 +162,13 @@ impl ExecutionDriver {
             // of `landed`: a retry re-running a finished task is wasteful
             // but safe, checkpointing to a wrong SHA is not.
             match self
-                .sequence_git(machine_str)
-                .rev_parse(wt_path, "HEAD")
+                .sequence_git(target.machine)
+                .rev_parse(wt.path, "HEAD")
                 .await
             {
-                Ok(sha) if !sha.trim().is_empty() => {
-                    let sha = sha.trim().to_string();
+                Ok(sha) if !sha.is_empty() => {
                     let produced = contribution.produced();
-                    self.checkpoint_landed_task(step_exec, machine_str, &task.id, &sha, &produced)
+                    self.checkpoint_landed_task(step, target.machine, &task.id, &sha, &produced)
                         .await;
                     tally.land(LandedTask {
                         id: task.id.clone(),
@@ -220,7 +197,7 @@ impl ExecutionDriver {
             });
 
             let cost_ceiling = self.base_max_budget_usd() * SEQUENCE_STEP_COST_CEILING_MULTIPLIER;
-            if *accumulated_cost > cost_ceiling {
+            if *spend.cost > cost_ceiling {
                 return Err(SequenceError::Failed(format!(
                     "sequence step: aggregate cost after {} of {} tasks reached \
                      ${:.2}, over the ${:.2} step ceiling. Work already completed and \
@@ -229,7 +206,7 @@ impl ExecutionDriver {
                      warrants.",
                     idx + 1,
                     tasks.len(),
-                    *accumulated_cost,
+                    *spend.cost,
                     cost_ceiling
                 )));
             }

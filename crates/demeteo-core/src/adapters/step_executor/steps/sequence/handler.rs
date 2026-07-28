@@ -2,6 +2,7 @@
 
 use crate::adapters::step_executor::steps::StepOutcome;
 
+use super::context::{StepCtx, StepSpend};
 use super::schema::SEQUENCE_CONFIG_SCHEMA;
 
 /// The `sequence` node type behind the [`NodeHandler`] seam. Pure
@@ -107,15 +108,23 @@ impl crate::adapters::step_executor::registry::NodeHandler for SequenceNodeHandl
         &self,
         ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
     ) -> StepOutcome {
+        // `NodeCtx` is the seam's shape, not the step's: it hands every
+        // handler the same flat list. Regrouping it here is the whole of the
+        // adaptation — `driver` reborrows immutably because the step needs no
+        // more than that, and the two `&mut` totals are disjoint fields.
         ctx.driver
             .handle_sequence_step(
-                ctx.step_exec,
-                ctx.step_conf,
-                ctx.accumulated_cost,
-                ctx.accumulated_tokens,
-                ctx.step_start,
-                ctx.step_index,
-                ctx.step_execs,
+                StepCtx {
+                    step_exec: ctx.step_exec,
+                    step_conf: ctx.step_conf,
+                    step_index: ctx.step_index,
+                    step_execs: ctx.step_execs,
+                },
+                &mut StepSpend {
+                    cost: ctx.accumulated_cost,
+                    tokens: ctx.accumulated_tokens,
+                    start: ctx.step_start,
+                },
             )
             .await
     }

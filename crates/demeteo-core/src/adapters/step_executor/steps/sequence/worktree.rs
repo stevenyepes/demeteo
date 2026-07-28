@@ -4,9 +4,10 @@
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sequence::checkpoint::CheckpointResume;
 use crate::domain::sequence::tasks::TaskPlan;
+
+use super::context::{RunTarget, StepCtx};
 
 impl ExecutionDriver {
     /// One worktree for the whole step, feature-scoped exactly as an
@@ -18,9 +19,8 @@ impl ExecutionDriver {
     /// attempt's commits are back in the tree and the scope fence is up.
     pub(crate) async fn open_step_worktree(
         &self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        machine_str: &str,
+        step: StepCtx<'_>,
+        target: RunTarget<'_>,
         wt_id: &str,
         plan: &TaskPlan,
         resume: &CheckpointResume,
@@ -56,7 +56,7 @@ impl ExecutionDriver {
         } = resume
         {
             if let Err(e) = self
-                .sequence_git(machine_str)
+                .sequence_git(target.machine)
                 .reset_hard(&wt_path, sha)
                 .await
             {
@@ -75,7 +75,7 @@ impl ExecutionDriver {
             }
             tracing::info!(
                 feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
+                step_id = %step.step_id(),
                 restored = landed_ids.len(),
                 remaining = plan.tasks.len(),
                 anchor = %sha,
@@ -90,7 +90,7 @@ impl ExecutionDriver {
             .apply_artifact_scope(
                 self.machine_id_opt.as_deref(),
                 &wt_path,
-                &self.sequence_writable_paths(step_conf),
+                &self.sequence_writable_paths(step.step_conf),
             )
             .await
         {

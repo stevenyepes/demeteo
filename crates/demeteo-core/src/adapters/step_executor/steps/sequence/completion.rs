@@ -1,16 +1,16 @@
 //! What a `sequence` step hands downstream once every stage has passed: the
 //! summary diff, the artifact references, and the completed row.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::artifacts::compute_git_diff;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::artifact::Artifact;
-use crate::domain::models::StepExecution;
 use crate::domain::sequence::progress::StepTally;
+use crate::domain::sequence::sha::Sha;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
+
+use super::context::{RunTarget, StepCtx, StepSpend};
 
 impl ExecutionDriver {
     /// Summary artifact: the whole feature's diff, computed from the
@@ -26,11 +26,14 @@ impl ExecutionDriver {
     /// "the code was committed then reverted".
     pub(crate) async fn collect_step_refs(
         &self,
-        step_exec: &StepExecution,
-        machine_str: &str,
-        base_sha: &str,
+        step: StepCtx<'_>,
+        target: RunTarget<'_>,
+        base_sha: &Sha,
         tally: &StepTally,
     ) -> Vec<String> {
+        let step_exec = step.step_exec;
+        let machine_str = target.machine;
+
         let diff_ref = match self.resolve_fork_point_ref(machine_str).await {
             Some(fork_point) => format!("{}..{}", fork_point, self.branch_name),
             None => format!("{}..{}", base_sha, self.branch_name),
@@ -71,13 +74,13 @@ impl ExecutionDriver {
     /// Mark the step completed and announce it.
     pub(crate) fn mark_step_completed(
         &self,
-        step_exec: &StepExecution,
-        step_start: Instant,
-        cost: f64,
-        tokens: i64,
+        step: StepCtx<'_>,
+        spend: &StepSpend<'_>,
         refs: Vec<String>,
     ) -> StepOutcome {
-        let wall = step_start.elapsed().as_secs();
+        let step_exec = step.step_exec;
+        let (cost, tokens) = (*spend.cost, *spend.tokens);
+        let wall = spend.start.elapsed().as_secs();
         let primary = refs.first().cloned();
         let _ = self.features.step_update(
             &step_exec.id,

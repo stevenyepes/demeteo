@@ -1,51 +1,38 @@
 //! One task of the list: a fresh session, one turn, the diff guard, and the
 //! commit that makes the next task's worktree contain this one's work.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::artifacts::{
     commit_worktree_changes, read_worktree_file, resolve_declared_artifacts, WorktreeSnapshot,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::artifact::Artifact;
-use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sequence::outcome::SequenceError;
 use crate::domain::sequence::progress::TaskContribution;
-use crate::domain::sequence::tasks::PlannedTask;
 use crate::ports::notification::DomainEvent;
 
-use super::prompt::CompletedTask;
+use super::context::{RunTarget, StepCtx, StepSpend, StepWorktree, TaskRun};
 
 impl ExecutionDriver {
     /// One task: fresh session, one turn, diff guard, commit. Never merges
     /// and never touches the feature branch — the caller owns that.
     ///
-    /// Returns what the task produced. `accumulated_cost` and
-    /// `accumulated_tokens` stay `&mut` because they are not step-scoped:
-    /// the driver carries them across every step of the feature.
-    #[allow(clippy::too_many_arguments)]
+    /// Returns what the task produced. `spend` stays `&mut` because its
+    /// totals are not step-scoped: the driver carries them across every step
+    /// of the feature.
     pub(crate) async fn run_one_task(
         &self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
-        step_index: usize,
-        step_execs: &[StepExecution],
-        task: &PlannedTask,
-        task_idx: usize,
-        task_total: usize,
-        completed: &[CompletedTask],
-        resumes_landed_work: bool,
-        thread_id: &str,
-        machine_str: &str,
-        wt_path: &str,
-        agent_kind: &str,
-        override_model: Option<&str>,
+        step: StepCtx<'_>,
+        spend: &mut StepSpend<'_>,
+        target: RunTarget<'_>,
+        wt: StepWorktree<'_>,
+        run: TaskRun<'_>,
     ) -> Result<TaskContribution, SequenceError> {
-        let snapshot = WorktreeSnapshot::capture(&*self.exec, machine_str, wt_path).await;
+        let step_exec = step.step_exec;
+        let step_conf = step.step_conf;
+        let task = run.task;
+
+        let snapshot = WorktreeSnapshot::capture(&*self.exec, target.machine, wt.path).await;
         // The worktree's HEAD *before* the agent runs. The snapshot delta
         // misses work the agent committed itself, and diffing against the
         // worktree's own HEAD afterwards would miss it too — the commit moved
@@ -54,53 +41,31 @@ impl ExecutionDriver {
         // here in a way it could not in the old parallel step: this worktree
         // already carries every earlier task's commits.
         let pre_head = self
-            .sequence_git(machine_str)
-            .rev_parse(wt_path, "HEAD")
+            .sequence_git(target.machine)
+            .rev_parse(wt.path, "HEAD")
             .await
             .ok()
-            .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let prompt = self
-            .build_task_prompt(
-                step_conf,
-                step_index,
-                step_execs,
-                task,
-                task_idx,
-                task_total,
-                completed,
-                resumes_landed_work,
-                machine_str,
-                wt_path,
-            )
-            .await;
+        let prompt = self.build_task_prompt(step, target, wt, run).await;
 
         let session = self
-            .spawn_sequence_session(
-                thread_id,
-                &task.title,
-                machine_str,
-                wt_path,
-                agent_kind,
-                override_model,
-                self.resolve_step_effort(step_conf),
-            )
+            .spawn_sequence_session(target, wt.path, run.thread_id, &task.title)
             .await
             .map_err(|e| e.with_context(format_args!("sequence task '{}'", task.id)))?;
 
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
-        let base_cost = *accumulated_cost;
-        let base_tokens = *accumulated_tokens;
+        let base_cost = *spend.cost;
+        let base_tokens = *spend.tokens;
 
         let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
             &*session,
             &prompt,
             timeouts,
             Some(self.cancel_watch.clone()),
-            machine_str,
+            target.machine,
             &*self.exec,
-            override_model.map(str::to_string),
+            target.override_model.map(str::to_string),
             self.pricing.clone(),
             |event| {
                 if let AgentEvent::Text { delta } = event {
@@ -115,7 +80,7 @@ impl ExecutionDriver {
                         status: "running".into(),
                         cost_usd: Some(base_cost),
                         tokens: Some(base_tokens),
-                        wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                        wall_clock_secs: Some(spend.start.elapsed().as_secs()),
                         cache_read_input_tokens: None,
                         cache_creation_input_tokens: None,
                     });
@@ -127,8 +92,8 @@ impl ExecutionDriver {
         let mut produced_artifacts: Vec<Artifact> = Vec::new();
         let turn_err: Option<SequenceError> = match turn_res {
             crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
-                *accumulated_cost += outcome.cost_usd;
-                *accumulated_tokens += outcome.tokens;
+                *spend.cost += outcome.cost_usd;
+                *spend.tokens += outcome.tokens;
                 produced_artifacts = outcome.produced_artifacts;
                 None
             }
@@ -152,7 +117,7 @@ impl ExecutionDriver {
         // The session's work is done either way — a task never needs its
         // conversation again, and leaving it alive would keep the model's
         // context (and the runtime process) around for the whole step.
-        let _ = self.registry.kill(thread_id).await;
+        let _ = self.registry.kill(run.thread_id).await;
 
         if let Some(err) = turn_err {
             return Err(err);
@@ -162,11 +127,11 @@ impl ExecutionDriver {
         // writes were never committed (that happens below) and are gone —
         // report it rather than capturing an empty delta and moving on. See
         // `WorktreeSnapshot::worktree_is_missing`.
-        if WorktreeSnapshot::worktree_is_missing(&*self.exec, machine_str, wt_path).await {
+        if WorktreeSnapshot::worktree_is_missing(&*self.exec, target.machine, wt.path).await {
             return Err(SequenceError::Environmental(format!(
                 "sequence task '{}': the step's worktree '{}' disappeared while the agent \
                  was running — its uncommitted changes are unrecoverable.",
-                task.id, wt_path
+                task.id, wt.path
             )));
         }
 
@@ -185,13 +150,13 @@ impl ExecutionDriver {
             })
             .collect();
         let mut changed = snapshot
-            .delta(&*self.exec, machine_str, wt_path, &always, &[])
+            .delta(&*self.exec, target.machine, wt.path, &always, &[])
             .await;
         if changed.is_empty() {
             if let Some(ref base) = pre_head {
                 if let Ok(diff_files) = self
-                    .sequence_git(machine_str)
-                    .diff_name_only(wt_path, base)
+                    .sequence_git(target.machine)
+                    .diff_name_only(wt.path, base)
                     .await
                 {
                     changed = diff_files
@@ -209,7 +174,7 @@ impl ExecutionDriver {
                 .unwrap_or("artifact")
                 .to_string();
             if let Some(content) =
-                read_worktree_file(&*self.exec, machine_str, wt_path, &rel_path).await
+                read_worktree_file(&*self.exec, target.machine, wt.path, &rel_path).await
             {
                 produced_artifacts.push(Artifact::tool_write(name, rel_path, content));
             }
@@ -222,7 +187,7 @@ impl ExecutionDriver {
             .git_ops
             .verify_and_revert_out_of_scope_writes(
                 self.machine_id_opt.as_deref(),
-                wt_path,
+                wt.path,
                 &self.sequence_writable_paths(step_conf),
             )
             .await
@@ -253,8 +218,8 @@ impl ExecutionDriver {
         // branch and a step that reports success having landed nothing.
         commit_worktree_changes(
             &*self.exec,
-            machine_str,
-            wt_path,
+            target.machine,
+            wt.path,
             &format!(
                 "feat({}): {}",
                 self.f_id.as_str(),

@@ -19,6 +19,7 @@
 use std::collections::HashSet;
 
 use crate::domain::models::CheckpointProduced;
+use crate::domain::sequence::sha::Sha;
 
 /// A task this attempt finished *and committed*, with the worktree HEAD its
 /// commit produced. When a later task fails, the caller resets the worktree
@@ -29,7 +30,7 @@ use crate::domain::models::CheckpointProduced;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LandedTask {
     pub id: String,
-    pub sha: String,
+    pub sha: Sha,
 }
 
 /// What one finished task emitted.
