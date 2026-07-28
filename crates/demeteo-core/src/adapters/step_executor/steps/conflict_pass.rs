@@ -84,7 +84,7 @@ impl ExecutionDriver {
         session: &dyn AgentSession,
         machine_str: &str,
         wt_path: &str,
-        override_model: &Option<String>,
+        override_model: Option<&str>,
         accumulated_cost: &mut f64,
         accumulated_tokens: &mut i64,
         step_start: Instant,
@@ -133,7 +133,7 @@ impl ExecutionDriver {
             Some(self.cancel_watch.clone()),
             machine_str,
             &*self.exec,
-            override_model.clone(),
+            override_model.map(str::to_string),
             self.pricing.clone(),
             |event| {
                 if let AgentEvent::Text { delta } = event {

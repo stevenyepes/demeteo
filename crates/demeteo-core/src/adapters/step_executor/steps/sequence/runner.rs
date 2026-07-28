@@ -80,7 +80,7 @@ impl ExecutionDriver {
         wt_id: &str,
         wt_path: &str,
         agent_kind: &str,
-        override_model: &Option<String>,
+        override_model: Option<&str>,
         all_artifact_refs: &mut Vec<String>,
         satisfied_decls: &mut std::collections::HashSet<String>,
         landed: &mut Vec<LandedTask>,
@@ -306,7 +306,7 @@ impl ExecutionDriver {
         machine_str: &str,
         wt_path: &str,
         agent_kind: &str,
-        override_model: &Option<String>,
+        override_model: Option<&str>,
         all_artifact_refs: &mut Vec<String>,
         satisfied_decls: &mut std::collections::HashSet<String>,
     ) -> Result<(), (String, bool)> {
@@ -376,7 +376,7 @@ impl ExecutionDriver {
             Some(self.cancel_watch.clone()),
             machine_str,
             &*self.exec,
-            override_model.clone(),
+            override_model.map(str::to_string),
             self.pricing.clone(),
             |event| {
                 if let AgentEvent::Text { delta } = event {
@@ -601,7 +601,7 @@ impl ExecutionDriver {
         machine_str: &str,
         wt_path: &str,
         agent_kind: &str,
-        override_model: &Option<String>,
+        override_model: Option<&str>,
         effort: crate::domain::models::EffortLevel,
     ) -> Result<std::sync::Arc<dyn crate::ports::agent_runtime::AgentSession>, (String, bool)> {
         let env =
@@ -618,7 +618,7 @@ impl ExecutionDriver {
             args: vec![],
             env,
             cwd: wt_path.to_string(),
-            model: override_model.clone(),
+            model: override_model.map(str::to_string),
             // A task turn is real agent work: it inherits the step's effort.
             effort: Some(effort),
             title: Some(title.to_string()),

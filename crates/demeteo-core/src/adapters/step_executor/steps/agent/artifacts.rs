@@ -15,7 +15,7 @@ impl ExecutionDriver {
         machine_str: &str,
         wt_path: &str,
         worktree_snapshot: &WorktreeSnapshot,
-        worktree_base_ref: &Option<String>,
+        worktree_base_ref: Option<&str>,
         produced_artifacts: &mut Vec<Artifact>,
     ) -> Result<(Option<String>, Vec<String>, Vec<MissingArtifact>), String> {
         let decls = step_conf.artifacts.as_deref().unwrap_or(&[]);
@@ -72,7 +72,7 @@ impl ExecutionDriver {
         let fork_point = self.resolve_fork_point_ref(machine_str).await;
         let diff_ref = fork_point
             .as_deref()
-            .or(worktree_base_ref.as_deref())
+            .or(worktree_base_ref)
             .unwrap_or("HEAD")
             .to_string();
         let diff_body = compute_git_diff(&*self.exec, machine_str, wt_path, &diff_ref).await;

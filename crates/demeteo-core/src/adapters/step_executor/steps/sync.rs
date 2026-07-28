@@ -192,7 +192,7 @@ impl ExecutionDriver {
                 step_execution_id: &step_exec.id,
                 thread_id_prefix: "sync-step-resolver",
                 agent_kind: &agent_kind,
-                override_model: &override_model,
+                override_model: override_model.as_deref(),
                 effort: self.resolve_step_effort(step_conf),
                 pricing: &self.pricing,
             },

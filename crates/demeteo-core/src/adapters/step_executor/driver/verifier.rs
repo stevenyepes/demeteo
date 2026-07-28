@@ -454,7 +454,7 @@ impl ExecutionDriver {
         accumulated_tokens: &mut i64,
         step_start: Instant,
         default_agent_kind: &str,
-        override_model: &Option<String>,
+        override_model: Option<&str>,
         machine_str: &str,
     ) -> Result<(), crate::domain::verifier::VerifierError> {
         let _ = self.notif.emit(&DomainEvent::StepProgress {
@@ -515,7 +515,7 @@ impl ExecutionDriver {
         let verifier_model: Option<String> = verifier_cfg
             .model
             .clone()
-            .or_else(|| override_model.clone());
+            .or_else(|| override_model.map(str::to_string));
 
         // Every supported agent is a CLI runtime that takes its model via the
         // `--model` flag in `build_args` from `ctx.model` below.

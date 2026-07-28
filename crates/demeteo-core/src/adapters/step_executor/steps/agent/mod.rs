@@ -355,7 +355,7 @@ impl ExecutionDriver {
                 step_exec,
                 step_conf,
                 &agent_kind,
-                &override_model,
+                override_model.as_deref(),
                 effort,
                 &machine_str,
                 &wt_path,
@@ -518,7 +518,7 @@ impl ExecutionDriver {
                 &machine_str,
                 &wt_path,
                 &worktree_snapshot,
-                &worktree_base_ref,
+                worktree_base_ref.as_deref(),
                 &mut produced_artifacts,
             )
             .await;
@@ -752,7 +752,7 @@ impl ExecutionDriver {
                     &*session,
                     &machine_str,
                     &wt_path,
-                    &override_model,
+                    override_model.as_deref(),
                     accumulated_cost,
                     accumulated_tokens,
                     step_start,
