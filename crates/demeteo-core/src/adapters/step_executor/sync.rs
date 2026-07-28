@@ -64,7 +64,7 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub step_execution_id: &'a StepExecutionId,
     pub thread_id_prefix: &'a str,
     pub agent_kind: &'a str,
-    pub override_model: &'a Option<String>,
+    pub override_model: Option<&'a str>,
     /// The run's resolved effort. Resolving a merge conflict is real
     /// reasoning work, so it inherits rather than being pinned like the
     /// verifier / triage / finalize turns.
@@ -132,7 +132,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         args: vec![],
         env: agent_env,
         cwd: resolved_cwd.to_string(),
-        model: override_model.clone(),
+        model: override_model.map(str::to_string),
         effort: Some(effort),
         title: Some("Sync conflict resolver".to_string()),
         agent_exec: agent_exec.clone(),
@@ -162,7 +162,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         None, // No cancel watch for resolver agent
         machine_str,
         &**exec,
-        override_model.clone(),
+        override_model.map(str::to_string),
         pricing.clone(),
         |event| {
             if let AgentEvent::Text { delta } = event {
@@ -399,7 +399,7 @@ impl DagStepExecutor {
             step_execution_id: &step_exec_id,
             thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
             agent_kind: &agent_kind,
-            override_model: &override_model,
+            override_model: override_model.as_deref(),
             effort,
             pricing: &self.pricing,
         })

@@ -56,7 +56,7 @@ impl ExecutionDriver {
         accumulated_tokens: &mut i64,
         retry_iteration: u32,
         agent_kind: &str,
-        override_model: &Option<String>,
+        override_model: Option<&str>,
         machine_str: &str,
         step_execs: &[StepExecution],
         step_index: usize,
@@ -348,7 +348,7 @@ impl ExecutionDriver {
         accumulated_cost: &mut f64,
         accumulated_tokens: &mut i64,
         agent_kind: &str,
-        override_model: &Option<String>,
+        override_model: Option<&str>,
         effort: crate::domain::models::EffortLevel,
         machine_str: &str,
         step_execs: &[StepExecution],
@@ -461,7 +461,7 @@ impl ExecutionDriver {
             args: vec![],
             env: planner_env,
             cwd: planner_wt_path.clone(),
-            model: override_model.clone(),
+            model: override_model.map(str::to_string),
             // Decomposing the spec into an ordered task list is real agent
             // work — it inherits the step's resolved effort.
             effort: Some(effort),
@@ -540,7 +540,7 @@ impl ExecutionDriver {
                 Some(self.cancel_watch.clone()),
                 machine_str,
                 &*self.exec,
-                override_model.clone(),
+                override_model.map(str::to_string),
                 self.pricing.clone(),
                 |_event| {},
             )

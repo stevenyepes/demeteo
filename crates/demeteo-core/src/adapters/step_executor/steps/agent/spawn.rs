@@ -42,7 +42,7 @@ impl ExecutionDriver {
         step_exec: &StepExecution,
         step_conf: &StepConfig,
         agent_kind: &str,
-        override_model: &Option<String>,
+        override_model: Option<&str>,
         effort: EffortLevel,
         machine_str: &str,
         wt_path: &str,
@@ -51,12 +51,8 @@ impl ExecutionDriver {
         // `ExecutionDriver::agent_session_key` for why. Steps whose
         // permission profile + model + effort match the previous step
         // still resume the same session; a change in any spawns fresh.
-        let session_key = Self::agent_session_key(
-            self.f_id.as_str(),
-            step_conf,
-            override_model.as_deref(),
-            effort,
-        );
+        let session_key =
+            Self::agent_session_key(self.f_id.as_str(), step_conf, override_model, effort);
         // Every supported agent is a CLI runtime that takes its model via a
         // `--model` flag built into `build_args` from `ctx.model` below; there
         // is no config-file/env model path to set up here.
@@ -89,7 +85,7 @@ impl ExecutionDriver {
             args: vec![],
             env: agent_env.clone(),
             cwd: wt_path.to_string(),
-            model: override_model.clone(),
+            model: override_model.map(str::to_string),
             effort: Some(effort),
             title: Some(step_conf.title.clone()),
             agent_exec: self.agent_exec.clone(),
@@ -111,7 +107,7 @@ impl ExecutionDriver {
             feature_id: self.f_id.clone(),
             step_execution_id: step_exec.id.clone(),
             agent_kind: agent_kind.to_string(),
-            model: override_model.clone(),
+            model: override_model.map(str::to_string),
             effort: effective_effort(agent_kind, effort),
         });
 
@@ -180,7 +176,7 @@ impl ExecutionDriver {
                 args: vec![],
                 env: agent_env,
                 cwd: wt_path.to_string(),
-                model: override_model.clone(),
+                model: override_model.map(str::to_string),
                 effort: Some(effort),
                 title: Some(step_conf.title.clone()),
                 agent_exec: self.agent_exec.clone(),
