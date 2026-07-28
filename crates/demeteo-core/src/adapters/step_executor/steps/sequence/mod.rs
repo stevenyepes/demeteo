@@ -27,116 +27,58 @@
 //! What survives from the old design is the part that actually helped: each
 //! task gets a *fresh* agent session, so no single context window has to
 //! carry the whole feature.
+//!
+//! # Where the step lives
+//!
+//! This file is the orchestration and nothing else — the stages in the order
+//! they run, with the judgement between them. Each stage is a module:
+//!
+//! * [`plan`] / [`planner`] — where the ordered task list comes from
+//! * [`resume`] — what a previous attempt already landed, and the checkpoint
+//!   that records it
+//! * [`worktree`] — the one worktree the whole list runs in
+//! * [`runner`] / [`task`] / [`prompt`] / [`session`] — the tasks themselves
+//! * [`merge`] — putting the commits on the feature branch
+//! * [`rollback`] — unwinding an attempt that will not complete
+//! * [`completion`] — what the step hands downstream
+//! * [`git`] — every git command any of them issues
+//!
+//! The decisions those stages consult are not here either: they are
+//! synchronous policy in [`crate::domain::sequence`], reachable from a test
+//! without a port double.
 
 use std::time::Instant;
 
-use crate::adapters::step_executor::artifacts::compute_git_diff;
 use crate::adapters::step_executor::driver::ExecutionDriver;
-use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::artifact::Artifact;
-use crate::domain::models::{CheckpointProduced, StepConfig, StepExecution};
+use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sequence::checkpoint::{
-    self, verdict_disposition, CheckpointDisposition, CheckpointResume,
+    verdict_disposition, CheckpointDisposition, CheckpointResume,
 };
 use crate::domain::sequence::outcome::{FailureDisposition, SequenceError};
-use crate::domain::sequence::progress::{LandedTask, StepTally};
-use crate::paths;
-use crate::ports::db::StepExecutionPatch;
+use crate::domain::sequence::progress::StepTally;
 use crate::ports::notification::DomainEvent;
 
-pub(crate) mod plan;
-pub(crate) mod runner;
+mod completion;
+mod git;
+mod handler;
+mod merge;
+mod plan;
+mod planner;
+mod prompt;
+mod resume;
+mod rollback;
+mod runner;
 mod schema;
+mod session;
+mod task;
+mod worktree;
 
-use schema::SEQUENCE_CONFIG_SCHEMA;
+pub(crate) use handler::SequenceNodeHandler;
 
 #[cfg(test)]
 #[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/disposition.rs"]
 mod disposition_tests;
-
-#[cfg(test)]
-#[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/probe.rs"]
-mod probe_tests;
-
-/// Which run a [`probe_anchor`] warning belongs to. Only ever read by
-/// `tracing`: the probe itself needs nothing from the driver, which is what
-/// lets a test drive it with a scripted `ExecutionPort` and no driver at all.
-pub(crate) struct ProbeLog<'a> {
-    pub feature_id: &'a str,
-    pub step_id: &'a str,
-}
-
-/// Ask git where the checkpoint's anchor commit stands relative to the
-/// feature branch.
-///
-/// Two questions and no decisions — the verdict is
-/// [`AnchorProbe`](crate::domain::sequence::checkpoint::AnchorProbe), and
-/// what it *means* is
-/// [`classify`](crate::domain::sequence::checkpoint::classify)'s to say.
-///
-/// A free function rather than a method because it needs an
-/// `ExecutionPort` and four strings, not a run: `ExecutionDriver` carries
-/// twenty-odd ports that a test would have to stub to reach a method here,
-/// which is the cost that left this logic uncovered.
-pub(crate) async fn probe_anchor(
-    exec: &dyn crate::ports::execution::ExecutionPort,
-    machine_str: &str,
-    target_dir: &str,
-    anchor: &str,
-    base_sha: &str,
-    log: ProbeLog<'_>,
-) -> checkpoint::AnchorProbe {
-    let repo = paths::shell_escape_posix(target_dir);
-    let safe_anchor = paths::shell_escape_posix(anchor);
-
-    // Is the prefix still there to restore? The companion ref keeps it
-    // reachable, so a miss means the ref was deleted or the repo was
-    // replaced under us — either way there is nothing to resume onto.
-    if let Err(e) = exec
-        .run_command(
-            machine_str,
-            &format!("git -C {} cat-file -e {}^{{commit}}", repo, safe_anchor),
-        )
-        .await
-    {
-        tracing::warn!(
-            feature_id = %log.feature_id,
-            step_id = %log.step_id,
-            anchor = %anchor,
-            error = %e,
-            "sequence step: the landed checkpoint's anchor commit is unreachable; \
-             running the full task list"
-        );
-        return checkpoint::AnchorProbe::Missing;
-    }
-
-    match exec
-        .run_command(
-            machine_str,
-            &format!(
-                "git -C {} merge-base {} {}",
-                repo,
-                safe_anchor,
-                paths::shell_escape_posix(base_sha),
-            ),
-        )
-        .await
-    {
-        Ok(out) if checkpoint::anchor_is_merged(&out, anchor) => checkpoint::AnchorProbe::Merged,
-        Ok(_) => checkpoint::AnchorProbe::Stranded,
-        Err(e) => {
-            tracing::warn!(
-                feature_id = %log.feature_id,
-                step_id = %log.step_id,
-                error = %e,
-                "sequence step: could not tell whether the landed prefix is merged; \
-                 running the full task list"
-            );
-            checkpoint::AnchorProbe::Unknown
-        }
-    }
-}
 
 impl ExecutionDriver {
     #[allow(clippy::too_many_arguments)]
@@ -178,15 +120,8 @@ impl ExecutionDriver {
         // Rollback anchor: the feature branch tip before this attempt. On
         // failure we reset the branch ref back to it so a retry starts clean.
         let base_sha = match self
-            .exec
-            .run_command(
-                &machine_str,
-                &format!(
-                    "git -C {} rev-parse {}",
-                    paths::shell_escape_posix(&self.target_dir),
-                    paths::shell_escape_posix(&self.branch_name),
-                ),
-            )
+            .sequence_git(&machine_str)
+            .rev_parse(&self.target_dir, &self.branch_name)
             .await
         {
             Ok(s) => s.trim().to_string(),
@@ -258,93 +193,16 @@ impl ExecutionDriver {
             "sequence step: running tasks in order"
         );
 
-        // 2. One worktree for the whole step, feature-scoped exactly as an
-        //    agent step's is. Two features on the same repo therefore get
-        //    different directories, and nothing this step does can disturb a
-        //    sibling feature's worktree.
+        // 2. One worktree for the whole step, carrying whatever an
+        //    interrupted attempt had already committed.
         let wt_id = format!("{}-step-{}", self.f_id_str, step_exec.step_id.0);
         let wt_path = match self
-            .git_ops
-            .provision_subtask_worktree(
-                self.machine_id_opt.as_deref(),
-                &self.target_dir,
-                &self.branch_name,
-                &wt_id,
-            )
+            .open_step_worktree(step_exec, step_conf, &machine_str, &wt_id, &plan, &resume)
             .await
         {
             Ok(p) => p,
-            Err(e) => {
-                return StepOutcome::Environmental(format!(
-                    "sequence step: worktree provision failed ({}): {}",
-                    wt_id, e
-                ))
-            }
+            Err(outcome) => return outcome,
         };
-
-        // 2b. Put the interrupted attempt's work back. Provisioning cuts the
-        //     worktree from the feature branch — and its leftover-state path
-        //     explicitly resets the step branch there — so a prefix that only
-        //     ever lived on the step branch is *gone from the tree* by now,
-        //     though still reachable through the checkpoint ref. Move onto it
-        //     before the scope fence chmods anything read-only, since the
-        //     reset writes files.
-        if let CheckpointResume::Restore {
-            landed_ids, sha, ..
-        } = &resume
-        {
-            if let Err(e) = self
-                .exec
-                .run_command(
-                    &machine_str,
-                    &format!(
-                        "git -C {} reset --hard {}",
-                        paths::shell_escape_posix(&wt_path),
-                        paths::shell_escape_posix(sha),
-                    ),
-                )
-                .await
-            {
-                // The plan has already dropped these tasks, so running on
-                // would implement the remainder against a tree missing
-                // their work. Environmental: a retry re-probes, and if the
-                // anchor is genuinely gone it resolves to a full re-run.
-                self.cleanup_sequence_worktree(&wt_id).await;
-                return StepOutcome::Environmental(format!(
-                    "sequence step: could not restore the {} task(s) an interrupted \
-                     attempt completed (checkpoint commit {}): {}",
-                    landed_ids.len(),
-                    sha,
-                    e
-                ));
-            }
-            tracing::info!(
-                feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
-                restored = landed_ids.len(),
-                remaining = plan.tasks.len(),
-                anchor = %sha,
-                "sequence step: restored an interrupted attempt's committed work"
-            );
-        }
-
-        // Scope fence. A no-op for `Implement` capability (whole worktree
-        // writable), which is what a sequence step normally carries.
-        if let Err(e) = self
-            .git_ops
-            .apply_artifact_scope(
-                self.machine_id_opt.as_deref(),
-                &wt_path,
-                &self.sequence_writable_paths(step_conf),
-            )
-            .await
-        {
-            self.cleanup_sequence_worktree(&wt_id).await;
-            return StepOutcome::Environmental(format!(
-                "sequence step: artifact scope setup failed: {}",
-                e
-            ));
-        }
 
         // 3. Run the tasks in order.
         //
@@ -396,54 +254,10 @@ impl ExecutionDriver {
             let mut checkpoint = CheckpointDisposition::RewindTo(&resume);
             if !*self.cancel_watch.borrow() && !tally.landed().is_empty() {
                 match self
-                    .checkpoint_landed_prefix(&wt_id, &wt_path, &machine_str, tally.landed())
+                    .salvage_landed_prefix(step_exec, &wt_id, &wt_path, &machine_str, &tally)
                     .await
                 {
-                    Ok(()) => {
-                        // Durable (V32): record the landed prefix so the next
-                        // attempt — in this process or after a restart — runs
-                        // only the remainder. A write failure degrades to the
-                        // in-attempt count; the retry then re-runs tasks whose
-                        // agents will find (and be told about) the committed
-                        // work, which is the pre-V32 restart behavior.
-                        //
-                        // The task loop has usually recorded each of these
-                        // already; this write is what closes the gap for a
-                        // task whose own checkpoint failed. The anchor is
-                        // re-stamped rather than left alone because the merge
-                        // above just made it an *ancestor* of the feature
-                        // branch — which is precisely how the next attempt
-                        // tells "already merged, skip the ids" from "still
-                        // only on the step branch, restore it first".
-                        let landed_ids: Vec<String> =
-                            tally.landed().iter().map(|t| t.id.clone()).collect();
-                        let anchor = tally.landed().last().map(|t| t.sha.as_str());
-                        // The same gap-closing for the produced payload: a
-                        // task whose own checkpoint write failed folded into
-                        // the tally anyway, and the failed task did not (it
-                        // returns before its artifacts resolve), so the
-                        // step-wide totals are exactly the landed tasks'
-                        // output. The union deduplicates the rest.
-                        let produced = tally.produced();
-                        let landed_total = match self.sequence_resume.sequence_checkpoint_record(
-                            &self.f_id,
-                            &step_exec.step_id.0,
-                            &landed_ids,
-                            anchor,
-                            Some(&produced),
-                            crate::paths::now_ms(),
-                        ) {
-                            Ok(total) => total as usize,
-                            Err(e) => {
-                                tracing::warn!(
-                                    feature_id = %self.f_id,
-                                    step_id = %step_exec.step_id.0,
-                                    error = %e,
-                                    "failed to persist sequence checkpoint"
-                                );
-                                landed_ids.len()
-                            }
-                        };
+                    Some(landed_total) => {
                         self.cleanup_sequence_worktree(&wt_id).await;
                         return self
                             .fail_sequence_step(
@@ -469,25 +283,15 @@ impl ExecutionDriver {
                             )
                             .await;
                     }
-                    Err(e) => {
-                        // The merge failed, so the prefix is still on the step
-                        // branch — but it is finished, paid-for work, and the
-                        // task loop already pinned and recorded it. Keep that
-                        // claim: the next attempt restores those commits and
-                        // runs only the remainder, which is strictly better
-                        // than re-running them into the same conflict. This is
-                        // the one rollback that is about the feature branch
-                        // rather than about disowning the attempt.
-                        tracing::warn!(
-                            feature_id = %self.f_id,
-                            step_id = %step_exec.step_id.0,
-                            error = %e,
-                            "sequence step: could not merge the completed task prefix; \
-                             falling back to a full rollback, keeping the prefix pinned for \
-                             the next attempt to restore"
-                        );
-                        checkpoint = CheckpointDisposition::Keep;
-                    }
+                    // The merge failed, so the prefix is still on the step
+                    // branch — but it is finished, paid-for work, and the
+                    // task loop already pinned and recorded it. Keep that
+                    // claim: the next attempt restores those commits and
+                    // runs only the remainder, which is strictly better
+                    // than re-running them into the same conflict. This is
+                    // the one rollback that is about the feature branch
+                    // rather than about disowning the attempt.
+                    None => checkpoint = CheckpointDisposition::Keep,
                 }
             }
             let rolled_back = self
@@ -629,38 +433,7 @@ impl ExecutionDriver {
                         verdict_disposition(resumed_whole_list, &resume),
                     )
                     .await;
-                // A failed rollback leaves the rejected attempt's commits on
-                // the feature branch. Fold the warning into the verdict so it
-                // reaches both the stored error and the retry feedback —
-                // `resolve_task_plan` treats a step's own failure as rolled
-                // back and would otherwise tell the next attempt's agents the
-                // branch is clean. Only the failure case is decorated: a
-                // clean rollback is the normal path and needs no note in the
-                // verdict the retry prompts render.
-                let decorate = |m: &str| -> String {
-                    if rolled_back {
-                        m.to_string()
-                    } else {
-                        FailureDisposition::RollbackFailed.decorate(m, &self.branch_name)
-                    }
-                };
-                return match verifier_err {
-                    crate::domain::verifier::VerifierError::Verdict(mut failure) => {
-                        failure.reason = decorate(&failure.reason);
-                        StepOutcome::VerdictFailed(failure)
-                    }
-                    crate::domain::verifier::VerifierError::Infrastructure(msg) => {
-                        StepOutcome::NonRetryable(decorate(&format!(
-                            "[verifier infrastructure error — check verifier config] {}",
-                            msg
-                        )))
-                    }
-                    // Triaged as an environment problem: the box is not
-                    // provisioned, editing source cannot fix it.
-                    crate::domain::verifier::VerifierError::Environment(msg) => {
-                        StepOutcome::NonRetryable(decorate(&msg))
-                    }
-                };
+                return self.verifier_failure_outcome(verifier_err, rolled_back);
             }
         }
 
@@ -718,51 +491,11 @@ impl ExecutionDriver {
                 .await;
         }
 
-        // 6. Summary artifact: the whole feature's diff, computed from the
-        //    fork point rather than this attempt's base, so a retry's critic
-        //    reviews the complete change and not just the incremental fix.
-        //
-        //    Two-dot range against `target_dir` rather than a single-ref
-        //    `git diff`: `target_dir` sits on the default branch for the
-        //    whole run (the feature branch is only ever a ref), so a
-        //    single-ref diff would compare the default branch's working tree
-        //    against the range start and render the implementation as
-        //    additions that exist in commits but not on disk — which reads as
-        //    "the code was committed then reverted".
-        let diff_ref = match self.resolve_fork_point_ref(&machine_str).await {
-            Some(fork_point) => format!("{}..{}", fork_point, self.branch_name),
-            None => format!("{}..{}", base_sha, self.branch_name),
-        };
-        let diff_body =
-            compute_git_diff(&*self.exec, &machine_str, &self.target_dir, &diff_ref).await;
-        let mut refs = Vec::new();
-        if !diff_body.trim().is_empty() {
-            let diff_artifact = Artifact {
-                name: "code-diff".into(),
-                mime: "text/x-diff".into(),
-                content: diff_body,
-                source: crate::domain::artifact::ArtifactSource::Diff {
-                    base: base_sha.clone(),
-                    head: self.branch_name.clone(),
-                    path_filter: None,
-                },
-            };
-            if let Ok(reference) =
-                self.artifacts
-                    .put(&self.f_id_str, &step_exec.step_id.0, &diff_artifact)
-            {
-                refs.push(reference);
-            }
-        }
-        refs.extend(tally.artifact_refs().iter().cloned());
-        // A reference is a stable path, so the store's own listing can name
-        // the artifact this attempt just wrote — `list_for_step` on the
-        // resumed-whole-list path returns the previous attempt's `code-diff`
-        // at the same path the `put` above returns. Keep the first mention.
-        {
-            let mut seen = std::collections::HashSet::new();
-            refs.retain(|r| seen.insert(r.clone()));
-        }
+        // 6. What the step hands downstream: the feature's diff plus every
+        //    task's artifacts.
+        let mut refs = self
+            .collect_step_refs(step_exec, &machine_str, &base_sha, &tally)
+            .await;
 
         // Every task ran and committed, yet the branch carries nothing.
         //
@@ -816,724 +549,12 @@ impl ExecutionDriver {
         self.clear_sequence_checkpoint(&step_exec.step_id.0, &machine_str)
             .await;
 
-        let wall = step_start.elapsed().as_secs();
-        let primary = refs.first().cloned();
-        let _ = self.features.step_update(
-            &step_exec.id,
-            &StepExecutionPatch {
-                last_failure_fingerprint: None,
-                iteration_count: None,
-                status: Some("completed".to_string()),
-                cost_usd: Some(Some(*accumulated_cost)),
-                tokens: Some(Some(*accumulated_tokens)),
-                wall_clock_secs: Some(Some(wall)),
-                artifact_path: Some(primary),
-                artifact_paths: Some(refs),
-                error_message: Some(None),
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-            },
-        );
-        let _ = self.notif.emit(&DomainEvent::StepProgress {
-            feature_id: self.f_id.clone(),
-            step_id: step_exec.step_id.0.clone(),
-            status: "completed".into(),
-            cost_usd: Some(*accumulated_cost),
-            tokens: Some(*accumulated_tokens),
-            wall_clock_secs: Some(wall),
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-        });
-        StepOutcome::Completed
-    }
-
-    /// Merge the step's task branch into the feature branch, spending one
-    /// agent turn on conflict resolution if the merge conflicts.
-    ///
-    /// Unlike the agent step, there is no live session to reuse here — each
-    /// task's session is killed as soon as its task commits, deliberately, so
-    /// no context carries across tasks. So the resolution pass gets its own
-    /// fresh session in the step's worktree. It only ever sees the conflicted
-    /// files, which is all it needs.
-    ///
-    /// `Err` when the merge could not be made to land; the caller rolls
-    /// the feature branch back.
-    #[allow(clippy::too_many_arguments)]
-    async fn merge_with_conflict_recovery(
-        &self,
-        step_exec: &StepExecution,
-        wt_id: &str,
-        wt_path: &str,
-        machine_str: &str,
-        agent_kind: &str,
-        override_model: Option<&str>,
-        effort: crate::domain::models::EffortLevel,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
-    ) -> Result<(), SequenceError> {
-        let merge_err = match self
-            .git_ops
-            .merge_subtask(
-                self.machine_id_opt.as_deref(),
-                wt_path,
-                &self.branch_name,
-                wt_id,
-            )
-            .await
-        {
-            Ok(()) => return Ok(()),
-            Err(e) => e,
-        };
-
-        let conflict_thread_id = format!("{}-{}-merge", self.f_id_str, step_exec.step_id.0);
-        let session = self
-            .spawn_sequence_session(
-                &conflict_thread_id,
-                "resolve merge conflicts",
-                machine_str,
-                wt_path,
-                agent_kind,
-                override_model,
-                effort,
-            )
-            .await?;
-
-        let pass = self
-            .resolve_merge_conflicts_via_agent(
-                step_exec,
-                &*session,
-                machine_str,
-                wt_path,
-                override_model,
-                accumulated_cost,
-                accumulated_tokens,
-                step_start,
-            )
-            .await;
-        let _ = self.registry.kill(&conflict_thread_id).await;
-
-        match pass {
-            // Not a content conflict — an agent cannot help. Report the
-            // original merge error, which says what actually went wrong.
-            Ok(ConflictPass::NothingToResolve) => Err(SequenceError::Failed(format!(
-                "sequence step: merging the completed task branch into '{}' failed: {}",
-                self.branch_name, merge_err
-            ))),
-            Ok(ConflictPass::Resolved(_)) => self
-                .git_ops
-                .merge_subtask(
-                    self.machine_id_opt.as_deref(),
-                    wt_path,
-                    &self.branch_name,
-                    wt_id,
-                )
-                .await
-                .map_err(|e| {
-                    SequenceError::Failed(format!(
-                        "sequence step: merging into '{}' still failed after the agent \
-                         resolved the conflicts: {}",
-                        self.branch_name, e
-                    ))
-                }),
-            Err(ConflictPassError::Cancelled) => Err(SequenceError::Cancelled),
-            Err(ConflictPassError::Failed(msg)) => Err(SequenceError::Failed(format!(
-                "sequence step: could not resolve the conflicts merging into '{}': {}",
-                self.branch_name, msg
-            ))),
-            Err(ConflictPassError::Environmental(msg)) => {
-                Err(SequenceError::Environmental(format!(
-                    "sequence step: agent error while resolving the merge conflicts: {}",
-                    msg
-                )))
-            }
-        }
-    }
-
-    /// Decide what a previous attempt's landed prefix means for this one.
-    ///
-    /// Runs against the main repo, before any worktree exists, because
-    /// `resolve_task_plan` needs the answer: the ids it drops and the
-    /// commits this restores have to be the same set.
-    ///
-    /// All this does is *observe* — read the row, ask git the two
-    /// questions — and hand both to
-    /// [`checkpoint::classify`](crate::domain::sequence::checkpoint::classify),
-    /// which owns the decision. A read that fails is
-    /// [`AnchorProbe::Unknown`] like any other unanswered question, and
-    /// classify resolves every uncertainty to
-    /// [`CheckpointResume::None`]: a full re-run wastes money, while a
-    /// wrong skip loses work.
-    async fn resolve_checkpoint_resume(
-        &self,
-        step_exec: &StepExecution,
-        machine_str: &str,
-        base_sha: &str,
-    ) -> CheckpointResume {
-        let checkpoint = match self
-            .sequence_resume
-            .sequence_checkpoint_get(&self.f_id, &step_exec.step_id.0)
-        {
-            Ok(cp) => cp,
-            Err(e) => {
-                tracing::warn!(
-                    feature_id = %self.f_id,
-                    step_id = %step_exec.step_id.0,
-                    error = %e,
-                    "sequence step: could not read the landed checkpoint; running the \
-                     full task list"
-                );
-                return CheckpointResume::None;
-            }
-        };
-
-        // Only a row that carries an anchor has anything to probe; an
-        // anchor-less one is pre-V35 and classify reads it without asking.
-        let probe = match checkpoint.anchor_sha.as_deref() {
-            Some(anchor) if !checkpoint.is_empty() => {
-                probe_anchor(
-                    &*self.exec,
-                    machine_str,
-                    &self.target_dir,
-                    anchor,
-                    base_sha,
-                    ProbeLog {
-                        feature_id: self.f_id.as_str(),
-                        step_id: &step_exec.step_id.0,
-                    },
-                )
-                .await
-            }
-            _ => checkpoint::AnchorProbe::Unknown,
-        };
-
-        checkpoint::classify(checkpoint, probe)
-    }
-
-    /// The shared git ref pinning this step's landed prefix.
-    ///
-    /// The prefix lives on the step branch until the step completes, and
-    /// `provision_subtask_worktree`'s leftover-state path resets that branch
-    /// back to the feature branch — which would orphan every commit an
-    /// interrupted attempt made, leaving them one `git gc` from
-    /// unrecoverable. A ref outside `refs/heads` keeps them reachable
-    /// without adding a branch to the user's `git branch` output. It is a
-    /// *shared* ref (git's per-worktree namespaces are `HEAD`,
-    /// `refs/bisect/*`, `refs/worktree/*` and `refs/rewritten/*`), so the
-    /// step worktree and the main checkout resolve the same one, and it
-    /// outlives the worktree that wrote it.
-    fn checkpoint_ref(&self, step_id: &str) -> String {
-        format!("refs/demeteo/seq/{}/{}", self.f_id_str, step_id)
-    }
-
-    /// Record one task as landed, durably, the moment its commit exists.
-    ///
-    /// This is the difference between a crash costing one task and costing
-    /// the whole list. The mid-list failure path below also checkpoints, but
-    /// only when `run_tasks_loop` *returns* — a killed process never gets
-    /// there, so before this existed the ids of twenty finished tasks died
-    /// with the driver and the next attempt re-planned from task one.
-    ///
-    /// Both writes are best-effort, and the order between them is not: the
-    /// row names a commit a later attempt will `reset --hard` to, so the
-    /// commit is pinned *first*. A failed pin means the task goes
-    /// unrecorded and re-runs — wasteful, but not wrong. A row naming an
-    /// unpinned commit would be worse than either.
-    ///
-    /// `produced` is what *this* task emitted (V36), recorded on the same
-    /// write as its id so the two can never disagree about which tasks the
-    /// payload covers. An attempt that resumes a fully-landed list runs no
-    /// task, and this row is then the only surviving record of what the
-    /// step has to show for itself.
-    async fn checkpoint_landed_task(
-        &self,
-        step_exec: &StepExecution,
-        machine_str: &str,
-        task_id: &str,
-        sha: &str,
-        produced: &CheckpointProduced,
-    ) {
-        let git_ref = self.checkpoint_ref(&step_exec.step_id.0);
-        if let Err(e) = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} update-ref {} {}",
-                    paths::shell_escape_posix(&self.target_dir),
-                    paths::shell_escape_posix(&git_ref),
-                    paths::shell_escape_posix(sha),
-                ),
-            )
-            .await
-        {
-            tracing::warn!(
-                feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
-                task_id = %task_id,
-                error = %e,
-                "sequence task: could not pin the landed prefix; it will not be \
-                 checkpointed and will re-run if this attempt is interrupted"
-            );
-            return;
-        }
-
-        if let Err(e) = self.sequence_resume.sequence_checkpoint_record(
-            &self.f_id,
-            &step_exec.step_id.0,
-            &[task_id.to_string()],
-            Some(sha),
-            Some(produced),
-            crate::paths::now_ms(),
-        ) {
-            tracing::warn!(
-                feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
-                task_id = %task_id,
-                error = %e,
-                "sequence task: could not persist the landed checkpoint"
-            );
-        }
-    }
-
-    /// Spend the checkpoint: drop the row and unpin the prefix.
-    ///
-    /// Called when the prefix stops being the thing a resume should restore
-    /// because the step *completed*. The row goes first: a leftover pinned
-    /// commit is inert, while a surviving row pointing at an unpinned commit
-    /// is a resume that can fail its `cat-file` probe for no reason.
-    async fn clear_sequence_checkpoint(&self, step_id: &str, machine_str: &str) {
-        let _ = self
-            .sequence_resume
-            .sequence_checkpoint_clear(&self.f_id, step_id);
-        self.unpin_checkpoint_prefix(step_id, machine_str).await;
-    }
-
-    /// Point the checkpoint ref at `sha`, or delete it when `sha` is `None`.
-    async fn move_checkpoint_ref(&self, step_id: &str, machine_str: &str, sha: Option<&str>) {
-        let git_ref = paths::shell_escape_posix(&self.checkpoint_ref(step_id));
-        let repo = paths::shell_escape_posix(&self.target_dir);
-        let cmd = match sha {
-            Some(sha) => format!(
-                "git -C {} update-ref {} {}",
-                repo,
-                git_ref,
-                paths::shell_escape_posix(sha)
-            ),
-            None => format!("git -C {} update-ref -d {}", repo, git_ref),
-        };
-        let _ = self.exec.run_command(machine_str, &cmd).await;
-    }
-
-    /// Unpin the prefix entirely.
-    async fn unpin_checkpoint_prefix(&self, step_id: &str, machine_str: &str) {
-        self.move_checkpoint_ref(step_id, machine_str, None).await;
-    }
-
-    /// Put the checkpoint back to the row this attempt started from.
-    ///
-    /// The counterpart to `cleanup_and_rollback`'s branch reset, and the
-    /// reason the two are called together: a rollback that moved the feature
-    /// branch back while leaving the checkpoint pointing at this attempt's
-    /// commits would not be a rollback at all. The next attempt reads that
-    /// row, finds an anchor that is not an ancestor of the (rewound) branch,
-    /// and `reset --hard`s the fresh worktree onto exactly the commits the
-    /// rollback set out to discard — so a verifier's rejection, or a cancel,
-    /// would quietly reinstate the work it rejected.
-    ///
-    /// Rewinding to [`CheckpointResume`] rather than clearing outright is
-    /// what keeps an *earlier* attempt's merged prefix: that work is on the
-    /// feature branch, `base_sha` was captured after it, and this attempt
-    /// never had any claim on it.
-    ///
-    /// The ref moves back too. The task loop advanced it once per landed
-    /// task, so leaving it at the tip would keep this attempt's discarded
-    /// commits reachable forever — and, worse, would survive a later
-    /// `Merged` rewind that expects no pin at all.
-    async fn rewind_checkpoint_to(
-        &self,
-        step_id: &str,
-        machine_str: &str,
-        resume: &CheckpointResume,
-    ) {
-        let (landed_ids, anchor, produced) = resume.as_stored();
-        if landed_ids.is_empty() {
-            self.clear_sequence_checkpoint(step_id, machine_str).await;
-        } else {
-            if let Err(e) = self.sequence_resume.sequence_checkpoint_set(
-                &self.f_id,
-                step_id,
-                landed_ids,
-                anchor,
-                produced,
-                crate::paths::now_ms(),
-            ) {
-                tracing::warn!(
-                    feature_id = %self.f_id,
-                    step_id = %step_id,
-                    error = %e,
-                    "sequence step: could not rewind the landed checkpoint after a rollback; \
-                     the next attempt may restore commits this one discarded"
-                );
-            }
-            self.move_checkpoint_ref(step_id, machine_str, anchor).await;
-        }
-        tracing::info!(
-            feature_id = %self.f_id,
-            step_id = %step_id,
-            landed = landed_ids.len(),
-            anchor = anchor.unwrap_or("-"),
-            "sequence step: rewound the landed checkpoint with the branch"
-        );
-    }
-
-    /// Preserve the completed task prefix after a mid-list failure: reset the
-    /// worktree to the last completed task's commit — discarding the failed
-    /// task's debris, both uncommitted writes and any commits its agent made
-    /// itself — and merge the step's task branch into the feature branch.
-    ///
-    /// Only the *merge conflict* recovery is deliberately absent here. On the
-    /// success path a conflicting merge is worth an agent turn, because the
-    /// worktree holds a complete verified implementation. Here the step is
-    /// already failing; spending more agent budget to salvage a partial
-    /// prefix inverts that trade, so a conflict falls back to the ordinary
-    /// full rollback in the caller.
-    async fn checkpoint_landed_prefix(
-        &self,
-        wt_id: &str,
-        wt_path: &str,
-        machine_str: &str,
-        landed: &[LandedTask],
-    ) -> Result<(), String> {
-        let last = landed
-            .last()
-            .ok_or_else(|| "no completed tasks to checkpoint".to_string())?;
-
-        self.exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} reset --hard {}",
-                    paths::shell_escape_posix(wt_path),
-                    paths::shell_escape_posix(&last.sha),
-                ),
-            )
-            .await
-            .map_err(|e| {
-                format!(
-                    "could not reset the worktree to the last completed task's commit {}: {}",
-                    last.sha, e
-                )
-            })?;
-
-        self.git_ops
-            .merge_subtask(
-                self.machine_id_opt.as_deref(),
-                wt_path,
-                &self.branch_name,
-                wt_id,
-            )
-            .await
-            .map_err(|e| {
-                format!(
-                    "merging the completed task prefix into '{}' failed: {}",
-                    self.branch_name, e
-                )
-            })
-    }
-
-    /// Tear the step's worktree down and reset the feature branch to
-    /// `base_sha`, so a retry starts from the tip the step began at.
-    ///
-    /// **The order is load-bearing.** `merge_subtask` checks the feature
-    /// branch *out inside this worktree* when it is not checked out anywhere
-    /// else (which is the normal case — the feature branch is otherwise just a
-    /// ref). Git refuses to `branch -f` a branch that a worktree holds, so
-    /// rolling back before removing the worktree fails with "cannot force
-    /// update the branch ... used by worktree at ...". Remove first, then
-    /// reset.
-    ///
-    /// Returns whether the branch actually moved back. Callers must not claim
-    /// a rollback they did not get: if the worktree could not be removed (a
-    /// locked file — the case `provision_subtask_worktree` explicitly warns
-    /// about), the reset fails and the step's commits are still on the branch.
-    ///
-    /// **The checkpoint rolls back with the branch**, per `checkpoint`. That
-    /// is not tidying: since V35 the row does not merely say *skip these
-    /// ids*, it names a commit the next attempt will `reset --hard` onto. A
-    /// rollback that moved the branch back and left the row alone would hand
-    /// the retry the very commits it just discarded — a verifier's rejection
-    /// reinstated, an explicit cancel undone.
-    ///
-    /// [`CheckpointDisposition::RewindTo`] is the answer rather than a clear,
-    /// because only *this attempt's* claim is being dropped: an earlier
-    /// attempt's merged prefix is on the feature branch, `base_sha` was
-    /// captured after it, and re-running it would be re-paying for work this
-    /// rollback never touched. See [`ExecutionDriver::rewind_checkpoint_to`].
-    ///
-    /// **The checkpoint moves only if the branch did.** The reset is what can
-    /// fail, so it goes first: rewinding a row to "these commits are gone"
-    /// while `branch -f` left them on the branch describes a rollback that
-    /// did not happen, and the next attempt would re-run tasks whose commits
-    /// are still sitting there. A failed reset therefore leaves the row
-    /// exactly as this attempt grew it — consistent with the branch, which is
-    /// the state the caller reports and the user acts on.
-    ///
-    /// `cleanup_sequence_worktree` does delete the step branch; whatever the
-    /// rewound checkpoint still pins stays reachable through its ref, so the
-    /// next attempt can restore it.
-    async fn cleanup_and_rollback(
-        &self,
-        wt_id: &str,
-        machine_str: &str,
-        base_sha: &str,
-        step_id: &str,
-        checkpoint: CheckpointDisposition<'_>,
-    ) -> bool {
-        self.cleanup_sequence_worktree(wt_id).await;
-
-        let reset = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} branch -f {} {}",
-                    paths::shell_escape_posix(&self.target_dir),
-                    paths::shell_escape_posix(&self.branch_name),
-                    paths::shell_escape_posix(base_sha),
-                ),
-            )
-            .await;
-
-        if reset.is_ok() {
-            match checkpoint {
-                CheckpointDisposition::RewindTo(resume) => {
-                    self.rewind_checkpoint_to(step_id, machine_str, resume)
-                        .await
-                }
-                CheckpointDisposition::Discard => {
-                    tracing::info!(
-                        feature_id = %self.f_id,
-                        step_id = %step_id,
-                        "sequence step: discarding the landed checkpoint — its work is what \
-                         this attempt's verdict rejected, so the retry re-implements it"
-                    );
-                    self.clear_sequence_checkpoint(step_id, machine_str).await;
-                }
-                CheckpointDisposition::Keep => {}
-            }
-        } else if !matches!(checkpoint, CheckpointDisposition::Keep) {
-            tracing::warn!(
-                feature_id = %self.f_id,
-                step_id = %step_id,
-                "sequence step: the branch reset failed, so the landed checkpoint was left \
-                 as this attempt grew it — it still matches what is on the branch"
-            );
-        }
-
-        match reset {
-            Ok(_) => true,
-            Err(e) => {
-                tracing::error!(
-                    feature_id = %self.f_id,
-                    branch = %self.branch_name,
-                    base_sha = %base_sha,
-                    error = %e,
-                    "sequence step: could not roll the feature branch back; the failed step's \
-                     commits are still on it"
-                );
-                false
-            }
-        }
-    }
-
-    async fn cleanup_sequence_worktree(&self, wt_id: &str) {
-        let _ = self
-            .git_ops
-            .cleanup_subtask_worktree(
-                self.machine_id_opt.as_deref(),
-                &self.target_dir,
-                &self.branch_name,
-                wt_id,
-            )
-            .await;
-    }
-
-    /// Persist the failure and translate it into the right outcome.
-    ///
-    /// Cancellation wins over whatever the error says, and that is not
-    /// belt-and-braces. A cancel that lands while an agent turn is in
-    /// flight comes back as [`SequenceError::Cancelled`] — but one that
-    /// lands a moment later, while the task is committing or the step is
-    /// merging, surfaces as an ordinary `Failed` from a git command whose
-    /// worktree is being torn down underneath it. Only the watch can tell
-    /// that apart from a real failure, so it is consulted first and the
-    /// error variant decides the rest.
-    async fn fail_sequence_step(
-        &self,
-        step_exec: &StepExecution,
-        step_start: Instant,
-        cost: f64,
-        tokens: i64,
-        err: SequenceError,
-        disposition: FailureDisposition,
-    ) -> StepOutcome {
-        let is_cancelled = matches!(err, SequenceError::Cancelled) || *self.cancel_watch.borrow();
-        let status_str = if is_cancelled {
-            "interrupted"
-        } else {
-            "failed"
-        };
-        let wall = step_start.elapsed().as_secs();
-        let stored = disposition.decorate(&err.to_string(), &self.branch_name);
-        let _ = self.features.step_update(
-            &step_exec.id,
-            &StepExecutionPatch {
-                last_failure_fingerprint: None,
-                iteration_count: None,
-                status: Some(status_str.to_string()),
-                cost_usd: Some(Some(cost)),
-                tokens: Some(Some(tokens)),
-                wall_clock_secs: Some(Some(wall)),
-                artifact_path: None,
-                artifact_paths: None,
-                error_message: Some(Some(stored)),
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-            },
-        );
-        let _ = self.notif.emit(&DomainEvent::StepProgress {
-            feature_id: self.f_id.clone(),
-            step_id: step_exec.step_id.0.clone(),
-            status: status_str.into(),
-            cost_usd: Some(cost),
-            tokens: Some(tokens),
-            wall_clock_secs: Some(wall),
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-        });
-
-        if is_cancelled {
-            return StepOutcome::Cancelled;
-        }
-        err.into()
-    }
-}
-
-// ── NodeHandler registration (P1.7) ───────────────────────────────────────────
-
-/// The `sequence` node type behind the [`NodeHandler`] seam. Pure
-/// delegation: execution is [`ExecutionDriver::handle_sequence_step`],
-/// byte-for-byte the behavior the old `match` arm dispatched. Owns the
-/// retired `parallel` alias (see the module docs above) so workflows
-/// the user cloned before the rename keep running.
-///
-/// [`NodeHandler`]: crate::adapters::step_executor::registry::NodeHandler
-pub(crate) struct SequenceNodeHandler;
-
-#[async_trait::async_trait]
-impl crate::adapters::step_executor::registry::NodeHandler for SequenceNodeHandler {
-    fn kind(&self) -> &'static str {
-        "sequence"
-    }
-
-    fn aliases(&self) -> &'static [&'static str] {
-        // The superseded name. Its concurrent fan-out was removed; such
-        // steps now run their tasks sequentially. Kept so workflows the
-        // user cloned or overrode keep running instead of failing with
-        // "Unknown step kind".
-        &["parallel"]
-    }
-
-    fn config_schema(&self) -> &'static serde_json::Value {
-        &SEQUENCE_CONFIG_SCHEMA
-    }
-
-    fn display(&self) -> crate::adapters::step_executor::registry::NodeDisplay {
-        crate::adapters::step_executor::registry::NodeDisplay {
-            label: "Sequence",
-            summary: "Fan a task list into one agent turn per task, \
-                      checkpointing each task as it lands.",
-        }
-    }
-
-    fn ports(&self) -> crate::adapters::step_executor::registry::NodePorts {
-        use crate::domain::models::workflow_v2::PortType;
-        crate::adapters::step_executor::registry::NodePorts {
-            // A sequence *consumes* a task list, but not necessarily from
-            // every predecessor: the shipped starters also wire a gate
-            // straight into one. Input stays `Any`; in v2 the task-list
-            // binding is the incoming edge, not a config field.
-            inputs: &[PortType::Any],
-            outputs: &[PortType::Text, PortType::File],
-        }
-    }
-
-    /// Catch a **stray `task_list_from` in the config** before it costs a run.
-    ///
-    /// v2 expresses the binding as an edge — `migrate_v1_to_v2` lifts the
-    /// field out and `project_v2_to_v1` recovers it from the graph — so the
-    /// builder can never produce one. A hand-edited or imported v2 document
-    /// can: the schema allows additional properties, and `project_node` only
-    /// overwrites the key when the graph actually has a task-list edge to
-    /// derive it from. Left alone, a bad value surfaces as a mid-run
-    /// `NonRetryable` from `load_task_list_artifact`, which is the latest
-    /// possible moment to learn about it.
-    fn lint(
-        &self,
-        node: &crate::domain::models::workflow_v2::NodeConfig,
-        graph: &crate::domain::workflow_graph::WorkflowGraph,
-    ) -> Vec<crate::domain::workflow_graph::LintFinding> {
-        use crate::domain::ids::StepId;
-        use crate::domain::workflow_graph::LintFinding;
-
-        let Some(source) = node
-            .config
-            .get("task_list_from")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        else {
-            return Vec::new();
-        };
-
-        if !graph.contains(&StepId::from(source)) {
-            return vec![LintFinding::node_error(
-                "task-list-unknown-source",
-                &node.id,
-                format!(
-                    "sequence node '{}' reads its task list from '{source}', which this \
-                     workflow does not contain",
-                    node.id
-                ),
-            )];
-        }
-        vec![LintFinding::node_warning(
-            "task-list-legacy-binding",
-            &node.id,
-            format!(
-                "sequence node '{}' carries a v1 `task_list_from` pointing at '{source}'. \
-                 Schema v2 expresses that as an edge — draw one from '{source}' and delete \
-                 the field, or it acts as a dependency the canvas never shows.",
-                node.id
-            ),
-        )]
-    }
-
-    async fn execute(
-        &self,
-        ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
-    ) -> StepOutcome {
-        ctx.driver
-            .handle_sequence_step(
-                ctx.step_exec,
-                ctx.step_conf,
-                ctx.accumulated_cost,
-                ctx.accumulated_tokens,
-                ctx.step_start,
-                ctx.step_index,
-                ctx.step_execs,
-            )
-            .await
+        self.mark_step_completed(
+            step_exec,
+            step_start,
+            *accumulated_cost,
+            *accumulated_tokens,
+            refs,
+        )
     }
 }
