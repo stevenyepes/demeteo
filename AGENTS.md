@@ -58,6 +58,27 @@ of one file would *not* infer:
 - Never `.unwrap()` / `.expect()` in production paths — use `?` or match
 - Never hard-code `localhost`, port numbers, or paths — read them from config/state
 
+### Where a decision is allowed to live
+
+The frontend's ~400 LOC rule has no Rust counterpart, which is how
+`steps/sequence/mod.rs` reached 1818 lines without ever tripping a review
+reflex. Line count was the symptom; this is the cause:
+
+- **A policy decision must not be spelled inside an `async fn` that also does
+  I/O.** If a `match` decides *what should happen* — as opposed to performing
+  it — it belongs in `domain/`, where it is synchronous and reachable from a
+  test without a single port double. `domain/` has no `async fn` anywhere in
+  it; keep it that way and the boundary enforces itself.
+- **Never construct an `ExecutionDriver` in a test.** It carries twenty-odd
+  ports that the code under test does not read (`driver_watchdog.rs` has two
+  `#[ignore]`d tests conceding exactly this). When adapter code is unreachable
+  from a test, the fix is to make it a free function over the *one* port it
+  needs — not to stub the other nineteen.
+- Extract a stage when an adapter module passes ~400 LOC **of code**. Doc
+  comments do not count toward it; they are the part worth keeping.
+- `#[allow(clippy::too_many_arguments)]` is a review trigger, not a fix. Bundle
+  the parameters that travel together, then delete the attribute.
+
 ### Cross-OS
 
 The desktop app ships on **Linux x86_64, macOS aarch64, and Windows x86_64**
@@ -139,6 +160,14 @@ runner test suites, the gate-feedback repro, and commitlint on `origin/master..H
 Fails fast. "`cargo test` passed" is **not** "CI is green" — run the whole script, not
 a subset. The `pre-push` hook runs it automatically (`git push --no-verify` for a
 deliberate WIP).
+
+**A new test does not count until you have watched it fail.** Break the code it
+covers, confirm that test — and ideally only that test — goes red, then revert.
+A suite that cannot fail is not coverage, and the shape that hides this is a
+test double that answers every call successfully: the e2e `FakeExec` returns
+`Ok("")` for every command, so anything *reading* git's output was being
+asserted against a default rather than an answer. Prefer a double that errors
+on anything it was not explicitly told to say.
 
 ### The parity gates are not in `npm run checks`
 
