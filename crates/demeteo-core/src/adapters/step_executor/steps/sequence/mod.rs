@@ -595,8 +595,20 @@ impl ExecutionDriver {
                                 environmental,
                                 FailureDisposition::PrefixLanded {
                                     landed: landed_total,
-                                    total: landed_total + plan.tasks.len()
-                                        - landed_this_attempt.len(),
+                                    // Everything the checkpoint knows landed,
+                                    // plus this attempt's plan minus what it
+                                    // ran. `landed_this_attempt` only ever
+                                    // accumulates tasks drawn from
+                                    // `plan.tasks`, so the difference cannot
+                                    // go negative — but the invariant lives a
+                                    // module away in `run_tasks_loop`, and a
+                                    // count in a user-facing message is not
+                                    // worth a panic if it ever moves.
+                                    total: landed_total
+                                        + plan
+                                            .tasks
+                                            .len()
+                                            .saturating_sub(landed_this_attempt.len()),
                                 },
                             )
                             .await;
@@ -1504,7 +1516,7 @@ impl ExecutionDriver {
                     "git -C {} branch -f {} {}",
                     paths::shell_escape_posix(&self.target_dir),
                     paths::shell_escape_posix(&self.branch_name),
-                    base_sha,
+                    paths::shell_escape_posix(base_sha),
                 ),
             )
             .await;

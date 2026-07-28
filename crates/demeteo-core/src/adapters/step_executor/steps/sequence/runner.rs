@@ -226,7 +226,14 @@ impl ExecutionDriver {
                 Ok(sha) if !sha.trim().is_empty() => {
                     let sha = sha.trim().to_string();
                     let produced = crate::domain::models::CheckpointProduced {
-                        artifact_refs: all_artifact_refs[refs_before..].to_vec(),
+                        // `run_one_task` only ever extends this, so the tail
+                        // is always there — but it is reached through two
+                        // frames of `&mut`, and a checkpoint write is not
+                        // worth a panic if that ever stops holding.
+                        artifact_refs: all_artifact_refs
+                            .get(refs_before..)
+                            .unwrap_or_default()
+                            .to_vec(),
                         satisfied_decls: satisfied_decls
                             .difference(&decls_before)
                             .cloned()
