@@ -9,6 +9,7 @@ use crate::domain::agent_event::AgentEvent;
 use crate::domain::artifact::Artifact;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sequence::outcome::SequenceError;
+use crate::domain::sequence::progress::{LandedTask, StepTally, TaskContribution};
 use crate::domain::sequence::tasks::{PlannedTask, TaskPlan};
 use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
@@ -27,17 +28,6 @@ struct CompletedTask {
     id: String,
     title: String,
     files: Vec<String>,
-}
-
-/// A task this attempt finished *and committed*, with the worktree HEAD its
-/// commit produced. When a later task fails, the caller resets the worktree
-/// to the last entry's `sha` (discarding the failed task's debris, including
-/// any commits its agent made itself) and merges the prefix to the feature
-/// branch, so the completed tasks' work — already paid for — survives the
-/// failure and the retry runs only the remainder.
-pub(crate) struct LandedTask {
-    pub id: String,
-    pub sha: String,
 }
 
 /// Aggregate dollar ceiling for one `sequence` step's whole task list, as a
@@ -62,8 +52,12 @@ impl ExecutionDriver {
     /// task commits before the next one starts; the caller merges the whole
     /// branch back once, after this returns.
     ///
-    /// `Err` on the first task that fails. `landed` then holds the tasks
-    /// this attempt completed and committed before the
+    /// Each task folds what it produced into `tally`, which the caller owns
+    /// because those totals are the *step's*: they are seeded from the
+    /// checkpoint before this runs and judged after it returns.
+    ///
+    /// `Err` on the first task that fails. `tally.landed()` then holds the
+    /// tasks this attempt completed and committed before the
     /// failure — the caller merges that prefix to the feature branch and
     /// fails the step, or rolls the branch back when nothing landed.
     #[allow(clippy::too_many_arguments)]
@@ -82,9 +76,7 @@ impl ExecutionDriver {
         wt_path: &str,
         agent_kind: &str,
         override_model: Option<&str>,
-        all_artifact_refs: &mut Vec<String>,
-        satisfied_decls: &mut std::collections::HashSet<String>,
-        landed: &mut Vec<LandedTask>,
+        tally: &mut StepTally,
     ) -> Result<(), SequenceError> {
         let tasks = &plan.tasks;
 
@@ -155,15 +147,12 @@ impl ExecutionDriver {
                 );
             }
 
+            // Cost and tokens are the driver's, accumulated across every
+            // step of the feature, so this task's own spend is only knowable
+            // as the difference across its run — which is what the
+            // `subtask_runs` row below wants.
             let cost_before = *accumulated_cost;
             let tokens_before = *accumulated_tokens;
-            // Both accumulators are step-wide, so this task's own
-            // contribution is only knowable as the difference across its
-            // run. Taken here rather than returned by `run_one_task`
-            // because the artifacts are resolved deep inside it, in the
-            // one place that knows which declarations they satisfied.
-            let refs_before = all_artifact_refs.len();
-            let decls_before = satisfied_decls.clone();
             let task_res = self
                 .run_one_task(
                     step_exec,
@@ -183,13 +172,11 @@ impl ExecutionDriver {
                     wt_path,
                     agent_kind,
                     override_model,
-                    all_artifact_refs,
-                    satisfied_decls,
                 )
                 .await;
 
             let (status, err_msg) = match &task_res {
-                Ok(()) => ("completed", None),
+                Ok(_) => ("completed", None),
                 Err(e) => ("failed", e.message()),
             };
             if let Err(e) = self.subtask_runs.subtask_run_finish(
@@ -207,7 +194,7 @@ impl ExecutionDriver {
                     "sequence task: could not close its subtask_runs row"
                 );
             }
-            task_res?;
+            let contribution = task_res?;
 
             // The task committed (run_one_task fails otherwise), so the
             // worktree HEAD is that commit — the checkpoint anchor a later
@@ -227,23 +214,10 @@ impl ExecutionDriver {
             {
                 Ok(sha) if !sha.trim().is_empty() => {
                     let sha = sha.trim().to_string();
-                    let produced = crate::domain::models::CheckpointProduced {
-                        // `run_one_task` only ever extends this, so the tail
-                        // is always there — but it is reached through two
-                        // frames of `&mut`, and a checkpoint write is not
-                        // worth a panic if that ever stops holding.
-                        artifact_refs: all_artifact_refs
-                            .get(refs_before..)
-                            .unwrap_or_default()
-                            .to_vec(),
-                        satisfied_decls: satisfied_decls
-                            .difference(&decls_before)
-                            .cloned()
-                            .collect(),
-                    };
+                    let produced = contribution.produced();
                     self.checkpoint_landed_task(step_exec, machine_str, &task.id, &sha, &produced)
                         .await;
-                    landed.push(LandedTask {
+                    tally.land(LandedTask {
                         id: task.id.clone(),
                         sha,
                     });
@@ -257,6 +231,11 @@ impl ExecutionDriver {
                     );
                 }
             }
+
+            // Unconditional: the task's output belongs to the step whether or
+            // not its commit could be pinned. Only the *resume* claim depends
+            // on the SHA above.
+            tally.fold(contribution);
 
             completed.push(CompletedTask {
                 id: task.id.clone(),
@@ -285,6 +264,10 @@ impl ExecutionDriver {
 
     /// One task: fresh session, one turn, diff guard, commit. Never merges
     /// and never touches the feature branch — the caller owns that.
+    ///
+    /// Returns what the task produced. `accumulated_cost` and
+    /// `accumulated_tokens` stay `&mut` because they are not step-scoped:
+    /// the driver carries them across every step of the feature.
     #[allow(clippy::too_many_arguments)]
     async fn run_one_task(
         &self,
@@ -305,9 +288,7 @@ impl ExecutionDriver {
         wt_path: &str,
         agent_kind: &str,
         override_model: Option<&str>,
-        all_artifact_refs: &mut Vec<String>,
-        satisfied_decls: &mut std::collections::HashSet<String>,
-    ) -> Result<(), SequenceError> {
+    ) -> Result<TaskContribution, SequenceError> {
         let snapshot = WorktreeSnapshot::capture(&*self.exec, machine_str, wt_path).await;
         // The worktree's HEAD *before* the agent runs. The snapshot delta
         // misses work the agent committed itself, and diffing against the
@@ -562,14 +543,14 @@ impl ExecutionDriver {
         );
         let missing_names: std::collections::HashSet<&str> =
             missing.iter().map(|m| m.name.as_str()).collect();
-        for decl in decls {
-            if !missing_names.contains(decl.name.as_str()) {
-                satisfied_decls.insert(decl.name.clone());
-            }
-        }
-        all_artifact_refs.extend(refs);
-
-        Ok(())
+        Ok(TaskContribution {
+            artifact_refs: refs,
+            satisfied_decls: decls
+                .iter()
+                .filter(|d| !missing_names.contains(d.name.as_str()))
+                .map(|d| d.name.clone())
+                .collect(),
+        })
     }
 
     /// Spawn a session in the step's worktree.
