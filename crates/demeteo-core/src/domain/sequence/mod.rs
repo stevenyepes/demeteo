@@ -17,4 +17,5 @@
 //! The adapter side keeps the choreography: provisioning, probing, merging,
 //! persisting, emitting.
 
+pub mod outcome;
 pub mod tasks;
