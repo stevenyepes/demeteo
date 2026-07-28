@@ -35,7 +35,7 @@
 use std::time::Instant;
 
 use crate::domain::models::{EffortLevel, StepConfig, StepExecution};
-use crate::domain::sequence::tasks::PlannedTask;
+use crate::domain::sequence::tasks::{PlanKind, PlannedTask};
 
 use super::prompt::CompletedTask;
 
@@ -123,6 +123,15 @@ pub(crate) struct TaskRun<'a> {
     /// previous attempt's work. Saying "this is the first task" when it does
     /// sends the agent to reimplement code it is looking at.
     pub resumes_landed_work: bool,
+    /// Greenfield list, or a delta closing a downstream verdict.
+    ///
+    /// Both run against a branch that already carries work, so both need
+    /// `resumes_landed_work` — but what the agent should *do* about it is
+    /// opposite. A re-run task is looking at an earlier version of itself
+    /// and must revise it in place; a rework task is new work whose earlier
+    /// version does not exist, and telling it to "revise in place" sends it
+    /// hunting for code nobody wrote.
+    pub plan_kind: PlanKind,
     /// This task's session key — unique per (feature, step, task), so the
     /// runtime can never hand back the previous task's conversation.
     pub thread_id: &'a str,

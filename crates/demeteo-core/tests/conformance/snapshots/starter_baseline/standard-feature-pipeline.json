@@ -10,14 +10,14 @@
       "error": null
     },
     {
-      "step_id": "s-tickets",
+      "step_id": "s-spec",
       "kind": "agent",
       "status": "completed",
       "iterations": 0,
       "error": null
     },
     {
-      "step_id": "s-spec",
+      "step_id": "s-tickets",
       "kind": "agent",
       "status": "completed",
       "iterations": 0,
@@ -74,8 +74,8 @@
     ],
     [
       "s-gate-review",
-      "implementation-spec.md",
-      "# stub artifact\n\npath: artifacts/implementation-spec.md\ngenerated-by: demeteo stub agent\n"
+      "task-list.json",
+      "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
     ],
     [
       "s-gate-ship",

@@ -17,7 +17,7 @@
  *    holds no run logic of its own: FeatureDetail owns the handlers and passes
  *    them in, so the canvas and timeline drive the exact same code paths.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   AlertCircle,
@@ -518,13 +518,54 @@ function SequenceTasks({
         <EmptyHint>No tasks in this node&apos;s plan.</EmptyHint>
       ) : (
         <ol className="space-y-1.5">
-          {tasks.map((t, i) => (
-            <SequenceTaskRow key={t.id} index={i + 1} task={t} />
+          {groupByCycle(tasks).map((group) => (
+            <Fragment key={group.cycle}>
+              {/* Only labelled once a rework cycle exists — a single-cycle
+                  node is the norm and a "Cycle 0" header on it is noise. */}
+              {group.labelled && (
+                <li className="flex items-baseline justify-between px-1 pb-0.5 pt-2 first:pt-0">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">
+                    {group.cycle === 0 ? 'Original decomposition' : `Rework ${group.cycle}`}
+                  </span>
+                  <span className="font-mono text-[10px] text-slate-500">
+                    {group.tasks.length} {group.tasks.length === 1 ? 'ticket' : 'tickets'}
+                  </span>
+                </li>
+              )}
+              {group.tasks.map((t, i) => (
+                <SequenceTaskRow key={`${group.cycle}-${t.id}`} index={i + 1} task={t} />
+              ))}
+            </Fragment>
           ))}
         </ol>
       )}
     </div>
   );
+}
+
+/**
+ * Split a flat task list into its decomposition cycles, in order.
+ *
+ * A step that a downstream verdict sent back has planned more than one list:
+ * the original decomposition, then one delta per rework cycle. Both are on the
+ * branch, so both are shown — rendering only the list that ran last would
+ * present a four-ticket delta as if it were the whole feature.
+ *
+ * `labelled` is false for the common single-cycle node, where a header would
+ * name a distinction that isn't there yet.
+ */
+function groupByCycle(
+  tasks: SequenceState['tasks'],
+): { cycle: number; tasks: SequenceState['tasks']; labelled: boolean }[] {
+  const groups: { cycle: number; tasks: SequenceState['tasks']; labelled: boolean }[] = [];
+  for (const task of tasks) {
+    const cycle = task.cycle ?? 0;
+    const last = groups[groups.length - 1];
+    if (last && last.cycle === cycle) last.tasks.push(task);
+    else groups.push({ cycle, tasks: [task], labelled: false });
+  }
+  const multi = groups.length > 1;
+  return groups.map((g) => ({ ...g, labelled: multi }));
 }
 
 function SequenceTaskRow({

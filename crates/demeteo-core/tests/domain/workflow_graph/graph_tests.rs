@@ -392,3 +392,149 @@ fn migrated_starters_lint_clean() {
         );
     }
 }
+
+// ---------- rework-target-without-template ----------
+//
+// Redirecting a verdict to the step that *writes* a task list is what makes
+// a rework cycle cheap — the producer reads the verdict and emits a delta.
+// It only works if the producer knows it is in a rework cycle. Without a
+// rework template it answers with a whole fresh decomposition, so the
+// redirect costs a planning turn *and* re-runs every task: strictly worse
+// than the shape it was meant to improve on.
+
+/// A producer → sequence → verdict chain, where the verdict redirects to
+/// the producer.
+fn rework_shape(rework_template: Option<&str>) -> WorkflowDefinitionV2 {
+    let mut producer_config = serde_json::json!({ "prompt_template": "decompose" });
+    if let Some(t) = rework_template {
+        producer_config["rework_prompt_template"] = serde_json::json!(t);
+    }
+    def(
+        serde_json::json!([
+            { "id": "tickets", "config": producer_config },
+            { "id": "implement", "type": "sequence",
+              "config": { "task_list_from": "tickets" } },
+            { "id": "validate",
+              "config": { "prompt_template": "check" },
+              "retry": { "verdict": { "strategy": "redirect", "redirect_to": "tickets" } } }
+        ]),
+        serde_json::json!([
+            { "from": "tickets", "to": "implement" },
+            { "from": "implement", "to": "validate" }
+        ]),
+    )
+}
+
+#[test]
+fn redirecting_to_a_producer_with_no_rework_template_warns() {
+    let findings = lint_workflow_v2(&rework_shape(None), &CORE_NODE_TYPES);
+    assert!(
+        codes(&findings).contains(&"rework-target-without-template"),
+        "{findings:?}"
+    );
+    // A warning: the workflow runs, it is just expensive. Blocking the save
+    // would refuse a definition the engine executes fine.
+    assert!(errors(&findings).is_empty(), "{findings:?}");
+}
+
+#[test]
+fn redirecting_to_a_producer_that_declares_one_is_clean() {
+    let findings = lint_workflow_v2(
+        &rework_shape(Some("emit only what closes the verdict")),
+        &CORE_NODE_TYPES,
+    );
+    assert!(
+        !codes(&findings).contains(&"rework-target-without-template"),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn a_blank_rework_template_does_not_silence_the_warning() {
+    let findings = lint_workflow_v2(&rework_shape(Some("  ")), &CORE_NODE_TYPES);
+    assert!(
+        codes(&findings).contains(&"rework-target-without-template"),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn redirecting_to_a_node_that_produces_no_task_list_is_not_flagged() {
+    // The overwhelmingly common shape — a verdict sending the run back to
+    // the step that implements — must stay silent, or every workflow in
+    // existence grows a badge.
+    let d = def(
+        serde_json::json!([
+            { "id": "spec", "config": { "prompt_template": "spec" } },
+            { "id": "implement", "config": { "prompt_template": "build" } },
+            { "id": "validate",
+              "config": { "prompt_template": "check" },
+              "retry": { "verdict": { "strategy": "redirect", "redirect_to": "implement" } } }
+        ]),
+        serde_json::json!([
+            { "from": "spec", "to": "implement" },
+            { "from": "implement", "to": "validate" }
+        ]),
+    );
+    let findings = lint_workflow_v2(&d, &CORE_NODE_TYPES);
+    assert!(
+        !codes(&findings).contains(&"rework-target-without-template"),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn the_v2_edge_binding_counts_as_a_producer_too() {
+    // v2 expresses the binding as an edge from a `task-list` artifact
+    // producer into a sequence node, and `project_v2_to_v1` reads it back
+    // that way. A rule that only read the config key would fire on the
+    // migrated form and go silent on the native one it round-trips to.
+    let d = def(
+        serde_json::json!([
+            { "id": "tickets", "config": {
+                "prompt_template": "decompose",
+                "artifacts": [{ "name": "task-list" }] } },
+            { "id": "implement", "type": "sequence", "config": {} },
+            { "id": "validate",
+              "config": { "prompt_template": "check" },
+              "retry": { "verdict": { "strategy": "redirect", "redirect_to": "tickets" } } }
+        ]),
+        serde_json::json!([
+            { "from": "tickets", "to": "implement" },
+            { "from": "implement", "to": "validate" }
+        ]),
+    );
+    let findings = lint_workflow_v2(&d, &CORE_NODE_TYPES);
+    assert!(
+        codes(&findings).contains(&"rework-target-without-template"),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn a_gate_between_a_producer_and_its_sequence_node_is_not_a_consumer() {
+    // The `refactor` starter's shape. Without the sequence-kind check the
+    // gate's incoming edge would make its predecessor read as a producer
+    // for the *gate*, and a redirect at the gate would grow a warning about
+    // a binding nobody wrote.
+    let d = def(
+        serde_json::json!([
+            { "id": "analyse", "config": {
+                "prompt_template": "plan",
+                "artifacts": [{ "name": "task-list" }] } },
+            { "id": "gate", "type": "gate", "config": {} },
+            { "id": "check",
+              "config": { "prompt_template": "check" },
+              "retry": { "verdict": { "strategy": "redirect", "redirect_to": "analyse" } } }
+        ]),
+        serde_json::json!([
+            { "from": "analyse", "to": "gate" },
+            { "from": "gate", "to": "check" }
+        ]),
+    );
+    let findings = lint_workflow_v2(&d, &CORE_NODE_TYPES);
+    assert!(
+        !codes(&findings).contains(&"rework-target-without-template"),
+        "nothing executes this list, so there is no rework cycle to warn about: {findings:?}"
+    );
+}

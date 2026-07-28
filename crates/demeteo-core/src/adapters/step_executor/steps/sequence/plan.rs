@@ -17,34 +17,42 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::models::StepExecution;
 use crate::domain::sequence::tasks::{
-    apply_landed_checkpoint, extract_task_plan, select_targeted_tasks,
-    task_list_json_shape_example, validate_task_plan, TaskPlan,
+    apply_landed_checkpoint, extract_task_plan, is_rework_plan, select_targeted_tasks,
+    task_list_json_shape_example, validate_task_plan, PlanKind, TaskPlan,
 };
 
 impl ExecutionDriver {
     /// Resolve the task list for this attempt.
     ///
-    /// The escalation ladder mirrors the retry semantics:
+    /// Two sources, and they answer a retry completely differently.
     ///
-    /// * **attempt 0** — take the full plan (from the artifact, or the
-    ///   planner) and cache it.
-    /// * **attempt 1** — reuse the cached plan and re-run only the tasks
-    ///   owning the verdict's implicated files, with the feedback stamped on
-    ///   each. Skipping the others is safe (and cheap): their commits are
-    ///   already on the branch.
-    /// * **attempt 2+** — the targeted fix did not stick. Re-resolve the full
-    ///   plan; when it comes from an artifact, a gate redirect may have
-    ///   revised the spec in the meantime, so re-reading picks that up.
+    /// **A step with a producer** (`task_list_from`) asks it. When a verdict
+    /// from behind this step sent the run back, the producer has already
+    /// re-run in rework mode and written a *delta* list — the four tickets
+    /// that close the verdict, not the twenty-five that built the feature.
+    /// So this step runs the list it is given, whole, and reports the
+    /// previous cycles as already landed. There is no selection to make
+    /// here: the producer made it, with the verdict text, the spec and the
+    /// diff in hand, which is strictly more than a file-overlap heuristic
+    /// can know.
     ///
-    /// Cutting across the ladder, and only for **planner-sourced** steps:
-    /// when `resume` carries landed tasks, the cached plan wins over
-    /// re-resolving. A checkpoint identifies work by task id, so a plan whose
-    /// ids differ from the one that produced it matches nothing — and a
-    /// planner pass re-decomposed from scratch produces exactly that.
-    /// Re-planning would keep the landed commits but re-pay for every one of
-    /// them. A `task_list_from` step needs no such rescue (its ids are the
-    /// upstream artifact's, stable across a re-read) and must not get one, or
-    /// attempt 2+ would stop seeing gate revisions.
+    /// **A step with no producer** — a legacy `parallel` workflow, whose
+    /// steps predate the field — has nobody to ask, so it keeps the old
+    /// escalation ladder: plan at attempt 0, re-run the tasks owning the
+    /// verdict's implicated files at attempt 1
+    /// ([`select_targeted_tasks`]), re-plan whole at attempt 2+. That
+    /// ladder is why this used to cost a 25-ticket feature three full runs
+    /// of itself; it survives only where nothing better is available.
+    ///
+    /// Cutting across both, and only for **planner-sourced** steps: when
+    /// `resume` carries landed tasks, the cached plan wins over
+    /// re-resolving. A checkpoint identifies work by task id, so a plan
+    /// whose ids differ from the one that produced it matches nothing — and
+    /// a planner pass re-decomposed from scratch produces exactly that.
+    /// Re-planning would keep the landed commits but re-pay for every one
+    /// of them. A `task_list_from` step needs no such rescue: its ids are
+    /// the artifact's, and a rework list's non-matching ids are the point,
+    /// not a drift to be rescued from.
     ///
     /// `&self`: resolving a plan reads the retry context, the plan cache and
     /// the attempt rows, and writes the cache back through its repository —
@@ -78,18 +86,29 @@ impl ExecutionDriver {
                 .as_ref()
                 .is_some_and(|rc| rc.failing_step_id != step_exec.step_id.0);
 
-        if retry_iteration == 1 && previous_attempt_landed {
-            // This step's own cached plan, never a sibling sequence step's.
-            // Durable (V32): read through the repo so the targeted retry
-            // works identically after a restart. An unparsable row (schema
-            // drift) degrades to a full re-plan, same as a cache miss.
-            let cached_for_this_step: Option<TaskPlan> = self
-                .sequence_resume
-                .plan_cache_get(&self.f_id, step_exec.step_id.0.as_str())
-                .ok()
-                .flatten()
-                .and_then(|json| serde_json::from_str(&json).ok());
-            if let (Some(cached), Some(rc)) = (cached_for_this_step.as_ref(), &self.retry_ctx) {
+        // This step's own cached plan, never a sibling sequence step's.
+        // Durable (V32): read through the repo so a retry behaves
+        // identically after a restart. An unparsable row (schema drift)
+        // degrades to a full re-resolve, same as a cache miss.
+        let cached: Option<TaskPlan> = self
+            .sequence_resume
+            .plan_cache_get(&self.f_id, step_exec.step_id.0.as_str())
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok());
+
+        let planner_sourced = step_conf
+            .task_list_from
+            .as_ref()
+            .is_none_or(|s| s.0.is_empty());
+
+        // A step with no producer has nobody to ask for a delta, so the old
+        // ladder is still the best it can do: one targeted retry off the
+        // cached plan, then a full re-plan. Only reachable from a legacy
+        // `parallel` workflow — every `task_list_from` step takes the
+        // producer path below.
+        if planner_sourced && retry_iteration == 1 && previous_attempt_landed {
+            if let (Some(cached), Some(rc)) = (cached.as_ref(), &self.retry_ctx) {
                 let targeted = select_targeted_tasks(cached, &rc.feedback, &rc.implicated_files);
                 tracing::info!(
                     feature_id = %self.f_id,
@@ -97,7 +116,7 @@ impl ExecutionDriver {
                     selected = targeted.tasks.len(),
                     skipped = targeted.already_landed.len(),
                     total = cached.tasks.len(),
-                    "sequence step: targeted retry"
+                    "sequence step: targeted retry (no task-list producer to ask for a delta)"
                 );
                 return Ok(self.skip_checkpointed_tasks(&step_exec.step_id.0, targeted, resume));
             }
@@ -118,18 +137,10 @@ impl ExecutionDriver {
         // the floor with nothing in the log to say so. Stability is the
         // reason to use the cache; where the artifact already provides it,
         // the artifact is the fresher source.
-        let planner_sourced = step_conf
-            .task_list_from
-            .as_ref()
-            .is_none_or(|s| s.0.is_empty());
         let cached_plan: Option<TaskPlan> = if resume.landed_ids().is_empty() || !planner_sourced {
             None
         } else {
-            self.sequence_resume
-                .plan_cache_get(&self.f_id, step_exec.step_id.0.as_str())
-                .ok()
-                .flatten()
-                .and_then(|json| serde_json::from_str(&json).ok())
+            cached.clone()
         };
 
         let mut plan = match cached_plan {
@@ -166,11 +177,66 @@ impl ExecutionDriver {
             )));
         }
 
-        // Cache only full plans — a targeted subset must never shadow the
-        // complete decomposition, or attempt 2 would re-plan from a fragment.
-        // Durable (V32), stored with the attempt that produced it (the
-        // step's latest V31 row). Telemetry-grade write: failure degrades
-        // to a re-plan on the next targeted retry.
+        // Is the list we just read a *delta* against the previous cycle, or
+        // a fresh whole decomposition?
+        //
+        // Only asked when the run is already in a rework cycle by graph
+        // position — a verdict from behind this step's producer sent it
+        // back — because that is the only way a producer could have written
+        // one. A gate revision reaching here re-reads a *greenfield* list
+        // and must keep being treated as one, however its ids compare.
+        let in_rework_cycle = self.rework_mode(step_conf).is_rework();
+        let is_delta =
+            in_rework_cycle && !planner_sourced && is_rework_plan(&plan, cached.as_ref());
+
+        if is_delta {
+            // Every task runs. The producer already chose which four of the
+            // twenty-five matter, holding the verdict, the spec and the diff
+            // — and no selection made here from `files` alone can improve on
+            // that. `already_landed` carries the cycles it is a delta
+            // against so each running agent's `{{completed_tasks}}` names
+            // the work sitting in the worktree it opens.
+            let previous = cached.as_ref();
+            plan.kind = PlanKind::Rework;
+            plan.cycle = previous.map(|c| c.cycle + 1).unwrap_or(1);
+            plan.history = previous.map(|c| c.close_cycle()).unwrap_or_default();
+            plan.already_landed = plan.all_prior_tasks();
+            plan.resumes_landed_work = true;
+            tracing::info!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                cycle = plan.cycle,
+                tasks = plan.tasks.len(),
+                landed = plan.already_landed.len(),
+                "sequence step: rework cycle — running the producer's delta"
+            );
+        } else if !planner_sourced && in_rework_cycle {
+            // A rework cycle whose producer handed back a whole list
+            // anyway: it declared no `rework_prompt_template`, or the agent
+            // ignored it. Running it is correct — every task re-runs over
+            // its own committed output, which is what happened before this
+            // change existed — but it is the expensive shape, so it says so
+            // rather than looking like a healthy delta in the log.
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                tasks = plan.tasks.len(),
+                producer = %step_conf
+                    .task_list_from
+                    .as_ref()
+                    .map(|s| s.0.as_str())
+                    .unwrap_or_default(),
+                "sequence step: rework cycle, but the task list is a whole decomposition, not a                  delta — every task will re-run over work already on the branch. The producer                  likely declares no `rework_prompt_template`."
+            );
+        }
+
+        // Cache the plan. A targeted subset must never shadow the complete
+        // decomposition, or the next re-plan starts from a fragment — but a
+        // rework delta is not a subset, it is this cycle's whole list, and
+        // it carries every earlier cycle in `history`. Durable (V32),
+        // stored with the attempt that produced it (the step's latest V31
+        // row). Telemetry-grade write: failure degrades to a re-plan on the
+        // next retry.
         let attempt_no = self
             .features
             .attempts_for_step(&step_exec.id)
@@ -203,9 +269,11 @@ impl ExecutionDriver {
             }
         }
 
-        // A full re-plan still runs against whatever the last attempt left on
-        // the branch, so it carries the same warning a targeted retry does.
-        plan.resumes_landed_work = previous_attempt_landed;
+        // A whole list re-run still runs against whatever the last attempt
+        // left on the branch, so it carries the same warning a delta does.
+        // Already true for a delta, and `||` keeps it that way rather than
+        // letting a `false` here overwrite it.
+        plan.resumes_landed_work |= previous_attempt_landed;
         Ok(self.skip_checkpointed_tasks(&step_exec.step_id.0, plan, resume))
     }
 

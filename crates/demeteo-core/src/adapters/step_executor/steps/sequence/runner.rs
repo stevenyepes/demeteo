@@ -93,6 +93,7 @@ impl ExecutionDriver {
                 total: tasks.len(),
                 completed: &completed,
                 resumes_landed_work: plan.resumes_landed_work,
+                plan_kind: plan.kind,
                 thread_id: &thread_id,
             };
 

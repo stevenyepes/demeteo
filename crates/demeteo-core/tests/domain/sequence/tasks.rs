@@ -27,6 +27,7 @@ fn plan() -> TaskPlan {
         ],
         already_landed: vec![],
         resumes_landed_work: false,
+        ..Default::default()
     }
 }
 
@@ -169,6 +170,7 @@ fn plan_of(ids: &[&str]) -> TaskPlan {
         tasks: ids.iter().map(|id| task(id, "t", &[])).collect(),
         already_landed: vec![],
         resumes_landed_work: false,
+        ..Default::default()
     }
 }
 
@@ -355,4 +357,142 @@ fn targeted_retry_reruns_a_task_that_shares_a_file_with_a_selected_task_even_wit
     assert_eq!(ids, ["base", "mid", "leaf"]);
     let landed: Vec<&str> = out.already_landed.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(landed, ["unrelated"]);
+}
+
+// --- is_rework_plan ----------------------------------------------------------
+//
+// Whether a task list is a delta against work already on the branch or a
+// fresh whole decomposition. The producing step declares it; the id-overlap
+// fallback exists because that declaration is written by an agent following
+// a prompt, not enforced by a schema.
+
+#[test]
+fn a_declared_rework_plan_is_a_delta_whatever_its_ids() {
+    // The declaration wins outright — including the awkward case where a
+    // producer reused an id from the original decomposition because the
+    // rework genuinely revisits that ticket.
+    let mut incoming = plan_of(&["a", "fix-1"]);
+    incoming.kind = PlanKind::Rework;
+    let previous = plan_of(&["a", "b"]);
+    assert!(is_rework_plan(&incoming, Some(&previous)));
+}
+
+#[test]
+fn an_undeclared_list_sharing_no_ids_is_read_as_a_delta() {
+    // The fallback: a producer that emitted a delta but forgot the marker.
+    // Read as greenfield, its agents would be told the branch is empty
+    // while standing in a worktree holding the whole previous cycle.
+    let incoming = plan_of(&["fix-1", "fix-2"]);
+    let previous = plan_of(&["a", "b"]);
+    assert!(is_rework_plan(&incoming, Some(&previous)));
+}
+
+#[test]
+fn an_undeclared_list_reusing_any_id_is_a_revised_whole_list() {
+    // A gate saying "the split is too coarse" gets back a re-decomposition
+    // that keeps most ids. One shared id is enough to say so: a delta names
+    // work that did not exist before.
+    let incoming = plan_of(&["a", "b", "c"]);
+    let previous = plan_of(&["a", "b"]);
+    assert!(!is_rework_plan(&incoming, Some(&previous)));
+}
+
+#[test]
+fn the_first_cycle_is_never_a_delta() {
+    // Nothing precedes it, so there is nothing for a delta to be against —
+    // and an empty previous cycle trivially shares no ids, which is exactly
+    // the shape the overlap test would otherwise misread.
+    let incoming = plan_of(&["a", "b"]);
+    assert!(!is_rework_plan(&incoming, None));
+    assert!(!is_rework_plan(&incoming, Some(&plan_of(&[]))));
+}
+
+#[test]
+fn an_empty_incoming_list_is_not_a_delta() {
+    // Vacuously shares no ids with anything. Calling it a delta would mean
+    // "zero tasks close the verdict", which the step would then run as a
+    // no-op cycle instead of failing on an empty list.
+    let incoming = plan_of(&[]);
+    let previous = plan_of(&["a"]);
+    assert!(!is_rework_plan(&incoming, Some(&previous)));
+}
+
+#[test]
+fn ids_are_compared_trimmed() {
+    // `validate_task_plan` accepts a whitespace-padded id, so an untrimmed
+    // comparison would see " a " and "a" as different work and call a
+    // revision a delta.
+    let mut incoming = plan_of(&[" a "]);
+    incoming.tasks[0].id = " a ".to_string();
+    let previous = plan_of(&["a"]);
+    assert!(!is_rework_plan(&incoming, Some(&previous)));
+}
+
+// --- cycle history -----------------------------------------------------------
+
+#[test]
+fn closing_a_cycle_stacks_it_onto_the_history() {
+    let first = plan_of(&["a", "b"]);
+    let mut second = plan_of(&["fix-1"]);
+    second.kind = PlanKind::Rework;
+    second.cycle = 1;
+    second.history = first.close_cycle();
+
+    assert_eq!(second.history.len(), 1);
+    assert_eq!(second.history[0].cycle, 0);
+    assert_eq!(second.history[0].kind, PlanKind::Greenfield);
+
+    // A third cycle carries both earlier ones, oldest first.
+    let mut third = plan_of(&["fix-2"]);
+    third.cycle = 2;
+    third.history = second.close_cycle();
+    let cycles: Vec<u32> = third.history.iter().map(|c| c.cycle).collect();
+    assert_eq!(cycles, [0, 1]);
+
+    // And every task from both is what its agents are told is on the branch.
+    let prior: Vec<String> = third.all_prior_tasks().into_iter().map(|t| t.id).collect();
+    assert_eq!(prior, ["a", "b", "fix-1"]);
+}
+
+#[test]
+fn a_greenfield_plans_history_serializes_away_entirely() {
+    // The back-compat claim for the plan cache: an untouched row's JSON is
+    // byte-identical to what it was before cycles existed, so an older
+    // build reads it unchanged.
+    let json = serde_json::to_string(&plan_of(&["a"])).expect("serializes");
+    assert!(!json.contains("history"), "{json}");
+    assert!(json.contains("\"kind\":\"greenfield\""), "{json}");
+}
+
+#[test]
+fn a_pre_cycle_plan_json_still_parses() {
+    let legacy = r#"{"tasks":[{"id":"a","title":"t","description":"d"}]}"#;
+    let plan: TaskPlan = serde_json::from_str(legacy).expect("legacy row parses");
+    assert_eq!(plan.kind, PlanKind::Greenfield);
+    assert_eq!(plan.cycle, 0);
+    assert!(plan.history.is_empty());
+}
+
+#[test]
+fn the_overlap_fallback_sees_the_cached_plans_own_tasks_not_only_its_history() {
+    // The first rework cycle is the one that matters most, and it is the one
+    // where `history` is still empty: the cached plan holds the original 25
+    // tickets in `tasks`, with nothing behind it. Comparing against history
+    // alone would make `previous` empty, so an undeclared delta would read
+    // as greenfield and every ticket would re-run — exactly the bug this
+    // whole change exists to remove, reintroduced in the fallback.
+    let greenfield = plan_of(&["ticket-01", "ticket-02"]);
+    assert!(greenfield.history.is_empty());
+
+    let incoming = plan_of(&["fix-1"]); // undeclared delta
+    assert!(
+        is_rework_plan(&incoming, Some(&greenfield)),
+        "a delta sharing no id with the cached plan's own tasks is a delta"
+    );
+
+    let revision = plan_of(&["ticket-01", "ticket-02", "ticket-03"]);
+    assert!(
+        !is_rework_plan(&revision, Some(&greenfield)),
+        "a re-decomposition reusing ids is not"
+    );
 }

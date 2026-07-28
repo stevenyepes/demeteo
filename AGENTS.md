@@ -202,7 +202,7 @@ Read the relevant doc before modifying that area.
 |------|----------|
 | Ports, adapters, hexagon, directory layout | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Domain model, ubiquitous language | [docs/DDD_MODEL.md](docs/DDD_MODEL.md) |
-| 42 locked decisions (+ superseded) | [docs/DECISIONS.md](docs/DECISIONS.md) |
+| 43 locked decisions (+ superseded) | [docs/DECISIONS.md](docs/DECISIONS.md) |
 | Open & deferred questions | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) |
 | Agent CLI integration spec | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) |
 | Workflow DAG model, registry, canvas | [docs/PRD_DAG_WORKFLOWS.md](docs/PRD_DAG_WORKFLOWS.md) · remaining work in [docs/TASKS_DAG_WORKFLOWS.md](docs/TASKS_DAG_WORKFLOWS.md) |

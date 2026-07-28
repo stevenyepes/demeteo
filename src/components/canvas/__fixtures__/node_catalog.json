@@ -85,6 +85,13 @@
             "null"
           ]
         },
+        "rework_prompt_template": {
+          "description": "Prompt rendered instead of `prompt_template` when a verdict from behind this step's task-list consumer sends the run back here — the previous cycle's code is already on the branch, so the step emits a delta rather than a whole decomposition. Unset falls back to `prompt_template`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "verifier": {
           "description": "Optional harness/verifier turn run after the agent turn; a FAIL verdict feeds the retry policy.",
           "type": [

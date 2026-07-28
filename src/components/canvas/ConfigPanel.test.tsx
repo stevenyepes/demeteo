@@ -397,6 +397,11 @@ describe('round-trip', () => {
         fireEvent.change(screen.getByTestId('code-prompt_template').querySelector('textarea')!, {
           target: { value: 'Do the thing.' },
         }),
+      rework_prompt_template: () =>
+        fireEvent.change(
+          screen.getByTestId('code-rework_prompt_template').querySelector('textarea')!,
+          { target: { value: 'Fix only what the verdict named.' } },
+        ),
     };
     // Every field the schema publishes must be covered — if the registry grows
     // one, this fails rather than quietly leaving it untested.
@@ -425,6 +430,7 @@ describe('round-trip', () => {
       max_iterations: 4,
       artifacts: [{ name: 'report' }],
       prompt_template: 'Do the thing.',
+      rework_prompt_template: 'Fix only what the verdict named.',
     });
 
     // Still valid against the schema the fields were derived from.

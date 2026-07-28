@@ -65,7 +65,15 @@ impl ExecutionDriver {
             None => (String::new(), String::new(), String::new()),
         };
 
-        let template = step_conf.prompt_template.as_deref().unwrap_or("");
+        // Why this step is running decides *which* template it renders. A
+        // step re-entered because a verdict from behind its task list's
+        // consumer rejected the work has a different job from one whose own
+        // output was rejected, and `rework_prompt_template` is where a
+        // workflow says so. Absent → the ordinary template, unchanged.
+        let mode = self.rework_mode(step_conf);
+        let template = crate::adapters::step_executor::driver::rework::effective_prompt_template(
+            step_conf, mode,
+        );
         // Promote the retry-feedback section to a first-class
         // placeholder so workflow authors can place it exactly where
         // they want it. Templates that don't reference
@@ -86,9 +94,12 @@ impl ExecutionDriver {
             .map(|f| f.attachments.as_slice())
             .unwrap_or(&[]);
 
-        let prompt = self
-            .base_ctx
-            .clone()
+        let ctx = crate::adapters::step_executor::driver::rework::bind_rework_context(
+            self.base_ctx.clone(),
+            mode,
+            self.retry_ctx.as_ref(),
+        );
+        let prompt = ctx
             .set("retry_feedback_section", &retry_section)
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)
@@ -654,6 +665,35 @@ impl ExecutionDriver {
                     let _ = self.registry.kill(&session_key).await;
                     return StepOutcome::VerdictFailed(failure);
                 }
+                // The criteria this step could not satisfy demand something
+                // the *project* is not configured to do — a build or test
+                // command that was never set. Re-running the implementation
+                // cannot add a setting, so opening a rework loop here would
+                // spend the whole retry budget re-implementing a feature
+                // that was already correct and end no better informed.
+                // Terminate once, carrying remediation the user can act on.
+                ParsedVerdict::Environment(reason) => {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        reason = %reason,
+                        "verdict: environment — unjudgeable criteria, not an implementation defect"
+                    );
+                    let _ = self
+                        .git_ops
+                        .cleanup_subtask_worktree(
+                            self.machine_id_opt.as_deref(),
+                            &self.target_dir,
+                            &self.branch_name,
+                            &subtask_id,
+                        )
+                        .await;
+                    let _ = self.registry.kill(&session_key).await;
+                    return StepOutcome::NonRetryable(format!(
+                        "[project configuration — retrying cannot fix this] {}",
+                        reason
+                    ));
+                }
                 ParsedVerdict::Missing(desc) => {
                     let _ = self
                         .git_ops
@@ -1028,6 +1068,16 @@ static AGENT_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
                     "type": ["string", "null"],
                     "description": "The step's prompt template. Supports the \
                         `{{...}}` placeholders documented in PROMPT_CONTEXT."
+                },
+                "rework_prompt_template": {
+                    "type": ["string", "null"],
+                    "description": "Prompt rendered instead of \
+                        `prompt_template` when a verdict from behind this \
+                        step's task-list consumer sends the run back here \
+                        — the previous cycle's code is already on the \
+                        branch, so the step emits a delta rather than a \
+                        whole decomposition. Unset falls back to \
+                        `prompt_template`."
                 },
                 "max_iterations": {
                     "type": ["integer", "null"],

@@ -718,6 +718,16 @@ impl ExecutionDriver {
                 );
                 Err(crate::domain::verifier::VerifierError::Verdict(failure))
             }
+            ParsedVerdict::Environment(reason) => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    reason = %reason,
+                    "verifier verdict: environment — the project is not configured to evidence \
+                     these criteria, so no amount of re-implementation can satisfy them"
+                );
+                Err(crate::domain::verifier::VerifierError::Environment(reason))
+            }
             ParsedVerdict::Missing(desc) => {
                 tracing::warn!(
                     feature_id = %self.f_id,
@@ -736,8 +746,20 @@ impl ExecutionDriver {
 pub(crate) enum ParsedVerdict {
     Pass,
     Fail(crate::domain::verifier::VerdictFailure),
-    /// No JSON object carrying the verdict key was found, or its value
-    /// was neither "pass" nor "fail". The string describes the problem.
+    /// The verifier judged the work unjudgeable: the criteria it could not
+    /// satisfy demand something the *project* is not configured to do, not
+    /// something the code got wrong.
+    ///
+    /// A third verdict rather than a flavour of `Fail`, because the two
+    /// route to opposite places. `Fail` opens a rework loop — the right
+    /// answer when an agent can fix what is broken. Nothing an agent writes
+    /// can add a `build_command` to project settings, so routing this to
+    /// `Fail` spends the entire retry budget re-implementing a feature that
+    /// was already correct and ends no better informed. This terminates
+    /// once, carrying remediation the user can act on.
+    Environment(String),
+    /// No JSON object carrying the verdict key was found, or its value was
+    /// none of the three above. The string describes the problem.
     Missing(String),
 }
 
@@ -800,6 +822,16 @@ pub(crate) fn parse_verdict_text(raw_text: &str, verdict_key: &str) -> ParsedVer
                 failing_tests: string_list("failing_tests"),
                 implicated_files: string_list("implicated_files"),
             })
+        }
+        // The verifier can only reach this by being *told* to in its
+        // instructions (the shipped validate step is), so an older
+        // workflow's verifier can never produce it by accident.
+        "environment" => {
+            let reason = val
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("The project is not configured to evidence this step's criteria.");
+            ParsedVerdict::Environment(reason.to_string())
         }
         other => ParsedVerdict::Missing(format!("Invalid verifier verdict: '{}'", other)),
     }

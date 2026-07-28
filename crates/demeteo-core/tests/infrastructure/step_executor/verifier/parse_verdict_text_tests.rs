@@ -146,3 +146,49 @@ fn think_tags_are_stripped_before_parsing() {
         ParsedVerdict::Pass
     ));
 }
+
+// --- the `environment` verdict -----------------------------------------------
+//
+// A third answer, not a flavour of `fail`. `fail` opens a rework loop, which
+// is right when an agent can fix what is broken — and wrong when the
+// unsatisfied criteria demand a command the *project* is not configured to
+// run. Nothing an agent writes adds a `build_command` to project settings,
+// so routing that to `fail` spends the whole retry budget re-implementing a
+// feature that was already correct.
+
+#[test]
+fn environment_verdict_carries_its_remediation() {
+    let text = r#"Report written. {"verdict": "environment", "reason": "Criterion 1 requires `npm run build`, which this project's harness does not run. Set build_command in project settings."}"#;
+    match parse_verdict_text(text, "verdict") {
+        ParsedVerdict::Environment(reason) => {
+            assert!(reason.contains("build_command"), "{reason}");
+        }
+        other => panic!("expected environment verdict, got {other:?}"),
+    }
+}
+
+#[test]
+fn environment_verdict_without_a_reason_still_says_something_actionable() {
+    let text = r#"{"verdict": "environment"}"#;
+    match parse_verdict_text(text, "verdict") {
+        ParsedVerdict::Environment(reason) => assert!(!reason.trim().is_empty()),
+        other => panic!("expected environment verdict, got {other:?}"),
+    }
+}
+
+#[test]
+fn environment_is_recognised_case_insensitively_like_the_others() {
+    assert!(matches!(
+        parse_verdict_text(r#"{"verdict": "ENVIRONMENT"}"#, "verdict"),
+        ParsedVerdict::Environment(_)
+    ));
+}
+
+#[test]
+fn an_unknown_verdict_word_is_still_missing_not_environment() {
+    // The vocabulary stays closed: only the three words route anywhere.
+    match parse_verdict_text(r#"{"verdict": "maybe"}"#, "verdict") {
+        ParsedVerdict::Missing(desc) => assert!(desc.contains("maybe"), "{desc}"),
+        other => panic!("expected missing, got {other:?}"),
+    }
+}

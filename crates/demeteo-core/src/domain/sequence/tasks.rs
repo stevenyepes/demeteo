@@ -44,17 +44,65 @@ pub struct PlannedTask {
     pub retry_note: Option<String>,
 }
 
-/// An ordered task list: either authored upstream (the spec step writes it
-/// as a declared artifact, so a human gate can review the decomposition
-/// before any code is written) or, for legacy `parallel` workflows that
-/// declare no `task_list_from`, produced by a planner turn.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Whether a task list decomposes the whole feature or only what a verdict
+/// rejected.
+///
+/// Written by the producing step and read by the `sequence` step, which
+/// treats the two completely differently: a greenfield list runs against a
+/// worktree cut from a branch that carries none of it, while a rework list
+/// runs against one that carries the entire previous cycle. Getting that
+/// backwards is either an agent reimplementing code it is looking at, or a
+/// delta applied to a tree that has nothing to apply it to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanKind {
+    /// The full decomposition. The default, so every task list written
+    /// before this field existed — and every producer that never learned
+    /// to set it — reads as what it is.
+    #[default]
+    Greenfield,
+    /// A delta closing a downstream verdict. Every task runs; the previous
+    /// cycle's tasks are reported as already landed.
+    Rework,
+}
+
+/// An ordered task list: either authored upstream (the decomposition step
+/// writes it as a declared artifact, so a human gate can review it before
+/// any code is written) or, for legacy `parallel` workflows that declare no
+/// `task_list_from`, produced by a planner turn.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskPlan {
     /// Accepts `tasks` (the current schema) or `subtasks` (what the old
     /// planner prompt emitted), so a legacy workflow's planner output still
     /// parses.
     #[serde(alias = "subtasks")]
     pub tasks: Vec<PlannedTask>,
+    /// Whole decomposition, or a delta against work already on the branch.
+    ///
+    /// Authoritative when the producer sets it. When it doesn't — a
+    /// hand-written list, an older prompt — the sequence step falls back to
+    /// comparing this list's ids against the previous cycle's, which
+    /// answers the same question from evidence rather than declaration.
+    #[serde(default)]
+    pub kind: PlanKind,
+    /// 0 for the original decomposition, incrementing once per rework
+    /// cycle. Assigned by the `sequence` step as it resolves the plan, not
+    /// by the producer — the producer has no way to know how many cycles
+    /// preceded it, and a number it guessed would silently mislabel the
+    /// history.
+    #[serde(default)]
+    pub cycle: u32,
+    /// Earlier cycles of this same step, oldest first, each carrying the
+    /// tasks it decomposed.
+    ///
+    /// Kept so a rework cycle does not erase the decomposition it is a
+    /// delta against: the drill-down renders every cycle, and the tasks a
+    /// running agent must be told are already on the branch are read from
+    /// here. Empty for a greenfield plan, which is why it skips
+    /// serializing — an untouched row's JSON is byte-identical to what it
+    /// was before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<PlanCycle>,
     /// Tasks a targeted retry is deliberately *not* re-running because their
     /// work is already committed on the feature branch (see
     /// [`select_targeted_tasks`]).
@@ -79,6 +127,67 @@ pub struct TaskPlan {
     /// starting from nothing.
     #[serde(skip)]
     pub resumes_landed_work: bool,
+}
+
+/// One finished cycle of a step's decomposition, as stored in
+/// [`TaskPlan::history`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanCycle {
+    pub cycle: u32,
+    #[serde(default)]
+    pub kind: PlanKind,
+    pub tasks: Vec<PlannedTask>,
+}
+
+impl TaskPlan {
+    /// Every task this step has ever planned, oldest cycle first, followed
+    /// by this plan's own.
+    ///
+    /// The record a rework cycle's agents are shown as "already committed
+    /// on your branch". Ordered rather than set-like because the prompt
+    /// renders it as a list an agent reads top to bottom, and the order the
+    /// tasks landed in is the order that makes it legible.
+    pub fn all_prior_tasks(&self) -> Vec<PlannedTask> {
+        self.history
+            .iter()
+            .flat_map(|c| c.tasks.iter())
+            .cloned()
+            .collect()
+    }
+
+    /// Every task this plan accounts for, `history` **plus its own**.
+    ///
+    /// The distinction from [`Self::all_prior_tasks`] is easy to get wrong
+    /// and expensive when you do. Asked of the *cached* plan, this is "every
+    /// ticket the previous cycles planned" — which is what an incoming list
+    /// must be compared against to tell a delta from a re-decomposition.
+    /// `all_prior_tasks` would answer that with `history` alone, and on the
+    /// first rework cycle `history` is still empty while the twenty-five
+    /// original tickets sit in `tasks`: the comparison would find nothing to
+    /// overlap with, read an undeclared delta as greenfield, and re-run
+    /// every one of them.
+    pub fn all_planned_tasks(&self) -> Vec<PlannedTask> {
+        let mut out = self.all_prior_tasks();
+        out.extend(self.tasks.iter().cloned());
+        out
+    }
+
+    /// Fold this plan into `history` as a completed cycle, returning the
+    /// history the *next* cycle starts from.
+    ///
+    /// Only the tasks survive: the execution-state fields
+    /// (`already_landed`, `resumes_landed_work`) describe one attempt, not
+    /// the decomposition, and carrying them forward would let a stale
+    /// attempt's bookkeeping outlive it.
+    pub fn close_cycle(&self) -> Vec<PlanCycle> {
+        let mut history = self.history.clone();
+        history.push(PlanCycle {
+            cycle: self.cycle,
+            kind: self.kind,
+            tasks: self.tasks.clone(),
+        });
+        history
+    }
 }
 
 /// The task-list JSON shape, as shown to a planner/spec agent and (in the
@@ -280,7 +389,51 @@ pub(crate) fn select_targeted_tasks(
         tasks: selected,
         already_landed,
         resumes_landed_work: true,
+        ..cached.clone()
     }
+}
+
+/// Is `incoming` a delta against `previous`, or a fresh whole decomposition?
+///
+/// The producing step declares it ([`PlanKind`]) and that declaration wins.
+/// The fallback exists because the declaration is written by an agent
+/// following a prompt, and a prompt is not a schema: a producer that emits
+/// a rework list without the marker would otherwise be read as a greenfield
+/// list, and the `sequence` step would tell its agents the branch is empty
+/// while they stand in a worktree holding the whole previous cycle.
+///
+/// The evidence is id overlap. A greenfield re-decomposition reissues the
+/// same ticket ids (the producer is revising a list it is looking at); a
+/// delta names work that did not exist before. So **no shared id with the
+/// previous cycle** reads as rework.
+///
+/// Two guards keep that from firing on the wrong thing. An empty previous
+/// cycle shares no ids with anything, and a first run has no previous cycle
+/// at all — both are greenfield by definition. And the caller only consults
+/// this when the run is *already* in a rework cycle by graph position
+/// ([`crate::domain::rework`]), so the worst a wrong answer here can do is
+/// re-run a list that would otherwise have been skipped — never the
+/// reverse.
+///
+/// `previous` is the whole cached [`TaskPlan`], not a task slice, so the
+/// comparison set is chosen here rather than at the call site. Handing the
+/// caller that choice is how this gets silently broken: `all_prior_tasks`
+/// looks like the right answer and is empty on the first rework cycle,
+/// where the tickets to compare against are the cached plan's *own*
+/// (see [`TaskPlan::all_planned_tasks`]).
+pub fn is_rework_plan(incoming: &TaskPlan, previous: Option<&TaskPlan>) -> bool {
+    if incoming.kind == PlanKind::Rework {
+        return true;
+    }
+    let Some(previous) = previous else {
+        return false;
+    };
+    let previous = previous.all_planned_tasks();
+    if previous.is_empty() || incoming.tasks.is_empty() {
+        return false;
+    }
+    let prior: std::collections::HashSet<&str> = previous.iter().map(|t| t.id.trim()).collect();
+    !incoming.tasks.iter().any(|t| prior.contains(t.id.trim()))
 }
 
 /// Drop the tasks a mid-list checkpoint already landed on the feature branch.
