@@ -338,8 +338,11 @@ mod harness_gates;
 /// the in-graph node records the sha it actually measured, the lazy fallback
 /// fires on validate's failure path and only there, a covering record is not
 /// re-measured, a fallback that cannot measure leaves the verdict untouched,
-/// and every worktree is torn down. Runs a real shell and real git; only the
-/// agent is stubbed. Included the same `#[path]` way.
+/// and every worktree is torn down. Plus HB9's pair: a gate the measurement
+/// found *unrunnable* ends the run at the head of the graph with remediation,
+/// while a gate that is merely red walks the whole graph to be subtracted at
+/// validate. Runs a real shell and real git; only the agent is stubbed.
+/// Included the same `#[path]` way.
 #[cfg(test)]
 #[path = "../../tests/conformance/harness_baseline.rs"]
 mod harness_baseline;
