@@ -1,0 +1,402 @@
+//! Baseline-measurement driver-integration fixtures (HB2b / P4.2a,
+//! `docs/HARNESS_BASELINE.md`).
+//!
+//! *What a gate said* is a pure decision, unit-tested against a scripted port
+//! next to [`measure_gates`](crate::adapters::step_executor::baseline::measure_gates).
+//! What that cannot cover is the wiring, and the wiring is where a baseline
+//! goes quietly wrong:
+//!
+//! 1. the node records the sha it **actually measured** — the field most easily
+//!    assumed and most expensive to have assumed;
+//! 2. a gate that is already red at the base is **recorded, not judged**, so a
+//!    run against an already-red repository is not blocked at its first node;
+//! 3. the worktree is torn down on the green path *and* the red one.
+//!
+//! Every leg runs a **real shell and real git** through
+//! `ExecutionMode::LocalOnly` (only the *agent* is stubbed): the subject is
+//! what the orchestrator chose to run against a real repository, and a scripted
+//! exec double would answer for that choice rather than obey it.
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use crate::adapters::agent::stub_runtime::STUB_AGENT_ENV;
+use crate::application::{bootstrap, projects, workflows};
+use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::harness_baseline::{BaselineProducer, HarnessBaseline};
+use crate::domain::ids::{FeatureId, ProjectId, ProviderId};
+use crate::domain::models::ProviderInstance;
+use crate::paths;
+use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::state::AppContext;
+
+const REPO_PATH: &str = "demeteo/harness-baseline";
+const PROVIDER_ID: &str = "harness-baseline-provider";
+
+/// A gate that always fails, announcing itself first. Byte-stable, so nothing
+/// here perturbs a fingerprint between the baseline run and the live one.
+fn failing(marker: &str) -> String {
+    format!("echo '{marker}'; exit 1")
+}
+
+/// A gate that always passes, announcing itself.
+fn passing(marker: &str) -> String {
+    format!("echo '{marker}'; exit 0")
+}
+
+struct NoopNotif;
+impl NotificationPort for NoopNotif {
+    fn emit(&self, _event: &DomainEvent) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The `baseline-harness` node as the starters now ship it: a `command` node
+/// that declares no command at all, because the commands it runs come from the
+/// project.
+fn baseline_node() -> serde_json::Value {
+    serde_json::json!({
+        "id": "s-baseline-harness",
+        "kind": "command",
+        "title": "Measure Harness Baseline",
+        "capability": "read_only",
+        "measure_baseline": true,
+        "idempotent": true,
+        "max_iterations": 1
+    })
+}
+
+fn workflow(name: &str, steps: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "description": "Harness baseline conformance fixture.",
+        "steps": steps,
+    })
+}
+
+/// Point the project's harness config at a deterministic marker command. A
+/// fresh project has no persisted settings row (defaults are applied lazily),
+/// so this builds one from the engine default.
+fn set_project(
+    ctx: &AppContext,
+    project_id: &ProjectId,
+    test_command: Option<String>,
+    prepare_command: Option<String>,
+) {
+    let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
+    settings.project_id = project_id.clone();
+    settings.worktree_strategy.test_command = test_command;
+    settings.worktree_strategy.prepare_command = prepare_command;
+    ctx.projects.save_settings(settings).expect("save settings");
+}
+
+/// Seed a real local git repo at the project's expected repo dir so
+/// `bootstrap_project` skips its (network) clone — the same "already cloned"
+/// shortcut every offline path relies on. Returns the seed commit's sha, which
+/// is the commit every producer in this file should end up measuring.
+fn init_local_repo(workspace_dir: &Path, project_id: &str, repo_path: &str) -> String {
+    let dir = paths::repo_target_dir_local(workspace_dir, project_id, repo_path);
+    std::fs::create_dir_all(&dir).expect("create repo dir");
+    let git = |args: &[&str]| -> String {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "demeteo@local"]);
+    git(&["config", "user.name", "demeteo"]);
+    std::fs::write(dir.join("README.md"), "# harness baseline fixture\n").expect("seed README");
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "seed"]);
+    git(&["rev-parse", "HEAD"])
+}
+
+/// One step's terminal row, reduced to what these fixtures assert on.
+#[derive(Debug, Clone, Default)]
+struct StepOutcomeRow {
+    status: String,
+    error: Option<String>,
+}
+
+/// Drive a freshly-started feature to a terminal state and hand back the
+/// baseline record plus each step's terminal row.
+async fn poll_terminal(
+    ctx: &AppContext,
+    feature_id: &FeatureId,
+) -> (Option<HarnessBaseline>, Vec<(String, StepOutcomeRow)>) {
+    const MAX_WAIT: Duration = Duration::from_secs(60);
+    let started = Instant::now();
+    loop {
+        let feature = ctx
+            .features
+            .get(feature_id)
+            .expect("feature read")
+            .expect("feature exists");
+        if matches!(
+            feature.status.as_str(),
+            "completed" | "awaiting_mr" | "failed" | "interrupted"
+        ) {
+            let steps = ctx
+                .features
+                .steps_for_feature(feature_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.step_id.0,
+                        StepOutcomeRow {
+                            status: s.status,
+                            error: s.error_message,
+                        },
+                    )
+                })
+                .collect();
+            return (feature.harness_baseline, steps);
+        }
+        if started.elapsed() > MAX_WAIT {
+            panic!(
+                "feature {} did not settle in {:?}; last status {}",
+                feature_id.as_str(),
+                MAX_WAIT,
+                feature.status
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+struct LegOutcome {
+    baseline: Option<HarnessBaseline>,
+    steps: Vec<(String, StepOutcomeRow)>,
+    /// The repo's `main` tip at the moment the feature started — the commit
+    /// every producer here should be measuring.
+    base_sha: String,
+    /// Every leftover `<repo>_wt_*` directory. Must be empty: worktrees are
+    /// disposable by construction and a run that leaves one behind leaks one
+    /// checkout per attempt.
+    leftover_worktrees: Vec<String>,
+}
+
+/// Register provider, create the project, seed the repo, bootstrap, ingest the
+/// workflow, and drive one feature to a terminal state on a locally-executing
+/// engine.
+async fn run_leg(
+    tag: &str,
+    steps: Vec<serde_json::Value>,
+    test_command: Option<String>,
+    prepare_command: Option<String>,
+) -> LegOutcome {
+    std::env::set_var(STUB_AGENT_ENV, "1");
+    let tmp = std::env::temp_dir().join(format!(
+        "demeteo-harness-baseline-{tag}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).expect("create app data dir");
+
+    let ctx = build_core_context(
+        CoreConfig {
+            app_data_dir: tmp.clone(),
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotif),
+        tokio::runtime::Handle::current(),
+    );
+
+    ctx.app_settings
+        .add_provider_instance(ProviderInstance {
+            id: ProviderId::from(PROVIDER_ID),
+            kind: "github".to_string(),
+            host: "github.com".to_string(),
+            username: String::new(),
+            avatar_url: String::new(),
+            created_at: paths::now_ms(),
+        })
+        .expect("register provider");
+
+    let project = projects::create(
+        &ctx,
+        projects::ProjectConfig {
+            name: "harness-baseline".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            repos: vec![projects::RepositoryConfig {
+                repo_path: REPO_PATH.to_string(),
+                provider_id: PROVIDER_ID.to_string(),
+            }],
+        },
+    )
+    .expect("create project");
+
+    let base_sha = init_local_repo(&ctx.workspace_dir, project.id.as_str(), REPO_PATH);
+    set_project(&ctx, &project.id, test_command, prepare_command);
+    bootstrap::bootstrap_project(&ctx, project.id.0.clone())
+        .await
+        .expect("bootstrap project");
+
+    let workflow_id = workflows::create_from_json(&ctx.workflows, &workflow(tag, steps))
+        .expect("ingest workflow");
+
+    let feature = ctx
+        .executor
+        .feature_start(
+            None,
+            project.id.as_str(),
+            workflow_id.as_str(),
+            "Baseline Feature",
+            "Exercise HB2b baseline measurement.",
+            Some("stub"),
+            None,
+            None,
+            None,
+            Some(1),
+            None,
+            vec![],
+            vec![],
+        )
+        .await
+        .expect("feature_start");
+
+    let (baseline, steps) = poll_terminal(&ctx, &feature.id).await;
+
+    let repo_dir = paths::repo_target_dir_local(&ctx.workspace_dir, project.id.as_str(), REPO_PATH);
+    let leftover_worktrees = leftover_worktrees(&repo_dir);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    LegOutcome {
+        baseline,
+        steps,
+        base_sha,
+        leftover_worktrees,
+    }
+}
+
+impl LegOutcome {
+    fn step(&self, id: &str) -> StepOutcomeRow {
+        self.steps
+            .iter()
+            .find(|(step_id, _)| step_id == id)
+            .map(|(_, row)| row.clone())
+            .unwrap_or_else(|| panic!("no step row for '{id}' in {:?}", self.steps))
+    }
+}
+
+/// Sibling directories named `<repo>_wt_*` — every linked worktree the run
+/// created and did not clean up.
+fn leftover_worktrees(repo_dir: &Path) -> Vec<String> {
+    let (Some(parent), Some(name)) = (repo_dir.parent(), repo_dir.file_name()) else {
+        return Vec::new();
+    };
+    let prefix = format!("{}_wt_", name.to_string_lossy());
+    std::fs::read_dir(parent)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| n.starts_with(&prefix))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// ── Producer 1: the in-graph node ────────────────────────────────────────────
+
+/// The headline P4.2a leg. The node runs the project's harness at zero token
+/// cost and records what it said **against the sha it measured** — not against
+/// an assumed one. `covers()` exists so a baseline taken from the wrong
+/// position in the graph is detectable rather than silently trusted, and it can
+/// only do that if the sha is real.
+#[tokio::test]
+async fn the_node_records_the_sha_it_actually_measured() {
+    let leg = run_leg(
+        "node",
+        vec![baseline_node()],
+        Some(passing("BASELINE-GATE-RAN")),
+        None,
+    )
+    .await;
+
+    let baseline = leg
+        .baseline
+        .clone()
+        .expect("the node must write a baseline record");
+    assert_eq!(
+        baseline.base_sha, leg.base_sha,
+        "the record must name the commit that was measured"
+    );
+    assert!(
+        baseline.covers(&leg.base_sha),
+        "a record that does not cover the run's base is not evidence about it"
+    );
+
+    let gate = baseline
+        .harness("default")
+        .expect("the project's test_command is measured under the default gate name");
+    assert!(gate.exit_ok, "a passing gate must be recorded as passing");
+    assert_eq!(gate.producer, BaselineProducer::Node);
+    assert!(
+        gate.output_ref.is_some(),
+        "the output belongs in the artifact store, referenced from the record"
+    );
+    assert!(
+        leg.leftover_worktrees.is_empty(),
+        "the node's worktree must be torn down: {:?}",
+        leg.leftover_worktrees
+    );
+}
+
+/// A harness that is already red at the base is **recorded, not judged**. That
+/// is the entire point of a baseline: a repository whose suite was already
+/// failing is not this feature's defect, and failing the run at its very first
+/// node would restate exactly the misattribution HB2 exists to remove — before
+/// a single line has been written.
+#[tokio::test]
+async fn a_red_gate_at_the_base_is_recorded_and_the_run_continues() {
+    let leg = run_leg(
+        "node-red",
+        vec![baseline_node()],
+        Some(failing("BASELINE-GATE-RAN")),
+        None,
+    )
+    .await;
+
+    let gate = leg
+        .baseline
+        .clone()
+        .expect("a red baseline is still a baseline")
+        .harness("default")
+        .cloned()
+        .expect("the gate was measured");
+    assert!(!gate.exit_ok, "the gate must be recorded as red");
+    assert!(
+        !gate.fingerprint.is_empty(),
+        "a red gate owes a fingerprint — it is the cheap rung of HB2c's ladder"
+    );
+
+    // The load-bearing half: the step itself must not fail. Failing here would
+    // block every run against an already-red repository at its very first node,
+    // which is the misattribution this whole subsystem exists to remove.
+    let step = leg.step("s-baseline-harness");
+    assert_eq!(
+        step.status, "completed",
+        "a red gate at the base is recorded, not judged: {step:?}"
+    );
+    assert_eq!(step.error, None, "and it is not dressed as a failure");
+    assert!(
+        leg.leftover_worktrees.is_empty(),
+        "the worktree must be torn down on the red path too: {:?}",
+        leg.leftover_worktrees
+    );
+}

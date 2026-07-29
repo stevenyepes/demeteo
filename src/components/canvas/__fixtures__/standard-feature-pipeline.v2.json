@@ -4,6 +4,27 @@
   "name": "Standard Feature Pipeline",
   "nodes": [
     {
+      "id": "s-baseline-harness",
+      "type": "command",
+      "type_version": 1,
+      "title": "Measure Harness Baseline",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "capability": "read_only",
+        "idempotent": true,
+        "max_iterations": 1,
+        "measure_baseline": true,
+        "prompt_template": null,
+        "verifier": null
+      },
+      "position": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    {
       "id": "s-research",
       "type": "agent",
       "type_version": 1,
@@ -30,7 +51,7 @@
       },
       "position": {
         "x": 0.0,
-        "y": 0.0
+        "y": 160.0
       }
     },
     {
@@ -60,7 +81,7 @@
       },
       "position": {
         "x": 0.0,
-        "y": 160.0
+        "y": 320.0
       }
     },
     {
@@ -91,7 +112,7 @@
       },
       "position": {
         "x": 0.0,
-        "y": 320.0
+        "y": 480.0
       }
     },
     {
@@ -109,7 +130,7 @@
       },
       "position": {
         "x": 0.0,
-        "y": 480.0
+        "y": 640.0
       }
     },
     {
@@ -151,7 +172,7 @@
       },
       "position": {
         "x": 0.0,
-        "y": 640.0
+        "y": 800.0
       }
     },
     {
@@ -196,7 +217,7 @@
       },
       "position": {
         "x": 0.0,
-        "y": 800.0
+        "y": 960.0
       }
     },
     {
@@ -226,7 +247,7 @@
       },
       "position": {
         "x": 0.0,
-        "y": 960.0
+        "y": 1120.0
       }
     },
     {
@@ -245,7 +266,7 @@
       },
       "position": {
         "x": 0.0,
-        "y": 1120.0
+        "y": 1280.0
       }
     },
     {
@@ -263,11 +284,15 @@
       },
       "position": {
         "x": 0.0,
-        "y": 1280.0
+        "y": 1440.0
       }
     }
   ],
   "edges": [
+    {
+      "from": "s-baseline-harness",
+      "to": "s-research"
+    },
     {
       "from": "s-research",
       "to": "s-spec"

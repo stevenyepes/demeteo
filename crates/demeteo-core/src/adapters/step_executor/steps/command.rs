@@ -93,6 +93,10 @@ const FEEDBACK_TAIL_BYTES: usize = 4_000;
 /// migration copies these verbatim into the node's `config`).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CommandSpec {
+    /// The authored shell command. Empty **only** when
+    /// [`measure_baseline`](Self::measure_baseline) is set, which is the one
+    /// mode where the commands to run come from the project rather than the
+    /// workflow.
     pub command: String,
     /// Worktree-relative, already validated as non-escaping. `None` =
     /// worktree root.
@@ -101,6 +105,10 @@ pub(crate) struct CommandSpec {
     pub timeout: Option<Duration>,
     /// Unset reads as `false`: see [`StepConfig::idempotent`].
     pub idempotent: bool,
+    /// Measure the harness baseline rather than run `command`
+    /// (`docs/HARNESS_BASELINE.md` HB2b). See
+    /// [`StepConfig::measure_baseline`].
+    pub measure_baseline: bool,
 }
 
 /// Parse + validate a step's command config. `Err` is an author-facing
@@ -109,13 +117,21 @@ pub(crate) struct CommandSpec {
 /// [`CommandNodeHandler::lint`] surfaces the same problems in the builder
 /// *before* a run is ever started.
 pub(crate) fn parse_spec(step: &StepConfig) -> Result<CommandSpec, String> {
-    let command = step
+    let measure_baseline = step.measure_baseline.unwrap_or(false);
+    // A baseline node's commands come from the *project* — its
+    // `prepare_command` and the harnesses that gate validation — so demanding
+    // one in the workflow would be asking the author for a string they cannot
+    // know. Every other command node still owes one: it is the entire step.
+    let command = match step
         .command
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty())
-        .ok_or_else(|| "command node declares no `command` to run".to_string())?
-        .to_string();
+    {
+        Some(cmd) => cmd.to_string(),
+        None if measure_baseline => String::new(),
+        None => return Err("command node declares no `command` to run".to_string()),
+    };
 
     let cwd = match step.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
         None => None,
@@ -137,6 +153,7 @@ pub(crate) fn parse_spec(step: &StepConfig) -> Result<CommandSpec, String> {
         env_allowlist: step.env_allowlist.clone(),
         timeout,
         idempotent: step.idempotent.unwrap_or(false),
+        measure_baseline,
     })
 }
 
@@ -206,9 +223,17 @@ impl ExecutionDriver {
             }
         };
 
-        let outcome = self
-            .run_command_in_worktree(step_exec, step_conf, &spec, &machine_str, &wt_path)
-            .await;
+        // Two shapes share every line above and below this: the same
+        // disposable worktree, the same login shell, the same teardown. Only
+        // *what is run in it* differs — an authored command, or the project's
+        // own gates measured into the baseline record (HB2b / P4.2a).
+        let outcome = if spec.measure_baseline {
+            self.run_baseline_node(step_exec, step_conf, &machine_str, &wt_path)
+                .await
+        } else {
+            self.run_command_in_worktree(step_exec, step_conf, &spec, &machine_str, &wt_path)
+                .await
+        };
 
         // The worktree is disposable by design (no merge-back), so tear it
         // down on every path — including the failure paths, whose evidence
@@ -546,7 +571,20 @@ static COMMAND_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
                     "type": "string",
                     "description": "Shell command to run, verbatim, under an \
                         interactive login shell (so the user's PATH and any \
-                        mise/asdf/nvm shims are active). Required."
+                        mise/asdf/nvm shims are active). Required unless \
+                        `measure_baseline` is set."
+                },
+                "measure_baseline": {
+                    "type": ["boolean", "null"],
+                    "description": "Measure the harness baseline instead of \
+                        running `command`: the node runs this PROJECT's \
+                        prepare command plus every harness that gates \
+                        validation, and records what each said at the commit \
+                        it measured. Only valid at the head of the graph, \
+                        where the feature branch still points at the base \
+                        commit. A red gate is recorded, not judged — \
+                        subtracting it from validate's verdict is a separate \
+                        decision."
                 },
                 "cwd": {
                     "type": ["string", "null"],
@@ -639,7 +677,11 @@ impl NodeHandler for CommandNodeHandler {
                 .filter(|s| !s.is_empty())
         };
 
-        if str_field("command").is_none() {
+        let bool_field =
+            |key: &str| -> Option<bool> { cfg.and_then(|o| o.get(key)).and_then(|v| v.as_bool()) };
+        let measures_baseline = bool_field("measure_baseline") == Some(true);
+
+        if str_field("command").is_none() && !measures_baseline {
             findings.push(LintFinding::node_error(
                 "command-missing",
                 &node.id,
@@ -655,11 +697,11 @@ impl NodeHandler for CommandNodeHandler {
                 ));
             }
         }
-        if cfg
-            .and_then(|o| o.get("idempotent"))
-            .and_then(|v| v.as_bool())
-            != Some(true)
-        {
+        // A baseline node is a measurement of a commit that has not changed:
+        // re-running it after an interrupt is free of consequence by
+        // construction, so the "are you sure this is safe to repeat" warning
+        // would be noise the author cannot act on.
+        if bool_field("idempotent") != Some(true) && !measures_baseline {
             findings.push(LintFinding::node_warning(
                 "command-not-idempotent",
                 &node.id,
@@ -690,7 +732,10 @@ impl NodeHandler for CommandNodeHandler {
     /// guard must ask regardless of what the fingerprint says.
     fn resume_policy(&self, step_conf: &StepConfig) -> ResumePolicy {
         match parse_spec(step_conf) {
-            Ok(spec) if spec.idempotent => ResumePolicy::WhenUnchanged,
+            // A baseline node only reads: it measures a commit and writes a
+            // record. Re-running it after an interrupt cannot do anything
+            // twice, so it never needs a human to approve the retry.
+            Ok(spec) if spec.idempotent || spec.measure_baseline => ResumePolicy::WhenUnchanged,
             // An unparseable config resolves to "ask": it is the safe
             // reading, and the step is about to fail as NonRetryable anyway.
             _ => ResumePolicy::AlwaysAsk,

@@ -192,7 +192,3 @@ impl HarnessBaseline {
         value.and_then(|v| serde_json::to_string(v).ok())
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/domain/harness_baseline.rs"]
-mod tests;

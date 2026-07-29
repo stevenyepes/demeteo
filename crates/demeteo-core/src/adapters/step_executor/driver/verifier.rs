@@ -1175,7 +1175,7 @@ impl HarnessOutcome {
 /// One gate's labelled block: which harness, the command it ran, and its
 /// combined output. Shared by the prompt section and the verdict reason so the
 /// two cannot describe the same run differently.
-fn harness_block(name: &str, cmd: &str, body: &str) -> String {
+pub(crate) fn harness_block(name: &str, cmd: &str, body: &str) -> String {
     format!(
         "### Harness `{name}`\n\n\
          \x20   {cmd}\n\n\

@@ -334,6 +334,16 @@ mod harness_triage;
 #[path = "../../tests/conformance/harness_gates.rs"]
 mod harness_gates;
 
+/// Baseline-measurement fixtures (HB2b / P4.2a, `docs/HARNESS_BASELINE.md`):
+/// the in-graph node records the sha it actually measured, the lazy fallback
+/// fires on validate's failure path and only there, a covering record is not
+/// re-measured, a fallback that cannot measure leaves the verdict untouched,
+/// and every worktree is torn down. Runs a real shell and real git; only the
+/// agent is stubbed. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/harness_baseline.rs"]
+mod harness_baseline;
+
 /// Bootstrap harness-preflight gate (HB1, `docs/HARNESS_BASELINE.md`): a
 /// project whose `test_command` names an unresolvable binary must be stopped at
 /// launch, before any step row is seeded — and a project whose commands resolve

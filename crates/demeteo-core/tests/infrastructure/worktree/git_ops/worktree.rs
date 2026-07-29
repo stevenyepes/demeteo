@@ -1152,3 +1152,14 @@ async fn test_branch_delete_handles_chmod_locked_worktree() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&wt_path);
 }
+
+/// `head_sha` answers about the *commit*, where `get_head_branch` answers about
+/// the ref. A baseline is only evidence about the commit it names, so the
+/// producer has to be able to ask — and to get nothing back when git cannot
+/// answer, rather than an empty string that would land in the record.
+#[tokio::test]
+async fn head_sha_reports_nothing_for_a_directory_that_is_not_a_repo() {
+    let (dir, helper) = make_repo("wt_head_sha_missing").await;
+    assert_eq!(helper.head_sha(None, "/nonexistent/path/xyz").await, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}

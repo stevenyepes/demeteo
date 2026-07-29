@@ -251,3 +251,71 @@ fn the_command_type_reaches_the_palette_without_a_frontend_edit() {
     assert!(entry.outputs.contains(&PortType::Text));
     assert!(entry.outputs.contains(&PortType::File));
 }
+
+// ── The baseline node (HB2b / P4.2a) ─────────────────────────────────────────
+//
+// One `command` node whose commands are not in the workflow: it runs *this
+// project's* prepare command and validation gates, which a workflow file
+// cannot know. Everything below is about that one exception not leaking into
+// the ordinary command node's contract.
+
+#[test]
+fn a_baseline_node_needs_no_command_of_its_own() {
+    let spec = parse_spec(&step_from(serde_json::json!({ "measure_baseline": true })))
+        .expect("the commands come from the project, not the workflow");
+    assert!(spec.measure_baseline);
+    assert!(spec.command.is_empty());
+}
+
+#[test]
+fn measure_baseline_is_off_unless_asked_for() {
+    // The exemption above must not reach any other command node: an ordinary
+    // one that forgot its command is still a definition bug.
+    let spec = parse_spec(&step_from(serde_json::json!({ "command": "make" }))).unwrap();
+    assert!(!spec.measure_baseline);
+    assert!(parse_spec(&step_from(serde_json::json!({ "measure_baseline": false }))).is_err());
+}
+
+#[test]
+fn lint_does_not_demand_a_command_from_a_baseline_node() {
+    let findings = lint_node(serde_json::json!({ "measure_baseline": true }));
+    assert!(
+        !codes(&findings).contains(&"command-missing"),
+        "unexpected findings: {findings:?}"
+    );
+    assert!(
+        findings.is_empty(),
+        "a baseline node is fully declared by that one flag: {findings:?}"
+    );
+}
+
+#[test]
+fn a_baseline_node_is_not_nagged_about_idempotence() {
+    // It measures a commit that cannot change. Asking the author to confirm it
+    // is safe to repeat is a question they cannot act on.
+    let findings = lint_node(serde_json::json!({ "measure_baseline": true }));
+    assert!(!codes(&findings).contains(&"command-not-idempotent"));
+}
+
+#[test]
+fn a_baseline_node_auto_resumes_after_an_interrupt() {
+    // Re-running it cannot do anything twice — it only reads a commit and
+    // writes a record — so it never parks at the synthetic gate.
+    assert_eq!(
+        CommandNodeHandler
+            .resume_policy(&step_from(serde_json::json!({ "measure_baseline": true }))),
+        ResumePolicy::WhenUnchanged
+    );
+}
+
+#[test]
+fn the_baseline_flag_is_configurable_from_the_builder() {
+    let entry = crate::adapters::step_executor::node_catalog::node_type_catalog()
+        .into_iter()
+        .find(|e| e.kind == KIND)
+        .expect("registered");
+    assert!(
+        entry.config_schema["properties"]["measure_baseline"].is_object(),
+        "a field the config panel cannot render is a field nobody can set"
+    );
+}

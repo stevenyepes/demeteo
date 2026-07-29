@@ -229,6 +229,28 @@ pub struct StepConfig {
     /// declare it explicitly and the node's lint warns when they don't.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotent: Option<bool>,
+    /// For a `command` step: measure the **harness baseline** instead of
+    /// running an authored command (`docs/HARNESS_BASELINE.md` HB2b / P4.2a).
+    ///
+    /// The node runs the project's `prepare_command` plus every harness that
+    /// gates validation — resolved through the same
+    /// [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses) chain
+    /// validate resolves through — and records what each said at the commit it
+    /// measured, as the feature's `harness_baseline_json` record. It is
+    /// therefore the one `command` node whose command is not in the workflow:
+    /// the whole point is to run *this project's* configured gates, and a
+    /// workflow file cannot know what those are.
+    ///
+    /// `command` becomes optional when this is set, and is ignored if present.
+    ///
+    /// Only valid at the **head** of a graph. The node provisions its worktree
+    /// off the feature branch, which is the base commit only while nothing has
+    /// been implemented yet; the record carries the sha actually measured, so a
+    /// baseline taken from the wrong position is detectable
+    /// ([`HarnessBaseline::covers`](crate::domain::harness_baseline::HarnessBaseline::covers))
+    /// rather than silently trusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measure_baseline: Option<bool>,
 }
 
 impl StepConfig {

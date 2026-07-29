@@ -225,7 +225,7 @@ impl GitOpsHelper {
         subtask_id: &str,
     ) -> Result<String, String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
+        let wt_dir = worktree_dir(repo_dir, subtask_id);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
         // 1. If a previous run registered this worktree with git,
@@ -366,6 +366,26 @@ impl GitOpsHelper {
         Ok(wt_dir)
     }
 
+    /// Resolve `dir`'s current `HEAD` to a full sha. `None` when git cannot
+    /// answer (not a repo, no commits yet, transport gone).
+    ///
+    /// Exists because a baseline is only evidence about the commit it names
+    /// (HB2a): the producer must record the sha it **actually measured**, not
+    /// the one it assumed it was on. `git rev-parse HEAD` inside the worktree
+    /// is the only thing that can tell it apart.
+    pub async fn head_sha(&self, machine_id: Option<&str>, dir: &str) -> Option<String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        self.exec
+            .run_command(
+                machine_str,
+                &format!("git -C {} rev-parse HEAD", paths::shell_escape_posix(dir)),
+            )
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
     /// Clean up a linked worktree for a subtask, including its branch.
     ///
     /// IMPORTANT: the artifact-scope fence (`apply_artifact_scope`) chmods
@@ -387,7 +407,7 @@ impl GitOpsHelper {
         subtask_id: &str,
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let wt_dir = format!("{}_wt_{}", repo_dir, subtask_id);
+        let wt_dir = worktree_dir(repo_dir, subtask_id);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
         let _ = self
@@ -617,6 +637,19 @@ impl GitOpsHelper {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     }
+}
+
+/// Where a linked worktree for `worktree_id` lives: a **sibling of the repo
+/// directory**, named by suffixing it.
+///
+/// Deliberately not a `PathBuf::join` — nothing here descends into a
+/// directory, so there is no separator to get wrong on any platform; the
+/// suffix keeps every worktree out of the repo it was cut from, which is what
+/// stops `git status` and every glob in the project from seeing them. Every
+/// provisioner and every cleanup must agree on this string or a teardown
+/// silently misses its target, so it is written once.
+fn worktree_dir(repo_dir: &str, worktree_id: &str) -> String {
+    format!("{}_wt_{}", repo_dir, worktree_id)
 }
 
 /// Build the shell command that symlinks each entry in

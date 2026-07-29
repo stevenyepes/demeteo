@@ -383,7 +383,7 @@
           ]
         },
         "command": {
-          "description": "Shell command to run, verbatim, under an interactive login shell (so the user's PATH and any mise/asdf/nvm shims are active). Required.",
+          "description": "Shell command to run, verbatim, under an interactive login shell (so the user's PATH and any mise/asdf/nvm shims are active). Required unless `measure_baseline` is set.",
           "type": "string"
         },
         "cwd": {
@@ -402,6 +402,13 @@
         },
         "idempotent": {
           "description": "True when re-running this command after a crash is safe (a build, a test run). Leave false for anything with outside side effects (deploy, publish, migration): an interrupted attempt then always parks at the synthetic gate instead of re-running.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "measure_baseline": {
+          "description": "Measure the harness baseline instead of running `command`: the node runs this PROJECT's prepare command plus every harness that gates validation, and records what each said at the commit it measured. Only valid at the head of the graph, where the feature branch still points at the base commit. A red gate is recorded, not judged — subtracting it from validate's verdict is a separate decision.",
           "type": [
             "boolean",
             "null"
