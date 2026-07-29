@@ -98,6 +98,22 @@ pub(crate) static SPAWN_LOG: std::sync::Mutex<
     Vec<(Option<String>, Option<crate::domain::models::EffortLevel>)>,
 > = std::sync::Mutex::new(Vec::new());
 
+/// Test-only record of every rendered prompt the stub was handed, in order.
+///
+/// A prompt is the one artefact of a step that is otherwise write-only: the
+/// engine assembles it from a template, the harness evidence, the artifact
+/// contract and the operating boundary, hands it to a runtime, and nothing
+/// keeps a copy. So "did the excluded harness block reach the agent?" and "was
+/// `{{harness_baseline}}` bound?" are unanswerable from outside without this —
+/// and both are load-bearing claims (HB2c: a subtraction the reader cannot
+/// audit will not be trusted).
+///
+/// Shared across concurrently-running tests, exactly like [`SPAWN_LOG`], so a
+/// reader must filter by a marker unique to its own fixture rather than assume
+/// it owns the log. Compiled out of the shipped binary.
+#[cfg(test)]
+pub(crate) static PROMPT_LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 pub struct StubRuntime;
 
 #[async_trait]
@@ -290,6 +306,10 @@ impl AgentSession for StubSession {
     }
 
     fn prompt(&self, text: &str) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
+        #[cfg(test)]
+        if let Ok(mut log) = PROMPT_LOG.lock() {
+            log.push(text.to_string());
+        }
         let directives = parse_directives(text);
         let exec = self.ctx.exec.clone();
         let machine = self.ctx.machine_id.clone();

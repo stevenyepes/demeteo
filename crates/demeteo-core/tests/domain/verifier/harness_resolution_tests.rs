@@ -317,3 +317,118 @@ fn an_undeclared_harness_serializes_to_nothing_at_all() {
     assert!(json.get("harness_names").is_none());
     assert!(json.get("harness_name").is_none());
 }
+
+// ── HB2c: which gates will judge this run (the `{{harness_baseline}}` list) ──
+
+fn step_with_verifier(id: &str, declared: &[&str]) -> crate::domain::models::StepConfig {
+    crate::domain::models::StepConfig {
+        id: crate::domain::ids::StepId(id.to_string()),
+        kind: "agent".to_string(),
+        verifier: Some(VerifierConfig {
+            agent_kind: None,
+            model: None,
+            effort: None,
+            instructions: String::new(),
+            harness_names: declared.iter().map(|s| s.to_string()).collect(),
+            verdict_key: "verdict".to_string(),
+        }),
+        ..Default::default()
+    }
+}
+
+fn plain_step(id: &str) -> crate::domain::models::StepConfig {
+    crate::domain::models::StepConfig {
+        id: crate::domain::ids::StepId(id.to_string()),
+        kind: "agent".to_string(),
+        ..Default::default()
+    }
+}
+
+/// A step that gates nothing contributes nothing. Listing its (nonexistent)
+/// harness would tell a spec author about a command no one will run — the same
+/// class of lie as telling them about none, and the one that cost two rework
+/// cycles.
+#[test]
+fn only_steps_that_actually_gate_contribute_to_the_list() {
+    let strategy = strategy(Some("cargo test"), &[], None);
+    let steps = [plain_step("s-research"), plain_step("s-spec")];
+
+    assert!(
+        crate::domain::verifier::resolve_gating_harnesses(&steps, &strategy, CEILING_S).is_empty()
+    );
+}
+
+/// The starter shape: no step declares a harness, so the whole list comes from
+/// the project — through the same chain validate will resolve through, tier for
+/// tier.
+#[test]
+fn a_starter_shaped_workflow_reports_the_projects_own_gates() {
+    let strategy = strategy(
+        Some("cargo test"),
+        &[("lint", "npm run lint"), ("unit", "npm test")],
+        Some(&["lint", "unit"]),
+    );
+    let steps = [plain_step("s-spec"), step_with_verifier("s-validate", &[])];
+
+    let gates = crate::domain::verifier::resolve_gating_harnesses(&steps, &strategy, CEILING_S);
+
+    assert_eq!(
+        gates,
+        vec![
+            ResolvedHarness {
+                name: "lint".to_string(),
+                command: "npm run lint".to_string(),
+                deadline_s: CEILING_S,
+            },
+            ResolvedHarness {
+                name: "unit".to_string(),
+                command: "npm test".to_string(),
+                deadline_s: CEILING_S,
+            },
+        ],
+        "the selected gates, not the test_command fallback"
+    );
+}
+
+/// A step that pins its own gates is reported as pinning them — reporting the
+/// project's selection instead would describe a run that is not going to happen.
+#[test]
+fn a_step_that_pins_its_gates_is_reported_as_pinning_them() {
+    let strategy = strategy(
+        Some("cargo test"),
+        &[("lint", "npm run lint"), ("unit", "npm test")],
+        Some(&["lint"]),
+    );
+    let steps = [step_with_verifier("s-validate", &["unit"])];
+
+    let gates = crate::domain::verifier::resolve_gating_harnesses(&steps, &strategy, CEILING_S);
+
+    assert_eq!(gates.len(), 1);
+    assert_eq!(gates[0].name, "unit");
+}
+
+/// Two gating steps means the union, in first-declared order, with no gate
+/// listed twice — a workflow that lints twice does not run two lints.
+#[test]
+fn two_gating_steps_union_without_repeating_a_gate() {
+    let strategy = strategy(
+        None,
+        &[
+            ("lint", "npm run lint"),
+            ("unit", "npm test"),
+            ("e2e", "npm run e2e"),
+        ],
+        None,
+    );
+    let steps = [
+        step_with_verifier("s-early", &["lint", "unit"]),
+        step_with_verifier("s-late", &["unit", "e2e"]),
+    ];
+
+    let gates = crate::domain::verifier::resolve_gating_harnesses(&steps, &strategy, CEILING_S);
+
+    assert_eq!(
+        gates.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+        vec!["lint", "unit", "e2e"]
+    );
+}

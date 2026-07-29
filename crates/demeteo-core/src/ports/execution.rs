@@ -344,6 +344,15 @@ mod harness_gates;
 #[path = "../../tests/conformance/harness_baseline.rs"]
 mod harness_baseline;
 
+/// Subtraction fixtures (HB2c, `docs/HARNESS_BASELINE.md`): a gate red at the
+/// base and identically red now does **not** fail the step, a gate green at the
+/// base and red now **does**, a differently-red gate does, and the exclusion is
+/// named in the evidence the validate turn is handed. Runs a real shell and
+/// real git; only the agent is stubbed. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/harness_subtraction.rs"]
+mod harness_subtraction;
+
 /// Bootstrap harness-preflight gate (HB1, `docs/HARNESS_BASELINE.md`): a
 /// project whose `test_command` names an unresolvable binary must be stopped at
 /// launch, before any step row is seeded — and a project whose commands resolve
