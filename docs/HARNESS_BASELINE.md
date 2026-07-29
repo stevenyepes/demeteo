@@ -32,14 +32,16 @@ depends on holding two subsystems in context at once.
 **Dependency order:**
 
 ```
-HB1 ─▶ HB4 ─▶ HB6
-        │
-HB5 ────┴─▶ HB2a ─▶ HB2b ─▶ HB2c ─▶ HB7
+HB1 ─▶ HB4 ──┐
+             ├─▶ HB6
+HB5 ─────────┘
+  └─▶ HB2a ─▶ HB2b ─▶ HB2c ─▶ HB7
 ```
 
-`HB3` is independent of everything. **HB1 is done.** Work them in that order:
-HB4 is small and unblocks HB6; HB5 fixes the *shape* of what gets recorded
-before HB2a fixes its storage.
+`HB3` is independent of everything. **HB1 and HB4 are done.** Work them in that
+order: HB4 was small and unblocks HB6; HB5 fixes the *shape* of what gets
+recorded before HB2a fixes its storage, and it also has to land before HB6,
+because HB6 authors the project tier of HB5's resolution chain.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -348,10 +350,39 @@ deterministic rather than agentic:
   `harness_name` stays accepted as a one-element list — the seven starter JSONs
   and any user-authored workflow must keep parsing unchanged.
 
-- **Run all by default.** If lint and unit both fail the user wants both; stopping
-  at the first turns one wasted cycle into two, which is the thing this document
-  exists to prevent. An opt-in `stop_on_first_failure` is the right escape hatch
-  for an expensive tail suite — add it when someone asks, not before.
+- **Run all the *declared* ones, even after one fails.** This is about the
+  declared list, **not** about running every harness in the project's map — which
+  harnesses gate a step is a resolved decision, see the next bullet. Within the
+  resolved list, do not stop at the first failure: if lint and unit are both red
+  the user wants both, and stopping turns one wasted cycle into two, which is the
+  thing this document exists to prevent. An opt-in `stop_on_first_failure` is the
+  right escape hatch for an expensive tail suite — add it when someone asks.
+
+- **Which harnesses gate a step is a resolution chain, not a single field.**
+  Today `harness_name` is declared per-step in the *workflow*, and **all seven
+  starters declare it `null`** (`git grep harness_name src-tauri/workflows`). So
+  the `harnesses` map is dead config across the entire shipped starter pack: a
+  user can add `lint → npm run lint`, see it accepted, and nothing will ever run
+  it, because the only thing that selects a harness is a field no shipped workflow
+  sets. Forking a starter to add your own gate is too much to ask.
+
+  Resolve it the way [decision 5](DECISIONS.md) (planner) and
+  [decision 37](DECISIONS.md) (effort) already resolve theirs — most specific
+  wins:
+
+  1. the step's `verifier.harness_names` — the workflow author was explicit;
+  2. the **project's selected validation gates** (new — the tier that fixes the
+     dead config, authored in HB6);
+  3. the project's `test_command` — today's fallback, unchanged.
+
+  Because the starters declare nothing they fall straight through to tier 2, so
+  ticking `lint` gates every workflow with no forking. A project with no harnesses
+  map behaves exactly as it does today.
+
+  **Do not make tier 2 additive** ("always *also* run these"), tempting as it is
+  for a safety property. Additive semantics make it impossible to narrow, and
+  produce the surprise where a workflow pinned to `unit` still runs the 20-minute
+  integration suite. Revisit only if someone is actually burned by losing a gate.
 
 - **The deadline is per harness, not per step.** `harness_shell_options` carries
   `wall_cap_s` as *the ceiling one command may consume* (S10). N harnesses means N
@@ -542,8 +573,23 @@ deterministic rather than agentic:
 ### HB3 — Ecosystem detection
 
 - **Goal:** stop `detect_worktree_strategy` from producing confidently wrong
-  commands. Independent of HB1/HB2 — it reduces how often the preflight has bad
-  input to report on.
+  commands, and make it emit the *right shape*. Independent of the rest — it
+  reduces how often everything upstream has bad input to report on.
+
+- **Emit named harnesses, not one mashed command.** Detection currently produces a
+  single `test_command`, and for a polyglot repo that is a hand-rolled
+  accumulator — `set +e; rc=0; npm test; rc=$((rc||$?)); cargo test;
+  rc=$((rc||$?)); exit $rc` (there is a preflight test pinning that exact string).
+  **That command exists only because there was nowhere to put multiple named
+  harnesses.** It also throws away *which* ecosystem failed, which is precisely
+  the attribution HB5 exists to recover.
+
+  Once harnesses are plural and gate-selectable, detection should emit
+  `{js-test: "npm test", rust-test: "cargo test"}` with both pre-ticked as gates,
+  and the accumulator should be deleted rather than fixed. This is also the honest
+  answer to "should there be a global harness config": the reusable knowledge is
+  the ecosystem *recipe*, which lives here, not the command string, which is
+  repo-specific and belongs to the project.
 
 - **Three defects, all in `strategy.rs`:**
   1. **Root-only marker stat.** The `ECOSYSTEMS` loop stats
@@ -578,8 +624,9 @@ deterministic rather than agentic:
   detects both ecosystems; a `scripts.test` naming a watch-mode runner is
   either corrected or flagged rather than emitted bare.
 
-- **Done when:** the Stratosbar layout produces a command covering both
-  ecosystems, a `prepare_command`, and no watch-mode invocation.
+- **Done when:** the Stratosbar layout produces named harnesses covering both
+  ecosystems, a `prepare_command`, and no watch-mode invocation — and no `rc=`
+  accumulator anywhere in the output.
 
 ### HB6 — Probe at configuration time, not only at launch
 
@@ -599,19 +646,54 @@ deterministic rather than agentic:
   known. Say which machine was probed, or the indicator is a lie on any project
   with a remote compute type.
 
-- **Depends:** HB4 (it is that union that makes one probe cover the whole panel).
-  **Size:** small-to-medium — one command, one typed wrapper, one panel section.
+- **This task also authors HB5's tier 2.** Each harness row gains a **"gates
+  validation" checkbox** and a **user-controlled order** — cheap gates first (lint
+  before integration), and since `harnesses` is a `HashMap` there is no order to
+  inherit, so one must be stored. With HB6's indicator a row reads its definition,
+  its health, and its role on one line:
+
+  > `lint` → `npm run lint` · ✓ resolved on PATH · ☑ gates validation
+
+- **Extract a `HarnessesSection`.** Those rows now carry five columns.
+  `StrategyTab.tsx` is 292 lines and `ProjectSettingsContext.tsx` is 641 — already
+  past the ~400 convention — so this is a component boundary, not a new tab and
+  emphatically not a new *global* settings surface. Harness commands are
+  repo-specific by nature (`npm run lint` vs `cargo clippy` vs `ruff check`); a
+  global map would be wrong for nearly every project and would invent a
+  global-vs-project shadowing question for no benefit. The reusable knowledge is
+  the *ecosystem recipe*, and that belongs in HB3's detection, not in a settings
+  surface.
+
+- **Four inline hints, and do not write new copy for them.** These are the things
+  nobody guesses, each of which costs hours:
+  1. commands run under `bash -l -i -c` — an **interactive login** shell, which is
+     the whole mise/asdf/nvm class of "but it works in my terminal";
+  2. the validate worktree is a *fresh* `git worktree add` with no `node_modules`
+     and no `target/` — which is **why `prepare_command` exists**;
+  3. a watch-mode `npm test` consumes the entire wall-clock cap and then fails;
+  4. on a remote-compute project the command runs on the **project's** machine.
+
+  `PreflightVerdict::detail()` already carries (1) and its reproduce line, and has
+  already earned its keep as the launch-blocking message. **Render that same
+  string** rather than authoring a parallel copy that will drift out of agreement
+  with the error message. Use **inline hints, not hover tooltips**: hover is
+  undiscoverable, absent on touch, and hides exactly what should be visible.
+
+- **Depends:** HB4 (it is that union that makes one probe cover the whole panel)
+  and HB5 (tier 2 has to exist to be checked). **Size:** medium.
 
 - **Context:** `preflight.rs`; `src-tauri/src/commands/` for the command shape;
   `src/lib/project.ts` for the typed wrapper (never `invoke()` raw);
   `src/components/settings/StrategyTab.tsx` + `ProjectSettingsContext.tsx`.
 
-- **Touch:** those. Design tokens per AGENTS.md §4 — emerald for resolved, ruby
-  for missing, read from `App.css`, never hard-coded.
+- **Touch:** those, plus the new `HarnessesSection` component. Design tokens per
+  AGENTS.md §4 — emerald for resolved, ruby for missing, read from `App.css`,
+  never hard-coded.
 
 - **Done when:** typing a nonexistent binary into `test_command` shows it
-  unresolved without leaving the settings panel, and the panel names the machine
-  it asked.
+  unresolved without leaving the settings panel; the panel names the machine it
+  asked; and a harness ticked as a gate is run by a starter workflow that declares
+  no `harness_names` of its own.
 
 ### HB7 — Make the verdict legible
 
