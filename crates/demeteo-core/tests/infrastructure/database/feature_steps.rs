@@ -55,6 +55,7 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         },
     )
     .unwrap();

@@ -157,6 +157,7 @@ fn insert_shadow_feature(
         max_budget_usd: input.max_budget_usd,
         step_overrides: step_overrides.to_vec(),
         attachments: Vec::new(),
+        harness_baseline: None,
     })
 }
 

@@ -141,6 +141,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // for databases that ran V32 before the column joined the table.
     add_column_if_missing(conn, "sequence_checkpoints", "anchor_sha", "TEXT")?;
 
+    // What the harnesses said before the feature (V37, decision 44).
+    // Nullable, and NULL means *absent*, never "everything was green".
+    add_column_if_missing(conn, "features", "harness_baseline_json", "TEXT")?;
+
     Ok(())
 }
 

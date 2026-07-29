@@ -91,6 +91,16 @@ pub struct FeaturePatch {
     /// `None` = inherit); this durably records the effective value so a
     /// later replay is stable against project-setting drift.
     pub commit_artifacts: Option<Option<bool>>,
+    /// Replicate the measured harness baseline (V37, decision 44).
+    ///
+    /// This exists for the *update* path specifically: `add` serde-round-trips
+    /// the whole [`Feature`], so a forgotten site here fails only when a row
+    /// already exists — which is exactly `hydrate_shadow_feature` mirroring a
+    /// detached run's progress, the one path where the failure is silent and
+    /// remote. Producers do not use this field; they call
+    /// [`FeatureRepository::merge_harness_baseline`], because a whole-record
+    /// write would clobber a partial measurement.
+    pub harness_baseline: Option<Option<crate::domain::harness_baseline::HarnessBaseline>>,
 }
 
 /// Patch for [`FeatureRepository::step_update`].
@@ -244,6 +254,25 @@ pub trait FeatureRepository: Send + Sync {
     fn update(&self, id: &FeatureId, patch: &FeaturePatch) -> Result<(), String>;
     /// Backfill a legacy feature that wasn't created with a workflow id.
     fn update_workflow_id(&self, id: &FeatureId, workflow_id: &WorkflowId) -> Result<(), String>;
+
+    /// Fold a measured harness baseline into the feature's stored record
+    /// (V37, decision 44), read-modify-write under one lock.
+    ///
+    /// The producer-facing write path, and it is a *merge* rather than a set
+    /// because HB2b's lazy fallback measures the single gate that just went
+    /// red: replacing the record would discard the baseline node's
+    /// measurement of every other gate. The policy itself is
+    /// [`HarnessBaseline::merge`](crate::domain::harness_baseline::HarnessBaseline::merge)
+    /// — this method only supplies it the stored value and stores the result.
+    ///
+    /// Read it back through [`get`](Self::get): the record rides on the
+    /// [`Feature`], and `None` there means no baseline was measured, never
+    /// that the harnesses were green.
+    fn merge_harness_baseline(
+        &self,
+        id: &FeatureId,
+        baseline: &crate::domain::harness_baseline::HarnessBaseline,
+    ) -> Result<(), String>;
 
     /// Pin the workflow version this feature runs (decision 38, V33).
     /// Pin-once: a no-op when the feature is already pinned, so a

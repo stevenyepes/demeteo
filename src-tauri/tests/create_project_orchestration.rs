@@ -294,6 +294,7 @@ impl StepExecutor for StubExecutor {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
     }
     async fn feature_pause(&self, _feature_id: &str) -> Result<(), String> {

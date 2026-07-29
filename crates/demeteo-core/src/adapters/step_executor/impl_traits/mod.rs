@@ -611,6 +611,7 @@ impl StepExecutor for DagStepExecutor {
             max_budget_usd,
             step_overrides,
             attachments: Vec::new(),
+            harness_baseline: None,
         };
         self.features.add(feature.clone())?;
 

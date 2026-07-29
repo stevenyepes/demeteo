@@ -323,6 +323,7 @@ async fn test_executor_gate_decide() {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
         .unwrap();
 
@@ -499,6 +500,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
         .unwrap();
 
@@ -693,6 +695,7 @@ async fn test_step_retry_blocked_by_active_predecessor() {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
         .unwrap();
 
@@ -798,6 +801,7 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
         .unwrap();
 
@@ -913,6 +917,7 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
         .unwrap();
 
@@ -1014,6 +1019,7 @@ async fn test_assert_no_active_predecessors_helper() {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
         .unwrap();
 
@@ -1199,6 +1205,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         max_budget_usd: None,
         step_overrides: Vec::new(),
         attachments: Vec::new(),
+        harness_baseline: None,
     };
     let mk_step = |se: &str, f: &str| StepExecution {
         last_failure_fingerprint: None,
@@ -1815,6 +1822,7 @@ async fn test_feature_start_pins_workflow_version() {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
         .unwrap();
     let resolved = executor

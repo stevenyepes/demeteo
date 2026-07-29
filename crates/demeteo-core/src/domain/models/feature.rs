@@ -1,4 +1,5 @@
 use crate::domain::attachment::AttachedFile;
+use crate::domain::harness_baseline::HarnessBaseline;
 use crate::domain::ids::{
     FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId, WorkflowVersionId,
 };
@@ -90,6 +91,20 @@ pub struct Feature {
     /// feature is purged.
     #[serde(default)]
     pub attachments: Vec<AttachedFile>,
+
+    /// What the project's harnesses said at this run's base commit
+    /// (decision 44, `features.harness_baseline_json`, migration V37).
+    /// Validate subtracts against it so a pre-existing red suite is not
+    /// attributed to the feature.
+    ///
+    /// `None` = **no baseline was measured**, which is emphatically not
+    /// "everything was green" — see [`HarnessBaseline`]. It rides on the
+    /// `Feature` rather than in a side table so it replicates to the
+    /// desktop on a detached run along the path `pr_title` and `effort`
+    /// already travel: `hydrate_shadow_feature` pulls the runner's whole
+    /// `Feature` over the `get_feature` RPC.
+    #[serde(default)]
+    pub harness_baseline: Option<HarnessBaseline>,
 }
 
 /// A per-step agent/model/effort override selected when launching a feature.

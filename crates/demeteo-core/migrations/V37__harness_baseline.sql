@@ -1,0 +1,46 @@
+-- What the project's harnesses said *before* the feature (decision 44,
+-- docs/HARNESS_BASELINE.md HB2a). Validate's verdict becomes a delta
+-- against this record rather than an absolute, so a repository whose
+-- suite was already red stops being told its feature broke it.
+--
+-- One JSON column on `features`, not a `harness_baselines` table and not
+-- a `run_events` record:
+--
+-- * The record is written as a whole (one measurement covers every
+--   configured harness) and read as a whole (validate needs all of them
+--   at once); no harness is ever queried individually. That is the
+--   criterion V36's own note blesses for a JSON column, and
+--   `features.attachments_json` (V19) is the existing precedent.
+-- * `run_events` is `append` + `list_since` with no by-kind lookup, so
+--   every read would scan the feature's whole log; being append-only, a
+--   re-measured baseline could only shadow the old one, never replace
+--   it; and the two transports key that table differently (`feature_id`
+--   locally, `run_id` on the runner), so an engine-written row would
+--   land in a key space the desktop never queries.
+-- * A `features` column replicates to the desktop on a detached run
+--   along the path `pr_title`, `effort` and `max_budget_usd` already
+--   travel — `hydrate_shadow_feature` pulls the runner's whole `Feature`
+--   row over the `get_feature` RPC.
+--
+-- Nullable, and NULL means **absent, not green**. "No baseline was ever
+-- measured" and "every harness passed at the base commit" are opposite
+-- answers; conflating them would invert the whole subtraction table, so
+-- the column decodes to `Option<HarnessBaseline>` and every read of a
+-- gate's status goes through a per-harness lookup that can only answer
+-- for a harness actually measured.
+--
+-- Shape (crates/demeteo-core/src/domain/harness_baseline.rs):
+--   {"base_sha": "…",
+--    "harnesses": [{"name": "lint", "command": "npm run lint",
+--                   "exit_ok": false, "fingerprint": "…",
+--                   "output_ref": "…", "measured_at": 1753,
+--                   "producer": "node"}]}
+--
+-- `base_sha` is what makes the record evidence at all: a baseline taken
+-- against a different base commit says nothing about this run, and
+-- without the sha there is no way to notice. Provenance
+-- (`measured_at` / `producer`) is per harness rather than per record
+-- because a partial re-measurement merges into the existing record, so
+-- one record can legitimately hold gates measured at different times by
+-- different producers.
+ALTER TABLE features ADD COLUMN harness_baseline_json TEXT;
