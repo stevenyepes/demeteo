@@ -165,6 +165,19 @@ reason that appeared *during* the run (disk filled, a service died, a registry
 went down). **Shrink its remit; do not delete it.** Its fail-safe property (any
 malfunction falls back to `Verdict`) is what makes it safe to keep.
 
+**And move the call it does keep earlier.** "Red-before / identically-red-now is
+not this feature's" is true only when the gate *ran*. A gate that was red at the
+base because the machine cannot run it — a missing system library, an absent
+toolchain, an unprovisioned service — produced no evidence, so subtracting it
+passes the step on nothing. Telling those two apart is exactly what the
+classifier is for, and the cheapest moment to ask is when the baseline is
+measured: at the head of the graph, with **zero implement budget spent**, versus
+`should_triage`'s minimum of one full rework cycle. So the baseline producer
+classifies each *red* gate once and stores the answer on the record; the
+comparison reads it rather than re-asking. Same agent, same prompt, same
+fail-safe — a different, earlier call site. A green baseline is not classified at
+all, because there is nothing to classify.
+
 ### Detached runs are the hard case, and they constrain the design
 
 Everything above must hold for a run executing inside `demeteo-runner` with
@@ -657,7 +670,8 @@ deterministic rather than agentic:
   |---|---|---|
   | binary unresolvable | — | blocked at launch, terminal (HB1/HB4) |
   | `prepare_command` fails | — | terminal `Environment` — the worktree can never be made runnable |
-  | red, same fingerprint | red, same fingerprint | **pre-existing** — not this feature; pass, with the exclusion named in the report |
+  | red, same fingerprint, classified `regression` at measurement | red, same fingerprint | **pre-existing** — not this feature; pass, with the exclusion named in the report |
+  | red, same fingerprint, classified `environment` at measurement | red, same fingerprint | **gate never ran** — terminal `Environment` with remediation. Identical to the row above on every input the comparison can see; only the classification separates them. |
   | green | red | **regression** — `Verdict`, retry. No agent needed to know this. |
   | red | red, *different* | new failures atop pre-existing — `Verdict`, retry, scoped to the delta |
   | — | 127 / transport / timeout | terminal `Environment` (already built) |
@@ -669,9 +683,12 @@ deterministic rather than agentic:
   from A" is comprehension, not judgment, and it never touches an exit code, so it
   cannot manufacture a pass.
 
-- **Narrow C6, don't delete it.** See §2. `classify_harness_failure` consults the
-  triage agent only for the residue: green at baseline, red now, and the failure
-  looks environmental. Its fail-safe fallback to `Verdict` must survive intact.
+- **Narrow C6, don't delete it — and move its earliest call.** See §2.
+  `classify_harness_failure` consults the triage agent only for the residue:
+  green at baseline, red now, and the failure looks environmental. The *other*
+  call happens when the baseline is measured, once per red gate, and is what
+  keeps a gate that cannot run from being subtracted. Its fail-safe fallback to
+  `Verdict` must survive intact at both sites.
 
 - **The other two consumers, in value order after subtraction:**
   1. **`s-spec` is told factually what the harness can prove.** The prompt already
@@ -700,32 +717,71 @@ deterministic rather than agentic:
 
 - **Done:** the comparison is `domain/harness_delta.rs` — pure, synchronous,
   reachable from a test with no port doubles — and `run_harness_first` calls it
-  rather than containing it. Per red gate it returns one of four
-  determinations: `PreExisting` (subtracted), `Regression`, `NewFailures`, and
-  `NoBaseline`. Three of those are verdicts; they are still distinct because
-  they answer two further questions differently — whether an exclusion must be
-  named, and whether C6 has anything left to add.
+  rather than containing it. Per red gate it returns one of five
+  determinations: `PreExisting` (subtracted), `Environment` (terminal, with
+  remediation), `Regression`, `NewFailures`, and `NoBaseline`. Three of those
+  are verdicts; they are still distinct because they answer two further
+  questions differently — whether an exclusion must be named, and whether C6 has
+  anything left to add. `GateDetermination::outcome()` is the only way to ask
+  what to *do* about a gate, and it returns three arms rather than a boolean:
+  the boolean it replaced had exactly two answers, "fail the step" and
+  "subtract it", so `Environment` had nowhere to go but into the arm it most
+  resembles — which is precisely how the first cut of this task shipped a gate
+  that could not run as a silent pass.
 
-  **Rungs 1 and 2 only, and rung 3 is deliberately deferred.** Exit status
-  settles a green baseline outright; a fingerprint match settles the rest.
-  The third rung — an agent reading two outputs to scope the delta to
-  individual test names — is *not built*. It costs an agent call on every red
-  validate, and whether that earns its keep is a judgement better made after
-  the cheap rungs have been watched in practice: rung 2's false-miss rate is
-  unknown until then, and its failure direction is the safe one (a perturbed
-  fingerprint reads as *new*, i.e. today's behaviour, never as pre-existing).
-  The note is in the module docs too, so the next reader does not re-derive it.
+  **The subtraction applies to a verdict, not to a gate that never ran.** Red at
+  the base because a system library is missing looks byte-for-byte like red at
+  the base because a test is broken: same command, same fingerprint, same exit
+  status both sides. The first proved nothing, so passing on it is evidence-free
+  — and it exits **1**, not 127, so the fast path cannot catch it. The record
+  therefore carries a per-gate classification (`HarnessBaselineRun.environment`,
+  `Option`-shaped, `#[serde(default)]`, no migration — the column is JSON), and
+  the comparison reads it as its final rung.
 
-  **C6 narrowed, not deleted.** The classifier is consulted only for
-  `Regression` and `NoBaseline` — green at the base and red now, which may be a
-  fault that appeared *during* the run, and the no-measurement case that keeps
-  today's behaviour. `NewFailures` is answered by the measurement (the gate
-  reached an exit status at the base, and its output changed under this
-  feature), and `PreExisting` never reaches a classifier because there is no
-  failure left to classify. The narrowing only ever *withholds* a call: the
+  **Rungs 1–3, and the finer rung is deliberately deferred.** Exit status settles
+  a green baseline outright; a fingerprint match settles same-vs-different; the
+  classification settles what a *same* failure was. A finer rung — an agent
+  reading two outputs to scope the delta to individual test names — is *not
+  built*. It costs an agent call on every red validate, unlike rung 3, which is
+  paid once per red gate at measurement time and read back for free. Whether it
+  earns its keep is a judgement better made after the cheap rungs have been
+  watched in practice: rung 2's false-miss rate is unknown until then, and its
+  failure direction is the safe one (a perturbed fingerprint reads as *new*, i.e.
+  today's behaviour, never as pre-existing). The note is in the module docs too,
+  so the next reader does not re-derive it.
+
+  **C6 narrowed, not deleted — and given an earlier call site.** At validate the
+  classifier is consulted only for `Regression` and `NoBaseline` — green at the
+  base and red now, which may be a fault that appeared *during* the run, and the
+  no-measurement case that keeps today's behaviour. `NewFailures` is answered by
+  the measurement (the gate reached an exit status at the base, and its output
+  changed under this feature); `PreExisting` never reaches a classifier because
+  there is no failure left to classify; and `Environment` was *already*
+  classified, at measurement time, so asking again would pay twice for one
+  answer. The narrowing only ever *withholds* a validate-time call: the
   reproduce-unchanged gate still has to fire first, so a first-sight regression
   is still a plain verdict at zero tokens, and every malfunction still falls
   back to `Verdict`.
+
+  **Why the classification moved to measurement time.** `should_triage` requires
+  a failure to have reproduced unchanged, so C6's cheapest possible detection of
+  "this machine cannot run the gate" costs one full rework cycle — two if the
+  implementer perturbs the output in between. Measuring the baseline happens at
+  the head of the graph, where **no implement budget has been spent at all**, and
+  the gate is already red and already in hand. So `measure_gates` hands each red
+  gate to the *same* `triage_harness_failure` (through the `BaselineTriage`
+  trait, so the function stays testable over one port rather than over an
+  `ExecutionDriver`) and stores the answer. Cost: one call per red gate per
+  measurement, none for a green baseline, and none at all on the subtraction
+  path.
+
+  **The fail-safe direction is unchanged, and it is the reason the field is
+  `Option`.** `triage_harness_failure` returns `Regression` on every
+  spawn/timeout/cancel/parse failure, so a malfunctioning classifier records no
+  fault — and no fault means `PreExisting`, which is the behaviour with no
+  classification at all. A record written before the field existed decodes the
+  same way. Only a *positive* `environment` answer can terminate a run, so a
+  broken classifier withholds an escalation and can never manufacture one.
 
   **One row deliberately reads before the baseline.** The exit-127 fast path
   runs on the *unsubtracted* failure set. A missing binary is red at the base
@@ -755,6 +811,19 @@ deterministic rather than agentic:
   127 path moved behind the subtraction, the narrowing computed but never
   applied, C6's fail-safe replaced by an escalation, and the
   `{{harness_baseline}}` binding removed.
+
+  Rung 3 added eleven more, likewise all watched fail: rung 3 removed from
+  `compare_gate`, an absent classification defaulting to `environment` (the
+  fail-safe inverted), `outcome()` routing `Environment` into `Excluded` (the
+  shipped defect, restored on purpose to watch it), `measure_gates` never
+  classifying, classifying a *green* gate, mapping `Regression` onto a recorded
+  fault, `run_harness_first` dropping the escalation, and the remediation
+  dropped on its way to the message. The conformance gate grew a ninth leg
+  (`a_gate_that_could_not_run_at_the_base_terminates_rather_than_being_excluded`)
+  whose fixture is built so a wrong answer is loud rather than ambiguous: the
+  gate output carries `@stub-verdict verdict` as well, so an incorrectly
+  excluded gate reaches the validate turn and the step completes **green** —
+  which is exactly what it does against the pre-fix code.
 
   **Two fixture techniques worth not re-deriving.** `git symbolic-ref -q HEAD`
   tells HB2b's *detached* baseline worktree from the step's own branch
