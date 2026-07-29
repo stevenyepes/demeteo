@@ -335,29 +335,35 @@ mod tests {
         assert!(has_errors(&findings));
     }
 
+    const STARTERS: [&str; 7] = [
+        "bugfix-pipeline",
+        "ci-fix",
+        "docs-update",
+        "experiment",
+        "refactor",
+        "simple-task",
+        "standard-feature-pipeline",
+    ];
+
+    /// The bundled starter JSON as authored, straight off disk — the same file
+    /// `seed_starter_workflows` ships in the binary.
+    fn starter(name: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src-tauri/workflows")
+            .join(format!("{name}.json"));
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read starter {}: {e}", path.display()));
+        serde_json::from_str(&body).expect("starter is valid JSON")
+    }
+
     #[test]
     fn every_migrated_starter_lints_clean() {
         // The builder's lint surface must agree with what the engine already
         // runs every day — a starter that linted dirty would show error badges
         // on a workflow the user never touched, and (via `has_errors` at the
         // write paths) could not be re-saved after an edit.
-        const STARTERS: [&str; 7] = [
-            "bugfix-pipeline",
-            "ci-fix",
-            "docs-update",
-            "experiment",
-            "refactor",
-            "simple-task",
-            "standard-feature-pipeline",
-        ];
         for name in STARTERS {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../src-tauri/workflows")
-                .join(format!("{name}.json"));
-            let body = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("read starter {}: {e}", path.display()));
-            let value: serde_json::Value =
-                serde_json::from_str(&body).expect("starter is valid JSON");
+            let value = starter(name);
             let migrated = crate::domain::models::workflow_migrate::migrate_definition(&value)
                 .unwrap_or_else(|e| panic!("{name} migrates: {e}"));
 
@@ -367,5 +373,170 @@ mod tests {
                 "{name} lints with errors: {findings:?}"
             );
         }
+    }
+
+    /// One `[attached — …]` reference found in a starter's prompt text.
+    struct AttachedRef {
+        /// The referencing step's id, for the assertion message.
+        from: String,
+        /// The text after the dash, as `resolve_attached_artifacts` sees it.
+        payload: String,
+    }
+
+    /// Every `[attached — …]` reference in a starter's prompts, in declaration
+    /// order. The `previous step artifact` spelling is skipped: it names a
+    /// position, not a step, so there is nothing to resolve.
+    fn attached_refs(wf: &serde_json::Value) -> Vec<AttachedRef> {
+        let mut out = Vec::new();
+        for step in wf["steps"].as_array().expect("starter has steps") {
+            let from = step["id"].as_str().unwrap_or_default().to_string();
+            let sources = [
+                step["prompt_template"].as_str(),
+                step["verifier"]["instructions"].as_str(),
+                step["rework_prompt_template"].as_str(),
+            ];
+            for text in sources.into_iter().flatten() {
+                // Mirrors `resolve_attached_artifacts`'s own scan: opening
+                // token `[attached`, closing `]`, payload after the dash.
+                let mut rest = text;
+                while let Some(start) = rest.find("[attached") {
+                    let after = &rest[start..];
+                    let Some(end) = after.find(']') else { break };
+                    let inside = &after[1..end];
+                    let payload = inside
+                        .split(['\u{2014}', '\u{2013}'])
+                        .nth(1)
+                        .map(str::trim)
+                        .unwrap_or_default();
+                    if !payload.is_empty() && payload != "previous step artifact" {
+                        out.push(AttachedRef {
+                            from: from.clone(),
+                            payload: payload.to_string(),
+                        });
+                    }
+                    rest = &rest[start + 1..];
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_starter_attachment_names_exactly_one_step_it_declares() {
+        // A prompt that references a step the workflow does not declare renders
+        // as "(Artifact '…' not found or not yet generated)" — silently, mid-run,
+        // with the agent then reasoning from a hole. `lint_definition` cannot see
+        // it because the reference lives inside prompt *text*, so nothing else in
+        // the gate would notice a step being deleted out from under its readers.
+        //
+        // *Exactly* one, because `resolve_attached_artifacts` resolves by
+        // substring in both directions (`content.contains(id) ||
+        // id.contains(content)`) and takes the first hit, so two candidates make
+        // the binding order-dependent.
+        //
+        // Deliberately **not** asserted: that the target is declared earlier. A
+        // step downstream of the reader is a legitimate target on a rework cycle,
+        // by which point it has already run once — `s-analyse`'s
+        // `rework_prompt_template` attaches the `s-regression` report that
+        // rejected it (decision 43), and Standard's `s-implement` attaches
+        // `s-critic` under an explicit "on a re-run" heading.
+        for name in STARTERS {
+            let wf = starter(name);
+            let ids: Vec<String> = wf["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap_or_default().to_lowercase())
+                .collect();
+
+            for AttachedRef { from, payload } in attached_refs(&wf) {
+                let payload_lower = payload.to_lowercase();
+                let matches: Vec<usize> = ids
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, id)| payload_lower.contains(*id) || id.contains(&payload_lower))
+                    .map(|(i, _)| i)
+                    .collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "{name}: `{from}` attaches [attached — {payload}], which resolves to \
+                     {} declared steps ({:?}) — it must name exactly one",
+                    matches.len(),
+                    matches.iter().map(|i| &ids[*i]).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_refactor_starter_takes_its_baseline_from_the_engine_not_an_agent() {
+        // F2 (`docs/HARNESS_BASELINE.md` §5). The starter used to carry two
+        // baselines: the `s-baseline-harness` command node, which *measures*,
+        // and an `s-baseline` agent step, which ran the suite itself and wrote
+        // prose about it. Decision 44 rejects the second — the thing being
+        // judged must not produce the evidence — so the agent step is gone and
+        // its three readers were re-pointed at the measurement.
+        let wf = starter("refactor");
+        let steps = wf["steps"].as_array().unwrap();
+        let ids: Vec<&str> = steps.iter().map(|s| s["id"].as_str().unwrap()).collect();
+
+        assert!(
+            !ids.contains(&"s-baseline"),
+            "the agent baseline step is back: {ids:?}"
+        );
+        // The measurement is still the head of the graph, and still measures:
+        // deleting the agent step must not have taken the record with it.
+        assert_eq!(ids.first(), Some(&"s-baseline-harness"));
+        assert_eq!(steps[0]["kind"].as_str(), Some("command"));
+        assert_eq!(steps[0]["measure_baseline"].as_bool(), Some(true));
+
+        // Nothing may still read the deleted step's artifact. This is the
+        // failure mode the whole task is about: `artifacts/s-baseline.md` is
+        // never written now, so a surviving reader would be reading a file that
+        // does not exist.
+        let raw = serde_json::to_string(&wf).unwrap();
+        assert!(
+            !raw.contains("s-baseline.md"),
+            "a step still reads the deleted agent baseline's artifact"
+        );
+    }
+
+    #[test]
+    fn the_refactor_no_harness_skip_branch_is_keyed_on_what_the_engine_renders() {
+        // The `NO_HARNESS` path used to be an agent's own prose verdict line in
+        // `artifacts/s-baseline.md`. With that step gone the skip branch is
+        // driven by the `{{harness_baseline}}` block, which is engine-rendered —
+        // so the branch is only reachable if the prompt keys on wording the
+        // renderer actually emits. Pinning both sides in one test is what stops
+        // a reword on either side from silently stranding the branch.
+        let wf = starter("refactor");
+        let regression = wf["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "s-regression")
+            .expect("refactor declares s-regression");
+        let prompt = regression["prompt_template"].as_str().unwrap();
+
+        assert!(
+            prompt.contains("{{harness_baseline}}"),
+            "s-regression no longer binds the engine's baseline block"
+        );
+
+        // What the renderer says when the project configures no gate at all.
+        let briefing = crate::domain::harness_baseline::render_harness_briefing(&[], None);
+        let marker = "NOTHING";
+        assert!(
+            briefing.contains(marker),
+            "the no-gate briefing no longer says {marker:?}: {briefing}"
+        );
+        assert!(
+            prompt.contains(marker),
+            "s-regression's skip branch no longer keys on {marker:?}"
+        );
+
+        // And the branch it guards is still the skip, not a comparison.
+        assert!(prompt.contains("VERDICT: ALL CLEAR"));
     }
 }
