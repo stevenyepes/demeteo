@@ -38,10 +38,9 @@ HB5 ─────────┘
   └─▶ HB2a ─▶ HB2b ─▶ HB2c ─▶ HB7
 ```
 
-`HB3` is independent of everything, and is now **the only task left**: the whole
-baseline arm (HB1, HB4, HB5, HB2a, HB2b, HB2c) plus HB6 and HB7 are done. The
-verdict is a delta, the subtraction is auditable in the UI, and what remains is
-stopping detection from producing confidently wrong commands in the first place.
+`HB3` was independent of everything, and **every task in this plan is now
+done**. The verdict is a delta, the subtraction is auditable in the UI, and
+detection no longer produces confidently wrong commands in the first place.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -52,7 +51,7 @@ stopping detection from producing confidently wrong commands in the first place.
 | Bootstrap tail + phase vocabulary | `crates/demeteo-core/src/adapters/step_executor/impl_traits/mod.rs` (`bootstrap_phase`, `run_bootstrap_tail_inner`) |
 | Harness execution primitive | `.../step_executor/driver/verifier.rs` (`run_harness_first`, `harness_shell_options`) |
 | Preflight probe (HB1, built) | `.../step_executor/preflight.rs` |
-| Ecosystem detection | `.../adapters/worktree/git_ops/strategy.rs` (`detect_worktree_strategy`) |
+| Ecosystem detection | `.../adapters/worktree/git_ops/strategy.rs` (`detect_worktree_strategy`) — the recipes it decides from are `domain/ecosystem.rs` (HB3) |
 | Shell contract | `crates/demeteo-core/src/ports/execution.rs` (`ShellOptions`, `TRANSPORT_ERROR_PREFIX`, `TIMEOUT_ERROR_PREFIX`) |
 | Sequence prompt binding | `.../step_executor/steps/sequence/prompt.rs` |
 | Phase order (frontend) | `src/types.ts` (`BOOTSTRAP_PHASE_ORDER`), rendered by `src/components/BootstrapStepper.tsx` |
@@ -887,7 +886,7 @@ deterministic rather than agentic:
   own prose; what is asserted is that the exclusion, and the instruction to
   record it, reach the turn that writes it.
 
-### HB3 — Ecosystem detection
+### HB3 — Ecosystem detection — **[Done]**
 
 - **Goal:** stop `detect_worktree_strategy` from producing confidently wrong
   commands, and make it emit the *right shape*. Independent of the rest — it
@@ -944,6 +943,98 @@ deterministic rather than agentic:
 - **Done when:** the Stratosbar layout produces named harnesses covering both
   ecosystems, a `prepare_command`, and no watch-mode invocation — and no `rc=`
   accumulator anywhere in the output.
+
+- **Done:** the *recipe* is a new pure `domain/ecosystem.rs` —
+  `compose_commands` over a slice of `MarkerSite`, reachable from a test with
+  no port double — and `strategy.rs` shrinks to gathering the evidence it
+  decides from. That split is the answer to the global-harness-config
+  question restated as code: the ecosystem recipe is reusable and lives in
+  `domain/`, the command string it derives is repo-specific and is written to
+  the project. Detection emits `{js-test, js-build, rust-test, rust-build, …}`
+  with the *test* gates pre-ticked in `validation_gates`; the accumulator is
+  deleted, not fixed.
+
+  **Build gates are emitted but not pre-ticked.** A test run almost always
+  builds first, so ticking both doubles the wall-clock for one extra signal —
+  but §1's motivating feature had an acceptance criterion that demanded
+  `cargo build` specifically. Putting them in the map makes that a checkbox in
+  HB6's panel rather than a string somebody has to know how to write.
+
+  **The scan is bounded three ways, and one `list_dir` answers each
+  directory.** Root plus one level, never a dot-dir or a `SKIPPED_DIRS` entry
+  (`node_modules` alone would otherwise contribute a `package.json` per
+  dependency), and never more than `MAX_SCANNED_SUBDIRS` of them. `list_dir`
+  rather than four `get_metadata` calls per directory because one listing
+  answers markers, lockfiles and subdirectories together — over SSH that is
+  the difference between a detection and a wait. A **root manifest shadows its
+  own ecosystem below it**: a Cargo workspace, npm workspaces and a Go module
+  all describe their members from the root, so emitting a gate per member as
+  well would run one suite twice under two names. Where a root manifest is
+  absent, siblings each get their own gate and the name carries the directory,
+  or the map silently loses one.
+
+  **A command below the root is wrapped `(cd dir && …)`, not `cd dir && …`.**
+  These commands are chained, and a `cd` that leaks would run the second
+  install in the first one's directory. The separator is `/` rather than
+  `PathBuf::join` throughout, deliberately: these are addresses and shell
+  fragments on the *target* machine — Linux for every remote project — so
+  joining with the host's separator would emit a backslash from a Windows
+  desktop and break the command everywhere it was sent.
+
+  **Two things detection now declines to emit**, on the principle that a
+  confidently wrong command is what this whole document exists to stop: a
+  watch-mode script with no one-shot form (`nodemon`, or a watcher that is not
+  the *last* command in the chain, where an appended `--run` would land on
+  something else), and a package with no real `scripts.test` — `npm test`
+  there exits 1 with "Missing script", which reaches validate wearing the
+  feature's costume. `vitest` and `jest --watch` *are* corrected, since they
+  have one. The one place ignorance is not read as absence is an unreadable or
+  unparseable manifest, which falls back to today's `npm test`. The install
+  step follows the lockfile that is actually present, because `npm ci` in a
+  pnpm repository does not merely fail — it writes a lockfile that was never
+  meant to exist.
+
+  **`test_command` is set only for a single-ecosystem repo.** It is tier 3 and
+  therefore unreachable whenever `validation_gates` is populated; its
+  remaining job is to render `{{test_command}}` in prompts authored before
+  harnesses went plural, and a polyglot repo has no honest single value for
+  it.
+
+  **One edit outside this task's stated Touch, and it was load-bearing.**
+  `bootstrap_project` returns the proposal *without persisting it*, and the
+  new-project wizard wrote back only the four fields its form edits — so every
+  detected harness, gate and prepare command was dropped the moment the wizard
+  finished. Survivable while detection produced one `test_command`; not now.
+  `NewProjectView` holds the proposal whole, writes it on approval, and shows
+  the detected gates read-only, because a polyglot repo's empty test-command
+  field otherwise reads as "nothing was found".
+
+  19 tests — 14 pure over `compose_commands`/`classify_test_script`, 5 in the
+  adapter against a real `LocalSubprocessAdapter` and a real repository (a
+  Tauri layout, a watch-mode script, the depth bound, a single-ecosystem repo,
+  and one with no markers at all). Nineteen mutations were watched redden
+  them: the root-only stat restored, the skip list and depth bound removed,
+  `prepare_command` back to `None`, the watch-mode read made inert, a
+  non-final watcher corrected anyway, an already-one-shot `vitest` corrected
+  anyway, `Missing`/`Uncorrectable` emitted bare, the `rc=` accumulator
+  reintroduced, root shadowing removed, sibling gate names collapsed onto one
+  key, `validation_gates` never populated, the subshell dropped so a chained
+  `cd` leaks, the lockfile ignored, an unparseable manifest read as "no
+  tests", tier 3 handed one ecosystem's command on a polyglot repo, wrapper
+  and assignment stripping removed, the adapter never reading the manifest,
+  a repo with no markers guessing `npm test`, and — in `preflight.rs` — `(`
+  dropped from the unresolvable set, which is what keeps `(cd` from being
+  probed as a binary.
+
+  `the_generated_polyglot_accumulator_probes_only_real_tools` pinned the
+  deleted string. It was reworked rather than removed: the property it covered
+  — the preflight finding the real tools inside a multi-command string
+  detection emits — still holds, against the subshell and `--` forms that
+  replaced it.
+
+  **Not proven here, by scope:** the wizard change is covered by `tsc` and by
+  reading. `NewProjectView` is one of the thin shells this repo's tests
+  deliberately do not stand up (`App.test.tsx` says so in as many words).
 
 ### HB6 — Probe at configuration time, not only at launch
 
@@ -1197,4 +1288,4 @@ deterministic rather than agentic:
 | HB2c | Subtraction & classification | medium-large | ✅ |
 | HB6 | Probe at configuration time | small-medium | ✅ |
 | HB7 | Make the verdict legible | medium | ✅ |
-| HB3 | Ecosystem detection | medium | ☐ |
+| HB3 | Ecosystem detection | medium | ✅ |
