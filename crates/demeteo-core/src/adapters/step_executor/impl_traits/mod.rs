@@ -200,9 +200,10 @@ impl DagStepExecutor {
         }
         self.emit_bootstrap(fid, branch, "completed", None);
 
-        // Phase 6a: harness preflight (HB1). Resolve the binaries the project's
-        // configured `test_command` names, on the machine that will run it,
-        // before a single token is spent.
+        // Phase 6a: harness preflight (HB1/HB4). Resolve the binaries every one
+        // of the project's configured commands names — `prepare_command`,
+        // `test_command`, and each named harness — on the machine that will run
+        // them, before a single token is spent.
         //
         // Here rather than in a graph node because it has to hold for *any*
         // workflow, including one the user drew with no baseline node in it. A
@@ -213,10 +214,11 @@ impl DagStepExecutor {
         // no step rows seeded yet there is nothing half-registered to reconcile
         // — the run simply never started, which is the honest description.
         //
-        // Probes only. It does not run the suite or `prepare_command`: those
-        // belong to the `baseline-harness` node at the head of the graph, which
-        // reaches them at the same point in the timeline without charging every
-        // launch a minute of wall-clock before anything visible happens.
+        // Probes only. `prepare_command` is probed but never *run* here, and
+        // neither is the suite: running belongs to the `baseline-harness` node
+        // at the head of the graph, which reaches them at the same point in the
+        // timeline without charging every launch a minute of wall-clock before
+        // anything visible happens.
         self.emit_bootstrap(fid, preflight, "running", None);
         let verdict = crate::adapters::step_executor::preflight::probe_configured_commands(
             self.exec.as_ref(),
@@ -224,7 +226,7 @@ impl DagStepExecutor {
                 .as_deref()
                 .unwrap_or(crate::domain::ids::LOCAL_MACHINE),
             &ctx.target_dir,
-            ctx.settings.worktree_strategy.test_command.as_deref(),
+            &ctx.settings.worktree_strategy,
             std::time::Duration::from_secs(PREFLIGHT_PROBE_TIMEOUT_S),
         )
         .await;

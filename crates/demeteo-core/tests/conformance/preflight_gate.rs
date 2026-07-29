@@ -44,6 +44,11 @@ const PROVIDER_ID: &str = "preflight-provider";
 /// would be worse than no test.
 const ABSENT_BINARY: &str = "demeteo-definitely-not-installed-xyz";
 
+/// A command every machine this suite can run on resolves, including the CI
+/// container. The HB4 legs set it as `test_command` so the *only* thing that
+/// can block them is the source under test.
+const RESOLVABLE_COMMAND: &str = "sh -c 'exit 0'";
+
 /// Captures the bootstrap phases the run emitted, in order, so a test can
 /// assert both *that* the preflight spoke and *what* it said.
 #[derive(Default)]
@@ -162,9 +167,17 @@ async fn poll_terminal(ctx: &AppContext, feature_id: &FeatureId) -> String {
     }
 }
 
-/// Run one leg with `test_command` set to `harness`, returning the terminal
-/// feature status, the recorded phases, and how many step rows were seeded.
-async fn run_leg(label: &str, harness: &str) -> (String, Arc<PhaseRecorder>, usize) {
+/// Run one leg with the project's `WorktreeStrategy` shaped by `configure`,
+/// returning the terminal feature status, the recorded phases, and how many
+/// step rows were seeded.
+///
+/// A closure rather than a single `test_command` because HB4 widened what the
+/// preflight reads: which of `prepare_command`, `test_command` and `harnesses`
+/// carries the unresolvable binary is exactly what each leg varies.
+async fn run_leg(
+    label: &str,
+    configure: impl FnOnce(&mut crate::domain::models::WorktreeStrategy),
+) -> (String, Arc<PhaseRecorder>, usize) {
     std::env::set_var(STUB_AGENT_ENV, "1");
     let recorder = Arc::new(PhaseRecorder::default());
     let tmp = std::env::temp_dir().join(format!(
@@ -212,7 +225,7 @@ async fn run_leg(label: &str, harness: &str) -> (String, Arc<PhaseRecorder>, usi
 
     let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
     settings.project_id = project.id.clone();
-    settings.worktree_strategy.test_command = Some(harness.to_string());
+    configure(&mut settings.worktree_strategy);
     ctx.projects.save_settings(settings).expect("save settings");
 
     init_local_repo(&ctx.workspace_dir, project.id.as_str(), REPO_PATH);
@@ -263,8 +276,10 @@ async fn run_leg(label: &str, harness: &str) -> (String, Arc<PhaseRecorder>, usi
 /// that failed late.
 #[tokio::test]
 async fn an_unresolvable_binary_blocks_the_launch_before_any_step_is_seeded() {
-    let (status, rec, step_count) =
-        run_leg("missing", &format!("{ABSENT_BINARY} --run && echo done")).await;
+    let (status, rec, step_count) = run_leg("missing", |s| {
+        s.test_command = Some(format!("{ABSENT_BINARY} --run && echo done"));
+    })
+    .await;
 
     assert_eq!(status, "failed", "an unresolvable harness must not start");
     assert_eq!(
@@ -300,7 +315,10 @@ async fn an_unresolvable_binary_blocks_the_launch_before_any_step_is_seeded() {
 /// every machine this suite can run on, including the CI container.
 #[tokio::test]
 async fn a_resolvable_binary_leaves_the_run_untouched() {
-    let (_status, rec, step_count) = run_leg("resolvable", "sh -c 'exit 0'").await;
+    let (_status, rec, step_count) = run_leg("resolvable", |s| {
+        s.test_command = Some(RESOLVABLE_COMMAND.to_string());
+    })
+    .await;
 
     let phases = rec.preflight();
     assert!(
@@ -316,4 +334,63 @@ async fn a_resolvable_binary_leaves_the_run_untouched() {
         step_count > 0,
         "step rows must be seeded exactly as before the preflight existed"
     );
+}
+
+/// Assert a leg was blocked at launch by `binary`, with nothing spent.
+fn assert_blocked_naming(status: &str, rec: &PhaseRecorder, step_count: usize, binary: &str) {
+    assert_eq!(status, "failed", "an unresolvable command must not start");
+    assert_eq!(step_count, 0, "a blocked launch must seed no step rows");
+
+    let detail = rec
+        .preflight()
+        .into_iter()
+        .find(|(_, s, _)| s == "failed")
+        .and_then(|(_, _, d)| d)
+        .expect("a failing preflight must carry a detail");
+    assert!(
+        detail.contains(binary),
+        "the detail must name the binary the user has to install or fix; got:\n{detail}"
+    );
+    assert!(
+        !rec.saw_phase("starting_pipeline"),
+        "the pipeline must never be started; got {:?}",
+        rec.phases.lock().unwrap()
+    );
+}
+
+/// HB4, first half: `prepare_command` is probed too. It is never *run* at
+/// bootstrap (`npm i` is ~40s on every launch), but resolving the binary it
+/// names is free — and until HB4 this project launched, spent the whole
+/// implement budget, and only then discovered the tool at `run_harness_first`.
+///
+/// `test_command` resolves here on purpose: the only thing that can block this
+/// leg is the source under test.
+#[tokio::test]
+async fn an_unresolvable_prepare_command_blocks_the_launch() {
+    let (status, rec, step_count) = run_leg("prepare-missing", |s| {
+        s.test_command = Some(RESOLVABLE_COMMAND.to_string());
+        s.prepare_command = Some(format!("{ABSENT_BINARY} install"));
+    })
+    .await;
+
+    assert_blocked_naming(&status, &rec, step_count, ABSENT_BINARY);
+}
+
+/// HB4, second half: a binary named only by an entry of the `harnesses` map.
+/// `verifier.harness_name` selects one of these, so a step naming `integration`
+/// runs a string the pre-HB4 preflight never looked at — it checked
+/// `test_command`, which that step does not execute.
+#[tokio::test]
+async fn an_unresolvable_named_harness_blocks_the_launch() {
+    let (status, rec, step_count) = run_leg("harness-missing", |s| {
+        s.test_command = Some(RESOLVABLE_COMMAND.to_string());
+        s.harnesses = Some(
+            [("integration".to_string(), format!("{ABSENT_BINARY} --run"))]
+                .into_iter()
+                .collect(),
+        );
+    })
+    .await;
+
+    assert_blocked_naming(&status, &rec, step_count, ABSENT_BINARY);
 }
