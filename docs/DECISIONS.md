@@ -114,6 +114,36 @@ today's behaviour, while a fabricated one excuses a real regression, so every
 ambiguity (transport failure, timeout, failed prepare) records **nothing**
 rather than a plausible red.
 
+**What the subtraction is a subtraction *of*.** It applies to a **verdict the
+gate reached**, never to a failure that means the gate never ran. Both look
+identical to the comparison — same command, same output, same fingerprint, red
+both sides — and they have opposite consequences. A pre-existing *code* defect
+predates the feature, so removing it leaves the gate's remaining evidence
+standing and the step may pass on that evidence. A gate that could not run on
+this machine (a missing system library, an absent toolchain, an unprovisioned
+service) produced no evidence at all, so passing on it certifies nothing; it is
+terminal `Environment` with remediation. The motivating incident, a missing
+`gdk-3.0`, exits **1**, not 127 — the exit-127 fast path cannot see it, which is
+exactly why C6's classifier exists.
+
+**Why that classification is made at baseline-measurement time.** C6 reaches the
+same question through `should_triage`, which requires the failure to have
+reproduced unchanged across two attempts, so its cheapest possible detection is
+one full rework cycle — and if the implementer perturbs the output in between,
+the fingerprint comparison resets and it is two. At baseline-measurement time the
+run is at the head of the graph and **no implement budget has been spent at
+all**. So the baseline producer hands every *red* gate to the same
+`triage_harness_failure` C6 uses — one call per red gate per measurement, none at
+all for a green baseline — and stores the answer on the record. The comparison
+then reads it instead of re-asking, which is why the subtraction path costs no
+tokens. This moved the classification, not the classifier: one prompt, one
+implementation, one fail-safe. The direction is preserved exactly — every
+spawn/timeout/cancel/parse failure yields `regression`, so an *absent*
+classification (never asked, answered regression, or a record written before the
+field existed) reads as a pre-existing defect and stays excluded. Only a positive
+`environment` answer can terminate a run, so a malfunctioning classifier can
+withhold an escalation and never manufacture one.
+
 **Why the granularity ladder stops at the fingerprint.** The comparison escalates
 cheapest-first: exit status, then `normalize_failure_fingerprint`. A third rung —
 an agent reading the base output and the current one and answering "which
@@ -129,13 +159,17 @@ needed, not before.
 **What survives of the triage agent.** The classifier (C6) is narrowed rather
 than deleted, because a baseline turns most of the environment-vs-regression
 question into a measurement: red-before-and-identically-red-now is not this
-feature's, and red-before-differently-red-now is answered too — the gate reached
-an exit status at the base, so the machine can run it, and the output changed
-under this feature's changes. What is left is green at the base and red now,
-which may be a fault that appeared *during* the run (a disk filled, a service
-died), and that genuinely needs judgement. The narrowing can only ever withhold a
-call, never cause one, and every malfunction still falls back to `Verdict` — the
-property that made the agent safe to keep at all.
+feature's *provided the gate actually ran*, and red-before-differently-red-now is
+answered too — the gate reached an exit status at the base, so the machine can
+run it, and the output changed under this feature's changes. What is left for the
+*validate-time* call is green at the base and red now, which may be a fault that
+appeared *during* the run (a disk filled, a service died), and that genuinely
+needs judgement. The narrowing can only ever withhold a call, never cause one,
+and every malfunction still falls back to `Verdict` — the property that made the
+agent safe to keep at all. The agent also gained a second, earlier call site (see
+above): the baseline producer classifies each red gate once at measurement time,
+which is where "the gate cannot run here" is now caught, a full rework cycle
+sooner than `should_triage` could reach it.
 
 ### 37 — Effort level (detail)
 
