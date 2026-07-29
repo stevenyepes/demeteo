@@ -38,11 +38,10 @@ HB5 ─────────┘
   └─▶ HB2a ─▶ HB2b ─▶ HB2c ─▶ HB7
 ```
 
-`HB3` is independent of everything. **HB1, HB4, HB5, HB2a, HB2b and HB2c are
-done**, which leaves HB6 unblocked (it authors the project tier of HB5's
-resolution chain, and the field it writes now exists) and **HB7** next on the
-baseline arm — the verdict is now a delta, and what remains there is making the
-subtraction and the terminal environment failure legible in the UI.
+`HB3` is independent of everything, and is now **the only task left**: the whole
+baseline arm (HB1, HB4, HB5, HB2a, HB2b, HB2c) plus HB6 and HB7 are done. The
+verdict is a delta, the subtraction is auditable in the UI, and what remains is
+stopping detection from producing confidently wrong commands in the first place.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -1064,7 +1063,7 @@ deterministic rather than agentic:
   (`tests/conformance/harness_gates.rs`). What this task proves is that the
   selection reaches `validation_gates` in the user's order.
 
-### HB7 — Make the verdict legible
+### HB7 — Make the verdict legible — **[Done]**
 
 - **Goal:** the subtraction is worthless if the user cannot see it happen, and a
   terminal environment failure currently renders as an ordinary failed feature —
@@ -1091,6 +1090,60 @@ deterministic rather than agentic:
 - **Done when:** a run that excluded a pre-existing failure says so in the UI
   naming the test, and a terminal environment failure renders its remediation as
   the primary content rather than as an error message.
+
+- **Done:** `HarnessGateTable` renders baseline vs. now per gate above the
+  Graph|Timeline toggle — a property of the run, not of one rendering of it —
+  and `EnvironmentNotReadyPanel` replaces the ruby error dump on the step that
+  ended in a terminal environment failure. Both read the V37 record, which now
+  exists on the frontend `Feature` type; the join and the two parsers are pure
+  functions in `src/lib/harnessVerdict.ts`.
+
+  **Where the "now" side comes from — one correction to this plan.** The
+  baseline half is structured and authoritative. The other half is not stored
+  per gate *anywhere*: `run_harness_first` folds it into the step's
+  `error_message`, and on the all-excluded pass path the exclusion travels into
+  the validate prompt only, so the report naming it is the agent's own prose
+  (HB2c's own "not proven here"). So the UI reads back the two engine-authored
+  strings that *are* persisted — `build_environment_message`, and
+  `build_failure_reason` + `build_exclusion_note` — rather than a structured
+  record. `isEnvironmentError` already parsed the first by prefix; this widens
+  that, it does not introduce it. **If a later task wants this to be a
+  structured read, the engine has to persist a per-gate result** (a `run_events`
+  kind, or a column) — that is engine work and was deliberately out of scope
+  here.
+
+  Every parse is conservative in the same direction the record is. An
+  unparseable message yields *nothing reported*, a gate the record never
+  measured renders **not measured**, and a gate no step named renders **no
+  failure reported** — neither is a pass. That is the one inversion decision 44
+  cannot survive, and it is why the pass path still has something to show: a
+  gate red at the base is named as excluded from the verdict off the *record*,
+  which is the only evidence a passing run leaves behind.
+
+  **Amber, not ruby, for the environment panel.** AGENTS.md §4 gives ruby to
+  errors and failures, and an environment failure is one — but the whole task is
+  that it must not read as *this feature's*. `NotificationBell` already accents
+  `environment_not_ready` amber, so the panel follows the convention that
+  existed rather than inventing a fifth colour. Ruby stays on the verdict, which
+  is the failure the feature answers for.
+
+  19 pure tests and 9 component ones, every one watched fail: the remediation
+  truncated to its first line, the environment prefix check dropped (caught by a
+  verdict whose own output quotes the labels), the exclusion note never parsed,
+  the evidence scanned front-to-back, an unmeasured gate defaulting to passed,
+  any red baseline gate reading as environmental (the fail-safe inverted), the
+  feature payload cast instead of guarded, the baseline classification ignored,
+  the environment failure not joined onto a gate, only the first failing gate
+  reported; and component-side: the exclusion note dropping the commit and the
+  producer, the exclusion rendered as an ordinary failure, the no-baseline state
+  rendering nothing, an empty table rendering a header anyway, the remediation
+  back in a monospace error string, `atBase` ignored, an empty remediation still
+  rendering the "Do this" box, and the reproduce block dropped.
+
+  **Not proven here, by scope:** that `FeatureDetail` *mounts* both. It is the
+  thin shell this repo's tests deliberately do not stand up (`App.test.tsx` says
+  so in as many words), so the wiring is covered by `tsc` and by reading, not by
+  a test.
 
 ---
 
@@ -1143,5 +1196,5 @@ deterministic rather than agentic:
 | HB2b | Measure the baseline: node + lazy fallback | large | ✅ |
 | HB2c | Subtraction & classification | medium-large | ✅ |
 | HB6 | Probe at configuration time | small-medium | ✅ |
-| HB7 | Make the verdict legible | medium | ☐ |
+| HB7 | Make the verdict legible | medium | ✅ |
 | HB3 | Ecosystem detection | medium | ☐ |
