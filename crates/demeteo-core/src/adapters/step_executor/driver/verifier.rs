@@ -287,8 +287,42 @@ impl ExecutionDriver {
                 .flatten()
                 .and_then(|f| f.harness_baseline);
 
-            let (attributable, excluded, triage_allowed) =
+            let subtracted =
                 self.subtract_pre_existing(baseline.as_ref(), &base_sha, wt_path, &failed);
+
+            // Red at the base **because the gate could not run here**. It looks
+            // identical to a pre-existing failure — same command, same output,
+            // same fingerprint — and subtracting it would pass the step on a
+            // gate that verified nothing. The baseline's own classification
+            // (taken at measurement time, before a line was implemented) is what
+            // tells the two apart; the motivating incident exited 1, not 127, so
+            // the fast path above cannot.
+            if let Some(gate) = subtracted.unrunnable {
+                let msg = build_environment_message(
+                    machine_str,
+                    wt_path,
+                    &gate.run.cmd,
+                    &gate.reason,
+                    &gate.remediation,
+                );
+                self.notify_environment_not_ready(step_exec, &msg);
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    harness = %gate.run.name,
+                    base_sha = %base_sha,
+                    "the gate was red at the base because this machine cannot run it — \
+                     terminating rather than excusing a gate that proved nothing"
+                );
+                return Err(crate::domain::verifier::VerifierError::Environment(msg));
+            }
+
+            let SubtractedFailures {
+                attributable,
+                excluded,
+                triage_allowed,
+                ..
+            } = subtracted;
 
             if attributable.is_empty() {
                 // Every red gate was already red, identically, before this
@@ -344,8 +378,8 @@ impl ExecutionDriver {
         base_sha: &str,
         wt_path: &str,
         failed: &[HarnessRun],
-    ) -> (Vec<HarnessRun>, Vec<ExcludedRun>, bool) {
-        use crate::domain::harness_delta::{compare_gates, ObservedFailure};
+    ) -> SubtractedFailures {
+        use crate::domain::harness_delta::{compare_gates, GateOutcome, ObservedFailure};
 
         // Fingerprinted over the same labelled block `measure_gates` records,
         // so the two sides of the comparison are strings built the same way
@@ -370,22 +404,43 @@ impl ExecutionDriver {
 
         let mut attributable = Vec::new();
         let mut excluded = Vec::new();
+        let mut unrunnable: Option<UnrunnableGate> = None;
         let mut triage_allowed = None;
         for (run, cmp) in failed.iter().zip(&comparisons) {
-            if cmp.determination.is_attributable() {
-                triage_allowed.get_or_insert(cmp.determination.allows_triage());
-                attributable.push(run.clone());
-            } else {
-                excluded.push(ExcludedRun {
+            match cmp.determination.outcome() {
+                GateOutcome::Attributable => {
+                    triage_allowed.get_or_insert(cmp.determination.allows_triage());
+                    attributable.push(run.clone());
+                }
+                GateOutcome::Excluded => excluded.push(ExcludedRun {
                     run: run.clone(),
                     reason: build_exclusion_reason(base_sha, cmp.baseline.as_ref()),
-                });
+                }),
+                // The **first** one only: the message carries a reproduce line,
+                // which means nothing for more than one command — the same
+                // reason the 127 fast path and the classifier each name a single
+                // gate.
+                GateOutcome::Unrunnable {
+                    reason,
+                    remediation,
+                } => {
+                    unrunnable.get_or_insert_with(|| UnrunnableGate {
+                        run: run.clone(),
+                        reason: reason.to_string(),
+                        remediation: remediation.to_string(),
+                    });
+                }
             }
         }
-        // No attributable gate ⇒ nothing will be classified, so the flag is
-        // moot; `true` keeps it from reading as a suppression that was never
-        // decided.
-        (attributable, excluded, triage_allowed.unwrap_or(true))
+        SubtractedFailures {
+            attributable,
+            excluded,
+            // No attributable gate ⇒ nothing will be classified, so the flag is
+            // moot; `true` keeps it from reading as a suppression that was never
+            // decided.
+            triage_allowed: triage_allowed.unwrap_or(true),
+            unrunnable,
+        }
     }
 
     /// Build the [`ShellOptions`](crate::ports::execution::ShellOptions) the
@@ -1337,6 +1392,41 @@ pub(crate) struct ExcludedRun {
     pub run: HarnessRun,
     /// One sentence naming the base commit and the producer that measured it.
     pub reason: String,
+}
+
+/// A red gate whose baseline says the gate **could not run on this machine**,
+/// so its failure is not a verdict about anything.
+///
+/// Distinct from [`ExcludedRun`] on purpose, and the distinction is the defect
+/// HB2c shipped with: both are "not this feature's fault", and they have
+/// opposite consequences. An excluded gate is subtracted and the step passes on
+/// what the *other* gates proved; an unrunnable one proved nothing, so passing
+/// on it is evidence-free and the run has to stop with remediation instead.
+struct UnrunnableGate {
+    run: HarnessRun,
+    /// The classifier's sentence, as recorded at baseline-measurement time.
+    reason: String,
+    /// Its provisioning step; may be empty.
+    remediation: String,
+}
+
+/// Everything the subtraction concluded about one harness pass.
+///
+/// A struct rather than the tuple this used to return because there are now
+/// three destinations a red gate can reach, and a positional tuple of two
+/// vectors plus two more fields is exactly where a caller starts binding the
+/// wrong one.
+struct SubtractedFailures {
+    /// The gates this feature answers for — a verdict, feeding the rework loop.
+    attributable: Vec<HarnessRun>,
+    /// The gates the baseline excused as pre-existing.
+    excluded: Vec<ExcludedRun>,
+    /// Whether C6's classifier may still be consulted about `attributable`.
+    triage_allowed: bool,
+    /// The first gate the baseline says cannot run here. `Some` short-circuits
+    /// everything else: it is terminal, so no verdict and no subtraction is
+    /// reached.
+    unrunnable: Option<UnrunnableGate>,
 }
 
 /// The red gates of one harness pass, split by who answers for them.

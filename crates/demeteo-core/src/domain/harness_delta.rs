@@ -27,17 +27,30 @@
 //! 2. **fingerprint** ([`normalize_failure_fingerprint`]) — red both sides with
 //!    the *same* normalized output is the same failure; a different one is new
 //!    failures on top of a pre-existing one.
+//! 3. **what that same failure *was*** — read off the record, not computed here.
+//!    A gate red at the base because the machine cannot run it is not a
+//!    pre-existing defect to subtract; it is a gate that proved nothing, and it
+//!    terminates with remediation ([`GateDetermination::Environment`]).
 //!
-//! `docs/HARNESS_BASELINE.md` describes a third rung: an agent reading both
-//! outputs and answering "which failures in B are absent from A", which would
-//! scope the delta to individual test names rather than to the whole gate.
-//! **It is deliberately not built here.** It costs an agent call on every red
-//! validate, and whether that is worth paying is a judgement better made after
-//! rungs 1–2 have been watched in practice — the fingerprint's own false-miss
-//! rate is unknown until then, and its failure direction is the safe one (a
-//! perturbed fingerprint reads as *new*, i.e. today's behaviour, never as
-//! pre-existing). Build it when a real run shows rung 2 conceding too much,
-//! not before.
+//! Rung 3 is a *lookup*, and that is the point: the classification was made
+//! once, by C6's triage agent, at baseline-measurement time — the head of the
+//! graph, where **zero implement budget has been spent**. Reaching the same
+//! question through `should_triage` instead costs a full rework cycle first,
+//! because the classifier is only consulted once a failure has reproduced
+//! unchanged. Same agent, same fail-safe, one cycle earlier and once per red
+//! gate rather than once per validate attempt.
+//!
+//! `docs/HARNESS_BASELINE.md` describes a **finer** rung beyond these: an agent
+//! reading both outputs and answering "which failures in B are absent from A",
+//! which would scope the delta to individual test names rather than to the whole
+//! gate. **It is deliberately not built here.** It costs an agent call on every
+//! red validate — unlike rung 3, which is paid once per red gate at measurement
+//! time and read back for free — and whether that is worth paying is a judgement
+//! better made after rungs 1–2 have been watched in practice: the fingerprint's
+//! own false-miss rate is unknown until then, and its failure direction is the
+//! safe one (a perturbed fingerprint reads as *new*, i.e. today's behaviour,
+//! never as pre-existing). Build it when a real run shows rung 2 conceding too
+//! much, not before.
 //!
 //! # The direction every ambiguity resolves in
 //!
@@ -51,23 +64,53 @@
 //! a red one is excusing a real regression. Only the first is survivable, so
 //! every gap resolves to it.
 //!
+//! Rung 3 resolves the other way round, for the same reason. A *positive*
+//! `environment` classification is the only thing that terminates a run, so an
+//! absent one — never classified, classified as a regression, or written by a
+//! build that predates the field — reads as a pre-existing defect and stays
+//! excluded. A malfunctioning classifier therefore withholds an escalation; it
+//! can never manufacture one.
+//!
 //! [`normalize_failure_fingerprint`]: crate::adapters::step_executor::driver::verifier::normalize_failure_fingerprint
 
 use crate::domain::harness_baseline::{HarnessBaseline, HarnessBaselineRun};
 
 /// What one red gate's comparison against the baseline determined.
 ///
-/// Three of the four are the same *outcome* — a verdict that feeds the rework
+/// Three of the five are the same *outcome* — a verdict that feeds the rework
 /// loop — and they are still distinct variants because they answer two further
 /// questions differently: whether the exclusion has to be named to the user,
 /// and whether C6's triage agent has anything left to add.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The fifth, [`Environment`](Self::Environment), is the one that is *not* a
+/// verdict and *not* a subtraction, and it is the reason this enum is read
+/// through [`outcome`](Self::outcome) rather than through a boolean.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateDetermination {
     /// Red at the base with this same normalized failure, and red now with it
     /// again. **Not this feature's.** Subtracted from the verdict — and named
     /// in the report, because a subtraction the user cannot audit will not be
     /// trusted the first time it is wrong.
     PreExisting,
+    /// Red at the base with this same normalized failure, and red now with it
+    /// again — but the baseline measurement recorded that the gate was red
+    /// *because it could not run on this machine*
+    /// ([`BaselineEnvironmentFault`](crate::domain::harness_baseline::BaselineEnvironmentFault)).
+    ///
+    /// **Terminal, with remediation.** This looks byte-for-byte like
+    /// [`PreExisting`](Self::PreExisting) and must not be treated like it: a
+    /// pre-existing *code* defect is a verdict the gate actually reached and
+    /// which predates the feature, so subtracting it leaves the rest of the
+    /// gate's evidence intact. A gate that could not run reached no verdict at
+    /// all, so subtracting it passes the step on nothing. The motivating
+    /// incident (a missing `gdk-3.0`) exits **1**, not 127, so the exit-127 fast
+    /// path cannot see it — only the classification can.
+    Environment {
+        /// One sentence naming what the machine is missing.
+        reason: String,
+        /// The concrete provisioning step; may be empty.
+        remediation: String,
+    },
     /// Green at the base, red now. **This feature broke it** — a verdict, and
     /// the rework loop is exactly the right place for it. No agent is needed to
     /// reach this conclusion; the measurement already made it.
@@ -84,12 +127,50 @@ pub enum GateDetermination {
     NoBaseline,
 }
 
+/// What the caller must *do* about one gate, which is not the same question as
+/// what the comparison determined.
+///
+/// This replaces the `is_attributable() -> bool` this type used to expose. The
+/// boolean had exactly two answers — "fail the step" and "subtract it" — so the
+/// moment a third became necessary the old shape would have quietly routed it
+/// into whichever of the two it resembled, and
+/// [`Environment`](GateDetermination::Environment) resembles the *subtract* one
+/// precisely. A three-way return makes a caller that has not thought about the
+/// third case fail to compile rather than fail to escalate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateOutcome<'a> {
+    /// This feature answers for it: a verdict, feeding the rework loop.
+    Attributable,
+    /// Subtracted from the verdict, and named in the report so the subtraction
+    /// is auditable.
+    Excluded,
+    /// The gate never ran here, so it proved nothing. Terminal `Environment`
+    /// with the remediation the classifier produced — passing on this would be
+    /// evidence-free, and retrying it spends an implement budget on something
+    /// `s-implement` cannot reach.
+    Unrunnable {
+        reason: &'a str,
+        remediation: &'a str,
+    },
+}
+
 impl GateDetermination {
-    /// Whether this feature answers for the gate's failure. False only for
-    /// [`PreExisting`](Self::PreExisting) — the one row of decision 44's table
-    /// that does not fail the step.
-    pub fn is_attributable(&self) -> bool {
-        !matches!(self, GateDetermination::PreExisting)
+    /// What the caller must do about this gate. The **only** way to ask; see
+    /// [`GateOutcome`] for why it is not a boolean.
+    pub fn outcome(&self) -> GateOutcome<'_> {
+        match self {
+            GateDetermination::PreExisting => GateOutcome::Excluded,
+            GateDetermination::Environment {
+                reason,
+                remediation,
+            } => GateOutcome::Unrunnable {
+                reason,
+                remediation,
+            },
+            GateDetermination::Regression
+            | GateDetermination::NewFailures
+            | GateDetermination::NoBaseline => GateOutcome::Attributable,
+        }
     }
 
     /// Whether C6's triage agent may still be consulted about this gate.
@@ -100,6 +181,10 @@ impl GateDetermination {
     ///
     /// * [`PreExisting`](Self::PreExisting) never reaches the classifier at all
     ///   — it is subtracted before there is a failure to classify.
+    /// * [`Environment`](Self::Environment) has already *been* classified, at
+    ///   baseline-measurement time, and terminates before classification is
+    ///   reached. Asking again would pay a second agent call for an answer
+    ///   already on the record.
     /// * [`NewFailures`](Self::NewFailures) is answered too: the gate reached an
     ///   exit status at the base, so the machine can run it, and the *output
     ///   changed* under this feature's changes. There is no judgement left that
@@ -201,7 +286,23 @@ pub fn compare_gate(
         // fingerprint, and a red record without one is a shape we do not
         // understand — matching it against an equally empty live fingerprint
         // would subtract a failure on the strength of two blanks.
-        GateDetermination::PreExisting
+        //
+        // Same failure both sides — but *what* the failure was decides whether
+        // it may be subtracted at all. The subtraction applies to a **verdict**
+        // the gate reached: a pre-existing code defect predates the feature, and
+        // removing it leaves the rest of the gate's evidence standing. A gate
+        // that could not run reached no verdict, so there is no evidence to
+        // leave standing and passing on it certifies nothing. Absent
+        // classification reads as the former (see
+        // `HarnessBaselineRun::environment`): only a positive `environment`
+        // answer can terminate a run.
+        match &measured.environment {
+            Some(fault) => GateDetermination::Environment {
+                reason: fault.reason.clone(),
+                remediation: fault.remediation.clone(),
+            },
+            None => GateDetermination::PreExisting,
+        }
     } else {
         GateDetermination::NewFailures
     };
