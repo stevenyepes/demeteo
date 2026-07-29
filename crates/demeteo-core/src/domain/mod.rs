@@ -6,6 +6,7 @@ pub mod attachment;
 pub mod bootstrap;
 pub mod expr;
 pub mod harness_baseline;
+pub mod harness_delta;
 pub mod ids;
 pub mod intercept;
 pub mod memory;

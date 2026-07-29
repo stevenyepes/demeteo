@@ -193,6 +193,92 @@ impl HarnessBaseline {
     }
 }
 
+/// The `{{harness_baseline}}` prompt block: what this project's harness can
+/// actually prove, and what it already said about the code before the feature
+/// started.
+///
+/// # The failure this exists to stop
+///
+/// Both failed validate attempts in `f-1785157902856` cost a rework cycle for
+/// the same reason: the spec's acceptance criteria named commands the harness
+/// never ran, so they could not be shown MET however correct the
+/// implementation was (`docs/HARNESS_BASELINE.md` §1). The spec prompt already
+/// handled a *blank* command; what it had no way to state was the **positive**
+/// fact — these gates, these commands, and this is what they said. Guessing at
+/// it from `test_command` alone became wrong the moment harnesses became plural
+/// (HB5): a project whose validation gates select `lint` and `unit` runs
+/// neither `test_command` nor one command.
+///
+/// # Why the empty case is worded as hard as it is
+///
+/// With no gates resolved, *every* criterion phrased against a command is
+/// unprovable, and that is knowable here — at spec time, for the price of a
+/// paragraph — instead of after the whole implement budget is gone and only if
+/// the validate agent then picks `environment` over `fail`. So the block does
+/// not merely omit a command list: it says nothing will run, says what that
+/// means for a criterion, and names the settings that would change it.
+///
+/// Pure over the two values the caller already holds, so every wording decision
+/// above is assertable without a driver.
+pub fn render_harness_briefing(
+    gates: &[crate::domain::verifier::ResolvedHarness],
+    baseline: Option<&HarnessBaseline>,
+) -> String {
+    if gates.is_empty() {
+        return "## What this project's harness can prove — NOTHING\n\
+                No validation gate is configured for this project, so the orchestrator will \
+                execute **no command at all** before judging the finished work. The only \
+                evidence available to the validator is a reading of the diff.\n\n\
+                That is an absence of evidence, not a passing result. A criterion that \
+                requires a command to be run can therefore never be shown MET, however \
+                correct the implementation is — and no amount of re-implementation can \
+                change that, because the missing piece is a project setting (the test \
+                command, or the harnesses selected as validation gates), not the code.\n\n\
+                So: raise this as the **first Open Question**, and phrase every acceptance \
+                criterion as something reviewable in the diff by eye. Do not assert a \
+                criterion the harness cannot evidence.\n"
+            .to_string();
+    }
+
+    let mut out = String::from(
+        "## What this project's harness can prove\n\
+         These are the **only** commands the orchestrator executes when it validates the \
+         finished work, run in this order, each as its own gate:\n\n",
+    );
+    for gate in gates {
+        let measured = baseline.and_then(|b| b.harness(&gate.name));
+        let status = match measured {
+            // Named as "before this feature started" rather than "at the base",
+            // because the reader needs the attribution, not the git vocabulary.
+            Some(run) if run.exit_ok => {
+                "passed against this repository before this feature started".to_string()
+            }
+            Some(_) => "**already failing** against this repository before this feature \
+                        started — this gate's output cannot evidence a new criterion until \
+                        that pre-existing failure is dealt with"
+                .to_string(),
+            // Absent is not green (HB2a). Say so, rather than leaving a blank
+            // that reads as a pass.
+            None => "not measured before this feature started, so nothing is known about \
+                     what it says on this repository"
+                .to_string(),
+        };
+        out.push_str(&format!(
+            "- `{}` → `{}`\n  - {}\n",
+            gate.name, gate.command, status
+        ));
+    }
+    out.push_str(
+        "\nWrite every acceptance criterion so it can be judged from those commands' output \
+         plus a reading of the diff. A criterion requiring anything they do not run can \
+         never be shown MET — it fails validation forever and burns the whole rework \
+         budget. If the feature genuinely needs a gate the list above does not cover, say \
+         so in **Open Questions** and phrase the criterion against what *is* run; do not \
+         assert it.\n",
+    );
+    out
+}
+
 /// Whether validate's failure path should measure a baseline **itself** — the
 /// lazy fallback of HB2b, the producer that makes the subtraction
 /// unconditional rather than a privilege of the workflows that happen to carry

@@ -202,6 +202,97 @@ pub(crate) async fn measure_gates(
 }
 
 impl ExecutionDriver {
+    /// The commit this run forked from — the one a baseline is evidence
+    /// *about*.
+    ///
+    /// The fork point, not the feature branch's tip: the tip carries this
+    /// feature's own commits, so measuring it would compare the work against
+    /// itself. Resolved once per failure path and handed to both consumers —
+    /// the producer that measures a fallback and the subtraction that checks
+    /// [`HarnessBaseline::covers`] — because two resolutions that could
+    /// disagree would silently disable the subtraction rather than fail.
+    ///
+    /// `None` on any failure (no settings, no merge-base, dead transport).
+    /// Callers treat that as *no baseline evidence*, which is today's
+    /// behaviour — never as a green base.
+    pub(crate) async fn resolve_base_sha(&self) -> Option<String> {
+        let feature = self.features.get(&self.f_id).ok().flatten()?;
+        let settings = self
+            .projects
+            .get_settings(&feature.project_id)
+            .ok()
+            .flatten()?;
+        let sha = self
+            .git_ops
+            .merge_base(
+                self.machine_id_opt.as_deref(),
+                &self.target_dir,
+                &settings.worktree_strategy.default_branch,
+                &self.branch_name,
+            )
+            .await;
+        if sha.is_none() {
+            tracing::warn!(
+                feature_id = %self.f_id,
+                "no merge-base for the feature branch — this run has no baseline evidence"
+            );
+        }
+        sha
+    }
+
+    /// Render the `{{harness_baseline}}` prompt block for this run: which gates
+    /// will judge the finished work, and what each already said about this
+    /// repository.
+    ///
+    /// The gate list is resolved through
+    /// [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses) — the
+    /// same chain validate itself resolves through — over the declarations of
+    /// **every step in this workflow that carries a verifier**, deduplicated by
+    /// name. Asking the project alone would be wrong for a workflow whose
+    /// validate step pins its own gates, and telling `s-spec` about gates that
+    /// will not run is the same class of lie as telling it about none of them.
+    ///
+    /// The wording is [`render_harness_briefing`], which is pure and lives in
+    /// `domain/`; what happens here is only the two lookups it cannot do.
+    /// Anything unreadable yields an empty block rather than a guess: a prompt
+    /// section that describes a harness this project does not have is worse
+    /// than no section.
+    pub(crate) fn render_harness_briefing(
+        &self,
+        feature: Option<&crate::domain::models::Feature>,
+    ) -> String {
+        let Some(feature) = feature else {
+            return String::new();
+        };
+        let Some(settings) = self
+            .projects
+            .get_settings(&feature.project_id)
+            .ok()
+            .flatten()
+        else {
+            return String::new();
+        };
+
+        let ceiling = self.harness_ceiling_s();
+        let mut gates: Vec<ResolvedHarness> = Vec::new();
+        for verifier in self.steps.iter().filter_map(|s| s.verifier.as_ref()) {
+            for gate in crate::domain::verifier::resolve_harnesses(
+                &verifier.harness_names,
+                &settings.worktree_strategy,
+                ceiling,
+            ) {
+                if !gates.iter().any(|g| g.name == gate.name) {
+                    gates.push(gate);
+                }
+            }
+        }
+
+        crate::domain::harness_baseline::render_harness_briefing(
+            &gates,
+            feature.harness_baseline.as_ref(),
+        )
+    }
+
     /// Measure `wt_path` at `base_sha` and fold the result into the feature's
     /// stored record. Shared by both producers.
     ///
@@ -456,10 +547,20 @@ impl ExecutionDriver {
     /// Cost, stated plainly: on a cold repo this is `prepare_command` plus a
     /// suite, i.e. minutes — which is why it fires only on the failure path,
     /// where the alternative is a rework cycle at $14.63 and 11M tokens.
+    ///
+    /// `base_sha` is supplied by the caller rather than resolved here, because
+    /// HB2c's subtraction needs the *same* commit to check
+    /// [`covers`](HarnessBaseline::covers) against. Two independent resolutions
+    /// of "the base" that could disagree is precisely the bug `covers` exists
+    /// to catch, and it would show up as a fallback that re-measures on every
+    /// attempt while the subtraction never fires. An empty string is accepted
+    /// and measures nothing: `fallback_baseline_needed` refuses a base it
+    /// cannot name.
     pub(crate) async fn measure_fallback_baseline(
         &self,
         step_id: &str,
         machine_str: &str,
+        base_sha: &str,
         resolved: &[ResolvedHarness],
         failed: &[HarnessRun],
     ) {
@@ -475,26 +576,6 @@ impl ExecutionDriver {
             return;
         };
 
-        // The base is the fork point, not the feature branch's tip: the tip
-        // carries this feature's own commits, and measuring those would compare
-        // the work against itself.
-        let Some(base_sha) = self
-            .git_ops
-            .merge_base(
-                self.machine_id_opt.as_deref(),
-                &self.target_dir,
-                &settings.worktree_strategy.default_branch,
-                &self.branch_name,
-            )
-            .await
-        else {
-            tracing::warn!(
-                feature_id = %self.f_id,
-                "no merge-base for the feature branch — skipping the fallback baseline"
-            );
-            return;
-        };
-
         let gates: Vec<ResolvedHarness> = resolved
             .iter()
             .filter(|r| failed.iter().any(|f| f.name == r.name))
@@ -504,7 +585,7 @@ impl ExecutionDriver {
 
         if !fallback_baseline_needed(
             !failed.is_empty(),
-            &base_sha,
+            base_sha,
             feature.harness_baseline.as_ref(),
             &names,
         ) {
@@ -518,7 +599,7 @@ impl ExecutionDriver {
             .provision_detached_worktree(
                 self.machine_id_opt.as_deref(),
                 &self.target_dir,
-                &base_sha,
+                base_sha,
                 &worktree_id,
                 Some(&cache_dir),
             )
@@ -540,7 +621,7 @@ impl ExecutionDriver {
                 machine: machine_str,
                 wt_path: &wt_path,
                 step_id,
-                base_sha: &base_sha,
+                base_sha,
                 producer: BaselineProducer::Fallback,
             },
             settings.worktree_strategy.prepare_command.as_deref(),

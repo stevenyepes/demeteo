@@ -40,8 +40,18 @@ const PROVIDER_ID: &str = "harness-gates-provider";
 
 /// A gate that always fails, announcing itself first. Deterministic and
 /// byte-stable, so nothing here perturbs a fingerprint.
+/// A gate that announces itself and fails **for this feature**.
+///
+/// The `git symbolic-ref` guard is what makes it a *regression* rather than a
+/// pre-existing failure: HB2b measures the baseline in a worktree that is
+/// detached by construction, where this exits zero, while the step's own
+/// worktree is checked out on a branch, where it exits one. Without it HB2c
+/// would (correctly) subtract every gate here as red-before-and-after and these
+/// fixtures would assert against a verdict that no longer exists — which is not
+/// what they are for. The marker is printed either way, so the fingerprint the
+/// baseline records is of the same command's output.
 fn failing(marker: &str) -> String {
-    format!("echo '{marker}'; exit 1")
+    format!("echo '{marker}'; git symbolic-ref -q HEAD >/dev/null || exit 0; exit 1")
 }
 
 /// A gate that always passes, announcing itself.

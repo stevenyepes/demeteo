@@ -85,7 +85,11 @@ fn validate_node() -> serde_json::Value {
         "kind": "agent",
         "title": "Validate",
         "agent_kind": "stub",
-        "prompt_template": "Validate the change. {{feature_description}}\n",
+        // `@stub-verdict` matters now that HB2c can let a red-but-pre-existing
+        // harness through to the agent turn: without it the turn ends with no
+        // verdict object and the step fails as *infrastructure*, which would
+        // mask whichever outcome the leg is actually asserting.
+        "prompt_template": "Validate the change. {{feature_description}}\n@stub-verdict verdict\n",
         "capability": "artifacts",
         "allow_shell": true,
         "verifier": {
@@ -467,10 +471,13 @@ async fn a_red_validate_with_no_baseline_node_measures_a_fallback() {
         "this repo's harness fails at the base too, which is what makes the \
          failure pre-existing"
     );
+    // What the *verdict* then does with that record is HB2c's, and it is
+    // asserted in `harness_subtraction.rs`: this gate is red at the base with
+    // the identical failure, so it no longer fails the step. Re-asserting it
+    // here would duplicate that leg while pretending to be about the producer.
     assert!(
-        leg.validate_error().contains("HARNESS-RAN"),
-        "the verdict must still be the harness's: {}",
-        leg.validate_error()
+        !gate.fingerprint.is_empty(),
+        "a red gate owes a fingerprint"
     );
     assert!(
         leg.leftover_worktrees.is_empty(),

@@ -55,7 +55,7 @@ fn absent_harness_never_claims_anything_was_executed() {
 
 #[test]
 fn ran_harness_carries_its_output_and_the_ban() {
-    let rendered = HarnessOutcome::Ran(vec![run(
+    let rendered = HarnessOutcome::from_runs(vec![run(
         "default",
         "cargo test",
         "test result: ok. 57 passed",
@@ -72,7 +72,7 @@ fn ran_harness_carries_its_output_and_the_ban() {
 fn the_two_outcomes_share_no_misleading_wording() {
     // The headings must be distinguishable at a glance in a long prompt: this
     // is the one signal the agent has for "is there evidence here or not".
-    let ran = HarnessOutcome::Ran(vec![run("default", "true", "")]).render_section();
+    let ran = HarnessOutcome::from_runs(vec![run("default", "true", "")]).render_section();
     let absent = HarnessOutcome::NotConfigured.render_section();
 
     let heading = |s: &str| s.lines().next().unwrap_or_default().to_string();
@@ -86,7 +86,7 @@ fn every_harness_gets_its_own_named_block() {
     // The whole point of the list. `&&`-chaining two commands hands the agent
     // one undifferentiated blob in which "which gate produced this line" is
     // unanswerable — and that attribution is what a per-gate verdict needs.
-    let rendered = HarnessOutcome::Ran(vec![
+    let rendered = HarnessOutcome::from_runs(vec![
         run("lint", "npm run lint", "0 problems"),
         run("unit", "npm test", "42 passing"),
     ])
