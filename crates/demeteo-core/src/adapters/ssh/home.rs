@@ -3,6 +3,7 @@
 //! Kept with [`SessionPool`] (whose `home_cache` it owns the reads of) so the
 //! whole HOME concern is one file.
 
+use super::retry::SshFailure;
 use super::session::SessionPool;
 use super::transport::{drain_stream, DrainBudget};
 use ssh2::Session;
@@ -31,13 +32,20 @@ const HOME_PROBE_CAP: Duration = Duration::from_secs(60);
 
 /// Probe `$HOME` over a fresh channel on an already-connected session.
 /// `printf %s` avoids trailing newlines and respects quoting.
-fn probe_home_over_channel(session: &Session) -> Result<String, String> {
-    let mut channel = session
-        .channel_session()
-        .map_err(|e| format!("Failed to open SSH channel for HOME probe: {}", e))?;
-    channel
-        .exec("printf %s \"$HOME\"")
-        .map_err(|e| format!("Failed to exec HOME probe over SSH: {}", e))?;
+///
+/// Graded for the retry loop the same way `command::exec_over_channel` is, and
+/// for the same reason even though this command has no side effects: the probe
+/// runs on [`HOME_PROBE_CAP`], so retrying a failure that happened *during* the
+/// drain would spend that budget once per attempt. Only the channel open —
+/// where nothing has been spent and nothing has run — is retried. See
+/// `super::retry`.
+fn probe_home_over_channel(session: &Session) -> Result<String, SshFailure> {
+    let mut channel = session.channel_session().map_err(|e| {
+        SshFailure::never_reached(format!("Failed to open SSH channel for HOME probe: {}", e))
+    })?;
+    channel.exec("printf %s \"$HOME\"").map_err(|e| {
+        SshFailure::may_have_run(format!("Failed to exec HOME probe over SSH: {}", e))
+    })?;
     let mut raw_bytes = Vec::new();
     drain_stream(
         &mut channel,
@@ -45,20 +53,21 @@ fn probe_home_over_channel(session: &Session) -> Result<String, String> {
         &mut raw_bytes,
         DrainBudget::starting_now(HOME_PROBE_CAP),
         "HOME probe output",
-    )?;
+    )
+    .map_err(SshFailure::may_have_run)?;
     let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
-    channel
-        .wait_close()
-        .map_err(|e| format!("Failed to wait for HOME probe channel: {}", e))?;
+    channel.wait_close().map_err(|e| {
+        SshFailure::may_have_run(format!("Failed to wait for HOME probe channel: {}", e))
+    })?;
     // ssh2's `wait_close` returns `Result<(), Error>`; the exit status is
     // on a separate method that returns `Result<i32, Error>` (0 on
     // success, non-zero on remote failure). Drain it so a broken shell
     // session doesn't get cached as a valid HOME.
-    let exit_code = channel
-        .exit_status()
-        .map_err(|e| format!("Failed to read HOME probe exit status: {}", e))?;
+    let exit_code = channel.exit_status().map_err(|e| {
+        SshFailure::may_have_run(format!("Failed to read HOME probe exit status: {}", e))
+    })?;
 
-    validate_home(&raw, exit_code)
+    validate_home(&raw, exit_code).map_err(SshFailure::answered)
 }
 
 /// Validate the raw bytes of a `printf %s "$HOME"` probe. Split from the
@@ -92,7 +101,7 @@ impl SessionPool {
     /// a connect and an auth handshake on top of the probe itself — so every
     /// caller must reach it from inside `spawn_blocking`. Both do today:
     /// `ExecutionPort::resolve_home` and `control_rpc::call`.
-    pub(super) fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
+    pub(super) fn resolve_home(&self, machine_id: &str) -> Result<String, SshFailure> {
         if let Ok(cache) = self.home_cache.lock() {
             if let Some(home) = cache.get(machine_id) {
                 eprintln!(
@@ -103,7 +112,7 @@ impl SessionPool {
             }
         }
 
-        let sftp_sess = self.get(machine_id)?;
+        let sftp_sess = self.get(machine_id).map_err(SshFailure::never_reached)?;
         let trimmed = probe_home_over_channel(&sftp_sess.session)?;
 
         eprintln!(
