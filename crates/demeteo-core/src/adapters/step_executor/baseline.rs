@@ -45,11 +45,13 @@
 
 use crate::adapters::step_executor::driver::verifier::{
     classify_exec_failure, harness_block, merge_stderr_into_stdout, HarnessExecFailure, HarnessRun,
+    TriageVerdict,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::harness_baseline::{
-    fallback_baseline_needed, BaselineProducer, HarnessBaseline, HarnessBaselineRun,
+    fallback_baseline_needed, BaselineEnvironmentFault, BaselineProducer, HarnessBaseline,
+    HarnessBaselineRun,
 };
 use crate::domain::verifier::ResolvedHarness;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
@@ -70,6 +72,36 @@ pub(crate) struct MeasuredGate {
     pub run: HarnessBaselineRun,
     /// Merged stdout+stderr, verbatim.
     pub output: String,
+}
+
+/// Answers "was this gate red because the code is broken, or because this
+/// machine cannot run it?" for one red baseline measurement.
+///
+/// A trait rather than a call straight into `ExecutionDriver` because the
+/// classification is the *only* thing [`measure_gates`] needs beyond an
+/// `ExecutionPort`, and taking a driver for it would drag twenty-odd unread
+/// ports into every test of this function (AGENTS.md §3 names constructing an
+/// `ExecutionDriver` in a test as the shape to avoid). The production
+/// implementation is [`DriverTriage`], which is a thin forward to C6's existing
+/// `triage_harness_failure` — there is deliberately no second classifier.
+///
+/// # Why the classification happens *here*
+///
+/// C6 reaches the same question through `should_triage`, which requires the
+/// failure to have reproduced unchanged across two attempts. Its cheapest
+/// possible detection is therefore one full rework cycle — ~$14 and 11M tokens
+/// in the run `docs/HARNESS_BASELINE.md` §1 records — and if the implementer
+/// perturbs the output in between, the fingerprint comparison resets and it is
+/// two. At baseline-measurement time the run is at the head of the graph and
+/// **no implement budget has been spent at all**. Same agent, same prompt, same
+/// fail-safe; one cycle earlier.
+#[async_trait::async_trait]
+pub(crate) trait BaselineTriage: Send + Sync {
+    /// Classify one gate's red measurement. Must fail safe: every spawn,
+    /// timeout, cancellation and parse failure owes
+    /// [`TriageVerdict::Regression`], because `Regression` is what leaves the
+    /// gate subtractable and the run unaffected.
+    async fn classify(&self, harness: &ResolvedHarness, output: &str) -> TriageVerdict;
 }
 
 /// Where a measurement is being taken, and on whose behalf.
@@ -117,8 +149,21 @@ pub(crate) struct BaselineSite<'a> {
 /// or the deadline expired — is **omitted**, not recorded as red, for the same
 /// reason `run_harness_first` refuses to call either a verdict: a command that
 /// never finished is not a failing command.
+///
+/// # Every red gate is classified, once
+///
+/// A red measurement is handed to `triage` before it is recorded, and what it
+/// says lands on
+/// [`HarnessBaselineRun::environment`](crate::domain::harness_baseline::HarnessBaselineRun::environment).
+/// HB2c then *reads* that field rather than re-asking, so the cost is one agent
+/// call per red gate per measurement — not per validate attempt — and a green
+/// baseline costs nothing at all, because there is no failure to classify.
+///
+/// It changes no verdict here, exactly like everything else in this module: the
+/// record grows a field, and `compare_gate` decides what the field means.
 pub(crate) async fn measure_gates(
     exec: &dyn ExecutionPort,
+    triage: &dyn BaselineTriage,
     site: &BaselineSite<'_>,
     prepare_command: Option<&str>,
     harnesses: &[ResolvedHarness],
@@ -173,6 +218,39 @@ pub(crate) async fn measure_gates(
             },
         };
 
+        // Only a red gate is classified. A green one has nothing to classify,
+        // and paying an agent call to be told so would make every healthy
+        // repository fund the unhealthy case.
+        let environment = if exit_ok {
+            None
+        } else {
+            match triage.classify(harness, &output).await {
+                TriageVerdict::Environment {
+                    reason,
+                    remediation,
+                } => {
+                    tracing::warn!(
+                        machine = %machine,
+                        harness = %harness.name,
+                        reason = %reason,
+                        "the gate was already red at the base because this machine cannot run \
+                         it — recording that, so validate terminates instead of passing on a \
+                         gate that proved nothing"
+                    );
+                    Some(BaselineEnvironmentFault {
+                        reason,
+                        remediation,
+                    })
+                }
+                // Every failure mode of the classifier lands here (see
+                // `BaselineTriage::classify`), and that is the safe direction:
+                // no fault recorded ⇒ HB2c reads the gate as a pre-existing
+                // defect ⇒ subtracted, which is the behaviour with no
+                // classification at all.
+                TriageVerdict::Regression => None,
+            }
+        };
+
         measured.push(MeasuredGate {
             run: HarnessBaselineRun {
                 name: harness.name.clone(),
@@ -192,6 +270,7 @@ pub(crate) async fn measure_gates(
                     )
                 },
                 output_ref: None,
+                environment,
                 measured_at,
                 producer: site.producer,
             },
@@ -199,6 +278,33 @@ pub(crate) async fn measure_gates(
         });
     }
     measured
+}
+
+/// The production [`BaselineTriage`]: C6's classifier, reached through the
+/// driver, asked about a gate in the worktree the measurement ran in.
+///
+/// It holds borrows rather than owning anything because the measurement it
+/// serves is a single `await` inside `record_harness_baseline` — and because a
+/// classifier that outlived the site it was built for could be asked about a
+/// worktree that no longer exists (the fallback producer tears its own down as
+/// soon as the measurement returns).
+struct DriverTriage<'a> {
+    driver: &'a ExecutionDriver,
+    machine: &'a str,
+    wt_path: &'a str,
+}
+
+#[async_trait::async_trait]
+impl BaselineTriage for DriverTriage<'_> {
+    async fn classify(&self, harness: &ResolvedHarness, output: &str) -> TriageVerdict {
+        // Deliberately the same function `classify_harness_failures` calls: one
+        // classifier, one prompt, one fail-safe. A second implementation here
+        // would be free to drift, and the direction it drifted in would decide
+        // whether a run terminates.
+        self.driver
+            .triage_harness_failure(self.machine, self.wt_path, &harness.command, output)
+            .await
+    }
 }
 
 impl ExecutionDriver {
@@ -303,6 +409,11 @@ impl ExecutionDriver {
     ) -> Vec<HarnessBaselineRun> {
         let measured = measure_gates(
             self.exec.as_ref(),
+            &DriverTriage {
+                driver: self,
+                machine: site.machine,
+                wt_path: site.wt_path,
+            },
             site,
             prepare_command,
             harnesses,

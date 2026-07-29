@@ -13,6 +13,7 @@ fn run(name: &str, exit_ok: bool, fingerprint: &str) -> HarnessBaselineRun {
         exit_ok,
         fingerprint: fingerprint.to_string(),
         output_ref: Some(format!("/artifacts/{name}.log")),
+        environment: None,
         measured_at: 1_000,
         producer: BaselineProducer::Node,
     }
