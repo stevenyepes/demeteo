@@ -210,7 +210,20 @@ pub fn fetch_default_settings() -> ProjectSettings {
         worktree_strategy: WorktreeStrategy {
             default_branch: "main".to_string(),
             branch_prefix: "demeteo/features/".to_string(),
-            test_command: Some("npm test".to_string()),
+            // Deliberately `None`, not a guess. This is the fallback for a
+            // project with *no saved settings row* — we know nothing about it,
+            // not even its ecosystem, so `npm test` was never justified: a real
+            // project gets its commands from `detect_worktree_strategy` at
+            // bootstrap, which at least reads the repo.
+            //
+            // It used to be a cheap wrong answer that failed late at
+            // `s-validate`. Since HB1's preflight it is an expensive one: the
+            // launch is *blocked* when the binary does not resolve, which is
+            // precisely the false positive `preflight.rs` is built to avoid —
+            // refusing to start work over a command the user never configured.
+            // `run-topology-conformance.sh` caught exactly that, and `npm run
+            // checks` did not.
+            test_command: None,
             build_command: None,
             coverage_command: None,
             conventions_file: None,
