@@ -105,14 +105,39 @@ producer specifically: failing at the head of the graph, before a line has been
 written, restates the exact misattribution the baseline exists to remove — a
 repository that was already red is not this feature's defect — and it makes the
 "red before, identically red now ⇒ pre-existing" row unreachable, since no run
-against such a repo would ever reach validate. So a red gate at the base
-completes the node with `exit_ok: false` on the record, and the *only* terminal
-outcome there is an environment that can produce no measurement at all: a
-failing `prepare_command`, or gates that never reach an exit status. The
-asymmetry generalizes to the whole mechanism — an absent baseline degrades to
-today's behaviour, while a fabricated one excuses a real regression, so every
-ambiguity (transport failure, timeout, failed prepare) records **nothing**
-rather than a plausible red.
+against such a repo would ever reach validate. So a **genuinely red** gate at the
+base completes the node with `exit_ok: false` on the record. The asymmetry
+generalizes to the whole mechanism — an absent baseline degrades to today's
+behaviour, while a fabricated one excuses a real regression, so every ambiguity
+(transport failure, timeout, failed prepare) records **nothing** rather than a
+plausible red.
+
+**What the baseline node does fail on, and why that is not the same rule.** Two
+outcomes end the run at the node, and both are one statement: *this machine
+cannot produce evidence about this project.* The first is a measurement that
+does not exist — a failing `prepare_command`, or gates that never reach an exit
+status. The second is a measurement whose classification says the gate was red
+**because it could not run here**: it reached an exit status but proved nothing,
+and it will prove nothing at validate either. The paragraph above and this one
+are not in tension because they answer different questions — *whose defect is
+this red gate?* versus *is this gate capable of producing evidence at all?* —
+and only the first is the misattribution the baseline exists to remove. Halting
+on the second costs a repository with a known-failing test nothing, because such
+a repository is classified `regression` and takes the row above.
+
+The value is entirely in the timing: the validate-time escalation already
+terminates the run for this exact gate, off this exact field, but only after the
+whole implement budget. The node knows it before a single agent turn. Note that
+no earlier phase can: HB1/HB4 probe with `command -v`, which catches a missing
+*binary*, and the motivating incident is a missing *library* — `cargo` resolves
+fine and the build is what fails, exiting 1. The measurement is the first point
+at which it is detectable at all. One unrunnable gate among green ones still
+halts, for the reason HB1 blocks a launch when one probed binary of several
+fails to resolve: a gate the user selected as gating cannot produce evidence, so
+continuing ships the feature unverified on that dimension while looking
+verified. And the fail-safe direction is unchanged — only a *positive*
+`environment` classification halts, so a classifier that malfunctions withholds
+the halt and can never manufacture one.
 
 **What the subtraction is a subtraction *of*.** It applies to a **verdict the
 gate reached**, never to a failure that means the gate never ran. Both look

@@ -178,6 +178,14 @@ comparison reads it rather than re-asking. Same agent, same prompt, same
 fail-safe — a different, earlier call site. A green baseline is not classified at
 all, because there is nothing to classify.
 
+**And act on it there too.** Once the answer is in hand at the head of the graph,
+recording it and continuing spends the entire implement budget to reach a
+terminal `Environment` the engine could already state. So a gate classified
+`environment` at measurement time ends the run *at the baseline node*. This is
+the one thing the earlier call site buys that the comparison cannot, and it is
+[I1](#i1-the-engine-executes-exactly-one-user-authored-command-per-run) closed
+from the other end: the first moment the engine finds out is no longer late.
+
 ### Detached runs are the hard case, and they constrain the design
 
 Everything above must hold for a run executing inside `demeteo-runner` with
@@ -616,18 +624,56 @@ deterministic rather than agentic:
     branch, and that is the safety property — nothing can commit onto it or
     merge it back, so a measurement can never contaminate the feature.
 
-  **The node records; it does not judge — one correction to this plan.** §3's
-  HB1 aside says a pre-existing-red suite reaches `verdict` through this node.
-  It does not, and should not: failing the run at its very first node would
-  restate exactly the misattribution [I2](#i2-a-pre-existing-red-harness-is-attributed-to-the-feature)
+  **The node records a verdict; it does not judge one — one correction to this
+  plan.** §3's HB1 aside says a pre-existing-red suite reaches `verdict` through
+  this node. It does not, and should not: failing the run at its very first node
+  would restate exactly the misattribution [I2](#i2-a-pre-existing-red-harness-is-attributed-to-the-feature)
   exists to remove, before a line has been written, and it would make HB2c's
   `red → red, same fingerprint → pre-existing` row unreachable through the node
-  path. A red gate completes the step with `exit_ok: false` on the record. What
-  *does* end the run is an environment that cannot produce a measurement at all
-  — a failing `prepare_command`, or gates that never reach an exit status —
-  which is terminal `Environment` with remediation, matching HB2c's `prepare`
-  row. **This supersedes HB1's aside; P4.2a's "Done when" was written against
+  path. A **genuinely red** gate completes the step with `exit_ok: false` on the
+  record. **This supersedes HB1's aside; P4.2a's "Done when" was written against
   the same assumption and is superseded with it.**
+
+  **What the node *does* end the run on.** Two outcomes, and they are one
+  statement — *this machine cannot produce evidence about this project*:
+
+  1. **No measurement at all** — a failing `prepare_command`, or gates that
+     never reach an exit status. Terminal `Environment` with remediation,
+     matching HB2c's `prepare` row.
+  2. **A measurement classified `environment`** — the gate reached an exit
+     status but was red *because it could not run here*, so it proved nothing
+     and will prove nothing at validate either. Same terminal `Environment`,
+     carrying the classifier's own remediation.
+
+  Row 2 is not in tension with "a red gate completes the node", because the two
+  answer different questions: *whose defect is this red gate?* versus *can this
+  gate produce evidence at all?* Only the first is the misattribution the
+  baseline exists to remove, and a repository with a known-failing or flaky test
+  is classified `regression` and takes the completing path. The value is
+  timing — [HB2c](#hb2c--subtraction-and-classification) already terminates for
+  this exact gate off this exact field, but only after the whole implement
+  budget; the node knows it before a single agent turn, which is
+  [I1](#i1-the-engine-executes-exactly-one-user-authored-command-per-run)
+  restated. And no earlier phase can reach it: HB1/HB4 probe with `command -v`,
+  which catches a missing *binary*, while the motivating `gdk-3.0` case is a
+  missing *library* — `cargo` resolves, the build fails, exit 1. One unrunnable
+  gate among green ones still halts, for the reason HB1 blocks a launch when one
+  probed binary of several fails to resolve. The fail-safe direction is
+  unchanged: only a *positive* classification halts, so a broken classifier
+  withholds the halt and can never manufacture one.
+
+  The decision is
+  `unrunnable_baseline_gate` in `domain/harness_baseline.rs` — pure, reachable
+  with no port doubles; the node owns only the notification and the
+  `StepOutcome`. 9 pure tests and a conformance leg
+  (`a_gate_that_cannot_run_here_ends_the_run_before_a_line_is_written`), every
+  one watched fail: the policy made inert, the `exit_ok` guard dropped, an
+  absent classification defaulting to unrunnable (the fail-safe inverted),
+  scanning back-to-front, halting only when *every* gate is unrunnable, the
+  escalation removed entirely (i.e. the pre-HB9 code, which completes), halting
+  on merely-red instead, the notification dropped, and each of the command and
+  the remediation dropped from the message. The "red is not unrunnable" half is
+  pinned on the existing caching leg rather than in a copy of its fixture.
 
   **Every ambiguity records nothing.** An absent baseline degrades to today's
   behaviour; a *fabricated* one inverts HB2c's table and excuses a real
