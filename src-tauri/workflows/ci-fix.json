@@ -5,6 +5,18 @@
   "is_starter": true,
   "steps": [
     {
+      "id": "s-baseline-harness",
+      "kind": "command",
+      "title": "Measure Harness Baseline",
+      "agent_kind": null,
+      "prompt_template": null,
+      "capability": "read_only",
+      "measure_baseline": true,
+      "idempotent": true,
+      "on_failure": null,
+      "max_iterations": 1
+    },
+    {
       "id": "s-diagnose",
       "kind": "agent",
       "title": "Diagnose CI Failure",

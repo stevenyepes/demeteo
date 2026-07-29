@@ -503,6 +503,34 @@ mod tests {
     }
 
     #[test]
+    fn every_test_gated_starter_measures_the_harness_before_any_agent_runs() {
+        // A test-gated run begins in a fresh worktree. Its configured prepare
+        // command must run before the default test command, rather than being
+        // left to an agent prompt to infer and execute on its own. Experiment
+        // is deliberately excluded: it has no verifier and therefore no
+        // default test gate to measure.
+        for name in [
+            "bugfix-pipeline",
+            "ci-fix",
+            "docs-update",
+            "refactor",
+            "simple-task",
+            "standard-feature-pipeline",
+        ] {
+            let wf = starter(name);
+            let steps = wf["steps"].as_array().unwrap();
+
+            assert_eq!(
+                steps.first().and_then(|step| step["id"].as_str()),
+                Some("s-baseline-harness"),
+                "{name} must measure its prepare and default test commands first"
+            );
+            assert_eq!(steps[0]["kind"].as_str(), Some("command"));
+            assert_eq!(steps[0]["measure_baseline"].as_bool(), Some(true));
+        }
+    }
+
+    #[test]
     fn the_refactor_no_harness_skip_branch_is_keyed_on_what_the_engine_renders() {
         // The `NO_HARNESS` path used to be an agent's own prose verdict line in
         // `artifacts/s-baseline.md`. With that step gone the skip branch is

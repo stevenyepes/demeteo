@@ -92,7 +92,7 @@ rework loop for a defect it did not introduce. `refactor.json` had an
 `s-baseline` step that addressed this — but it was an `agent` step reading its
 own test run and writing prose, not an engine measurement, and the standard
 pipeline had no equivalent at all. (Deleted by [F2](#f2--refactorjson-had-two-baselines--done-2026-07-29);
-both starters now open on the `s-baseline-harness` measurement.)
+every test-gated starter now opens on the `s-baseline-harness` measurement.)
 
 ### I3. A misconfigured command is indistinguishable from a broken feature
 
@@ -242,8 +242,8 @@ deterministic rather than agentic:
   effectively nothing: in `f-1785157902856` research + tickets + spec ran ~31
   minutes before implement started, and once P4.1 lands the node goes parallel
   with research for free. The two halves also sit at the right altitudes —
-  probes guard *every* launch whatever workflow was chosen; the node guards the
-  starters and produces the durable baseline HB2 consumes.
+probes guard *every* launch whatever workflow was chosen; the node guards every
+test-gated starter and produces the durable baseline HB2 consumes.
 
   The cost of the split, stated plainly: a **custom** workflow with no
   `baseline-harness` node gets probes but no baseline, so HB2's pre-existing-red
