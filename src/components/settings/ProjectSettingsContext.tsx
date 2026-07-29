@@ -6,7 +6,7 @@ import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { DEFAULT_EFFORT, reconcileEffort } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
-import { saveProjectSettings, setWorkflowOverride } from '../../lib/project';
+import { probeProjectCommands, saveProjectSettings, setWorkflowOverride, type CommandProbeReport } from '../../lib/project';
 import { useNavigation, useProject } from '../../context';
 
 export interface AvailableRepo { path: string; providerId: string; }
@@ -17,6 +17,11 @@ export interface RepoHealthStatus {
   worktrees: WorktreeInfo[]; has_uncommitted: boolean; has_unpushed: boolean;
 }
 export interface AgentConfigView { kind: string; enabled: boolean; available: boolean; install_command: string; display_label: string; }
+
+/** How long the panel waits after a keystroke before asking the machine. A
+ *  probe per character would be a `command -v` per character, on a machine
+ *  that may be an SSH hop away. */
+const PROBE_DEBOUNCE_MS = 400;
 
 export const WF_LEVEL = '';
 export const ovKey = (workflowId: string, stepId: string) => `${workflowId}::${stepId}`;
@@ -77,6 +82,17 @@ interface SettingsCtx {
   coverageCommand: string; setCoverageCommand: (v: string) => void;
   conventionsFile: string; setConventionsFile: (v: string) => void;
   harnesses: { [key: string]: string }; setHarnesses: (v: { [key: string]: string }) => void;
+  /** The harnesses that gate validation, in the order they run. Tier 2 of the
+   *  engine's resolution chain; empty = fall through to `test_command`. */
+  validationGates: string[]; setValidationGates: (v: string[]) => void;
+  /** Latest per-command probe of the *project's* machine, or `null` when none
+   *  has answered yet. An indicator only — nothing here gates a save. */
+  commandProbe: CommandProbeReport | null;
+  isProbingCommands: boolean;
+  /** Why the probe could not answer (machine unreachable, none selected, …).
+   *  Rendered beside the rows; never a reason to refuse a save. */
+  probeError: string;
+  refreshCommandProbe: () => void;
   prepareCommand: string; setPrepareCommand: (v: string) => void;
   prTemplate: string; setPrTemplate: (v: string) => void;
   conflictPolicy: string; setConflictPolicy: (v: string) => void;
@@ -204,6 +220,11 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [coverageCommand, setCoverageCommand] = useState('');
   const [conventionsFile, setConventionsFile] = useState('');
   const [harnesses, setHarnesses] = useState<{ [key: string]: string }>({});
+  const [validationGates, setValidationGates] = useState<string[]>([]);
+  const [commandProbe, setCommandProbe] = useState<CommandProbeReport | null>(null);
+  const [isProbingCommands, setIsProbingCommands] = useState(false);
+  const [probeError, setProbeError] = useState('');
+  const [probeNonce, setProbeNonce] = useState(0);
   const [prepareCommand, setPrepareCommand] = useState('');
   const [prTemplate, setPrTemplate] = useState('');
   const [conflictPolicy, setConflictPolicy] = useState('always_gate');
@@ -411,6 +432,39 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
 
   useEffect(() => { fetchAgentConfigs(); }, [computeType, remoteHost]);
 
+  const refreshCommandProbe = () => setProbeNonce(n => n + 1);
+
+  // Probe the configured commands where they are authored (HB6). Runs against
+  // the *project's* machine — the backend picks it from the compute type, so a
+  // remote project is never answered with the laptop's PATH — and re-runs as
+  // the commands change, which is what makes a mistyped binary visible without
+  // leaving the panel. Debounced because a keystroke is not a question worth a
+  // `command -v` round trip.
+  //
+  // Every failure mode ends in an indicator, never a block: `handleSave` does
+  // not read any of this state.
+  useEffect(() => {
+    if (activeTab !== 'strategy' || isLoading) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      (async () => {
+        setIsProbingCommands(true);
+        try {
+          const report = await probeProjectCommands({
+            projectId: activeProject.id,
+            prepareCommand,
+            testCommand,
+            harnesses,
+          });
+          if (!cancelled) { setCommandProbe(report); setProbeError(''); }
+        } catch (err) {
+          if (!cancelled) { setCommandProbe(null); setProbeError(formatError(err)); }
+        } finally { if (!cancelled) setIsProbingCommands(false); }
+      })();
+    }, PROBE_DEBOUNCE_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [activeTab, isLoading, activeProject.id, computeType, remoteHost, prepareCommand, testCommand, harnesses, probeNonce]);
+
   const fetchWorkspaceHealth = async () => {
     setIsLoadingHealth(true); setHealthError('');
     try {
@@ -434,6 +488,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setCoverageCommand(res.worktree_strategy.coverage_command || '');
           setConventionsFile(res.worktree_strategy.conventions_file || '');
           setHarnesses(res.worktree_strategy.harnesses || {});
+          setValidationGates(res.worktree_strategy.validation_gates || []);
           setPrepareCommand(res.worktree_strategy.prepare_command || '');
           setPrTemplate(res.worktree_strategy.pr_template || '');
           setConflictPolicy(res.conflict_policy);
@@ -526,6 +581,12 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     } catch (err) { reportError(err, { kind: 'internal' }); return []; }
   };
 
+  // A tick left behind by a deleted harness is not a declaration: the engine
+  // drops names its `harnesses` map no longer defines when it resolves tier 2,
+  // so persisting one would keep alive a selection nothing can honour.
+  const gatesToPersist = () =>
+    validationGates.filter(g => Object.prototype.hasOwnProperty.call(harnesses, g));
+
   const saveAllSettings = async () => {
     const machineId = computeType === 'remote' ? remoteHost : 'local';
     if (machineId) {
@@ -533,7 +594,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
   };
 
   const handleSave = async () => {
@@ -556,7 +617,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     } else {
       try {
         await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
         // Keep `compute_type` / `remote_host` in sync with the DB so the
         // Settings tab doesn't fall back to "Local Compute" the next
         // time the user reopens it. Mirrors the re-bootstrap save path
@@ -619,7 +680,9 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     healthData, isLoadingHealth, healthExpanded, setHealthExpanded, showHealthPanel, healthError,
     defaultBranch, setDefaultBranch, branchPrefix, setBranchPrefix, testCommand, setTestCommand,
     buildCommand, setBuildCommand, coverageCommand, setCoverageCommand, conventionsFile, setConventionsFile,
-    harnesses, setHarnesses, prepareCommand, setPrepareCommand, prTemplate, setPrTemplate, conflictPolicy, setConflictPolicy,
+    harnesses, setHarnesses, validationGates, setValidationGates,
+    commandProbe, isProbingCommands, probeError, refreshCommandProbe,
+    prepareCommand, setPrepareCommand, prTemplate, setPrTemplate, conflictPolicy, setConflictPolicy,
     featureLifecycle, setFeatureLifecycle, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
     defaultEffort, setDefaultEffort,
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,

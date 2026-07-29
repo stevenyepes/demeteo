@@ -1013,6 +1013,57 @@ deterministic rather than agentic:
   asked; and a harness ticked as a gate is run by a starter workflow that declares
   no `harness_names` of its own.
 
+- **Done:** `probe_project_commands` in `preflight.rs` wraps HB4's probe and
+  pairs each configured command with the binaries it names, through a pure
+  `attribute_verdict` that is decidable with no port double. The Tauri command
+  of the same name resolves *which* machine from the project's compute type —
+  never from the caller — and the panel calls it through
+  `probeProjectCommands` in `src/lib/project.ts`. The new
+  `HarnessesSection` owns the five-column rows plus the two commands that
+  belong beside them, so `test_command` moved out of the Git-isolation card:
+  it is the resolution chain's fallback tier and deserves the same indicator
+  as the harnesses it competes with.
+
+  **Three shape decisions worth not re-deriving.**
+
+  *The probe reads no repository directory.* HB1 passes `ctx.target_dir`
+  because it has one; the panel does not, and a project may never have been
+  provisioned on the machine it is configured for. A cwd that does not exist
+  fails every probe at spawn time and reads as a missing toolchain — the exact
+  false positive the module is built around avoiding — so an empty `cwd` now
+  means "the adapter's default". `command -v` needs the login shell, not the
+  repo.
+
+  *Order is stored only for the selection.* `validation_gates` is the one
+  ordered thing the engine reads, and an unticked harness never runs, so it
+  has no position to store. The rows therefore render gates first in run
+  order, then the rest alphabetically, and the arrows act on ticked rows only.
+
+  *No copy of its own.* `PreflightVerdict::detail` travels to the panel
+  verbatim, and the fresh-checkout/watch-mode sentence `baseline.rs` already
+  emits became `FRESH_CHECKOUT_REMEDIATION`, read by both. The panel and the
+  failure a user meets mid-run cannot drift apart because there is only one
+  string.
+
+  10 pure/wiring Rust tests and 10 frontend ones, every one watched fail:
+  dropping the harness name from the attribution, letting `configured_commands`
+  walk its own list, marking every binary resolved, guessing a binary from the
+  raw first word, reporting a fixed machine, paraphrasing the launch-blocking
+  string, a second copy of the guidance, ignoring the verdict, naming a
+  repository directory, a transport failure read as a missing binary; and
+  frontend-side: painting every binary resolved, dropping the machine name,
+  never rendering the engine's message or its guidance, a probe that stops
+  following what was typed, `validation_gates` dropped from the save payload,
+  an empty list written instead of a cleared one, a stale tick re-persisted,
+  reordering made inert, a deleted harness's gate surviving a re-add, and each
+  of the two ways a probe could wrongly block a save.
+
+  **Not proven here, by scope:** the third leg of the Done-when — that a
+  ticked gate is *run* by a starter declaring no `harness_names` — is HB5's
+  `resolve_harnesses` chain and is pinned by its conformance gate
+  (`tests/conformance/harness_gates.rs`). What this task proves is that the
+  selection reaches `validation_gates` in the user's order.
+
 ### HB7 — Make the verdict legible
 
 - **Goal:** the subtraction is worthless if the user cannot see it happen, and a
@@ -1091,6 +1142,6 @@ deterministic rather than agentic:
 | HB2a | Baseline record: shape & storage | medium | ✅ |
 | HB2b | Measure the baseline: node + lazy fallback | large | ✅ |
 | HB2c | Subtraction & classification | medium-large | ✅ |
-| HB6 | Probe at configuration time | small-medium | ☐ |
+| HB6 | Probe at configuration time | small-medium | ✅ |
 | HB7 | Make the verdict legible | medium | ☐ |
 | HB3 | Ecosystem detection | medium | ☐ |

@@ -96,6 +96,67 @@ export async function setWorkflowOverride(input: {
   });
 }
 
+// ── Configuration-time command probe (HB6) ─────────────────────────────────
+
+/** Which project setting a probed command came from. */
+export type ProbedCommandSource = 'prepare' | 'test' | 'harness';
+
+/** One binary a configured command names, and whether the machine found it.
+ *  A binary the engine deliberately skipped (a shell builtin, a `$(…)`
+ *  substitution, a glob) is absent from the list rather than reported as
+ *  healthy — the panel claims exactly what was checked. */
+export interface ProbedBinary {
+  name: string;
+  resolved: boolean;
+}
+
+export interface ProbedCommand {
+  source: ProbedCommandSource;
+  /** The `harnesses` key, for `source === 'harness'`. */
+  harness: string | null;
+  command: string;
+  binaries: ProbedBinary[];
+}
+
+export interface CommandProbeReport {
+  /** The machine that was actually asked — the *project's*, not the laptop's. */
+  machine: string;
+  commands: ProbedCommand[];
+  /** The engine's own `PreflightVerdict::detail` — the same string a blocked
+   *  launch terminates with, carrying the `bash -l -i -c` reproduce line.
+   *  Rendered verbatim so the panel and the launch cannot drift apart. */
+  detail: string | null;
+  /** The engine's fresh-checkout / watch-mode remediation, likewise verbatim. */
+  guidance: string;
+  /** Whether this verdict would stop a launch. Reported, never enforced: a
+   *  save is not gated on a probe. */
+  blocks_launch: boolean;
+}
+
+/**
+ * Probe the project's configured commands on **the project's own machine**.
+ *
+ * The commands are sent as they stand in the form, not read back from the DB:
+ * the point is to answer for the command the user just typed. Which machine
+ * gets asked is decided backend-side from the project's compute type, so the
+ * panel cannot accidentally report the laptop's PATH for a remote project.
+ */
+export async function probeProjectCommands(input: {
+  projectId: string;
+  prepareCommand: string | null;
+  testCommand: string | null;
+  harnesses: Record<string, string> | null;
+}): Promise<CommandProbeReport> {
+  return invoke<CommandProbeReport>('probe_project_commands', {
+    projectId: input.projectId,
+    draft: {
+      prepare_command: input.prepareCommand || null,
+      test_command: input.testCommand || null,
+      harnesses: input.harnesses && Object.keys(input.harnesses).length > 0 ? input.harnesses : null,
+    },
+  });
+}
+
 /**
  * Partial project-settings input. Any field left `undefined` is filled from
  * the existing DB record (or a sensible default). This prevents the
@@ -111,6 +172,12 @@ export interface ProjectSettingsInput {
   conventions_file?: string | null;
   pr_template?: string | null;
   harnesses?: Record<string, string> | null;
+  /** The user's ordered selection of which harnesses gate validation — tier 2
+   *  of the engine's harness resolution chain. Order is the user's (cheap
+   *  gates first) and has to be stored, because `harnesses` is a map with no
+   *  order to inherit. `null`/empty = no selection, which resolves exactly as
+   *  it does today. */
+  validation_gates?: string[] | null;
   prepare_command?: string | null;
   extra_writable_paths?: string[] | null;
   conflict_policy?: string;
@@ -172,6 +239,15 @@ export async function saveProjectSettings(
               ? input.harnesses
               : null)
           : (baseWs?.harnesses ?? null),
+      // Dropped rather than written when the selection is empty: the backend
+      // stores the bare `harnesses` map in that case, so a project that never
+      // ticks a gate keeps writing byte-identical rows.
+      validation_gates:
+        input.validation_gates !== undefined
+          ? (input.validation_gates && input.validation_gates.length > 0
+              ? input.validation_gates
+              : null)
+          : (baseWs?.validation_gates ?? null),
       prepare_command:
         input.prepare_command !== undefined
           ? input.prepare_command
