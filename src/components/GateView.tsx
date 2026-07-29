@@ -116,7 +116,9 @@ export const GateView: React.FC<GateViewProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
       {/* Modal Card */}
-      <div className="w-full max-w-2xl bg-[#0d0f14] border border-violet-500/30 rounded-2xl shadow-[0_0_50px_rgba(139,92,246,0.15)] overflow-hidden flex flex-col font-sans max-h-[85vh]">
+      {/* Wider than the app's other modals because this one has to show an
+          artifact — a task list or a diff at 42rem wraps every line. */}
+      <div className="w-full max-w-4xl bg-[#0d0f14] border border-violet-500/30 rounded-2xl shadow-[0_0_50px_rgba(139,92,246,0.15)] overflow-hidden flex flex-col font-sans max-h-[85vh]">
         {/* Modal Header */}
         <div className="p-6 border-b border-white/5 bg-white/[0.01] flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -137,7 +139,7 @@ export const GateView: React.FC<GateViewProps> = ({
         </div>
 
         {/* Modal Content */}
-        <div className="p-6 flex-1 overflow-y-auto space-y-6">
+        <div className="p-6 flex-1 min-h-0 overflow-y-auto space-y-6">
           <div className="p-4 rounded-lg bg-white/[0.01] border border-white/5 text-sm text-slate-400 leading-relaxed space-y-3">
             <div className="text-white font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-300">
               <Terminal className="w-3.5 h-3.5" /> Pipeline context
@@ -149,11 +151,16 @@ export const GateView: React.FC<GateViewProps> = ({
           </div>
 
           {/* Artifact Preview */}
-          <div className="space-y-2 flex flex-col min-h-[300px]">
+          <div className="space-y-2 flex flex-col">
             <div className="text-white font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-300 shrink-0">
               <Sparkles className="w-3.5 h-3.5 text-violet-400" /> Artifact Output
             </div>
-            <div className="flex-1 flex flex-col p-4 rounded-lg border border-white/5 bg-[#050608] overflow-hidden min-h-[280px]">
+            {/* A definite height, not a min-height: this box sits inside a
+                scrollable body, so `flex-1` here resolves against nothing and
+                the editor below inherits a height of zero — which is how the
+                artifact rendered as an empty black panel. `vh` keeps it
+                proportional to the window instead of a magic pixel count. */}
+            <div className="flex h-[46vh] min-h-[240px] flex-col p-4 rounded-lg border border-white/5 bg-[#050608] overflow-hidden">
               {(() => {
                 const gatePath = stepExec?.artifact_paths?.length
                   ? stepExec.artifact_paths[0]
@@ -167,7 +174,7 @@ export const GateView: React.FC<GateViewProps> = ({
                   ? `${stepExec.status}:${stepExec.tokens}:${stepExec.wall_clock_secs}:${stepExec.cost_usd}`
                   : undefined;
                 return gatePath ? (
-                  <ArtifactViewer artifactPath={gatePath} maxHeight="280px" contentVersion={contentVersion} />
+                  <ArtifactViewer artifactPath={gatePath} contentVersion={contentVersion} />
                 ) : (
                   <div className="text-slate-500 font-mono text-xs italic flex items-center justify-center h-full">
                     No artifact outputs saved for this gate step.

@@ -1109,7 +1109,12 @@ export function FeatureDetail() {
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
       {/* Header telemetry panel */}
-      <div className="p-6 border-b border-white/5 bg-[#0d0f14]/80 flex items-center justify-between gap-6 backdrop-blur-md">
+      {/* Title on the left, telemetry + actions on the right — one row while
+          both fit, stacked once they don't. Nothing here is `shrink-0` at the
+          group level: a run with every action available (sync / publish /
+          cleanup) is wider than a half-window, and it should wrap rather than
+          push the header off-screen. */}
+      <div className="p-6 border-b border-white/5 bg-[#0d0f14]/80 flex flex-wrap items-start justify-between gap-x-6 gap-y-4 backdrop-blur-md">
         <div className="space-y-1 min-w-0 flex-1">
           <div className="flex items-center gap-3 min-w-0">
             <button
@@ -1157,8 +1162,8 @@ export function FeatureDetail() {
           <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>
         </div>
 
-        <div className="flex flex-col items-end gap-3 shrink-0">
-          <div className="flex items-center gap-6">
+        <div className="flex min-w-0 flex-col items-end gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-x-6 gap-y-2">
             <div className="text-right">
               <div className="text-[10px] text-slate-500 uppercase font-bold">Elapsed Duration</div>
               <div className="text-lg font-bold font-mono text-white">{duration}</div>
@@ -1185,7 +1190,7 @@ export function FeatureDetail() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button
               onClick={handleOpenTerminalTab}
               className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
@@ -1384,9 +1389,16 @@ export function FeatureDetail() {
       ) : (
         <div className="flex-1 flex flex-row overflow-hidden w-full h-full">
           {/* Left Column: Timeline */}
-          <div className={`flex min-h-0 flex-col overflow-y-auto p-8 transition-all duration-500 ${
+          {/* `overflow-x-hidden` pairs with `overflow-y-auto` on purpose: set
+              alone, `overflow-y` leaves `overflow-x` computed as `auto`, which
+              is where the stray horizontal scrollbar under the timeline came
+              from. `min-w-0` lets the column shrink to its share of the split
+              instead of to its widest step card. */}
+          <div className={`flex min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-8 transition-all duration-500 ${
             selectedArtifactPath
-              ? 'w-[40%] border-r border-white/5 bg-[#08090c]/40'
+              // Basis rather than width so the two columns' 1px borders come
+              // out of the split instead of adding to it.
+              ? 'basis-[40%] border-r border-white/5 bg-[#08090c]/40'
               // Prose and step cards keep the 72rem reading cap; the graph
               // takes the window, however wide it is.
               : `w-full mx-auto ${graphMode ? '' : 'max-w-6xl'}`
@@ -1575,11 +1587,19 @@ export function FeatureDetail() {
                       data-step-id={step.id}
                       className={`p-5 rounded-xl border transition-all duration-300 ${statusBg} ${isActiveGate ? 'ring-2 ring-amber-500/40' : ''}`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          {icon}
-                          <span className="font-semibold text-white tracking-wide text-sm">{humanizeStepId(step.step_id)}</span>
-                          <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono">
+                      {/* Title and metrics are one row while they fit and two
+                          when they don't — the narrow (artifact-open) column
+                          used to squeeze the metric group until the last value
+                          rendered outside the card. */}
+                      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                        {/* Wraps rather than truncates: the hover-only Replay
+                            button still reserves its width, and with a truncate
+                            here it spent that width shortening the step name to
+                            "Resea…" in a card that had room for it. */}
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="shrink-0">{icon}</span>
+                          <span className="font-semibold text-white tracking-wide text-sm break-words">{humanizeStepId(step.step_id)}</span>
+                          <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono shrink-0">
                             {step.step_kind}
                           </span>
                           {(step.iteration_count ?? 0) > 0 && (
@@ -1604,10 +1624,10 @@ export function FeatureDetail() {
                           </button>
                         </div>
 
-                        <div className="flex items-center gap-4 text-xs font-mono">
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs font-mono">
                           {typeof step.cost_usd === 'number' && step.cost_usd > 0 && (
                             <span
-                              className="text-emerald-400"
+                              className="text-emerald-400 whitespace-nowrap"
                               title={`${step.cost_usd.toFixed(4)} USD`}
                             >
                               {formatCost(step.cost_usd)}
@@ -1615,25 +1635,25 @@ export function FeatureDetail() {
                           )}
                           {typeof step.cache_read_input_tokens === 'number' && step.cache_read_input_tokens > 0 && (
                             <span
-                              className="text-violet-400"
+                              className="text-violet-400 whitespace-nowrap"
                               title={`${step.cache_read_input_tokens.toLocaleString()} cache-read tokens (live from last turn)`}
                             >
                               {formatTokens(step.cache_read_input_tokens)}p cache
                             </span>
                           )}
-                          {typeof step.tokens === 'number' && <span className="text-cyan-400">{formatTokens(step.tokens)}</span>}
-                          {typeof step.wall_clock_secs === 'number' && <span className="text-slate-400">{formatDuration(step.wall_clock_secs)}</span>}
+                          {typeof step.tokens === 'number' && <span className="text-cyan-400 whitespace-nowrap">{formatTokens(step.tokens)}</span>}
+                          {typeof step.wall_clock_secs === 'number' && <span className="text-slate-400 whitespace-nowrap">{formatDuration(step.wall_clock_secs)}</span>}
                         </div>
                       </div>
 
                       {step.status === 'awaiting_gate' && (
-                        <div className="mt-4 p-4 rounded bg-amber-500/5 border border-amber-500/20 flex justify-between items-center animate-pulse">
-                          <div className="text-xs text-amber-400 font-semibold uppercase tracking-wide">
+                        <div className="mt-4 p-4 rounded bg-amber-500/5 border border-amber-500/20 flex flex-wrap justify-between items-center gap-3 animate-pulse">
+                          <div className="min-w-0 flex-1 text-xs text-amber-400 font-semibold uppercase tracking-wide">
                             Pipeline paused. Awaiting manual review.
                           </div>
                           <button
                             onClick={() => navigate({ kind: 'detail', featureId, featureTitle, gateStepExecutionId: step.id })}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 rounded text-xs font-bold text-black transition shadow-[0_0_10px_rgba(245,158,11,0.4)]"
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 bg-amber-500 hover:bg-amber-600 rounded text-xs font-bold text-black transition shadow-[0_0_10px_rgba(245,158,11,0.4)]"
                           >
                             Decide Gate <ArrowRight className="w-3 h-3" />
                           </button>
@@ -1777,6 +1797,7 @@ export function FeatureDetail() {
                               return (
                                 <button
                                   key={path}
+                                  title={cls.basename}
                                   onClick={() => {
                                     setSelectedArtifactPath(path);
                                     setSelectedStepTitle(step.step_id);
@@ -1848,7 +1869,7 @@ export function FeatureDetail() {
           {/* Right Column: Artifact Viewer panel */}
           <div 
             className={`h-full min-w-0 overflow-hidden border-l border-white/5 bg-[#0d0f14]/60 backdrop-blur-xl flex flex-col transition-all duration-500 ${
-              selectedArtifactPath ? 'w-[60%] opacity-100 translate-x-0' : 'w-0 opacity-0 translate-x-[50px] pointer-events-none'
+              selectedArtifactPath ? 'basis-[60%] opacity-100 translate-x-0' : 'basis-0 opacity-0 translate-x-[50px] pointer-events-none'
             }`}
           >
             {selectedArtifactPath && (

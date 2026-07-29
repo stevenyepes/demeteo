@@ -5,6 +5,7 @@ import type { Provider } from '../types';
 import { useProject, useUIState } from '../context';
 import { useErrorBus } from '../lib/errorBus';
 import ProviderSettings from './ProviderSettings';
+import { OverlayPortal } from './ui/OverlayPortal';
 
 export default function ProvidersPage() {
   const { state: { providers, projects, reposByProject }, dispatch: projDispatch } = useProject();
@@ -110,6 +111,7 @@ export default function ProvidersPage() {
       )}
 
       {pendingDelete && (
+        <OverlayPortal>
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="glass-panel p-6 max-w-md w-full mx-4 border border-amber-500/30">
             <div className="flex items-start gap-3 mb-4">
@@ -140,6 +142,7 @@ export default function ProvidersPage() {
             </div>
           </div>
         </div>
+        </OverlayPortal>
       )}
     </div>
   );

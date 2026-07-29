@@ -7,6 +7,7 @@ import {
   GitCommit, FilePlus, FileMinus, FileEdit,
 } from 'lucide-react';
 import { formatError } from '../lib/errors';
+import { MONACO_RESIZE_SAFE } from '../lib/monaco';
 
 interface SftpEntry {
   name: string;
@@ -439,6 +440,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
                 theme="vs-dark"
                 value={fileContent}
                 options={{
+                  ...MONACO_RESIZE_SAFE,
                   readOnly: true,
                   domReadOnly: true,
                   minimap: { enabled: true },
@@ -471,6 +473,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
                 original={diffOriginal}
                 modified={diffModified}
                 options={{
+                  ...MONACO_RESIZE_SAFE,
                   readOnly: true,
                   renderSideBySide: true,
                   minimap: { enabled: false },

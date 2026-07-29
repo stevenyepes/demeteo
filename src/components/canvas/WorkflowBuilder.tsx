@@ -49,6 +49,7 @@ import {
 } from 'lucide-react';
 
 import { useErrorBus } from '../../lib/errorBus';
+import { MONACO_RESIZE_SAFE } from '../../lib/monaco';
 import { useNavigationGuard } from '../../hooks/useNavigationGuard';
 import type { NavigationIntent } from '../../context/NavigationContext';
 import { ConfigPanel } from './ConfigPanel';
@@ -672,6 +673,7 @@ export function WorkflowBuilder({
                 theme="vs-dark"
                 value={JSON.stringify(compareView ? compareView.definition : history.definition, null, 2)}
                 options={{
+                  ...MONACO_RESIZE_SAFE,
                   readOnly: true,
                   minimap: { enabled: false },
                   fontSize: 12,

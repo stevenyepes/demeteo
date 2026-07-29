@@ -5,6 +5,7 @@ import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Loader2, AlertCircle, ExternalLink } from 'lucide-react';
+import { MONACO_RESIZE_SAFE } from '../lib/monaco';
 
 interface ArtifactViewerProps {
   artifactPath: string | null;
@@ -192,12 +193,12 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   }
 
   return (
-    <div 
-      className="flex-1 min-w-0 flex flex-col overflow-hidden"
+    <div
+      className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden"
       style={{ maxHeight }}
     >
       {viewType === 'markdown' ? (
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
           <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-2 shrink-0">
             <span className="flex items-center gap-2 truncate">
               <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
@@ -213,7 +214,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
               Copy Complete Output
             </button>
           </div>
-          <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pr-2 space-y-1 font-sans">
+          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden pr-2 space-y-1 font-sans">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
@@ -268,6 +269,16 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </blockquote>
               ),
               // Table components
+              // An artifact table lands in a panel a fraction of the window
+              // wide. Left to itself the browser sizes columns from their
+              // longest unbreakable run — a file path, an id — and the table
+              // exceeds the panel; the wrapper then puts a horizontal
+              // scrollbar at the *bottom of the table*, several screens down,
+              // which reads as "content is cut off and there is no way to see
+              // it". `overflow-wrap: anywhere` on the cells (unlike
+              // `break-word`) feeds back into intrinsic width, so the table
+              // fits and wraps. The scroll wrapper stays as the last resort
+              // for a table too column-heavy to fit at any wrapping.
               table: ({ children }) => (
                 <div className="w-full overflow-x-auto my-6 rounded-xl border border-white/5 bg-[#0d0f14]/40 backdrop-blur-md">
                   <table className="w-full border-collapse text-left text-xs font-sans">
@@ -291,12 +302,12 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </tr>
               ),
               th: ({ children }) => (
-                <th className="px-4 py-3 font-semibold font-display uppercase tracking-wider text-slate-200 border-r border-white/5 last:border-0 break-words">
+                <th className="px-4 py-3 font-semibold font-display uppercase tracking-wider text-slate-200 border-r border-white/5 last:border-0 [overflow-wrap:anywhere]">
                   {children}
                 </th>
               ),
               td: ({ children }) => (
-                <td className="px-4 py-3 text-slate-300 border-r border-white/5 last:border-0 leading-relaxed font-sans break-words">
+                <td className="px-4 py-3 text-slate-300 border-r border-white/5 last:border-0 leading-relaxed font-sans [overflow-wrap:anywhere]">
                   {children}
                 </td>
               ),
@@ -328,6 +339,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                         theme="vs-dark"
                         value={codeContent}
                         options={{
+                          ...MONACO_RESIZE_SAFE,
                           readOnly: true,
                           minimap: { enabled: false },
                           scrollBeyondLastLine: false,
@@ -368,7 +380,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
           </div>
         </div>
       ) : (
-        <div className="flex-1 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
+        <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
           <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider">
             <span className="flex items-center gap-2 truncate">
               <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
@@ -384,13 +396,17 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
               Copy Complete Output
             </button>
           </div>
-          <div className="flex-1">
+          {/* `min-h-0` so this host takes the space the header leaves rather
+              than the editor's content height — `height="100%"` below only
+              resolves against a definite box. */}
+          <div className="flex-1 min-h-0 min-w-0">
             <Editor
               height="100%"
               language={language}
               theme="vs-dark"
               value={content}
               options={{
+                ...MONACO_RESIZE_SAFE,
                 readOnly: true,
                 minimap: { enabled: true },
                 scrollBeyondLastLine: false,

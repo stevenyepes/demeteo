@@ -15,6 +15,7 @@ import { WorkflowList } from "./components/WorkflowList";
 import { WorkflowBuilderScreen } from "./components/canvas/WorkflowBuilderScreen";
 import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
+import { OverlayPortal } from "./components/ui/OverlayPortal";
 import { CodeEditorView } from "./components/CodeEditorView";
 import StartFeatureModal from "./components/StartFeatureModal";
 import CreateProjectWizard from "./components/wizard/CreateProjectWizard";
@@ -438,8 +439,14 @@ function AppInner() {
       <TopBar connectedProvider={connectedProvider} />
       <div className="flex flex-1 overflow-hidden relative min-h-0">
         <ProjectRail />
-        <div className="flex-1 flex flex-col min-h-0 relative">
-        <main className="flex-1 flex flex-col relative overflow-hidden bg-[#0a0c10] z-0 min-h-0">
+        {/* `min-w-0` is load-bearing, not decoration: a flex item defaults to
+            `min-width: auto`, so without it this column inherits the widest
+            min-content width of whatever view is mounted (a Monaco line, a
+            markdown table, a step card's metric row) and pushes the whole
+            shell past the window — the rail stays put and the header scrolls
+            off to the right. Every column below it repeats the same pair. */}
+        <div className="flex-1 min-w-0 flex flex-col min-h-0 relative">
+        <main className="flex-1 min-w-0 flex flex-col relative overflow-hidden bg-[#0a0c10] z-0 min-h-0">
 
           {/* empty-state */}
           {view.kind === 'empty-state' && (
@@ -505,6 +512,12 @@ function AppInner() {
 
           {view.kind === 'settings' && <PreferencesScreen />}
 
+          {/* These four are full-window overlays, and <main> is a stacking
+              context (`relative` + `z-0`), so rendered in place they paint
+              *below* the rail and sidebar at `z-10`. The portal lifts them out
+              to <body>; they stay children of this component in the React tree,
+              so navigation, project state and error-bus context are unchanged. */}
+          <OverlayPortal>
           {/* Gate overlay — rendered on top of detail view */}
           {view.kind === 'detail' && view.gateStepExecutionId && (
             <GateView
@@ -540,6 +553,7 @@ function AppInner() {
             entries={commandPaletteEntries}
           />
           <DocsPanel isOpen={docsPanelOpen} onClose={() => uiDispatch({ type: 'SET_DOCS_PANEL', open: false })} />
+          </OverlayPortal>
         </main>
         {/* Keep-mounted, CSS-hidden off-route so the active xterm and all
             backend sessions survive navigation (spec §4.1). */}

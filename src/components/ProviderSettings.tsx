@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ShieldAlert, Check, Server, Code, GitBranch, X } from 'lucide-react';
 import { formatError } from '../lib/errors';
+import { OverlayPortal } from './ui/OverlayPortal';
 
 interface ProviderSettingsProps {
     onConnected: (provider: { id: string; type: string; name: string; host: string; pat: string; username: string; avatarUrl: string }) => void;
@@ -58,6 +59,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
     };
 
     return (
+      <OverlayPortal>
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#08090c]/80 backdrop-blur-sm p-4">
             <div className="absolute w-[600px] h-[600px] bg-cyan-600/10 rounded-full blur-[120px] pointer-events-none"></div>
             
@@ -172,5 +174,6 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
                 </div>
             </div>
         </div>
+      </OverlayPortal>
     );
 }

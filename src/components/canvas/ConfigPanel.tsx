@@ -37,6 +37,7 @@ import { FieldLabel } from '../ui/FieldLabel';
 import { useAgentCatalog, effortLevelsFor } from '../../lib/agentCatalog';
 import { EFFORT_LABELS, isEffortLevel } from '../../lib/effortLevels';
 import { TONE_CHIP, TONE_TEXT } from '../../lib/runStatus';
+import { MONACO_RESIZE_SAFE } from '../../lib/monaco';
 import {
   FAILURE_CLASSES,
   FAILURE_CLASS_LABELS,
@@ -66,6 +67,7 @@ const INPUT_CLASS =
   'w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/50 focus:outline-none';
 
 const MONACO_OPTIONS = {
+  ...MONACO_RESIZE_SAFE,
   minimap: { enabled: false },
   scrollBeyondLastLine: false,
   fontSize: 12,
