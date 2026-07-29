@@ -222,16 +222,20 @@ async fn local_subprocess_adapter_satisfies_the_contract() {
 //   DEMETEO_SSH_CONFORMANCE_USER      (default demeteo)
 //   DEMETEO_SSH_CONFORMANCE_PASSWORD  (required)
 //   DEMETEO_SSH_CONFORMANCE_WORKDIR   (default /home/<user>/conformance)
+/// The loopback container's connection details and the wiring both SSH legs
+/// need. Kept in one place so a second test against the same sshd does not
+/// re-derive the env contract above.
 #[cfg(feature = "ssh-conformance")]
-#[tokio::test]
-async fn ssh_client_adapter_satisfies_the_contract() {
+mod ssh_target {
     use crate::adapters::ssh::client::SshClientAdapter;
     use crate::domain::ids::{AgentProfileId, MachineId};
     use crate::domain::models::{AgentProfile, Machine};
     use crate::ports::db::MachineRepository;
+    use crate::ports::execution::ExecutionPort;
+    use std::sync::Arc;
 
-    // Minimal single-machine repo pointing the adapter at the container.
-    struct OneMachine(Machine);
+    /// Minimal single-machine repo pointing the adapter at the container.
+    pub struct OneMachine(pub Machine);
     impl MachineRepository for OneMachine {
         fn get_machines(&self) -> Result<Vec<Machine>, String> {
             Ok(vec![self.0.clone()])
@@ -259,47 +263,253 @@ async fn ssh_client_adapter_satisfies_the_contract() {
         }
     }
 
-    let host =
-        std::env::var("DEMETEO_SSH_CONFORMANCE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port_num: i32 = std::env::var("DEMETEO_SSH_CONFORMANCE_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(2222);
-    let user =
-        std::env::var("DEMETEO_SSH_CONFORMANCE_USER").unwrap_or_else(|_| "demeteo".to_string());
-    let password = std::env::var("DEMETEO_SSH_CONFORMANCE_PASSWORD")
-        .expect("DEMETEO_SSH_CONFORMANCE_PASSWORD must be set for the ssh-conformance test");
-    let workdir = std::env::var("DEMETEO_SSH_CONFORMANCE_WORKDIR")
-        .unwrap_or_else(|_| format!("/home/{user}/conformance"));
+    pub struct Target {
+        pub host: String,
+        pub port: i32,
+        pub user: String,
+        pub password: String,
+        pub workdir: String,
+    }
 
+    pub fn target() -> Target {
+        let host = std::env::var("DEMETEO_SSH_CONFORMANCE_HOST")
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("DEMETEO_SSH_CONFORMANCE_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(2222);
+        let user =
+            std::env::var("DEMETEO_SSH_CONFORMANCE_USER").unwrap_or_else(|_| "demeteo".to_string());
+        let password = std::env::var("DEMETEO_SSH_CONFORMANCE_PASSWORD")
+            .expect("DEMETEO_SSH_CONFORMANCE_PASSWORD must be set for the ssh-conformance test");
+        let workdir = std::env::var("DEMETEO_SSH_CONFORMANCE_WORKDIR")
+            .unwrap_or_else(|_| format!("/home/{user}/conformance"));
+        Target {
+            host,
+            port,
+            user,
+            password,
+            workdir,
+        }
+    }
+
+    /// An adapter addressing `machine_id`, reaching the container on
+    /// `port` — which is the container's own port for the contract leg and a
+    /// proxy's for the drop leg.
+    pub fn adapter(t: &Target, port: i32, machine_id: &str) -> Arc<dyn ExecutionPort> {
+        let machine = Machine {
+            id: MachineId(machine_id.to_string()),
+            name: machine_id.to_string(),
+            host: t.host.clone(),
+            port,
+            username: t.user.clone(),
+            auth_type: "password".to_string(),
+            key_path: None,
+            agents: None,
+            auto_approved_rules: None,
+            use_login_shell: Some(false),
+            setup_commands: None,
+            notify_webhook_url: None,
+        };
+        // Seed the in-process credential cache so the adapter's password lookup
+        // never reaches the OS keyring (which the test build may lack, and
+        // which has no secret for this throwaway host anyway).
+        crate::credential_cache::set(&format!("machine_{machine_id}"), &t.password);
+        Arc::new(SshClientAdapter::new(Arc::new(OneMachine(machine))))
+    }
+}
+
+#[cfg(feature = "ssh-conformance")]
+#[tokio::test]
+async fn ssh_client_adapter_satisfies_the_contract() {
+    let t = ssh_target::target();
     let machine_id = "ssh-conformance";
-    let machine = Machine {
-        id: MachineId(machine_id.to_string()),
-        name: "ssh-conformance".to_string(),
-        host,
-        port: port_num,
-        username: user,
-        auth_type: "password".to_string(),
-        key_path: None,
-        agents: None,
-        auto_approved_rules: None,
-        use_login_shell: Some(false),
-        setup_commands: None,
-        notify_webhook_url: None,
-    };
-    // Seed the in-process credential cache so the adapter's password lookup
-    // never reaches the OS keyring (which the test build may lack, and which
-    // has no secret for this throwaway host anyway).
-    crate::credential_cache::set(&format!("machine_{machine_id}"), &password);
-
-    let port: Arc<dyn ExecutionPort> =
-        Arc::new(SshClientAdapter::new(Arc::new(OneMachine(machine))));
+    let port = ssh_target::adapter(&t, t.port, machine_id);
 
     // Ensure the workdir exists, mirroring `fresh_local_workdir` for the local
     // leg — the shared `exec_contract` assumes a pre-existing writable dir.
-    port.run_command(machine_id, &format!("mkdir -p {workdir}"))
+    port.run_command(machine_id, &format!("mkdir -p {}", t.workdir))
         .await
         .expect("failed to create the remote conformance workdir");
 
-    exec_contract(port, machine_id, &workdir).await;
+    exec_contract(port, machine_id, &t.workdir).await;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// S4 — a genuine dropped connection, absorbed and then not absorbed
+// ─────────────────────────────────────────────────────────────────────────
+
+/// A TCP relay in front of the container's sshd that can be told to drop every
+/// live connection and refuse new ones.
+///
+/// This is the only instrument available that produces a *real* dropped SSH
+/// session: killing the container would end the test target, and a fake
+/// `ExecutionPort` cannot exercise the thing under test at all — the retry
+/// depends on `SessionPool` evicting a corpse and `ssh_util::connect`
+/// re-handshaking, neither of which exists in a double. Cutting the transport
+/// underneath a live adapter reproduces the field failure exactly: the pooled
+/// session's liveness probe fails, the reconnect finds nothing listening back,
+/// and everything the driver would have seen is what the assertions read.
+#[cfg(feature = "ssh-conformance")]
+struct FlakyProxy {
+    port: u16,
+    allow: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    live: std::sync::Arc<std::sync::Mutex<Vec<std::net::TcpStream>>>,
+    stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(feature = "ssh-conformance")]
+impl FlakyProxy {
+    fn start(upstream: String) -> Self {
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the proxy");
+        let port = listener.local_addr().expect("no proxy addr").port();
+        let allow = Arc::new(AtomicBool::new(true));
+        let live: Arc<Mutex<Vec<TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
+        let stopped = Arc::new(AtomicBool::new(false));
+
+        let (a, l, s) = (allow.clone(), live.clone(), stopped.clone());
+        std::thread::spawn(move || {
+            for incoming in listener.incoming() {
+                if s.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(client) = incoming else { continue };
+                // Refusing by accepting and closing (rather than not listening)
+                // keeps the TCP connect fast and pushes the failure into the
+                // SSH handshake — which is the shape a dropped session
+                // actually presents, and one `PERMANENT_MARKERS` must not
+                // mistake for a bad credential.
+                if !a.load(Ordering::SeqCst) {
+                    let _ = client.shutdown(std::net::Shutdown::Both);
+                    continue;
+                }
+                let Ok(server) = TcpStream::connect(&upstream) else {
+                    let _ = client.shutdown(std::net::Shutdown::Both);
+                    continue;
+                };
+                if let (Ok(mut held), Ok(c), Ok(sv)) =
+                    (l.lock(), client.try_clone(), server.try_clone())
+                {
+                    held.push(c);
+                    held.push(sv);
+                }
+                for (mut from, mut to) in [
+                    (
+                        client.try_clone().expect("clone client"),
+                        server.try_clone().expect("clone server"),
+                    ),
+                    (server, client),
+                ] {
+                    std::thread::spawn(move || {
+                        let _ = std::io::copy(&mut from, &mut to);
+                    });
+                }
+            }
+        });
+
+        Self {
+            port,
+            allow,
+            live,
+            stopped,
+        }
+    }
+
+    /// Drop every live connection and refuse new ones.
+    fn cut(&self) {
+        use std::sync::atomic::Ordering;
+        self.allow.store(false, Ordering::SeqCst);
+        if let Ok(mut held) = self.live.lock() {
+            for s in held.drain(..) {
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+
+    fn restore(&self) {
+        self.allow.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn allow_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.allow.clone()
+    }
+}
+
+#[cfg(feature = "ssh-conformance")]
+impl Drop for FlakyProxy {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        self.stopped.store(true, Ordering::SeqCst);
+        // The accept loop is parked in `accept`; one connection wakes it so the
+        // thread observes the flag and exits instead of outliving the test.
+        let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+    }
+}
+
+/// S4 end-to-end, against a real sshd: a network that goes away for a moment
+/// must not end a run, and one that stays away must still be reported as a
+/// transport failure.
+///
+/// Both halves matter and they pull in opposite directions. Only the first
+/// would let a wrapper pass that swallowed every failure into a retry loop;
+/// only the second would let one pass that never retried at all. Together they
+/// pin the two properties the plan entry names — absorb the blip, preserve the
+/// distinction the verifier depends on.
+#[cfg(feature = "ssh-conformance")]
+#[tokio::test]
+async fn ssh_client_adapter_absorbs_a_brief_drop_and_still_reports_a_lasting_one() {
+    use crate::adapters::step_executor::driver::verifier::{
+        classify_exec_failure, HarnessExecFailure,
+    };
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    let t = ssh_target::target();
+    let proxy = FlakyProxy::start(format!("{}:{}", t.host, t.port));
+    let machine_id = "ssh-drop-recovery";
+    let port = ssh_target::adapter(&t, i32::from(proxy.port), machine_id);
+
+    // Establish and pool a session, so the drop below is a *live* session
+    // dying rather than a machine that was never reachable.
+    let first = port
+        .run_command(machine_id, "printf %s established")
+        .await
+        .expect("the proxied session must work before anything is cut");
+    assert_eq!(first.trim(), "established");
+
+    // --- a blip the retry must absorb --------------------------------------
+    proxy.cut();
+    let allow = proxy.allow_flag();
+    let healer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        allow.store(true, Ordering::SeqCst);
+    });
+    let recovered = port.run_command(machine_id, "printf %s recovered").await;
+    healer.await.expect("the healer task must not panic");
+    assert_eq!(
+        recovered.as_deref().map(str::trim),
+        Ok("recovered"),
+        "a dropped session that comes back must be re-established transparently",
+    );
+
+    // --- an outage that outlasts the whole retry budget ---------------------
+    // This is the regression guard for the verifier chain, asserted through
+    // the classifier rather than the string: exhausted retries must still be
+    // `Transport`, which routes to a non-retryable `Infrastructure` instead of
+    // sending an agent to fix code that was never tested (C0.2 / D3).
+    proxy.cut();
+    let err = port
+        .run_command(machine_id, "printf %s unreachable")
+        .await
+        .expect_err("a host that never comes back must fail");
+    assert_eq!(
+        classify_exec_failure(&err),
+        HarnessExecFailure::Transport,
+        "an exhausted retry must still read as a transport failure, got: {err}",
+    );
+    proxy.restore();
 }
