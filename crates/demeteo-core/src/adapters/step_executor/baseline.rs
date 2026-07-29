@@ -1,5 +1,5 @@
-//! Measuring the harness baseline — the in-graph producer of the HB2a record
-//! (`docs/HARNESS_BASELINE.md` HB2b / P4.2a, decision 44).
+//! Measuring the harness baseline — the two producers of the HB2a record
+//! (`docs/HARNESS_BASELINE.md` HB2b, decision 44).
 //!
 //! Validate today asks "is the harness green?" and treats any non-zero exit as
 //! this feature's verdict, so a repository that was already red sends the run
@@ -7,26 +7,30 @@
 //! produces is the other half of that subtraction; HB2c is what reads it and
 //! changes an outcome. **Nothing here changes a verdict.**
 //!
-//! # The producer
+//! # Two producers, one shape
 //!
-//! `baseline-harness`, a zero-token `command` node at the head of the Standard
-//! and Refactor starters (P4.2a). Cheap and the default: its wall-clock hides
-//! behind research, which in `f-1785157902856` ran ~31 minutes before implement
-//! started.
+//! 1. **The in-graph node** — `baseline-harness`, a zero-token `command` node at
+//!    the head of the Standard and Refactor starters (P4.2a). Cheap and the
+//!    default: its wall-clock hides behind research.
+//! 2. **The lazy fallback** — fired from `run_harness_first`'s *failure* path
+//!    when no stored record covers the run's base. This is what makes the
+//!    subtraction unconditional instead of a privilege of the two starters that
+//!    carry the node.
 //!
-//! A second producer — a lazy fallback on validate's failure path, for the
-//! graphs this node cannot reach — funnels through the same [`measure_gates`],
-//! which is why each gate carries its own [`BaselineProducer`] rather than the
-//! record carrying one.
+//! Both funnel through [`measure_gates`], so a record cannot depend on which
+//! producer wrote it beyond the [`BaselineProducer`] stamped on each gate.
 //!
 //! # Where the decisions live
 //!
-//! *Which* harnesses gate a step is
-//! [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses) — pure,
-//! and critically **the same function validate resolves through**: a baseline
-//! measured over a different set of gates than validate runs is worse than no
-//! baseline. What is left here is execution, and [`measure_gates`] is a free
-//! function over the one port it needs rather than a method on
+//! *Whether* to measure a fallback baseline is
+//! [`fallback_baseline_needed`](crate::domain::harness_baseline::fallback_baseline_needed)
+//! — pure, in `domain/`, reachable from a test with no port doubles. *Which*
+//! harnesses gate a step is
+//! [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses), likewise
+//! pure and, critically, **the same function validate resolves through**: a
+//! baseline measured over a different set of gates than validate runs is worse
+//! than no baseline. What is left here is execution, and [`measure_gates`] is a
+//! free function over the one port it needs rather than a method on
 //! `ExecutionDriver`, so it is reachable from a test that stubs an
 //! `ExecutionPort` and nothing else (AGENTS.md §3).
 //!
@@ -36,14 +40,17 @@
 //! inverts HB2c's table: a gate wrongly recorded as red-at-base excuses a real
 //! regression. So every ambiguity resolves toward recording nothing —
 //! a transport failure, a timeout, and a failed `prepare_command` all record
-//! *no gate at all* rather than a red one.
+//! *no gate at all* rather than a red one, and the whole fallback returns `()`
+//! so it is structurally incapable of changing the verdict it runs beside.
 
 use crate::adapters::step_executor::driver::verifier::{
-    classify_exec_failure, harness_block, merge_stderr_into_stdout, HarnessExecFailure,
+    classify_exec_failure, harness_block, merge_stderr_into_stdout, HarnessExecFailure, HarnessRun,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::artifact::{Artifact, ArtifactSource};
-use crate::domain::harness_baseline::{BaselineProducer, HarnessBaseline, HarnessBaselineRun};
+use crate::domain::harness_baseline::{
+    fallback_baseline_needed, BaselineProducer, HarnessBaseline, HarnessBaselineRun,
+};
 use crate::domain::verifier::ResolvedHarness;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
 
@@ -426,6 +433,132 @@ impl ExecutionDriver {
             source: ArtifactSource::AgentText,
         };
         self.artifacts.put(&self.f_id_str, step_id, &artifact).ok()
+    }
+
+    /// The lazy fallback: validate's harness just went red and nothing on
+    /// record says what those gates did at the base, so measure it here.
+    ///
+    /// **Returns `()`, and that is the point.** A baseline mechanism may
+    /// withhold an improvement; it may never invent a failure. With no value to
+    /// return there is nothing the caller could branch on, so every way this
+    /// can go wrong — an unresolvable merge-base, a worktree that cannot be
+    /// made, a prepare that fails, a dead transport — leaves the verdict
+    /// exactly as it is today. This mirrors how C6's triage fails safe.
+    ///
+    /// Only the gates that **actually failed** are measured. They are still
+    /// resolved through
+    /// [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses), so
+    /// each command is byte-identical to the one validate just ran; the filter
+    /// only drops the gates that were green, which need no baseline because
+    /// nothing is being subtracted from them. That is also the partial write
+    /// [`HarnessBaseline::merge`] was designed around.
+    ///
+    /// Cost, stated plainly: on a cold repo this is `prepare_command` plus a
+    /// suite, i.e. minutes — which is why it fires only on the failure path,
+    /// where the alternative is a rework cycle at $14.63 and 11M tokens.
+    pub(crate) async fn measure_fallback_baseline(
+        &self,
+        step_id: &str,
+        machine_str: &str,
+        resolved: &[ResolvedHarness],
+        failed: &[HarnessRun],
+    ) {
+        let Some(feature) = self.features.get(&self.f_id).ok().flatten() else {
+            return;
+        };
+        let Some(settings) = self
+            .projects
+            .get_settings(&feature.project_id)
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+
+        // The base is the fork point, not the feature branch's tip: the tip
+        // carries this feature's own commits, and measuring those would compare
+        // the work against itself.
+        let Some(base_sha) = self
+            .git_ops
+            .merge_base(
+                self.machine_id_opt.as_deref(),
+                &self.target_dir,
+                &settings.worktree_strategy.default_branch,
+                &self.branch_name,
+            )
+            .await
+        else {
+            tracing::warn!(
+                feature_id = %self.f_id,
+                "no merge-base for the feature branch — skipping the fallback baseline"
+            );
+            return;
+        };
+
+        let gates: Vec<ResolvedHarness> = resolved
+            .iter()
+            .filter(|r| failed.iter().any(|f| f.name == r.name))
+            .cloned()
+            .collect();
+        let names: Vec<String> = gates.iter().map(|g| g.name.clone()).collect();
+
+        if !fallback_baseline_needed(
+            !failed.is_empty(),
+            &base_sha,
+            feature.harness_baseline.as_ref(),
+            &names,
+        ) {
+            return;
+        }
+
+        let worktree_id = format!("{}-baseline", self.f_id_str);
+        let cache_dir = crate::paths::feature_cache_dir(&self.target_dir, &self.branch_name);
+        let wt_path = match self
+            .git_ops
+            .provision_detached_worktree(
+                self.machine_id_opt.as_deref(),
+                &self.target_dir,
+                &base_sha,
+                &worktree_id,
+                Some(&cache_dir),
+            )
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    error = %e,
+                    "could not provision the detached baseline worktree — no baseline measured"
+                );
+                return;
+            }
+        };
+
+        self.record_harness_baseline(
+            &BaselineSite {
+                machine: machine_str,
+                wt_path: &wt_path,
+                step_id,
+                base_sha: &base_sha,
+                producer: BaselineProducer::Fallback,
+            },
+            settings.worktree_strategy.prepare_command.as_deref(),
+            &gates,
+        )
+        .await;
+
+        // Torn down on every path — this one included, where the measurement
+        // itself came back red. The worktree is disposable by construction
+        // (detached, no branch), so leaving one behind is pure debris.
+        let _ = self
+            .git_ops
+            .cleanup_detached_worktree(
+                self.machine_id_opt.as_deref(),
+                &self.target_dir,
+                &worktree_id,
+            )
+            .await;
     }
 }
 

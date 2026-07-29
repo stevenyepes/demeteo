@@ -38,10 +38,11 @@ HB5 ─────────┘
   └─▶ HB2a ─▶ HB2b ─▶ HB2c ─▶ HB7
 ```
 
-`HB3` is independent of everything. **HB1, HB4, HB5 and HB2a are done**, which
-leaves HB6 unblocked (it authors the project tier of HB5's resolution chain, and
-the field it writes now exists) and HB2b next on the baseline arm — the record
-and its storage exist, so what remains there is measuring into them.
+`HB3` is independent of everything. **HB1, HB4, HB5, HB2a and HB2b are done**,
+which leaves HB6 unblocked (it authors the project tier of HB5's resolution
+chain, and the field it writes now exists) and **HB2c** next on the baseline arm
+— the record now exists and is written by both producers, so what remains there
+is reading it to change a verdict.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -582,6 +583,71 @@ deterministic rather than agentic:
   a pre-existing failure. That is the leg that proves the fallback, and adding the
   node to the fixture cannot fake it.
 
+- **Done:** both producers, funnelled through one `measure_gates` in
+  `adapters/step_executor/baseline.rs` so a record cannot depend on which wrote
+  it beyond the per-gate `producer` stamp.
+
+  - **The node** is `s-baseline-harness`, a `command` node carrying one new
+    field — `measure_baseline` — at the head of the Standard and Refactor
+    starters. It is the one command node whose command is *not* in the
+    workflow: a workflow file cannot know this project's `prepare_command` or
+    its gates, so it resolves them through **the same
+    `resolve_harnesses` chain validate resolves through**. It records the sha
+    `git rev-parse HEAD` reports in the worktree it measured, never the one it
+    assumed.
+  - **The fallback** fires from `run_harness_first`'s harness-failure path,
+    measuring the gates that just went red against a worktree detached at the
+    merge-base. The git primitive is `provision_detached_worktree`
+    (`git worktree add --detach`) plus `cleanup_detached_worktree`, which
+    deliberately does *not* end in a `branch -D`: a detached worktree has no
+    branch, and that is the safety property — nothing can commit onto it or
+    merge it back, so a measurement can never contaminate the feature.
+
+  **The node records; it does not judge — one correction to this plan.** §3's
+  HB1 aside says a pre-existing-red suite reaches `verdict` through this node.
+  It does not, and should not: failing the run at its very first node would
+  restate exactly the misattribution [I2](#i2-a-pre-existing-red-harness-is-attributed-to-the-feature)
+  exists to remove, before a line has been written, and it would make HB2c's
+  `red → red, same fingerprint → pre-existing` row unreachable through the node
+  path. A red gate completes the step with `exit_ok: false` on the record. What
+  *does* end the run is an environment that cannot produce a measurement at all
+  — a failing `prepare_command`, or gates that never reach an exit status —
+  which is terminal `Environment` with remediation, matching HB2c's `prepare`
+  row. **This supersedes HB1's aside; P4.2a's "Done when" was written against
+  the same assumption and is superseded with it.**
+
+  **Every ambiguity records nothing.** An absent baseline degrades to today's
+  behaviour; a *fabricated* one inverts HB2c's table and excuses a real
+  regression. So a transport failure, a timeout, and a failed `prepare_command`
+  all record **no gate**, never a red one — a suite run without its install step
+  fails for reasons that have nothing to do with the base commit. The fallback
+  returns `()` for the same reason: with no value to branch on it is
+  structurally incapable of changing the verdict it runs beside.
+
+  33 tests, every one watched fail. Pure: each of the five conditions in
+  `fallback_baseline_needed` inverted in turn (green measuring, an empty base
+  accepted, an empty gate list accepted, `covers` skipped, partial coverage
+  accepted), and eight ways `measure_gates` could lie (continuing past a failed
+  prepare, recording a transport failure or a timeout as red, abandoning the
+  remaining gates after one, sharing one deadline, dropping the `2>&1` wrap,
+  fingerprinting the raw output instead of the labelled block, fingerprinting a
+  green gate, stopping at the first red one). Wiring, in a six-leg conformance
+  gate over a **real shell and real git**
+  (`tests/conformance/harness_baseline.rs`): the node assuming its sha, the node
+  judging a red baseline, the fallback hook removed, the fallback firing on
+  green, the teardown removed, the primitive taking a branch instead of a sha,
+  `-b` reintroduced, and the leftover-state clearing removed.
+
+  **Left to the user:** `refactor.json`'s `s-baseline` **agent** step still
+  exists beside the new node. It does by hand what the node now measures — an
+  agent runs the suite and writes prose — so it is arguably redundant, but it
+  also carries narrative value the node does not. Deleting a step from a shipped
+  starter is not this task's call; it is asked, not presumed.
+
+  **Not proven here, by scope:** nothing yet *reads* the record to change an
+  outcome. HB2c owns the subtraction, and its "Done when" is still the leg that
+  proves this arm end to end.
+
 ### HB2c — Subtraction and classification
 
 - **Goal:** evaluate the retry rule from §2 as a table the engine can compute,
@@ -833,7 +899,7 @@ deterministic rather than agentic:
 | HB4 | Probe every configured command | small | ✅ |
 | HB5 | Named harnesses become an ordered list | medium | ✅ |
 | HB2a | Baseline record: shape & storage | medium | ✅ |
-| HB2b | Measure the baseline: node + lazy fallback | large | ☐ |
+| HB2b | Measure the baseline: node + lazy fallback | large | ✅ |
 | HB2c | Subtraction & classification | medium-large | ☐ |
 | HB6 | Probe at configuration time | small-medium | ☐ |
 | HB7 | Make the verdict legible | medium | ☐ |

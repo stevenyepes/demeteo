@@ -1153,10 +1153,182 @@ async fn test_branch_delete_handles_chmod_locked_worktree() {
     let _ = std::fs::remove_dir_all(&wt_path);
 }
 
+// ── Detached worktrees (HB2b) ────────────────────────────────────────────────
+//
+// The baseline fallback measures the *base* commit, which predates the feature
+// entirely. `provision_subtask_worktree` cannot serve it: it takes a branch and
+// creates one. These cover the primitive that can.
+
+/// Commit a second time and return `(first_sha, second_sha)`.
+async fn two_commits(repo: &str) -> (String, String) {
+    let exec = fresh_exec();
+    let sha = |out: String| out.trim().to_string();
+    let first = sha(exec
+        .run_command("local", &format!("git -C \"{repo}\" rev-parse HEAD"))
+        .await
+        .unwrap());
+    exec.write_file("local", &format!("{repo}/second.txt"), "second")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{repo}\" add ."))
+        .await;
+    let _ = exec
+        .run_command("local", &format!("git -C \"{repo}\" commit -m second"))
+        .await;
+    let second = sha(exec
+        .run_command("local", &format!("git -C \"{repo}\" rev-parse HEAD"))
+        .await
+        .unwrap());
+    (first, second)
+}
+
+/// The headline property: the worktree is checked out at the sha it was asked
+/// for, not at the branch tip. A baseline measured at the tip would compare the
+/// feature's work against itself.
+#[tokio::test]
+async fn a_detached_worktree_is_checked_out_at_the_requested_sha() {
+    let (dir, helper) = make_repo("wt_detached_sha").await;
+    let repo = dir.to_string_lossy().to_string();
+    let (first, second) = two_commits(&repo).await;
+    assert_ne!(first, second);
+
+    let wt = helper
+        .provision_detached_worktree(None, &repo, &first, "baseline", None)
+        .await
+        .expect("provisions");
+
+    assert_eq!(
+        helper.head_sha(None, &wt).await.as_deref(),
+        Some(first.as_str()),
+        "the worktree must sit at the base commit, not at the branch tip"
+    );
+    // The second commit's file must not be there — the point of measuring an
+    // older commit is that it does not contain the newer work.
+    assert!(!std::path::Path::new(&wt).join("second.txt").exists());
+
+    let _ = helper
+        .cleanup_detached_worktree(None, &repo, "baseline")
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Detached is the safety property, not an implementation detail: a worktree
+/// with no branch cannot be committed onto and cannot be merged back by
+/// anything, so a measurement can never contaminate the feature.
+#[tokio::test]
+async fn a_detached_worktree_carries_no_branch() {
+    let (dir, helper) = make_repo("wt_detached_nobranch").await;
+    let repo = dir.to_string_lossy().to_string();
+    let (first, _) = two_commits(&repo).await;
+
+    helper
+        .provision_detached_worktree(None, &repo, &first, "baseline", None)
+        .await
+        .expect("provisions");
+
+    let listed = helper.list_worktrees(None, &repo).await.expect("lists");
+    let entry = listed
+        .iter()
+        .find(|w| w.path.ends_with("_wt_baseline"))
+        .expect("the detached worktree is registered");
+    assert_eq!(
+        entry.branch, None,
+        "a baseline worktree must hold no branch: {entry:?}"
+    );
+
+    let _ = helper
+        .cleanup_detached_worktree(None, &repo, "baseline")
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Teardown must leave nothing behind — no directory and no registration. The
+/// caller runs it on the failure path too, where the measurement itself came
+/// back red, so anything left here accumulates once per failed validate.
+#[tokio::test]
+async fn cleanup_removes_the_directory_and_the_registration() {
+    let (dir, helper) = make_repo("wt_detached_cleanup").await;
+    let repo = dir.to_string_lossy().to_string();
+    let (first, _) = two_commits(&repo).await;
+
+    let wt = helper
+        .provision_detached_worktree(None, &repo, &first, "baseline", None)
+        .await
+        .expect("provisions");
+    assert!(std::path::Path::new(&wt).exists());
+
+    helper
+        .cleanup_detached_worktree(None, &repo, "baseline")
+        .await
+        .expect("cleans up");
+
+    assert!(
+        !std::path::Path::new(&wt).exists(),
+        "the worktree directory must be gone"
+    );
+    let listed = helper.list_worktrees(None, &repo).await.expect("lists");
+    assert!(
+        !listed.iter().any(|w| w.path.ends_with("_wt_baseline")),
+        "the registration must be pruned too, or the next `add` fails with \
+         'already used by worktree at': {listed:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An unresolvable sha must fail loudly rather than hand back a worktree at
+/// whatever git felt like. The caller degrades to "no baseline" on `Err`; a
+/// silent success would produce a record describing the wrong commit.
+#[tokio::test]
+async fn an_unresolvable_sha_is_an_error_not_a_silent_checkout() {
+    let (dir, helper) = make_repo("wt_detached_badsha").await;
+    let repo = dir.to_string_lossy().to_string();
+
+    let err = helper
+        .provision_detached_worktree(
+            None,
+            &repo,
+            "0000000000000000000000000000000000000000",
+            "baseline",
+            None,
+        )
+        .await
+        .expect_err("an unknown commit cannot be checked out");
+    assert!(
+        err.contains("provision_detached_worktree"),
+        "the error must name the operation: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A leftover directory from a crashed run must not block the next
+/// measurement — the same leftover-state discipline the subtask path carries.
+#[tokio::test]
+async fn an_orphan_directory_is_cleared_before_the_add() {
+    let (dir, helper) = make_repo("wt_detached_orphan").await;
+    let repo = dir.to_string_lossy().to_string();
+    let (first, _) = two_commits(&repo).await;
+
+    let orphan = format!("{repo}_wt_baseline");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(format!("{orphan}/debris.txt"), "left over").unwrap();
+
+    let wt = helper
+        .provision_detached_worktree(None, &repo, &first, "baseline", None)
+        .await
+        .expect("an orphan directory must not block provisioning");
+    assert!(!std::path::Path::new(&wt).join("debris.txt").exists());
+
+    let _ = helper
+        .cleanup_detached_worktree(None, &repo, "baseline")
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `head_sha` answers about the *commit*, where `get_head_branch` answers about
-/// the ref. A baseline is only evidence about the commit it names, so the
-/// producer has to be able to ask — and to get nothing back when git cannot
-/// answer, rather than an empty string that would land in the record.
+/// the ref — and a detached worktree has no ref to answer with.
 #[tokio::test]
 async fn head_sha_reports_nothing_for_a_directory_that_is_not_a_repo() {
     let (dir, helper) = make_repo("wt_head_sha_missing").await;
