@@ -1,6 +1,7 @@
 use rusqlite::params;
 
 use crate::domain::attachment::AttachedFile;
+use crate::domain::harness_baseline::HarnessBaseline;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{EffortLevel, Feature, StepExecution};
 use crate::ports::attachment_store::AttachmentJsonPort;
@@ -13,6 +14,16 @@ use super::super::SqliteAdapter;
 fn effort_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<EffortLevel>> {
     let raw: Option<String> = row.get(idx)?;
     Ok(raw.as_deref().and_then(EffortLevel::parse))
+}
+
+/// Read the `harness_baseline_json` column (V37). Anything unreadable —
+/// NULL, empty, corrupt, or a record from a newer schema — degrades to
+/// `None`, i.e. *no baseline was measured*. Never to an empty record:
+/// "nothing was measured" and "everything was green" are opposite answers
+/// and only one of them is safe to guess. See [`HarnessBaseline`].
+fn baseline_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<HarnessBaseline>> {
+    let raw: Option<String> = row.get(idx)?;
+    Ok(HarnessBaseline::from_column(raw.as_deref()))
 }
 
 impl AttachmentJsonPort for SqliteAdapter {
@@ -60,7 +71,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -99,6 +110,7 @@ impl FeatureRepository for SqliteAdapter {
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
                     attachments,
+                    harness_baseline: baseline_from_row(row, 23)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -113,7 +125,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json
                  FROM features WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -152,6 +164,7 @@ impl FeatureRepository for SqliteAdapter {
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
                     attachments,
+                    harness_baseline: baseline_from_row(row, 23)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -176,15 +189,17 @@ impl FeatureRepository for SqliteAdapter {
         } else {
             Some(serde_json::to_string(&f.attachments).map_err(|e| e.to_string())?)
         };
+        let harness_baseline_json: Option<String> =
+            HarnessBaseline::to_column(f.harness_baseline.as_ref());
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort, max_budget_usd, workflow_version_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort, max_budget_usd, workflow_version_id, harness_baseline_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
                 f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
                 f.mr_url, f.mr_state, commit_artifacts, loop_iterations, step_overrides_json,
                 attachments_json, f.description, f.effort.map(|e| e.as_str()), f.max_budget_usd,
-                f.workflow_version_id
+                f.workflow_version_id, harness_baseline_json
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -261,6 +276,13 @@ impl FeatureRepository for SqliteAdapter {
             sets.push("pr_body=?");
             binds.push(Box::new(b));
         }
+        // Whole-record replication (V37). `Some(None)` clears the column back
+        // to "no baseline measured"; producers merge instead, through
+        // `merge_harness_baseline`.
+        if let Some(baseline) = patch.harness_baseline.clone() {
+            sets.push("harness_baseline_json=?");
+            binds.push(Box::new(HarnessBaseline::to_column(baseline.as_ref())));
+        }
         if sets.is_empty() {
             return Ok(());
         }
@@ -269,6 +291,36 @@ impl FeatureRepository for SqliteAdapter {
 
         conn.execute(&sql, rusqlite::params_from_iter(binds.iter()))
             .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn merge_harness_baseline(
+        &self,
+        id: &FeatureId,
+        baseline: &HarnessBaseline,
+    ) -> Result<(), String> {
+        // Read-modify-write under one lock. Both producers and the reader are
+        // the same process against one SQLite file (decision 44), so holding
+        // the connection mutex across the read and the write is the whole of
+        // the concurrency story — there is no second host to race with. The
+        // merge itself is pure and lives in the domain.
+        let conn = self.conn.lock()?;
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT harness_baseline_json FROM features WHERE id = ?1",
+                params![id.0],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let merged = HarnessBaseline::merge(
+            HarnessBaseline::from_column(stored.as_deref()),
+            baseline.clone(),
+        );
+        conn.execute(
+            "UPDATE features SET harness_baseline_json = ?2 WHERE id = ?1",
+            params![id.0, HarnessBaseline::to_column(Some(&merged))],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -303,7 +355,7 @@ impl FeatureRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id
+                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json
                  FROM features WHERE mr_state = 'open' AND mr_url IS NOT NULL ORDER BY created_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -342,6 +394,7 @@ impl FeatureRepository for SqliteAdapter {
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default(),
                     attachments,
+                    harness_baseline: baseline_from_row(row, 23)?,
                 })
             })
             .map_err(|e| e.to_string())?;

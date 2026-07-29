@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 
 use super::super::super::SqliteAdapter;
+use crate::domain::harness_baseline::{BaselineProducer, HarnessBaseline, HarnessBaselineRun};
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::Feature;
 use crate::domain::models::Project;
@@ -56,6 +57,7 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         },
     )
     .unwrap();
@@ -108,6 +110,7 @@ fn feature_description_round_trips_through_get_and_get_active() {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         },
     )
     .unwrap();
@@ -167,6 +170,7 @@ fn feature_max_budget_usd_round_trips_through_get_and_get_active() {
             max_budget_usd: Some(12.5),
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         },
     )
     .unwrap();
@@ -303,6 +307,7 @@ fn feature_effort_and_step_override_effort_round_trip() {
                 effort: Some(EffortLevel::Low),
             }],
             attachments: Vec::new(),
+            harness_baseline: None,
         },
     )
     .unwrap();
@@ -381,4 +386,240 @@ fn feature_patch_sets_and_clears_effort() {
     )
     .unwrap();
     assert_eq!(adapter.get(&fid).unwrap().unwrap().effort, None);
+}
+
+// ── Harness baseline (V37, decision 44) ──────────────────────────────────────
+
+fn baseline_run(name: &str, exit_ok: bool, fingerprint: &str) -> HarnessBaselineRun {
+    HarnessBaselineRun {
+        name: name.to_string(),
+        command: format!("npm run {name}"),
+        exit_ok,
+        fingerprint: fingerprint.to_string(),
+        output_ref: Some(format!("/artifacts/{name}.log")),
+        measured_at: 1_700,
+        producer: BaselineProducer::Node,
+    }
+}
+
+#[test]
+fn feature_harness_baseline_round_trips_unchanged() {
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_baseline", "p_baseline");
+    let record = HarnessBaseline {
+        base_sha: "0f1e2d3c".to_string(),
+        harnesses: vec![
+            baseline_run("lint", true, ""),
+            baseline_run("unit", false, "assertion failed: <WT>/src/lib.rs:12"),
+        ],
+    };
+
+    FeatureRepository::merge_harness_baseline(&adapter, &fid, &record).unwrap();
+
+    let stored = adapter
+        .get(&fid)
+        .unwrap()
+        .unwrap()
+        .harness_baseline
+        .unwrap();
+    assert_eq!(
+        stored, record,
+        "the record must survive the column verbatim"
+    );
+    // ...and through the list read the project home renders, which has its
+    // own column list and its own row mapping.
+    let active = adapter
+        .get_active(&ProjectId::from("p_baseline".to_string()))
+        .unwrap();
+    assert_eq!(active[0].harness_baseline.as_ref(), Some(&record));
+}
+
+#[test]
+fn feature_harness_baseline_survives_the_insert_path() {
+    // `add` is the path a detached run's whole-`Feature` mirror takes on the
+    // first poll; `merge_harness_baseline` never runs on the desktop.
+    let adapter = setup();
+    let pid = ProjectId::from("p_insert".to_string());
+    let fid = make_feature(&adapter, "f_insert_seed", "p_insert");
+    let mut feature = adapter.get(&fid).unwrap().unwrap();
+    feature.id = FeatureId::from("f_inserted".to_string());
+    feature.harness_baseline = Some(HarnessBaseline {
+        base_sha: "cafebabe".to_string(),
+        harnesses: vec![baseline_run("unit", false, "fp")],
+    });
+    FeatureRepository::add(&adapter, feature.clone()).unwrap();
+
+    let stored = adapter
+        .get(&FeatureId::from("f_inserted".to_string()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.harness_baseline, feature.harness_baseline);
+    let _ = pid;
+}
+
+#[test]
+fn feature_harness_baseline_replicates_through_the_update_patch() {
+    // The `hydrate_shadow_feature` path. Missing this site fails only on
+    // *update*, silently, and only on a detached run — the desktop would show
+    // a subtraction it could not explain.
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_replicated", "p_replicated");
+    let record = HarnessBaseline {
+        base_sha: "9988ff".to_string(),
+        harnesses: vec![baseline_run("integration", false, "fp-int")],
+    };
+
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            status: Some("running".to_string()),
+            harness_baseline: Some(Some(record.clone())),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        adapter.get(&fid).unwrap().unwrap().harness_baseline,
+        Some(record)
+    );
+
+    // A patch that says nothing about the baseline leaves it alone...
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            status: Some("done".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(adapter
+        .get(&fid)
+        .unwrap()
+        .unwrap()
+        .harness_baseline
+        .is_some());
+
+    // ...and `Some(None)` clears it back to "no baseline measured".
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            harness_baseline: Some(None),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(adapter
+        .get(&fid)
+        .unwrap()
+        .unwrap()
+        .harness_baseline
+        .is_none());
+}
+
+#[test]
+fn a_partial_measurement_merges_into_the_stored_record() {
+    // HB2b's lazy fallback measures the one gate that went red. The other
+    // gates' measurements must survive the write.
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_partial", "p_partial");
+    FeatureRepository::merge_harness_baseline(
+        &adapter,
+        &fid,
+        &HarnessBaseline {
+            base_sha: "abc123".to_string(),
+            harnesses: vec![
+                baseline_run("lint", true, ""),
+                baseline_run("unit", true, ""),
+            ],
+        },
+    )
+    .unwrap();
+
+    let mut remeasured = baseline_run("unit", false, "fp-unit");
+    remeasured.producer = BaselineProducer::Fallback;
+    FeatureRepository::merge_harness_baseline(
+        &adapter,
+        &fid,
+        &HarnessBaseline {
+            base_sha: "abc123".to_string(),
+            harnesses: vec![remeasured],
+        },
+    )
+    .unwrap();
+
+    let stored = adapter
+        .get(&fid)
+        .unwrap()
+        .unwrap()
+        .harness_baseline
+        .unwrap();
+    assert_eq!(stored.harnesses.len(), 2, "the untouched gate must survive");
+    assert!(stored.harness("lint").unwrap().exit_ok);
+    let unit = stored.harness("unit").unwrap();
+    assert!(!unit.exit_ok);
+    assert_eq!(unit.producer, BaselineProducer::Fallback);
+}
+
+#[test]
+fn a_feature_with_no_baseline_reads_as_absent_not_as_green() {
+    // The inversion HB2c's decision table cannot survive: "nobody measured"
+    // must never arrive looking like "everything passed".
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_none", "p_none");
+    let feature = adapter.get(&fid).unwrap().unwrap();
+    assert!(
+        feature.harness_baseline.is_none(),
+        "an unmeasured feature has no baseline at all"
+    );
+    let active = adapter
+        .get_active(&ProjectId::from("p_none".to_string()))
+        .unwrap();
+    assert!(active[0].harness_baseline.is_none());
+}
+
+#[test]
+fn a_corrupt_baseline_column_reads_as_absent() {
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_corrupt", "p_corrupt");
+    {
+        let conn = adapter.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE features SET harness_baseline_json = ?2 WHERE id = ?1",
+            rusqlite::params![fid.0, "{ this is not json"],
+        )
+        .unwrap();
+    }
+    assert!(adapter
+        .get(&fid)
+        .unwrap()
+        .unwrap()
+        .harness_baseline
+        .is_none());
+}
+
+#[test]
+fn the_baseline_column_is_restored_on_a_database_that_predates_v37() {
+    // A database whose `refinery` history already records V37 will never
+    // re-run the `.sql`, so a row created before the column existed is only
+    // rescued by the defensive `add_column_if_missing`. Dropping the column
+    // from a migrated database reproduces exactly that state.
+    let mut conn = Connection::open_in_memory().unwrap();
+    crate::adapters::database::migration::run(&mut conn).unwrap();
+    conn.execute("ALTER TABLE features DROP COLUMN harness_baseline_json", [])
+        .unwrap();
+
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let fid = make_feature(&adapter, "f_pre_v37", "p_pre_v37");
+    let record = HarnessBaseline {
+        base_sha: "77aa".to_string(),
+        harnesses: vec![baseline_run("unit", false, "fp")],
+    };
+    FeatureRepository::merge_harness_baseline(&adapter, &fid, &record).unwrap();
+    assert_eq!(
+        adapter.get(&fid).unwrap().unwrap().harness_baseline,
+        Some(record)
+    );
 }

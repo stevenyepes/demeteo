@@ -18,6 +18,42 @@ pub(super) const NOTIFY_ON: &[&str] = &[
     "needs-credentials",
 ];
 
+/// Which of a runner-side `Feature`'s columns the desktop's shadow row
+/// mirrors on every poll.
+///
+/// Pure and separate from the `async fn` that does the RPC because *what
+/// replicates* is a decision, and the way it goes wrong is invisible: `add`
+/// serde-round-trips the whole `Feature`, so a field missing from this patch
+/// still lands on the first poll and is simply never updated afterwards. The
+/// symptom is therefore a stale value on a detached run only — no error, no
+/// log line, and nothing a fixture that never hits the update branch would
+/// catch. Being a free function over one value, it is assertable directly.
+///
+/// `effort` and `commit_artifacts` are deliberately absent: both are launch
+/// inputs the desktop already holds, and mirroring them back would let the
+/// runner's copy overwrite the local pin.
+fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
+    FeaturePatch {
+        effort: None,
+        status: Some(feature.status.clone()),
+        total_cost: Some(Some(feature.total_cost)),
+        duration: Some(Some(feature.duration.clone())),
+        tokens: Some(Some(feature.tokens)),
+        agent_kind: Some(feature.agent_kind.clone()),
+        model: Some(feature.model.clone()),
+        mr_url: Some(feature.mr_url.clone()),
+        mr_state: Some(feature.mr_state.clone()),
+        pr_title: Some(feature.pr_title.clone()),
+        pr_body: Some(feature.pr_body.clone()),
+        // The runner measured the baseline and the runner's own validate read
+        // it, so the desktop needs it only to *show* the subtraction (V37,
+        // decision 44) — but it is written mid-run and may be re-measured, so
+        // the first poll's whole-`Feature` insert is not enough on its own.
+        harness_baseline: Some(feature.harness_baseline.clone()),
+        commit_artifacts: None,
+    }
+}
+
 pub(super) async fn hydrate_shadow_feature(
     ctx: &AppContext,
     machine_id: &str,
@@ -54,23 +90,8 @@ pub(super) async fn hydrate_shadow_feature(
     if ctx.features.get(&feature_id)?.is_none() {
         ctx.features.add(feature.clone())?;
     } else {
-        ctx.features.update(
-            &feature_id,
-            &FeaturePatch {
-                effort: None,
-                status: Some(feature.status.clone()),
-                total_cost: Some(Some(feature.total_cost)),
-                duration: Some(Some(feature.duration.clone())),
-                tokens: Some(Some(feature.tokens)),
-                agent_kind: Some(feature.agent_kind.clone()),
-                model: Some(feature.model.clone()),
-                mr_url: Some(feature.mr_url.clone()),
-                mr_state: Some(feature.mr_state.clone()),
-                pr_title: Some(feature.pr_title.clone()),
-                pr_body: Some(feature.pr_body.clone()),
-                commit_artifacts: None,
-            },
-        )?;
+        ctx.features
+            .update(&feature_id, &shadow_feature_patch(&feature))?;
     }
 
     let store = FsArtifactStore::new(ctx.app_data_dir.clone());

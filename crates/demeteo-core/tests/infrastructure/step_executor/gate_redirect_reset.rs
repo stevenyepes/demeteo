@@ -77,6 +77,7 @@ fn seed_parent_rows(
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         })
         .unwrap();
     FeatureId::from("f-1".to_string())

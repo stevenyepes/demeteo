@@ -5,6 +5,7 @@ pub mod artifact;
 pub mod attachment;
 pub mod bootstrap;
 pub mod expr;
+pub mod harness_baseline;
 pub mod ids;
 pub mod intercept;
 pub mod memory;

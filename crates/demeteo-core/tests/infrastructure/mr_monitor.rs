@@ -75,6 +75,7 @@ fn make_open_mr_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> 
         max_budget_usd: None,
         step_overrides: Vec::new(),
         attachments: Vec::new(),
+        harness_baseline: None,
     };
     FeatureRepository::add(adapter, feature.clone()).unwrap();
     feature

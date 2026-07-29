@@ -26,8 +26,8 @@
 **Sizing rule:** ≤ ~2,000 lines of required reading, one coherent diff, no task
 depends on holding two subsystems in context at once.
 
-**Migrations:** V35 `sequence_checkpoint_anchor` and V36
-`sequence_checkpoint_produced` are built — the next free number is **V37**.
+**Migrations:** V36 `sequence_checkpoint_produced` and V37 `harness_baseline`
+are built — the next free number is **V38**.
 
 **Dependency order:**
 
@@ -38,9 +38,10 @@ HB5 ─────────┘
   └─▶ HB2a ─▶ HB2b ─▶ HB2c ─▶ HB7
 ```
 
-`HB3` is independent of everything. **HB1, HB4 and HB5 are done**, which leaves
-HB6 unblocked (it authors the project tier of HB5's resolution chain, and the
-field it writes now exists) and HB2a next on the baseline arm.
+`HB3` is independent of everything. **HB1, HB4, HB5 and HB2a are done**, which
+leaves HB6 unblocked (it authors the project tier of HB5's resolution chain, and
+the field it writes now exists) and HB2b next on the baseline arm — the record
+and its storage exist, so what remains there is measuring into them.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -436,7 +437,7 @@ deterministic rather than agentic:
   envelope accepts any object and silently discards a legacy map's entries —
   which is exactly what it did until the conformance leg caught it.
 
-### HB2a — The baseline record: shape and storage
+### HB2a — The baseline record: shape and storage — **[Done]**
 
 - **Goal:** one durable, per-feature, per-harness record of what the harness said
   *before* the feature. Everything downstream is a read of this.
@@ -501,6 +502,40 @@ deterministic rather than agentic:
 - **Done when:** a baseline written at the head of a run is read back by the
   validate step of the same run, **in both a local run and a detached runner
   run.** The detached leg is what decides the storage, so it is not optional.
+
+- **Done:** `domain/harness_baseline.rs` — `HarnessBaseline { base_sha,
+  harnesses }` over `HarnessBaselineRun { name, command, exit_ok, fingerprint,
+  output_ref, measured_at, producer }`, persisted as `features
+  .harness_baseline_json` (V37, plus the defensive `add_column_if_missing`) and
+  carried on `Feature` so it replicates along `pr_title`'s path. Merge and
+  lookup are pure functions in `domain/`, reachable from a test with no port
+  doubles; the adapter's `merge_harness_baseline` only supplies them the stored
+  value under the connection lock.
+
+  **Two shape decisions worth not re-deriving.** *Provenance is per harness,
+  not per record*: a partial re-measurement merges, so one record legitimately
+  holds gates measured at different times by different producers, and a
+  record-level `producer` would be false about half its own entries. *There is
+  no record-level "was it green" accessor* — every question goes through
+  `harness(name) -> Option<&_>`, so a record holding no measurement answers
+  nothing rather than answering "fine", and every decode failure (NULL, empty,
+  corrupt, a producer a newer build named) degrades to `None`. Absent must
+  never read as green or HB2c's table inverts.
+
+  24 tests, every one watched fail: clobbering instead of upserting, blending
+  two base shas, fabricating an empty record out of a NULL or corrupt column,
+  a name-blind lookup, `covers` accepting any sha, dropping `base_sha` or the
+  artifact reference from the payload, an empty record fabricating a green
+  gate, and each of the four persistence sites in turn — insert, update patch,
+  the read-modify-write accessor, and the defensive column add. The
+  `hydrate_shadow_feature` patch is now built by a pure `shadow_feature_patch`,
+  which is what makes the replication site — silent, update-only, detached-run
+  only — assertable at all.
+
+  **Not proven here, by scope:** the end-to-end "written at the head, read by
+  validate" leg needs a producer (HB2b) and a consumer (HB2c). What is proven
+  is that the record survives insert, update, and re-read byte-identically, and
+  that the runner→desktop patch carries it.
 
 ### HB2b — Measure the baseline: the node, plus a lazy fallback
 
@@ -797,7 +832,7 @@ deterministic rather than agentic:
 | HB1 | Bootstrap preflight phase | medium | ✅ |
 | HB4 | Probe every configured command | small | ✅ |
 | HB5 | Named harnesses become an ordered list | medium | ✅ |
-| HB2a | Baseline record: shape & storage | medium | ☐ |
+| HB2a | Baseline record: shape & storage | medium | ✅ |
 | HB2b | Measure the baseline: node + lazy fallback | large | ☐ |
 | HB2c | Subtraction & classification | medium-large | ☐ |
 | HB6 | Probe at configuration time | small-medium | ☐ |

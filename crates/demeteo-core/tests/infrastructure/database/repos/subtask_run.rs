@@ -55,6 +55,7 @@ fn seed() -> (SqliteAdapter, FeatureId, StepExecutionId) {
             max_budget_usd: None,
             step_overrides: Vec::new(),
             attachments: Vec::new(),
+            harness_baseline: None,
         },
     )
     .unwrap();

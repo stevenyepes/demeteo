@@ -1,8 +1,10 @@
 use super::{
-    backfill_local_path, declared_remote_paths, mime_for_path, shadow_step_artifacts_stale,
+    backfill_local_path, declared_remote_paths, mime_for_path, shadow_feature_patch,
+    shadow_step_artifacts_stale,
 };
-use crate::domain::ids::{FeatureId, StepExecutionId, StepId};
-use crate::domain::models::feature::StepExecution;
+use crate::domain::harness_baseline::{BaselineProducer, HarnessBaseline, HarnessBaselineRun};
+use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId};
+use crate::domain::models::feature::{Feature, StepExecution};
 
 fn make_step(status: &str, tokens: i64, wall_clock_secs: u64, cost_usd: f64) -> StepExecution {
     StepExecution {
@@ -96,4 +98,66 @@ fn mime_inferred_from_extension() {
     assert_eq!(mime_for_path("/w/change.diff"), "text/x-diff");
     assert_eq!(mime_for_path("/w/manifest.json"), "application/json");
     assert_eq!(mime_for_path("/w/LICENSE"), "text/plain");
+}
+
+// ── Shadow-feature replication (V37, decision 44) ────────────────────────────
+
+fn runner_feature(harness_baseline: Option<HarnessBaseline>) -> Feature {
+    Feature {
+        id: FeatureId::from("f_shadow".to_string()),
+        project_id: ProjectId::from("p_shadow".to_string()),
+        workflow_id: None,
+        workflow_version_id: None,
+        title: "remote run".to_string(),
+        description: String::new(),
+        status: "running".to_string(),
+        total_cost: 1.5,
+        duration: "3m".to_string(),
+        tokens: 42,
+        created_at: 1_000,
+        agent_kind: None,
+        model: None,
+        effort: None,
+        mr_url: None,
+        mr_state: Some("none".to_string()),
+        pr_title: None,
+        pr_body: None,
+        commit_artifacts: None,
+        loop_iterations: None,
+        max_budget_usd: None,
+        step_overrides: Vec::new(),
+        attachments: Vec::new(),
+        harness_baseline,
+    }
+}
+
+#[test]
+fn the_shadow_patch_mirrors_the_measured_baseline() {
+    // The update branch is the one that matters: the first poll inserts the
+    // whole `Feature`, so a baseline missing from this patch is stale only
+    // *after* the run measures it — silently, and only on a detached run.
+    let baseline = HarnessBaseline {
+        base_sha: "abc123".to_string(),
+        harnesses: vec![HarnessBaselineRun {
+            name: "unit".to_string(),
+            command: "cargo test".to_string(),
+            exit_ok: false,
+            fingerprint: "fp".to_string(),
+            output_ref: Some("/artifacts/unit.log".to_string()),
+            measured_at: 1_700,
+            producer: BaselineProducer::Node,
+        }],
+    };
+    let patch = shadow_feature_patch(&runner_feature(Some(baseline.clone())));
+    assert_eq!(patch.harness_baseline, Some(Some(baseline)));
+}
+
+#[test]
+fn the_shadow_patch_mirrors_an_unmeasured_baseline_as_absent() {
+    let patch = shadow_feature_patch(&runner_feature(None));
+    assert_eq!(
+        patch.harness_baseline,
+        Some(None),
+        "an unmeasured run must clear the shadow, not leave a stale record"
+    );
 }
