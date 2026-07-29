@@ -386,6 +386,157 @@ impl GitOpsHelper {
             .filter(|s| !s.is_empty())
     }
 
+    /// Provision a linked worktree **detached at `sha`** — no branch, no
+    /// branch creation, nothing that could later be merged anywhere.
+    ///
+    /// [`provision_subtask_worktree`](Self::provision_subtask_worktree) cannot
+    /// do this: it takes a *branch*, and creates a subtask branch off it. The
+    /// baseline fallback (HB2b) needs the opposite — a checkout of a commit
+    /// that predates the feature entirely, so the harness it runs there is
+    /// measuring the base rather than the work under test. `git worktree add
+    /// --detach <path> <sha>` is that primitive.
+    ///
+    /// Detached is not an implementation detail, it is the safety property: a
+    /// worktree with no branch cannot be committed onto and cannot be merged
+    /// back by anything, so a measurement can never contaminate the feature.
+    ///
+    /// `cache_dir`, when given, seeds the well-known dependency caches exactly
+    /// as the subtask path does — a fresh checkout has no `node_modules` and no
+    /// `target/`, and the caller is about to run `prepare_command` in it.
+    ///
+    /// Leftover-state handling mirrors `provision_subtask_worktree` step for
+    /// step (registered worktree → write-restore → orphan dir → prune → add),
+    /// because the failure modes are the same ones and an interrupted run
+    /// leaves the same debris.
+    pub async fn provision_detached_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        sha: &str,
+        worktree_id: &str,
+        cache_dir: Option<&str>,
+    ) -> Result<String, String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let wt_dir = worktree_dir(repo_dir, worktree_id);
+
+        self.clear_worktree_path(machine_str, repo_dir, &wt_dir)
+            .await
+            .map_err(|e| format!("provision_detached_worktree: {e}"))?;
+
+        let cmd = format!(
+            "git -C {} worktree add --detach --force {} {}",
+            paths::shell_escape_posix(repo_dir),
+            paths::shell_escape_posix(&wt_dir),
+            paths::shell_escape_posix(sha),
+        );
+        self.exec
+            .run_command(machine_str, &cmd)
+            .await
+            .map_err(|e| {
+                format!(
+                    "provision_detached_worktree: git worktree add --detach at {sha} failed: {e}"
+                )
+            })?;
+
+        if let Some(cache) = cache_dir {
+            let _ = self
+                .exec
+                .run_command(
+                    machine_str,
+                    &link_dependency_caches_cmd(repo_dir, &wt_dir, cache),
+                )
+                .await;
+        }
+
+        Ok(wt_dir)
+    }
+
+    /// Tear down a worktree provisioned by
+    /// [`provision_detached_worktree`](Self::provision_detached_worktree).
+    ///
+    /// Deliberately **not** `cleanup_subtask_worktree`: that one ends by
+    /// deleting `<feature>_subtask_<id>`, and a detached worktree has no branch
+    /// to delete. Asking git to `branch -D` a ref that never existed would be a
+    /// guaranteed error on a path whose whole job is to leave nothing behind.
+    ///
+    /// Best-effort on every command, as the subtask cleanup is — the caller
+    /// runs this on the success *and* failure paths and must not have its own
+    /// outcome changed by a teardown hiccup.
+    pub async fn cleanup_detached_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        worktree_id: &str,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let wt_dir = worktree_dir(repo_dir, worktree_id);
+        let _ = self
+            .clear_worktree_path(machine_str, repo_dir, &wt_dir)
+            .await;
+        Ok(())
+    }
+
+    /// Get a worktree path back to "nothing is here": deregister it with git,
+    /// restore write permissions the artifact-scope fence may have stripped,
+    /// remove the directory, and prune stale metadata.
+    ///
+    /// Only the `rm -rf` propagates its error — the rest are best-effort for
+    /// the reasons `provision_subtask_worktree` documents at length (each
+    /// handles a *leftover* state that usually isn't there). A failed `rm`
+    /// is different: it means the path is still occupied, so whatever the
+    /// caller was about to create there cannot be created.
+    async fn clear_worktree_path(
+        &self,
+        machine_str: &str,
+        repo_dir: &str,
+        wt_dir: &str,
+    ) -> Result<(), String> {
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} worktree remove --force {}",
+                    paths::shell_escape_posix(repo_dir),
+                    paths::shell_escape_posix(wt_dir)
+                ),
+            )
+            .await;
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "chmod -R u+w {} 2>/dev/null || true",
+                    paths::shell_escape_posix(wt_dir)
+                ),
+            )
+            .await;
+        self.exec
+            .run_command(
+                machine_str,
+                &format!("rm -rf {}", paths::shell_escape_posix(wt_dir)),
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "rm -rf {wt_dir} failed: {e}. The directory may be locked or owned by \
+                     another user; manual cleanup is required."
+                )
+            })?;
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} worktree prune",
+                    paths::shell_escape_posix(repo_dir)
+                ),
+            )
+            .await;
+        Ok(())
+    }
+
     /// Clean up a linked worktree for a subtask, including its branch.
     ///
     /// IMPORTANT: the artifact-scope fence (`apply_artifact_scope`) chmods

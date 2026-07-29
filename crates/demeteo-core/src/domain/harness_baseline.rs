@@ -192,3 +192,56 @@ impl HarnessBaseline {
         value.and_then(|v| serde_json::to_string(v).ok())
     }
 }
+
+/// Whether validate's failure path should measure a baseline **itself** — the
+/// lazy fallback of HB2b, the producer that makes the subtraction
+/// unconditional rather than a privilege of the workflows that happen to carry
+/// a `baseline-harness` node.
+///
+/// Pure, and deliberately so: "should we spend minutes of wall-clock measuring
+/// a baseline right now" is a policy decision, and AGENTS.md §3 puts those here
+/// rather than inside the `async fn` that would also do the measuring. Every
+/// input is a value the caller already holds.
+///
+/// The four conditions, and what each is protecting:
+///
+/// * **`harness_failed`** — the fallback fires *only* on the failure path. On a
+///   green harness there is nothing to subtract from, and measuring anyway
+///   would add minutes to every successful run to answer a question nobody
+///   asked. This is an argument rather than an implicit precondition precisely
+///   so a test can hold everything else fixed and prove the green path measures
+///   nothing.
+/// * **a non-empty `base_sha`** — a measurement that cannot say *which commit*
+///   it describes is not evidence (see [`HarnessBaseline::base_sha`]). If the
+///   merge-base would not resolve, the honest answer is no baseline, not a
+///   baseline against an unknown commit.
+/// * **a non-empty `gates`** — nothing gates this step, so nothing failed that
+///   a baseline could excuse.
+/// * **no covering measurement already** — a record that
+///   [`covers`](HarnessBaseline::covers) this base *and* already holds every
+///   gate in `gates` answers the question. Re-measuring would burn the same
+///   minutes on the second validate attempt of the same run, which is exactly
+///   what caching the fallback's own write exists to prevent. A record covering
+///   a *different* sha does not count: it describes other code.
+///
+/// Note what is **not** here: whether the baseline was green or red. A stored
+/// measurement is an answer either way, and re-measuring a gate that was
+/// already measured at this commit cannot produce new information.
+pub fn fallback_baseline_needed(
+    harness_failed: bool,
+    base_sha: &str,
+    existing: Option<&HarnessBaseline>,
+    gates: &[String],
+) -> bool {
+    if !harness_failed || base_sha.trim().is_empty() || gates.is_empty() {
+        return false;
+    }
+    let Some(existing) = existing.filter(|b| b.covers(base_sha)) else {
+        return true;
+    };
+    gates.iter().any(|g| existing.harness(g).is_none())
+}
+
+#[cfg(test)]
+#[path = "../../tests/domain/harness_baseline.rs"]
+mod tests;

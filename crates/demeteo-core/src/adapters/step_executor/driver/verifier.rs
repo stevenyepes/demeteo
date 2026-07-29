@@ -216,6 +216,37 @@ impl ExecutionDriver {
         // (reproduces-unchanged) failure the triage agent may reclassify this
         // as an environment problem rather than a code regression (C6).
         if !failed.is_empty() {
+            // HB2b's lazy fallback, on the *failure* path only. A gate that
+            // just went red is the one case where knowing what it did at the
+            // base is worth minutes of wall-clock — the alternative is a rework
+            // cycle at $14.63 and 11M tokens. On a green harness this is not
+            // reached at all, which is deliberate: there is nothing to subtract
+            // from, and every successful run would otherwise pay for it.
+            //
+            // It measures and records; it decides nothing (HB2c owns the
+            // subtraction), and it returns `()` so it cannot influence the
+            // verdict computed below however badly it goes.
+            //
+            // Raced against cancellation for the same reason every other
+            // command here is: dropping the future is what stops the work, and
+            // a Stop must not wait out a cold `npm install`.
+            let mut cancel_watch = self.cancel_watch.clone();
+            let cancelled = async move {
+                if cancel_watch.wait_for(|c| *c).await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            };
+            tokio::select! {
+                biased;
+                _ = cancelled => {}
+                _ = self.measure_fallback_baseline(
+                    &step_exec.step_id.0,
+                    machine_str,
+                    &resolved,
+                    &failed,
+                ) => {}
+            }
+
             return Err(self
                 .classify_harness_failures(step_exec, machine_str, wt_path, &failed)
                 .await);

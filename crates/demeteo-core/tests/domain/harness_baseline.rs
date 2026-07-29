@@ -220,3 +220,109 @@ fn a_different_base_sha_replaces_rather_than_blends() {
         "a measurement of other code must not survive the rebase"
     );
 }
+
+// ── fallback_baseline_needed (HB2b) ──────────────────────────────────────────
+//
+// The lazy fallback is the expensive producer: `prepare_command` plus a suite
+// against a cold checkout, i.e. minutes. Every test here is about *not* paying
+// that unless the answer it buys is worth it.
+
+fn gates(names: &[&str]) -> Vec<String> {
+    names.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn a_green_harness_never_measures_a_fallback_baseline() {
+    // The load-bearing one. Nothing failed, so there is nothing to subtract
+    // from — and firing here would add minutes to every *successful* run
+    // forever, to answer a question nobody asked.
+    assert!(!fallback_baseline_needed(
+        false,
+        "abc123",
+        None,
+        &gates(&["unit"])
+    ));
+}
+
+#[test]
+fn a_red_harness_with_no_record_measures() {
+    assert!(fallback_baseline_needed(
+        true,
+        "abc123",
+        None,
+        &gates(&["unit"])
+    ));
+}
+
+#[test]
+fn a_covering_record_holding_every_failing_gate_does_not_re_measure() {
+    // The cache. A second validate attempt in the same run must not pay for
+    // the same measurement twice — which is the whole reason the fallback
+    // persists what it measured.
+    let stored = baseline("abc123", vec![run("unit", false, "fp")]);
+    assert!(!fallback_baseline_needed(
+        true,
+        "abc123",
+        Some(&stored),
+        &gates(&["unit"])
+    ));
+}
+
+#[test]
+fn a_green_record_also_counts_as_measured() {
+    // "Was it green?" is not one of the inputs: a stored measurement answers
+    // the question either way, and re-running a gate at a commit it was
+    // already measured at cannot produce new information.
+    let stored = baseline("abc123", vec![run("unit", true, "")]);
+    assert!(!fallback_baseline_needed(
+        true,
+        "abc123",
+        Some(&stored),
+        &gates(&["unit"])
+    ));
+}
+
+#[test]
+fn a_record_for_a_different_commit_does_not_count() {
+    // It describes other code. Trusting it is exactly the mistake `base_sha`
+    // exists to make detectable.
+    let stored = baseline("def456", vec![run("unit", false, "fp")]);
+    assert!(fallback_baseline_needed(
+        true,
+        "abc123",
+        Some(&stored),
+        &gates(&["unit"])
+    ));
+}
+
+#[test]
+fn a_record_missing_one_of_the_failing_gates_measures() {
+    // Partial coverage is not coverage: `lint` has no baseline, so the gate
+    // that just went red would get no subtraction.
+    let stored = baseline("abc123", vec![run("unit", false, "fp")]);
+    assert!(fallback_baseline_needed(
+        true,
+        "abc123",
+        Some(&stored),
+        &gates(&["unit", "lint"])
+    ));
+}
+
+#[test]
+fn an_unresolvable_base_never_measures() {
+    // A measurement that cannot name its commit is not evidence. No baseline
+    // is the honest answer; a baseline against an unknown commit is not.
+    for sha in ["", "   "] {
+        assert!(!fallback_baseline_needed(
+            true,
+            sha,
+            None,
+            &gates(&["unit"])
+        ));
+    }
+}
+
+#[test]
+fn no_gates_never_measures() {
+    assert!(!fallback_baseline_needed(true, "abc123", None, &[]));
+}

@@ -1,16 +1,25 @@
 //! Baseline-measurement driver-integration fixtures (HB2b / P4.2a,
 //! `docs/HARNESS_BASELINE.md`).
 //!
-//! *What a gate said* is a pure decision, unit-tested against a scripted port
-//! next to [`measure_gates`](crate::adapters::step_executor::baseline::measure_gates).
-//! What that cannot cover is the wiring, and the wiring is where a baseline
-//! goes quietly wrong:
+//! The two decisions this feature turns on are pure and unit-tested where they
+//! live: *whether* to measure a fallback is
+//! [`fallback_baseline_needed`](crate::domain::harness_baseline::fallback_baseline_needed)
+//! in `domain/`, and *what a gate said* is
+//! [`measure_gates`](crate::adapters::step_executor::baseline::measure_gates)
+//! against a scripted port. What neither can cover is the wiring, and the
+//! wiring is where a baseline goes quietly wrong:
 //!
-//! 1. the node records the sha it **actually measured** — the field most easily
-//!    assumed and most expensive to have assumed;
-//! 2. a gate that is already red at the base is **recorded, not judged**, so a
-//!    run against an already-red repository is not blocked at its first node;
-//! 3. the worktree is torn down on the green path *and* the red one.
+//! 1. the in-graph node records the sha it **actually measured** — the field
+//!    most easily assumed and most expensive to have assumed;
+//! 2. the fallback fires on validate's **failure** path and *only* there, so a
+//!    green run pays nothing;
+//! 3. it does **not** re-measure when a record already covers the base, which
+//!    is the entire reason it persists what it measured;
+//! 4. a fallback that cannot produce a measurement leaves the verdict exactly
+//!    as it is today — a baseline mechanism may withhold an improvement, never
+//!    invent a failure;
+//! 5. the detached worktree is torn down on the success *and* the failure
+//!    path.
 //!
 //! Every leg runs a **real shell and real git** through
 //! `ExecutionMode::LocalOnly` (only the *agent* is stubbed): the subject is
@@ -63,6 +72,26 @@ fn baseline_node() -> serde_json::Value {
         "capability": "read_only",
         "measure_baseline": true,
         "idempotent": true,
+        "max_iterations": 1
+    })
+}
+
+/// One agent step gated on the project's harness — the shape every starter's
+/// validate step has. No `on_failure`: a red harness should end the run on the
+/// first attempt, keeping each fixture to one dispatch.
+fn validate_node() -> serde_json::Value {
+    serde_json::json!({
+        "id": "s-validate",
+        "kind": "agent",
+        "title": "Validate",
+        "agent_kind": "stub",
+        "prompt_template": "Validate the change. {{feature_description}}\n",
+        "capability": "artifacts",
+        "allow_shell": true,
+        "verifier": {
+            "instructions": "Return the harness verdict.",
+            "verdict_key": "verdict"
+        },
         "max_iterations": 1
     })
 }
@@ -291,6 +320,10 @@ impl LegOutcome {
             .map(|(_, row)| row.clone())
             .unwrap_or_else(|| panic!("no step row for '{id}' in {:?}", self.steps))
     }
+
+    fn validate_error(&self) -> String {
+        self.step("s-validate").error.unwrap_or_default()
+    }
 }
 
 /// Sibling directories named `<repo>_wt_*` — every linked worktree the run
@@ -397,6 +430,149 @@ async fn a_red_gate_at_the_base_is_recorded_and_the_run_continues() {
     assert!(
         leg.leftover_worktrees.is_empty(),
         "the worktree must be torn down on the red path too: {:?}",
+        leg.leftover_worktrees
+    );
+}
+
+// ── Producer 2: the lazy fallback ────────────────────────────────────────────
+
+/// The leg HB2b exists for: a workflow with **no baseline node** — a custom
+/// workflow, or any of the five starters that did not get one — still ends up
+/// with a record, because validate's failure path measured one itself.
+#[tokio::test]
+async fn a_red_validate_with_no_baseline_node_measures_a_fallback() {
+    let leg = run_leg(
+        "fallback",
+        vec![validate_node()],
+        Some(failing("HARNESS-RAN")),
+        None,
+    )
+    .await;
+
+    let baseline = leg
+        .baseline
+        .clone()
+        .expect("the fallback must write a record when validate goes red");
+    assert_eq!(
+        baseline.base_sha, leg.base_sha,
+        "the fallback measures the merge-base, not the feature branch tip — \
+         measuring the tip would compare the work against itself"
+    );
+    let gate = baseline
+        .harness("default")
+        .expect("the red gate is measured");
+    assert_eq!(gate.producer, BaselineProducer::Fallback);
+    assert!(
+        !gate.exit_ok,
+        "this repo's harness fails at the base too, which is what makes the \
+         failure pre-existing"
+    );
+    assert!(
+        leg.validate_error().contains("HARNESS-RAN"),
+        "the verdict must still be the harness's: {}",
+        leg.validate_error()
+    );
+    assert!(
+        leg.leftover_worktrees.is_empty(),
+        "the detached worktree must be torn down: {:?}",
+        leg.leftover_worktrees
+    );
+}
+
+/// The fallback must **never** fire on green. There is nothing to subtract
+/// from, and measuring anyway would add minutes to every successful run,
+/// forever, to answer a question nobody asked.
+#[tokio::test]
+async fn a_green_validate_measures_nothing() {
+    let leg = run_leg(
+        "green",
+        vec![validate_node()],
+        Some(passing("HARNESS-RAN")),
+        None,
+    )
+    .await;
+
+    assert!(
+        leg.baseline.is_none(),
+        "a green run must not pay for a baseline: {:?}",
+        leg.baseline
+    );
+    assert!(leg.leftover_worktrees.is_empty());
+}
+
+/// With the node ahead of it, validate's failure path must find the record
+/// already covering the base and **not re-measure**. Provenance is what makes
+/// this observable: the gate stays stamped `node`, so a fallback that ran
+/// anyway would show up as `fallback`.
+///
+/// This is also the cross-producer agreement leg. The node measures its
+/// worktree's HEAD and the fallback measures `git merge-base`; if those two
+/// ever disagreed about what "the base" is, the record would not cover and the
+/// fallback would re-measure on every single validate failure.
+#[tokio::test]
+async fn a_covering_record_is_not_re_measured_by_the_fallback() {
+    let leg = run_leg(
+        "cached",
+        vec![baseline_node(), validate_node()],
+        Some(failing("HARNESS-RAN")),
+        None,
+    )
+    .await;
+
+    let baseline = leg.baseline.clone().expect("the node wrote a record");
+    let gate = baseline
+        .harness("default")
+        .expect("the gate is in the record");
+    assert_eq!(
+        gate.producer,
+        BaselineProducer::Node,
+        "a covering record must satisfy validate's failure path outright — \
+         re-measuring would pay for the same answer twice per attempt"
+    );
+    assert_eq!(baseline.base_sha, leg.base_sha);
+    assert!(leg.leftover_worktrees.is_empty());
+}
+
+/// A fallback that cannot produce a measurement must leave everything exactly
+/// as it is today.
+///
+/// The condition is real rather than contrived: the project's
+/// `prepare_command` succeeds in validate's own worktree — which is checked out
+/// on a branch — and fails in the baseline worktree, which is **detached** by
+/// construction. That is the shape of every environment-sensitive prepare
+/// step, and it is the one case where measuring anyway would be actively
+/// harmful: a suite run without its install step fails for reasons that have
+/// nothing to do with the base commit, so recording those gates as red-at-base
+/// would excuse a real regression later.
+///
+/// So: no record at all, and the run reaches the same verdict, naming the same
+/// gate, that it reached before this feature existed. A broken baseline
+/// mechanism may withhold an improvement; it may never invent a failure.
+#[tokio::test]
+async fn a_fallback_that_cannot_measure_leaves_the_verdict_untouched() {
+    let leg = run_leg(
+        "unmeasurable",
+        vec![validate_node()],
+        Some(failing("HARNESS-RAN")),
+        // Succeeds on a branch, fails on a detached HEAD.
+        Some("git symbolic-ref -q HEAD >/dev/null".to_string()),
+    )
+    .await;
+
+    assert!(
+        leg.baseline.is_none(),
+        "a measurement taken without its prepare step is not evidence about \
+         the base commit, so none may be recorded: {:?}",
+        leg.baseline
+    );
+    assert!(
+        leg.validate_error().contains("HARNESS-RAN"),
+        "the verdict must be the harness's own, unchanged: {}",
+        leg.validate_error()
+    );
+    assert!(
+        leg.leftover_worktrees.is_empty(),
+        "the worktree must be torn down even when the measurement failed: {:?}",
         leg.leftover_worktrees
     );
 }
