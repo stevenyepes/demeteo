@@ -23,6 +23,7 @@ fn measured(name: &str, exit_ok: bool, fingerprint: &str) -> HarnessBaselineRun 
         fingerprint: fingerprint.to_string(),
         output_ref: Some(format!("/artifacts/{name}.log")),
         environment: None,
+        failing_tests: None,
         measured_at: 1_000,
         producer: BaselineProducer::Node,
     }
@@ -55,6 +56,20 @@ fn observed<'a>(name: &'a str, command: &'a str, fingerprint: &'a str) -> Observ
         name,
         command,
         fingerprint,
+        // The overwhelmingly common shape: rung 3 costs an agent call, so the
+        // caller pays for it only where it can act. Every test that is not about
+        // rung 3 must behave as it did before the field existed.
+        failing_tests: None,
+    }
+}
+
+/// Rung 3's unscoped answer — a differently-red gate nobody could name the
+/// delta of. Spelled once so the assertions below read as "new failures, no
+/// scope" rather than as an empty-vector literal whose meaning has to be
+/// re-derived.
+fn unscoped() -> GateDetermination {
+    GateDetermination::NewFailures {
+        new_failures: Vec::new(),
     }
 }
 
@@ -173,11 +188,11 @@ fn a_record_written_before_the_field_existed_decodes_as_pre_existing() {
     assert_eq!(
         determine(Some(&base), &observed("unit", "npm run unit", "fp-unit")),
         GateDetermination::PreExisting,
-        "an unclassified red gate keeps the behaviour it had before rung 3 existed"
+        "an unclassified red gate keeps the behaviour it had before the field existed"
     );
 }
 
-/// Rung 3 is read *after* rung 2 has matched, not instead of it. A gate that was
+/// The classification is read *after* rung 2 has matched, not instead of it. A gate that was
 /// unrunnable at the base and says something different now is not the failure
 /// that was classified, so the classification is not evidence about it — it
 /// stays a verdict, which is the safe direction (it withholds an escalation
@@ -187,7 +202,7 @@ fn an_environmental_baseline_does_not_terminate_a_differently_red_gate() {
     let base = record(BASE, vec![unrunnable("unit", "fp-old")]);
     let d = determine(Some(&base), &observed("unit", "npm run unit", "fp-new"));
 
-    assert_eq!(d, GateDetermination::NewFailures);
+    assert_eq!(d, unscoped());
     assert_eq!(d.outcome(), GateOutcome::Attributable);
 }
 
@@ -220,8 +235,181 @@ fn a_differently_red_gate_is_new_failures_atop_the_pre_existing_one() {
     let base = record(BASE, vec![measured("unit", false, "fp-old")]);
     let d = determine(Some(&base), &observed("unit", "npm run unit", "fp-new"));
 
-    assert_eq!(d, GateDetermination::NewFailures);
+    assert_eq!(d, unscoped());
     assert_eq!(d.outcome(), GateOutcome::Attributable);
+}
+
+// ── Rung 3: which of those failures are actually new ─────────────────────────
+
+/// A red measurement that also named the tests it reported failing.
+fn named(name: &str, fingerprint: &str, tests: &[&str]) -> HarnessBaselineRun {
+    HarnessBaselineRun {
+        failing_tests: Some(tests.iter().map(|t| t.to_string()).collect()),
+        ..measured(name, false, fingerprint)
+    }
+}
+
+fn seen<'a>(
+    name: &'a str,
+    command: &'a str,
+    fingerprint: &'a str,
+    tests: &'a [String],
+) -> ObservedFailure<'a> {
+    ObservedFailure {
+        failing_tests: Some(tests),
+        ..observed(name, command, fingerprint)
+    }
+}
+
+fn ids(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+/// **The leg rung 3 exists for.** Rungs 1–2 can say only "red at the base, red
+/// now, differently" — so the whole gate is the verdict and the rework cycle
+/// re-derives all of it. With both sides' identifiers in hand, the delta is one
+/// test, and the retry is scoped to it.
+///
+/// A refactor pipeline is the case that makes this load-bearing: "these 3 of 500
+/// tests regressed" and "the suite is red" are the same determination and
+/// completely different instructions.
+#[test]
+fn a_differently_red_gate_reports_only_the_failures_that_are_new() {
+    let base = record(
+        BASE,
+        vec![named("unit", "fp-old", &["auth::expired", "db::pool"])],
+    );
+    let now = ids(&["auth::expired", "db::pool", "cart::totals"]);
+    let d = determine(Some(&base), &seen("unit", "npm run unit", "fp-new", &now));
+
+    assert_eq!(
+        d,
+        GateDetermination::NewFailures {
+            new_failures: ids(&["cart::totals"]),
+        },
+        "only the failure absent from the base is this feature's to answer for"
+    );
+    assert_eq!(
+        d.outcome(),
+        GateOutcome::Attributable,
+        "and it is still a verdict — rung 3 scopes one, it never converts one"
+    );
+}
+
+/// The scope is not allowed to leak into any other row. Whatever the extractor
+/// says, a gate that was **green** at the base is a regression and a gate that is
+/// **identically** red is pre-existing — those were settled by rungs 1 and 2, and
+/// a reading cannot reopen them.
+#[test]
+fn a_reading_cannot_change_a_determination_the_cheaper_rungs_settled() {
+    let now = ids(&["cart::totals"]);
+
+    let green = record(BASE, vec![measured("unit", true, "")]);
+    assert_eq!(
+        determine(Some(&green), &seen("unit", "npm run unit", "fp-new", &now)),
+        GateDetermination::Regression,
+        "rung 1 settled this; naming tests cannot make a regression pre-existing"
+    );
+
+    let same = record(BASE, vec![named("unit", "fp-unit", &["auth::expired"])]);
+    assert_eq!(
+        determine(Some(&same), &seen("unit", "npm run unit", "fp-unit", &now)),
+        GateDetermination::PreExisting,
+        "rung 2 settled this; a differing reading cannot manufacture a verdict"
+    );
+
+    let broken = record(BASE, vec![unrunnable("unit", "fp-unit")]);
+    assert_eq!(
+        determine(
+            Some(&broken),
+            &seen("unit", "npm run unit", "fp-unit", &now)
+        ),
+        GateDetermination::Environment {
+            reason: "pkg-config cannot find gdk-3.0".to_string(),
+            remediation: "install libgtk-3-dev".to_string(),
+        },
+        "and a gate that could not run is still terminal, whatever its output named"
+    );
+}
+
+/// A malfunctioning extractor — one that answers nothing, on either side —
+/// degrades to rung 2 with the determination untouched. That is the direction
+/// the whole subsystem fails in: no reading costs a caller the pre-rung-3
+/// behaviour, which is a correct if coarser answer.
+#[test]
+fn an_extraction_that_reads_nothing_degrades_to_rung_2() {
+    let none: Vec<String> = Vec::new();
+
+    // Nothing read now.
+    let base = record(BASE, vec![named("unit", "fp-old", &["auth::expired"])]);
+    assert_eq!(
+        determine(Some(&base), &seen("unit", "npm run unit", "fp-new", &none)),
+        unscoped(),
+    );
+
+    // Nothing read at the base — every name would otherwise read as new, which
+    // is not a narrower statement but a fabricated one: the gate was already red,
+    // so some of those failures certainly predate the feature.
+    let unnamed = record(BASE, vec![measured("unit", false, "fp-old")]);
+    let now = ids(&["auth::expired", "cart::totals"]);
+    assert_eq!(
+        determine(
+            Some(&unnamed),
+            &seen("unit", "npm run unit", "fp-new", &now)
+        ),
+        unscoped(),
+    );
+}
+
+/// The delta is over the *live* order, deduplicated, and blind to surrounding
+/// whitespace — a runner that prints a failing test in both a summary and a
+/// detail block named one failure, not two.
+#[test]
+fn the_delta_is_the_live_order_deduplicated() {
+    assert_eq!(
+        new_failing_tests(
+            &ids(&["a", " b "]),
+            &ids(&["c", "b", "a", "c", "", "  ", "d"]),
+        ),
+        ids(&["c", "d"]),
+    );
+}
+
+/// The predicate that decides whether an agent call is worth making. It is the
+/// cost bound in one function: only a gate every cheaper rung has conceded, and
+/// whose record holds something to diff against, is worth paying for.
+#[test]
+fn extraction_is_only_paid_for_where_it_could_narrow_something() {
+    let cmp = |b: HarnessBaselineRun, fp: &str| {
+        compare_gate(
+            Some(&record(BASE, vec![b])),
+            BASE,
+            &observed("unit", "npm run unit", fp),
+        )
+        .extraction_would_scope()
+    };
+
+    assert!(
+        cmp(named("unit", "fp-old", &["auth::expired"]), "fp-new"),
+        "differently red, with names on record: the one case rung 3 can settle"
+    );
+    assert!(
+        !cmp(measured("unit", false, "fp-old"), "fp-new"),
+        "no names on record — an extraction could only fabricate scope"
+    );
+    assert!(
+        !cmp(named("unit", "fp-unit", &["auth::expired"]), "fp-unit"),
+        "rung 2 answered; a subtracted gate is not retried at all"
+    );
+    assert!(
+        !cmp(measured("unit", true, ""), "fp-new"),
+        "rung 1 answered; every failure on a green base is new by construction"
+    );
+    assert!(
+        !compare_gate(None, BASE, &observed("unit", "npm run unit", "fp-new"))
+            .extraction_would_scope(),
+        "with no baseline there is nothing to subtract from"
+    );
 }
 
 /// No record at all is today's behaviour, unchanged. This is the row that keeps
@@ -360,7 +548,7 @@ fn a_red_baseline_without_a_fingerprint_matches_nothing() {
     let base = record(BASE, vec![measured("unit", false, "")]);
     let d = determine(Some(&base), &observed("unit", "npm run unit", ""));
 
-    assert_eq!(d, GateDetermination::NewFailures);
+    assert_eq!(d, unscoped());
 }
 
 // ── What C6's classifier is still asked about ────────────────────────────────
@@ -382,7 +570,7 @@ fn only_the_residue_still_needs_the_triage_agent() {
         "with no measurement there is nothing to narrow with — today's behaviour"
     );
     assert!(
-        !GateDetermination::NewFailures.allows_triage(),
+        !unscoped().allows_triage(),
         "the gate reached an exit status at the base and its output changed \
          under this feature: the measurement already answered"
     );

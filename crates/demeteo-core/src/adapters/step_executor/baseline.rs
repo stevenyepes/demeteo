@@ -48,6 +48,7 @@ use crate::adapters::step_executor::driver::verifier::{
     TriageVerdict,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::failing_tests::{DriverExtractor, FailingTestExtractor};
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::harness_baseline::{
     fallback_baseline_needed, BaselineEnvironmentFault, BaselineProducer, HarnessBaseline,
@@ -104,6 +105,29 @@ pub(crate) trait BaselineTriage: Send + Sync {
     async fn classify(&self, harness: &ResolvedHarness, output: &str) -> TriageVerdict;
 }
 
+/// The three collaborators a measurement asks a question of: the port that
+/// **runs** a gate, the classifier that says *why* a red one is red, and the
+/// extractor that says *what* it named.
+///
+/// One struct rather than three parameters for the reason AGENTS.md §3 gives:
+/// they always travel together, none of them makes a measurement on its own, and
+/// bundling is what keeps [`measure_gates`] under the argument ceiling without
+/// reaching for `#[allow(clippy::too_many_arguments)]` — which that section calls
+/// a review trigger rather than a fix.
+///
+/// It is also the seam every test of this module is built on. All three are
+/// `dyn`, so a test supplies doubles that error on anything they were not told to
+/// answer and never constructs an `ExecutionDriver`.
+#[derive(Clone, Copy)]
+pub(crate) struct MeasurementPorts<'a> {
+    /// Runs the prepare command and each gate.
+    pub exec: &'a dyn ExecutionPort,
+    /// Regression vs. environment for one red gate (C6, HB8).
+    pub triage: &'a dyn BaselineTriage,
+    /// The failing test identifiers one red gate named (rung 3).
+    pub extractor: &'a dyn FailingTestExtractor,
+}
+
 /// Where a measurement is being taken, and on whose behalf.
 ///
 /// One struct rather than five parameters because they always travel together
@@ -150,7 +174,7 @@ pub(crate) struct BaselineSite<'a> {
 /// reason `run_harness_first` refuses to call either a verdict: a command that
 /// never finished is not a failing command.
 ///
-/// # Every red gate is classified, once
+/// # Every red gate is classified and read, once
 ///
 /// A red measurement is handed to `triage` before it is recorded, and what it
 /// says lands on
@@ -159,17 +183,30 @@ pub(crate) struct BaselineSite<'a> {
 /// call per red gate per measurement — not per validate attempt — and a green
 /// baseline costs nothing at all, because there is no failure to classify.
 ///
+/// The same red measurement is handed to `extractor`, which names the individual
+/// tests it reports as failing
+/// ([`HarnessBaselineRun::failing_tests`](crate::domain::harness_baseline::HarnessBaselineRun::failing_tests),
+/// rung 3). Same shape, same cost model, same fail-safe: a green gate is never
+/// asked, and an extraction that answers nothing records `None`, which every
+/// consumer reads as "compare at rungs 1–2", i.e. as the behaviour before the
+/// field existed. **Whether** a gate is red is `exit_ok` and nothing else; this
+/// only says what the output named.
+///
 /// It changes no verdict here, exactly like everything else in this module: the
 /// record grows a field, and `compare_gate` decides what the field means.
 pub(crate) async fn measure_gates(
-    exec: &dyn ExecutionPort,
-    triage: &dyn BaselineTriage,
+    ports: &MeasurementPorts<'_>,
     site: &BaselineSite<'_>,
     prepare_command: Option<&str>,
     harnesses: &[ResolvedHarness],
     opts: ShellOptions,
     measured_at: i64,
 ) -> Vec<MeasuredGate> {
+    let MeasurementPorts {
+        exec,
+        triage,
+        extractor,
+    } = *ports;
     let (machine, wt_path) = (site.machine, site.wt_path);
     if let Some(cmd) = prepare_command.map(str::trim).filter(|c| !c.is_empty()) {
         if exec
@@ -251,6 +288,19 @@ pub(crate) async fn measure_gates(
             }
         };
 
+        // Rung 3, and only for a red gate — a green one names no failing test,
+        // so asking would make every healthy repository fund the unhealthy case
+        // for an answer that is knowably empty. An extraction that reads nothing
+        // records `None` rather than an empty list, so "nobody asked" and "the
+        // answer was nothing" stay the same story to every consumer: compare at
+        // rungs 1–2.
+        let failing_tests = if exit_ok {
+            None
+        } else {
+            let ids = extractor.extract(&harness.command, &output).await;
+            (!ids.is_empty()).then_some(ids)
+        };
+
         measured.push(MeasuredGate {
             run: HarnessBaselineRun {
                 name: harness.name.clone(),
@@ -271,6 +321,7 @@ pub(crate) async fn measure_gates(
                 },
                 output_ref: None,
                 environment,
+                failing_tests,
                 measured_at,
                 producer: site.producer,
             },
@@ -408,11 +459,18 @@ impl ExecutionDriver {
         harnesses: &[ResolvedHarness],
     ) -> Vec<HarnessBaselineRun> {
         let measured = measure_gates(
-            self.exec.as_ref(),
-            &DriverTriage {
-                driver: self,
-                machine: site.machine,
-                wt_path: site.wt_path,
+            &MeasurementPorts {
+                exec: self.exec.as_ref(),
+                triage: &DriverTriage {
+                    driver: self,
+                    machine: site.machine,
+                    wt_path: site.wt_path,
+                },
+                extractor: &DriverExtractor {
+                    driver: self,
+                    machine: site.machine,
+                    wt_path: site.wt_path,
+                },
             },
             site,
             prepare_command,

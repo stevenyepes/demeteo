@@ -27,6 +27,7 @@ pub(crate) mod artifacts;
 pub(crate) mod baseline;
 pub(crate) mod driver;
 pub(crate) mod driver_registry;
+pub(crate) mod failing_tests;
 pub(crate) mod gate_waiter;
 pub(crate) mod impl_traits;
 pub mod node_catalog;

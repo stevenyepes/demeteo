@@ -48,6 +48,16 @@
 //! with `{"<key>":"pass"}` so single-turn validate steps (which parse a
 //! verdict object out of the agent text) pass deterministically.
 //!
+//! A `@stub-tests <a,b,c>` directive makes the stub end its reply with the
+//! failing-test-identifier object rung 3's extractor asks for
+//! (`{"failing_tests":["a","b","c"]}`), which
+//! [`parse_test_ids_text`](crate::adapters::step_executor::failing_tests::parse_test_ids_text)
+//! lifts out. Put it in a *gate's own output* and it reaches the extractor
+//! through the harness block the prompt inlines, so the base's reading and the
+//! tip's can differ without a second commit — which is how the "only the new
+//! failures are reported" leg is driven deterministically. An empty list is
+//! spelled by omitting the directive, i.e. by the extractor reading nothing.
+//!
 //! A `@stub-triage <category>` directive makes the stub end its reply with a
 //! harness-triage verdict object (`{"category":"<category>", …}`) that
 //! [`parse_triage_text`](crate::adapters::step_executor::driver::verifier::parse_triage_text)
@@ -178,9 +188,12 @@ struct StubDirectives {
     /// Harness-triage category to echo back (`environment` / `regression`).
     /// Drives the C6 classifier deterministically.
     triage_category: Option<String>,
+    /// Failing test identifiers to echo back, driving rung 3's extractor.
+    failing_tests: Option<Vec<String>>,
 }
 
-/// Extract `@stub-write` / `@stub-verdict` / `@stub-triage` directives from a
+/// Extract `@stub-write` / `@stub-verdict` / `@stub-triage` / `@stub-tests`
+/// directives from a
 /// rendered prompt. Whitespace-tolerant; a directive must be the first token
 /// on its (trimmed) line, so a prompt merely *mentioning* one in prose — e.g.
 /// the failing-command echo embedded mid-line in a triage prompt — does not
@@ -189,6 +202,7 @@ fn parse_directives(text: &str) -> StubDirectives {
     let mut writes = Vec::new();
     let mut verdict_key = None;
     let mut triage_category = None;
+    let mut failing_tests = None;
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("@stub-write") {
@@ -208,13 +222,30 @@ fn parse_directives(text: &str) -> StubDirectives {
             if !category.is_empty() {
                 triage_category = Some(category.to_string());
             }
+        } else if let Some(rest) = line.strip_prefix("@stub-tests") {
+            let ids: Vec<String> = rest
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            if !ids.is_empty() {
+                failing_tests = Some(ids);
+            }
         }
     }
     StubDirectives {
         writes,
         verdict_key,
         triage_category,
+        failing_tests,
     }
+}
+
+/// A deterministic failing-test reading, shaped exactly like the JSON rung 3's
+/// extraction prompt asks for so `parse_test_ids_text` reads it back.
+fn failing_tests_json(ids: &[String]) -> String {
+    serde_json::json!({ "failing_tests": ids }).to_string()
 }
 
 /// A deterministic harness-triage verdict object for the given category,
@@ -350,10 +381,26 @@ impl AgentSession for StubSession {
                     .await;
             }
 
+            let answered_otherwise =
+                directives.verdict_key.is_some() || directives.triage_category.is_some();
+
             if let Some(key) = directives.verdict_key {
                 let _ = tx
                     .send(AgentEvent::Text {
                         delta: format!("{{\"{key}\":\"pass\"}}"),
+                    })
+                    .await;
+            }
+
+            // Only when nothing else was asked for. A gate's output carries this
+            // directive so the *extractor* sees it, and that same output is
+            // inlined into the validate turn's evidence — where answering with a
+            // test list instead of a verdict would make the fixture's own
+            // observation channel change the step's outcome.
+            if let Some(ids) = directives.failing_tests.filter(|_| !answered_otherwise) {
+                let _ = tx
+                    .send(AgentEvent::Text {
+                        delta: failing_tests_json(&ids),
                     })
                     .await;
             }

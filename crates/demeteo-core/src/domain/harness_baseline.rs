@@ -130,6 +130,24 @@ pub struct HarnessBaselineRun {
     /// `TriageVerdict::Regression` on every spawn/timeout/cancel/parse failure.
     #[serde(default)]
     pub environment: Option<BaselineEnvironmentFault>,
+    /// The test identifiers this gate's *red* measurement named, read out of its
+    /// own output — the third rung of HB2c's granularity ladder.
+    ///
+    /// `None` means **no reading was obtained**, and it collapses four
+    /// different histories that must behave identically: the gate was
+    /// green so there was nothing to read; the extractor could not be spawned,
+    /// timed out, or answered nothing parseable; or the record was written by a
+    /// build that predates this field (the column is JSON, so an older record
+    /// simply omits it). Every one of those degrades to rungs 1–2, i.e. to the
+    /// behaviour before this field existed.
+    ///
+    /// It is deliberately **not** evidence. Whether the gate passed is the exit
+    /// status and nothing else; this only enumerates what the output *named*,
+    /// so a wrong or missing reading can narrow a retry's advice and can never
+    /// turn a red gate green. Decision 44 rejects agent-produced evidence; this
+    /// is an agent-produced *reading of* evidence the engine already owns.
+    #[serde(default)]
+    pub failing_tests: Option<Vec<String>>,
     /// Unix seconds at which *this gate* was measured.
     pub measured_at: i64,
     /// Which producer measured this gate.

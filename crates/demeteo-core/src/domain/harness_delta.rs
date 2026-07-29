@@ -18,7 +18,7 @@
 //! the stored record — and then calls this to find out what any of it *means*.
 //! Every input below is a value the caller already holds.
 //!
-//! # The ladder, and the rung that was deliberately not built
+//! # The ladder
 //!
 //! Comparison escalates cheapest-first, and stops as soon as one rung answers:
 //!
@@ -27,30 +27,39 @@
 //! 2. **fingerprint** ([`normalize_failure_fingerprint`]) — red both sides with
 //!    the *same* normalized output is the same failure; a different one is new
 //!    failures on top of a pre-existing one.
-//! 3. **what that same failure *was*** — read off the record, not computed here.
-//!    A gate red at the base because the machine cannot run it is not a
-//!    pre-existing defect to subtract; it is a gate that proved nothing, and it
-//!    terminates with remediation ([`GateDetermination::Environment`]).
+//! 3. **per-test names** ([`ObservedFailure::failing_tests`]) — red both sides
+//!    but *differently*, which rung 2 can only report as "everything about this
+//!    gate is suspect". With the identifiers each side named, the delta is
+//!    computable, and [`GateDetermination::NewFailures`] carries the failures
+//!    that are genuinely new. The determination is **unchanged** by this rung:
+//!    it scopes a verdict, it never converts one.
 //!
-//! Rung 3 is a *lookup*, and that is the point: the classification was made
-//! once, by C6's triage agent, at baseline-measurement time — the head of the
-//! graph, where **zero implement budget has been spent**. Reaching the same
-//! question through `should_triage` instead costs a full rework cycle first,
-//! because the classifier is only consulted once a failure has reproduced
-//! unchanged. Same agent, same fail-safe, one cycle earlier and once per red
-//! gate rather than once per validate attempt.
+//! Sitting beside the ladder rather than on it is a **lookup**: *what that same
+//! failure was*. A gate red at the base because the machine cannot run it is not
+//! a pre-existing defect to subtract; it is a gate that proved nothing, and it
+//! terminates with remediation ([`GateDetermination::Environment`]). This is not
+//! a comparison rung — nothing about the live run is examined — because the
+//! classification was made once, by C6's triage agent, at baseline-measurement
+//! time: the head of the graph, where **zero implement budget has been spent**.
+//! Reaching the same question through `should_triage` instead costs a full
+//! rework cycle first, because the classifier is only consulted once a failure
+//! has reproduced unchanged. Same agent, same fail-safe, one cycle earlier and
+//! once per red gate rather than once per validate attempt.
 //!
-//! `docs/HARNESS_BASELINE.md` describes a **finer** rung beyond these: an agent
-//! reading both outputs and answering "which failures in B are absent from A",
-//! which would scope the delta to individual test names rather than to the whole
-//! gate. **It is deliberately not built here.** It costs an agent call on every
-//! red validate — unlike rung 3, which is paid once per red gate at measurement
-//! time and read back for free — and whether that is worth paying is a judgement
-//! better made after rungs 1–2 have been watched in practice: the fingerprint's
-//! own false-miss rate is unknown until then, and its failure direction is the
-//! safe one (a perturbed fingerprint reads as *new*, i.e. today's behaviour,
-//! never as pre-existing). Build it when a real run shows rung 2 conceding too
-//! much, not before.
+//! # Why rung 3 may use an agent when decision 44 forbids one
+//!
+//! Decision 44 rejects agent-produced **evidence**: the thing being judged must
+//! not control whether it passed. Rung 3 is agent-produced *reading of* evidence
+//! the engine already owns. It never sees an exit code and cannot supply one, so
+//! it is structurally incapable of manufacturing a pass — the worst a wrong
+//! reading can do is name the wrong subset of an already-failing gate, which
+//! narrows the advice a rework prompt is given and changes nothing about whether
+//! the step failed. That is comprehension, not judgment, and it is the one place
+//! in this design where an agent legitimately belongs.
+//!
+//! It is also *additive*: with no reading at all the verdict reason still
+//! carries every failing gate's output tail exactly as it does today, so rung 3
+//! can add scope and can never subtract evidence.
 //!
 //! # The direction every ambiguity resolves in
 //!
@@ -64,12 +73,18 @@
 //! a red one is excusing a real regression. Only the first is survivable, so
 //! every gap resolves to it.
 //!
-//! Rung 3 resolves the other way round, for the same reason. A *positive*
-//! `environment` classification is the only thing that terminates a run, so an
-//! absent one — never classified, classified as a regression, or written by a
-//! build that predates the field — reads as a pre-existing defect and stays
-//! excluded. A malfunctioning classifier therefore withholds an escalation; it
-//! can never manufacture one.
+//! The classification lookup resolves the other way round, for the same reason.
+//! A *positive* `environment` classification is the only thing that terminates a
+//! run, so an absent one — never classified, classified as a regression, or
+//! written by a build that predates the field — reads as a pre-existing defect
+//! and stays excluded. A malfunctioning classifier therefore withholds an
+//! escalation; it can never manufacture one.
+//!
+//! Rung 3 resolves to **nothing scoped**. Either side missing its test names, an
+//! unparseable reading, a timed-out extractor, or a delta that comes out empty
+//! all yield an empty `new_failures` — which is byte-for-byte the behaviour
+//! before rung 3 existed: the whole gate is the verdict and the retry is
+//! unscoped. Nothing here can move a gate between attributable and excluded.
 //!
 //! [`normalize_failure_fingerprint`]: crate::adapters::step_executor::driver::verifier::normalize_failure_fingerprint
 
@@ -118,7 +133,18 @@ pub enum GateDetermination {
     /// Red at the base and red now, but *differently*. New failures on top of a
     /// pre-existing one — a verdict, since something the feature did changed
     /// what the gate says.
-    NewFailures,
+    NewFailures {
+        /// Rung 3's answer: the test identifiers failing now that were **not**
+        /// failing at the base, in the order the live run named them.
+        ///
+        /// **Empty means unscoped, never "nothing is new".** The gate is red and
+        /// differently red — something is new by construction — so an empty list
+        /// says only that the comparison could not name it: one side had no
+        /// per-test reading, the reading was unparseable, or the extractor was
+        /// never asked. The caller must then treat the whole gate as the
+        /// verdict, which is exactly what it did before rung 3 existed.
+        new_failures: Vec<String>,
+    },
     /// Nothing that covers this run's base commit measured this gate: no record
     /// at all, a record describing another commit, a record that never measured
     /// this gate, or one whose recorded command is not the command that just
@@ -168,7 +194,7 @@ impl GateDetermination {
                 remediation,
             },
             GateDetermination::Regression
-            | GateDetermination::NewFailures
+            | GateDetermination::NewFailures { .. }
             | GateDetermination::NoBaseline => GateOutcome::Attributable,
         }
     }
@@ -206,11 +232,24 @@ impl GateDetermination {
             GateDetermination::Regression | GateDetermination::NoBaseline
         )
     }
+
+    /// Rung 3's scope, if it produced one: the failures this feature added on
+    /// top of a gate that was already red.
+    ///
+    /// Empty for every other determination, and empty for an *unscoped*
+    /// [`NewFailures`](Self::NewFailures) — see that variant for why those two
+    /// have to be the same answer.
+    pub fn new_failures(&self) -> &[String] {
+        match self {
+            GateDetermination::NewFailures { new_failures } => new_failures,
+            _ => &[],
+        }
+    }
 }
 
 /// One gate as the live run observed it. Borrowed rather than owned because
 /// every field is already sitting in the caller's `HarnessRun`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ObservedFailure<'a> {
     /// The gate's name — the join key against the baseline record.
     pub name: &'a str,
@@ -221,6 +260,15 @@ pub struct ObservedFailure<'a> {
     /// `normalize_failure_fingerprint` over this gate's labelled failure block,
     /// built exactly the way the baseline producer built its own.
     pub fingerprint: &'a str,
+    /// Rung 3's live half: the test identifiers this run's output named, when
+    /// an extraction was performed.
+    ///
+    /// `None` is the *normal* value. Extraction costs an agent call, so the
+    /// caller pays for it only where rung 3 can act — a gate rungs 1–2 called
+    /// [`NewFailures`](GateDetermination::NewFailures) whose baseline record
+    /// carries names to diff against — and hands `None` everywhere else. `None`
+    /// and an empty list are the same answer here: no scope.
+    pub failing_tests: Option<&'a [String]>,
 }
 
 /// One gate's determination, with the evidence it was reached on.
@@ -234,6 +282,32 @@ pub struct GateComparison {
     /// name the exclusion — which commit, measured by which producer, when —
     /// without holding the record open a second time.
     pub baseline: Option<HarnessBaselineRun>,
+}
+
+impl GateComparison {
+    /// Whether paying for rung 3 on this gate could change anything — the
+    /// question a caller must answer *before* spending an agent call, and the
+    /// reason [`compare_gate`] is cheap enough to run twice.
+    ///
+    /// It is `true` only where every other rung has already conceded and the
+    /// record holds something to diff against: a
+    /// [`NewFailures`](GateDetermination::NewFailures) with no scope yet, whose
+    /// baseline measurement named its own failing tests. On a green baseline
+    /// rung 1 answered; on an identical fingerprint rung 2 did; with no recorded
+    /// names there is nothing to subtract and an extraction could only fabricate
+    /// scope. In all of those, asking would buy an answer nobody reads.
+    ///
+    /// This is what keeps the cost bounded to the case
+    /// `docs/HARNESS_BASELINE.md` describes: not every red validate, but a gate
+    /// that was already red and is now red *differently*.
+    pub fn extraction_would_scope(&self) -> bool {
+        matches!(&self.determination, GateDetermination::NewFailures { new_failures } if new_failures.is_empty())
+            && self
+                .baseline
+                .as_ref()
+                .and_then(|b| b.failing_tests.as_ref())
+                .is_some_and(|t| !t.is_empty())
+    }
 }
 
 /// Compare one red gate against the baseline.
@@ -304,7 +378,18 @@ pub fn compare_gate(
             None => GateDetermination::PreExisting,
         }
     } else {
-        GateDetermination::NewFailures
+        // Rung 3. Rungs 1–2 have established that the gate is red both sides and
+        // saying something different, which on its own scopes the verdict to the
+        // whole gate. If both sides named their failing tests, the delta between
+        // them is a strictly narrower — and still complete — statement of what
+        // this feature added. Either side silent yields an empty list, i.e. the
+        // unscoped answer rung 2 already reached.
+        GateDetermination::NewFailures {
+            new_failures: new_failing_tests(
+                measured.failing_tests.as_deref().unwrap_or(&[]),
+                observed.failing_tests.unwrap_or(&[]),
+            ),
+        }
     };
 
     GateComparison {
@@ -312,6 +397,37 @@ pub fn compare_gate(
         determination,
         baseline: Some(measured.clone()),
     }
+}
+
+/// Which failures named *now* were not named at the base — rung 3's whole
+/// computation, kept pure and separate so the escalation policy above and the
+/// set arithmetic can each be wrong in isolation.
+///
+/// Order is the live run's, because that is the order a reader of the current
+/// output will encounter them in. Duplicates collapse: a runner that prints a
+/// failing test in both a summary and a detail block named one failure, not two.
+///
+/// **Either side empty yields empty.** With no baseline reading there is nothing
+/// to subtract, and every name would read as new — which is not a narrower
+/// statement but a *fabricated* one, since the gate was already red and some of
+/// those names are certainly pre-existing. With no live reading there is nothing
+/// to report. Both degrade to "unscoped", which is the pre-rung-3 behaviour.
+pub fn new_failing_tests(at_base: &[String], now: &[String]) -> Vec<String> {
+    if at_base.is_empty() || now.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for name in now {
+        let name = name.trim();
+        if name.is_empty()
+            || at_base.iter().any(|b| b.trim() == name)
+            || out.iter().any(|o| o == name)
+        {
+            continue;
+        }
+        out.push(name.to_string());
+    }
+    out
 }
 
 /// Compare every red gate, preserving the order they ran in.
