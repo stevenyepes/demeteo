@@ -134,6 +134,64 @@ impl ExecutionPort for ScriptedExec {
     }
 }
 
+/// A [`BaselineTriage`] double that answers from a script and **records every
+/// gate it was asked about**.
+///
+/// The call log is half the point: "a green baseline costs no agent call" and
+/// "the classification is read from the record rather than re-asked at validate"
+/// are both claims about a call that must *not* happen, and a double that only
+/// returns values cannot witness them.
+///
+/// Like [`ScriptedExec`], it refuses anything it was not told to answer — but
+/// its refusal has to be a `TriageVerdict`, so it returns `Regression` and
+/// records the miss for the assertion to name. That is also the honest model of
+/// production: `triage_harness_failure` cannot fail, it can only fall back.
+struct ScriptedTriage {
+    answers: HashMap<String, TriageVerdict>,
+    asked: Mutex<Vec<String>>,
+}
+
+impl ScriptedTriage {
+    /// Keyed by harness *name*, since that is what identifies a gate.
+    fn new(answers: &[(&str, TriageVerdict)]) -> Self {
+        Self {
+            answers: answers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Classifies nothing — the shape every "no call should happen" assertion
+    /// uses, and the one a malfunctioning classifier degrades to.
+    fn none() -> Self {
+        Self::new(&[])
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+fn environmental(reason: &str, remediation: &str) -> TriageVerdict {
+    TriageVerdict::Environment {
+        reason: reason.to_string(),
+        remediation: remediation.to_string(),
+    }
+}
+
+#[async_trait::async_trait]
+impl BaselineTriage for ScriptedTriage {
+    async fn classify(&self, harness: &ResolvedHarness, _output: &str) -> TriageVerdict {
+        self.asked.lock().unwrap().push(harness.name.clone());
+        self.answers
+            .get(&harness.name)
+            .cloned()
+            .unwrap_or(TriageVerdict::Regression)
+    }
+}
+
 /// The worktree every test measures in. Its path is what the fingerprint is
 /// normalized against, so it has to be the same one the assertions use.
 fn site(producer: BaselineProducer) -> BaselineSite<'static> {
@@ -155,14 +213,25 @@ fn gate(name: &str, command: &str, deadline_s: u64) -> ResolvedHarness {
 }
 
 /// Run `measure_gates` against a scripted port with the defaults every test
-/// shares.
+/// shares, and a classifier that answers `regression` for everything — i.e. the
+/// pre-HB2c-fix behaviour, which is what most of these tests hold fixed.
 async fn measure(
     exec: &ScriptedExec,
     prepare: Option<&str>,
     harnesses: &[ResolvedHarness],
 ) -> Vec<MeasuredGate> {
+    measure_with(exec, &ScriptedTriage::none(), prepare, harnesses).await
+}
+
+async fn measure_with(
+    exec: &ScriptedExec,
+    triage: &ScriptedTriage,
+    prepare: Option<&str>,
+    harnesses: &[ResolvedHarness],
+) -> Vec<MeasuredGate> {
     measure_gates(
         exec,
+        triage,
         &site(BaselineProducer::Node),
         prepare,
         harnesses,
@@ -248,6 +317,135 @@ async fn every_gate_runs_even_after_one_of_them_is_red() {
     assert_eq!(names, vec!["lint", "unit"]);
 }
 
+// ── Classifying a red gate, once, at measurement time ────────────────────────
+
+#[tokio::test]
+async fn a_red_gate_the_machine_cannot_run_is_recorded_as_environmental() {
+    // The regression this exists for. `gdk-3.0` missing exits **1**, not 127,
+    // so the fast path cannot see it — and to HB2c's fingerprint comparison it
+    // is indistinguishable from a pre-existing test failure. The record is the
+    // only place that difference can live.
+    let exec = ScriptedExec::new(&[(
+        "cargo test",
+        Err("error: failed to run custom build command"),
+    )]);
+    let triage = ScriptedTriage::new(&[(
+        "unit",
+        environmental("pkg-config cannot find gdk-3.0", "install libgtk-3-dev"),
+    )]);
+    let measured = measure_with(&exec, &triage, None, &[gate("unit", "cargo test", 600)]).await;
+
+    let fault = measured[0]
+        .run
+        .environment
+        .as_ref()
+        .expect("an unrunnable gate must be recorded as one");
+    assert_eq!(fault.reason, "pkg-config cannot find gdk-3.0");
+    assert_eq!(
+        fault.remediation, "install libgtk-3-dev",
+        "the remediation is what makes the terminal failure actionable"
+    );
+    assert!(
+        !measured[0].run.exit_ok,
+        "and it is still a red measurement — the classification says why, not whether"
+    );
+}
+
+#[tokio::test]
+async fn a_red_gate_the_classifier_calls_a_regression_stays_subtractable() {
+    // HB2c's own behaviour, preserved. A genuine pre-existing code defect is
+    // exactly what decision 44 subtracts; recording a fault here would turn
+    // every already-red repository into a terminal failure, which is the
+    // opposite of what the baseline is for.
+    let exec = ScriptedExec::new(&[("npm test", Err("1 failing\n  auth spec"))]);
+    let triage = ScriptedTriage::new(&[("unit", TriageVerdict::Regression)]);
+    let measured = measure_with(&exec, &triage, None, &[gate("unit", "npm test", 600)]).await;
+
+    assert!(
+        measured[0].run.environment.is_none(),
+        "a broken test is a verdict the gate reached — it stays excludable"
+    );
+    assert_eq!(triage.asked(), vec!["unit"], "and it was asked");
+}
+
+#[tokio::test]
+async fn a_green_gate_is_never_handed_to_the_classifier() {
+    // Cost control, and it is structural rather than a budget check: a healthy
+    // repository must not fund the unhealthy case. There is also nothing to
+    // classify — a green gate has no failure.
+    let exec = ScriptedExec::new(&[
+        ("npm run lint", Ok("clean")),
+        ("npm test", Ok("42 passing")),
+    ]);
+    let triage = ScriptedTriage::none();
+    let measured = measure_with(
+        &exec,
+        &triage,
+        None,
+        &[
+            gate("lint", "npm run lint", 600),
+            gate("unit", "npm test", 600),
+        ],
+    )
+    .await;
+
+    assert!(
+        triage.asked().is_empty(),
+        "a green baseline owes no agent call at all: {:?}",
+        triage.asked()
+    );
+    assert!(measured.iter().all(|m| m.run.environment.is_none()));
+}
+
+#[tokio::test]
+async fn each_red_gate_is_classified_exactly_once() {
+    // Once per red gate per measurement — not per validate attempt, which is
+    // what reading the answer back off the record buys. Two red gates are two
+    // independent questions; one is not evidence about the other.
+    let exec = ScriptedExec::new(&[
+        ("npm run lint", Err("lint blew up")),
+        ("npm test", Err("1 failing")),
+        ("npm run e2e", Ok("ok")),
+    ]);
+    let triage = ScriptedTriage::new(&[("lint", environmental("no browser", "install chromium"))]);
+    let measured = measure_with(
+        &exec,
+        &triage,
+        None,
+        &[
+            gate("lint", "npm run lint", 600),
+            gate("unit", "npm test", 600),
+            gate("e2e", "npm run e2e", 600),
+        ],
+    )
+    .await;
+
+    assert_eq!(triage.asked(), vec!["lint", "unit"]);
+    assert!(measured[0].run.environment.is_some());
+    assert!(
+        measured[1].run.environment.is_none(),
+        "one gate's environmental fault must not spread to another's"
+    );
+}
+
+#[tokio::test]
+async fn a_classifier_that_answers_nothing_useful_leaves_the_gate_subtractable() {
+    // The fail-safe direction, stated as a test. `triage_harness_failure`
+    // returns `Regression` on every spawn/timeout/cancel/parse failure, so a
+    // malfunctioning classifier records no fault — which is the behaviour with
+    // no classification at all. A broken classifier must never manufacture a
+    // terminal failure.
+    let exec = ScriptedExec::new(&[("npm test", Err("1 failing"))]);
+    let triage = ScriptedTriage::none();
+    let measured = measure_with(&exec, &triage, None, &[gate("unit", "npm test", 600)]).await;
+
+    assert_eq!(measured.len(), 1, "the measurement itself still happened");
+    assert!(
+        measured[0].run.environment.is_none(),
+        "a triage that could not answer withholds the escalation, it does not invent one"
+    );
+}
+
 // ── What must never be recorded ──────────────────────────────────────────────
 
 #[tokio::test]
@@ -260,13 +458,24 @@ async fn a_failed_prepare_records_nothing_at_all() {
         ("npm ci", Err("ENOENT")),
         ("npm test", Err("cannot find module")),
     ]);
-    let measured = measure(&exec, Some("npm ci"), &[gate("unit", "npm test", 600)]).await;
+    let triage = ScriptedTriage::none();
+    let measured = measure_with(
+        &exec,
+        &triage,
+        Some("npm ci"),
+        &[gate("unit", "npm test", 600)],
+    )
+    .await;
 
     assert!(measured.is_empty(), "no gate may be recorded: {measured:?}");
     assert_eq!(
         exec.commands(),
         vec![wrapped("npm ci")],
         "the harness must not even be attempted once prepare has failed"
+    );
+    assert!(
+        triage.asked().is_empty(),
+        "and nothing may be classified either — there is no measurement to classify"
     );
 }
 
@@ -400,6 +609,7 @@ async fn each_gate_carries_the_producer_and_the_measurement_time() {
     let exec = ScriptedExec::new(&[("npm test", Ok("ok"))]);
     let measured = measure_gates(
         &exec,
+        &ScriptedTriage::none(),
         &site(BaselineProducer::Fallback),
         None,
         &[gate("unit", "npm test", 600)],

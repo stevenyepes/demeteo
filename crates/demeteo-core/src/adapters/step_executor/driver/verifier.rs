@@ -680,7 +680,13 @@ impl ExecutionDriver {
     /// plumbing. Fails safe: any spawn/timeout/cancel/parse error returns
     /// [`TriageVerdict::Regression`], so a broken triage can only ever withhold
     /// an escalation, never manufacture one.
-    async fn triage_harness_failure(
+    ///
+    /// `pub(crate)` because HB2c's baseline producer calls it too, through
+    /// [`BaselineTriage`](crate::adapters::step_executor::baseline::BaselineTriage),
+    /// to classify a gate that was already red at the base. Sharing the one
+    /// classifier is the point: a second implementation would be free to drift,
+    /// and the direction it drifted in would decide whether a run terminates.
+    pub(crate) async fn triage_harness_failure(
         &self,
         machine_str: &str,
         wt_path: &str,

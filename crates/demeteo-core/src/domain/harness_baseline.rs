@@ -54,6 +54,32 @@ pub enum BaselineProducer {
     Fallback,
 }
 
+/// Why a gate was red at the base **because it could not run on this machine**
+/// — a missing system library, an absent toolchain, an unprovisioned service —
+/// rather than because the code under it was broken.
+///
+/// The distinction is the whole reason this type exists. HB2c subtracts a gate
+/// that is red at the base and identically red now, which is right for a
+/// pre-existing *code* defect: the gate ran, reached a verdict, and that verdict
+/// predates the feature. It is wrong for a gate that never ran, because then the
+/// step passed on evidence that does not exist. The motivating incident was a
+/// missing `gdk-3.0`, which exits **1**, not 127 — so the exit-127 fast path
+/// cannot see it and only a classifier can tell the two apart.
+///
+/// The two strings are `TriageVerdict::Environment`'s own, carried verbatim so
+/// `build_environment_message` renders the same text here as it does on every
+/// other terminal environment failure: what to install, the failing command, and
+/// a copy-pasteable reproduce line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaselineEnvironmentFault {
+    /// One sentence naming what the machine is missing.
+    pub reason: String,
+    /// The concrete provisioning step, e.g. "install libgtk-3-dev". May be
+    /// empty — the classifier is not obliged to know one, and a reason without
+    /// a remedy is still worth more than a silent pass.
+    pub remediation: String,
+}
+
 /// One gate's measurement at the base commit.
 ///
 /// Mirrors `HarnessRun` in `driver/verifier.rs` field for field on the three
@@ -85,6 +111,25 @@ pub struct HarnessBaselineRun {
     /// output nobody needs).
     #[serde(default)]
     pub output_ref: Option<String>,
+    /// What the triage classifier said about this gate's *red* measurement, and
+    /// only when it said "environment". `None` covers three different histories
+    /// that all have to behave identically:
+    ///
+    /// * the gate was green, so there was nothing to classify;
+    /// * the classifier answered `regression` — a genuine pre-existing code
+    ///   defect, which is exactly what HB2c subtracts;
+    /// * nothing classified it at all: the classifier could not be spawned, timed
+    ///   out, or the record was written by a build that predates this field (the
+    ///   column is JSON, so an older record simply omits it and decodes to
+    ///   `None`).
+    ///
+    /// Collapsing all three onto `None` is deliberate, and it is the fail-safe
+    /// direction. `Some` is the only value that can *terminate* a run, so a
+    /// classifier that malfunctions withholds an escalation — it can never
+    /// manufacture one. That mirrors `triage_harness_failure`'s own fallback to
+    /// `TriageVerdict::Regression` on every spawn/timeout/cancel/parse failure.
+    #[serde(default)]
+    pub environment: Option<BaselineEnvironmentFault>,
     /// Unix seconds at which *this gate* was measured.
     pub measured_at: i64,
     /// Which producer measured this gate.
