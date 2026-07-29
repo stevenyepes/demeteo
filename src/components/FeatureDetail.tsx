@@ -27,12 +27,19 @@ import {
   replayFromStep,
   remoteRetryStep,
   isBlockingError,
-  isEnvironmentError,
   findActivePredecessor,
 } from '../lib/features';
 import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
 import { EFFORT_LABELS, reconcileEffort, type EffortLevel } from '../lib/effortLevels';
-import type { SyncOutcomeView, MrState } from '../types';
+import type { SyncOutcomeView, MrState, HarnessBaseline } from '../types';
+import {
+  isBaselineEnvironmentFailure,
+  parseEnvironmentFailure,
+  readHarnessBaseline,
+  readHarnessEvidence,
+} from '../lib/harnessVerdict';
+import { HarnessGateTable } from './HarnessGateTable';
+import { EnvironmentNotReadyPanel } from './EnvironmentNotReadyPanel';
 import { Modal } from './ui/Modal';
 import { RemoteGateActions, ReinjectCredentials, RunEventTimeline } from './RunEventTimeline';
 import { bucketFor } from './RemoteRunInbox';
@@ -106,43 +113,6 @@ const ArtifactIcon: React.FC<{ kind: ArtifactKind; className?: string }> = ({ ki
       return <FileQuestion className={className} />;
   }
 };
-
-/**
- * Explains *why* an environment failure happens on a machine where the tool is,
- * as far as the user is concerned, already installed — and what "installed"
- * actually has to mean for the harness.
- *
- * Deliberately names no specific tool: the harness runs whatever prepare/test
- * command the project declares, so the rule is the same for cargo, npm, pytest
- * or anything else. The trap it describes is the common one — the tool exists,
- * but only the user's own shell can see it, because a version manager activates
- * it per-directory (or only from a config the harness's shell never reads).
- * Retrying the step cannot fix any of that, which is why this sits next to the
- * error instead of next to the Retry button.
- */
-const EnvironmentHint: React.FC = () => (
-  <div
-    className="mt-3 pt-3 border-t border-rose-500/20 flex items-start gap-2 font-sans text-slate-400"
-    title={
-      'The harness runs your prepare/test commands through a fresh interactive login shell on the ' +
-      'target machine (bash -l -i -c), not through your terminal session. A tool is only usable if ' +
-      'that shell can find it on PATH.\n\n' +
-      'Verify on the machine:\n' +
-      "  bash -l -i -c 'command -v <tool>'\n\n" +
-      'If it prints nothing, export the tool from ~/.profile or ~/.bashrc, or declare it in your ' +
-      "version manager's global config (mise use -g, asdf global, nvm alias default) so every " +
-      'shell activates it — not just the directories that ask for it.'
-    }
-  >
-    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px text-amber-400" />
-    <span>
-      Retrying will not help until the machine is fixed. The harness runs commands through a fresh
-      interactive login shell, so every tool must be discoverable on that shell&apos;s{' '}
-      <span className="font-mono text-slate-300">PATH</span> — installed is not enough. Hover for how
-      to check and fix it.
-    </span>
-  </div>
-);
 
 const ARTIFACT_KIND_COLORS: Record<ArtifactKind, string> = {
   'markdown': 'text-cyan-400',
@@ -283,6 +253,11 @@ export function FeatureDetail() {
     return ordered;
   }, [bootstrapPhases, featureStatus]);
   const showBootstrap = !anyStepStarted && orderedBootstrapPhases.length > 0;
+  // What this run's persisted step failures say about the same gates the
+  // baseline measured — the *now* half of HB7's table. Read off the last step
+  // that reported any, because a rework loop re-runs validate and the earlier
+  // attempt describes code that has since changed.
+  const harnessEvidence = useMemo(() => readHarnessEvidence(steps), [steps]);
   const [tokens, setTokens] = useState<number>(0);
   const [totalCost, setTotalCost] = useState<number>(0);
   const [cacheReadTokens, setCacheReadTokens] = useState<number>(0);
@@ -321,6 +296,10 @@ export function FeatureDetail() {
   // The persisted prompt body (migration V27), surfaced in the Initial Prompt
   // panel below. `''` for runs started before the column existed.
   const [featureDescription, setFeatureDescription] = useState<string>('');
+  // What this run's validation gates said at the base commit (decision 44,
+  // `features.harness_baseline_json`). `null` is "nothing measured" and is
+  // rendered as such — never as a pass; see `HarnessGateTable`.
+  const [harnessBaseline, setHarnessBaseline] = useState<HarnessBaseline | null>(null);
 
   // Stream buffering: accumulate chunks in a ref, flush to state once per animation frame
   const streamBufferRef = useRef<Record<string, string>>({});
@@ -679,6 +658,11 @@ export function FeatureDetail() {
           if (typeof f.description === 'string') {
             setFeatureDescription(f.description);
           }
+          // Through a guard rather than a field read: the column is JSON the
+          // engine wrote and a shape this build does not understand must
+          // degrade to "no baseline", exactly as `HarnessBaseline::from_column`
+          // degrades every decode failure to `None`.
+          setHarnessBaseline(readHarnessBaseline(f));
         }
       } catch (err) {
         reportError(err, { kind: "internal" });
@@ -1440,6 +1424,10 @@ export function FeatureDetail() {
                 <BootstrapStepper phases={orderedBootstrapPhases} />
               </div>
             )}
+            {/* Above the Graph|Timeline toggle so the verdict's evidence is in
+                the same place whichever view is selected: it is a property of
+                the run, not of one rendering of it. */}
+            <HarnessGateTable baseline={harnessBaseline} evidence={harnessEvidence} />
             {canShowGraph && (
               /* Graph | Timeline toggle (PRD §6.1). List stays default; the
                  graph is the same pinned-version definition with the live
@@ -1566,6 +1554,11 @@ export function FeatureDetail() {
                   statusBg = 'border-amber-500/40 bg-amber-950/10 shadow-[0_0_15px_rgba(245,158,11,0.08)]';
                 }
 
+                // `null` for every failure that is not the engine's terminal
+                // environment message — a verdict, an agent failure, an empty
+                // error. Guessing here would dress a real defect up as somebody
+                // else's problem.
+                const stepEnvironment = parseEnvironmentFailure(step.error_message);
                 const activePredecessor = findActivePredecessor(steps, step);
                 const isBlockedByPredecessor = (step.status === 'failed' || step.status === 'interrupted') && activePredecessor !== null;
                 const isActiveGate = view.gateStepExecutionId === step.id;
@@ -1647,12 +1640,23 @@ export function FeatureDetail() {
                         </div>
                       )}
 
-                      {(step.status === 'failed' || step.status === 'interrupted') && step.error_message && (
+                      {/* Two different things end a step, and they are not the
+                          same claim. An environment failure is not the feature's
+                          defect and carries an action, so it gets the
+                          remediation-first panel; everything else is a verdict
+                          the feature answers for and keeps the ruby block. */}
+                      {(step.status === 'failed' || step.status === 'interrupted') && stepEnvironment && (
+                        <EnvironmentNotReadyPanel
+                          failure={stepEnvironment}
+                          atBase={isBaselineEnvironmentFailure(stepEnvironment, harnessBaseline)}
+                        />
+                      )}
+
+                      {(step.status === 'failed' || step.status === 'interrupted') && !stepEnvironment && step.error_message && (
                         <div className="mt-3 p-3 rounded bg-rose-500/5 border border-rose-500/20 text-xs text-rose-400 font-mono">
                           {/* The backend composes this message with newlines and an indented
                               reproduce line; render it verbatim instead of collapsing it. */}
                           <div className="whitespace-pre-wrap">{step.error_message}</div>
-                          {isEnvironmentError(step.error_message) && <EnvironmentHint />}
                         </div>
                       )}
 
@@ -1660,7 +1664,9 @@ export function FeatureDetail() {
                         <div className="mt-4 p-4 rounded bg-rose-500/5 border border-rose-500/20 flex flex-col gap-3">
                           <div className="flex justify-between items-center">
                             <div className="text-xs text-rose-400 font-semibold uppercase tracking-wide">
-                              Step failed. You can change harness/model and retry.
+                              {stepEnvironment
+                                ? 'Fix the machine first — retrying before that fails the same way.'
+                                : 'Step failed. You can change harness/model and retry.'}
                             </div>
                             <button
                               onClick={() => handleRetryStep(step.id)}

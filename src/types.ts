@@ -510,6 +510,65 @@ export interface Feature {
    * Set from the StartFeatureModal advanced section.
    */
   commit_artifacts?: boolean | null;
+  /**
+   * What the project's validation gates said at this run's **base commit**
+   * (decision 44, `features.harness_baseline_json`, migration V37). Mirrors the
+   * Rust `Feature::harness_baseline`, so it arrives on `feature_get` for a
+   * local run and on the hydrated shadow row for a detached one.
+   *
+   * `null`/`undefined` means **no baseline was measured**, which is emphatically
+   * not "everything was green" — see {@link HarnessBaseline}.
+   */
+  harness_baseline?: HarnessBaseline | null;
+}
+
+/** Which producer measured one gate — mirrors the Rust `BaselineProducer`.
+ *  Recorded per gate, not per record, because a partial re-measurement merges
+ *  into an existing record. */
+export type BaselineProducer = 'node' | 'fallback';
+
+/** Why a gate was red at the base **because the machine could not run it** —
+ *  mirrors the Rust `BaselineEnvironmentFault`. Its presence is what separates
+ *  a pre-existing *code* defect (subtracted from the verdict) from a gate that
+ *  reached no verdict at all (terminal, with remediation). */
+export interface BaselineEnvironmentFault {
+  reason: string;
+  /** The concrete provisioning step. May be empty — the classifier is not
+   *  obliged to know one. */
+  remediation: string;
+}
+
+/** One gate's measurement at the base commit — mirrors the Rust
+ *  `HarnessBaselineRun`. */
+export interface HarnessBaselineRun {
+  name: string;
+  /** The command as the user authored it (not the `2>&1` wrapper). */
+  command: string;
+  exit_ok: boolean;
+  /** Normalized failure fingerprint; empty when the gate was green. */
+  fingerprint?: string;
+  /** `ArtifactStore` reference to the merged output — never the output. */
+  output_ref?: string | null;
+  /** Set only when the classifier said the gate could not run here. */
+  environment?: BaselineEnvironmentFault | null;
+  /** Unix **seconds** at which this gate was measured. */
+  measured_at: number;
+  producer: BaselineProducer;
+}
+
+/** Everything measured at one base commit, for one feature — mirrors the Rust
+ *  `HarnessBaseline`.
+ *
+ *  **Absent is not green.** A gate missing from `harnesses` was never measured,
+ *  and rendering that as a pass inverts the whole subtraction decision 44
+ *  exists to make: a genuine regression would read as pre-existing. Every
+ *  consumer here answers "not measured" rather than filling the silence. */
+export interface HarnessBaseline {
+  /** The commit the measurement was taken against. A record describing another
+   *  commit is not evidence about this run. */
+  base_sha: string;
+  /** The gates measured, in the order they ran (cheap gates first). */
+  harnesses?: HarnessBaselineRun[];
 }
 
 export type MrState = 'none' | 'draft' | 'open' | 'merged' | 'closed';
