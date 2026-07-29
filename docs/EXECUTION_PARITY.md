@@ -31,6 +31,17 @@ that, and they are the reason the code looks the way it does:
   `.ok()?` or `unwrap_or_default()`. Transport failures are distinguishable by
   message prefix (`TRANSPORT_ERROR_PREFIX`) so the verifier can treat them as
   non-retryable infrastructure rather than as a code regression.
+
+  The SSH adapter retries *underneath* that prefix (S4,
+  [`RELIABILITY_PLAN.md`](RELIABILITY_PLAN.md)) and the distinction is what
+  bounds it. A retry is only permitted where the remote was handed nothing —
+  before `channel.exec` — because arbitrary user shell cannot be re-run safely
+  once it may be in flight, and the port carries no idempotency signal that
+  could say otherwise. When the attempts are spent the **last failure's message
+  is returned untouched**, so a persistent drop still reads as `transport:` to
+  `classify_exec_failure` and still routes to `Infrastructure`. Retry that
+  swallowed the prefix would look like a reliability improvement and behave like
+  a regression detector pointed at the wrong thing.
 - **A red harness is triaged before it feeds the retry loop.** See below.
 
 ## The gates — and the trap
