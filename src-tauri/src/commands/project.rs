@@ -80,6 +80,25 @@ pub async fn check_repos_dirty(
         .map_err(AppError::from)
 }
 
+/// Probe the project's configured commands on the machine that will run them,
+/// for the Strategy panel's inline indicator (HB6).
+///
+/// `draft` carries the commands as they stand in the form, so a command typed
+/// and not yet saved is what gets checked. The result is an indicator: a probe
+/// that fails, or that finds a binary missing, never blocks a save — a user may
+/// legitimately configure a command for a machine that is not the one they are
+/// sitting at. The launch-time gate is unchanged.
+#[tauri::command]
+pub async fn probe_project_commands(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    draft: crate::application::projects::CommandProbeDraft,
+) -> Result<demeteo_core::adapters::step_executor::preflight::CommandProbeReport, AppError> {
+    crate::application::projects::probe_commands(&ctx, project_id, draft)
+        .await
+        .map_err(AppError::from)
+}
+
 #[tauri::command]
 pub fn get_repositories_for_project(
     ctx: State<'_, AppContext>,

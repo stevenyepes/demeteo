@@ -45,12 +45,61 @@
 //! confidently resolve to a plain binary name is skipped rather than guessed at.
 //! Missing a broken command means the user lands in today's behaviour. Wrongly
 //! flagging a working one means they cannot start work at all.
+//!
+//! # The same probe, at configuration time (HB6)
+//!
+//! [`probe_project_commands`] is this module's second entry point: the settings
+//! panel asks the *same* question about the *same* commands on the *same*
+//! machine, and gets the answer attributed back to the individual settings the
+//! user is looking at. It shares [`PreflightVerdict::detail`] verbatim rather
+//! than paraphrasing it, so what the panel says and what a blocked launch says
+//! can never disagree.
+//!
+//! It is an indicator there, not a gate. Nothing about a settings-time answer
+//! may block a save: a user may legitimately configure a command for a machine
+//! that is not the one they are sitting at (the remote runner especially), and
+//! the gate belongs at launch, where which machine will run it is known.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::domain::models::WorktreeStrategy;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
+
+/// Per-probe ceiling for the harness preflight, in seconds.
+///
+/// Its own constant rather than the run's `wall_cap_s`, because the two answer
+/// different questions: `wall_cap_s` is "how long may a build take" (30 min by
+/// default), while this bounds a single `command -v` on an already-connected
+/// machine. Anything beyond a few seconds means the machine or the shell is
+/// unwell, not that the binary is slow to find — and an expiry is treated as
+/// *no evidence* rather than a missing binary, so erring short is safe.
+///
+/// Shared by the launch phase and the settings panel (HB6) on purpose: two
+/// ceilings would let the panel report a binary the launch cannot find, or the
+/// reverse, and the whole value of probing at configuration time is that it is
+/// the same answer arriving earlier.
+pub const PREFLIGHT_PROBE_TIMEOUT_S: u64 = 20;
+
+/// What a configured command has to survive, stated once and rendered
+/// everywhere it applies.
+///
+/// The engine already tells a user this when a baseline cannot be measured
+/// (`baseline.rs`); the settings panel needs the identical sentence *before*
+/// they have paid for a run. Both sites therefore read this constant instead of
+/// each carrying its own wording — a second copy would drift, and the two would
+/// then disagree about the two things nobody guesses: that the worktree a
+/// harness runs in is a fresh `git worktree add` with no `node_modules` and no
+/// `target/` (which is why `prepare_command` exists at all), and that a
+/// watch-mode runner never exits, so it burns the entire wall-clock ceiling and
+/// then fails.
+pub const FRESH_CHECKOUT_REMEDIATION: &str =
+    "Run the command below in a *fresh* checkout — that is what this step gets, with no \
+     `node_modules` and no `target/`. If it needs an install step, set the project's \
+     prepare command; if it hangs, it is most likely a watch-mode runner, which never \
+     exits.";
 
 /// Shell keywords, builtins and no-ops that either always resolve or are not
 /// commands at all. Probing them yields nothing and risks a false positive on
@@ -202,34 +251,62 @@ pub(crate) fn probeable_binaries(commands: &[&str]) -> Vec<String> {
     out
 }
 
-/// Every command the project has actually configured, in probe order:
-/// `prepare_command`, then `test_command`, then each named harness **sorted by
-/// name**.
+/// Which project setting a probed command came from, so the settings panel can
+/// put the answer back beside the field the user typed it into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandSource {
+    /// `WorktreeStrategy::prepare_command`.
+    Prepare,
+    /// `WorktreeStrategy::test_command` — the resolution chain's tier 3.
+    Test,
+    /// One entry of the `harnesses` map, named by [`ProbedCommand::harness`].
+    Harness,
+}
+
+/// Every command the project has actually configured, tagged with where it came
+/// from, in probe order: `prepare_command`, then `test_command`, then each named
+/// harness **sorted by name**.
 ///
 /// The sort is not cosmetic: `harnesses` is a `HashMap`, so an unsorted walk
 /// would vary the probe order — and therefore the order binaries appear in a
 /// failure message — between two runs of the same project. Blank and
 /// whitespace-only entries are dropped; a setting cleared to `""` is not a
 /// configured command.
-pub(crate) fn configured_commands(strategy: &WorktreeStrategy) -> Vec<&str> {
+///
+/// [`configured_commands`] is this list with the tags dropped, rather than a
+/// second walk of the same three sources: the set the launch probes and the set
+/// the settings panel displays have to be the same set, and deriving one from
+/// the other is what makes that structural instead of a convention.
+pub(crate) fn labelled_commands(
+    strategy: &WorktreeStrategy,
+) -> Vec<(CommandSource, Option<&str>, &str)> {
     fn live(cmd: &Option<String>) -> Option<&str> {
         cmd.as_deref().map(str::trim).filter(|c| !c.is_empty())
     }
 
-    let mut out: Vec<&str> = Vec::new();
-    out.extend(live(&strategy.prepare_command));
-    out.extend(live(&strategy.test_command));
+    let mut out: Vec<(CommandSource, Option<&str>, &str)> = Vec::new();
+    out.extend(live(&strategy.prepare_command).map(|c| (CommandSource::Prepare, None, c)));
+    out.extend(live(&strategy.test_command).map(|c| (CommandSource::Test, None, c)));
     if let Some(harnesses) = &strategy.harnesses {
         let mut entries: Vec<(&String, &String)> = harnesses.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
         out.extend(
             entries
                 .into_iter()
-                .map(|(_, cmd)| cmd.trim())
-                .filter(|cmd| !cmd.is_empty()),
+                .map(|(name, cmd)| (CommandSource::Harness, Some(name.as_str()), cmd.trim()))
+                .filter(|(_, _, cmd)| !cmd.is_empty()),
         );
     }
     out
+}
+
+/// Every configured command, in probe order. See [`labelled_commands`].
+pub(crate) fn configured_commands(strategy: &WorktreeStrategy) -> Vec<&str> {
+    labelled_commands(strategy)
+        .into_iter()
+        .map(|(_, _, cmd)| cmd)
+        .collect()
 }
 
 /// Probe every binary the project's configured commands name, on the machine
@@ -250,6 +327,12 @@ pub(crate) fn configured_commands(strategy: &WorktreeStrategy) -> Vec<&str> {
 /// only a login profile establishes, and `mise`/`asdf`/`nvm` shims only
 /// activate in an interactive one. Probing under a bare `sh -c` would report
 /// half a developer's toolchain missing.
+/// An empty `cwd` means "the adapter's default working directory" rather than
+/// an empty path. `command -v` needs the login shell, not the repo, and the
+/// settings-time caller (HB6) has no checkout to point at — the project may not
+/// be provisioned on that machine yet. Naming a directory that does not exist
+/// would fail every probe at spawn time and read as a missing toolchain, which
+/// is exactly the false positive this module is built around avoiding.
 pub(crate) async fn probe_configured_commands(
     exec: &dyn ExecutionPort,
     machine_str: &str,
@@ -270,7 +353,7 @@ pub(crate) async fn probe_configured_commands(
     }
 
     let opts = ShellOptions {
-        cwd: Some(cwd.to_string()),
+        cwd: Some(cwd.to_string()).filter(|c| !c.is_empty()),
         timeout: Some(timeout),
         ..ShellOptions::login_interactive()
     };
@@ -315,6 +398,116 @@ pub(crate) async fn probe_configured_commands(
 fn is_not_found(err: &str) -> bool {
     !err.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX)
         && !err.starts_with(crate::ports::execution::TIMEOUT_ERROR_PREFIX)
+}
+
+// ── HB6: the same probe, attributed back to the settings that produced it ────
+
+/// One binary a configured command names, and whether the machine could find
+/// it.
+///
+/// A binary this module *skipped* (a builtin, a substitution, a glob) is absent
+/// rather than present-and-unknown: the panel claims exactly what was checked,
+/// no more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbedBinary {
+    pub name: String,
+    pub resolved: bool,
+}
+
+/// One configured command as the settings panel sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbedCommand {
+    pub source: CommandSource,
+    /// The `harnesses` key, for [`CommandSource::Harness`]. `None` for the two
+    /// project-wide settings, which have no name of their own.
+    pub harness: Option<String>,
+    pub command: String,
+    pub binaries: Vec<ProbedBinary>,
+}
+
+/// The answer to "can this project's configured commands run on the machine
+/// that will run them", per command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandProbeReport {
+    /// **The machine that was actually asked.** Not decoration: on a project
+    /// with a remote compute type the commands run there, not on the laptop
+    /// showing the panel, and an indicator that does not say where it looked is
+    /// a lie on exactly those projects.
+    pub machine: String,
+    /// Every configured command, in [`labelled_commands`] order.
+    pub commands: Vec<ProbedCommand>,
+    /// [`PreflightVerdict::detail`] verbatim — the same string a blocked launch
+    /// terminates with, carrying the `bash -l -i -c` reproduce line. Rendered
+    /// rather than paraphrased so the panel and the launch cannot drift apart.
+    pub detail: Option<String>,
+    /// [`FRESH_CHECKOUT_REMEDIATION`], for the same reason.
+    pub guidance: String,
+    /// Whether this verdict would stop a launch. Reported, never enforced here:
+    /// a save is not gated on a probe (see the module header).
+    pub blocks_launch: bool,
+}
+
+/// Attribute one [`PreflightVerdict`] back to the individual commands that
+/// produced it.
+///
+/// Pure, and deliberately separate from the `async fn` that does the probing:
+/// the whole mapping — which command owns which binary, and what the panel is
+/// therefore entitled to claim — is decidable in a unit test with no port
+/// double (AGENTS.md, "where a decision is allowed to live").
+pub(crate) fn attribute_verdict(
+    strategy: &WorktreeStrategy,
+    machine: &str,
+    verdict: &PreflightVerdict,
+) -> CommandProbeReport {
+    const NONE: &[String] = &[];
+    let missing = match verdict {
+        PreflightVerdict::MissingBinaries { missing } => missing.as_slice(),
+        _ => NONE,
+    };
+
+    let commands = labelled_commands(strategy)
+        .into_iter()
+        .map(|(source, harness, command)| ProbedCommand {
+            source,
+            harness: harness.map(str::to_string),
+            command: command.to_string(),
+            binaries: probeable_binaries(&[command])
+                .into_iter()
+                .map(|name| ProbedBinary {
+                    resolved: !missing.contains(&name),
+                    name,
+                })
+                .collect(),
+        })
+        .collect();
+
+    CommandProbeReport {
+        machine: machine.to_string(),
+        commands,
+        detail: verdict.detail(),
+        guidance: FRESH_CHECKOUT_REMEDIATION.to_string(),
+        blocks_launch: !verdict.permits_launch(),
+    }
+}
+
+/// Probe the project's configured commands **at configuration time** and report
+/// the answer per command (HB6).
+///
+/// The same probe the launch runs, on the same machine, against the commands
+/// currently in the panel — including ones the user has typed but not yet
+/// saved, which is the entire point: the most valuable place to say a
+/// `test_command` is wrong is where it was just authored.
+///
+/// Runs with the adapter's default working directory: see
+/// [`probe_configured_commands`].
+pub async fn probe_project_commands(
+    exec: &dyn ExecutionPort,
+    machine_str: &str,
+    strategy: &WorktreeStrategy,
+    timeout: Duration,
+) -> CommandProbeReport {
+    let verdict = probe_configured_commands(exec, machine_str, "", strategy, timeout).await;
+    attribute_verdict(strategy, machine_str, &verdict)
 }
 
 #[cfg(test)]

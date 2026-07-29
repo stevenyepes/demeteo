@@ -432,6 +432,7 @@ pub fn run() {
             commands::project::update_project,
             commands::project::delete_project,
             commands::project::check_repos_dirty,
+            commands::project::probe_project_commands,
             commands::project::get_repositories_for_project,
             commands::project::get_workspace_health,
             commands::project::get_project_by_id,

@@ -177,6 +177,92 @@ pub async fn delete_workspace(ctx: &AppContext, id: String) -> Result<(), String
     Ok(())
 }
 
+/// The command settings the Strategy panel probes, as they stand **in the
+/// form** — not as they stand in the database.
+///
+/// Sent by the caller rather than read back from storage because the whole
+/// value of a configuration-time probe is answering for the command the user
+/// just typed, before they have decided whether to keep it. A probe of the
+/// saved record would tell them about the previous command.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CommandProbeDraft {
+    #[serde(default)]
+    pub prepare_command: Option<String>,
+    #[serde(default)]
+    pub test_command: Option<String>,
+    #[serde(default)]
+    pub harnesses: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Probe a project's configured commands on **the project's own machine**
+/// (HB6).
+///
+/// Which machine that is comes from the project, never from the caller: on a
+/// remote-compute project the commands run on the runner, and an indicator that
+/// silently asked the laptop instead would be confidently wrong exactly where
+/// the answer matters most.
+///
+/// An indicator, not a gate — nothing here may block a save. The launch-time
+/// gate (HB1/HB4) stays where it is.
+pub async fn probe_commands(
+    ctx: &AppContext,
+    project_id: String,
+    draft: CommandProbeDraft,
+) -> Result<crate::adapters::step_executor::preflight::CommandProbeReport, String> {
+    let projects = ctx.projects.get_projects()?;
+    let project_id_typed = ProjectId::from(project_id.clone());
+    let project = projects
+        .into_iter()
+        .find(|p| p.id == project_id_typed)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+
+    let machine = if project.compute_type.to_lowercase() == "local" {
+        crate::domain::ids::LOCAL_MACHINE.to_string()
+    } else {
+        project
+            .remote_host
+            .as_ref()
+            .map(|m| m.as_str())
+            .filter(|m| !m.trim().is_empty())
+            .ok_or_else(|| {
+                "This project runs on a remote machine, but no machine is selected — the \
+                 commands cannot be checked until one is."
+                    .to_string()
+            })?
+            .to_string()
+    };
+
+    // Only the three command fields are read by the probe, so only those are
+    // carried across. Spelling the rest out rather than loading the stored
+    // strategy keeps this honest about what it looked at: a branch prefix or a
+    // PR template has no bearing on whether `cargo` resolves.
+    let strategy = crate::domain::models::WorktreeStrategy {
+        default_branch: String::new(),
+        branch_prefix: String::new(),
+        test_command: draft.test_command,
+        build_command: None,
+        coverage_command: None,
+        conventions_file: None,
+        pr_template: None,
+        harnesses: draft.harnesses,
+        validation_gates: None,
+        prepare_command: draft.prepare_command,
+        extra_writable_paths: Vec::new(),
+    };
+
+    Ok(
+        crate::adapters::step_executor::preflight::probe_project_commands(
+            &*ctx.exec,
+            &machine,
+            &strategy,
+            std::time::Duration::from_secs(
+                crate::adapters::step_executor::preflight::PREFLIGHT_PROBE_TIMEOUT_S,
+            ),
+        )
+        .await,
+    )
+}
+
 pub async fn check_repos_dirty(
     ctx: &AppContext,
     project_id: String,
