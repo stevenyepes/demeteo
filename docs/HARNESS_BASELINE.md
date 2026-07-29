@@ -88,10 +88,11 @@ implement budget has been spent.
 `run_harness_first` treats any non-zero exit as this step's verdict. Nothing
 ever established what the suite did on the *base branch*, so a repository whose
 tests were already failing before the feature started sends the run into a
-rework loop for a defect it did not introduce. `refactor.json` has an
-`s-baseline` step that addresses this — but it is an `agent` step reading its
+rework loop for a defect it did not introduce. `refactor.json` had an
+`s-baseline` step that addressed this — but it was an `agent` step reading its
 own test run and writing prose, not an engine measurement, and the standard
-pipeline has no equivalent at all.
+pipeline had no equivalent at all. (Deleted by [F2](#f2--refactorjson-had-two-baselines--done-2026-07-29);
+both starters now open on the `s-baseline-harness` measurement.)
 
 ### I3. A misconfigured command is indistinguishable from a broken feature
 
@@ -590,6 +591,7 @@ deterministic rather than agentic:
   cheaper and trustworthy (a measurement, not a reading). Once this lands,
   `s-baseline`'s continued existence needs a decision: keep it for narrative value,
   or delete it as redundant. **Put that to the user; do not presume it.**
+  *(Asked and answered — deleted; see [F2](#f2--refactorjson-had-two-baselines--done-2026-07-29).)*
 
 - **Depends:** HB2a. **Size:** large — it is the only task here that adds a git
   primitive.
@@ -699,7 +701,9 @@ deterministic rather than agentic:
   exists beside the new node. It does by hand what the node now measures — an
   agent runs the suite and writes prose — so it is arguably redundant, but it
   also carries narrative value the node does not. Deleting a step from a shipped
-  starter is not this task's call; it is asked, not presumed.
+  starter is not this task's call; it is asked, not presumed. *(Answered
+  2026-07-29: deleted. [F2](#f2--refactorjson-had-two-baselines--done-2026-07-29) records what
+  the deletion cost and what it did not.)*
 
   **Not proven here, by scope:** nothing yet *reads* the record to change an
   outcome. HB2c owns the subtraction, and its "Done when" is still the leg that
@@ -888,7 +892,7 @@ deterministic rather than agentic:
 
 HB2c deferred this on a cost argument and said the judgement was better made
 after rungs 1–2 had been watched. What made it load-bearing was not the
-false-miss rate: it is [F2](#f2--refactorjson-now-has-two-baselines). Deleting
+false-miss rate: it is [F2](#f2--refactorjson-had-two-baselines--done-2026-07-29). Deleting
 `refactor.json`'s `s-baseline` **agent** step downgrades three downstream
 consumers that read *individual test identifiers* out of `artifacts/s-baseline.md`
 — `s-analyse`'s Test Coverage Map ("the test names verbatim"), its
@@ -896,8 +900,15 @@ consumers that read *individual test identifiers* out of `artifacts/s-baseline.m
 test listed as PASSING… if it now FAILS, mark as REGRESSION"). The engine record
 carried `exit_ok` plus a whole-output fingerprint per gate, so deleting the agent
 step would have taken the refactor pipeline from "these 3 of 500 regressed" to
-"the suite is red". **The record now carries what they need**; wiring the prompts
-to it is the next task.
+"the suite is red". **The record now carries what they need.**
+
+*Postscript, 2026-07-29.* F2 wired the prompts and did **not** need this field to
+do it — it attaches the node's captured gate output instead, which is what
+`failing_tests` is a reading *of*, so the prompts get more than the reading would
+give them. That does not make the rung idle: it is what
+`VerdictFailure::failing_tests` scopes a rework template with, on every workflow,
+and it is what made the "the prompt must not read `None` as nothing-was-failing"
+hazard cheap enough to design around. See §5 F2 for the wiring that shipped.
 
 - **On the record:** `HarnessBaselineRun.failing_tests: Option<Vec<String>>`.
   **No migration** — the column is JSON, and the field is `Option` +
@@ -1394,16 +1405,16 @@ to it is the next task.
 HB8 and HB9 were not in the original decomposition; each was found by the task
 after it and is recorded in its own section above. HB2c's third rung was
 deliberately deferred by that task and built later, once
-[F2](#f2--refactorjson-now-has-two-baselines) made it load-bearing; it is
+[F2](#f2--refactorjson-had-two-baselines--done-2026-07-29) made it load-bearing; it is
 recorded inside HB2c rather than as a task of its own.
 
 ---
 
 ## 5. Open follow-ups
 
-Neither blocks anything. Both were found by the work above and are recorded
-here rather than left in a commit message. F2's *technical* blocker has since
-been cleared by HB2c's third rung; what remains of it is prompt work.
+F1 blocks nothing and is still open. F2 is **done** — its record is kept below
+rather than deleted, because the deletion it authorised cost one capability that
+nothing else in this document records.
 
 ### F1 — per-gate results have no structured home
 
@@ -1420,33 +1431,85 @@ is the coupling this codebase otherwise avoids. The fix is a structured per-gate
 result on the step row (the `harness_baseline_json` precedent applies: a JSON
 column needs no migration). Worth doing before anything else reads these strings.
 
-### F2 — `refactor.json` now has two baselines — **decided: delete the agent step**
+### F2 — `refactor.json` had two baselines — **[Done, 2026-07-29]**
 
-`refactor.json` carries both the new `s-baseline-harness` command node and its
-original `s-baseline` **agent** step, which runs the suite and writes prose. HB2b
+`refactor.json` carried both the `s-baseline-harness` command node and its
+original `s-baseline` **agent** step, which ran the suite and wrote prose. HB2b
 deliberately left the agent step alone because the plan called its fate a user
 decision, not an assumption.
 
 The orchestrator measurement is cheaper (zero tokens) and trustworthy in a way an
 agent reading its own test run is not — that is decision 44's whole argument. What
-the agent step still has is narrative value. **The user has decided to keep the
-new approach and delete the agent step.**
+the agent step still had is narrative value. **The user decided to keep the
+measurement and delete the agent step**, and it is deleted: the graph is now
+`s-baseline-harness → s-analyse → …`, and the P0.2 snapshot plus the canvas v2
+fixture were regenerated. The other six starters are byte-identical.
 
-**The technical blocker is cleared.** Deleting `s-baseline` used to cost the
-refactor pipeline a granularity the engine record did not have: three consumers
-read *individual test identifiers* out of `artifacts/s-baseline.md` — `s-analyse`'s
-Test Coverage Map, its `rework_prompt_template`, and `s-regression`'s per-test
-comparison — while `HarnessBaselineRun` recorded only `exit_ok` plus a
-whole-output fingerprint. [Rung 3](#rung-3--per-test-names--done-2026-07-29) put
-`failing_tests` on the record, so the measurement now carries what they need.
+**How the three consumers reach the measurement.** `s-analyse` (twice — its
+prompt and its `rework_prompt_template`) and `s-regression` used to read
+`artifacts/s-baseline.md`. They now read the measurement two ways, and the split
+matters:
 
-**What is left is prompt work, and it is the next task:** delete the `s-baseline`
-node, re-point `s-analyse` and `s-regression` at the engine record rather than at
-`artifacts/s-baseline.md`, and decide how the per-test names reach them — most
-likely by widening `{{harness_baseline}}` (`render_harness_briefing`), which today
-renders per-gate status only. Note the two are not equivalent: the agent step
-listed **passing** tests as well, and the record names only the failing ones,
-because a measurement of what a green suite contains is not something the engine
-takes. `s-regression`'s "for every test listed as PASSING… if it now FAILS" has to
-be rephrased as its contrapositive — *these were failing before; anything else
-that fails now is a regression* — which is exactly what the record supports.
+- **`[attached — from s-baseline-harness]`** — the node's own artifacts, which are
+  the gates' captured stdout+stderr at the base commit (`store_baseline_output`,
+  one per measured gate). This is the *evidence*, and it is why widening
+  `{{harness_baseline}}` turned out not to be necessary: the record's
+  `failing_tests` is a *reading of* this output, so attaching the output gives the
+  consumers strictly more than the reading would, at no engine cost. It travels the
+  path every other starter attachment travels (`resolve_attached_artifacts` →
+  `materialize_external_artifact_paths`), so it lands inside the agent's worktree
+  fence as a path manifest rather than as megabytes of inlined log.
+- **`{{harness_baseline}}`** — the record's own per-gate status, which is the only
+  thing that can say a gate was **not measured**. An attached output cannot say
+  that: absence of a file is indistinguishable from a store failure.
+
+**Where the asymmetry landed.** The agent step listed **passing** tests; the record
+names only failing ones, because a measurement of what a green suite contains is
+not something the engine takes. `s-regression`'s "for every test listed as
+PASSING… if it now FAILS" is therefore rephrased as its contrapositive — *a test
+failing now that was not failing at the base is a regression*. The two are not
+equivalent, and each difference was decided rather than absorbed:
+
+1. **A test that did not exist at the base and fails now.** The old rule could not
+   see it; the new one flags it. **Kept as a regression, deliberately** — a
+   refactor preserves behaviour and must not leave a new failing test behind. The
+   report labels it `ABSENT` in the Baseline column so the rework prompt can tell
+   it from a genuine regression.
+2. **A test that passed at the base and is now absent** — deleted or renamed by the
+   refactor. This is the one the contrapositive genuinely loses: nothing fails, so
+   nothing in the comparison can find it, and *a refactor silently deleting a test
+   is exactly the behaviour change this workflow exists to catch.* It is recovered,
+   but **not by the record** — the record has no passing side to diff against.
+   `s-regression` compares the test identifiers the *attached baseline output*
+   names against the ones its own run names, and reports a `DELETED` verdict that
+   fails the check. Where the runner does not enumerate individual tests, it falls
+   back to comparing totals and says in the report that the comparison was
+   count-level. **State the residue plainly: this leg is a comparison of two
+   outputs by an agent, not an engine measurement, so it is weaker than the other
+   two rules on this page.** It cannot manufacture a pass — every branch of it
+   only ever *adds* a failure — but it can miss one. The engine-side fix, if this
+   is ever wanted as a measurement, is a passing-side reading on the record, which
+   is a rung-3-shaped change and was out of scope here.
+3. **`failing_tests: None` vs. an empty list.** Rung 3 made these different claims
+   on purpose, and the prompt must never read `None` as "nothing was failing". It
+   cannot: the prompt never sees `failing_tests` at all. It sees the *output*
+   (which is either attached or not) and the record's per-gate status (which says
+   measured-and-passed, measured-and-failed, or **not measured**). The prompt
+   spells out that a not-measured gate is `UNKNOWN`, never `PASS` — the same
+   "absent is not green" invariant `HarnessBaseline::harness` enforces in code.
+
+**The `NO_HARNESS` path survives**, driven by the record rather than by an agent's
+prose verdict line: with no validation gate configured, `render_harness_briefing`
+emits its "the harness can prove NOTHING" block and `s-regression` skips to
+`VERDICT: ALL CLEAR`. Both sides of that coupling are pinned by one test
+(`the_refactor_no_harness_skip_branch_is_keyed_on_what_the_engine_renders`), so a
+reword of either strands the branch loudly instead of silently.
+
+**No engine change.** `render_harness_briefing` was not widened, `verifier.rs` and
+`harness_baseline.rs` are untouched, and the three new tests live in
+`node_lint.rs`'s starter-pack module beside `every_migrated_starter_lints_clean`.
+The one that generalises past this task is
+`every_starter_attachment_names_exactly_one_step_it_declares`: a prompt referencing
+a deleted step renders as "(Artifact '…' not found or not yet generated)" mid-run,
+and nothing in the lint gate could see it, because the reference lives in prompt
+*text*.
