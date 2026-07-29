@@ -19,7 +19,10 @@
 //!    as it is today — a baseline mechanism may withhold an improvement, never
 //!    invent a failure;
 //! 5. the detached worktree is torn down on the success *and* the failure
-//!    path.
+//!    path;
+//! 6. a gate the measurement found **unrunnable** ends the run here (HB9),
+//!    while a gate that is merely **red** does not — the two are one line apart
+//!    in the node and have opposite consequences.
 //!
 //! Every leg runs a **real shell and real git** through
 //! `ExecutionMode::LocalOnly` (only the *agent* is stubbed): the subject is
@@ -27,7 +30,7 @@
 //! exec double would answer for that choice rather than obey it.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::adapters::agent::stub_runtime::STUB_AGENT_ENV;
@@ -54,9 +57,27 @@ fn passing(marker: &str) -> String {
     format!("echo '{marker}'; exit 0")
 }
 
-struct NoopNotif;
-impl NotificationPort for NoopNotif {
-    fn emit(&self, _event: &DomainEvent) -> Result<(), String> {
+/// Captures the terminal environment signal, which is the only way the
+/// remediation reaches a user: an error string on a step row is visible in the
+/// node panel, while `EnvironmentNotReady` is persisted as a notification and
+/// pushed live. A leg asserting only the step's status could not tell "the run
+/// stopped and said why" from "the run stopped".
+#[derive(Default)]
+struct SignalRecorder {
+    environment_not_ready: Mutex<Vec<String>>,
+}
+
+struct RecordingNotif(Arc<SignalRecorder>);
+
+impl NotificationPort for RecordingNotif {
+    fn emit(&self, event: &DomainEvent) -> Result<(), String> {
+        if let DomainEvent::EnvironmentNotReady { reason, .. } = event {
+            self.0
+                .environment_not_ready
+                .lock()
+                .unwrap()
+                .push(reason.clone());
+        }
         Ok(())
     }
 }
@@ -218,6 +239,7 @@ struct LegOutcome {
     /// disposable by construction and a run that leaves one behind leaks one
     /// checkout per attempt.
     leftover_worktrees: Vec<String>,
+    signals: Arc<SignalRecorder>,
 }
 
 /// Register provider, create the project, seed the repo, bootstrap, ingest the
@@ -239,12 +261,13 @@ async fn run_leg(
     ));
     std::fs::create_dir_all(&tmp).expect("create app data dir");
 
+    let signals = Arc::new(SignalRecorder::default());
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: tmp.clone(),
             execution_mode: ExecutionMode::LocalOnly,
         },
-        Arc::new(NoopNotif),
+        Arc::new(RecordingNotif(signals.clone())),
         tokio::runtime::Handle::current(),
     );
 
@@ -313,10 +336,18 @@ async fn run_leg(
         steps,
         base_sha,
         leftover_worktrees,
+        signals,
     }
 }
 
 impl LegOutcome {
+    /// Every `EnvironmentNotReady` message this run produced. The environment
+    /// path takes one free in-place retry before the feature fails, so a
+    /// terminating leg may legitimately see the same message twice.
+    fn environment_signals(&self) -> Vec<String> {
+        self.signals.environment_not_ready.lock().unwrap().clone()
+    }
+
     fn step(&self, id: &str) -> StepOutcomeRow {
         self.steps
             .iter()
@@ -436,6 +467,93 @@ async fn a_red_gate_at_the_base_is_recorded_and_the_run_continues() {
         "the worktree must be torn down on the red path too: {:?}",
         leg.leftover_worktrees
     );
+    assert!(
+        leg.environment_signals().is_empty(),
+        "and nobody is told the environment is broken — it is not: {:?}",
+        leg.environment_signals()
+    );
+}
+
+/// The HB9 leg. A gate the classifier says **cannot run on this machine** ends
+/// the run here, at the head of the graph, with zero implement budget spent.
+///
+/// Validate reaches the identical conclusion from the identical field — that is
+/// HB8, and `harness_subtraction.rs` asserts it — but only after the whole
+/// implement budget is gone. The `gdk-3.0` incident this exists for exits **1**,
+/// not 127, and `command -v` resolves `cargo` perfectly, so neither the
+/// preflight probes (HB1/HB4) nor the exit-127 fast path can see it. This
+/// measurement is the first point at which it is detectable at all.
+///
+/// The fixture is one line from the leg above it: the same always-red gate, plus
+/// `@stub-triage environment`, which is what the baseline's own classifier call
+/// reads. That is deliberate — those two legs *are* the distinction this task
+/// draws, and putting them side by side is what stops a later change from
+/// collapsing them.
+#[tokio::test]
+async fn a_gate_that_cannot_run_here_ends_the_run_before_a_line_is_written() {
+    let leg = run_leg(
+        "node-unrunnable",
+        vec![baseline_node(), validate_node()],
+        Some("echo 'UNRUNNABLE-GATE-RAN'; echo '@stub-triage environment'; exit 1".to_string()),
+        None,
+    )
+    .await;
+
+    let signals = leg.environment_signals();
+    assert!(
+        !signals.is_empty(),
+        "the remediation is the entire payload of this failure — a run that stops \
+         without it is a stack trace: {:?}",
+        leg.step("s-baseline-harness")
+    );
+    assert!(
+        signals[0].contains("install the missing system dependency"),
+        "the classifier's remediation must survive from the record to the user: {}",
+        signals[0]
+    );
+    assert!(
+        signals[0].contains("UNRUNNABLE-GATE-RAN"),
+        "and the message must name the command that could not run, or its \
+         reproduce line points at nothing: {}",
+        signals[0]
+    );
+
+    let node = leg.step("s-baseline-harness");
+    assert_ne!(
+        node.status, "completed",
+        "completing here is the defect this leg exists for — the run would then \
+         pay the entire implement budget to be told the same thing: {node:?}"
+    );
+
+    // Nothing downstream ran. That is the whole value: the gate that could not
+    // produce evidence was found before a single token was spent on code it
+    // could never judge.
+    assert!(
+        leg.steps
+            .iter()
+            .all(|(id, row)| id == "s-baseline-harness" || row.status != "completed"),
+        "no step after the baseline may have run: {:?}",
+        leg.steps
+    );
+
+    // The classification is on the record either way, so a later attempt reads
+    // it back instead of paying a second agent call.
+    let gate = leg
+        .baseline
+        .clone()
+        .expect("the measurement is still recorded — it is what justifies the halt")
+        .harness("default")
+        .cloned()
+        .expect("the gate was measured");
+    assert!(
+        gate.environment.is_some(),
+        "the halt must be backed by a recorded classification, not by a guess: {gate:?}"
+    );
+    assert!(
+        leg.leftover_worktrees.is_empty(),
+        "the worktree must be torn down on the terminal path too: {:?}",
+        leg.leftover_worktrees
+    );
 }
 
 // ── Producer 2: the lazy fallback ────────────────────────────────────────────
@@ -516,6 +634,13 @@ async fn a_green_validate_measures_nothing() {
 /// worktree's HEAD and the fallback measures `git merge-base`; if those two
 /// ever disagreed about what "the base" is, the record would not cover and the
 /// fallback would re-measure on every single validate failure.
+///
+/// And it is HB9's regression guard, because it is already the exact fixture:
+/// a repository whose gate is genuinely red must still walk the *whole* graph —
+/// node completes, validate completes on the subtraction — with nobody told the
+/// environment is broken. A halt that fired on "red" rather than on "could not
+/// run" would make Demeteo unusable on any repo with a known-failing or flaky
+/// test, and it would redden here rather than in a support ticket.
 #[tokio::test]
 async fn a_covering_record_is_not_re_measured_by_the_fallback() {
     let leg = run_leg(
@@ -538,6 +663,25 @@ async fn a_covering_record_is_not_re_measured_by_the_fallback() {
     );
     assert_eq!(baseline.base_sha, leg.base_sha);
     assert!(leg.leftover_worktrees.is_empty());
+
+    // HB9's other half: red is not unrunnable.
+    assert_eq!(
+        leg.step("s-baseline-harness").status,
+        "completed",
+        "a gate that is merely red at the base is recorded, not judged"
+    );
+    assert_eq!(
+        leg.step("s-validate").status,
+        "completed",
+        "and the run reaches validate, where the pre-existing failure is \
+         subtracted rather than blamed on the feature: {:?}",
+        leg.step("s-validate")
+    );
+    assert!(
+        leg.environment_signals().is_empty(),
+        "a pre-existing code defect is not an environment failure: {:?}",
+        leg.environment_signals()
+    );
 }
 
 /// A fallback that cannot produce a measurement must leave everything exactly

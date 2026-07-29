@@ -850,7 +850,13 @@ impl ExecutionDriver {
     /// *immediately* on triage (no wasted retries first). Mirrors the
     /// `RetryBudgetExhausted` persistence path so the bell shows it after a
     /// refresh, plus a live event for the toast.
-    fn notify_environment_not_ready(&self, step_exec: &StepExecution, message: &str) {
+    ///
+    /// `pub(crate)` because the baseline node terminates on the same signal
+    /// (HB9): a gate that cannot run is the same news to the user whether the
+    /// engine noticed it at the head of the graph or at validate, and it must
+    /// arrive through the same channel — one that survives a refresh — rather
+    /// than as a step error string only the node panel shows.
+    pub(crate) fn notify_environment_not_ready(&self, step_exec: &StepExecution, message: &str) {
         if let Ok(Some(feature)) = self.features.get(&self.f_id) {
             let notification = crate::domain::models::Notification {
                 id: format!("notif-{}", crate::paths::now_ms()),

@@ -373,6 +373,92 @@ pub fn fallback_baseline_needed(
     gates.iter().any(|g| existing.harness(g).is_none())
 }
 
+/// The gate a baseline measurement found unrunnable, named so the caller can
+/// build the terminal message without searching the record a second time.
+///
+/// Borrowed rather than owned: every field is already a `String` on the record,
+/// and the only thing anyone does with this is render it into
+/// `build_environment_message`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnrunnableBaselineGate<'a> {
+    /// The gate's name, for the log line — the message itself names the
+    /// command, which is what a reproduce line needs.
+    pub name: &'a str,
+    /// The command as the user authored it.
+    pub command: &'a str,
+    /// One sentence naming what the machine is missing, verbatim from the
+    /// classifier.
+    pub reason: &'a str,
+    /// The concrete provisioning step; may be empty.
+    pub remediation: &'a str,
+}
+
+/// Does this baseline measurement permit the run to continue? `Some` means no,
+/// and names the gate that says so (HB9).
+///
+/// # Why the baseline halts on this and not on a red gate
+///
+/// A gate that is simply **red** at the base completes the node and the run goes
+/// on — that is the whole point of measuring a baseline, and halting there would
+/// restate the misattribution the subtraction exists to remove (decision 44). A
+/// gate the classifier said is red *because this machine cannot run it* is the
+/// opposite case: it produced no evidence at the base and will produce none at
+/// validate either, so every token spent between here and there buys nothing.
+/// [`GateDetermination::Environment`](crate::domain::harness_delta::GateDetermination::Environment)
+/// already terminates the run for exactly this gate — this asks the same
+/// question at the head of the graph instead of after the implement budget is
+/// spent, which is invariant I1 of `docs/HARNESS_BASELINE.md`.
+///
+/// Note what only this producer can see. `command -v` (HB1/HB4) catches a
+/// missing **binary** before the run starts; the motivating incident was a
+/// missing **library**, where `cargo` resolves fine and the *build* is what
+/// fails, exiting 1. The baseline measurement is the first point at which that
+/// is detectable at all.
+///
+/// # One unrunnable gate among green ones still halts
+///
+/// A gate the user selected as gating cannot produce evidence, so continuing
+/// means the feature ships unverified on that dimension while looking verified.
+/// HB1 makes the same call when one probed binary of several fails to resolve.
+///
+/// # The direction it fails in
+///
+/// Only a *positive* classification returns `Some`. A record that was never
+/// classified, one the classifier called a regression, and one written by a
+/// build that predates the field all decode to `None` on
+/// [`HarnessBaselineRun::environment`] and are indistinguishable here — so a
+/// malfunctioning classifier withholds a halt and can never manufacture one,
+/// which is the same asymmetry `compare_gate` reads the field under.
+///
+/// A gate recorded **green** is likewise never a halt, however it is
+/// classified. `measure_gates` classifies only red gates, so a green gate
+/// carrying a fault is a shape nothing here wrote; refusing to act on it is the
+/// safe reading of a record we do not understand.
+///
+/// # Only the first
+///
+/// The message this feeds carries a reproduce line, which means nothing for two
+/// commands at once. The exit-127 fast path and the validate-time escalation
+/// each name a single gate for the same reason.
+///
+/// The input is the gates **this measurement** produced, not the whole stored
+/// record: a gate some earlier producer measured is not this node's finding, and
+/// validate's own comparison is what answers for it.
+pub fn unrunnable_baseline_gate(
+    measured: &[HarnessBaselineRun],
+) -> Option<UnrunnableBaselineGate<'_>> {
+    measured.iter().filter(|run| !run.exit_ok).find_map(|run| {
+        run.environment
+            .as_ref()
+            .map(|fault| UnrunnableBaselineGate {
+                name: &run.name,
+                command: &run.command,
+                reason: &fault.reason,
+                remediation: &fault.remediation,
+            })
+    })
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/harness_baseline.rs"]
 mod tests;

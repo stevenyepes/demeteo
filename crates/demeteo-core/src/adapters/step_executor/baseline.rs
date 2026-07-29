@@ -487,16 +487,30 @@ impl ExecutionDriver {
     /// `base_sha` visibly does not cover the run's base instead of a plausible
     /// lie.
     ///
-    /// # It records; it does not judge
+    /// # It records a verdict; it does not judge one
     ///
-    /// A red gate here completes the step. That is the whole purpose of the
-    /// baseline: a repository whose suite was already failing is not this
-    /// feature's defect, and failing the run at its first node would restate
-    /// exactly the misattribution HB2 exists to remove — before a single line
-    /// has been written. What *does* end the run is an environment that cannot
-    /// produce a measurement at all: a `prepare_command` that fails means the
-    /// worktree can never be made runnable, and no amount of implementing
-    /// changes that.
+    /// A gate that is simply **red** here completes the step. That is the whole
+    /// purpose of the baseline: a repository whose suite was already failing is
+    /// not this feature's defect, and failing the run at its first node would
+    /// restate exactly the misattribution HB2 exists to remove — before a
+    /// single line has been written.
+    ///
+    /// Two things do end the run, and both are the same statement: **this
+    /// machine cannot produce evidence about this project.**
+    ///
+    /// * No measurement at all — a `prepare_command` that fails, or gates that
+    ///   never reach an exit status. The worktree can never be made runnable.
+    /// * A measurement whose classifier said the gate was red *because it could
+    ///   not run here* (HB9). That gate reached an exit status but proved
+    ///   nothing, and it will prove nothing at validate either — where the same
+    ///   answer already terminates the run, after the entire implement budget.
+    ///   Asking here costs zero implement budget, which is the point.
+    ///
+    /// The decision itself is
+    /// [`unrunnable_baseline_gate`](crate::domain::harness_baseline::unrunnable_baseline_gate)
+    /// — pure, in `domain/`, reachable from a test with no port doubles
+    /// (AGENTS.md §3). What is left here is the notification and the
+    /// [`StepOutcome`](super::steps::StepOutcome) it maps onto.
     ///
     /// Returns the same `(outcome, artifact refs)` pair the authored-command
     /// path does, so `handle_command_step` treats the two identically.
@@ -613,7 +627,37 @@ impl ExecutionDriver {
             );
         }
 
-        let refs = runs.iter().filter_map(|r| r.output_ref.clone()).collect();
+        let refs: Vec<String> = runs.iter().filter_map(|r| r.output_ref.clone()).collect();
+
+        // A gate that could not run on this machine. The record already knows
+        // it — the classifier answered when the gate was measured, moments ago
+        // — and validate would reach the identical conclusion from the identical
+        // field, only after the whole implement budget has been spent. So say it
+        // here, where nothing has been spent at all.
+        //
+        // The artifact references survive into the failure: the gate's output is
+        // the evidence for the remediation, and a terminal step whose Output tab
+        // is blank is the opposite of what it is for.
+        if let Some(gate) = crate::domain::harness_baseline::unrunnable_baseline_gate(&runs) {
+            let msg = crate::adapters::step_executor::driver::verifier::build_environment_message(
+                machine_str,
+                wt_path,
+                gate.command,
+                gate.reason,
+                gate.remediation,
+            );
+            self.notify_environment_not_ready(step_exec, &msg);
+            tracing::warn!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                harness = %gate.name,
+                base_sha = %base_sha,
+                "a gate that validation depends on cannot run on this machine — ending the run \
+                 at the head of the graph rather than after the implement budget"
+            );
+            return (StepOutcome::Environmental(msg), refs);
+        }
+
         (StepOutcome::Completed, refs)
     }
 

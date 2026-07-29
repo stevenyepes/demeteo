@@ -328,6 +328,125 @@ fn no_gates_never_measures() {
     assert!(!fallback_baseline_needed(true, "abc123", None, &[]));
 }
 
+// ── unrunnable_baseline_gate (HB9) ───────────────────────────────────────────
+
+/// A gate red *because this machine cannot run it* — what
+/// `measure_gates` records when the classifier answers `environment`.
+fn unrunnable(name: &str) -> HarnessBaselineRun {
+    HarnessBaselineRun {
+        environment: Some(BaselineEnvironmentFault {
+            reason: format!("pkg-config cannot find gdk-3.0 for {name}"),
+            remediation: "install libgtk-3-dev".to_string(),
+        }),
+        ..run(name, false, "fp")
+    }
+}
+
+#[test]
+fn a_gate_that_cannot_run_here_stops_the_run_at_the_baseline() {
+    // The whole task. The classification is already on the record — validate
+    // reaches the identical answer from the identical field, but only after the
+    // entire implement budget has been spent on a gate that can never produce
+    // evidence for anybody.
+    let measured = [unrunnable("unit")];
+    let gate = unrunnable_baseline_gate(&measured)
+        .expect("a gate that proved nothing must not let the run proceed");
+
+    assert_eq!(gate.name, "unit");
+    assert_eq!(
+        gate.command, "npm run unit",
+        "the message carries a reproduce line, which needs the command"
+    );
+    assert_eq!(gate.reason, "pkg-config cannot find gdk-3.0 for unit");
+    assert_eq!(
+        gate.remediation, "install libgtk-3-dev",
+        "the remediation is the entire payload of a terminal environment failure"
+    );
+}
+
+#[test]
+fn a_gate_merely_red_at_the_base_lets_the_run_proceed() {
+    // The regression risk of HB9, and the behaviour decision 44 was written to
+    // protect: a repository with a known-failing test is not this feature's
+    // defect. Halting here would make Demeteo unusable on it.
+    assert_eq!(unrunnable_baseline_gate(&[run("unit", false, "fp")]), None);
+}
+
+#[test]
+fn a_green_baseline_lets_the_run_proceed() {
+    assert_eq!(unrunnable_baseline_gate(&[run("unit", true, "")]), None);
+}
+
+#[test]
+fn one_unrunnable_gate_among_green_ones_still_stops_the_run() {
+    // A gate the user selected as gating cannot produce evidence, so proceeding
+    // ships the feature unverified on that dimension while looking verified.
+    // HB1 makes the same call when one probed binary of several fails.
+    let measured = [
+        run("lint", true, ""),
+        unrunnable("unit"),
+        run("e2e", true, ""),
+    ];
+    let gate = unrunnable_baseline_gate(&measured)
+        .expect("a green majority does not make an unrunnable gate acceptable");
+    assert_eq!(gate.name, "unit");
+}
+
+#[test]
+fn only_the_first_unrunnable_gate_is_named() {
+    // The message it feeds carries a reproduce line, which means nothing for
+    // two commands at once — the same reason the 127 fast path and the
+    // validate-time escalation each name a single gate.
+    let measured = [unrunnable("lint"), unrunnable("unit")];
+    let gate = unrunnable_baseline_gate(&measured).expect("the first one still stops the run");
+    assert_eq!(gate.name, "lint");
+}
+
+#[test]
+fn an_unclassified_red_gate_lets_the_run_proceed() {
+    // The fail-safe direction, and it is load-bearing: `triage_harness_failure`
+    // answers `regression` on every spawn/timeout/cancel/parse failure, so a
+    // classifier that malfunctions leaves this field `None`. Only a *positive*
+    // answer may halt a run; a broken classifier must never manufacture one.
+    let mut red = run("unit", false, "fp");
+    red.environment = None;
+    assert_eq!(unrunnable_baseline_gate(&[red]), None);
+}
+
+#[test]
+fn a_record_written_before_the_field_existed_lets_the_run_proceed() {
+    // The same `None`, arrived at differently: the column is JSON and
+    // `environment` is `#[serde(default)]`, so an older record simply omits it.
+    // An unparseable or older record means "not classified", never "unrunnable".
+    let legacy = r#"{"base_sha":"abc123","harnesses":[{"name":"unit",
+        "command":"npm run unit","exit_ok":false,"fingerprint":"fp",
+        "measured_at":1000,"producer":"node"}]}"#;
+    let decoded = HarnessBaseline::from_column(Some(legacy)).expect("decodes");
+    assert_eq!(unrunnable_baseline_gate(&decoded.harnesses), None);
+}
+
+#[test]
+fn a_gate_recorded_green_never_halts_however_it_is_classified() {
+    // `measure_gates` classifies only red gates, so a green one carrying a
+    // fault is a shape nothing in this codebase writes. Refusing to act on a
+    // record we do not understand is the safe reading — the same direction
+    // `compare_gate` takes with a red record that carries no fingerprint.
+    let contradictory = HarnessBaselineRun {
+        exit_ok: true,
+        ..unrunnable("unit")
+    };
+    assert_eq!(unrunnable_baseline_gate(&[contradictory]), None);
+}
+
+#[test]
+fn nothing_measured_halts_nothing() {
+    // An empty measurement is the *other* terminal case (a failed prepare, or
+    // gates that reached no exit status), and the node answers it before this
+    // is ever asked. Here it must simply be silent rather than inventing a
+    // gate to blame.
+    assert_eq!(unrunnable_baseline_gate(&[]), None);
+}
+
 // ── The `{{harness_baseline}}` briefing (HB2c) ───────────────────────────────
 
 fn gate(name: &str, command: &str) -> crate::domain::verifier::ResolvedHarness {
