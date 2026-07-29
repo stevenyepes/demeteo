@@ -1,11 +1,11 @@
 # Demeteo: Locked Decisions Reference
 
-> **Standalone reference for the 43 locked design decisions** that emerged
+> **Standalone reference for the 44 locked design decisions** that emerged
 > from the multi-agent orchestrator design. This is the same
 > table that guides the project. If any conflicts ever arise, this
 > doc should be considered a source of truth; flag the conflict and re-align.
 
-## 1. The 43 Decisions
+## 1. The 44 Decisions
 
 | #  | Decision                           | Locked answer                                                                  | Source           |
 |----|------------------------------------|--------------------------------------------------------------------------------|------------------|
@@ -27,7 +27,7 @@
 | 16 | Repo merge model                   | `feature/<slug>` branch from canonical; subtasks merge into it; optional MR    | Interview Q17    |
 | 17 | PAT scope                          | Per-provider global, keyed by `(kind, host)` for multi-instance support        | Interview Q17a   |
 | 18 | Multi-feature concurrency          | **Concurrent — N features per project.** Features on one project run at the same time, each on its own `feature/<slug>` branch and its own feature-scoped worktree. ⚠️ **Supersedes the original "strict serial (A)" answer** — see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q18) |
-| 19 | Workflow authoring UX              | **Visual DAG builder** (`WorkflowCanvas` design mode) replaces the form-first editor; read-only Monaco source tab per [decision 42](#1-the-42-decisions); "save run as template" still v1.2. ⚠️ **Supersedes the form-first (v1.0) / YAML-view (v1.1) answer** — see [§2](#2-superseded-decisions). | 2026-07-23 (was Interview Q19) |
+| 19 | Workflow authoring UX              | **Visual DAG builder** (`WorkflowCanvas` design mode) replaces the form-first editor; read-only Monaco source tab per [decision 42](#1-the-44-decisions); "save run as template" still v1.2. ⚠️ **Supersedes the form-first (v1.0) / YAML-view (v1.1) answer** — see [§2](#2-superseded-decisions). | 2026-07-23 (was Interview Q19) |
 | 20 | Conflict resolution UX             | **Inline, at the point of conflict — no cascade layer.** A step's task-branch merge that conflicts costs one agent turn in the step's own worktree and session (`steps/conflict_pass`); an upstream-sync conflict is surfaced to the user, who triggers `feature_resolve_sync_conflicts` ("Resolve with agent") from the UI. No dedicated Monaco 3-way component. ⚠️ **Supersedes the original "smart cascade" answer** — the `ConflictResolver` port, its stub adapter, and the `subtask_merges` audit table were deleted as never-called; see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q20) |
 | 21 | Project overview                   | Running features (plural) + queue + lazy-loaded repo map. Revised with [decision 18](#2-superseded-decisions): there is no single "current feature" slot, because a project may have several features in flight. | 2026-07-12 (was Interview Q21) |
 | 22 | "Start a feature" entry point      | Slim modal with description + inferred chips; "Customize…" expands              | Interview Q22    |
@@ -52,6 +52,51 @@
 | 41 | Scheduling stays outside the graph | `WorkflowSchedule` (cron) remains a **workflow-level sibling of `nodes`/`edges`**, not a node type — schema v2 does not entrench scheduling in the graph, so it can move to the Kanban card/board layer (Epic C1) later without a schema break. Resolves PRD DAG §11 Q4. | PRD DAG §11 (2026-07-23) |
 | 42 | Workflow source view               | The DAG builder ships a **read-only Monaco JSON source tab in Phase 3** (fulfilling decision 19's deferred source-view promise in v2 form). Editable source with two-way canvas binding stays deferred — a later decision record is required to add it. Resolves PRD DAG §11 Q5. | PRD DAG §11 (2026-07-23) |
 | 43 | Rework is a decomposition, not a re-run | A verdict failure downstream of a `sequence` step redirects to the step that **produces** its task list, not the step that executes it. That producer, seeing it is in a rework cycle (`domain/rework.rs` — the failing step is a descendant of the consumer), renders its `rework_prompt_template` and emits a **delta**: one ticket per defect the verdict named. The sequence step runs that list whole against the branch the previous cycle already landed, and reports the earlier cycles as `already_landed`. The file-overlap `select_targeted_tasks` heuristic survives only where there is no producer to ask (legacy `parallel` workflows). Corollary: the decomposition step must come **after** the spec step, so a rework redirect cannot rewind the spec and move the acceptance criteria the validator judges against. | 2026-07-28 |
+| 44 | Validate judges a delta, not an absolute | A harness failure is retryable **iff** the harness was proven runnable **and** the failure is *new relative to a measured baseline*; everything else is terminal with remediation. The baseline is an engine **measurement** — exit status plus a normalized failure fingerprint per named harness, taken against the run's base commit — never an agent's reading of its own test run. Persisted as one JSON column, `features.harness_baseline_json` (migration V37). See the detail block below and [docs/HARNESS_BASELINE.md](HARNESS_BASELINE.md). | 2026-07-28 |
+
+### 44 — Harness baseline (detail)
+
+Three things here were decided against a plausible-sounding alternative, so the
+reasoning is recorded rather than left to be re-derived.
+
+**Why a delta and not an absolute.** `run_harness_first` treats any non-zero exit
+as this step's verdict. Nothing establishes what the suite did on the base branch,
+so a repository whose tests were already red sends the run into a rework loop for
+a defect it did not introduce — and a missing system library arrives wearing the
+same costume. Both are then fed to `s-implement`, which cannot fix either. The
+delta is what makes "is this the feature's fault?" answerable at all, and the
+retry rule above is just that question restated.
+
+**Why a measurement and not an agent.** The obvious alternative is to prompt the
+validate agent to run the tests and report the verdict. It is rejected because the
+thing being judged would then control the evidence: an agent can report a pass
+through a subset, a `--no-fail-fast`, a misread, or plain optimism. Three
+supporting reasons — the `Verify` capability's write fence is `ArtifactsOnly`, so
+`cargo test`/`npm test` would need the fence widened, which [decision
+35](#1-the-44-decisions) and AGENTS.md §2 forbid; build output streamed into
+context is the cost `run_harness_first` exists to avoid; and an agent-chosen
+command breaks the attempt-to-attempt comparability that
+`normalize_failure_fingerprint` and `should_triage` depend on. The agent keeps a
+real role — *interpreting* a failure into an actionable rework reason — but never
+produces the pass/fail evidence.
+
+**Why a `features` column and not a `run_events` record.** The original framing
+assumed the runner→desktop sync carried only events, which would have decided it
+by construction. That was false twice. `hydrate_shadow_feature`
+(`application/remote_runs/reconcile.rs`) already pulls the runner's whole `Feature`
+and `StepExecution` rows over the `get_feature`/`list_steps` RPCs, so a column
+replicates along the path `pr_title` and `effort` already travel. More
+fundamentally, in a detached run the writer and the reader are **the same process
+on the runner against one SQLite file**, so the sync path is a display concern,
+not a correctness one. With that constraint gone, `run_events` is strictly worse:
+`RunEventsPort` is `append` + `list_since` only — no by-kind lookup, so every read
+scans the feature's whole log — it is append-only, so a re-measured baseline could
+only shadow the old one, and the two transports key it differently (`feature_id`
+locally, `run_id` on the runner, and the runner never wires `RunEventRecorder`), so
+an engine-written row would land in a key space `stream_events` never queries. One
+JSON column follows `features.attachments_json` (V19) and V36's own note blessing a
+single JSON column for state that is always read and written together and never
+queried on — which is exactly this record's shape.
 
 ### 37 — Effort level (detail)
 
