@@ -20,12 +20,23 @@
 //!
 //! # Why only probes
 //!
-//! It resolves binaries; it does not run the suite, and it does not run
-//! `prepare_command` either. Both belong to the `baseline-harness` command node
-//! (P4.2a), which sits at the head of the graph — the same point in the timeline
-//! for a fraction of the wall-clock here, where every launch pays it. A phase
-//! that adds a minute to "Launch" before anything visible happens would be paid
-//! by every user on every run to catch a problem the next node catches anyway.
+//! It resolves binaries; it does not *run* anything the project configured —
+//! not the suite, and not `prepare_command`. Running belongs to the
+//! `baseline-harness` command node (P4.2a), which sits at the head of the graph
+//! — the same point in the timeline for a fraction of the wall-clock here,
+//! where every launch pays it. A phase that adds a minute to "Launch" before
+//! anything visible happens would be paid by every user on every run to catch a
+//! problem the next node catches anyway.
+//!
+//! # What "the configured commands" means (HB4)
+//!
+//! Every command the project configured, not just `test_command`:
+//! `prepare_command`, `test_command`, and every value in the `harnesses` map. A
+//! `prepare_command` naming a missing binary is as fatal as a `test_command`
+//! doing so, and a step selecting a named harness runs *that* string — probing
+//! only `test_command` would check something the run never executes. Probing is
+//! `command -v` either way, so covering all of them costs nothing extra beyond
+//! the probes themselves.
 //!
 //! # The bias, stated once
 //!
@@ -38,6 +49,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use crate::domain::models::WorktreeStrategy;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
 
 /// Shell keywords, builtins and no-ops that either always resolve or are not
@@ -61,9 +73,14 @@ const UNRESOLVABLE: &[char] = &['$', '`', '(', ')', '<', '>', '*', '?', '{', '}'
 /// What the preflight established about a project's configured commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PreflightVerdict {
-    /// No `test_command` is configured. Nothing to probe — **not** a failure.
-    /// A project may legitimately have no harness; the run proceeds and the
-    /// validate step is told plainly that nothing ran (S12).
+    /// The project configures **no command at all** — no `prepare_command`, no
+    /// `test_command`, and no named harness. Nothing to probe — **not** a
+    /// failure. A project may legitimately have no harness; the run proceeds
+    /// and the validate step is told plainly that nothing ran (S12).
+    ///
+    /// It is deliberately *all three*: a project that configures only named
+    /// harnesses has a harness, and reporting "none configured" at it would be
+    /// false.
     NotConfigured,
     /// Every binary the configured commands name resolves on the login shell's
     /// `PATH`. Carries what was actually checked, so the phase detail can say
@@ -100,9 +117,10 @@ impl PreflightVerdict {
     pub(crate) fn detail(&self) -> Option<String> {
         match self {
             PreflightVerdict::NotConfigured => Some(
-                "No test command is configured for this project, so nothing will be run to \
-                 verify the feature. Set one in project settings if you want the validate step \
-                 to have evidence to judge."
+                "This project configures no commands at all — no test command, no prepare \
+                 command, and no named harnesses — so nothing will be run to verify the \
+                 feature. Set at least a test command in project settings if you want the \
+                 validate step to have evidence to judge."
                     .to_string(),
             ),
             PreflightVerdict::Resolved { probed } if probed.is_empty() => None,
@@ -133,26 +151,31 @@ impl PreflightVerdict {
     }
 }
 
-/// Extract the binaries a user-authored command line will actually try to
-/// execute, skipping everything that cannot be resolved without running a
+/// Extract the binaries a set of user-authored command lines will actually try
+/// to execute, skipping everything that cannot be resolved without running a
 /// shell.
 ///
-/// Splits on the operators that start a new command (`&&`, `||`, `;`, `|`,
-/// newline), then takes each segment's command word — after stepping over any
-/// leading `VAR=value` assignments, which are not commands. Words that are
-/// shell builtins, or that contain substitution/glob/redirection characters,
-/// are dropped: see the module's bias note. Order-preserving and deduplicated,
-/// so a command naming `cargo` three times probes it once.
-pub(crate) fn probeable_binaries(cmd: &str) -> Vec<String> {
+/// Splits each command on the operators that start a new command (`&&`, `||`,
+/// `;`, `|`, newline), then takes each segment's command word — after stepping
+/// over any leading `VAR=value` assignments, which are not commands. Words that
+/// are shell builtins, or that contain substitution/glob/redirection
+/// characters, are dropped: see the module's bias note.
+///
+/// Order-preserving and deduplicated **across the whole slice**, not merely
+/// within one command: a command naming `cargo` three times probes it once, and
+/// so does a project whose prepare, test and three harnesses all say `npm`.
+/// That is what lets HB4 probe every configured command for the cost of the
+/// distinct tools in them.
+pub(crate) fn probeable_binaries(commands: &[&str]) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
 
-    for segment in cmd
-        .split(['\n', ';'])
-        .flat_map(|s| s.split("&&"))
-        .flat_map(|s| s.split("||"))
-        .flat_map(|s| s.split('|'))
-    {
+    for segment in commands.iter().flat_map(|cmd| {
+        cmd.split(['\n', ';'])
+            .flat_map(|s| s.split("&&"))
+            .flat_map(|s| s.split("||"))
+            .flat_map(|s| s.split('|'))
+    }) {
         let mut words = segment.split_whitespace();
         // Step over leading assignments: `RUST_LOG=debug cargo test` runs
         // `cargo`, not `RUST_LOG=debug`.
@@ -179,8 +202,43 @@ pub(crate) fn probeable_binaries(cmd: &str) -> Vec<String> {
     out
 }
 
-/// Probe every binary the configured commands name, on the machine that will
-/// run them.
+/// Every command the project has actually configured, in probe order:
+/// `prepare_command`, then `test_command`, then each named harness **sorted by
+/// name**.
+///
+/// The sort is not cosmetic: `harnesses` is a `HashMap`, so an unsorted walk
+/// would vary the probe order — and therefore the order binaries appear in a
+/// failure message — between two runs of the same project. Blank and
+/// whitespace-only entries are dropped; a setting cleared to `""` is not a
+/// configured command.
+pub(crate) fn configured_commands(strategy: &WorktreeStrategy) -> Vec<&str> {
+    fn live(cmd: &Option<String>) -> Option<&str> {
+        cmd.as_deref().map(str::trim).filter(|c| !c.is_empty())
+    }
+
+    let mut out: Vec<&str> = Vec::new();
+    out.extend(live(&strategy.prepare_command));
+    out.extend(live(&strategy.test_command));
+    if let Some(harnesses) = &strategy.harnesses {
+        let mut entries: Vec<(&String, &String)> = harnesses.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        out.extend(
+            entries
+                .into_iter()
+                .map(|(_, cmd)| cmd.trim())
+                .filter(|cmd| !cmd.is_empty()),
+        );
+    }
+    out
+}
+
+/// Probe every binary the project's configured commands name, on the machine
+/// that will run them.
+///
+/// Takes the whole `WorktreeStrategy` rather than one command because the three
+/// sources travel together and are read as a set: `prepare_command`,
+/// `test_command`, and the `harnesses` map. Their union is deduplicated, so the
+/// cost is one probe per distinct tool, not per command.
 ///
 /// A free function over the one port it needs, rather than a method on
 /// `ExecutionDriver` — the driver carries twenty-odd ports this never reads,
@@ -196,14 +254,15 @@ pub(crate) async fn probe_configured_commands(
     exec: &dyn ExecutionPort,
     machine_str: &str,
     cwd: &str,
-    test_command: Option<&str>,
+    strategy: &WorktreeStrategy,
     timeout: Duration,
 ) -> PreflightVerdict {
-    let Some(cmd) = test_command.map(str::trim).filter(|c| !c.is_empty()) else {
+    let commands = configured_commands(strategy);
+    if commands.is_empty() {
         return PreflightVerdict::NotConfigured;
-    };
+    }
 
-    let binaries = probeable_binaries(cmd);
+    let binaries = probeable_binaries(&commands);
     if binaries.is_empty() {
         // A command made entirely of builtins and substitutions. Nothing to
         // assert, and asserting nothing is the honest outcome — not a failure.

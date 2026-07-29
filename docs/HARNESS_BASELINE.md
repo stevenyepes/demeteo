@@ -288,7 +288,7 @@ deterministic rather than agentic:
   the other proves a resolvable one leaves the run untouched. Both were watched
   fail — an inert gate reddens the first, an over-eager one reddens the second.
 
-### HB4 — Probe every configured command, not just `test_command`
+### HB4 — Probe every configured command, not just `test_command` — **[Done]**
 
 - **Goal:** close the gap HB1 shipped with. `probe_configured_commands` takes a
   single `test_command` and probes that. Two things it therefore never checks:
@@ -686,7 +686,7 @@ deterministic rather than agentic:
 | Task | Title | Size | Status |
 |---|---|---|---|
 | HB1 | Bootstrap preflight phase | medium | ✅ |
-| HB4 | Probe every configured command | small | ☐ |
+| HB4 | Probe every configured command | small | ✅ |
 | HB5 | Named harnesses become an ordered list | medium | ☐ |
 | HB2a | Baseline record: shape & storage | medium | ☐ |
 | HB2b | Measure the baseline: node + lazy fallback | large | ☐ |
