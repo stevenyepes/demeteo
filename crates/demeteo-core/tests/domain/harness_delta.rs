@@ -9,7 +9,9 @@
 //! the wiring reaches them.
 
 use super::*;
-use crate::domain::harness_baseline::{BaselineProducer, HarnessBaseline, HarnessBaselineRun};
+use crate::domain::harness_baseline::{
+    BaselineEnvironmentFault, BaselineProducer, HarnessBaseline, HarnessBaselineRun,
+};
 
 const BASE: &str = "abc1234def5678";
 
@@ -23,6 +25,20 @@ fn measured(name: &str, exit_ok: bool, fingerprint: &str) -> HarnessBaselineRun 
         environment: None,
         measured_at: 1_000,
         producer: BaselineProducer::Node,
+    }
+}
+
+/// A red measurement the classifier called *environmental* at measurement time:
+/// the gate could not run on this machine, so its red says nothing about the
+/// code. Indistinguishable from [`measured`]`(name, false, fp)` on every field
+/// rungs 1 and 2 read — which is the whole reason rung 3 exists.
+fn unrunnable(name: &str, fingerprint: &str) -> HarnessBaselineRun {
+    HarnessBaselineRun {
+        environment: Some(BaselineEnvironmentFault {
+            reason: "pkg-config cannot find gdk-3.0".to_string(),
+            remediation: "install libgtk-3-dev".to_string(),
+        }),
+        ..measured(name, false, fingerprint)
     }
 }
 
@@ -59,8 +75,9 @@ fn a_gate_red_before_and_identically_red_now_is_not_this_features_fault() {
     let d = determine(Some(&base), &observed("unit", "npm run unit", "fp-unit"));
 
     assert_eq!(d, GateDetermination::PreExisting);
-    assert!(
-        !d.is_attributable(),
+    assert_eq!(
+        d.outcome(),
+        GateOutcome::Excluded,
         "a pre-existing failure must not fail the step"
     );
 }
@@ -74,7 +91,123 @@ fn a_gate_green_before_and_red_now_is_a_regression() {
     let d = determine(Some(&base), &observed("unit", "npm run unit", "fp-new"));
 
     assert_eq!(d, GateDetermination::Regression);
-    assert!(d.is_attributable(), "a regression must fail the step");
+    assert_eq!(
+        d.outcome(),
+        GateOutcome::Attributable,
+        "a regression must fail the step"
+    );
+}
+
+// ── The row that looks exactly like leg 1 and is its opposite ────────────────
+
+/// A gate red at the base **because the machine cannot run it**, red now with
+/// the identical output. Every input rung 2 can see is the same as leg 1's — the
+/// same command, the same fingerprint, the same exit status both sides — so
+/// without rung 3 this is subtracted and the step passes on a gate that verified
+/// nothing.
+///
+/// The motivating incident was a missing `gdk-3.0`. It exits **1**, not 127, so
+/// the exit-127 fast path never sees it; before decision 44 it reached C6's
+/// classifier and terminated with remediation, and HB2c regressed that to a
+/// silent pass. What tells it from leg 1 is not a comparison — it is the
+/// classification the measurement recorded.
+#[test]
+fn a_gate_red_at_the_base_because_it_could_not_run_is_terminal_not_subtracted() {
+    let base = record(BASE, vec![unrunnable("unit", "fp-unit")]);
+    let d = determine(Some(&base), &observed("unit", "npm run unit", "fp-unit"));
+
+    assert_eq!(
+        d,
+        GateDetermination::Environment {
+            reason: "pkg-config cannot find gdk-3.0".to_string(),
+            remediation: "install libgtk-3-dev".to_string(),
+        },
+        "a gate that never ran proved nothing, so passing on it is evidence-free"
+    );
+    assert_eq!(
+        d.outcome(),
+        GateOutcome::Unrunnable {
+            reason: "pkg-config cannot find gdk-3.0",
+            remediation: "install libgtk-3-dev",
+        },
+        "and the remediation has to survive the comparison, or the terminal \
+         failure cannot say what to install"
+    );
+}
+
+/// The fail-safe direction, and the reason the field is `Option`-shaped rather
+/// than an enum with an `Unknown` arm that a caller could mis-handle. A record
+/// written before this field existed decodes with it absent, and *absent must
+/// mean subtractable* — the pre-HB2c-fix behaviour — because only a positive
+/// classification may terminate a run. A classifier that spawns, times out, or
+/// answers unparseably lands here too.
+#[test]
+fn a_red_gate_that_was_never_classified_stays_pre_existing() {
+    let base = record(BASE, vec![measured("unit", false, "fp-unit")]);
+    let d = determine(Some(&base), &observed("unit", "npm run unit", "fp-unit"));
+
+    assert_eq!(d, GateDetermination::PreExisting);
+    assert_eq!(d.outcome(), GateOutcome::Excluded);
+}
+
+/// The same claim reached through the decoder rather than through a constructor,
+/// which is the only way to prove the *stored* shape of an older record. A
+/// baseline written by a build that predates the field must decode cleanly and
+/// behave as excluded — a decode failure would degrade to `NoBaseline`, and a
+/// decode that defaulted the other way would terminate every run against an
+/// already-red repository.
+#[test]
+fn a_record_written_before_the_field_existed_decodes_as_pre_existing() {
+    let stored = r#"{"base_sha":"abc1234def5678","harnesses":[{"name":"unit",
+        "command":"npm run unit","exit_ok":false,"fingerprint":"fp-unit",
+        "measured_at":1000,"producer":"node"}]}"#;
+    let base = HarnessBaseline::from_column(Some(stored)).expect("an older record must decode");
+
+    assert!(
+        base.harness("unit")
+            .expect("the gate is there")
+            .environment
+            .is_none(),
+        "absent is not environmental"
+    );
+    assert_eq!(
+        determine(Some(&base), &observed("unit", "npm run unit", "fp-unit")),
+        GateDetermination::PreExisting,
+        "an unclassified red gate keeps the behaviour it had before rung 3 existed"
+    );
+}
+
+/// Rung 3 is read *after* rung 2 has matched, not instead of it. A gate that was
+/// unrunnable at the base and says something different now is not the failure
+/// that was classified, so the classification is not evidence about it — it
+/// stays a verdict, which is the safe direction (it withholds an escalation
+/// rather than manufacturing one).
+#[test]
+fn an_environmental_baseline_does_not_terminate_a_differently_red_gate() {
+    let base = record(BASE, vec![unrunnable("unit", "fp-old")]);
+    let d = determine(Some(&base), &observed("unit", "npm run unit", "fp-new"));
+
+    assert_eq!(d, GateDetermination::NewFailures);
+    assert_eq!(d.outcome(), GateOutcome::Attributable);
+}
+
+/// And rung 1 still wins outright. A record cannot be both green and
+/// environmental — a green gate is never classified — but if a malformed one
+/// ever were, the exit status must still settle it, exactly as it does against a
+/// fingerprint.
+#[test]
+fn a_green_baseline_is_a_regression_whatever_else_the_record_carries() {
+    let mut green = measured("unit", true, "");
+    green.environment = Some(BaselineEnvironmentFault {
+        reason: "should never be read".to_string(),
+        remediation: String::new(),
+    });
+    let base = record(BASE, vec![green]);
+
+    assert_eq!(
+        determine(Some(&base), &observed("unit", "npm run unit", "fp-new")),
+        GateDetermination::Regression
+    );
 }
 
 // ── The rest of the table ────────────────────────────────────────────────────
@@ -88,7 +221,7 @@ fn a_differently_red_gate_is_new_failures_atop_the_pre_existing_one() {
     let d = determine(Some(&base), &observed("unit", "npm run unit", "fp-new"));
 
     assert_eq!(d, GateDetermination::NewFailures);
-    assert!(d.is_attributable());
+    assert_eq!(d.outcome(), GateOutcome::Attributable);
 }
 
 /// No record at all is today's behaviour, unchanged. This is the row that keeps
@@ -98,7 +231,7 @@ fn no_record_at_all_reproduces_todays_behaviour() {
     let d = determine(None, &observed("unit", "npm run unit", "fp-unit"));
 
     assert_eq!(d, GateDetermination::NoBaseline);
-    assert!(d.is_attributable());
+    assert_eq!(d.outcome(), GateOutcome::Attributable);
 }
 
 // ── Absent is not green ──────────────────────────────────────────────────────
@@ -256,6 +389,15 @@ fn only_the_residue_still_needs_the_triage_agent() {
     assert!(
         !GateDetermination::PreExisting.allows_triage(),
         "a subtracted gate is never classified — there is no failure left"
+    );
+    assert!(
+        !GateDetermination::Environment {
+            reason: "no gdk".to_string(),
+            remediation: "install libgtk-3-dev".to_string(),
+        }
+        .allows_triage(),
+        "this one has already been classified, at measurement time — asking \
+         again pays a second agent call for an answer already on the record"
     );
 }
 

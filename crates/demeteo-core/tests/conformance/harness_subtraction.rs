@@ -14,6 +14,12 @@
 //!    evidence the validate turn is handed;
 //! 2. a gate green at the base and red now **does**.
 //!
+//! And the one that keeps leg 1 from being a way to pass anything: a gate red at
+//! the base **because this machine cannot run it** is indistinguishable from leg
+//! 1 on every input the comparison can see, and must terminate with remediation
+//! instead of being subtracted. The difference is not computed — it is the
+//! classification C6's agent recorded when the baseline was measured.
+//!
 //! Plus the three that keep it honest: a differently-red gate is still this
 //! feature's, an exclusion is named beside an attributable failure rather than
 //! vanishing, and C6's classifier is not consulted about a case the measurement
@@ -400,13 +406,31 @@ async fn a_gate_red_at_the_base_and_identically_red_now_does_not_fail_the_step()
     // The exclusion is *named* in the evidence the turn was judging on. Passing
     // a red gate silently would be a subtraction the reader cannot audit — and
     // the first time it is wrong, nothing would say it happened.
+    // Two turns see this gate's output, and telling them apart is itself the
+    // assertion. The baseline's triage call reads it once at measurement time —
+    // that is the whole cost of rung 3, paid at the head of the failure path —
+    // and the validate turn reads it once as evidence. Split them by the
+    // heading each carries and neither can borrow the other's count.
     let prompts = prompts_containing("PRE-EXISTING-RED");
+    let triage: Vec<&String> = prompts
+        .iter()
+        .filter(|p| p.contains("triage classifier"))
+        .collect();
+    let judged: Vec<&String> = prompts
+        .iter()
+        .filter(|p| p.contains("Harness Results"))
+        .collect();
     assert_eq!(
-        prompts.len(),
+        triage.len(),
+        1,
+        "the red baseline gate is classified exactly once, at measurement time"
+    );
+    assert_eq!(
+        judged.len(),
         1,
         "exactly one validate turn should have seen this gate"
     );
-    let prompt = &prompts[0];
+    let prompt = judged[0];
     assert!(
         prompt.contains("Excluded"),
         "the excluded gate needs a heading of its own in the prompt:\n{prompt}"
@@ -424,10 +448,101 @@ async fn a_gate_red_at_the_base_and_identically_red_now_does_not_fail_the_step()
         !gate.exit_ok,
         "the gate was red at the base; that is what excused it"
     );
+    // This leg also exercises the classifier's fail-safe end to end. The
+    // baseline's red gate *was* handed to the triage agent (every red baseline
+    // gate is), and the stub had no `@stub-triage` directive to answer with — so
+    // it returned nothing parseable, which `parse_triage_text` reads as
+    // `regression`. That must leave the gate subtractable and the run
+    // untouched: a classifier that cannot answer withholds an escalation, it
+    // never manufactures one.
+    assert!(
+        gate.environment.is_none(),
+        "a triage that answered nothing must not have terminated the run: {:?}",
+        gate.environment
+    );
     assert_eq!(
         leg.baseline.as_ref().unwrap().base_sha,
         leg.base_sha,
         "and the record must cover this run's base commit"
+    );
+}
+
+// ── Leg 1b: red before, but because the gate cannot run here ─────────────────
+
+/// **The row leg 1 must not swallow.** Every input the comparison can see is
+/// leg 1's: the same command, the same byte-identical output both sides, the
+/// same red exit. What differs is *why* it was red at the base — the machine
+/// cannot run the gate — and that is knowable only from the classification the
+/// baseline measurement recorded.
+///
+/// Subtracting it would pass the step on a gate that verified nothing, which is
+/// strictly worse than the misattribution HB2c set out to fix: it turns "does
+/// validate hide issues?" from a question into a yes. Before decision 44 this
+/// case reached C6's classifier and terminated with remediation, so a silent
+/// pass here is also a regression against master.
+///
+/// The fixture is deliberately built so that a *wrong* answer is loud: the gate
+/// output carries `@stub-verdict verdict` as well, so if the gate is excluded
+/// the excluded block reaches the validate turn, the stub returns a passing
+/// verdict, and the step **completes green**. There is no ambiguous middle.
+///
+/// It also carries `@stub-triage environment`, which is what the baseline's own
+/// triage call reads — at the head of the failure path, before any rework cycle
+/// has been spent. That is the cost argument in executable form: the same agent,
+/// the same prompt, one cycle earlier than `should_triage` could ever reach it.
+#[tokio::test]
+async fn a_gate_that_could_not_run_at_the_base_terminates_rather_than_being_excluded() {
+    let leg = run_leg(
+        "unrunnable",
+        vec![validate_node(None, 1)],
+        GateConfig {
+            test_command: Some(
+                "echo 'UNRUNNABLE-GATE-RAN'; echo '@stub-triage environment'; \
+                 echo '@stub-verdict verdict'; exit 1"
+                    .to_string(),
+            ),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let signals = leg.signals.environment_not_ready.lock().unwrap().clone();
+    assert_eq!(
+        signals.len(),
+        1,
+        "a gate that proved nothing must terminate with remediation, not pass: {:?}",
+        leg.validate()
+    );
+    assert!(
+        signals[0].contains("install the missing system dependency"),
+        "the classifier's remediation has to survive from the baseline record \
+         all the way to the user: {}",
+        signals[0]
+    );
+    assert!(
+        signals[0].contains("UNRUNNABLE-GATE-RAN"),
+        "and the message must name the command that could not run, or the \
+         reproduce line points at nothing: {}",
+        signals[0]
+    );
+
+    let row = leg.validate();
+    assert_ne!(
+        row.status, "completed",
+        "passing here is the defect this leg exists for: {row:?}"
+    );
+
+    // The classification is on the *record*, which is what makes it free to
+    // re-read on every later attempt instead of paying a second agent call.
+    let gate = leg.gate("default");
+    assert!(
+        !gate.exit_ok,
+        "it was still a red measurement — the classification says why, not whether"
+    );
+    assert!(
+        gate.environment.is_some(),
+        "the baseline must carry the classification, or nothing downstream can \
+         tell this gate from a pre-existing defect: {gate:?}"
     );
 }
 
@@ -541,6 +656,14 @@ async fn an_excluded_gate_is_named_beside_the_failure_that_is_being_charged() {
 /// exit status at the base, so the machine can run it, and the output changed
 /// under this feature's changes. The run therefore burns its retry budget as an
 /// ordinary verdict would, and no `EnvironmentNotReady` signal is emitted.
+///
+/// The baseline's *own* triage call still happens — every red baseline gate is
+/// classified — but it is asked about the base's output, which is the `GATE-RAN`
+/// line without the directive (`red_plus` emits the extra only on a branch, and
+/// HB2b measures detached). So it answers `regression`, the gate stays
+/// subtractable, and nothing escalates. That asymmetry is exactly the one rung 3
+/// turns on: the classification describes the failure that was *measured*, never
+/// the one observed later.
 #[tokio::test]
 async fn the_triage_agent_is_not_asked_about_a_case_the_baseline_settled() {
     let leg = run_leg(

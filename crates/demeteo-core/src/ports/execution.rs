@@ -345,10 +345,12 @@ mod harness_gates;
 mod harness_baseline;
 
 /// Subtraction fixtures (HB2c, `docs/HARNESS_BASELINE.md`): a gate red at the
-/// base and identically red now does **not** fail the step, a gate green at the
-/// base and red now **does**, a differently-red gate does, and the exclusion is
-/// named in the evidence the validate turn is handed. Runs a real shell and
-/// real git; only the agent is stubbed. Included the same `#[path]` way.
+/// base and identically red now does **not** fail the step, a gate red at the
+/// base *because this machine cannot run it* **does** — terminally, with
+/// remediation — a gate green at the base and red now does, a differently-red
+/// gate does, and the exclusion is named in the evidence the validate turn is
+/// handed. Runs a real shell and real git; only the agent is stubbed. Included
+/// the same `#[path]` way.
 #[cfg(test)]
 #[path = "../../tests/conformance/harness_subtraction.rs"]
 mod harness_subtraction;
