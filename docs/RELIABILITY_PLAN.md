@@ -128,6 +128,11 @@ up, SSH dropped) still serves commands that time out rather than reconnecting
 immediately. The keepalive-ack no-progress abort addressed the *symptom* of a
 wedged read; the cache itself is still not health-checked.
 
+S4's retry loop now evicts before each attempt, so a half-open session is no
+longer *reused* by the call that tripped over it — but that is a reaction to a
+failure that already happened, not the health check this asks for. The cost of
+the missing check is unchanged: the first caller still pays the timeout.
+
 **Fix:** track `last_used: AtomicU64` on `SftpSession` and probe `sess.closed()`
 before returning a cached session; add a background reaper for sessions idle
 > 5 min.
@@ -152,17 +157,91 @@ longer-term, migrate to `russh`. Narrowing the guard to the individual `ssh2`
 call is not sufficient on its own — `File` borrows the session, so the read/write
 loop genuinely needs it held; the transfer has to move off the shared handle.
 
-### S4. Retry on transient SSH drops — **[Open]**
+### S4. Retry on transient SSH drops — **[Fixed]**
 
-**Where:** `adapters/ssh/`
+**Where:** `adapters/ssh/retry.rs`, `adapters/ssh/client.rs`
 
 One dropped network = full pipeline stop. The driver only sees the subprocess
-return and marks the step `Failed`.
+return and marks the step `Failed` — so a run forty minutes and twenty dollars
+in died on a blip that lasted three seconds.
 
-**Fix:** a `with_ssh_retry(future, attempts: u32)` wrapper at the `ExecutionPort`
-boundary that re-establishes the session on `Err(SshError::ConnectionLost)` and
-re-execs the call. Note this must not swallow the transport-failure distinction
-the verifier depends on — see [`EXECUTION_PARITY.md`](EXECUTION_PARITY.md).
+This entry originally proposed re-establishing on `Err(SshError::ConnectionLost)`.
+**There is no `SshError` and no `ConnectionLost`**: every `ExecutionPort` method
+returns `Result<T, String>` by design (D3), and a dropped connection is
+identifiable only by the `TRANSPORT_ERROR_PREFIX` that `transport_err` puts on
+the message. Establishing what a drop *is*, at a boundary that has only strings,
+was most of the work — and the answer turned out not to be a variant at all.
+
+**Fixed by** `with_ssh_retry`, wrapping the blocking half of each port method in
+`client.rs`, under one rule:
+
+> **A call is retried only when the remote was handed nothing.**
+
+That rule, not a per-method idempotency table, is the safety argument.
+`run_command_with` executes arbitrary user shell — a `git commit`, an `npm
+publish`, a merge — and the port carries no idempotency signal, so nothing at
+this layer can decide whether re-running one is safe. What it *can* decide is
+whether the command reached the wire, and `command::run_blocking` now reports
+that: the boundary is `channel.exec`. Before it, the session or the channel
+failed and the remote shell was handed nothing, so re-running is side-effect
+free **whatever the operation does**. From it onward the request may have been
+delivered without its reply, and once the command is running the remote process
+outlives the channel — so a retry would run a second copy alongside the first.
+
+The three-way grading (`NeverReachedRemote` / `RemoteMayHaveRun` / `Answered`)
+is therefore not decoration. Only the first retries; the second is a genuine
+transport failure that is deliberately *not* retried; the third is a verdict.
+
+Six things worth knowing before touching this:
+
+- **An exhausted retry returns the last failure verbatim.** Nothing is rewrapped,
+  so `transport: ` still leads, `classify_exec_failure` still answers
+  `Transport`, the verifier still routes to a non-retryable `Infrastructure`,
+  and `preflight` still declines to read it as a missing binary. A wrapper that
+  rewrote a persistent drop into any other class would silently reopen every
+  hole C0.2/D3 closed — which is why the guard for it asserts through the
+  classifier, not the string.
+- **A retry that succeeds leaves no trace.** The caller's contract is unchanged;
+  a call that recovered on attempt two is indistinguishable from one that worked
+  first time. A caller that could tell would start branching on it.
+- **`ShellOptions::timeout` is spent across the whole call, not per attempt.**
+  S10's harness deadline survives intact rather than becoming `attempts ×
+  ceiling`. When there is time left but not enough for another backoff, the
+  transport failure already in hand is surfaced rather than a manufactured
+  timeout — it is the more specific answer and the one D3 routes correctly.
+- **Cancellation needs no machinery.** The backoff is a plain `.await`, so a
+  caller racing this against `cancel_watch` (as `run_harness_command` does)
+  drops the future and the wait ends at once. A blocking sleep there would have
+  resurrected S10 in a new place.
+- **The pooled session is evicted between attempts.** Without it a retry reuses
+  the corpse: `SessionPool::get`'s liveness probe is an SFTP `readdir`, which a
+  half-open connection can still answer while `channel_session` fails.
+- **Authentication failures are excluded by name.** They arrive as
+  `NeverReachedRemote` and would otherwise be retried; repeating a rejected
+  credential cannot succeed and is how an account gets locked. A *handshake*
+  failure is deliberately not on that list — it is what a restarting sshd
+  produces, and it is the exact error a real dropped session presents on
+  reconnect (`Failed getting banner`), so listing it would disable the feature.
+
+`test_connection`, `control_rpc` and `spawn_interactive` are **not** retried.
+The first two are reachability probes whose answer is "can this connect right
+now", and `control_rpc` additionally carries side-effecting runner methods and
+backs the Machines-view status probe S7 already flags as slow. `spawn_interactive`
+cannot be retried at all: a live PTY cannot be transparently re-established
+under a caller already holding the handle — which is also the honest limit of
+this fix, since an agent turn dies with its session either way.
+
+What this deliberately does **not** cover: a drop in the middle of a long
+command. That is `RemoteMayHaveRun`, and absorbing it would mean re-running
+work that may still be in flight.
+
+Proved against a real sshd rather than a double — the retry depends on
+`SessionPool` evicting a corpse and `ssh_util::connect` re-handshaking, neither
+of which exists in a fake. `run-ssh-conformance.sh` now drives a TCP relay in
+front of the container that can drop every live connection: a 300ms outage must
+be absorbed transparently, and one that outlasts the whole budget must still
+classify as `Transport`. The two halves pull in opposite directions, so neither
+a wrapper that never retries nor one that swallows the distinction can pass both.
 
 ### S5. Port-forwarding state not covered by watchdog — **[Open]**
 
