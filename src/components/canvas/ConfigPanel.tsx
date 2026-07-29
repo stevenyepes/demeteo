@@ -84,9 +84,19 @@ const MONACO_OPTIONS = {
 const VERIFIER_DEFAULTS = {
   instructions: 'Verify that the changes are correct and the tests pass.',
   agent_kind: null,
-  harness_name: null,
+  harness_names: [],
   verdict_key: 'verdict',
 };
+
+/** The verifier's harness selection, reading both spellings: `harness_names`
+ *  (the ordered list) and the singular `harness_name` it replaced, which any
+ *  workflow authored before it still carries. */
+function readHarnessNames(v: Record<string, unknown>): string[] {
+  if (Array.isArray(v.harness_names)) {
+    return v.harness_names.filter((n): n is string => typeof n === 'string');
+  }
+  return typeof v.harness_name === 'string' && v.harness_name ? [v.harness_name] : [];
+}
 
 const JOIN_OPTIONS: { value: JoinSemantics; label: string; hint: string }[] = [
   {
@@ -619,17 +629,29 @@ function VerifierForm({
             </select>
           </div>
           <div>
-            <FieldLabel htmlFor="cfg-verifier-harness">Harness</FieldLabel>
+            <FieldLabel htmlFor="cfg-verifier-harness">Harnesses</FieldLabel>
             <input
               id="cfg-verifier-harness"
               type="text"
-              value={typeof v.harness_name === 'string' ? v.harness_name : ''}
-              onChange={(evt) => set({ harness_name: evt.target.value || null })}
+              value={readHarnessNames(v).join(', ')}
+              onChange={(evt) =>
+                set({
+                  harness_names: evt.target.value
+                    .split(',')
+                    .map((n) => n.trim())
+                    .filter(Boolean),
+                  // Drop the singular spelling this replaced, so a node edited
+                  // here stops carrying two sources of truth. The backend still
+                  // accepts it for workflows nobody has opened.
+                  harness_name: undefined,
+                })
+              }
               placeholder="Project default"
               className={INPUT_CLASS}
             />
             <p className="mt-1 text-[11px] text-slate-500">
-              The build/test command whose output the verdict is drawn from.
+              Comma-separated. Each runs separately, in this order, and all of them must pass —
+              leave blank to use the project&rsquo;s selected gates.
             </p>
           </div>
           <div>

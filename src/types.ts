@@ -610,6 +610,12 @@ export interface Repository {
 export interface VerifierConfig {
   agent_kind?: string | null;
   instructions: string;
+  /** Ordered gates: each runs separately, in this order, and all must pass.
+   *  Empty/absent falls through to the project's selected validation gates and
+   *  then to its `test_command` (HB5). */
+  harness_names?: string[] | null;
+  /** @deprecated The pre-HB5 single-harness spelling. Still parsed by the
+   *  backend for workflows authored against it; never written any more. */
   harness_name?: string | null;
   verdict_key?: string;
 }

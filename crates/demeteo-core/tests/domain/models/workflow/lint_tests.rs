@@ -32,7 +32,7 @@ fn with_verifier(mut s: StepConfig) -> StepConfig {
         agent_kind: None,
         model: None,
         instructions: "check it".into(),
-        harness_name: None,
+        harness_names: Vec::new(),
         verdict_key: "verdict".into(),
     });
     // A properly-authored looping judge attaches the artifact it grades

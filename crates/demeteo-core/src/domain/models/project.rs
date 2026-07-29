@@ -40,6 +40,26 @@ pub struct WorktreeStrategy {
     pub pr_template: Option<String>,
     #[serde(default)]
     pub harnesses: Option<HashMap<String, String>>,
+    /// The user's **ordered selection of which harnesses gate validation** —
+    /// tier 2 of [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses).
+    ///
+    /// It exists because `harnesses` was otherwise dead config: the only thing
+    /// that selected an entry was a per-step `verifier.harness_names`, and all
+    /// seven shipped starters declare none — so a user could add
+    /// `lint → npm run lint`, see it accepted, and nothing would ever run it
+    /// short of forking a starter. Ticking it here gates every workflow that
+    /// declares nothing of its own.
+    ///
+    /// Ordered because `harnesses` is a `HashMap` and therefore has no order to
+    /// inherit, while the order is the user's (cheap gates first — lint before
+    /// integration). Names that no longer exist in `harnesses` are ignored at
+    /// resolution rather than erroring.
+    ///
+    /// `None`/empty = no selection, which resolves exactly as it does today.
+    /// Persisted inside the `harnesses` column — see
+    /// `adapters/database/repos/project.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_gates: Option<Vec<String>>,
     /// Optional shell command run inside each subtask worktree before the
     /// verifier's harness command (`npm ci`, `cargo fetch`, `prisma
     /// generate`, a DB migration, …). Runs after write permissions are

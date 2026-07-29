@@ -8,9 +8,9 @@ use std::time::Instant;
 use tokio_stream::StreamExt;
 
 impl ExecutionDriver {
-    /// Resolve and run the project's prepare command + test harness inside
-    /// `wt_path`, and return the formatted "harness results" section for an
-    /// agent prompt.
+    /// Resolve and run the project's prepare command + every harness that gates
+    /// this step inside `wt_path`, and return the formatted "harness results"
+    /// section for an agent prompt.
     ///
     /// This is the harness-first primitive: it runs **before** any agent
     /// turn, so a red harness fails the step objectively at zero token
@@ -19,12 +19,27 @@ impl ExecutionDriver {
     /// commands (which the capability chmod fence would block with EPERM
     /// anyway — build tools need to write `target/`, `node_modules/`, …).
     ///
+    /// *Which* harnesses gate the step is a policy decision, resolved by
+    /// [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses) — pure,
+    /// synchronous, and not spelled here. This function only executes what that
+    /// returned, **in order, each as its own command with its own deadline and
+    /// its own labelled output block**.
+    ///
+    /// **Every resolved harness runs, even after one fails** (HB5). If lint and
+    /// unit are both red the user wants both: stopping at the first turns one
+    /// wasted rework cycle into two, which is the thing
+    /// [`docs/HARNESS_BASELINE.md`] exists to prevent. Only the three failure
+    /// modes that end the *step* short-circuit the loop — a dead machine, an
+    /// expired deadline, and Stop — because none of them can produce a verdict
+    /// on the gates that have not run yet either.
+    ///
     /// Errors:
-    /// * prepare or harness exits non-zero → [`VerifierError::Verdict`]
-    ///   with the output tail as the actionable reason (feeds the
-    ///   on_failure retry loop) — **unless** the failure reproduces the
-    ///   previous attempt's failure unchanged, in which case a triage agent
-    ///   (C6) may reclassify it as [`VerifierError::Environment`] (terminal).
+    /// * prepare or any harness exits non-zero → [`VerifierError::Verdict`]
+    ///   naming **each** failing gate, with its output tail as the actionable
+    ///   reason (feeds the on_failure retry loop) — **unless** the failure
+    ///   reproduces the previous attempt's failure unchanged, in which case a
+    ///   triage agent (C6) may reclassify it as
+    ///   [`VerifierError::Environment`] (terminal).
     /// * a transport failure → [`VerifierError::Infrastructure`].
     /// * a timeout → [`VerifierError::Environment`] (terminal, with remediation).
     /// * cancellation → [`VerifierError::Cancelled`].
@@ -43,31 +58,24 @@ impl ExecutionDriver {
         let settings = feature
             .as_ref()
             .and_then(|f| self.projects.get_settings(&f.project_id).ok().flatten());
-        let harnesses = settings
-            .as_ref()
-            .and_then(|s| s.worktree_strategy.harnesses.clone());
         let prepare_command = settings
             .as_ref()
             .and_then(|s| s.worktree_strategy.prepare_command.clone());
 
-        let harness_name = verifier_cfg
-            .harness_name
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-        let harness_cmd = verifier_cfg
-            .harness_name
+        let resolved = settings
             .as_ref()
-            .and_then(|name| harnesses.as_ref().and_then(|h| h.get(name)))
-            .cloned()
-            .or_else(|| {
-                settings
-                    .as_ref()
-                    .and_then(|s| s.worktree_strategy.test_command.clone())
-            });
+            .map(|s| {
+                crate::domain::verifier::resolve_harnesses(
+                    &verifier_cfg.harness_names,
+                    &s.worktree_strategy,
+                    self.harness_ceiling_s(),
+                )
+            })
+            .unwrap_or_default();
 
         // Idempotent write-restore. Fresh worktrees are writable, but a
         // retried step may run in a worktree the fence already touched.
-        if prepare_command.is_some() || harness_cmd.is_some() {
+        if prepare_command.is_some() || !resolved.is_empty() {
             let _ = self
                 .exec
                 .run_command(
@@ -120,14 +128,32 @@ impl ExecutionDriver {
                     }
                     HarnessExecFailure::NonZeroExit => {
                         return Err(self
-                            .classify_harness_failure(step_exec, machine_str, wt_path, cmd, &out)
+                            .classify_harness_failures(
+                                step_exec,
+                                machine_str,
+                                wt_path,
+                                &[HarnessRun {
+                                    name: "prepare".to_string(),
+                                    cmd: cmd.clone(),
+                                    output: out,
+                                }],
+                            )
                             .await)
                     }
                 },
             }
         }
 
-        let harness_result: Option<(String, bool)> = match harness_cmd {
+        let mut ran: Vec<HarnessRun> = Vec::new();
+        let mut failed: Vec<HarnessRun> = Vec::new();
+        for harness in &resolved {
+            // Each harness carries **its own** deadline (see
+            // `ResolvedHarness::deadline_s`): the ceiling is per command, so it
+            // is applied N times rather than divided N ways.
+            let opts = crate::ports::execution::ShellOptions {
+                timeout: Some(std::time::Duration::from_secs(harness.deadline_s)),
+                ..opts.clone()
+            };
             // Merge stderr into stdout for the harness run. The port contract
             // is "stdout on success, stdout+stderr on failure" (D3) — correct
             // for a port, wrong for this caller, because a *green* suite that
@@ -140,55 +166,62 @@ impl ExecutionDriver {
             // so the pass/fail gate below is unchanged. The newlines matter: a
             // command whose last line is a `#` comment would otherwise swallow
             // the closing paren.
-            Some(ref cmd) => match self
-                .run_harness_command(machine_str, &merge_stderr_into_stdout(cmd), opts.clone())
-                .await
-            {
+            let result = self
+                .run_harness_command(
+                    machine_str,
+                    &merge_stderr_into_stdout(&harness.command),
+                    opts,
+                )
+                .await;
+            let run = |output: String| HarnessRun {
+                name: harness.name.clone(),
+                cmd: harness.command.clone(),
+                output,
+            };
+            match result {
                 None => return Err(crate::domain::verifier::VerifierError::Cancelled),
-                Some(Ok(out)) => Some((out, true)),
+                Some(Ok(out)) => ran.push(run(out)),
                 Some(Err(out)) => match classify_exec_failure(&out) {
                     // A transport failure is infrastructure, not a red harness —
-                    // don't gate a Verdict on it (C0.2 / D3).
+                    // don't gate a Verdict on it (C0.2 / D3). It also ends the
+                    // loop: the machine is gone, so the remaining gates cannot
+                    // reach a verdict either.
                     HarnessExecFailure::Transport => {
                         return Err(crate::domain::verifier::VerifierError::Infrastructure(
-                            format!("test harness '{}' could not run: {}", cmd, out),
+                            format!(
+                                "test harness '{}' ({}) could not run: {}",
+                                harness.name, harness.command, out
+                            ),
                         ))
                     }
                     HarnessExecFailure::Timeout => {
                         let msg = build_timeout_message(
                             machine_str,
                             wt_path,
-                            cmd,
-                            self.harness_ceiling_s(),
+                            &harness.command,
+                            harness.deadline_s,
                         );
                         self.notify_environment_not_ready(step_exec, &msg);
                         return Err(crate::domain::verifier::VerifierError::Environment(msg));
                     }
-                    HarnessExecFailure::NonZeroExit => Some((out, false)),
+                    // The one shape that is a verdict — record it and keep
+                    // going, so a run that broke two gates reports two.
+                    HarnessExecFailure::NonZeroExit => failed.push(run(out)),
                 },
-            },
-            None => None,
-        };
+            }
+        }
 
         // Hard gate: non-zero exit is objective — fail without any agent
         // involvement so nothing can "pass" a broken build. On a *persistent*
         // (reproduces-unchanged) failure the triage agent may reclassify this
         // as an environment problem rather than a code regression (C6).
-        if let Some((ref out, false)) = harness_result {
-            let cmd = harness_cmd.as_deref().unwrap_or("test harness");
+        if !failed.is_empty() {
             return Err(self
-                .classify_harness_failure(step_exec, machine_str, wt_path, cmd, out)
+                .classify_harness_failures(step_exec, machine_str, wt_path, &failed)
                 .await);
         }
 
-        Ok(match (&harness_cmd, &harness_result) {
-            (Some(cmd), Some((output, _))) => HarnessOutcome::Ran {
-                name: harness_name,
-                cmd: cmd.clone(),
-                output: output.clone(),
-            },
-            _ => HarnessOutcome::NotConfigured,
-        })
+        Ok(HarnessOutcome::from_runs(ran))
     }
 
     /// Build the [`ShellOptions`](crate::ports::execution::ShellOptions) the
@@ -233,7 +266,13 @@ impl ExecutionDriver {
     /// may one step take" answer an agent turn is.
     ///
     /// The `command` node overrides this with its own `spec.timeout`, which is
-    /// why this is a default rather than a floor.
+    /// why this is a default rather than a floor — and so does each resolved
+    /// harness, which carries the same ceiling as *its own*
+    /// [`deadline_s`](crate::domain::verifier::ResolvedHarness::deadline_s).
+    /// The cap answers "how long may one command take", so N gates get N
+    /// ceilings rather than a slice each; the sum a step may spend is therefore
+    /// unbounded in the number of gates its author declared. See that field for
+    /// why dividing would be worse.
     pub(crate) fn harness_shell_options(
         &self,
         wt_path: &str,
@@ -283,7 +322,7 @@ impl ExecutionDriver {
         }
     }
 
-    /// Turn a non-transport prepare/harness failure into the right
+    /// Turn one or more non-transport prepare/harness failures into the right
     /// [`VerifierError`](crate::domain::verifier::VerifierError) (C6/D7).
     ///
     /// On first sight — or when the failing output *changed* from the previous
@@ -299,15 +338,34 @@ impl ExecutionDriver {
     /// unknown category — falls safe back to `Verdict`, so a broken triage can
     /// only ever *withhold* the remaining retries, never wrongly terminate a
     /// real regression.
-    async fn classify_harness_failure(
+    ///
+    /// With several gates red, the *fingerprint* and the *verdict reason* cover
+    /// all of them — the retry loop needs every failure or it fixes one and
+    /// rediscovers the next — while the 127 fast path and the triage agent are
+    /// asked about a single gate each: the first whose binary is missing, and
+    /// the first that failed, respectively. Both of those answer "is this
+    /// machine able to run this command", which is a per-command question, and
+    /// both attach a copy-pasteable reproduce line that only means anything for
+    /// one command.
+    async fn classify_harness_failures(
         &self,
         step_exec: &StepExecution,
         machine_str: &str,
         wt_path: &str,
-        cmd: &str,
-        output: &str,
+        failures: &[HarnessRun],
     ) -> crate::domain::verifier::VerifierError {
-        // Fast path: the shell could not find a binary the harness command
+        let Some(primary) = failures.first() else {
+            // Unreachable by construction (callers only call this with at least
+            // one failure), but returning a verdict beats an `unwrap` in a
+            // production path.
+            return crate::domain::verifier::VerifierError::Verdict(
+                crate::domain::verifier::VerdictFailure::from_reason(
+                    "the harness reported a failure with no failing command".to_string(),
+                ),
+            );
+        };
+
+        // Fast path: the shell could not find a binary a harness command
         // itself invokes (exit 127). That is objectively an environment gap —
         // the code never ran, so no amount of editing it can help. Escalate
         // straight to the terminal `Environment` error rather than spending a
@@ -315,7 +373,11 @@ impl ExecutionDriver {
         // pass) plus a triage agent turn to reach the same conclusion on the
         // *next* attempt. This skips `should_triage`'s reproduce-unchanged
         // requirement on purpose: a 127 is deterministic, not flaky.
-        if let Some(missing) = detect_missing_command(cmd, output) {
+        if let Some((failure, missing)) = failures
+            .iter()
+            .find_map(|f| detect_missing_command(&f.cmd, &f.output).map(|m| (f, m)))
+        {
+            let cmd = failure.cmd.as_str();
             let msg = build_environment_message(
                 machine_str,
                 wt_path,
@@ -346,7 +408,11 @@ impl ExecutionDriver {
             return crate::domain::verifier::VerifierError::Environment(msg);
         }
 
-        let current_fp = normalize_failure_fingerprint(output, wt_path);
+        // Fingerprint the whole failing set, not just the first gate: two
+        // attempts that fail the same lint but different tests are *not* the
+        // same failure, and triaging them as one would hand the classifier a
+        // reproduction that never happened.
+        let current_fp = normalize_failure_fingerprint(&combined_failure_output(failures), wt_path);
         let persistent = should_triage(step_exec.last_failure_fingerprint.as_deref(), &current_fp);
 
         // Persist the fingerprint for the next attempt's comparison. Harmless
@@ -361,12 +427,8 @@ impl ExecutionDriver {
             },
         );
 
-        let truncated = tail_chars(output, 2000);
         let verdict = crate::domain::verifier::VerifierError::Verdict(
-            crate::domain::verifier::VerdictFailure::from_reason(format!(
-                "command '{}' exited with failure:\n{}",
-                cmd, truncated
-            )),
+            crate::domain::verifier::VerdictFailure::from_reason(build_failure_reason(failures)),
         );
 
         if !persistent {
@@ -378,8 +440,9 @@ impl ExecutionDriver {
 
         // Reproduced unchanged → consult the classifier. Any non-`environment`
         // answer falls back to `verdict`.
+        let cmd = primary.cmd.as_str();
         match self
-            .triage_harness_failure(machine_str, wt_path, cmd, output)
+            .triage_harness_failure(machine_str, wt_path, cmd, &primary.output)
             .await
         {
             TriageVerdict::Environment {
@@ -392,6 +455,7 @@ impl ExecutionDriver {
                 tracing::warn!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
+                    harness = %primary.name,
                     cmd = %cmd,
                     "harness failure triaged as environment — terminating without further retries"
                 );
@@ -567,10 +631,7 @@ impl ExecutionDriver {
         // Resolve + run prepare and harness via the shared harness-first
         // primitive. A non-zero exit propagates as a Verdict failure
         // before any verifier agent spawns.
-        let harness_name = verifier_cfg
-            .harness_name
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
+        let harness_label = verifier_cfg.harness_label();
         let harness_section = self
             .run_harness_first(step_exec, verifier_cfg, wt_path, machine_str)
             .await?
@@ -642,7 +703,7 @@ impl ExecutionDriver {
                     .effort
                     .unwrap_or(crate::domain::models::EffortLevel::VERIFIER_DEFAULT),
             ),
-            title: Some(format!("Verify: {}", harness_name)),
+            title: Some(format!("Verify: {}", harness_label)),
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
@@ -1026,18 +1087,46 @@ pub(crate) fn verdict_contract(verdict_key: &str) -> String {
 /// and that it may not check for itself has one coherent move left, and it
 /// certifies a feature nobody tested (S12).
 pub(crate) enum HarnessOutcome {
-    /// A harness ran and exited zero. `output` is merged stdout+stderr.
-    Ran {
-        name: String,
-        cmd: String,
-        output: String,
-    },
+    /// Every gating harness ran and exited zero, in declared order. Each
+    /// [`HarnessRun::output`] is merged stdout+stderr. Non-empty by
+    /// construction — build it through [`HarnessOutcome::from_runs`].
+    Ran(Vec<HarnessRun>),
     /// No `test_command` (and no named harness) is configured — **nothing was
     /// executed**. Not a pass, not a fail: an absence of evidence.
     NotConfigured,
 }
 
+/// One harness's execution: which gate it was, what it ran, and what it said.
+///
+/// The *name* is the field that earns this struct. With several gates in one
+/// step, an output blob that does not say which gate produced it cannot tell a
+/// failing lint from a failing test suite, which is exactly the attribution
+/// `&&`-chaining commands used to destroy. HB2a records this shape and HB7
+/// renders it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HarnessRun {
+    /// The gate's name — `default` when it came from the project's
+    /// `test_command`, `prepare` for the prepare command.
+    pub name: String,
+    /// The command as the user authored it (not the `2>&1` wrapper).
+    pub cmd: String,
+    /// Merged stdout+stderr.
+    pub output: String,
+}
+
 impl HarnessOutcome {
+    /// Build the outcome from the runs that completed. An empty list is
+    /// [`NotConfigured`](HarnessOutcome::NotConfigured) — "nothing ran" and
+    /// "everything passed" are opposites, and the enum exists so no caller can
+    /// treat them alike (S12).
+    pub(crate) fn from_runs(runs: Vec<HarnessRun>) -> Self {
+        if runs.is_empty() {
+            HarnessOutcome::NotConfigured
+        } else {
+            HarnessOutcome::Ran(runs)
+        }
+    }
+
     /// Render the harness block for an agent prompt, **heading included**.
     ///
     /// The heading is deliberately part of this method rather than the caller's
@@ -1046,16 +1135,23 @@ impl HarnessOutcome {
     /// coupling is the whole fix — the prompt-side mitigation in `2257ffb`
     /// relied on the agent obeying prose that the surrounding template
     /// contradicted.
+    ///
+    /// Every gate gets **its own labelled block**, so "which gate says what" is
+    /// answerable from the prompt alone.
     pub(crate) fn render_section(&self) -> String {
         match self {
-            HarnessOutcome::Ran { name, cmd, output } => format!(
+            HarnessOutcome::Ran(runs) => format!(
                 "## Harness Results (already executed by the orchestrator)\n\
-                 We ran the '{name}' harness in this exact worktree:\n\n\
-                 \x20   {cmd}\n\n\
-                 Its combined stdout and stderr:\n\
-                 ```\n{output}\n```\n\n\
+                 We ran {count} in this exact worktree, in this order:\n\n\
+                 {blocks}\n\
                  This output is authoritative. Do NOT re-run the build or test \
                  suite.\n",
+                count = plural_harnesses(runs.len()),
+                blocks = runs
+                    .iter()
+                    .map(|r| harness_block(&r.name, &r.cmd, &r.output))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             ),
             // Everything here is load-bearing. Naming the absence, refusing the
             // inference, and pointing at the verdict that fits it are what stop
@@ -1073,6 +1169,77 @@ impl HarnessOutcome {
                  use the `environment` verdict rather than `fail`.\n"
                 .to_string(),
         }
+    }
+}
+
+/// One gate's labelled block: which harness, the command it ran, and its
+/// combined output. Shared by the prompt section and the verdict reason so the
+/// two cannot describe the same run differently.
+fn harness_block(name: &str, cmd: &str, body: &str) -> String {
+    format!(
+        "### Harness `{name}`\n\n\
+         \x20   {cmd}\n\n\
+         Its combined stdout and stderr:\n\
+         ```\n{body}\n```\n",
+    )
+}
+
+/// "the 'lint' harness" / "2 harnesses". Keeps the singular reading exactly as
+/// it read before harnesses became a list — the overwhelmingly common case.
+fn plural_harnesses(count: usize) -> String {
+    if count == 1 {
+        "1 harness".to_string()
+    } else {
+        format!("{} harnesses", count)
+    }
+}
+
+/// The failing gates' outputs, labelled, as one string — the input to the
+/// fingerprint. Not truncated: the fingerprint compares two whole failures, and
+/// truncating first would let a difference past the tail read as a reproduction.
+fn combined_failure_output(failures: &[HarnessRun]) -> String {
+    failures
+        .iter()
+        .map(|f| harness_block(&f.name, &f.cmd, &f.output))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The actionable reason injected as retry feedback, naming **which gate** went
+/// red — with several red, naming all of them, because an implementer told
+/// about one failure fixes it and rediscovers the next on the following cycle,
+/// which is the wasted-cycle problem this whole subsystem exists to prevent.
+///
+/// The 2000-character tail budget is shared out among the failures rather than
+/// paid per failure, so a step with five red gates cannot silently grow the
+/// retry prompt fivefold; a single failure therefore reads byte-for-byte as it
+/// did before. The floor keeps each gate's tail long enough to carry a stack.
+fn build_failure_reason(failures: &[HarnessRun]) -> String {
+    const TAIL_BUDGET: usize = 2000;
+    const TAIL_FLOOR: usize = 500;
+    let per_failure = (TAIL_BUDGET / failures.len().max(1)).max(TAIL_FLOOR);
+
+    let blocks = failures
+        .iter()
+        .map(|f| {
+            format!(
+                "'{}' — command '{}' exited with failure:\n{}",
+                f.name,
+                f.cmd,
+                tail_chars(&f.output, per_failure)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    if failures.len() == 1 {
+        blocks
+    } else {
+        format!(
+            "{} of this step's harnesses failed — all of them must pass.\n\n{}",
+            failures.len(),
+            blocks
+        )
     }
 }
 

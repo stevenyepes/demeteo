@@ -325,6 +325,15 @@ mod topology_equivalence;
 #[path = "../../tests/conformance/harness_triage.rs"]
 mod harness_triage;
 
+/// Multi-harness gating fixtures (HB5, `docs/HARNESS_BASELINE.md`): every
+/// resolved gate runs even after one fails and each failure is attributed by
+/// name, and a starter-shaped workflow that declares no harness is gated by the
+/// project's selected validation gates. Runs a real shell; only the agent is
+/// stubbed. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/harness_gates.rs"]
+mod harness_gates;
+
 /// Bootstrap harness-preflight gate (HB1, `docs/HARNESS_BASELINE.md`): a
 /// project whose `test_command` names an unresolvable binary must be stopped at
 /// launch, before any step row is seeded — and a project whose commands resolve

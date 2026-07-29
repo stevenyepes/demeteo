@@ -207,6 +207,7 @@ fn strategy(
                 .map(|(name, cmd)| (name.to_string(), cmd.to_string()))
                 .collect()
         }),
+        validation_gates: None,
         prepare_command: prepare.map(str::to_string),
         extra_writable_paths: Vec::new(),
     }
