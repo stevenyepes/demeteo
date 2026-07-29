@@ -666,3 +666,50 @@ async fn a_project_with_no_gate_is_told_so_before_a_criterion_is_written() {
          early:\n{prompt}"
     );
 }
+
+// ── The row with no baseline column at all ───────────────────────────────────
+
+/// exit 127 is terminal **whether or not** the binary was equally missing at
+/// the base. Decision 44's table gives it its own row for a reason: the code
+/// never ran, so there is nothing for a subtraction to be evidence about, and
+/// "pre-existing" would quietly pass a step that tested nothing. Which is
+/// exactly what happens if the fast path is moved behind the subtraction — a
+/// missing binary is red at the base with the identical diagnostic, so it is
+/// the *most* subtractable failure there is.
+///
+/// `eval` is the fixture's lever: HB1's launch preflight probes the head binary
+/// of each stage and skips shell builtins, so this reaches validate rather than
+/// being blocked at launch — while `detect_missing_command` still sees the
+/// missing name as a token of the command it was asked about.
+#[tokio::test]
+async fn a_missing_binary_stays_terminal_rather_than_being_subtracted() {
+    let leg = run_leg(
+        "missing-binary",
+        vec![validate_node(None, 1)],
+        GateConfig {
+            test_command: Some("eval demeteo-absent-binary-hb2c".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let signals = leg.signals.environment_not_ready.lock().unwrap().clone();
+    assert_eq!(
+        signals.len(),
+        1,
+        "a missing binary is an environment failure with remediation, not a \
+         verdict and not a subtraction: {:?}",
+        leg.validate()
+    );
+    assert!(
+        signals[0].contains("demeteo-absent-binary-hb2c"),
+        "the remediation must name the binary: {}",
+        signals[0]
+    );
+    assert!(
+        leg.baseline.is_none(),
+        "and nothing should have been measured: the fast path fires before the \
+         baseline is consulted at all, got {:?}",
+        leg.baseline
+    );
+}
