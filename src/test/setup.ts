@@ -162,6 +162,18 @@ vi.mock("@xterm/addon-webgl", () => ({
 }));
 
 // --- Browser APIs jsdom omits ----------------------------------------------
+// Node 22+ exposes an experimental `localStorage` global. Without
+// `--localstorage-file` it resolves to `undefined`, which can shadow jsdom's
+// working implementation in a non-interactive worktree shell. Bind the
+// browser implementation explicitly so every Vitest worker sees the same
+// storage surface regardless of how Node was launched.
+if (typeof globalThis.localStorage === "undefined") {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: window.localStorage,
+  });
+}
+
 globalThis.ResizeObserver ??= class {
   observe() {}
   unobserve() {}
