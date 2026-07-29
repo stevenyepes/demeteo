@@ -94,12 +94,30 @@ impl ExecutionDriver {
             .map(|f| f.attachments.as_slice())
             .unwrap_or(&[]);
 
+        // What the project's gates are, and what they already said about this
+        // repository (HB2c). Computed only when the template asks for it: it
+        // costs two DB reads, and every step that does not reference the token
+        // would otherwise pay them on every attempt.
+        //
+        // This is the fix for the failure in `docs/HARNESS_BASELINE.md` §1 —
+        // both validate attempts in `f-1785157902856` failed because the spec's
+        // acceptance criteria named commands the harness never ran. The
+        // `{{test_command}}` the spec prompt used instead has been wrong since
+        // harnesses became plural (HB5): a project gated on `lint` and `unit`
+        // runs neither that string nor one command.
+        let harness_briefing = if template.contains("{{harness_baseline}}") {
+            self.render_harness_briefing(feature_for_attachments.as_ref())
+        } else {
+            String::new()
+        };
+
         let ctx = crate::adapters::step_executor::driver::rework::bind_rework_context(
             self.base_ctx.clone(),
             mode,
             self.retry_ctx.as_ref(),
         );
         let prompt = ctx
+            .set("harness_baseline", &harness_briefing)
             .set("retry_feedback_section", &retry_section)
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)

@@ -115,6 +115,16 @@ fn triage_workflow() -> serde_json::Value {
 /// second attempt's fingerprint matches the first and the persistence gate
 /// fires. The triage prompt embeds this output, so the stub classifier reads
 /// the category back out. `set -e`-free, plain `sh` builtins only.
+///
+/// The `git symbolic-ref` guard puts this failure in the **one** case HB2c
+/// leaves the classifier: green at the base, red now. HB2b measures the
+/// baseline in a worktree that is detached by construction (where this exits
+/// zero) while the step runs on a branch (where it exits one), so the recorded
+/// baseline is green and the live failure is a regression the measurement
+/// cannot itself explain — a fault that appeared *during* the run, which is
+/// exactly what triage is for. Without the guard the gate would be red at the
+/// base with the identical output and HB2c would subtract it before any
+/// classifier saw it.
 fn set_failing_harness(
     ctx: &AppContext,
     project_id: &crate::domain::ids::ProjectId,
@@ -127,7 +137,8 @@ fn set_failing_harness(
     settings.project_id = project_id.clone();
     settings.worktree_strategy.test_command = Some(format!(
         "echo 'error: the system library gdk-3.0 was not found'; \
-         echo '@stub-triage {category}'; exit 1"
+         echo '@stub-triage {category}'; \
+         git symbolic-ref -q HEAD >/dev/null || exit 0; exit 1"
     ));
     ctx.projects.save_settings(settings).expect("save settings");
 }

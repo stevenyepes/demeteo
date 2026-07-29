@@ -126,17 +126,27 @@ impl ExecutionDriver {
                         self.notify_environment_not_ready(step_exec, &msg);
                         return Err(crate::domain::verifier::VerifierError::Environment(msg));
                     }
+                    // A failing prepare is never subtracted. `measure_gates`
+                    // records **no gate** when the baseline's own prepare
+                    // fails, so there is nothing on record that could excuse
+                    // this — and that is the right asymmetry: a worktree that
+                    // cannot be made runnable is not a pre-existing test
+                    // failure, it is a step that never got to run one.
                     HarnessExecFailure::NonZeroExit => {
                         return Err(self
                             .classify_harness_failures(
                                 step_exec,
                                 machine_str,
                                 wt_path,
-                                &[HarnessRun {
-                                    name: "prepare".to_string(),
-                                    cmd: cmd.clone(),
-                                    output: out,
-                                }],
+                                &HarnessFailureSet {
+                                    attributable: &[HarnessRun {
+                                        name: "prepare".to_string(),
+                                        cmd: cmd.clone(),
+                                        output: out,
+                                    }],
+                                    excluded: &[],
+                                    triage_allowed: true,
+                                },
                             )
                             .await)
                     }
@@ -211,11 +221,22 @@ impl ExecutionDriver {
             }
         }
 
-        // Hard gate: non-zero exit is objective — fail without any agent
-        // involvement so nothing can "pass" a broken build. On a *persistent*
-        // (reproduces-unchanged) failure the triage agent may reclassify this
-        // as an environment problem rather than a code regression (C6).
+        // Hard gate: a non-zero exit is objective — but *whose* defect it is is
+        // not, and that is what HB2c decides here before anything fails.
         if !failed.is_empty() {
+            // The exit-127 fast path runs on the **unsubtracted** set and
+            // before the baseline is consulted at all. A binary the shell
+            // cannot find is terminal whether or not it was equally missing at
+            // the base: the code never ran, so there is nothing for a
+            // subtraction to be evidence about, and "pre-existing" would
+            // quietly pass a step that tested nothing. Decision 44's table says
+            // so in its own row — 127 is terminal `Environment`, no baseline
+            // column.
+            if let Some(err) = self.missing_command_error(step_exec, machine_str, wt_path, &failed)
+            {
+                return Err(err);
+            }
+
             // HB2b's lazy fallback, on the *failure* path only. A gate that
             // just went red is the one case where knowing what it did at the
             // base is worth minutes of wall-clock — the alternative is a rework
@@ -223,36 +244,148 @@ impl ExecutionDriver {
             // reached at all, which is deliberate: there is nothing to subtract
             // from, and every successful run would otherwise pay for it.
             //
-            // It measures and records; it decides nothing (HB2c owns the
-            // subtraction), and it returns `()` so it cannot influence the
-            // verdict computed below however badly it goes.
+            // It measures and records; it decides nothing, and it returns `()`
+            // so it cannot influence the verdict computed below however badly
+            // it goes.
             //
             // Raced against cancellation for the same reason every other
             // command here is: dropping the future is what stops the work, and
-            // a Stop must not wait out a cold `npm install`.
+            // a Stop must not wait out a cold `npm install`. A cancelled race
+            // leaves `base_sha` empty, which is *no evidence* — so a Stop
+            // yields today's verdict rather than a subtraction taken on half a
+            // measurement.
             let mut cancel_watch = self.cancel_watch.clone();
             let cancelled = async move {
                 if cancel_watch.wait_for(|c| *c).await.is_err() {
                     std::future::pending::<()>().await;
                 }
             };
-            tokio::select! {
+            let base_sha = tokio::select! {
                 biased;
-                _ = cancelled => {}
-                _ = self.measure_fallback_baseline(
-                    &step_exec.step_id.0,
-                    machine_str,
-                    &resolved,
-                    &failed,
-                ) => {}
+                _ = cancelled => String::new(),
+                sha = async {
+                    let sha = self.resolve_base_sha().await.unwrap_or_default();
+                    self.measure_fallback_baseline(
+                        &step_exec.step_id.0,
+                        machine_str,
+                        &sha,
+                        &resolved,
+                        &failed,
+                    )
+                    .await;
+                    sha
+                } => sha,
+            };
+
+            // Re-read the record *after* the fallback: on a workflow with no
+            // baseline node it is the write that just happened, and reading
+            // before it would make the fallback a producer with no consumer.
+            let baseline = self
+                .features
+                .get(&self.f_id)
+                .ok()
+                .flatten()
+                .and_then(|f| f.harness_baseline);
+
+            let (attributable, excluded, triage_allowed) =
+                self.subtract_pre_existing(baseline.as_ref(), &base_sha, wt_path, &failed);
+
+            if attributable.is_empty() {
+                // Every red gate was already red, identically, before this
+                // feature existed. It does not fail the step — and the
+                // exclusion travels into the prompt so the report names it,
+                // because a subtraction the user cannot audit is one they will
+                // not trust the first time it is wrong.
+                tracing::info!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    excluded = excluded.len(),
+                    base_sha = %base_sha,
+                    "every failing gate was red at the base with the identical failure — \
+                     excluded from this step's verdict"
+                );
+                return Ok(HarnessOutcome::from_runs_with_exclusions(ran, excluded));
             }
 
             return Err(self
-                .classify_harness_failures(step_exec, machine_str, wt_path, &failed)
+                .classify_harness_failures(
+                    step_exec,
+                    machine_str,
+                    wt_path,
+                    &HarnessFailureSet {
+                        attributable: &attributable,
+                        excluded: &excluded,
+                        triage_allowed,
+                    },
+                )
                 .await);
         }
 
         Ok(HarnessOutcome::from_runs(ran))
+    }
+
+    /// Split the red gates into the ones this feature answers for and the ones
+    /// the baseline excuses, and say whether C6's classifier has anything left
+    /// to add.
+    ///
+    /// The decision itself is [`compare_gates`](crate::domain::harness_delta::compare_gates)
+    /// — pure, in `domain/`, reachable from a test with no port doubles
+    /// (AGENTS.md §3). What is left here is joining its answer back onto the
+    /// runs and wording the exclusion, neither of which is a policy choice.
+    ///
+    /// `triage_allowed` is taken from the **first attributable** gate, because
+    /// that is the single gate `classify_harness_failures` asks the classifier
+    /// about: gating on a determination reached for some *other* gate would ask
+    /// the agent a question the baseline already answered, or withhold one it
+    /// did not.
+    fn subtract_pre_existing(
+        &self,
+        baseline: Option<&crate::domain::harness_baseline::HarnessBaseline>,
+        base_sha: &str,
+        wt_path: &str,
+        failed: &[HarnessRun],
+    ) -> (Vec<HarnessRun>, Vec<ExcludedRun>, bool) {
+        use crate::domain::harness_delta::{compare_gates, ObservedFailure};
+
+        // Fingerprinted over the same labelled block `measure_gates` records,
+        // so the two sides of the comparison are strings built the same way
+        // rather than two shapes that merely look similar.
+        let fingerprints: Vec<String> = failed
+            .iter()
+            .map(|f| {
+                normalize_failure_fingerprint(&harness_block(&f.name, &f.cmd, &f.output), wt_path)
+            })
+            .collect();
+        let observed: Vec<ObservedFailure<'_>> = failed
+            .iter()
+            .zip(&fingerprints)
+            .map(|(f, fp)| ObservedFailure {
+                name: &f.name,
+                command: &f.cmd,
+                fingerprint: fp,
+            })
+            .collect();
+
+        let comparisons = compare_gates(baseline, base_sha, &observed);
+
+        let mut attributable = Vec::new();
+        let mut excluded = Vec::new();
+        let mut triage_allowed = None;
+        for (run, cmp) in failed.iter().zip(&comparisons) {
+            if cmp.determination.is_attributable() {
+                triage_allowed.get_or_insert(cmp.determination.allows_triage());
+                attributable.push(run.clone());
+            } else {
+                excluded.push(ExcludedRun {
+                    run: run.clone(),
+                    reason: build_exclusion_reason(base_sha, cmp.baseline.as_ref()),
+                });
+            }
+        }
+        // No attributable gate ⇒ nothing will be classified, so the flag is
+        // moot; `true` keeps it from reading as a suppression that was never
+        // decided.
+        (attributable, excluded, triage_allowed.unwrap_or(true))
     }
 
     /// Build the [`ShellOptions`](crate::ports::execution::ShellOptions) the
@@ -370,6 +503,14 @@ impl ExecutionDriver {
     /// only ever *withhold* the remaining retries, never wrongly terminate a
     /// real regression.
     ///
+    /// HB2c narrows *when* the classifier is consulted without touching that
+    /// fail-safe: a gate whose baseline already settled regression-vs-
+    /// environment as a measurement skips it
+    /// ([`HarnessFailureSet::triage_allowed`]), and gates the baseline excused
+    /// never arrive here at all — they are named in the verdict reason instead,
+    /// so the rework loop does not go looking for a defect the feature did not
+    /// cause.
+    ///
     /// With several gates red, the *fingerprint* and the *verdict reason* cover
     /// all of them — the retry loop needs every failure or it fixes one and
     /// rediscovers the next — while the 127 fast path and the triage agent are
@@ -383,8 +524,9 @@ impl ExecutionDriver {
         step_exec: &StepExecution,
         machine_str: &str,
         wt_path: &str,
-        failures: &[HarnessRun],
+        set: &HarnessFailureSet<'_>,
     ) -> crate::domain::verifier::VerifierError {
+        let failures = set.attributable;
         let Some(primary) = failures.first() else {
             // Unreachable by construction (callers only call this with at least
             // one failure), but returning a verdict beats an `unwrap` in a
@@ -396,47 +538,8 @@ impl ExecutionDriver {
             );
         };
 
-        // Fast path: the shell could not find a binary a harness command
-        // itself invokes (exit 127). That is objectively an environment gap —
-        // the code never ran, so no amount of editing it can help. Escalate
-        // straight to the terminal `Environment` error rather than spending a
-        // `Verdict` retry (which re-runs the agent against a gate that cannot
-        // pass) plus a triage agent turn to reach the same conclusion on the
-        // *next* attempt. This skips `should_triage`'s reproduce-unchanged
-        // requirement on purpose: a 127 is deterministic, not flaky.
-        if let Some((failure, missing)) = failures
-            .iter()
-            .find_map(|f| detect_missing_command(&f.cmd, &f.output).map(|m| (f, m)))
-        {
-            let cmd = failure.cmd.as_str();
-            let msg = build_environment_message(
-                machine_str,
-                wt_path,
-                cmd,
-                &format!(
-                    "The shell could not find `{}` on PATH (exit 127), so the command never ran.",
-                    missing
-                ),
-                &format!(
-                    "Make `{missing}` *discoverable* on this machine — installed is not enough, it \
-                     has to be on the PATH of a fresh interactive login shell, which is what the \
-                     harness runs commands under. Check it with:\n\
-                     \x20 bash -l -i -c 'command -v {missing}'\n\
-                     If that prints nothing, either export the tool's directory from ~/.profile or \
-                     ~/.bashrc, or — if a version manager owns it (mise, asdf, nvm, pyenv, rbenv) — \
-                     declare it in that manager's *global* config so every shell activates it, not \
-                     just the directories that ask for it.",
-                ),
-            );
-            self.notify_environment_not_ready(step_exec, &msg);
-            tracing::warn!(
-                feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
-                cmd = %cmd,
-                missing = %missing,
-                "harness command not found on PATH — terminating without retries"
-            );
-            return crate::domain::verifier::VerifierError::Environment(msg);
+        if let Some(err) = self.missing_command_error(step_exec, machine_str, wt_path, failures) {
+            return err;
         }
 
         // Fingerprint the whole failing set, not just the first gate: two
@@ -459,13 +562,34 @@ impl ExecutionDriver {
         );
 
         let verdict = crate::domain::verifier::VerifierError::Verdict(
-            crate::domain::verifier::VerdictFailure::from_reason(build_failure_reason(failures)),
+            crate::domain::verifier::VerdictFailure::from_reason(format!(
+                "{}{}",
+                build_failure_reason(failures),
+                build_exclusion_note(set.excluded),
+            )),
         );
 
         if !persistent {
             // First sight, or the error changed across the retry — treat it as
             // ongoing progress and let the implement loop keep working. No
             // triage call on attempt 1 (C6.2 DoD).
+            return verdict;
+        }
+
+        // HB2c's narrowing of C6. The classifier exists to tell an
+        // unprovisioned machine from a broken change, and a covering baseline
+        // answers most of that as a measurement rather than a judgement — see
+        // `GateDetermination::allows_triage` for which cases it settles and
+        // why. This only ever *withholds* a call; it can never cause one, and
+        // it leaves the fail-safe below untouched.
+        if !set.triage_allowed {
+            tracing::debug!(
+                feature_id = %self.f_id,
+                step_id = %step_exec.step_id.0,
+                harness = %primary.name,
+                "the baseline already answered regression-vs-environment for this gate — \
+                 not consulting the triage classifier"
+            );
             return verdict;
         }
 
@@ -494,6 +618,61 @@ impl ExecutionDriver {
             }
             TriageVerdict::Regression => verdict,
         }
+    }
+
+    /// The exit-127 fast path: the shell could not find a binary a harness
+    /// command itself invokes. That is objectively an environment gap — the
+    /// code never ran, so no amount of editing it can help. Escalate straight
+    /// to the terminal `Environment` error rather than spending a `Verdict`
+    /// retry (which re-runs the agent against a gate that cannot pass) plus a
+    /// triage agent turn to reach the same conclusion on the *next* attempt.
+    /// This skips `should_triage`'s reproduce-unchanged requirement on purpose:
+    /// a 127 is deterministic, not flaky.
+    ///
+    /// A method rather than inline code because HB2c gave it a second caller:
+    /// `run_harness_first` asks it about the **unsubtracted** failure set,
+    /// before the baseline is consulted, so a missing binary stays terminal
+    /// even when it was equally missing at the base. `None` means no failure
+    /// here names a binary the shell could not find.
+    fn missing_command_error(
+        &self,
+        step_exec: &StepExecution,
+        machine_str: &str,
+        wt_path: &str,
+        failures: &[HarnessRun],
+    ) -> Option<crate::domain::verifier::VerifierError> {
+        let (failure, missing) = failures
+            .iter()
+            .find_map(|f| detect_missing_command(&f.cmd, &f.output).map(|m| (f, m)))?;
+        let cmd = failure.cmd.as_str();
+        let msg = build_environment_message(
+            machine_str,
+            wt_path,
+            cmd,
+            &format!(
+                "The shell could not find `{}` on PATH (exit 127), so the command never ran.",
+                missing
+            ),
+            &format!(
+                "Make `{missing}` *discoverable* on this machine — installed is not enough, it \
+                 has to be on the PATH of a fresh interactive login shell, which is what the \
+                 harness runs commands under. Check it with:\n\
+                 \x20 bash -l -i -c 'command -v {missing}'\n\
+                 If that prints nothing, either export the tool's directory from ~/.profile or \
+                 ~/.bashrc, or — if a version manager owns it (mise, asdf, nvm, pyenv, rbenv) — \
+                 declare it in that manager's *global* config so every shell activates it, not \
+                 just the directories that ask for it.",
+            ),
+        );
+        self.notify_environment_not_ready(step_exec, &msg);
+        tracing::warn!(
+            feature_id = %self.f_id,
+            step_id = %step_exec.step_id.0,
+            cmd = %cmd,
+            missing = %missing,
+            "harness command not found on PATH — terminating without retries"
+        );
+        Some(crate::domain::verifier::VerifierError::Environment(msg))
     }
 
     /// Spawn a small classifier agent to decide regression vs. environment for
@@ -1118,13 +1297,62 @@ pub(crate) fn verdict_contract(verdict_key: &str) -> String {
 /// and that it may not check for itself has one coherent move left, and it
 /// certifies a feature nobody tested (S12).
 pub(crate) enum HarnessOutcome {
-    /// Every gating harness ran and exited zero, in declared order. Each
-    /// [`HarnessRun::output`] is merged stdout+stderr. Non-empty by
-    /// construction — build it through [`HarnessOutcome::from_runs`].
-    Ran(Vec<HarnessRun>),
+    /// Every gating harness ran, in declared order, and none of them failed
+    /// *this feature*. Non-empty by construction — build it through
+    /// [`from_runs`](HarnessOutcome::from_runs) or
+    /// [`from_runs_with_exclusions`](HarnessOutcome::from_runs_with_exclusions).
+    Ran {
+        /// The gates that exited zero. Each [`HarnessRun::output`] is merged
+        /// stdout+stderr.
+        passed: Vec<HarnessRun>,
+        /// The gates that exited **non-zero** and were subtracted as
+        /// pre-existing (HB2c): red at the base with the identical failure, so
+        /// not this feature's defect.
+        ///
+        /// A separate list rather than a flag on `HarnessRun` for the same
+        /// reason this enum exists at all — "it passed" and "it failed, but not
+        /// because of you" are different claims, and a caller that cannot tell
+        /// them apart will eventually word one as the other.
+        excluded: Vec<ExcludedRun>,
+    },
     /// No `test_command` (and no named harness) is configured — **nothing was
     /// executed**. Not a pass, not a fail: an absence of evidence.
     NotConfigured,
+}
+
+/// A red gate the baseline excused: what it ran and said, plus why it does not
+/// count against this feature.
+///
+/// The `reason` is not decoration. Decision 44 subtracts a failure the user did
+/// not ask to have subtracted, and a subtraction nobody can audit is one nobody
+/// will trust the first time it is wrong — so the exclusion is named wherever
+/// the failure would have been.
+pub(crate) struct ExcludedRun {
+    pub run: HarnessRun,
+    /// One sentence naming the base commit and the producer that measured it.
+    pub reason: String,
+}
+
+/// The red gates of one harness pass, split by who answers for them.
+///
+/// One struct rather than three parameters because they are three views of a
+/// single decision and are meaningless apart: excluded gates without the
+/// attributable ones cannot be reported, and `triage_allowed` is a property of
+/// the first attributable gate. Bundling also keeps
+/// `classify_harness_failures` under the argument ceiling without reaching for
+/// `too_many_arguments`, which AGENTS.md §3 calls a review trigger rather than
+/// a fix.
+pub(crate) struct HarnessFailureSet<'a> {
+    /// The gates this feature answers for. Non-empty at every call site: a set
+    /// with nothing attributable never reaches classification.
+    pub attributable: &'a [HarnessRun],
+    /// The gates the baseline excused, carried so the verdict names them —
+    /// otherwise the rework loop is handed a failure list that silently omits
+    /// half of what the user can see in the log.
+    pub excluded: &'a [ExcludedRun],
+    /// Whether C6's triage classifier may still be consulted — see
+    /// [`GateDetermination::allows_triage`](crate::domain::harness_delta::GateDetermination::allows_triage).
+    pub triage_allowed: bool,
 }
 
 /// One harness's execution: which gate it was, what it ran, and what it said.
@@ -1151,10 +1379,23 @@ impl HarnessOutcome {
     /// "everything passed" are opposites, and the enum exists so no caller can
     /// treat them alike (S12).
     pub(crate) fn from_runs(runs: Vec<HarnessRun>) -> Self {
-        if runs.is_empty() {
+        Self::from_runs_with_exclusions(runs, Vec::new())
+    }
+
+    /// As [`from_runs`](Self::from_runs), with the gates HB2c subtracted.
+    ///
+    /// "Nothing ran" is still `NotConfigured`, but an *excluded* gate ran — so
+    /// a pass whose every gate was excused must not collapse into the
+    /// no-harness block, which tells the agent nothing was executed. That is
+    /// S12's bug arrived from the other direction.
+    pub(crate) fn from_runs_with_exclusions(
+        passed: Vec<HarnessRun>,
+        excluded: Vec<ExcludedRun>,
+    ) -> Self {
+        if passed.is_empty() && excluded.is_empty() {
             HarnessOutcome::NotConfigured
         } else {
-            HarnessOutcome::Ran(runs)
+            HarnessOutcome::Ran { passed, excluded }
         }
     }
 
@@ -1168,21 +1409,24 @@ impl HarnessOutcome {
     /// contradicted.
     ///
     /// Every gate gets **its own labelled block**, so "which gate says what" is
-    /// answerable from the prompt alone.
+    /// answerable from the prompt alone — and an excluded gate gets a block
+    /// that says *why* it does not count, so the report can name the
+    /// subtraction (HB2c).
     pub(crate) fn render_section(&self) -> String {
         match self {
-            HarnessOutcome::Ran(runs) => format!(
+            HarnessOutcome::Ran { passed, excluded } => format!(
                 "## Harness Results (already executed by the orchestrator)\n\
                  We ran {count} in this exact worktree, in this order:\n\n\
-                 {blocks}\n\
+                 {blocks}\n{exclusions}\
                  This output is authoritative. Do NOT re-run the build or test \
                  suite.\n",
-                count = plural_harnesses(runs.len()),
-                blocks = runs
+                count = plural_harnesses(passed.len() + excluded.len()),
+                blocks = passed
                     .iter()
                     .map(|r| harness_block(&r.name, &r.cmd, &r.output))
                     .collect::<Vec<_>>()
                     .join("\n"),
+                exclusions = render_exclusions(excluded),
             ),
             // Everything here is load-bearing. Naming the absence, refusing the
             // inference, and pointing at the verdict that fits it are what stop
@@ -1201,6 +1445,111 @@ impl HarnessOutcome {
                 .to_string(),
         }
     }
+}
+
+/// Why one gate was subtracted, in one sentence: the base commit it was
+/// identically red at, and which producer measured that.
+///
+/// The producer is named because the two have very different stories — the node
+/// measured at the head of this run, the fallback measured on this very failure
+/// path — and a support question ("how do you know?") is answered by one word.
+/// A missing record is a shape this function should never be handed (a gate is
+/// only excluded on the strength of one), but it degrades to a sentence that
+/// claims no evidence rather than to a panic.
+fn build_exclusion_reason(
+    base_sha: &str,
+    measured: Option<&crate::domain::harness_baseline::HarnessBaselineRun>,
+) -> String {
+    let Some(measured) = measured else {
+        return "This gate was excluded from the verdict as pre-existing.".to_string();
+    };
+    let producer = match measured.producer {
+        crate::domain::harness_baseline::BaselineProducer::Node => {
+            "measured at the head of this run, before any work started"
+        }
+        crate::domain::harness_baseline::BaselineProducer::Fallback => {
+            "measured on this failure path against a fresh checkout of the base commit"
+        }
+    };
+    format!(
+        "EXCLUDED — this gate failed here, and it failed with the *identical* output at the \
+         base commit {sha} ({producer}). The failure predates this feature, so it is not part \
+         of this step's verdict.",
+        sha = short_sha(base_sha),
+    )
+}
+
+/// First 12 characters of a sha — enough to identify a commit, short enough to
+/// read inline. Anything shorter is echoed whole rather than truncated to
+/// nonsense.
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(12).collect()
+}
+
+/// The excluded-gates section of the prompt's harness block.
+///
+/// Empty when nothing was subtracted, so a run with no exclusions renders
+/// byte-for-byte as it did before HB2c — the overwhelmingly common case, and
+/// the one every existing prompt expectation was written against.
+fn render_exclusions(excluded: &[ExcludedRun]) -> String {
+    if excluded.is_empty() {
+        return String::new();
+    }
+    let blocks = excluded
+        .iter()
+        .map(|e| {
+            format!(
+                "{}\n{}",
+                e.reason,
+                harness_block(&e.run.name, &e.run.cmd, &e.run.output)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "### Excluded — {count} that already failed before this feature\n\n\
+         {blocks}\n\
+         Record each excluded gate in your report, by name, as a pre-existing failure. Do NOT \
+         report it as an implementation defect, do not let it decide your verdict, and do not \
+         ask for it to be fixed — the work under review did not cause it. Saying nothing about \
+         it is also wrong: a reader who can see the failure in the log and no mention of it in \
+         the report cannot tell a deliberate subtraction from an oversight.\n\n",
+        count = plural_harnesses(excluded.len()),
+        blocks = blocks,
+    )
+}
+
+/// The exclusion note appended to a verdict's retry feedback.
+///
+/// The rework loop reads the verdict reason and turns it into tickets. Without
+/// this, an implementer handed "the `unit` gate failed" while the log also
+/// shows a red `lint` gate has every reason to go and fix `lint` too — work
+/// nobody asked for, on a defect the feature did not cause.
+fn build_exclusion_note(excluded: &[ExcludedRun]) -> String {
+    if excluded.is_empty() {
+        return String::new();
+    }
+    let names = excluded
+        .iter()
+        .map(|e| format!("'{}'", e.run.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "\n\nAlso red, but NOT part of this verdict: {names}. {plural} failing identically \
+         before this feature started, so {pronoun} excluded — do not try to fix {pronoun2}.",
+        names = names,
+        plural = if excluded.len() == 1 {
+            "That gate was already"
+        } else {
+            "Those gates were already"
+        },
+        pronoun = if excluded.len() == 1 {
+            "it is"
+        } else {
+            "they are"
+        },
+        pronoun2 = if excluded.len() == 1 { "it" } else { "them" },
+    )
 }
 
 /// One gate's labelled block: which harness, the command it ran, and its
