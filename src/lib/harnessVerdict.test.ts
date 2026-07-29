@@ -138,6 +138,20 @@ describe('parseEnvironmentFailure', () => {
     expect(parseEnvironmentFailure(null)).toBeNull();
     expect(parseEnvironmentFailure('')).toBeNull();
   });
+
+  it('is null for a verdict whose own output quotes the labels this parses', () => {
+    // The discriminator is the engine's headline, not the presence of a
+    // "Failing command:" line — harness output is arbitrary text and can
+    // contain anything. Reading this one as an environment failure would dress
+    // a defect the feature caused up as somebody else's problem, and hide it
+    // behind "retrying will not help".
+    expect(
+      parseEnvironmentFailure(
+        "'unit' — command 'cargo test' exited with failure:\n" +
+          'Failing command: cargo test\nMachine: local\nReproduce:\n  cd /wt && cargo test\n',
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('parseHarnessVerdict', () => {
@@ -272,7 +286,26 @@ describe('isBaselineEnvironmentFailure', () => {
     ).toBe(true);
   });
 
-  it('is false for a red gate with no classification — the fail-safe direction', () => {
+  it('is false for the same gate red at the base with no classification', () => {
+    // The fail-safe direction: never classified, classified a regression, and
+    // written by a build that predates the field all decode alike, so a
+    // malfunctioning classifier withholds the "already unrunnable at the base"
+    // claim rather than manufacturing one.
+    expect(
+      isBaselineEnvironmentFailure(failure, {
+        base_sha: 'abc',
+        harnesses: [
+          {
+            name: 'unit',
+            command: 'cargo test',
+            exit_ok: false,
+            fingerprint: 'fp',
+            measured_at: 1,
+            producer: 'node',
+          },
+        ],
+      }),
+    ).toBe(false);
     expect(isBaselineEnvironmentFailure(failure, BASELINE)).toBe(false);
     expect(isBaselineEnvironmentFailure(failure, null)).toBe(false);
   });
