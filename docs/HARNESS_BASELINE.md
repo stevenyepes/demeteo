@@ -725,7 +725,8 @@ deterministic rather than agentic:
   (already built) → per-test-name extraction. The third rung is the honest place
   for an agent: reading two outputs and answering "which failures in B are absent
   from A" is comprehension, not judgment, and it never touches an exit code, so it
-  cannot manufacture a pass.
+  cannot manufacture a pass. **All three rungs are now built** — see the rung-3
+  block at the end of this section.
 
 - **Narrow C6, don't delete it — and move its earliest call.** See §2.
   `classify_harness_failure` consults the triage agent only for the residue:
@@ -782,17 +783,13 @@ deterministic rather than agentic:
   `Option`-shaped, `#[serde(default)]`, no migration — the column is JSON), and
   the comparison reads it as its final rung.
 
-  **Rungs 1–3, and the finer rung is deliberately deferred.** Exit status settles
-  a green baseline outright; a fingerprint match settles same-vs-different; the
-  classification settles what a *same* failure was. A finer rung — an agent
-  reading two outputs to scope the delta to individual test names — is *not
-  built*. It costs an agent call on every red validate, unlike rung 3, which is
-  paid once per red gate at measurement time and read back for free. Whether it
-  earns its keep is a judgement better made after the cheap rungs have been
-  watched in practice: rung 2's false-miss rate is unknown until then, and its
-  failure direction is the safe one (a perturbed fingerprint reads as *new*, i.e.
-  today's behaviour, never as pre-existing). The note is in the module docs too,
-  so the next reader does not re-derive it.
+  **Rungs 1–2, plus a lookup.** Exit status settles a green baseline outright; a
+  fingerprint match settles same-vs-different; the recorded classification then
+  settles what a *same* failure was. That last one is not a comparison rung —
+  nothing about the live run is examined — which is why it costs nothing at
+  validate: it was answered once, at measurement time. **The per-test rung was
+  deferred here and is now built** — see the rung-3 block below for what changed
+  the cost argument.
 
   **C6 narrowed, not deleted — and given an earlier call site.** At validate the
   classifier is consulted only for `Regression` and `NoBaseline` — green at the
@@ -856,7 +853,8 @@ deterministic rather than agentic:
   applied, C6's fail-safe replaced by an escalation, and the
   `{{harness_baseline}}` binding removed.
 
-  Rung 3 added eleven more, likewise all watched fail: rung 3 removed from
+  The classification lookup added eleven more, likewise all watched fail: the
+  lookup removed from
   `compare_gate`, an absent classification defaulting to `environment` (the
   fail-safe inverted), `outcome()` routing `Environment` into `Excluded` (the
   shipped defect, restored on purpose to watch it), `measure_gates` never
@@ -885,6 +883,106 @@ deterministic rather than agentic:
   without an LLM. And the *report artifact* naming the exclusion is the agent's
   own prose; what is asserted is that the exclusion, and the instruction to
   record it, reach the turn that writes it.
+
+#### Rung 3 — per-test names — **[Done, 2026-07-29]**
+
+HB2c deferred this on a cost argument and said the judgement was better made
+after rungs 1–2 had been watched. What made it load-bearing was not the
+false-miss rate: it is [F2](#f2--refactorjson-now-has-two-baselines). Deleting
+`refactor.json`'s `s-baseline` **agent** step downgrades three downstream
+consumers that read *individual test identifiers* out of `artifacts/s-baseline.md`
+— `s-analyse`'s Test Coverage Map ("the test names verbatim"), its
+`rework_prompt_template`, and `s-regression`'s per-test comparison ("for every
+test listed as PASSING… if it now FAILS, mark as REGRESSION"). The engine record
+carried `exit_ok` plus a whole-output fingerprint per gate, so deleting the agent
+step would have taken the refactor pipeline from "these 3 of 500 regressed" to
+"the suite is red". **The record now carries what they need**; wiring the prompts
+to it is the next task.
+
+- **On the record:** `HarnessBaselineRun.failing_tests: Option<Vec<String>>`.
+  **No migration** — the column is JSON, and the field is `Option` +
+  `#[serde(default)]`, so a record written before this decodes cleanly and
+  compares at rungs 1–2. `None` deliberately collapses four histories that must
+  behave identically: green gate, extractor could not answer, extractor timed
+  out, record predates the field. An empty list is never recorded, because
+  "nobody read this" and "the runner named no failing test" are different claims
+  and only the first is true of a spawn failure.
+
+- **In `compare_gate`:** `NewFailures` gains a `new_failures` payload — the live
+  reading minus the base's, in live order, deduplicated. **Empty means unscoped,
+  never "nothing is new"**: the gate is red and *differently* red, so something
+  is new by construction, and an empty list says only that nobody could name it.
+  Either side silent yields empty, because with no base reading every live name
+  would read as new — which is not a narrower statement but a fabricated one.
+
+- **The determination never moves.** Rung 3 scopes a verdict; it cannot convert
+  one. Rungs 1 and 2 and the classification lookup are all read *before* it, so a
+  reading cannot make a regression pre-existing, or a subtracted gate a verdict,
+  or an unrunnable gate anything but terminal.
+
+- **Why an agent is allowed here** is decision 44's own boundary restated:
+  decision 44 rejects agent-produced *evidence*, and this is agent-produced
+  *reading of* evidence the engine already owns. Structurally, not by promise —
+  the extractor spawns with an **empty tool allowlist** so it cannot run a
+  command, its prompt is never offered a verdict vocabulary, and the exit status
+  was decided before it was asked. It reuses `triage_harness_failure`'s
+  plumbing exactly (same registry, pinned-low effort, `BUDGET_FRACTION_TRIAGE`,
+  same cancellation race), so there is one cheap-agent path, not two.
+
+- **The cost, which is where the deferral's argument was wrong.** It is *not* a
+  call on every red validate. Two sites, both bounded:
+  1. **measurement time** — one call per **red** gate, cached on the record and
+     never re-paid, including across validate attempts;
+  2. **validate** — only for a gate `GateComparison::extraction_would_scope()`
+     flags: rungs 1–2 conceded (`NewFailures`, unscoped) *and* the record already
+     holds names to diff against. A green suite, a first-sight regression, a
+     subtracted pre-existing failure, and a run with no baseline cost nothing.
+
+  Worst case is therefore `red gates at measurement` + `red-and-differently-red
+  gates × validate attempts`, at one tool-less, two-turn, cheap-model call each.
+  That is what `compare_gate` being pure and free buys: the cheap pass is what
+  decides whether the expensive one is worth paying for.
+
+- **The carrier is `VerdictFailure::failing_tests`**, which `RetryContext`
+  already threads into a rework template's `{{failing_tests}}`. No parallel
+  channel, and the verdict *reason* is untouched — the scope is added to the
+  evidence, never substituted for it, so a reading that came back empty costs the
+  reader nothing.
+
+- **Where the code lives:** the comparison is `domain/harness_delta.rs` (pure,
+  synchronous, no ports); the extraction and the two-pass escalation are
+  `adapters/step_executor/failing_tests.rs`, a free function over the one port it
+  needs, so *which gates cost an agent call* is assertable against a single
+  double rather than an `ExecutionDriver` (AGENTS.md §3). `measure_gates`'s three
+  collaborators became a `MeasurementPorts` bundle rather than a fourth argument
+  plus a `too_many_arguments` allow.
+
+  16 mutations were watched redden the new tests: rung 3 removed from
+  `compare_gate`; the delta ignoring the base set; the delta neither deduplicating
+  nor trimming; `extraction_would_scope` forced true and forced false; a reading
+  allowed to override rung 2; `measure_gates` never extracting, extracting on
+  *green* gates, and recording an empty reading as an answer; the record not
+  persisting the names; a pre-rung-3 record defaulting to "the runner named
+  nothing" (the fail-safe inverted); the scope never reaching the verdict; the
+  union never collected from the comparisons; the cap on a reading dropped; an
+  unusable reply not filtered; and the prompt offering a verdict vocabulary.
+
+  The conformance gate grew a tenth leg
+  (`a_differently_red_gate_reports_only_the_failures_that_are_new`) over a real
+  shell and real git. Its fixture drives both readings out of one command — a new
+  `@stub-tests` directive in the gate's own output, plus `git symbolic-ref` to
+  tell the detached baseline worktree from the branch checkout — so the base names
+  `alpha` and the tip names `alpha,beta` with no second commit. It asserts on the
+  *step's* error message, because that is the carrier, and it asserts `alpha` is
+  **absent**: naming it would be the mis-scoping failure, a ticket to fix a test
+  that was already broken.
+
+  **Not proven here, by scope:** how well a real model reads a real runner's
+  output. That is unknowable from a test and is the reason the whole rung is
+  built to be advisory — nothing it says can change a determination, and the
+  verdict reason carries the full output either way. If it reads badly in
+  practice the observable symptom is an under-scoped rework prompt, not a wrong
+  pass; `extraction_would_scope` is the one place to switch it off.
 
 ### HB3 — Ecosystem detection — **[Done]**
 
@@ -1291,16 +1389,21 @@ deterministic rather than agentic:
 | HB3 | Ecosystem detection | medium | ✅ |
 | HB8 | An environmental red baseline is not subtracted | small | ✅ |
 | HB9 | Halt at the baseline node on an unrunnable gate | small | ✅ |
+| HB2c rung 3 | Per-test names on the record and in `compare_gate` | medium | ✅ |
 
 HB8 and HB9 were not in the original decomposition; each was found by the task
-after it and is recorded in its own section above.
+after it and is recorded in its own section above. HB2c's third rung was
+deliberately deferred by that task and built later, once
+[F2](#f2--refactorjson-now-has-two-baselines) made it load-bearing; it is
+recorded inside HB2c rather than as a task of its own.
 
 ---
 
 ## 5. Open follow-ups
 
 Neither blocks anything. Both were found by the work above and are recorded
-here rather than left in a commit message.
+here rather than left in a commit message. F2's *technical* blocker has since
+been cleared by HB2c's third rung; what remains of it is prompt work.
 
 ### F1 — per-gate results have no structured home
 
@@ -1317,7 +1420,7 @@ is the coupling this codebase otherwise avoids. The fix is a structured per-gate
 result on the step row (the `harness_baseline_json` precedent applies: a JSON
 column needs no migration). Worth doing before anything else reads these strings.
 
-### F2 — `refactor.json` now has two baselines
+### F2 — `refactor.json` now has two baselines — **decided: delete the agent step**
 
 `refactor.json` carries both the new `s-baseline-harness` command node and its
 original `s-baseline` **agent** step, which runs the suite and writes prose. HB2b
@@ -1326,5 +1429,24 @@ decision, not an assumption.
 
 The orchestrator measurement is cheaper (zero tokens) and trustworthy in a way an
 agent reading its own test run is not — that is decision 44's whole argument. What
-the agent step still has is narrative value. **Keep it or delete it; this is a
-product call, not a technical one.**
+the agent step still has is narrative value. **The user has decided to keep the
+new approach and delete the agent step.**
+
+**The technical blocker is cleared.** Deleting `s-baseline` used to cost the
+refactor pipeline a granularity the engine record did not have: three consumers
+read *individual test identifiers* out of `artifacts/s-baseline.md` — `s-analyse`'s
+Test Coverage Map, its `rework_prompt_template`, and `s-regression`'s per-test
+comparison — while `HarnessBaselineRun` recorded only `exit_ok` plus a
+whole-output fingerprint. [Rung 3](#rung-3--per-test-names--done-2026-07-29) put
+`failing_tests` on the record, so the measurement now carries what they need.
+
+**What is left is prompt work, and it is the next task:** delete the `s-baseline`
+node, re-point `s-analyse` and `s-regression` at the engine record rather than at
+`artifacts/s-baseline.md`, and decide how the per-test names reach them — most
+likely by widening `{{harness_baseline}}` (`render_harness_briefing`), which today
+renders per-gate status only. Note the two are not equivalent: the agent step
+listed **passing** tests as well, and the record names only the failing ones,
+because a measurement of what a green suite contains is not something the engine
+takes. `s-regression`'s "for every test listed as PASSING… if it now FAILS" has to
+be rephrased as its contrapositive — *these were failing before; anything else
+that fails now is a regression* — which is exactly what the record supports.

@@ -169,17 +169,46 @@ field existed) reads as a pre-existing defect and stays excluded. Only a positiv
 `environment` answer can terminate a run, so a malfunctioning classifier can
 withhold an escalation and never manufacture one.
 
-**Why the granularity ladder stops at the fingerprint.** The comparison escalates
-cheapest-first: exit status, then `normalize_failure_fingerprint`. A third rung —
-an agent reading the base output and the current one and answering "which
-failures in B are absent from A" — is designed and **deliberately not built**. It
-would scope a verdict to individual test names rather than to the whole gate,
-which is real value, but it costs an agent call on *every* red validate, and the
-question it answers only arises when rung 2 concedes too much. That rate is
-unknown until the cheap rungs have been watched in practice, and rung 2's failure
-direction is the safe one: a perturbed fingerprint reads as *new failures*, i.e.
-today's behaviour, never as pre-existing. Build it when a real run shows it is
-needed, not before.
+**Why the granularity ladder has a third rung, and why its agent does not break
+the rule above.** The comparison escalates cheapest-first: exit status, then
+`normalize_failure_fingerprint`, then **per-test names**. Rung 3 is an agent
+reading a gate's output and enumerating the identifiers it named as failing; the
+delta against the same reading taken at the base is what a differently-red gate
+adds. Without it, red-before-and-differently-red-now scopes the verdict to the
+whole gate, and the rework cycle re-derives all of it — the difference between
+"these 3 of 500 tests regressed" and "the suite is red", which is the capability
+a refactor workflow exists for.
+
+The rule this appears to violate is "why a measurement and not an agent", and it
+does not, because the two draw a line in different places. **Decision 44 rejects
+agent-produced *evidence*: the thing being judged must not control whether it
+passed.** Rung 3 is agent-produced *reading of* evidence the engine already owns.
+The boundary is structural, not a promise:
+
+- the engine decides pass/fail from the exit status, always — the extraction is
+  handed output that has already been classified red;
+- it spawns with an **empty tool allowlist**, so it cannot run a command, and its
+  prompt is never offered a verdict vocabulary — there is no answer it can give
+  that means "passed";
+- every failure mode (no spawn, timeout, cancellation, unparseable reply, or a
+  delta that comes out empty) yields an empty list, which the comparison reads as
+  *unscoped* — byte-for-byte the pre-rung-3 behaviour;
+- the scope is **additive**: the verdict reason still carries every failing
+  gate's output tail whatever the reading said, so a wrong reading narrows advice
+  and can never remove evidence.
+
+That is comprehension, not judgment, and it is the one place in this design where
+an agent legitimately belongs.
+
+The cost objection that deferred it is answered by *where* it is paid. It is not
+an agent call on every red validate: at measurement time it is one call per
+**red** gate, cached on the record and never re-paid; at validate it fires only
+for a gate rungs 1–2 could not settle *and* whose record already holds names to
+diff against (`GateComparison::extraction_would_scope`). A green suite, a
+first-sight regression, a subtracted pre-existing failure, and a run with no
+baseline each cost nothing. The scope then travels on
+`VerdictFailure::failing_tests`, the carrier `RetryContext` already threads into
+a rework template's `{{failing_tests}}`, rather than a channel of its own.
 
 **What survives of the triage agent.** The classifier (C6) is narrowed rather
 than deleted, because a baseline turns most of the environment-vs-regression
