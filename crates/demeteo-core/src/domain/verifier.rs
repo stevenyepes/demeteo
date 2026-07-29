@@ -176,6 +176,39 @@ pub fn resolve_harnesses(
     }
 }
 
+/// Which harnesses will judge this run's finished work.
+///
+/// The union of every step in the workflow that carries a `verifier`, each
+/// resolved through [`resolve_harnesses`] — the same chain that step will
+/// itself resolve through when it runs — deduplicated by name, in
+/// first-declared order.
+///
+/// This is what the `{{harness_baseline}}` prompt block is built from (HB2c),
+/// and its two obvious shortcuts are both wrong. Asking the *project* alone
+/// (`resolve_harnesses(&[], …)`) lies about a workflow whose validate step pins
+/// its own gates; asking only the first verifier lies about a workflow with two.
+/// Either way the spec author is told about commands that will not run, which
+/// is the same class of failure as telling them about none — and it is the
+/// failure that cost two rework cycles in `f-1785157902856`.
+///
+/// Pure, so the wording downstream is assertable without a driver: the caller's
+/// only job is to fetch the steps and the strategy.
+pub fn resolve_gating_harnesses(
+    steps: &[crate::domain::models::StepConfig],
+    strategy: &WorktreeStrategy,
+    deadline_s: u64,
+) -> Vec<ResolvedHarness> {
+    let mut gates: Vec<ResolvedHarness> = Vec::new();
+    for verifier in steps.iter().filter_map(|s| s.verifier.as_ref()) {
+        for gate in resolve_harnesses(&verifier.harness_names, strategy, deadline_s) {
+            if !gates.iter().any(|g| g.name == gate.name) {
+                gates.push(gate);
+            }
+        }
+    }
+    gates
+}
+
 /// Resolve a list of harness names against the project's `harnesses` map,
 /// preserving declared order and dropping repeats.
 ///

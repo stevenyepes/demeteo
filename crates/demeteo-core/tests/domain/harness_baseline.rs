@@ -326,3 +326,103 @@ fn an_unresolvable_base_never_measures() {
 fn no_gates_never_measures() {
     assert!(!fallback_baseline_needed(true, "abc123", None, &[]));
 }
+
+// ── The `{{harness_baseline}}` briefing (HB2c) ───────────────────────────────
+
+fn gate(name: &str, command: &str) -> crate::domain::verifier::ResolvedHarness {
+    crate::domain::verifier::ResolvedHarness {
+        name: name.to_string(),
+        command: command.to_string(),
+        deadline_s: 600,
+    }
+}
+
+/// The positive statement the spec prompt never had. Both failed validate
+/// attempts in `f-1785157902856` cost a rework cycle because the acceptance
+/// criteria named commands the harness never ran — so the block has to name
+/// every gate *and* its command, or the reader is guessing again.
+#[test]
+fn the_briefing_names_every_gate_and_the_command_it_runs() {
+    let gates = [gate("lint", "npm run lint"), gate("unit", "cargo test")];
+    let rendered = render_harness_briefing(&gates, None);
+
+    for (name, cmd) in [("lint", "npm run lint"), ("unit", "cargo test")] {
+        assert!(
+            rendered.contains(name) && rendered.contains(cmd),
+            "the briefing must name {name} and {cmd}; got:\n{rendered}"
+        );
+    }
+    assert!(
+        rendered.contains("only"),
+        "it must say these are the only commands executed, or a criterion \
+         against some other command still looks provable; got:\n{rendered}"
+    );
+}
+
+/// The `not_configured` row, reached at spec time instead of after the whole
+/// implement budget. It is not enough to omit the command list: a spec author
+/// told nothing will run has to be told what that *means* for a criterion, and
+/// where the setting that would change it lives.
+#[test]
+fn no_gates_at_all_says_so_and_says_what_it_costs() {
+    let rendered = render_harness_briefing(&[], None);
+
+    assert!(
+        rendered.contains("NOTHING"),
+        "an unconfigured harness must be unmissable; got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("never be shown MET"),
+        "the consequence for a criterion is the whole point of saying it early; \
+         got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Open Question"),
+        "and it must say where to record it; got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("project setting"),
+        "no amount of re-implementation fixes a missing command — the block must \
+         say which lever does; got:\n{rendered}"
+    );
+}
+
+/// A gate that was already failing is *not* a gate whose output can evidence a
+/// new criterion. Saying only "these commands run" would let a spec author
+/// write a criterion against a suite that has never been green here.
+#[test]
+fn a_gate_already_red_at_the_base_is_flagged_as_such() {
+    let record = baseline("abc123", vec![run("unit", false, "fp")]);
+    let rendered = render_harness_briefing(&[gate("unit", "npm run unit")], Some(&record));
+
+    assert!(
+        rendered.contains("already failing"),
+        "a red baseline must be stated, not left to be inferred; got:\n{rendered}"
+    );
+}
+
+#[test]
+fn a_gate_green_at_the_base_says_it_passed() {
+    let record = baseline("abc123", vec![run("unit", true, "")]);
+    let rendered = render_harness_briefing(&[gate("unit", "npm run unit")], Some(&record));
+
+    assert!(rendered.contains("passed"), "got:\n{rendered}");
+    assert!(!rendered.contains("already failing"), "got:\n{rendered}");
+}
+
+/// Absent is not green, in the prompt as well as in the verdict. A gate with no
+/// measurement must not render as a blank line the reader completes as "fine".
+#[test]
+fn an_unmeasured_gate_is_reported_as_unknown_not_as_passing() {
+    let record = baseline("abc123", vec![run("lint", true, "")]);
+    let rendered = render_harness_briefing(&[gate("unit", "npm run unit")], Some(&record));
+
+    assert!(
+        rendered.contains("not measured"),
+        "silence about a gate must be stated as silence; got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("passed"),
+        "an unmeasured gate must not borrow another gate's green; got:\n{rendered}"
+    );
+}

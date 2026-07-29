@@ -273,19 +273,11 @@ impl ExecutionDriver {
             return String::new();
         };
 
-        let ceiling = self.harness_ceiling_s();
-        let mut gates: Vec<ResolvedHarness> = Vec::new();
-        for verifier in self.steps.iter().filter_map(|s| s.verifier.as_ref()) {
-            for gate in crate::domain::verifier::resolve_harnesses(
-                &verifier.harness_names,
-                &settings.worktree_strategy,
-                ceiling,
-            ) {
-                if !gates.iter().any(|g| g.name == gate.name) {
-                    gates.push(gate);
-                }
-            }
-        }
+        let gates = crate::domain::verifier::resolve_gating_harnesses(
+            &self.steps,
+            &settings.worktree_strategy,
+            self.harness_ceiling_s(),
+        );
 
         crate::domain::harness_baseline::render_harness_briefing(
             &gates,
