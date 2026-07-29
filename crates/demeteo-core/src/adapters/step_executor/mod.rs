@@ -24,6 +24,7 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 // ── Sub-modules (deep-module decomposition) ────────────────────────────────────
 
 pub(crate) mod artifacts;
+pub(crate) mod baseline;
 pub(crate) mod driver;
 pub(crate) mod driver_registry;
 pub(crate) mod gate_waiter;

@@ -98,6 +98,22 @@ JSON column follows `features.attachments_json` (V19) and V36's own note blessin
 single JSON column for state that is always read and written together and never
 queried on — which is exactly this record's shape.
 
+**Why the baseline records a red gate instead of failing on it.** The obvious
+reading of "run the harness first" is that a red one should stop the run, and
+that is what an early draft of the plan assumed. It is wrong for the *baseline*
+producer specifically: failing at the head of the graph, before a line has been
+written, restates the exact misattribution the baseline exists to remove — a
+repository that was already red is not this feature's defect — and it makes the
+"red before, identically red now ⇒ pre-existing" row unreachable, since no run
+against such a repo would ever reach validate. So a red gate at the base
+completes the node with `exit_ok: false` on the record, and the *only* terminal
+outcome there is an environment that can produce no measurement at all: a
+failing `prepare_command`, or gates that never reach an exit status. The
+asymmetry generalizes to the whole mechanism — an absent baseline degrades to
+today's behaviour, while a fabricated one excuses a real regression, so every
+ambiguity (transport failure, timeout, failed prepare) records **nothing**
+rather than a plausible red.
+
 ### 37 — Effort level (detail)
 
 Four things about this one are load-bearing and were easy to get wrong, so they

@@ -3,6 +3,13 @@
   "terminal_status": "awaiting_mr",
   "steps": [
     {
+      "step_id": "s-baseline-harness",
+      "kind": "command",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
       "step_id": "s-research",
       "kind": "agent",
       "status": "completed",
@@ -67,6 +74,11 @@
     }
   ],
   "artifacts": [
+    [
+      "s-baseline-harness",
+      "baseline-default.txt",
+      ""
+    ],
     [
       "s-critic",
       "critic-review.md",

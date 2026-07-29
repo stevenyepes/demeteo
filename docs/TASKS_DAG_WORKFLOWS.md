@@ -71,6 +71,28 @@ correctness change that rides on P3.5's `command` node, not on the scheduler.
 - **Touch:** the two starter JSONs (as v2) and their canvas fixtures (`src/components/canvas/__fixtures__/standard-feature-pipeline.v2.json`, `refactor.v2.json`), regenerated snapshots for those two under `crates/demeteo-core/tests/conformance/snapshots/starter_baseline/`, seeding test updates.
 - **Done when:** the P0.2 harness gains two cases the stub agent cannot answer for, **each watched fail before it passes** (AGENTS.md §7) — (a) a fixture project whose configured `test_command` genuinely exits non-zero: the baseline node's `step_attempts` row records `error_class = verdict` and no `s-implement` step ever leaves `pending`; (b) the same fixture with a green command: the chain proceeds unchanged to the end. The red case needs its own project settings, not a snapshot edit — `test_command` is pinned to `true` for the existing snapshots. The five untouched starters' snapshots remain **bit-identical**.
 
+- **Done — implemented by [HB2b](HARNESS_BASELINE.md), not separately.** The two
+  plans describe the same node and it was built once: `s-baseline-harness`, a
+  `command` node carrying the new `measure_baseline` flag, at the head of
+  `standard-feature-pipeline.json` and `refactor.json`. It runs the project's
+  `prepare_command` plus every gate `resolve_harnesses` returns and writes the
+  decision-44 baseline record; the fixtures, canvas fixtures and the two
+  starters' P0.2 snapshots were regenerated, and the other five remain
+  bit-identical.
+
+  **One correction to the "Done when" above.** A red baseline does **not**
+  record `error_class = verdict` and does not stop the run. That was written
+  before HB2's subtraction existed, and blocking there would restate the exact
+  misattribution the baseline exists to remove — a repository that was already
+  red is not this feature's defect. A red gate completes the node with
+  `exit_ok: false` on the record; what *is* terminal is an environment that can
+  produce no measurement at all (a failing `prepare_command`, or gates that
+  never reach an exit status). See HB2b's Done block for the full reasoning.
+
+  Refactor's existing `s-baseline` **agent** step was left in place: deleting a
+  step from a shipped starter is a user decision, and HB2b asks it rather than
+  presuming it.
+
 ### P4.2b — Parallel shapes for Standard Feature + Refactor starters
 
 - **Goal:** Ship what is genuinely topological in the PRD §7 shapes: Standard = `research ∥ baseline-harness` fan-in to `tickets`, and `validate ∥ critic` fan-in to `gate-ship`; Refactor = `regression ∥ api-drift-review` fan-in to `gate-diff`. The baseline-node conversions themselves are P4.2a's; this task only rewires the edges. The other five starters stay chains and must remain **bit-identical** to the P0.2 baseline snapshots.
@@ -103,7 +125,7 @@ correctness change that rides on P3.5's `command` node, not on the scheduler.
 |---|---|---|
 | P0.1 – P3.6 | Phases 0–3 (schema v2, engine, canvas, builder) | ✅ 2026-07-23 → 2026-07-26 |
 | P4.1 | Write-scope lint + parallelism | ☐ |
-| P4.2a | `baseline-harness` command node | ☐ |
+| P4.2a | `baseline-harness` command node | ✅ (via HB2b) |
 | P4.2b | Parallel starter shapes | ☐ |
 | P4.3 | Conditional edges UI | ☐ |
 | P4.4 | `subworkflow` node | ☐ |
