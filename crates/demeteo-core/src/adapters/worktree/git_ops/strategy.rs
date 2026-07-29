@@ -1,6 +1,8 @@
 use super::GitOpsHelper;
+use crate::domain::ecosystem::{self, MarkerSite, ECOSYSTEMS, JS_LOCKFILES, MAX_SCANNED_SUBDIRS};
 use crate::domain::models::WorktreeStrategy;
 use crate::paths;
+use std::collections::HashMap;
 
 impl GitOpsHelper {
     /// Run git analysis and propose strategy settings
@@ -57,87 +59,27 @@ impl GitOpsHelper {
             }
         }
 
-        // 3. Detect ecosystems once, then derive test + build commands from the
-        // same set. A polyglot repo (a Tauri app is package.json *and*
-        // Cargo.toml; a Go service with a JS frontend is go.mod *and*
-        // package.json) needs *every* ecosystem's suite to run. The old
-        // first-match-wins picked a single command and silently dropped the
-        // rest, so the verifier's harness could run e.g. only `cargo test` for
-        // a TypeScript-only change — a gate that passes while the change's real
-        // suite (`tsc`/vitest) never executed, reporting a red build as green
-        // and looping the implement retry forever. Collecting the ecosystem set
-        // in one pass keeps the test and build command lists from drifting (the
-        // build command had the same first-match-wins bug), and stats each
-        // marker file only once. A user can still override with a single
-        // explicit command (e.g. a repo's own `npm run checks` aggregate) in
-        // settings.
-        struct Ecosystem {
-            marker: &'static str,
-            test: &'static str,
-            build: Option<&'static str>,
-        }
-        const ECOSYSTEMS: &[Ecosystem] = &[
-            Ecosystem {
-                marker: "package.json",
-                test: "npm test",
-                build: Some("npm run build"),
-            },
-            Ecosystem {
-                marker: "Cargo.toml",
-                test: "cargo test",
-                build: Some("cargo build"),
-            },
-            Ecosystem {
-                marker: "go.mod",
-                test: "go test ./...",
-                build: Some("go build ./..."),
-            },
-            Ecosystem {
-                marker: "requirements.txt",
-                test: "pytest",
-                build: None,
-            },
-        ];
-
-        let mut test_cmds: Vec<&str> = Vec::new();
-        let mut build_cmds: Vec<&str> = Vec::new();
-        for eco in ECOSYSTEMS {
-            if self
-                .exec
-                .get_metadata(machine_str, &format!("{}/{}", repo_dir, eco.marker))
-                .await
-                .is_ok()
-            {
-                test_cmds.push(eco.test);
-                if let Some(b) = eco.build {
-                    build_cmds.push(b);
-                }
-            }
-        }
-
-        // Chain all detected suites so every one runs each verify and the
-        // harness fails if ANY suite fails (not just the first). `&&` would let
-        // an unrelated red in an earlier suite mask or block a change whose real
-        // gate runs later; the `rc` accumulator runs every suite and preserves a
-        // non-zero exit. Runs under the login shell (`run_command_with`), so
-        // `set +e`/`$?`/`exit` behave. A single-ecosystem repo (the common case)
-        // keeps the bare command so it reads cleanly in settings.
-        let run_all = |cmds: &[&str]| -> Option<String> {
-            match cmds {
-                [] => None,
-                [only] => Some((*only).to_string()),
-                _ => {
-                    let body = cmds
-                        .iter()
-                        .map(|c| format!("{c}; rc=$((rc||$?))"))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    Some(format!("set +e; rc=0; {body}; exit $rc"))
-                }
-            }
-        };
-        let test_command = run_all(&test_cmds);
-        let build_command = run_all(&build_cmds);
+        // 3. Find every ecosystem in the repository, then let
+        // `domain::ecosystem` decide what to emit for it.
+        //
+        // A polyglot repo (a Tauri app is package.json *and* Cargo.toml; a Go
+        // service with a JS frontend is go.mod *and* package.json) needs
+        // *every* ecosystem's suite to run. First-match-wins picked one command
+        // and silently dropped the rest, so the harness could run only
+        // `cargo test` for a TypeScript-only change — a gate that passes while
+        // the change's real suite never executed.
+        //
+        // Running all of them used to mean chaining them into one string with a
+        // hand-rolled `rc` accumulator, because there was nowhere to put more
+        // than one harness. There is now: `harnesses` is plural and
+        // gate-selectable (HB5), so each ecosystem gets its own named gate and a
+        // failure says *which* one went red — the attribution HB2c's per-gate
+        // subtraction reads. The accumulator is deleted rather than fixed.
+        //
+        // A user can still override the lot with a single explicit command
+        // (e.g. a repo's own `npm run checks` aggregate) in settings.
+        let sites = self.find_marker_sites(machine_str, repo_dir).await;
+        let detected = ecosystem::compose_commands(&sites);
 
         // 4. Auto-detect project conventions file (for {{project_conventions}} injection).
         // Priority order: AGENTS.md, CLAUDE.md, .cursor/rules/rules.md
@@ -159,16 +101,116 @@ impl GitOpsHelper {
         Ok(WorktreeStrategy {
             default_branch,
             branch_prefix: "demeteo/features/".to_string(),
-            test_command,
-            build_command,
+            test_command: detected.test_command,
+            build_command: detected.build_command,
             coverage_command: None,
             conventions_file,
             pr_template,
-            harnesses: None,
-            validation_gates: None,
-            prepare_command: None,
+            harnesses: Some(detected.harnesses.into_iter().collect::<HashMap<_, _>>())
+                .filter(|h| !h.is_empty()),
+            validation_gates: Some(detected.validation_gates).filter(|g| !g.is_empty()),
+            prepare_command: detected.prepare_command,
             extra_writable_paths: Vec::new(),
         })
+    }
+
+    /// Locate every ecosystem marker in the repository, at a **bounded** depth,
+    /// and gather the evidence `domain::ecosystem` needs to resolve each one.
+    ///
+    /// # Why below the root at all
+    ///
+    /// Detection used to stat `{repo_dir}/{marker}` and nothing deeper. A Tauri
+    /// app keeps its `Cargo.toml` in `src-tauri/`, so it matched `package.json`
+    /// alone — the entire Rust half of the project was invisible to detection
+    /// and the generated command silently covered half the repo.
+    ///
+    /// # Why not deeper
+    ///
+    /// An unbounded walk on a monorepo is its own bug, so this goes exactly one
+    /// level down and no further, skipping the directories that are full of
+    /// other people's manifests ([`ecosystem::SKIPPED_DIRS`], every dot-dir) and
+    /// stopping after [`MAX_SCANNED_SUBDIRS`]. A marker at depth two belongs to
+    /// a layout a human should be describing in settings.
+    ///
+    /// # Why `list_dir` and not `get_metadata`
+    ///
+    /// One listing answers every question about a directory at once — which
+    /// markers are in it, which lockfiles sit beside them, and which
+    /// subdirectories are worth visiting. Stat-ing each marker in each candidate
+    /// directory would be four round trips per directory instead of one, which
+    /// over SSH is the difference between a detection and a wait. If the root
+    /// listing fails there is no fallback worth writing: a repository directory
+    /// that cannot be listed cannot be stat-ed into either.
+    ///
+    /// Paths are joined with `/` rather than `PathBuf::join` because they are
+    /// addresses on the *target* machine, which is Linux for every remote
+    /// project regardless of what the desktop runs — see
+    /// [`ecosystem::in_dir`]'s note.
+    async fn find_marker_sites(&self, machine_str: &str, repo_dir: &str) -> Vec<MarkerSite> {
+        let Ok(root) = self.exec.list_dir(machine_str, repo_dir).await else {
+            return Vec::new();
+        };
+
+        let mut sites = self.sites_in(machine_str, repo_dir, "", &root).await;
+
+        let subdirs: Vec<String> = root
+            .iter()
+            .filter(|e| e.is_dir && ecosystem::is_scannable_subdir(&e.name))
+            .map(|e| e.name.clone())
+            .take(MAX_SCANNED_SUBDIRS)
+            .collect();
+        for dir in subdirs {
+            let path = format!("{}/{}", repo_dir, dir);
+            if let Ok(entries) = self.exec.list_dir(machine_str, &path).await {
+                sites.extend(self.sites_in(machine_str, &path, &dir, &entries).await);
+            }
+        }
+        sites
+    }
+
+    /// Turn one directory listing into the [`MarkerSite`]s it contains.
+    ///
+    /// `rel` is the directory's repo-relative path (empty for the root), which
+    /// is what the emitted commands are wrapped to run in.
+    async fn sites_in(
+        &self,
+        machine_str: &str,
+        abs_dir: &str,
+        rel: &str,
+        entries: &[crate::ports::execution::SftpEntry],
+    ) -> Vec<MarkerSite> {
+        let present = |name: &str| entries.iter().any(|e| !e.is_dir && e.name == name);
+        let mut sites = Vec::new();
+        for recipe in ECOSYSTEMS {
+            if !present(recipe.marker) {
+                continue;
+            }
+            // Only the JS recipe reads anything beyond the marker's existence:
+            // its commands live in `scripts`, and which manager installs them is
+            // in the lockfile. The others are fixed by the toolchain.
+            let (manifest, lockfiles) = if recipe.id == "js" {
+                (
+                    self.exec
+                        .read_file(machine_str, &format!("{}/{}", abs_dir, recipe.marker))
+                        .await
+                        .ok(),
+                    JS_LOCKFILES
+                        .iter()
+                        .filter(|l| present(l))
+                        .map(|l| (*l).to_string())
+                        .collect(),
+                )
+            } else {
+                (None, Vec::new())
+            };
+            sites.push(MarkerSite {
+                marker: recipe.marker.to_string(),
+                dir: rel.to_string(),
+                manifest,
+                lockfiles,
+            });
+        }
+        sites
     }
 
     async fn fallback_default_branch(&self, machine_str: &str, repo_dir: &str) -> String {

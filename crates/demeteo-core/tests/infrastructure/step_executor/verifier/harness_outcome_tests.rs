@@ -228,10 +228,10 @@ fn merge_survives_a_command_ending_in_a_comment() {
 
 #[test]
 fn merge_preserves_multi_command_harnesses() {
-    // The shape `detect_worktree_strategy` emits for a polyglot repo. The
-    // subshell must not disturb the `exit $rc` accumulator that makes the
-    // combined status meaningful.
-    let cmd = "set +e; rc=0; npm test; rc=$((rc||$?)); cargo test; rc=$((rc||$?)); exit $rc";
+    // The shape `detect_worktree_strategy` emits for a marker that lives below
+    // the repository root (HB3). The wrapping subshell must not disturb the
+    // inner one, whose whole job is to keep the `cd` from leaking.
+    let cmd = "(cd src-tauri && cargo test)";
     let wrapped = merge_stderr_into_stdout(cmd);
     assert!(wrapped.contains(cmd));
     assert!(wrapped.starts_with("(\n") && wrapped.ends_with("\n) 2>&1"));
