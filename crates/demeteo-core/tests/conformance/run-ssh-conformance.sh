@@ -54,5 +54,7 @@ export DEMETEO_SSH_CONFORMANCE_PASSWORD="$SSH_PASSWORD"
 export DEMETEO_SSH_CONFORMANCE_WORKDIR="/home/$SSH_USER/conformance"
 
 cd "$REPO_ROOT"
+# Both SSH legs: the byte-identical `exec_contract`, and the S4 drop test that
+# cuts a TCP relay in front of this same sshd.
 cargo test -p demeteo-core --features ssh-conformance \
-  ssh_client_adapter_satisfies_the_contract -- --nocapture
+  ssh_client_adapter -- --nocapture
