@@ -520,6 +520,283 @@ async fn only_a_prepare_command_is_still_configured() {
     );
 }
 
+// ── HB6: the same probe, attributed back to the settings panel ───────────────
+
+#[test]
+fn every_probed_command_is_attributed_to_the_setting_it_came_from() {
+    // The panel puts each answer back beside the field that produced it, so an
+    // answer that cannot say which of prepare / test / `lint` it belongs to is
+    // useless there — it is the misattribution HB6 exists to remove, one layer
+    // up.
+    let s = strategy(
+        Some("npm ci"),
+        Some("npm test"),
+        &[("lint", "npm run lint"), ("unit", "cargo test")],
+    );
+    let report = attribute_verdict(&s, "local", &PreflightVerdict::Resolved { probed: vec![] });
+
+    let seen: Vec<(CommandSource, Option<&str>, &str)> = report
+        .commands
+        .iter()
+        .map(|c| (c.source, c.harness.as_deref(), c.command.as_str()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (CommandSource::Prepare, None, "npm ci"),
+            (CommandSource::Test, None, "npm test"),
+            (CommandSource::Harness, Some("lint"), "npm run lint"),
+            (CommandSource::Harness, Some("unit"), "cargo test"),
+        ]
+    );
+}
+
+#[test]
+fn the_panel_lists_exactly_what_the_launch_probes() {
+    // Two walks of the same three sources would drift, and the drift would be
+    // silent: the panel would show a command the launch never checks, or check
+    // one it never shows.
+    let s = strategy(
+        Some(" npm ci "),
+        Some("  "),
+        &[("lint", "npm run lint"), ("stale", "   ")],
+    );
+    let displayed: Vec<&str> = labelled_commands(&s)
+        .into_iter()
+        .map(|(_, _, c)| c)
+        .collect();
+    assert_eq!(displayed, configured_commands(&s));
+    assert_eq!(displayed, vec!["npm ci", "npm run lint"]);
+}
+
+#[test]
+fn a_missing_binary_is_marked_missing_on_every_command_that_names_it() {
+    // `cargo` is missing, `npm` is not. The lint gate is fine and must not be
+    // painted red beside a genuinely broken unit gate.
+    let s = strategy(
+        None,
+        Some("npm test"),
+        &[
+            ("lint", "npm run lint"),
+            ("unit", "cargo test && npm run x"),
+        ],
+    );
+    let report = attribute_verdict(
+        &s,
+        "local",
+        &PreflightVerdict::MissingBinaries {
+            missing: vec!["cargo".to_string()],
+        },
+    );
+
+    let by_binary: Vec<(&str, Vec<(&str, bool)>)> = report
+        .commands
+        .iter()
+        .map(|c| {
+            (
+                c.command.as_str(),
+                c.binaries
+                    .iter()
+                    .map(|b| (b.name.as_str(), b.resolved))
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        by_binary,
+        vec![
+            ("npm test", vec![("npm", true)]),
+            ("npm run lint", vec![("npm", true)]),
+            (
+                "cargo test && npm run x",
+                vec![("cargo", false), ("npm", true)]
+            ),
+        ]
+    );
+    assert!(report.blocks_launch, "this is what stops a launch today");
+}
+
+#[test]
+fn a_command_the_probe_skipped_claims_nothing_rather_than_claiming_health() {
+    // `$(which pytest)` is deliberately not resolved — running a shell to find
+    // out is the thing the module refuses to do. Reporting it as resolved would
+    // be a claim nothing checked.
+    let s = strategy(None, Some("$(which pytest) -q"), &[]);
+    let report = attribute_verdict(&s, "local", &PreflightVerdict::Resolved { probed: vec![] });
+
+    assert_eq!(report.commands.len(), 1);
+    assert!(
+        report.commands[0].binaries.is_empty(),
+        "an unresolvable word must not appear as a verified one"
+    );
+}
+
+#[test]
+fn the_report_names_the_machine_it_asked() {
+    // On a remote-compute project the commands run there, not on the laptop
+    // showing the panel. An indicator that does not say where it looked is a
+    // lie on exactly those projects.
+    let s = strategy(None, Some("cargo test"), &[]);
+    let report = attribute_verdict(
+        &s,
+        "runner-01",
+        &PreflightVerdict::Resolved { probed: vec![] },
+    );
+    assert_eq!(report.machine, "runner-01");
+}
+
+#[test]
+fn the_report_carries_the_launch_blocking_string_verbatim() {
+    // Not a paraphrase of it: the panel and the error the user meets at launch
+    // must be the same sentence, or one of them will drift and be wrong.
+    let s = strategy(None, Some("cargo test"), &[]);
+    let verdict = PreflightVerdict::MissingBinaries {
+        missing: vec!["cargo".to_string()],
+    };
+    let report = attribute_verdict(&s, "local", &verdict);
+    assert_eq!(report.detail, verdict.detail());
+    assert!(report.detail.unwrap().contains("bash -l -i -c"));
+}
+
+#[test]
+fn the_report_carries_the_fresh_checkout_and_watch_mode_facts() {
+    // The two things nobody guesses, and the reason they are a shared constant:
+    // the engine says exactly this when a baseline cannot be measured.
+    let s = strategy(None, Some("npm test"), &[]);
+    let report = attribute_verdict(&s, "local", &PreflightVerdict::Resolved { probed: vec![] });
+    assert_eq!(report.guidance, FRESH_CHECKOUT_REMEDIATION);
+    assert!(report.guidance.contains("node_modules"));
+    assert!(report.guidance.contains("watch-mode"));
+}
+
+#[tokio::test]
+async fn the_settings_probe_answers_per_command_over_the_same_port() {
+    let exec = ScriptedExec::new(&[
+        ("command -v npm", Ok("/usr/bin/npm")),
+        ("command -v cargo", Err("Command failed (exit code: 1): ")),
+    ]);
+    let report = probe_project_commands(
+        &exec,
+        "local",
+        &strategy(Some("npm ci"), Some("cargo test"), &[]),
+        T,
+    )
+    .await;
+
+    assert_eq!(report.machine, "local");
+    assert!(report.blocks_launch);
+    assert_eq!(
+        report
+            .commands
+            .iter()
+            .map(|c| c.binaries.iter().all(|b| b.resolved))
+            .collect::<Vec<_>>(),
+        vec![true, false]
+    );
+}
+
+#[tokio::test]
+async fn the_settings_probe_reads_no_repository_directory() {
+    // It runs before — and often instead of — a checkout on that machine: a
+    // project may be configured for a runner it has never been provisioned on.
+    // Naming a directory that does not exist there would fail every probe at
+    // spawn time and read as a missing toolchain.
+    struct CwdSpy(Mutex<Vec<Option<String>>>);
+    #[async_trait::async_trait]
+    impl ExecutionPort for CwdSpy {
+        async fn test_connection(&self, _m: &str) -> Result<(), String> {
+            Ok(())
+        }
+        async fn run_command_with(
+            &self,
+            _m: &str,
+            _cmd: &str,
+            o: ShellOptions,
+        ) -> Result<String, String> {
+            self.0.lock().unwrap().push(o.cwd.clone());
+            Ok("/usr/bin/npm".to_string())
+        }
+        async fn read_file(&self, _m: &str, _p: &str) -> Result<String, String> {
+            Err("unscripted read_file".into())
+        }
+        async fn write_file(&self, _m: &str, _p: &str, _c: &str) -> Result<(), String> {
+            Err("unscripted write_file".into())
+        }
+        async fn write_file_bytes(&self, _m: &str, _p: &str, _c: &[u8]) -> Result<(), String> {
+            Err("unscripted write_file_bytes".into())
+        }
+        async fn get_metadata(
+            &self,
+            _m: &str,
+            _p: &str,
+        ) -> Result<crate::ports::execution::SftpEntry, String> {
+            Err("unscripted get_metadata".into())
+        }
+        async fn list_dir(
+            &self,
+            _m: &str,
+            _p: &str,
+        ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
+            Err("unscripted list_dir".into())
+        }
+        async fn setup_worktree(
+            &self,
+            _m: &str,
+            _r: &str,
+            _b: &str,
+            _s: &str,
+        ) -> Result<(), String> {
+            Err("unscripted setup_worktree".into())
+        }
+        async fn resolve_home(&self, _m: &str) -> Result<String, String> {
+            Err("unscripted resolve_home".into())
+        }
+        async fn resolve_user(&self, _m: &str) -> Result<String, String> {
+            Err("unscripted resolve_user".into())
+        }
+        async fn control_rpc(
+            &self,
+            _m: &str,
+            _method: &str,
+            _params: serde_json::Value,
+        ) -> Result<serde_json::Value, String> {
+            Err("unscripted control_rpc".into())
+        }
+        fn spawn_interactive(
+            &self,
+            _m: &str,
+            _binary: &str,
+            _args: &[String],
+            _cwd: &str,
+            _env: &std::collections::HashMap<String, String>,
+        ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+            Err("unscripted spawn_interactive".into())
+        }
+    }
+
+    let spy = CwdSpy(Mutex::new(Vec::new()));
+    let _ = probe_project_commands(&spy, "local", &test_only("npm test"), T).await;
+    assert_eq!(
+        *spy.0.lock().unwrap(),
+        vec![None],
+        "the settings probe must leave the working directory to the adapter"
+    );
+}
+
+#[tokio::test]
+async fn a_transport_failure_at_configuration_time_accuses_nothing() {
+    // The bias is unchanged by the surface: a network blip must not paint a
+    // working toolchain red in the panel any more than it may block a launch.
+    let exec = ScriptedExec::new(&[(
+        "command -v cargo",
+        Err(&format!("{TRANSPORT_ERROR_PREFIX}connection reset")),
+    )]);
+    let report = probe_project_commands(&exec, "local", &test_only("cargo test"), T).await;
+
+    assert!(!report.blocks_launch);
+    assert!(report.commands[0].binaries.iter().all(|b| b.resolved));
+}
+
 #[tokio::test]
 async fn a_transport_failure_on_a_harness_probe_still_never_blocks() {
     // The bias is unchanged by the wider input set: more probes means more

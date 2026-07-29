@@ -816,10 +816,10 @@ fn build_unmeasurable_message(
          the prepare command failed, or no harness produced an exit status. Nothing was \
          recorded, because a suite measured without its install step is not evidence about \
          the base commit.",
-        "Run the command below in a *fresh* checkout — that is what this step gets, with no \
-         `node_modules` and no `target/`. If it needs an install step, set the project's \
-         prepare command; if it hangs, it is most likely a watch-mode runner, which never \
-         exits.",
+        // The settings panel (HB6) states the same two facts before a run is
+        // ever paid for, so the sentence lives in one place and both sites read
+        // it — a second copy would drift out of agreement with this one.
+        crate::adapters::step_executor::preflight::FRESH_CHECKOUT_REMEDIATION,
     )
 }
 

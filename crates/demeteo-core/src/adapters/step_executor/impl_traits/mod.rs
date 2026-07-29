@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
 
+use crate::adapters::step_executor::preflight::PREFLIGHT_PROBE_TIMEOUT_S;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::application::attachments::{commit_staged_attachments, StagedAttachmentInput};
 use crate::domain::ids::{FeatureId, GateDecisionId, ProjectId, StepExecutionId, WorkflowId};
@@ -38,16 +39,6 @@ pub(crate) mod bootstrap_phase {
     pub const REGISTERING: (&str, &str) = ("registering", "Registering feature & steps");
     pub const STARTING_PIPELINE: (&str, &str) = ("starting_pipeline", "Starting pipeline");
 }
-
-/// Per-probe ceiling for the harness preflight, in seconds.
-///
-/// Its own constant rather than the run's `wall_cap_s`, because the two answer
-/// different questions: `wall_cap_s` is "how long may a build take" (30 min by
-/// default), while this bounds a single `command -v` on an already-connected
-/// machine. Anything beyond a few seconds means the machine or the shell is
-/// unwell, not that the binary is slow to find — and an expiry is treated as
-/// *no evidence* rather than a missing binary, so erring short is safe.
-const PREFLIGHT_PROBE_TIMEOUT_S: u64 = 20;
 
 impl DagStepExecutor {
     /// Emit a single [`DomainEvent::BootstrapProgress`]. Best-effort: a
