@@ -1763,10 +1763,14 @@ pub(crate) fn classify_exec_failure(err: &str) -> HarnessExecFailure {
 /// A command that produces no exit status inside a generous wall-clock budget
 /// is overwhelmingly a runner left in **watch mode**, not a slow suite — and
 /// that is a configuration defect no retry can resolve, so the message leads
-/// with it. `detect_worktree_strategy` emits a bare `npm test` for any repo with
-/// a root `package.json`, and `scripts.test` is very often `vitest` or
-/// `jest --watch`, so this is the default path for a large class of projects,
-/// not an exotic one.
+/// with it. `scripts.test` is very often `vitest` or `jest --watch`, and
+/// detection used to emit a bare `npm test` for any repo with a root
+/// `package.json` — so this was the default path for a large class of projects,
+/// not an exotic one. HB3 now reads the script and either corrects it or
+/// declines to emit it, which shrinks the population that reaches here to
+/// hand-written commands and watch-mode forms detection does not recognise. It
+/// does not empty it: this message is still the only thing standing between a
+/// user and a silent half-hour.
 fn build_timeout_message(machine_str: &str, wt_path: &str, cmd: &str, ceiling_s: u64) -> String {
     build_environment_message(
         machine_str,
