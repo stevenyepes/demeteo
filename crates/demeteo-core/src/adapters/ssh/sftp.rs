@@ -6,6 +6,7 @@
 //! wrappers. The `readdir`/`stat` post-processing is pure and lives here so it
 //! is unit-testable without a live socket.
 
+use super::retry::SshFailure;
 use super::session::SessionPool;
 use crate::ports::execution::SftpEntry;
 use ssh2::{FileStat, Sftp};
@@ -15,17 +16,32 @@ use std::path::{Path, PathBuf};
 
 /// Take the pooled session for `machine_id` and run `op` against its locked
 /// `Sftp` handle. Every operation below shares this preamble.
+///
+/// The two failure sites are graded differently, and the grading is the retry
+/// policy (see `super::retry`):
+///
+/// - **The session could not be established.** Nothing was asked of the remote,
+///   so re-running is safe for reads and for the whole-file writes below alike.
+///   This is the case a momentary network drop produces, and the only one
+///   retried.
+/// - **The SFTP call itself failed.** `Answered`, deliberately, even though a
+///   dropped connection can also produce it: an `open` that fails because the
+///   path does not exist is indistinguishable at this layer from one that fails
+///   because the channel died, and `read_file` on a missing artifact is a
+///   routine existence check. Guessing "transport" there would spend two
+///   backoffs and a reconnect on every absent file. The transport failure is
+///   not lost — the session is evicted below, so the *next* call reconnects.
 fn with_sftp<T>(
     pool: &SessionPool,
     machine_id: &str,
     op: impl FnOnce(&Sftp) -> Result<T, String>,
-) -> Result<T, String> {
-    let sftp_sess = pool.get(machine_id)?;
+) -> Result<T, SshFailure> {
+    let sftp_sess = pool.get(machine_id).map_err(SshFailure::never_reached)?;
     let sftp = sftp_sess
         .sftp
         .lock()
-        .map_err(|_| "Failed to lock SFTP".to_string())?;
-    op(&sftp)
+        .map_err(|_| SshFailure::answered("Failed to lock SFTP"))?;
+    op(&sftp).map_err(SshFailure::answered)
 }
 
 /// Evict the pooled session before reporting: these failures mean the SFTP
@@ -50,7 +66,7 @@ pub(super) fn read_file(
     pool: &SessionPool,
     machine_id: &str,
     path: &str,
-) -> Result<String, String> {
+) -> Result<String, SshFailure> {
     with_sftp(pool, machine_id, |sftp| {
         let path_buf = Path::new(path);
         let mut file = evict_on_err(pool, machine_id, sftp.open(path_buf), "Failed to open file")?;
@@ -62,21 +78,19 @@ pub(super) fn read_file(
     })
 }
 
-pub(super) fn write_file(
-    pool: &SessionPool,
-    machine_id: &str,
-    path: &str,
-    content: &str,
-) -> Result<(), String> {
-    write_file_bytes(pool, machine_id, path, content.as_bytes())
-}
-
+/// The one write path. `ExecutionPort::write_file` is the UTF-8 façade over it
+/// and delegates in `client.rs`, so there is a single place where a retry
+/// decision about a write is made.
+///
+/// Whole-file replacement: `Sftp::create` truncates, so a write that died
+/// half-finished and a write that never started converge on the same result
+/// once it succeeds. That is why the retry rule needs no special case here.
 pub(super) fn write_file_bytes(
     pool: &SessionPool,
     machine_id: &str,
     path: &str,
     content: &[u8],
-) -> Result<(), String> {
+) -> Result<(), SshFailure> {
     with_sftp(pool, machine_id, |sftp| {
         let path_buf = Path::new(path);
         let mut file = evict_on_err(
@@ -98,7 +112,7 @@ pub(super) fn get_metadata(
     pool: &SessionPool,
     machine_id: &str,
     path: &str,
-) -> Result<SftpEntry, String> {
+) -> Result<SftpEntry, SshFailure> {
     with_sftp(pool, machine_id, |sftp| {
         let path_buf = Path::new(path);
         let stat = evict_on_err(pool, machine_id, sftp.stat(path_buf), "Failed to stat file")?;
@@ -129,7 +143,7 @@ pub(super) fn list_dir(
     pool: &SessionPool,
     machine_id: &str,
     path: &str,
-) -> Result<Vec<SftpEntry>, String> {
+) -> Result<Vec<SftpEntry>, SshFailure> {
     with_sftp(pool, machine_id, |sftp| {
         let path_buf = Path::new(path);
         let entries = evict_on_err(

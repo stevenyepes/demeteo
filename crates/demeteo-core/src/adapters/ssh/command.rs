@@ -5,6 +5,7 @@
 //! shell assembly is pure and lives here so it is unit-testable without a live
 //! socket.
 
+use super::retry::SshFailure;
 use super::session::SessionPool;
 use super::transport::{drain_stream, transport_err, DrainBudget, TRANSPORT_WALL_CAP};
 use crate::paths;
@@ -45,8 +46,14 @@ pub(super) fn build_invocation(cmd: &str, opts: &ShellOptions) -> String {
 
 /// The blocking half of [`ExecutionPort::run_command_with`]: get (or open) the
 /// pooled session, assemble the invocation, and run it. Everything here is
-/// synchronous `ssh2` work — the caller owns the `spawn_blocking` boundary and
-/// the timeout wait.
+/// synchronous `ssh2` work — the caller owns the `spawn_blocking` boundary,
+/// the timeout wait, and the retry loop.
+///
+/// The error carries a [`SshFailure`] rather than a bare `String` because a
+/// retry decision cannot be made from the message: the same "the connection
+/// broke" text means "nothing ran, re-run me" before `exec` and "the remote is
+/// running this right now" after it. Only this function knows which side of
+/// that line it failed on, so only it can say. See `super::retry`.
 ///
 /// [`ExecutionPort::run_command_with`]: crate::ports::execution::ExecutionPort::run_command_with
 pub(super) fn run_blocking(
@@ -54,16 +61,19 @@ pub(super) fn run_blocking(
     machine_id: &str,
     cmd: &str,
     opts: &ShellOptions,
-) -> Result<String, String> {
+) -> Result<String, SshFailure> {
     // A failure to establish/reuse the session is a transport failure,
     // not a command failure — tag it so callers (e.g. the verifier)
-    // don't misclassify an unreachable machine as a red build.
+    // don't misclassify an unreachable machine as a red build. It is also the
+    // one failure that is unambiguously safe to retry: no session means the
+    // command was never handed to a shell.
     let sftp_sess = pool.get(machine_id).map_err(|e| {
-        if e.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX) {
+        let msg = if e.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX) {
             e
         } else {
             transport_err(e)
-        }
+        };
+        SshFailure::never_reached(msg)
     })?;
 
     let full_cmd = build_invocation(cmd, opts);
@@ -80,13 +90,22 @@ pub(super) fn run_blocking(
 /// This is the single drain-and-check path shared by `run_command_with`, so
 /// the exit-status handling that root-caused "UI says HEALTHY but the dir
 /// doesn't exist" lives in exactly one place.
-pub(super) fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<String, String> {
-    let mut channel = session
-        .channel_session()
-        .map_err(|e| transport_err(format!("Failed to open SSH channel: {}", e)))?;
-    channel
-        .exec(full_cmd)
-        .map_err(|e| transport_err(format!("Failed to execute command: {}", e)))?;
+///
+/// It is also where the retry boundary is drawn, and the boundary is exactly
+/// `channel.exec`. Everything before it — opening the channel — leaves the
+/// remote shell with nothing, so a failure there is
+/// [`SshFailure::never_reached`] and safe to re-run whatever the command does.
+/// Everything from `exec` onward is [`SshFailure::may_have_run`]: libssh2's
+/// process-startup request may have been delivered without its reply coming
+/// back, and once the command is running the remote process outlives the
+/// channel — so a retry would run a second copy alongside the first.
+pub(super) fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<String, SshFailure> {
+    let mut channel = session.channel_session().map_err(|e| {
+        SshFailure::never_reached(transport_err(format!("Failed to open SSH channel: {}", e)))
+    })?;
+    channel.exec(full_cmd).map_err(|e| {
+        SshFailure::may_have_run(transport_err(format!("Failed to execute command: {}", e)))
+    })?;
 
     // Timeout-tolerant drain: a long silent command (e.g. `cargo test`
     // compiling) must not be aborted by the session's 10s blocking-call
@@ -102,7 +121,8 @@ pub(super) fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<Str
         &mut stdout_bytes,
         budget,
         "command stdout",
-    )?;
+    )
+    .map_err(SshFailure::may_have_run)?;
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
 
     // ssh2 keeps stderr on a separate stream. Drain it so the remote
@@ -120,12 +140,18 @@ pub(super) fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<Str
     }
     let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
-    channel
-        .wait_close()
-        .map_err(|e| transport_err(format!("Failed to wait for channel close: {}", e)))?;
-    let exit_code = channel
-        .exit_status()
-        .map_err(|e| transport_err(format!("Failed to read command exit status: {}", e)))?;
+    channel.wait_close().map_err(|e| {
+        SshFailure::may_have_run(transport_err(format!(
+            "Failed to wait for channel close: {}",
+            e
+        )))
+    })?;
+    let exit_code = channel.exit_status().map_err(|e| {
+        SshFailure::may_have_run(transport_err(format!(
+            "Failed to read command exit status: {}",
+            e
+        )))
+    })?;
 
     if exit_code != 0 {
         let detail = if stderr.trim().is_empty() {
@@ -133,7 +159,12 @@ pub(super) fn exec_over_channel(session: &Session, full_cmd: &str) -> Result<Str
         } else {
             stderr.trim().to_string()
         };
-        return Err(format!("Command failed ({}): {}", detail, full_cmd));
+        // The command reached a verdict. Never retried — that is the whole
+        // point of `Answered`.
+        return Err(SshFailure::answered(format!(
+            "Command failed ({}): {}",
+            detail, full_cmd
+        )));
     }
 
     Ok(stdout)
