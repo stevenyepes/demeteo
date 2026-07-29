@@ -19,7 +19,25 @@
 //!   `InteractiveHandle` over the channel.
 //! - `control_rpc` — the `demeteo-runner` control-socket round-trip and its
 //!   response decoding.
+//! - `retry` — the re-establish-and-retry loop each method below wraps its
+//!   blocking half in, and the rule that decides when a failure is eligible.
+//!
+//! Which methods retry, and why, is a policy statement rather than an
+//! implementation detail, so it is stated once here (S4,
+//! `docs/RELIABILITY_PLAN.md`):
+//!
+//! | method | retried | why |
+//! |---|---|---|
+//! | `run_command_with` | yes | only when the shell never received the command |
+//! | `read_file` / `write_file(_bytes)` / `get_metadata` / `list_dir` | yes | same rule; the session could not be established |
+//! | `resolve_home` | yes | same rule |
+//! | `setup_worktree` | inherited | it is three `run_command` calls |
+//! | `test_connection` | **no** | its answer *is* "can this connect right now"; retrying would report a flaky host as healthy |
+//! | `resolve_user` | **no** | a database read; no network to drop |
+//! | `control_rpc` | **no** | side-effecting runner methods, and it backs a reachability probe (see `control_rpc`) |
+//! | `spawn_interactive` | **no** | a live PTY cannot be re-established under a caller already holding the handle |
 
+use super::retry::{with_ssh_retry, SshFailure};
 use super::session::{machine_secret, SessionPool};
 // The pooled-session type moved to `session`, but it was public at this path
 // before the split — re-export it so the crate's surface is unchanged.
@@ -91,52 +109,53 @@ impl ExecutionPort for SshClientAdapter {
         // directory with no extra env, matching the historical behaviour of
         // the previous bare `channel.exec`, but now with cwd/env/login
         // honoured identically to the local adapter when the caller opts in.
-        let machine_id = machine_id.to_string();
+        //
+        // `ShellOptions::timeout` is handed to `with_ssh_retry`, which spends
+        // it across the *whole* call rather than per attempt: a caller asking
+        // for a ceiling gets that ceiling, not `attempts × ceiling`. That also
+        // keeps the expiry message byte-identical to the local adapter's, so
+        // both transports classify an expiry the same way.
+        //
+        // This is the one method where re-running is genuinely dangerous — it
+        // is arbitrary user shell — and the reason it can be retried at all is
+        // that `command::run_blocking` reports *where* it failed. Only a
+        // failure before `channel.exec` is eligible; see `super::retry`.
+        let mid = machine_id.to_string();
         let cmd = cmd.to_string();
-        let pool = self.pool.clone();
         let limit = opts.timeout;
-        let work = tokio::task::spawn_blocking(move || -> Result<String, String> {
-            command::run_blocking(&pool, &machine_id, &cmd, &opts)
-        });
-
-        // `ShellOptions::timeout`, to the extent this transport can honour it.
-        // ssh2 is a synchronous API driving a channel we cannot signal from
-        // here, so the deadline bounds *our* wait; the remote process keeps
-        // running until it exits on its own. Documented on the field, and the
-        // error is the same one the local adapter returns, so callers classify
-        // an expiry identically on both transports.
-        match limit {
-            Some(limit) => match tokio::time::timeout(limit, work).await {
-                Ok(joined) => joined.map_err(|e| format!("blocking task panicked: {}", e))?,
-                Err(_) => Err(format!(
-                    "{}command exceeded its {}s ceiling",
-                    crate::ports::execution::TIMEOUT_ERROR_PREFIX,
-                    limit.as_secs()
-                )),
-            },
-            None => work
-                .await
-                .map_err(|e| format!("blocking task panicked: {}", e))?,
-        }
+        with_ssh_retry("run_command", machine_id, &self.pool, limit, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let cmd = cmd.clone();
+            let opts = opts.clone();
+            async move {
+                tokio::task::spawn_blocking(move || command::run_blocking(&pool, &mid, &cmd, &opts))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
     }
 
     async fn read_file(&self, machine_id: &str, path: &str) -> Result<String, String> {
-        let machine_id = machine_id.to_string();
+        let mid = machine_id.to_string();
         let path = path.to_string();
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || sftp::read_file(&pool, &machine_id, &path))
-            .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
+        with_ssh_retry("read_file", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || sftp::read_file(&pool, &mid, &path))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
     }
 
     async fn write_file(&self, machine_id: &str, path: &str, content: &str) -> Result<(), String> {
-        let machine_id = machine_id.to_string();
-        let path = path.to_string();
-        let content = content.to_string();
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || sftp::write_file(&pool, &machine_id, &path, &content))
+        self.write_file_bytes(machine_id, path, content.as_bytes())
             .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
     async fn write_file_bytes(
@@ -145,33 +164,55 @@ impl ExecutionPort for SshClientAdapter {
         path: &str,
         content: &[u8],
     ) -> Result<(), String> {
-        let machine_id = machine_id.to_string();
+        let mid = machine_id.to_string();
         let path = path.to_string();
         let content = content.to_vec();
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || {
-            sftp::write_file_bytes(&pool, &machine_id, &path, &content)
+        with_ssh_retry("write_file", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            let content = content.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    sftp::write_file_bytes(&pool, &mid, &path, &content)
+                })
+                .await
+                .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
         })
         .await
-        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
     async fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String> {
-        let machine_id = machine_id.to_string();
+        let mid = machine_id.to_string();
         let path = path.to_string();
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || sftp::get_metadata(&pool, &machine_id, &path))
-            .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
+        with_ssh_retry("get_metadata", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || sftp::get_metadata(&pool, &mid, &path))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
     }
 
     async fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
-        let machine_id = machine_id.to_string();
+        let mid = machine_id.to_string();
         let path = path.to_string();
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || sftp::list_dir(&pool, &machine_id, &path))
-            .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
+        with_ssh_retry("list_dir", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || sftp::list_dir(&pool, &mid, &path))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
     }
 
     async fn setup_worktree(
@@ -221,11 +262,17 @@ impl ExecutionPort for SshClientAdapter {
         // turn, and the Machines view fires one runner-status probe per
         // configured machine at once — enough unreachable machines and every
         // worker is occupied at the same time, which stalls the whole backend.
-        let machine_id = machine_id.to_string();
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || pool.resolve_home(&machine_id))
-            .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
+        let mid = machine_id.to_string();
+        with_ssh_retry("resolve_home", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            async move {
+                tokio::task::spawn_blocking(move || pool.resolve_home(&mid))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
     }
 
     async fn resolve_user(&self, machine_id: &str) -> Result<String, String> {

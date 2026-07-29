@@ -36,6 +36,18 @@ fn parse_response(raw: &str) -> Result<serde_json::Value, String> {
 /// `run_command`/SFTP use. Opens one fresh channel per call (the session
 /// itself is what's cached/reused) — simple request/response, no
 /// long-lived multiplexed connection to manage.
+///
+/// **Not** wrapped in `super::retry::with_ssh_retry`, on both of the grounds
+/// that module cares about. The runner's control methods are side-effecting —
+/// starting and cancelling runs, not just reading status — so a retry would
+/// have to be gated on the request never having been written, which is a
+/// window of a few bytes. And this path is what the Machines view probes on
+/// mount, once per configured machine: adding reconnect attempts to a probe
+/// whose whole job is to report reachability makes a dead machine slower to
+/// report as dead (S7). The HOME lookup below is the pool's own synchronous
+/// one and is likewise not retried here — it reads the cache that
+/// `ExecutionPort::resolve_home` (which *is* retried) fills, so a machine the
+/// pipeline has already reached costs nothing either way.
 pub(super) fn call(
     pool: &SessionPool,
     machine_id: &str,
@@ -43,7 +55,7 @@ pub(super) fn call(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let sftp_sess = pool.get(machine_id)?;
-    let home = pool.resolve_home(machine_id)?;
+    let home = pool.resolve_home(machine_id).map_err(|f| f.message)?;
     let socket_path = format!("{}/.local/share/demeteo-runner/control.sock", home);
 
     let mut channel = sftp_sess
