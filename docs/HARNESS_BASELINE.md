@@ -1289,3 +1289,42 @@ deterministic rather than agentic:
 | HB6 | Probe at configuration time | small-medium | ✅ |
 | HB7 | Make the verdict legible | medium | ✅ |
 | HB3 | Ecosystem detection | medium | ✅ |
+| HB8 | An environmental red baseline is not subtracted | small | ✅ |
+| HB9 | Halt at the baseline node on an unrunnable gate | small | ✅ |
+
+HB8 and HB9 were not in the original decomposition; each was found by the task
+after it and is recorded in its own section above.
+
+---
+
+## 5. Open follow-ups
+
+Neither blocks anything. Both were found by the work above and are recorded
+here rather than left in a commit message.
+
+### F1 — per-gate results have no structured home
+
+`run_harness_first` folds per-gate results into the step's `error_message` as a
+**string**, and on the all-excluded *pass* path the exclusion reaches the validate
+prompt only — the report naming it is the agent's prose. There is no run-event
+kind and no column for it. So HB7's UI reads the two engine-authored strings that
+*are* persisted, by prefix (`build_environment_message`, `build_exclusion_note`).
+
+This is not new — `isEnvironmentError` already parsed by prefix, so HB7 widened an
+existing seam rather than opening one — and the parse is pinned by tests. But it
+means **a wording change in an engine message can silently break the UI**, which
+is the coupling this codebase otherwise avoids. The fix is a structured per-gate
+result on the step row (the `harness_baseline_json` precedent applies: a JSON
+column needs no migration). Worth doing before anything else reads these strings.
+
+### F2 — `refactor.json` now has two baselines
+
+`refactor.json` carries both the new `s-baseline-harness` command node and its
+original `s-baseline` **agent** step, which runs the suite and writes prose. HB2b
+deliberately left the agent step alone because the plan called its fate a user
+decision, not an assumption.
+
+The orchestrator measurement is cheaper (zero tokens) and trustworthy in a way an
+agent reading its own test run is not — that is decision 44's whole argument. What
+the agent step still has is narrative value. **Keep it or delete it; this is a
+product call, not a technical one.**
