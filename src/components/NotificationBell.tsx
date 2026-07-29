@@ -6,6 +6,7 @@ import {
   markNotificationRead,
   unreadNotificationCount,
 } from "../lib/notifications";
+import { parseEnvironmentFailure } from "../lib/harnessVerdict";
 import type {
   Notification,
   MrMergedEvent,
@@ -85,11 +86,21 @@ export function NotificationBell() {
   // service the coding agent can't install. Distinct from
   // `retry_budget_exhausted`: it fires *immediately* (no wasted
   // retries) and the fix is provisioning the machine, not the code.
+  //
+  // `reason` is the whole `build_environment_message` blob — headline,
+  // remediation, failing command, machine, and an indented reproduce
+  // block. A toast is the wrong surface for all of that, so it shows the
+  // one actionable sentence and leaves the rest to the feature detail's
+  // panel (HB7), which renders the same parse in full.
   useTauriEvent<EnvironmentNotReadyEvent>(
     "environment_not_ready",
     ({ step_id, reason }) => {
+      const parsed = parseEnvironmentFailure(reason);
+      const summary = parsed
+        ? parsed.remediation || parsed.reason
+        : reason;
       setToast({
-        message: `Step '${step_id}' — environment not ready. ${reason}`,
+        message: `Step '${step_id}' — environment not ready. ${summary}`,
         accent: "amber",
       });
       refresh();
