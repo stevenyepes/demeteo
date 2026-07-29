@@ -717,6 +717,16 @@ export interface WorktreeStrategy {
   pr_template: string | null;
   harnesses?: Record<string, string> | null;
   /**
+   * The user's **ordered selection of which harnesses gate validation** —
+   * tier 2 of the engine's harness resolution chain, beaten only by a step
+   * that names its own gates. It exists because every shipped starter
+   * declares none, so without it the `harnesses` map is config nothing ever
+   * reads. Ordered because the map has no order to inherit and the order is
+   * the user's: cheap gates first, lint before integration.
+   * `null`/empty = no selection, which resolves as it does today.
+   */
+  validation_gates?: string[] | null;
+  /**
    * Optional shell command run inside each subtask worktree before the
    * verifier's harness command (e.g. `npm ci`, `cargo fetch`, `prisma
    * generate`). Runs after dependency-cache dirs from the primary

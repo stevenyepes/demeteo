@@ -1,5 +1,6 @@
 import { GitBranch, Zap, Settings, FileText, Activity, Check, RotateCw, Trash2, Plus, FolderOpen } from 'lucide-react';
 import { DEFAULT_EFFORT, EFFORT_LABELS, reconcileEffort, type EffortLevel } from '../../lib/effortLevels';
+import { HarnessesSection } from './HarnessesSection';
 import { useSettings } from './ProjectSettingsContext';
 
 export function StrategyTab() {
@@ -16,11 +17,13 @@ export function StrategyTab() {
         <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <GitBranch className="w-4 h-4 text-violet-400" /> Git Isolation & Strategy
         </h3>
+        {/* The test command moved to `HarnessesSection`: it is the harness
+            resolution chain's fallback tier, so it belongs beside the named
+            harnesses it competes with and gets the same probe indicator. */}
         {[
           { label: 'Default Branch', value: s.defaultBranch, onChange: s.setDefaultBranch },
           { label: 'Branch Prefix', value: s.branchPrefix, onChange: s.setBranchPrefix },
-          { label: 'Default Test Command', value: s.testCommand, onChange: s.setTestCommand, placeholder: 'e.g. npm test or cargo test' },
-        ].map(({ label, value, onChange, placeholder }) => (
+        ].map(({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) => (
           <div key={label}>
             <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">{label}</label>
             <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600" />
@@ -28,51 +31,7 @@ export function StrategyTab() {
         ))}
       </div>
 
-      {/* Named Test Harnesses */}
-      <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
-          <Zap className="w-4 h-4 text-cyan-400" /> Named Test Harnesses
-        </h3>
-        <p className="text-xs text-slate-400 leading-relaxed">
-          Define named test harness commands to verify agent-generated code (e.g., key: <code>lint</code>, command: <code>npm run lint</code>).
-        </p>
-        <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Prepare Command (optional)</label>
-          <input type="text" value={s.prepareCommand} onChange={e => s.setPrepareCommand(e.target.value)} placeholder="e.g. npm ci or cargo fetch" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
-          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
-            Runs inside each subtask worktree right before the harness. Demeteo already symlinks gitignored dependency
-            caches (<code className="text-slate-300">node_modules/</code>, <code className="text-slate-300">target/</code>, <code className="text-slate-300">.venv/</code>, …) in
-            from the primary checkout, so most projects don't need this — reach for it only for codegen, DB migrations,
-            or a freshly-added dependency the symlink can't cover.
-          </p>
-        </div>
-        <div className="space-y-3">
-          {Object.entries(s.harnesses).map(([name, cmd]) => (
-            <div key={name} className="flex gap-2 items-center">
-              <div className="flex-1 font-mono text-xs bg-black/40 border border-white/10 rounded-lg p-2 text-white truncate">
-                <span className="text-cyan-400">{name}</span>: <span className="text-slate-300">{cmd}</span>
-              </div>
-              <button type="button" onClick={() => { const copy = { ...s.harnesses }; delete copy[name]; s.setHarnesses(copy); }} className="p-2 text-slate-500 hover:text-ruby-400 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 shrink-0" title="Delete harness">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
-          <div className="border-t border-white/5 pt-3 flex gap-2">
-            <input type="text" placeholder="Name" id="new-harness-name" className="w-1/3 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono" />
-            <input type="text" placeholder="Command" id="new-harness-cmd" className="flex-1 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono" />
-            <button type="button" onClick={() => {
-              const nameEl = document.getElementById('new-harness-name') as HTMLInputElement;
-              const cmdEl = document.getElementById('new-harness-cmd') as HTMLInputElement;
-              if (nameEl && cmdEl) {
-                const name = nameEl.value.trim(); const cmd = cmdEl.value.trim();
-                if (name && cmd) { s.setHarnesses({ ...s.harnesses, [name]: cmd }); nameEl.value = ''; cmdEl.value = ''; }
-              }
-            }} className="px-3 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors flex items-center gap-1 font-semibold shrink-0">
-              <Plus className="w-3 h-3" /> Add
-            </button>
-          </div>
-        </div>
-      </div>
+      <HarnessesSection />
 
       {/* Automation Policies */}
       <div className="glass-panel p-6 rounded-xl space-y-4">
