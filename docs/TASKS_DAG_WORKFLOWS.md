@@ -91,7 +91,9 @@ correctness change that rides on P3.5's `command` node, not on the scheduler.
 
   Refactor's existing `s-baseline` **agent** step was left in place: deleting a
   step from a shipped starter is a user decision, and HB2b asks it rather than
-  presuming it.
+  presuming it. *(Answered 2026-07-29 — deleted; the starter now opens on the
+  `s-baseline-harness` node alone. See `HARNESS_BASELINE.md` §5 F2 for what the
+  three downstream readers were re-pointed at and what the deletion cost.)*
 
 ### P4.2b — Parallel shapes for Standard Feature + Refactor starters
 
