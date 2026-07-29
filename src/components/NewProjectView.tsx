@@ -17,6 +17,13 @@ interface WorktreeStrategy {
     branch_prefix: string;
     test_command: string | null;
     pr_template: string | null;
+    /** Named per-ecosystem gates detection derived (HB3). */
+    harnesses: Record<string, string> | null;
+    /** Which of them are pre-ticked to gate validation — HB5's tier 2. */
+    validation_gates: string[] | null;
+    build_command: string | null;
+    /** The install step a fresh `git worktree add` needs before any suite. */
+    prepare_command: string | null;
 }
 
 const NewProjectView = () => {
@@ -47,6 +54,12 @@ const NewProjectView = () => {
     const [branchPrefix, setBranchPrefix] = useState('demeteo/features/');
     const [testCommand, setTestCommand] = useState('');
     const [prTemplate, setPrTemplate] = useState('');
+    // What detection derived beyond the four fields this form edits. Held
+    // whole and written on approval: the form is a *review* of the proposal,
+    // not the whole of it, and dropping the rest here is what used to make the
+    // detected harness map, its gate selection and its prepare command
+    // invisible the moment the wizard finished (HB3).
+    const [detected, setDetected] = useState<WorktreeStrategy | null>(null);
     const [conflictPolicy, setConflictPolicy] = useState('always_gate');
     const [featureLifecycle, setFeatureLifecycle] = useState('archive');
 
@@ -197,6 +210,7 @@ const NewProjectView = () => {
                 setBranchPrefix(strategy.branch_prefix);
                 setTestCommand(strategy.test_command || '');
                 setPrTemplate(strategy.pr_template || '');
+                setDetected(strategy);
                 setBootstrapStep('strategy_proposal');
             } else {
                 throw new Error("Failed to initialize project record");
@@ -209,10 +223,12 @@ const NewProjectView = () => {
 
     const handleApproveStrategy = async () => {
         try {
-            // Utility merges with existing DB values, so we only pass the
-            // fields shown in the strategy-proposal form. Everything else
-            // (harnesses, build_command, etc.) gets a sensible default on a
-            // first bootstrap or is preserved on a re-bootstrap.
+            // The utility merges with existing DB values, so the form's own
+            // fields are passed as edited. The rest of the detected strategy is
+            // passed too, and must be: `bootstrap_project` returns the proposal
+            // without persisting it, so anything not written here is simply
+            // lost — which is what silently discarded every detected harness,
+            // its gate selection and its prepare command (HB3).
             await saveProjectSettings(projectId, {
                 default_branch: defaultBranch,
                 branch_prefix: branchPrefix,
@@ -220,6 +236,10 @@ const NewProjectView = () => {
                 pr_template: prTemplate || null,
                 conflict_policy: conflictPolicy,
                 feature_lifecycle: featureLifecycle,
+                harnesses: detected?.harnesses ?? null,
+                validation_gates: detected?.validation_gates ?? null,
+                build_command: detected?.build_command ?? null,
+                prepare_command: detected?.prepare_command ?? null,
             });
 
             // `compute_type` / `remote_host` MUST be carried into the
@@ -642,6 +662,29 @@ const NewProjectView = () => {
                                         className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
                                     />
                                 </div>
+
+                                {/* A polyglot repository has no single test command — it has one
+                                    gate per ecosystem — so the field above is legitimately empty
+                                    for it. Showing what was detected is what keeps that from
+                                    reading as "nothing was found". Editable in Settings → Strategy. */}
+                                {detected?.validation_gates?.length ? (
+                                    <div>
+                                        <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Detected Validation Gates</label>
+                                        <div className="space-y-1">
+                                            {detected.validation_gates.map(name => (
+                                                <div key={name} className="flex gap-2 items-center p-2 rounded-lg border bg-emerald-500/5 border-emerald-500/20">
+                                                    <span className="text-[11px] font-mono text-emerald-400">{name}</span>
+                                                    <span className="text-[11px] font-mono text-slate-400 truncate">{detected.harnesses?.[name]}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {detected.prepare_command ? (
+                                            <p className="mt-1.5 text-[11px] text-slate-500">
+                                                Prepare step: <span className="font-mono text-slate-400">{detected.prepare_command}</span>
+                                            </p>
+                                        ) : null}
+                                    </div>
+                                ) : null}
 
                                 <div>
                                     <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Conflict Resolution Policy</label>
