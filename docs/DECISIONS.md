@@ -114,6 +114,29 @@ today's behaviour, while a fabricated one excuses a real regression, so every
 ambiguity (transport failure, timeout, failed prepare) records **nothing**
 rather than a plausible red.
 
+**Why the granularity ladder stops at the fingerprint.** The comparison escalates
+cheapest-first: exit status, then `normalize_failure_fingerprint`. A third rung —
+an agent reading the base output and the current one and answering "which
+failures in B are absent from A" — is designed and **deliberately not built**. It
+would scope a verdict to individual test names rather than to the whole gate,
+which is real value, but it costs an agent call on *every* red validate, and the
+question it answers only arises when rung 2 concedes too much. That rate is
+unknown until the cheap rungs have been watched in practice, and rung 2's failure
+direction is the safe one: a perturbed fingerprint reads as *new failures*, i.e.
+today's behaviour, never as pre-existing. Build it when a real run shows it is
+needed, not before.
+
+**What survives of the triage agent.** The classifier (C6) is narrowed rather
+than deleted, because a baseline turns most of the environment-vs-regression
+question into a measurement: red-before-and-identically-red-now is not this
+feature's, and red-before-differently-red-now is answered too — the gate reached
+an exit status at the base, so the machine can run it, and the output changed
+under this feature's changes. What is left is green at the base and red now,
+which may be a fault that appeared *during* the run (a disk filled, a service
+died), and that genuinely needs judgement. The narrowing can only ever withhold a
+call, never cause one, and every malfunction still falls back to `Verdict` — the
+property that made the agent safe to keep at all.
+
 ### 37 — Effort level (detail)
 
 Four things about this one are load-bearing and were easy to get wrong, so they

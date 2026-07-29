@@ -38,11 +38,11 @@ HB5 ─────────┘
   └─▶ HB2a ─▶ HB2b ─▶ HB2c ─▶ HB7
 ```
 
-`HB3` is independent of everything. **HB1, HB4, HB5, HB2a and HB2b are done**,
-which leaves HB6 unblocked (it authors the project tier of HB5's resolution
-chain, and the field it writes now exists) and **HB2c** next on the baseline arm
-— the record now exists and is written by both producers, so what remains there
-is reading it to change a verdict.
+`HB3` is independent of everything. **HB1, HB4, HB5, HB2a, HB2b and HB2c are
+done**, which leaves HB6 unblocked (it authors the project tier of HB5's
+resolution chain, and the field it writes now exists) and **HB7** next on the
+baseline arm — the verdict is now a delta, and what remains there is making the
+subtraction and the terminal environment failure legible in the UI.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -698,6 +698,81 @@ deterministic rather than agentic:
   pre-existing failure reaches `s-critic` instead of looping `s-tickets`, and the
   validate report names the pre-existing failure as excluded.
 
+- **Done:** the comparison is `domain/harness_delta.rs` — pure, synchronous,
+  reachable from a test with no port doubles — and `run_harness_first` calls it
+  rather than containing it. Per red gate it returns one of four
+  determinations: `PreExisting` (subtracted), `Regression`, `NewFailures`, and
+  `NoBaseline`. Three of those are verdicts; they are still distinct because
+  they answer two further questions differently — whether an exclusion must be
+  named, and whether C6 has anything left to add.
+
+  **Rungs 1 and 2 only, and rung 3 is deliberately deferred.** Exit status
+  settles a green baseline outright; a fingerprint match settles the rest.
+  The third rung — an agent reading two outputs to scope the delta to
+  individual test names — is *not built*. It costs an agent call on every red
+  validate, and whether that earns its keep is a judgement better made after
+  the cheap rungs have been watched in practice: rung 2's false-miss rate is
+  unknown until then, and its failure direction is the safe one (a perturbed
+  fingerprint reads as *new*, i.e. today's behaviour, never as pre-existing).
+  The note is in the module docs too, so the next reader does not re-derive it.
+
+  **C6 narrowed, not deleted.** The classifier is consulted only for
+  `Regression` and `NoBaseline` — green at the base and red now, which may be a
+  fault that appeared *during* the run, and the no-measurement case that keeps
+  today's behaviour. `NewFailures` is answered by the measurement (the gate
+  reached an exit status at the base, and its output changed under this
+  feature), and `PreExisting` never reaches a classifier because there is no
+  failure left to classify. The narrowing only ever *withholds* a call: the
+  reproduce-unchanged gate still has to fire first, so a first-sight regression
+  is still a plain verdict at zero tokens, and every malfunction still falls
+  back to `Verdict`.
+
+  **One row deliberately reads before the baseline.** The exit-127 fast path
+  runs on the *unsubtracted* failure set. A missing binary is red at the base
+  with the identical diagnostic, so it is the most subtractable failure there
+  is — and subtracting it would quietly pass a step that tested nothing.
+
+  **The other two consumers.** `{{harness_baseline}}` binds the gates that will
+  judge the run (`resolve_gating_harnesses`, the union over every verifier-
+  bearing step, through the same chain each will resolve through) plus what
+  each already said on this repository; `s-spec` renders it in place of the
+  "exactly ONE command … `{{test_command}}`" claim, which became false the
+  moment harnesses went plural. With no gate configured the block says so, says
+  what it costs a criterion, and names the setting that would change it — at
+  spec time rather than after the implement budget is gone.
+
+  36 tests, every one watched fail. Pure: nothing ever subtracted, a regression
+  excused too, `covers` skipped, an unmeasured gate reading as green, the
+  command-equality check dropped, rung 1 skipped so two empty fingerprints
+  match, the empty-fingerprint guard dropped on a red record, the narrowing
+  widened to `NewFailures`, an unconfigured harness rendering as an empty gate
+  list, an unmeasured gate briefed as passing, and a step's pinned gates
+  ignored. Wiring, in an eight-leg conformance gate over a **real shell and
+  real git** (`tests/conformance/harness_subtraction.rs`): the exclusion never
+  reaching the prompt, the verdict not naming what it is not asking for, an
+  all-excluded pass collapsing into the no-harness block, the two sides
+  fingerprinted differently, the record read before the fallback writes it, the
+  127 path moved behind the subtraction, the narrowing computed but never
+  applied, C6's fail-safe replaced by an escalation, and the
+  `{{harness_baseline}}` binding removed.
+
+  **Two fixture techniques worth not re-deriving.** `git symbolic-ref -q HEAD`
+  tells HB2b's *detached* baseline worktree from the step's own branch
+  checkout, which is how a green-then-red gate is produced deterministically
+  without a second commit — the three older harness fixtures adopted it too,
+  since their red gates were red at the base as well and were (correctly) being
+  subtracted. And `StubRuntime::PROMPT_LOG` records what the stub was actually
+  handed: a prompt is otherwise write-only, so "the exclusion reached the
+  agent" and "`{{harness_baseline}}` was bound" were unobservable from outside.
+
+  **Not proven here, by scope:** the "reaches `s-critic` instead of looping
+  `s-tickets`" wording of the Done-when is asserted at the step level (the
+  validate step completes rather than producing a verdict failure) rather than
+  by driving the full ten-node starter, which the conformance harness cannot do
+  without an LLM. And the *report artifact* naming the exclusion is the agent's
+  own prose; what is asserted is that the exclusion, and the instruction to
+  record it, reach the turn that writes it.
+
 ### HB3 — Ecosystem detection
 
 - **Goal:** stop `detect_worktree_strategy` from producing confidently wrong
@@ -900,7 +975,7 @@ deterministic rather than agentic:
 | HB5 | Named harnesses become an ordered list | medium | ✅ |
 | HB2a | Baseline record: shape & storage | medium | ✅ |
 | HB2b | Measure the baseline: node + lazy fallback | large | ✅ |
-| HB2c | Subtraction & classification | medium-large | ☐ |
+| HB2c | Subtraction & classification | medium-large | ✅ |
 | HB6 | Probe at configuration time | small-medium | ☐ |
 | HB7 | Make the verdict legible | medium | ☐ |
 | HB3 | Ecosystem detection | medium | ☐ |
