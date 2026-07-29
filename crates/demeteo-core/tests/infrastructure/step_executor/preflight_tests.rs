@@ -57,12 +57,28 @@ fn shell_builtins_are_not_probed() {
 }
 
 #[test]
-fn the_generated_polyglot_accumulator_probes_only_real_tools() {
-    // What `detect_worktree_strategy`'s `run_all` emits for a multi-ecosystem
-    // repo. Everything here except `npm` and `cargo` is a builtin, an
-    // assignment, or arithmetic substitution.
-    let cmd = "set +e; rc=0; npm test; rc=$((rc||$?)); cargo test; rc=$((rc||$?)); exit $rc";
-    assert_eq!(probeable_binaries(&[cmd]), vec!["npm", "cargo"]);
+fn what_detection_emits_for_a_polyglot_repo_probes_only_real_tools() {
+    // `detect_worktree_strategy` used to emit one hand-rolled accumulator for a
+    // multi-ecosystem repo — `set +e; rc=0; npm test; rc=$((rc||$?)); …` — and
+    // this test pinned it. HB3 deleted that string in favour of named
+    // harnesses, but the property it was covering survives: detection still
+    // emits multi-command strings, and the preflight must find the real tools in
+    // them without being fooled by the shell around them.
+    //
+    // The two shapes it now emits. Everything except `npm` and `cargo` is a
+    // builtin or a parenthesis — the subshell exists so a `cd` cannot leak into
+    // the next link of the chain, and `(cd` must not be probed as a binary.
+    assert_eq!(
+        probeable_binaries(&["npm ci && (cd src-tauri && cargo fetch)"]),
+        vec!["npm", "cargo"]
+    );
+    assert_eq!(
+        probeable_binaries(&["(cd src-tauri && cargo test)"]),
+        vec!["cargo"]
+    );
+    // And the corrected watch-mode form, whose `--` separator must not be read
+    // as the start of a new command.
+    assert_eq!(probeable_binaries(&["npm test -- --run"]), vec!["npm"]);
 }
 
 #[test]
