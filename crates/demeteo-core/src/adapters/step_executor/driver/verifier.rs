@@ -146,9 +146,12 @@ impl ExecutionDriver {
                                     }],
                                     excluded: &[],
                                     triage_allowed: true,
+                                    // A prepare command runs no tests, so there
+                                    // is nothing for rung 3 to name.
+                                    failing_tests: &[],
                                 },
                             )
-                            .await)
+                            .await);
                     }
                 },
             }
@@ -287,8 +290,9 @@ impl ExecutionDriver {
                 .flatten()
                 .and_then(|f| f.harness_baseline);
 
-            let subtracted =
-                self.subtract_pre_existing(baseline.as_ref(), &base_sha, wt_path, &failed);
+            let subtracted = self
+                .subtract_pre_existing(baseline.as_ref(), &base_sha, wt_path, machine_str, &failed)
+                .await;
 
             // Red at the base **because the gate could not run here**. It looks
             // identical to a pre-existing failure — same command, same output,
@@ -321,6 +325,7 @@ impl ExecutionDriver {
                 attributable,
                 excluded,
                 triage_allowed,
+                new_failing_tests,
                 ..
             } = subtracted;
 
@@ -350,6 +355,7 @@ impl ExecutionDriver {
                         attributable: &attributable,
                         excluded: &excluded,
                         triage_allowed,
+                        failing_tests: &new_failing_tests,
                     },
                 )
                 .await);
@@ -372,44 +378,55 @@ impl ExecutionDriver {
     /// about: gating on a determination reached for some *other* gate would ask
     /// the agent a question the baseline already answered, or withhold one it
     /// did not.
-    fn subtract_pre_existing(
+    ///
+    /// Async only because of rung 3: naming *which* failures a differently-red
+    /// gate added takes a reading of two outputs, and
+    /// [`compare_gates_with_extraction`](crate::adapters::step_executor::failing_tests::compare_gates_with_extraction)
+    /// is what decides the narrow set of gates that is worth paying for. Nothing
+    /// it returns can move a gate between attributable and excluded.
+    async fn subtract_pre_existing(
         &self,
         baseline: Option<&crate::domain::harness_baseline::HarnessBaseline>,
         base_sha: &str,
         wt_path: &str,
+        machine_str: &str,
         failed: &[HarnessRun],
     ) -> SubtractedFailures {
-        use crate::domain::harness_delta::{compare_gates, GateOutcome, ObservedFailure};
+        use crate::domain::harness_delta::GateOutcome;
 
-        // Fingerprinted over the same labelled block `measure_gates` records,
-        // so the two sides of the comparison are strings built the same way
-        // rather than two shapes that merely look similar.
-        let fingerprints: Vec<String> = failed
-            .iter()
-            .map(|f| {
-                normalize_failure_fingerprint(&harness_block(&f.name, &f.cmd, &f.output), wt_path)
-            })
-            .collect();
-        let observed: Vec<ObservedFailure<'_>> = failed
-            .iter()
-            .zip(&fingerprints)
-            .map(|(f, fp)| ObservedFailure {
-                name: &f.name,
-                command: &f.cmd,
-                fingerprint: fp,
-            })
-            .collect();
-
-        let comparisons = compare_gates(baseline, base_sha, &observed);
+        let comparisons =
+            crate::adapters::step_executor::failing_tests::compare_gates_with_extraction(
+                &crate::adapters::step_executor::failing_tests::DriverExtractor {
+                    driver: self,
+                    machine: machine_str,
+                    wt_path,
+                },
+                baseline,
+                base_sha,
+                wt_path,
+                failed,
+            )
+            .await;
 
         let mut attributable = Vec::new();
         let mut excluded = Vec::new();
         let mut unrunnable: Option<UnrunnableGate> = None;
         let mut triage_allowed = None;
+        let mut new_failing_tests: Vec<String> = Vec::new();
         for (run, cmp) in failed.iter().zip(&comparisons) {
             match cmp.determination.outcome() {
                 GateOutcome::Attributable => {
                     triage_allowed.get_or_insert(cmp.determination.allows_triage());
+                    // Rung 3's scope, unioned across the gates this feature
+                    // answers for. Empty for every gate rung 3 could not narrow,
+                    // which is what keeps a partial reading from claiming to be
+                    // the whole failure set: the verdict reason still carries
+                    // every gate's output either way.
+                    for name in cmp.determination.new_failures() {
+                        if !new_failing_tests.contains(name) {
+                            new_failing_tests.push(name.clone());
+                        }
+                    }
                     attributable.push(run.clone());
                 }
                 GateOutcome::Excluded => excluded.push(ExcludedRun {
@@ -440,6 +457,7 @@ impl ExecutionDriver {
             // decided.
             triage_allowed: triage_allowed.unwrap_or(true),
             unrunnable,
+            new_failing_tests,
         }
     }
 
@@ -616,12 +634,22 @@ impl ExecutionDriver {
             },
         );
 
+        // Rung 3 rides on the *existing* carrier into the retry loop rather than
+        // a parallel channel: `failing_tests` is what `RetryContext` threads into
+        // a rework template's `{{failing_tests}}`, so a scoped delta becomes one
+        // ticket per new failure instead of a re-derivation of the whole gate.
+        // The reason is unchanged — the scope is added to the evidence, never
+        // substituted for it, so an empty list costs the reader nothing.
         let verdict = crate::domain::verifier::VerifierError::Verdict(
-            crate::domain::verifier::VerdictFailure::from_reason(format!(
-                "{}{}",
-                build_failure_reason(failures),
-                build_exclusion_note(set.excluded),
-            )),
+            crate::domain::verifier::VerdictFailure {
+                reason: format!(
+                    "{}{}",
+                    build_failure_reason(failures),
+                    build_exclusion_note(set.excluded),
+                ),
+                failing_tests: set.failing_tests.to_vec(),
+                implicated_files: Vec::new(),
+            },
         );
 
         if !persistent {
@@ -1433,6 +1461,18 @@ struct SubtractedFailures {
     /// everything else: it is terminal, so no verdict and no subtraction is
     /// reached.
     unrunnable: Option<UnrunnableGate>,
+    /// Rung 3's scope across `attributable`: the individual tests failing now
+    /// that were not failing at the base.
+    ///
+    /// **Advisory, and additive.** It travels into
+    /// [`VerdictFailure::failing_tests`](crate::domain::verifier::VerdictFailure::failing_tests)
+    /// so the rework producer can write one ticket per genuinely new failure
+    /// instead of re-deriving a whole gate — the `{{failing_tests}}` a rework
+    /// template already renders. Empty is the common case and means *unscoped*,
+    /// never "nothing failed": the verdict reason carries every failing gate's
+    /// output regardless, so nothing is hidden by an extraction that read
+    /// nothing.
+    new_failing_tests: Vec<String>,
 }
 
 /// The red gates of one harness pass, split by who answers for them.
@@ -1455,6 +1495,10 @@ pub(crate) struct HarnessFailureSet<'a> {
     /// Whether C6's triage classifier may still be consulted — see
     /// [`GateDetermination::allows_triage`](crate::domain::harness_delta::GateDetermination::allows_triage).
     pub triage_allowed: bool,
+    /// Rung 3's scope: the individual tests among `attributable` that were not
+    /// failing at the base. Empty means unscoped, and the verdict then reads
+    /// exactly as it did before rung 3 existed.
+    pub failing_tests: &'a [String],
 }
 
 /// One harness's execution: which gate it was, what it ran, and what it said.

@@ -605,6 +605,65 @@ async fn a_differently_red_gate_is_still_this_features_verdict() {
     );
 }
 
+// ── Leg 3b: and the delta is named, test by test ─────────────────────────────
+
+/// Rung 3. Leg 3 proves a differently-red gate is still a verdict; on its own
+/// that verdict says "this whole gate is suspect", and the rework cycle that
+/// follows re-derives all of it. With the identifiers each side named, the same
+/// verdict says *which* failures are new — the difference between "these 3 of
+/// 500 regressed" and "the suite is red".
+///
+/// The fixture drives both readings out of one command. `@stub-tests` in the
+/// gate's own output is what the extractor sees, and `git symbolic-ref` tells the
+/// detached baseline worktree from the step's branch checkout — so the base
+/// reading is `alpha` and the tip's is `alpha,beta`, with no second commit.
+///
+/// The assertion is on the *step's* error message because that is the carrier:
+/// `VerdictFailure::failing_tests` is rendered by `to_feedback` and threaded into
+/// `RetryContext`, which is what a rework template's `{{failing_tests}}` binds.
+/// Naming `alpha` there would be the mis-scoping failure — a ticket to fix a test
+/// that was already broken before the feature started.
+#[tokio::test]
+async fn a_differently_red_gate_reports_only_the_failures_that_are_new() {
+    let leg = run_leg(
+        "scoped",
+        vec![validate_node(None, 1)],
+        GateConfig {
+            test_command: Some(
+                "echo 'SCOPED-GATE-RAN'; echo '@stub-tests alpha'; \
+                 git symbolic-ref -q HEAD >/dev/null && echo '@stub-tests alpha,beta'; exit 1"
+                    .to_string(),
+            ),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let gate = leg.gate("default");
+    assert_eq!(
+        gate.failing_tests.as_deref(),
+        Some(["alpha".to_string()].as_slice()),
+        "the base's reading is what the delta is taken against, and it is cached \
+         on the record so no later attempt re-pays for it"
+    );
+
+    let err = leg.validate_error();
+    assert!(
+        err.contains("Failing tests:") && err.contains("beta"),
+        "the new failure has to reach the retry carrier, or the rework cycle \
+         re-derives the whole gate: {err}"
+    );
+    assert!(
+        !err.contains("- alpha"),
+        "and the pre-existing one must not — a ticket to fix it is work nobody \
+         asked for, on a defect this feature did not cause: {err}"
+    );
+    assert!(
+        err.contains("SCOPED-GATE-RAN"),
+        "the scope is added to the evidence, never substituted for it: {err}"
+    );
+}
+
 // ── Leg 4: the exclusion is named beside an attributable failure ─────────────
 
 /// A subtraction the user cannot audit is one they will not trust the first

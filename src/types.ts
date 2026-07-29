@@ -551,6 +551,13 @@ export interface HarnessBaselineRun {
   output_ref?: string | null;
   /** Set only when the classifier said the gate could not run here. */
   environment?: BaselineEnvironmentFault | null;
+  /** The test identifiers this gate's **red** measurement named, read out of
+   *  its own output (rung 3 of the granularity ladder).
+   *
+   *  Absent means *no reading was obtained* — a green gate, an extractor that
+   *  answered nothing, or a record written before the field existed — never
+   *  "the runner named no failing test". */
+  failing_tests?: string[] | null;
   /** Unix **seconds** at which this gate was measured. */
   measured_at: number;
   producer: BaselineProducer;

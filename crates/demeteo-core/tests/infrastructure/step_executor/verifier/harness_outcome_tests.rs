@@ -286,6 +286,7 @@ fn measured_at_base(name: &str, producer: BaselineProducer) -> HarnessBaselineRu
         fingerprint: "fp".to_string(),
         output_ref: None,
         environment: None,
+        failing_tests: None,
         measured_at: 1_700_000_000,
         producer,
     }

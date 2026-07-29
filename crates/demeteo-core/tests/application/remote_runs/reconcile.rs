@@ -145,6 +145,7 @@ fn the_shadow_patch_mirrors_the_measured_baseline() {
             fingerprint: "fp".to_string(),
             output_ref: Some("/artifacts/unit.log".to_string()),
             environment: None,
+            failing_tests: None,
             measured_at: 1_700,
             producer: BaselineProducer::Node,
         }],

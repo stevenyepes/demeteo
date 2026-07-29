@@ -181,6 +181,48 @@ fn environmental(reason: &str, remediation: &str) -> TriageVerdict {
     }
 }
 
+/// A [`FailingTestExtractor`] double, same shape and same reason as
+/// [`ScriptedTriage`]: rung 3's cost claims — "a green gate is never asked",
+/// "each red gate is asked exactly once" — are about calls that must or must not
+/// happen, and only a double that records can witness them.
+struct ScriptedExtractor {
+    answers: HashMap<String, Vec<String>>,
+    asked: Mutex<Vec<String>>,
+}
+
+impl ScriptedExtractor {
+    /// Keyed by the gate's *command*, which is what the extractor is handed —
+    /// deliberately not by name, since the reading is of one command's output and
+    /// nothing about a gate's name reaches it.
+    fn new(answers: &[(&str, &[&str])]) -> Self {
+        Self {
+            answers: answers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.iter().map(|s| s.to_string()).collect()))
+                .collect(),
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Reads nothing, ever — the malfunctioning extractor, and the shape every
+    /// "no call should happen" assertion uses.
+    fn none() -> Self {
+        Self::new(&[])
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::adapters::step_executor::failing_tests::FailingTestExtractor for ScriptedExtractor {
+    async fn extract(&self, cmd: &str, _output: &str) -> Vec<String> {
+        self.asked.lock().unwrap().push(cmd.to_string());
+        self.answers.get(cmd).cloned().unwrap_or_default()
+    }
+}
+
 #[async_trait::async_trait]
 impl BaselineTriage for ScriptedTriage {
     async fn classify(&self, harness: &ResolvedHarness, _output: &str) -> TriageVerdict {
@@ -229,9 +271,22 @@ async fn measure_with(
     prepare: Option<&str>,
     harnesses: &[ResolvedHarness],
 ) -> Vec<MeasuredGate> {
+    measure_extracting(exec, triage, &ScriptedExtractor::none(), prepare, harnesses).await
+}
+
+async fn measure_extracting(
+    exec: &ScriptedExec,
+    triage: &ScriptedTriage,
+    extractor: &ScriptedExtractor,
+    prepare: Option<&str>,
+    harnesses: &[ResolvedHarness],
+) -> Vec<MeasuredGate> {
     measure_gates(
-        exec,
-        triage,
+        &MeasurementPorts {
+            exec,
+            triage,
+            extractor,
+        },
         &site(BaselineProducer::Node),
         prepare,
         harnesses,
@@ -348,6 +403,96 @@ async fn a_red_gate_the_machine_cannot_run_is_recorded_as_environmental() {
     assert!(
         !measured[0].run.exit_ok,
         "and it is still a red measurement — the classification says why, not whether"
+    );
+}
+
+// ── Reading a red gate's test identifiers, once, at measurement time ─────────
+
+#[tokio::test]
+async fn a_red_gate_records_the_test_identifiers_it_named() {
+    // The record HB2c's rung 3 diffs against, and the granularity the refactor
+    // pipeline's per-test comparison needs: "these 3 of 500 regressed" versus
+    // "the suite is red" are the same exit status and completely different
+    // instructions.
+    let exec = ScriptedExec::new(&[("npm test", Err("FAIL auth::expired"))]);
+    let extractor = ScriptedExtractor::new(&[("npm test", &["auth::expired"] as &[&str])]);
+    let measured = measure_extracting(
+        &exec,
+        &ScriptedTriage::none(),
+        &extractor,
+        None,
+        &[gate("unit", "npm test", 600)],
+    )
+    .await;
+
+    assert_eq!(
+        measured[0].run.failing_tests.as_deref(),
+        Some(["auth::expired".to_string()].as_slice()),
+        "verbatim, so the two sides of the comparison are the same strings"
+    );
+    assert_eq!(
+        extractor.asked(),
+        vec!["npm test"],
+        "and asked exactly once"
+    );
+    assert!(
+        !measured[0].run.exit_ok,
+        "the exit status is still the engine's — the reading says what, never whether"
+    );
+}
+
+#[tokio::test]
+async fn a_green_gate_is_never_handed_to_the_extractor() {
+    // A green gate names no failing test, so the answer is knowably empty and
+    // asking would make every healthy repository fund the unhealthy case.
+    let exec = ScriptedExec::new(&[("npm test", Ok("42 passing"))]);
+    let extractor = ScriptedExtractor::new(&[("npm test", &["should-never-be-read"] as &[&str])]);
+    let measured = measure_extracting(
+        &exec,
+        &ScriptedTriage::none(),
+        &extractor,
+        None,
+        &[gate("unit", "npm test", 600)],
+    )
+    .await;
+
+    assert!(
+        extractor.asked().is_empty(),
+        "a green gate must cost no agent call: {:?}",
+        extractor.asked()
+    );
+    assert_eq!(
+        measured[0].run.failing_tests, None,
+        "and it records nothing, which every consumer reads as 'nobody asked'"
+    );
+}
+
+#[tokio::test]
+async fn an_extractor_that_reads_nothing_records_nothing_rather_than_an_empty_list() {
+    // The fail-safe. `None` and `Some([])` would compare identically today, but
+    // they are different claims — "nobody could read this" versus "the runner
+    // named no failing test" — and only the first is true of a spawn failure.
+    // Collapsing them onto `None` keeps a malfunctioning extractor
+    // indistinguishable from a record written before rung 3 existed.
+    let exec = ScriptedExec::new(&[("npm test", Err("Segmentation fault"))]);
+    let extractor = ScriptedExtractor::none();
+    let measured = measure_extracting(
+        &exec,
+        &ScriptedTriage::none(),
+        &extractor,
+        None,
+        &[gate("unit", "npm test", 600)],
+    )
+    .await;
+
+    assert_eq!(extractor.asked(), vec!["npm test"], "it was asked");
+    assert_eq!(
+        measured[0].run.failing_tests, None,
+        "and read nothing, which must not be recorded as an answer"
+    );
+    assert!(
+        !measured[0].run.fingerprint.is_empty(),
+        "rungs 1-2 are untouched by a failed reading — that is the whole degradation path"
     );
 }
 
@@ -608,8 +753,11 @@ async fn each_gate_carries_the_producer_and_the_measurement_time() {
     // hold gates measured by both producers at different times.
     let exec = ScriptedExec::new(&[("npm test", Ok("ok"))]);
     let measured = measure_gates(
-        &exec,
-        &ScriptedTriage::none(),
+        &MeasurementPorts {
+            exec: &exec,
+            triage: &ScriptedTriage::none(),
+            extractor: &ScriptedExtractor::none(),
+        },
         &site(BaselineProducer::Fallback),
         None,
         &[gate("unit", "npm test", 600)],

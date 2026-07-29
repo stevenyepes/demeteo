@@ -14,6 +14,7 @@ fn run(name: &str, exit_ok: bool, fingerprint: &str) -> HarnessBaselineRun {
         fingerprint: fingerprint.to_string(),
         output_ref: Some(format!("/artifacts/{name}.log")),
         environment: None,
+        failing_tests: None,
         measured_at: 1_000,
         producer: BaselineProducer::Node,
     }
@@ -49,6 +50,66 @@ fn base_sha_survives_the_round_trip() {
     );
     let decoded = HarnessBaseline::from_column(Some(&encoded)).unwrap();
     assert_eq!(decoded.base_sha, "deadbeef");
+}
+
+/// Rung 3's names ride on the same column, so they must survive the same round
+/// trip the fingerprint does — this is the whole storage claim of the task, and
+/// a `#[serde(default)]` field that silently fails to encode would look
+/// identical to a gate nobody extracted.
+#[test]
+fn per_test_names_round_trip_on_the_record() {
+    let mut red = run("unit", false, "fp-unit");
+    red.failing_tests = Some(vec![
+        "auth::rejects_expired_token".to_string(),
+        "src/app.test.ts > renders the header".to_string(),
+    ]);
+    let record = baseline("abc123", vec![run("lint", true, ""), red]);
+
+    let encoded = HarnessBaseline::to_column(Some(&record)).expect("encodes");
+    assert!(
+        encoded.contains("auth::rejects_expired_token"),
+        "the identifiers must be *in* the stored payload: {encoded}"
+    );
+    let decoded = HarnessBaseline::from_column(Some(&encoded)).expect("decodes");
+    assert_eq!(decoded, record);
+    assert_eq!(
+        decoded.harness("unit").unwrap().failing_tests.as_deref(),
+        Some(
+            [
+                "auth::rejects_expired_token".to_string(),
+                "src/app.test.ts > renders the header".to_string(),
+            ]
+            .as_slice()
+        ),
+        "verbatim and in the order the runner printed them"
+    );
+    assert_eq!(
+        decoded.harness("lint").unwrap().failing_tests,
+        None,
+        "a green gate names nothing, and nothing is not an empty list"
+    );
+}
+
+/// **No migration is needed, and this is what proves it.** The column is JSON,
+/// so a record written before rung 3 existed simply omits the field. It has to
+/// decode — not degrade to `None` for the *whole record*, which is what a
+/// non-defaulted field would cause — and behave exactly as it did, i.e. with no
+/// per-test names to compare.
+#[test]
+fn a_record_written_before_rung_3_decodes_and_behaves_as_it_did() {
+    let legacy = r#"{"base_sha":"abc123","harnesses":[{"name":"unit",
+        "command":"npm run unit","exit_ok":false,"fingerprint":"fp-unit",
+        "output_ref":"/artifacts/unit.log","measured_at":1000,"producer":"node"}]}"#;
+
+    let decoded = HarnessBaseline::from_column(Some(legacy))
+        .expect("a pre-rung-3 record must still decode, or every old run loses its baseline");
+    let gate = decoded.harness("unit").expect("gate survives");
+    assert_eq!(gate.fingerprint, "fp-unit");
+    assert!(!gate.exit_ok);
+    assert_eq!(
+        gate.failing_tests, None,
+        "absent is 'nobody read this', which compares at rungs 1-2 — today's behaviour"
+    );
 }
 
 #[test]
