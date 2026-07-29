@@ -247,6 +247,7 @@ fn project_settings_default_effort_round_trips() {
             conventions_file: None,
             pr_template: None,
             harnesses: None,
+            validation_gates: None,
             prepare_command: None,
             extra_writable_paths: Vec::new(),
         },
@@ -275,5 +276,82 @@ fn project_settings_default_effort_round_trips() {
     assert_eq!(
         adapter.get_settings(&pid).unwrap().unwrap().default_effort,
         None
+    );
+}
+
+/// The `harnesses` column carries two fields (HB5): the map, and the user's
+/// ordered selection of which of them gate validation. Both shapes it may hold
+/// must read back intact — and the legacy bare map, which is what every row
+/// written before HB5 contains and what a project with no selection still
+/// writes, must survive a shape it was never told about.
+#[test]
+fn project_settings_harnesses_and_validation_gates_round_trip() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let pid = ProjectId::from("p_settings_gates".to_string());
+    adapter
+        .add(Project {
+            id: pid.clone(),
+            name: "gates settings".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        })
+        .unwrap();
+
+    let harnesses: std::collections::HashMap<String, String> = [
+        ("lint".to_string(), "npm run lint".to_string()),
+        ("unit".to_string(), "npm test".to_string()),
+    ]
+    .into_iter()
+    .collect();
+
+    let settings = |gates: Option<Vec<String>>| ProjectSettings {
+        project_id: pid.clone(),
+        worktree_strategy: WorktreeStrategy {
+            default_branch: "main".to_string(),
+            branch_prefix: "feat/".to_string(),
+            test_command: None,
+            build_command: None,
+            coverage_command: None,
+            conventions_file: None,
+            pr_template: None,
+            harnesses: Some(harnesses.clone()),
+            validation_gates: gates,
+            prepare_command: None,
+            extra_writable_paths: Vec::new(),
+        },
+        conflict_policy: "manual".to_string(),
+        feature_lifecycle: "keep".to_string(),
+        default_agent_kind: None,
+        default_model: None,
+        default_effort: None,
+        default_loop_iterations: None,
+        default_max_budget_usd: None,
+        artifact_subdir: "artifacts/".to_string(),
+        commit_artifacts: false,
+    };
+
+    // No selection: the column keeps its pre-HB5 bare-map shape, and the map
+    // must not be swallowed by the reader that now also understands an envelope.
+    adapter.save_settings(settings(None)).unwrap();
+    let saved = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(saved.worktree_strategy.harnesses, Some(harnesses.clone()));
+    assert_eq!(saved.worktree_strategy.validation_gates, None);
+
+    // With a selection, both fields survive — and the order is the user's
+    // (cheap gates first), so it must not be re-sorted or set-ified.
+    adapter
+        .save_settings(settings(Some(vec!["unit".to_string(), "lint".to_string()])))
+        .unwrap();
+    let saved = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(saved.worktree_strategy.harnesses, Some(harnesses));
+    assert_eq!(
+        saved.worktree_strategy.validation_gates,
+        Some(vec!["unit".to_string(), "lint".to_string()])
     );
 }

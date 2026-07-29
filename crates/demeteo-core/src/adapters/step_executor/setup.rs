@@ -216,6 +216,7 @@ pub fn fetch_default_settings() -> ProjectSettings {
             conventions_file: None,
             pr_template: None,
             harnesses: None,
+            validation_gates: None,
             prepare_command: None,
             extra_writable_paths: Vec::new(),
         },

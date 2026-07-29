@@ -7,7 +7,17 @@
 // were previously spelled inside `async fn`s that also did I/O, so none of them
 // could be asserted without standing up a driver and twenty ports it never read.
 
-use super::{merge_stderr_into_stdout, verdict_contract, HarnessOutcome};
+use super::{
+    build_failure_reason, merge_stderr_into_stdout, verdict_contract, HarnessOutcome, HarnessRun,
+};
+
+fn run(name: &str, cmd: &str, output: &str) -> HarnessRun {
+    HarnessRun {
+        name: name.to_string(),
+        cmd: cmd.to_string(),
+        output: output.to_string(),
+    }
+}
 
 // ── S12: an absent harness must not read as a passing one ────────────────────
 
@@ -45,11 +55,11 @@ fn absent_harness_never_claims_anything_was_executed() {
 
 #[test]
 fn ran_harness_carries_its_output_and_the_ban() {
-    let rendered = HarnessOutcome::Ran {
-        name: "default".into(),
-        cmd: "cargo test".into(),
-        output: "test result: ok. 57 passed".into(),
-    }
+    let rendered = HarnessOutcome::Ran(vec![run(
+        "default",
+        "cargo test",
+        "test result: ok. 57 passed",
+    )])
     .render_section();
 
     assert!(rendered.contains("already executed by the orchestrator"));
@@ -62,16 +72,134 @@ fn ran_harness_carries_its_output_and_the_ban() {
 fn the_two_outcomes_share_no_misleading_wording() {
     // The headings must be distinguishable at a glance in a long prompt: this
     // is the one signal the agent has for "is there evidence here or not".
-    let ran = HarnessOutcome::Ran {
-        name: "default".into(),
-        cmd: "true".into(),
-        output: String::new(),
-    }
-    .render_section();
+    let ran = HarnessOutcome::Ran(vec![run("default", "true", "")]).render_section();
     let absent = HarnessOutcome::NotConfigured.render_section();
 
     let heading = |s: &str| s.lines().next().unwrap_or_default().to_string();
     assert_ne!(heading(&ran), heading(&absent));
+}
+
+// ── HB5: several gates, each attributable ────────────────────────────────────
+
+#[test]
+fn every_harness_gets_its_own_named_block() {
+    // The whole point of the list. `&&`-chaining two commands hands the agent
+    // one undifferentiated blob in which "which gate produced this line" is
+    // unanswerable — and that attribution is what a per-gate verdict needs.
+    let rendered = HarnessOutcome::Ran(vec![
+        run("lint", "npm run lint", "0 problems"),
+        run("unit", "npm test", "42 passing"),
+    ])
+    .render_section();
+
+    for (name, cmd, output) in [
+        ("lint", "npm run lint", "0 problems"),
+        ("unit", "npm test", "42 passing"),
+    ] {
+        assert!(
+            rendered.contains(&format!("### Harness `{name}`")),
+            "every gate needs its own labelled heading; {name} missing from:\n{rendered}"
+        );
+        assert!(rendered.contains(cmd), "missing {cmd} in:\n{rendered}");
+        assert!(
+            rendered.contains(output),
+            "missing {output} in:\n{rendered}"
+        );
+    }
+    // Declared order is the user's order (cheap gates first), so the blocks
+    // must not be reordered on the way into the prompt.
+    assert!(
+        rendered.find("### Harness `lint`") < rendered.find("### Harness `unit`"),
+        "blocks must follow declared order; got:\n{rendered}"
+    );
+}
+
+#[test]
+fn no_runs_at_all_is_not_configured_rather_than_an_empty_pass() {
+    // The constructor is the only thing standing between "we ran nothing" and
+    // a `Ran([])` that would render the authoritative heading over no evidence
+    // at all — the S12 bug with an extra step.
+    assert!(matches!(
+        HarnessOutcome::from_runs(Vec::new()),
+        HarnessOutcome::NotConfigured
+    ));
+    let rendered = HarnessOutcome::from_runs(Vec::new()).render_section();
+    assert!(rendered.contains("NOTHING RAN"));
+    assert!(!rendered.contains("already executed"));
+}
+
+// ── HB5: a failure says which gate went red ──────────────────────────────────
+
+#[test]
+fn a_failure_names_the_harness_that_failed() {
+    let reason = build_failure_reason(&[run("lint", "npm run lint", "3 problems")]);
+
+    assert!(
+        reason.contains("'lint'"),
+        "the retry feedback must name the gate, not just the command; got:\n{reason}"
+    );
+    assert!(reason.contains("npm run lint"));
+    assert!(
+        reason.contains("exited with failure"),
+        "the wording every consumer of this string matches on must survive"
+    );
+}
+
+#[test]
+fn both_failing_harnesses_reach_the_retry_feedback() {
+    // If only the first red gate reached the implementer it would fix that one
+    // and rediscover the second on the next cycle — one wasted cycle turned
+    // into two, which is exactly what running every declared harness exists to
+    // prevent. Reporting only half of what ran would give the saving back.
+    let reason = build_failure_reason(&[
+        run("lint", "npm run lint", "3 problems"),
+        run("unit", "npm test", "1 failing: adds two numbers"),
+    ]);
+
+    assert!(reason.contains("'lint'") && reason.contains("3 problems"));
+    assert!(reason.contains("'unit'") && reason.contains("1 failing: adds two numbers"));
+    assert!(
+        reason.contains("2 of this step's harnesses failed"),
+        "the count must lead, so the reader knows to look for more than one; got:\n{reason}"
+    );
+}
+
+#[test]
+fn a_single_failure_reads_exactly_as_it_did_before_the_list() {
+    // Back-compat where it is observable: one red gate must not acquire a
+    // "1 of this step's harnesses failed" preamble it never had.
+    let reason = build_failure_reason(&[run("default", "cargo test", "boom")]);
+    assert!(!reason.contains("harnesses failed"));
+    assert_eq!(
+        reason,
+        "'default' — command 'cargo test' exited with failure:\nboom"
+    );
+}
+
+#[test]
+fn the_tail_budget_is_shared_not_multiplied() {
+    // A step with five red gates must not grow the retry prompt fivefold. Each
+    // gate still gets a floor worth of tail (enough for a stack), and the
+    // failing *end* of each output is what survives — the assertion, not the
+    // build banner.
+    let long = "x".repeat(10_000);
+    let five: Vec<_> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .map(|n| run(n, "cmd", &format!("{long}TAIL-{n}")))
+        .collect();
+    let reason = build_failure_reason(&five);
+
+    assert!(
+        reason.len() < 5 * 2000,
+        "budget must be shared; got {} chars",
+        reason.len()
+    );
+    for n in ["a", "b", "c", "d", "e"] {
+        assert!(
+            reason.contains(&format!("TAIL-{n}")),
+            "every gate keeps the tail of its own output; {n} lost"
+        );
+    }
 }
 
 // ── S11: a green run's stderr must survive ───────────────────────────────────

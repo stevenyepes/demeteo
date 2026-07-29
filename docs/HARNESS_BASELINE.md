@@ -38,10 +38,9 @@ HB5 ─────────┘
   └─▶ HB2a ─▶ HB2b ─▶ HB2c ─▶ HB7
 ```
 
-`HB3` is independent of everything. **HB1 and HB4 are done.** Work them in that
-order: HB4 was small and unblocks HB6; HB5 fixes the *shape* of what gets
-recorded before HB2a fixes its storage, and it also has to land before HB6,
-because HB6 authors the project tier of HB5's resolution chain.
+`HB3` is independent of everything. **HB1, HB4 and HB5 are done**, which leaves
+HB6 unblocked (it authors the project tier of HB5's resolution chain, and the
+field it writes now exists) and HB2a next on the baseline arm.
 
 ### Key code coordinates (shared reference — don't re-discover these)
 
@@ -336,7 +335,7 @@ deterministic rather than agentic:
   go in the conformance gate (real shell), and both must be watched fail against
   today's code first.
 
-### HB5 — Named harnesses become an ordered list
+### HB5 — Named harnesses become an ordered list — **[Done]**
 
 - **Goal:** `VerifierConfig::harness_name: Option<String>` selects exactly one
   entry from the `harnesses` map. A validate step that should gate on lint *and*
@@ -408,6 +407,34 @@ deterministic rather than agentic:
   fails*, and the failure names the failing one. A workflow declaring the old
   singular `harness_name` behaves bit-identically — assert against the P0.2
   starter snapshots.
+
+- **Done:** `VerifierConfig::harness_names: Vec<String>` (accepting the singular
+  spelling's `null` / `"lint"` / list shapes through one deserializer, so no
+  starter changed), the pure `resolve_harnesses` chain in `domain/verifier.rs`,
+  and a plural `HarnessOutcome::Ran(Vec<HarnessRun>)` whose per-gate blocks and
+  per-gate verdict reason are what HB2a records and HB7 renders. 26 unit tests
+  over the pure decisions plus a two-leg conformance gate,
+  `tests/conformance/harness_gates.rs`, which runs a **real** shell: one leg
+  proves a red first gate does not stop the second and that both are named, the
+  other proves a starter-shaped workflow (declaring `null`) is gated by the
+  project's selection rather than its `test_command`. Every test was watched
+  fail — stopping at the first failure, dividing the deadline, making tier 2
+  additive, checking tier 2 first, dropping the tier-3 fallback, dropping the
+  gate name from the reason, reporting only the first failure, unlabelling the
+  blocks, dropping the `harness_name` alias, letting `Ran([])` render, paying
+  the tail budget per failure, and both ways of failing to persist the
+  selection.
+
+  **Storage of tier 2 — one correction to this plan.** `WorktreeStrategy` is
+  *not* serialized as a whole: `repos/project.rs` gives every field its own
+  column, so an `Option<Vec<String>>` needed somewhere to live after all. It
+  went into the existing `harnesses` `serde_json` column (V8), which now accepts
+  two shapes — the bare map, still written whenever no gate is selected, and
+  `{harnesses, validation_gates}` once one is. That keeps V37 free for HB2a and
+  keeps every pre-HB5 row byte-identical. The map must be tried **first** when
+  reading: every envelope field is optional, so an untagged match against the
+  envelope accepts any object and silently discards a legacy map's entries —
+  which is exactly what it did until the conformance leg caught it.
 
 ### HB2a — The baseline record: shape and storage
 
@@ -769,7 +796,7 @@ deterministic rather than agentic:
 |---|---|---|---|
 | HB1 | Bootstrap preflight phase | medium | ✅ |
 | HB4 | Probe every configured command | small | ✅ |
-| HB5 | Named harnesses become an ordered list | medium | ☐ |
+| HB5 | Named harnesses become an ordered list | medium | ✅ |
 | HB2a | Baseline record: shape & storage | medium | ☐ |
 | HB2b | Measure the baseline: node + lazy fallback | large | ☐ |
 | HB2c | Subtraction & classification | medium-large | ☐ |

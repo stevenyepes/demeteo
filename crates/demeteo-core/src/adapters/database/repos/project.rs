@@ -15,6 +15,75 @@ fn effort_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<E
     Ok(raw.as_deref().and_then(EffortLevel::parse))
 }
 
+/// The two shapes the `project_settings.harnesses` TEXT column (V8) is allowed
+/// to hold. Both are harness *configuration*, which is why they share one
+/// column instead of costing a migration for a `Vec<String>`:
+///
+/// * `{"lint": "npm run lint"}` — the original map, and still what is written
+///   whenever no validation gates are selected. Every row written before HB5
+///   has this shape, and so does every row written after it by a project that
+///   never ticked a gate, so the column's content is unchanged for them.
+/// * `{"harnesses": {...}, "validation_gates": ["lint"]}` — written only once a
+///   selection exists.
+///
+/// Order matters, and the *map* has to be tried first. Every field of the
+/// envelope is optional, so an untagged match against it would accept any JSON
+/// object at all — including a legacy map, whose entries it would silently
+/// discard as unknown fields. The reverse cannot happen: the envelope's
+/// `harnesses` key holds an object, and a map's values are all strings, so a
+/// real envelope can never parse as a map.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum HarnessesColumn {
+    Map(std::collections::HashMap<String, String>),
+    Envelope {
+        harnesses: Option<std::collections::HashMap<String, String>>,
+        #[serde(default)]
+        validation_gates: Option<Vec<String>>,
+    },
+}
+
+/// Split the stored column into the two `WorktreeStrategy` fields it carries.
+/// An unparseable column degrades to "nothing configured", exactly as the
+/// previous `from_str(&s).ok()` did.
+fn harnesses_from_column(
+    raw: Option<String>,
+) -> (
+    Option<std::collections::HashMap<String, String>>,
+    Option<Vec<String>>,
+) {
+    match raw.and_then(|s| serde_json::from_str::<HarnessesColumn>(&s).ok()) {
+        Some(HarnessesColumn::Envelope {
+            harnesses,
+            validation_gates,
+        }) => (harnesses, validation_gates),
+        Some(HarnessesColumn::Map(map)) => (Some(map), None),
+        None => (None, None),
+    }
+}
+
+/// Render the column. Stays in the legacy bare-map shape unless a gate
+/// selection exists, so a project that never uses HB6's checkbox writes
+/// byte-identical rows to the ones it wrote before.
+fn harnesses_to_column(strategy: &WorktreeStrategy) -> Option<String> {
+    let gates = strategy
+        .validation_gates
+        .as_ref()
+        .filter(|g| !g.is_empty())
+        .cloned();
+    match gates {
+        None => strategy
+            .harnesses
+            .as_ref()
+            .and_then(|h| serde_json::to_string(h).ok()),
+        Some(gates) => serde_json::to_string(&HarnessesColumn::Envelope {
+            harnesses: strategy.harnesses.clone(),
+            validation_gates: Some(gates),
+        })
+        .ok(),
+    }
+}
+
 impl ProjectRepository for SqliteAdapter {
     fn get_projects(&self) -> Result<Vec<Project>, String> {
         let conn = self.conn.lock()?;
@@ -186,7 +255,7 @@ impl ProjectRepository for SqliteAdapter {
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
             .query_map(params![project_id.0], |row| {
-                let harnesses: Option<String> = row.get(12)?;
+                let (harnesses, validation_gates) = harnesses_from_column(row.get(12)?);
                 let commit_artifacts: i64 = row.get(14)?;
                 let default_loop_iterations: Option<i64> = row.get(15)?;
                 let extra_writable_paths_json: Option<String> = row.get(16)?;
@@ -201,7 +270,8 @@ impl ProjectRepository for SqliteAdapter {
                         coverage_command: row.get(8)?,
                         conventions_file: row.get(9)?,
                         pr_template: row.get(4)?,
-                        harnesses: harnesses.and_then(|s| serde_json::from_str(&s).ok()),
+                        harnesses,
+                        validation_gates,
                         prepare_command,
                         extra_writable_paths: extra_writable_paths_json
                             .and_then(|s| serde_json::from_str(&s).ok())
@@ -228,11 +298,7 @@ impl ProjectRepository for SqliteAdapter {
 
     fn save_settings(&self, s: ProjectSettings) -> Result<(), String> {
         let conn = self.conn.lock()?;
-        let harnesses_json = s
-            .worktree_strategy
-            .harnesses
-            .as_ref()
-            .and_then(|h| serde_json::to_string(h).ok());
+        let harnesses_json = harnesses_to_column(&s.worktree_strategy);
         let extra_writable_paths_json = if s.worktree_strategy.extra_writable_paths.is_empty() {
             None
         } else {

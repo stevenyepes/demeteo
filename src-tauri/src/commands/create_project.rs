@@ -411,6 +411,7 @@ pub async fn submit_create_project_step(
                     conventions_file: None,
                     pr_template: None,
                     harnesses: None,
+                    validation_gates: None,
                     prepare_command: None,
                     extra_writable_paths: Vec::new(),
                 },

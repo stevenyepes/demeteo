@@ -239,7 +239,7 @@ describe('verifier sub-form', () => {
     expect(next.nodes.find((n) => n.id === AGENT_NODE_ID)!.config!.verifier).toEqual({
       instructions: 'Verify that the changes are correct and the tests pass.',
       agent_kind: null,
-      harness_name: null,
+      harness_names: [],
       verdict_key: 'verdict',
     });
   });
