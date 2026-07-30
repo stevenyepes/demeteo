@@ -96,3 +96,68 @@ fn renders_project_memory_markdown() {
 
     assert_eq!(result, "Memory list:\n- **test_key**: test_value (Source: Human)\n- **other_key**: other_value (Source: Agent)\n");
 }
+
+// ── render_executable ────────────────────────────────────────────────────────
+//
+// A command is not prose: `render`'s collapse-to-empty turns an unconfigured
+// `{{build_command}}` into a gate that reports success without running.
+
+#[test]
+fn an_executable_template_renders_when_every_token_resolves() {
+    let ctx = PromptContext::new().set("build_command", "npm run build");
+    assert_eq!(
+        ctx.render_executable("{{build_command}}").unwrap(),
+        "npm run build"
+    );
+}
+
+#[test]
+fn an_executable_template_refuses_an_unset_token_by_name() {
+    let err = PromptContext::new()
+        .set("test_command", "npm test")
+        .render_executable("{{build_command}}")
+        .expect_err("an unset token must not collapse to an empty command");
+
+    assert!(
+        err.contains("build_command"),
+        "the error must name the token so it names the setting: {err}"
+    );
+}
+
+#[test]
+fn an_executable_template_refuses_a_token_set_to_blank() {
+    // How it actually arrives: the column exists and holds "".
+    let err = PromptContext::new()
+        .set("build_command", "   ")
+        .render_executable("{{build_command}}")
+        .expect_err("a blank setting is an absent one");
+    assert!(err.contains("build_command"), "{err}");
+}
+
+#[test]
+fn an_executable_template_refuses_a_command_that_is_only_whitespace() {
+    PromptContext::new()
+        .render_executable("   \n ")
+        .expect_err("an empty command must never be treated as a command");
+}
+
+#[test]
+fn an_executable_template_leaves_shell_braces_alone() {
+    // `${VAR}` and awk/jq bodies are ordinary characters, not tokens; an
+    // unclosed `{{` renders literally, so it must not be demanded either.
+    let ctx = PromptContext::new();
+    assert_eq!(
+        ctx.render_executable("awk '{print $1}' f && echo ${HOME}")
+            .unwrap(),
+        "awk '{print $1}' f && echo ${HOME}"
+    );
+}
+
+#[test]
+fn an_executable_template_demands_every_distinct_token() {
+    let err = PromptContext::new()
+        .set("prepare_command", "npm ci")
+        .render_executable("{{prepare_command}} && {{test_command}}")
+        .expect_err("the second token is unset");
+    assert!(err.contains("test_command"), "{err}");
+}

@@ -186,7 +186,7 @@ impl ExecutionDriver {
     ) -> StepOutcome {
         self.emit_command_status(step_exec, "running", 0, None, None);
 
-        let spec = match parse_spec(step_conf) {
+        let mut spec = match parse_spec(step_conf) {
             Ok(spec) => spec,
             Err(msg) => {
                 return self.finish_command(
@@ -197,6 +197,37 @@ impl ExecutionDriver {
                 )
             }
         };
+
+        // Resolve `{{project_setting}}` tokens against the same bindings the
+        // agent prompts render from. This is what lets a *reusable* workflow
+        // own a command node at all: a starter cannot know that this project
+        // builds with `npm run build` and that one with `cargo build`, so
+        // without resolution the only command node a starter can carry is the
+        // baseline node, whose commands come from the project by construction.
+        //
+        // `render_executable`, not `render`: the prose renderer collapses an
+        // unset token to `""`, and an empty command is not a command that did
+        // nothing — it is a gate that reports success without running. Its
+        // `Err` names the token, hence the setting, and lands on
+        // `NonRetryable` because no agent turn can add a project setting; a
+        // rework loop over one spends the whole budget and closes nothing
+        // (S13, decision 43).
+        if !spec.measure_baseline {
+            match self.base_ctx.render_executable(&spec.command) {
+                Ok(rendered) => spec.command = rendered,
+                Err(msg) => {
+                    return self.finish_command(
+                        step_exec,
+                        step_start,
+                        &[],
+                        StepOutcome::NonRetryable(format!(
+                            "command node '{}': {msg}",
+                            step_exec.step_id.0
+                        )),
+                    )
+                }
+            }
+        }
 
         let machine_str = self.machine_id().to_string();
         let subtask_id = format!("{}-step-{}", self.f_id_str, step_exec.step_id.0);
