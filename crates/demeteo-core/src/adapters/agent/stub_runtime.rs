@@ -60,7 +60,7 @@
 //!
 //! A `@stub-triage <category>` directive makes the stub end its reply with a
 //! harness-triage verdict object (`{"category":"<category>", …}`) that
-//! [`parse_triage_text`](crate::adapters::step_executor::driver::verifier::parse_triage_text)
+//! [`parse_triage_text`](crate::domain::harness_triage::parse_triage_text)
 //! lifts out. This is what lets the C6 harness-failure triage classifier be
 //! driven deterministically end-to-end: a failing harness command whose output
 //! carries `@stub-triage environment` reaches the triage agent (which runs on

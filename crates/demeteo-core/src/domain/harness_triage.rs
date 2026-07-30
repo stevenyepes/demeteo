@@ -125,7 +125,7 @@ pub fn recover_unbraced_object(text: &str, key: &str) -> Option<serde_json::Valu
 
 /// Scan a classifier agent's turn text for the triage JSON object. Tolerates
 /// prose, code fences, and extended-thinking tags around the JSON, mirroring
-/// [`parse_verdict_text`]'s tolerance. Any failure to find a usable
+/// `parse_verdict_text`'s tolerance. Any failure to find a usable
 /// `"category"` defaults to [`TriageVerdict::Regression`] (fail-safe).
 pub fn parse_triage_text(raw_text: &str) -> TriageVerdict {
     let Some(val) = crate::domain::text::find_json_object_with_key(raw_text, "category") else {
