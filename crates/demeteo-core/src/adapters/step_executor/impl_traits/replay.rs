@@ -1,9 +1,65 @@
 use super::super::DagStepExecutor;
 use crate::domain::ids::StepExecutionId;
-use crate::domain::models::StepConfig;
+use crate::domain::models::{StepConfig, StepExecution};
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
 use crate::ports::step_executor::StepExecutor;
+
+/// The patch that rewinds one in-range step to `pending`.
+///
+/// A free function rather than an inline literal because it is the only
+/// *decision* in the rewind — everything around it is I/O — and pinning it
+/// needs neither a `DagStepExecutor` nor the twenty-odd ports one carries.
+///
+/// Spend (`cost_usd`, `tokens`, `wall_clock_secs`) is written back
+/// unchanged: the run really did spend it, and a rewind is not a refund.
+/// `iteration_count` is the opposite case and the reason this exists.
+/// It is the redirect budget [`crate::adapters::step_executor::retry_policy::evaluate`]
+/// reads, and it must reset: both callers are a human asking for another
+/// go, and a node that carried its spent budget across the rewind would get
+/// exactly one attempt before the policy answers `Exhausted`, never
+/// reaching its `on_failure` target. That is a Retry button that visibly
+/// re-runs the step and then fails it the same way, every time.
+fn rewind_patch(step: &StepExecution) -> StepExecutionPatch {
+    StepExecutionPatch {
+        last_failure_fingerprint: None,
+        iteration_count: Some(0),
+        status: Some("pending".to_string()),
+        cost_usd: step.cost_usd.map(Some),
+        tokens: step.tokens.map(Some),
+        wall_clock_secs: step.wall_clock_secs.map(Some),
+        artifact_path: None,
+        artifact_paths: Some(Vec::new()),
+        error_message: Some(None),
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+    }
+}
+
+/// The patch that puts one step back as [`rewind_patch`] found it, when
+/// arming the driver failed and the whole rewind has to be undone.
+///
+/// Restores the budget rather than leaving it zeroed: an arm that never
+/// happened must not hand the run a set of retries it was never granted.
+fn unwind_patch(original_status: &str, original_iterations: u32) -> StepExecutionPatch {
+    StepExecutionPatch {
+        last_failure_fingerprint: None,
+        iteration_count: Some(original_iterations),
+        status: Some(original_status.to_string()),
+        cost_usd: None,
+        tokens: None,
+        wall_clock_secs: None,
+        artifact_path: None,
+        artifact_paths: None,
+        error_message: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/step_executor/replay_patch.rs"]
+mod replay_patch_tests;
 
 impl DagStepExecutor {
     /// Rewind a step (and its graph descendants) to `pending` and re-arm the
@@ -23,6 +79,12 @@ impl DagStepExecutor {
     /// gone the resume reads "no checkpoint" and re-runs everything — and
     /// the ref name is deterministic, so the step's own completion path
     /// deletes it next time round.
+    ///
+    /// Every rewound node's `iteration_count` — the redirect budget the
+    /// retry policy reads (`retry_policy::evaluate`) — resets to zero. Both
+    /// callers are a human asking for another go, and a node that carried
+    /// its spent budget across the rewind would get exactly one attempt and
+    /// then exhaust, never reaching its `on_failure` target.
     pub(crate) async fn replay_steps_from(
         &self,
         execution_id: &str,
@@ -154,7 +216,7 @@ impl DagStepExecutor {
             });
 
         let all_steps = self.features.steps_for_feature(feature_id)?;
-        let mut patch_list: Vec<(StepExecutionId, String)> = Vec::new();
+        let mut patch_list: Vec<(StepExecutionId, (String, u32))> = Vec::new();
         for s in &all_steps {
             let is_in_range = match &reset_ids {
                 Some(set) => set.contains(&s.step_id),
@@ -163,23 +225,8 @@ impl DagStepExecutor {
             };
 
             if is_in_range {
-                patch_list.push((s.id.clone(), s.status.clone()));
-                self.features.step_update(
-                    &s.id,
-                    &StepExecutionPatch {
-                        last_failure_fingerprint: None,
-                        iteration_count: None,
-                        status: Some("pending".to_string()),
-                        cost_usd: s.cost_usd.map(Some),
-                        tokens: s.tokens.map(Some),
-                        wall_clock_secs: s.wall_clock_secs.map(Some),
-                        artifact_path: None,
-                        artifact_paths: Some(Vec::new()),
-                        error_message: Some(None),
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
-                    },
-                )?;
+                patch_list.push((s.id.clone(), (s.status.clone(), s.iteration_count)));
+                self.features.step_update(&s.id, &rewind_patch(s))?;
                 // Mirror the DB reset with a `StepProgress` event so
                 // the frontend's local `steps` array reflects the
                 // rewind without waiting for a full
@@ -238,23 +285,10 @@ impl DagStepExecutor {
             )
             .await
         {
-            for (sid, original_status) in &patch_list {
-                let _ = self.features.step_update(
-                    sid,
-                    &StepExecutionPatch {
-                        last_failure_fingerprint: None,
-                        iteration_count: None,
-                        status: Some(original_status.clone()),
-                        cost_usd: None,
-                        tokens: None,
-                        wall_clock_secs: None,
-                        artifact_path: None,
-                        artifact_paths: None,
-                        error_message: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
-                    },
-                );
+            for (sid, (original_status, original_iterations)) in &patch_list {
+                let _ = self
+                    .features
+                    .step_update(sid, &unwind_patch(original_status, *original_iterations));
             }
             let _ = self.features.update(
                 feature_id,
