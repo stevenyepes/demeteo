@@ -8,6 +8,9 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::application::attachments::{commit_staged_attachments, StagedAttachmentInput};
 use crate::domain::ids::{FeatureId, GateDecisionId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{Feature, GateDecision, StepExecution};
+use crate::domain::run_control::{
+    active_predecessor_refusal, retry_refusal, shadow_refusal, RunAction,
+};
 use crate::error::AppError;
 use crate::paths;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
@@ -475,11 +478,7 @@ impl DagStepExecutor {
         // steps do sit in `awaiting_gate`) would otherwise arm a local
         // driver against a run another machine is driving.
         if self.runner_owned_features().contains(feature_id) {
-            return Err(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 this machine never drives it (decide its gates via the remote run instead)",
-                feature_id
-            ));
+            return Err(shadow_refusal(RunAction::Drive, feature_id));
         }
 
         let feature = self
@@ -641,11 +640,7 @@ impl StepExecutor for DagStepExecutor {
         // rather than find no sender in the map and report success — a
         // silent `Ok` here is a "Stop" the user watched do nothing.
         if self.runner_owned_features().contains(feature_id) {
-            return Err(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 cancel it on the runner (remote_cancel_run), not locally",
-                feature_id
-            ));
+            return Err(shadow_refusal(RunAction::Cancel, feature_id));
         }
         if let Some(tx) = self.cancel_senders.lock().unwrap().get(feature_id) {
             let _ = tx.send(true);
@@ -675,14 +670,8 @@ impl StepExecutor for DagStepExecutor {
                 AppError::not_found(format!("Step execution not found: {}", execution_id))
             })?;
 
-        if step_exec.status != "failed"
-            && step_exec.status != "interrupted"
-            && step_exec.status != "pending"
-        {
-            return Err(AppError::validation(format!(
-                "Cannot retry a step in '{}' status. Only failed or interrupted steps can be retried.",
-                step_exec.status
-            )));
+        if let Some(refusal) = retry_refusal(&step_exec.status) {
+            return Err(AppError::validation(refusal));
         }
 
         self.assert_no_active_predecessors(&step_exec, "retrying this step")?;
@@ -698,10 +687,9 @@ impl StepExecutor for DagStepExecutor {
             .runner_owned_features()
             .contains(step_exec.feature_id.as_str())
         {
-            return Err(AppError::validation(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 this machine cannot retry its steps",
-                step_exec.feature_id.0
+            return Err(AppError::validation(shadow_refusal(
+                RunAction::Retry,
+                &step_exec.feature_id.0,
             )));
         }
 
@@ -795,10 +783,9 @@ impl GatePresenter for DagStepExecutor {
             .runner_owned_features()
             .contains(step_exec.feature_id.as_str())
         {
-            return Err(AppError::validation(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 decide this gate on the runner (remote_decide_gate), not locally",
-                step_exec.feature_id.0
+            return Err(AppError::validation(shadow_refusal(
+                RunAction::DecideGate,
+                &step_exec.feature_id.0,
             )));
         }
 
@@ -862,23 +849,13 @@ impl GatePresenter for DagStepExecutor {
 }
 
 impl DagStepExecutor {
-    /// Refuse to act on `target` while any of its graph *ancestors* is
-    /// still non-terminal (`pending`, `running`, `verifying`, or
-    /// `awaiting_gate`). Used by `step_retry` and `gate_decide` so a stale
-    /// retry / approve click does not race a still-running dependency.
+    /// Read what [`active_predecessor_refusal`] needs — the feature's step
+    /// rows and its ancestor set — and obey the answer. Used by `step_retry`
+    /// and `gate_decide`.
     ///
     /// The ancestor set comes from the feature's pinned workflow version
-    /// migrated to the v2 graph (P1.12) — for a v1 chain that is exactly
-    /// the old `step_index <` predecessor set, and for a DAG it correctly
-    /// leaves independent branches undisturbed. When the graph cannot be
-    /// resolved (legacy feature without a matching workflow, unparseable
-    /// version row), the guard falls back to the index comparison rather
-    /// than failing open.
-    ///
-    /// `intent` is the user-facing phrase that follows "before" in the
-    /// returned message (e.g. "retrying this step", "deciding this gate").
-    /// It is purely cosmetic so the two call sites can give the user a
-    /// tailored sentence.
+    /// migrated to the v2 graph (P1.12). A resolution miss hands `None` to the
+    /// policy, which has its own fallback.
     pub(crate) fn assert_no_active_predecessors(
         &self,
         target: &StepExecution,
@@ -897,28 +874,10 @@ impl DagStepExecutor {
                     .map(|set| set.into_iter().cloned().collect())
             });
 
-        for s in &siblings {
-            if s.id == target.id {
-                continue;
-            }
-            let blocks = match &ancestors {
-                Some(set) => set.contains(&s.step_id),
-                None => s.step_index < target.step_index,
-            };
-            if !blocks {
-                continue;
-            }
-            if matches!(
-                s.status.as_str(),
-                "pending" | "running" | "verifying" | "awaiting_gate"
-            ) {
-                return Err(AppError::validation(format!(
-                    "Step '{}' is still {}; wait for it to finish before {}.",
-                    s.step_id.0, s.status, intent
-                )));
-            }
+        match active_predecessor_refusal(target, &siblings, ancestors.as_ref(), intent) {
+            Some(refusal) => Err(AppError::validation(refusal)),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Best-effort resolution of a feature's scheduling graph: pinned

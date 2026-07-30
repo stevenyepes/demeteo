@@ -24,6 +24,7 @@ pub mod permission;
 pub mod prompt_budget;
 pub mod prompt_context;
 pub mod rework;
+pub mod run_control;
 pub mod run_spec;
 pub mod sequence;
 pub mod text;
