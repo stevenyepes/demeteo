@@ -57,6 +57,8 @@ use crate::domain::harness_triage::TriageVerdict;
 use crate::domain::verifier::ResolvedHarness;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
 
+pub(crate) mod briefing;
+
 /// One gate as measured: the record to persist, plus the output that record
 /// only *references*.
 ///
@@ -395,51 +397,6 @@ impl ExecutionDriver {
             );
         }
         sha
-    }
-
-    /// Render the `{{harness_baseline}}` prompt block for this run: which gates
-    /// will judge the finished work, and what each already said about this
-    /// repository.
-    ///
-    /// The gate list is resolved through
-    /// [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses) — the
-    /// same chain validate itself resolves through — over the declarations of
-    /// **every step in this workflow that carries a verifier**, deduplicated by
-    /// name. Asking the project alone would be wrong for a workflow whose
-    /// validate step pins its own gates, and telling `s-spec` about gates that
-    /// will not run is the same class of lie as telling it about none of them.
-    ///
-    /// The wording is [`render_harness_briefing`], which is pure and lives in
-    /// `domain/`; what happens here is only the two lookups it cannot do.
-    /// Anything unreadable yields an empty block rather than a guess: a prompt
-    /// section that describes a harness this project does not have is worse
-    /// than no section.
-    pub(crate) fn render_harness_briefing(
-        &self,
-        feature: Option<&crate::domain::models::Feature>,
-    ) -> String {
-        let Some(feature) = feature else {
-            return String::new();
-        };
-        let Some(settings) = self
-            .projects
-            .get_settings(&feature.project_id)
-            .ok()
-            .flatten()
-        else {
-            return String::new();
-        };
-
-        let gates = crate::domain::verifier::resolve_gating_harnesses(
-            &self.steps,
-            &settings.worktree_strategy,
-            harness_ceiling_s(self.app_settings.as_ref()),
-        );
-
-        crate::domain::harness_baseline::render_harness_briefing(
-            &gates,
-            feature.harness_baseline.as_ref(),
-        )
     }
 
     /// Measure `wt_path` at `base_sha` and fold the result into the feature's
@@ -852,5 +809,5 @@ fn build_unmeasurable_message(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/infrastructure/step_executor/baseline_tests.rs"]
+#[path = "../../../../tests/infrastructure/step_executor/baseline_tests.rs"]
 mod baseline_tests;

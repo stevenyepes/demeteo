@@ -226,7 +226,14 @@ impl ExecutionDriver {
         // harnesses became plural (HB5): a project gated on `lint` and `unit`
         // runs neither that string nor one command.
         let harness_briefing = if needs_harness_briefing(template) {
-            self.render_harness_briefing(feature_for_attachments.as_ref())
+            crate::adapters::step_executor::baseline::briefing::harness_briefing(
+                self.projects.as_ref(),
+                &self.steps,
+                crate::adapters::step_executor::harness_shell::harness_ceiling_s(
+                    self.app_settings.as_ref(),
+                ),
+                feature_for_attachments.as_ref(),
+            )
         } else {
             String::new()
         };
