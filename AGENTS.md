@@ -161,6 +161,14 @@ Fails fast. "`cargo test` passed" is **not** "CI is green" — run the whole scr
 a subset. The `pre-push` hook runs it automatically (`git push --no-verify` for a
 deliberate WIP).
 
+**Working inside a Demeteo run, use `npm run checks:code` instead** — the same gates
+without commitlint. Commitlint judges `origin/master..HEAD`, and inside a run that range
+holds only orchestrator plumbing (one commit per ticket, plus subtask merges) that the
+finalize step squashes away, having validated the surviving message against the real
+`commit-msg` hook. A ticket agent cannot fix a message it never wrote, so the verdict
+feeds a rework cycle that closes nothing. That is what `ProjectSettings.default_test_command`
+should point at; `pre-push` and CI keep running the full `checks`.
+
 **A new test does not count until you have watched it fail.** Break the code it
 covers, confirm that test — and ideally only that test — goes red, then revert.
 A suite that cannot fail is not coverage, and the shape that hides this is a

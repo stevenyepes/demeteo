@@ -12,8 +12,22 @@
 #
 # Usage:
 #   scripts/checks.sh                 # run every gate, including commitlint
+#   npm run checks:code               # every gate EXCEPT commitlint — see below
 #   CHECKS_SKIP_COMMITLINT=1 ...      # skip commitlint (CI runs it separately)
 #   CHECKS_BASE=origin/master ...     # commit range base for commitlint
+#
+# Why `checks:code` exists, and who should use it. Commitlint here judges the
+# *range* `origin/master..HEAD`, which is the right gate for a branch a human is
+# about to push and the wrong one for a branch mid-run inside Demeteo. There,
+# every commit in that range is orchestrator plumbing — one per ticket, plus the
+# subtask merges — and the finalize step squashes the lot into a single commit
+# whose message it validates against this repo's real `commit-msg` hook before
+# publishing. So a mid-run commitlint gate judges commits that are already
+# scheduled for deletion, and it fails on them: an agent cannot fix a message it
+# did not write and will not survive the squash, so the verdict feeds a rework
+# cycle that closes nothing. Demeteo's own default test command should therefore
+# be `npm run checks:code`; the `pre-push` hook and CI keep running the full
+# `checks`, which is where linting the range is meaningful.
 #
 # Fails fast on the first failing gate with a nonzero exit.
 set -euo pipefail
