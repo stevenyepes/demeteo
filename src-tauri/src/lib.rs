@@ -479,6 +479,7 @@ pub fn run() {
             commands::remote_runner::remote_decide_gate,
             commands::remote_runner::remote_cancel_run,
             commands::remote_runner::remote_retry_step,
+            commands::remote_runner::remote_replay_step,
             commands::remote_runner::remote_reinject_credentials,
             commands::features::feature_pause,
             commands::features::feature_resume,
