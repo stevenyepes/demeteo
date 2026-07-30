@@ -2,8 +2,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::domain::models::{EffortLevel, WorktreeStrategy};
 
+pub mod verdict;
+
 #[cfg(test)]
-#[path = "../../tests/domain/verifier/harness_resolution_tests.rs"]
+#[path = "../../../tests/domain/verifier/harness_resolution_tests.rs"]
 mod harness_resolution_tests;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

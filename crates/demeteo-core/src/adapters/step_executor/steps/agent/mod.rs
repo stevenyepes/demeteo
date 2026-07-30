@@ -380,9 +380,8 @@ impl ExecutionDriver {
                 prompt = prompt,
                 section = outcome.render_section(),
                 instructions = verifier_cfg.instructions,
-                contract = crate::adapters::step_executor::driver::verifier::verdict_contract(
-                    &verifier_cfg.verdict_key,
-                ),
+                contract =
+                    crate::domain::verifier::verdict::verdict_contract(&verifier_cfg.verdict_key,),
             ),
             _ => prompt,
         };
@@ -624,9 +623,7 @@ impl ExecutionDriver {
         // objective half is green; the agent's verdict covers the
         // subjective half (correct and complete vs. the spec).
         if let Some(ref verifier_cfg) = step_conf.verifier {
-            use crate::adapters::step_executor::driver::verifier::{
-                parse_verdict_text, ParsedVerdict,
-            };
+            use crate::domain::verifier::verdict::{parse_verdict_text, ParsedVerdict};
             let mut verdict = parse_verdict_text(&text_buffer, &verifier_cfg.verdict_key);
 
             // The turn produced no usable verdict object. Re-ask the SAME

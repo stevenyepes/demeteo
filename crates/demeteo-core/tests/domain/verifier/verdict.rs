@@ -1,7 +1,11 @@
-// Tests extracted from `src/adapters/step_executor/driver/verifier.rs` (mirrored-tests convention).
+// Tests for `src/domain/verifier/verdict.rs` (mirrored-tests convention).
 // `super` resolves to that module.
+//
+// Ask and parse are one contract, so they are asserted together: the menu of
+// verdicts `verdict_contract` offers must be the set `parse_verdict_text`
+// accepts, and S13 is what happened the one time they were not.
 
-use super::{parse_verdict_text, ParsedVerdict};
+use super::{build_verifier_prompt, parse_verdict_text, verdict_contract, ParsedVerdict};
 
 #[test]
 fn pass_verdict_amid_prose() {
@@ -191,4 +195,81 @@ fn an_unknown_verdict_word_is_still_missing_not_environment() {
         ParsedVerdict::Missing(desc) => assert!(desc.contains("maybe"), "{desc}"),
         other => panic!("expected missing, got {other:?}"),
     }
+}
+
+// ── S13: the agent must be offered the verdict that fits a config defect ─────
+
+#[test]
+fn verdict_contract_offers_all_three_verdicts() {
+    let contract = verdict_contract("verdict");
+
+    assert!(contract.contains("\"verdict\": \"pass\""));
+    assert!(contract.contains("\"verdict\": \"fail\""));
+    // The one that was missing. `parse_verdict_text` has always accepted it and
+    // the shipped verifier instructions have always asked for it, but this menu
+    // listed only pass and fail — so an agent that had correctly judged a
+    // criterion unprovable still had to answer `fail`, and `fail` opens a
+    // rework loop against a feature whose defect is a project setting.
+    assert!(
+        contract.contains("\"verdict\": \"environment\""),
+        "environment must be in the menu, not only in the prose instructions; got:\n{contract}"
+    );
+}
+
+#[test]
+fn verdict_contract_explains_when_environment_beats_fail() {
+    // Offering the option is not enough — the model needs the discriminator,
+    // because `fail` is the more natural reading of "a criterion is not met".
+    let contract = verdict_contract("verdict");
+    assert!(contract.contains("NOT `fail`"));
+    assert!(contract.contains("rework budget"));
+}
+
+#[test]
+fn verdict_contract_honours_a_custom_verdict_key() {
+    // `VerifierConfig::verdict_key` is configurable and `parse_verdict_text`
+    // reads whatever it says; a hard-coded key here would silently produce a
+    // contract the parser cannot satisfy.
+    let contract = verdict_contract("ship_it");
+    assert!(contract.contains("\"ship_it\": \"pass\""));
+    assert!(contract.contains("\"ship_it\": \"environment\""));
+    assert!(!contract.contains("\"verdict\":"));
+}
+
+// ── the dedicated verifier turn's prompt ─────────────────────────────────────
+
+/// The two properties the turn used to prove only by inspection, because the
+/// `format!` lived inside a 250-line `async fn`.
+///
+/// The key has to appear three times — once as the requirement and twice in the
+/// worked examples — or a custom `verdict_key` produces a prompt whose examples
+/// contradict its own instruction. And the harness section goes in *verbatim*:
+/// it carries its own heading and its own claim about whether anything ran, so
+/// anything this template did to it would be the S12 coupling arriving from the
+/// prompt side.
+#[test]
+fn the_verifier_prompt_carries_the_key_three_times_and_the_harness_section_whole() {
+    let section = "## Harness Results — NOTHING RAN\nnothing was executed.\n";
+    let prompt = build_verifier_prompt(
+        "Judge the acceptance criteria.",
+        section,
+        "- File/Artifact: report.md\n",
+        "ship_it",
+    );
+
+    assert_eq!(
+        prompt.matches("ship_it").count(),
+        3,
+        "the requirement and both worked examples must name the same key; got:\n{prompt}"
+    );
+    assert!(
+        prompt.contains(section),
+        "the harness section must survive byte-for-byte; got:\n{prompt}"
+    );
+    assert!(prompt.contains("Judge the acceptance criteria."));
+    assert!(prompt.contains("- File/Artifact: report.md"));
+    assert!(
+        !prompt.contains("\"verdict\""),
+        "no default key may leak past a custom one; got:\n{prompt}"
+    );
 }

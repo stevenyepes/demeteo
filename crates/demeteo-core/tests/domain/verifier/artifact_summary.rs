@@ -1,4 +1,4 @@
-// Tests extracted from `src/adapters/step_executor/driver/verifier.rs` (mirrored-tests convention).
+// Tests for `src/domain/verifier/verdict.rs` (mirrored-tests convention).
 // `super` resolves to that module.
 
 use super::format_produced_artifacts_summary;
