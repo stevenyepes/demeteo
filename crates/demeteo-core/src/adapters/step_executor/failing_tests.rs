@@ -50,6 +50,7 @@ use crate::domain::agent_event::AgentEvent;
 use crate::domain::harness_baseline::HarnessBaseline;
 use crate::domain::harness_delta::{compare_gate, GateComparison, ObservedFailure};
 use crate::domain::harness_fingerprint::normalize_failure_fingerprint;
+use crate::domain::text::tail_chars;
 use crate::ports::agent_runtime::AgentContext;
 use tokio_stream::StreamExt;
 
@@ -346,16 +347,6 @@ pub(crate) fn parse_test_ids_text(raw_text: &str) -> Vec<String> {
         return Vec::new();
     }
     ids
-}
-
-/// Tail-truncate for the prompt, same reasoning as the triage classifier's: a
-/// failing run's useful signal is at the bottom of its log.
-fn tail_chars(s: &str, max: usize) -> String {
-    let total = s.chars().count();
-    if total <= max {
-        return s.to_string();
-    }
-    s.chars().skip(total - max).collect()
 }
 
 #[cfg(test)]

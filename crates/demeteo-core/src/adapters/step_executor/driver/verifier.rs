@@ -11,6 +11,7 @@ use crate::domain::harness_triage::{
     TriageDecision, TriageVerdict,
 };
 use crate::domain::models::StepExecution;
+use crate::domain::text::tail_chars;
 use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::notification::DomainEvent;
@@ -1889,22 +1890,6 @@ fn build_timeout_message(machine_str: &str, wt_path: &str, cmd: &str, ceiling_s:
     )
 }
 
-/// Truncate `s` to at most `max` characters, keeping the *tail* rather
-/// than the head. Build/test failures are almost always at the end of
-/// the output (the failing assertion, the panic message, the compiler
-/// error) — a long build log's useful signal is at the bottom. Keeping
-/// the head instead (the previous behavior) surfaced the install/build
-/// banner and truncated away exactly the information the retry loop
-/// needs to act on.
-fn tail_chars(s: &str, max: usize) -> String {
-    let total = s.chars().count();
-    if total <= max {
-        return s.to_string();
-    }
-    let skip = total - max;
-    s.chars().skip(skip).collect()
-}
-
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/verifier/triage_tests.rs"]
 mod triage_tests;
@@ -1912,10 +1897,6 @@ mod triage_tests;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/verifier/produced_artifacts_summary_tests.rs"]
 mod produced_artifacts_summary_tests;
-
-#[cfg(test)]
-#[path = "../../../../tests/infrastructure/step_executor/verifier/tail_chars_tests.rs"]
-mod tail_chars_tests;
 
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/verifier/harness_outcome_tests.rs"]
