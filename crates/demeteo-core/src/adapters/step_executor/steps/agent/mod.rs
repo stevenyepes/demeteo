@@ -240,9 +240,7 @@ impl ExecutionDriver {
         // cost; a green harness's output is injected into the step's single
         // agent turn, which writes the report artifact AND emits the verdict
         // JSON itself — no separate verifier session, no second test run.
-        let mut harness_section: Option<
-            crate::adapters::step_executor::driver::verifier::HarnessOutcome,
-        > = None;
+        let mut harness_section: Option<crate::domain::harness_outcome::HarnessOutcome> = None;
         if let Some(ref verifier_cfg) = step_conf.verifier {
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),

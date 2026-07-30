@@ -43,9 +43,6 @@
 //! *no gate at all* rather than a red one, and the whole fallback returns `()`
 //! so it is structurally incapable of changing the verdict it runs beside.
 
-use crate::adapters::step_executor::driver::verifier::{
-    harness_block, merge_stderr_into_stdout, HarnessRun,
-};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::failing_tests::{DriverExtractor, FailingTestExtractor};
 use crate::domain::artifact::{Artifact, ArtifactSource};
@@ -54,6 +51,7 @@ use crate::domain::harness_baseline::{
     HarnessBaselineRun,
 };
 use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
+use crate::domain::harness_outcome::{harness_block, merge_stderr_into_stdout, HarnessRun};
 use crate::domain::harness_triage::TriageVerdict;
 use crate::domain::verifier::ResolvedHarness;
 use crate::ports::execution::{ExecutionPort, ShellOptions};

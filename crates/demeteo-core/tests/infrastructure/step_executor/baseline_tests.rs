@@ -62,7 +62,7 @@ impl ScriptedExec {
 /// script an answer against the command it authored rather than against the
 /// command the adapter is handed.
 fn wrapped(cmd: &str) -> String {
-    crate::adapters::step_executor::driver::verifier::merge_stderr_into_stdout(cmd)
+    crate::domain::harness_outcome::merge_stderr_into_stdout(cmd)
 }
 
 #[async_trait::async_trait]
@@ -341,9 +341,7 @@ async fn the_fingerprint_is_built_the_same_way_the_live_failure_path_builds_it()
     let measured = measure(&exec, None, &[gate("unit", "npm test", 600)]).await;
 
     let live = crate::domain::harness_fingerprint::normalize_failure_fingerprint(
-        &crate::adapters::step_executor::driver::verifier::harness_block(
-            "unit", "npm test", output,
-        ),
+        &crate::domain::harness_outcome::harness_block("unit", "npm test", output),
         "/repo_wt_baseline",
     );
     assert_eq!(measured[0].run.fingerprint, live);

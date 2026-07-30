@@ -44,12 +44,12 @@
 //! finds out whether it is worth paying for. Escalating only when the coarser
 //! level is ambiguous is the ladder's whole rule.
 
-use crate::adapters::step_executor::driver::verifier::{harness_block, HarnessRun};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::harness_baseline::HarnessBaseline;
 use crate::domain::harness_delta::{compare_gate, GateComparison, ObservedFailure};
 use crate::domain::harness_fingerprint::normalize_failure_fingerprint;
+use crate::domain::harness_outcome::{harness_block, HarnessRun};
 use crate::domain::text::tail_chars;
 use crate::ports::agent_runtime::AgentContext;
 use tokio_stream::StreamExt;
