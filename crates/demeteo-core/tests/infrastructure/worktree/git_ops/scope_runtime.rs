@@ -231,3 +231,80 @@ async fn test_scope_all_writes_sentinel_disables_enforcement() {
         .await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Regression: the fence must never chmod *through* a symlink.
+///
+/// A worktree's `node_modules` is a symlink into the feature's shared
+/// dependency cache (`link_dependency_caches_cmd`), and `chmod` follows the
+/// symlink it is handed on the command line — there is no `lchmod` on Linux,
+/// so `chmod -R a-w <wt>/node_modules` cannot make the *link* read-only and
+/// instead makes the cache's whole tree read-only. That cache is shared by
+/// every worktree of the feature and outlives this step, so one
+/// `ArtifactsOnly` verify step disables `npm`/`vite` for every step after it.
+///
+/// The damage is also one-way: step 1's `chmod -R u+w <wt>` cannot undo it,
+/// because `-R` does not follow symlinks encountered *during* traversal. So
+/// the next step provisions a clean worktree, relinks it to the same poisoned
+/// cache, and fails identically — which is how feature `f-1785431165068` spent
+/// its retry budget redirecting to `s-fix` over a permission bit.
+#[tokio::test]
+async fn test_scope_fence_does_not_chmod_through_dependency_cache_symlink() {
+    let (dir, helper) = make_repo("scope_symlink").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    let wt = format!("{}_wt", repo);
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" worktree add \"{wt}\" HEAD"),
+    )
+    .await
+    .unwrap();
+
+    // The feature's shared cache, seeded once and symlinked into every
+    // worktree of the feature.
+    let cache = format!("{}_cache_feat", repo);
+    std::fs::create_dir_all(format!("{cache}/node_modules/.vite-temp")).unwrap();
+    exec.run_command(
+        "local",
+        &format!("ln -sfn \"{cache}/node_modules\" \"{wt}/node_modules\""),
+    )
+    .await
+    .unwrap();
+
+    // A `verify`-capability step on a project declaring no extra writable
+    // paths: writable is `artifacts/` alone, so `node_modules` is protected.
+    let writable = crate::adapters::worktree::git_ops::scope::derive_writable_paths_for_scope(
+        crate::domain::permission::WriteScope::ArtifactsOnly,
+        None,
+        &[],
+    );
+    helper
+        .apply_artifact_scope(None, &wt, &writable)
+        .await
+        .expect("scope setup should succeed");
+
+    // Vite writes its bundled config here on every `vite`/`vitest` start.
+    let probe = format!("{cache}/node_modules/.vite-temp/vite.config.ts.timestamp-1.mjs");
+    let wrote = exec.write_file("local", &probe, "export default {}").await;
+
+    // Restore before asserting so a failure still cleans up after itself.
+    let _ = exec
+        .run_command("local", &format!("chmod -R u+w \"{cache}\" \"{wt}\""))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&cache);
+    let _ = std::fs::remove_dir_all(&wt);
+
+    assert!(
+        wrote.is_ok(),
+        "fence chmod'd through the node_modules symlink into the feature's \
+         shared dependency cache, disabling it for every later step"
+    );
+}

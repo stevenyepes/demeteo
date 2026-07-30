@@ -327,14 +327,30 @@ impl GitOpsHelper {
             }
         }
 
+        // `[ -L ]` guards every one of these, and it is load-bearing rather
+        // than defensive. `chmod` dereferences the path it is handed on the
+        // command line — Linux has no `lchmod`, so a symlink's own mode is
+        // not settable and `chmod -R a-w <wt>/node_modules` silently applies
+        // to the *target* instead. That target is the feature's shared
+        // dependency cache (`link_dependency_caches_cmd` symlinks every entry
+        // in `paths::DEPENDENCY_CACHE_DIRS` into it), which lives outside the
+        // worktree and outlives this step, so fencing one `ArtifactsOnly`
+        // step would leave `npm`/`cargo`/`pip` unable to write for every
+        // later step of the feature. Worse, it is one-way: step 1's
+        // `chmod -R u+w` above does *not* follow symlinks met during
+        // traversal, so nothing restores it and each subsequent step relinks
+        // a clean worktree to the same read-only cache and fails identically.
+        //
+        // Skipping loses no enforcement. A symlink cannot be made read-only
+        // in the first place, its target is by construction outside the
+        // worktree the fence reasons about, and the post-step diff guard
+        // still covers the link itself.
         for p in &protected {
+            let escaped = crate::paths::shell_escape_posix(&p.to_string_lossy());
             self.exec
                 .run_command(
                     machine,
-                    &format!(
-                        "chmod -R a-w {}",
-                        crate::paths::shell_escape_posix(&p.to_string_lossy())
-                    ),
+                    &format!("[ -L {escaped} ] || chmod -R a-w {escaped}"),
                 )
                 .await
                 .map_err(|e| format!("scope: chmod a-w on {} failed: {}", p.display(), e))?;
