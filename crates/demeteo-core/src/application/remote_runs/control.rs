@@ -36,14 +36,47 @@ pub async fn cancel_remote_run(
     Ok(())
 }
 
+/// Which rewind a detached run should perform — the wire value of the
+/// runner's `retry_step` `mode` parameter.
+///
+/// The two are not interchangeable, and treating them as one is how remote
+/// replay stayed broken: the runner's `Retry` arm refuses any step that is
+/// not `failed` / `interrupted` / `pending`, and a replay target is
+/// normally `completed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteRewind {
+    /// Resume the node that broke, keeping a sequence step's landed prefix.
+    Retry,
+    /// An explicit redo from a node of any status, dropping that prefix.
+    Replay,
+}
+
+impl RemoteRewind {
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::Retry => "retry",
+            Self::Replay => "replay",
+        }
+    }
+}
+
+/// The three run-shape overrides a rewind may re-pin, which always travel
+/// together: the modal that starts one offers exactly these, each meaning
+/// "leave it as it was" when `None`.
+#[derive(Debug, Clone, Default)]
+pub struct RewindOverrides {
+    pub model: Option<String>,
+    pub agent_kind: Option<String>,
+    pub effort: Option<EffortLevel>,
+}
+
 pub async fn retry_remote_step(
     ctx: &AppContext,
     machine_id: String,
     run_id: String,
     step_execution_id: String,
-    model: Option<String>,
-    agent_kind: Option<String>,
-    effort: Option<EffortLevel>,
+    overrides: RewindOverrides,
+    mode: RemoteRewind,
 ) -> Result<(), AppError> {
     let Some(row) = ctx
         .remote_run_mirror
@@ -62,9 +95,10 @@ pub async fn retry_remote_step(
         serde_json::json!({
             "run_id": run_id,
             "step_execution_id": step_execution_id,
-            "model": model,
-            "agent_kind": agent_kind,
-            "effort": effort,
+            "model": overrides.model,
+            "agent_kind": overrides.agent_kind,
+            "effort": overrides.effort,
+            "mode": mode.as_wire(),
         }),
     )
     .await

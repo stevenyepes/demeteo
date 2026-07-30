@@ -99,10 +99,33 @@ struct DecideGateParams {
     feedback: Option<String>,
 }
 
-/// `retry_step(run_id, step_execution_id, model?, agent_kind?, effort?)` — the
-/// remote twin of the desktop app's `step_retry` command. Unlike
-/// `decide_gate`, `run_id` is load-bearing here: a retry has to re-open
-/// the run (the step's failure already drove it terminal, so its
+/// Which rewind `retry_step` performs — the remote twin of the desktop's
+/// two distinct commands.
+///
+/// They are *not* the same operation, and routing both through
+/// `step_retry` (as the laptop did before this field existed) makes replay
+/// impossible on a detached run: `step_retry` only accepts a step in
+/// `failed` / `interrupted` / `pending`, and the step a human replays from
+/// is almost always `completed`. It also keeps any landed sequence prefix,
+/// so an explicit redo would skip most of its own task list.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RetryMode {
+    /// Resume the node that broke, keeping a sequence step's landed
+    /// prefix. The default, so a desktop older than this runner — which
+    /// omits the field entirely — keeps its existing behaviour.
+    #[default]
+    Retry,
+    /// An explicit redo from a node of any status, dropping the landed
+    /// prefix so the node runs its whole list again.
+    Replay,
+}
+
+/// `retry_step(run_id, step_execution_id, model?, agent_kind?, effort?,
+/// mode?)` — the remote twin of the desktop app's `step_retry` *and*
+/// `replay_from_step` commands, selected by `mode`. Unlike `decide_gate`,
+/// `run_id` is load-bearing here: either rewind has to re-open the run
+/// (the step's failure already drove it terminal, so its
 /// `await_terminal_and_push` tail has exited), and that is keyed by run.
 ///
 /// `effort` is `#[serde(default)]` like the rest: a desktop app older than
@@ -118,6 +141,8 @@ struct RetryStepParams {
     agent_kind: Option<String>,
     #[serde(default)]
     effort: Option<EffortLevel>,
+    #[serde(default)]
+    mode: RetryMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -547,10 +572,11 @@ fn require_owner_of_step(
         .ok_or_else(not_found)
 }
 
-/// Retry a failed / interrupted step of a detached run from the laptop —
-/// the remote twin of the desktop app's `step_retry` command, which can
-/// only ever drive runs *this* machine owns (the local executor refuses a
-/// runner-owned shadow outright).
+/// Rewind a detached run to one of its steps from the laptop — the remote
+/// twin of the desktop app's `step_retry` / `replay_from_step` commands,
+/// which can only ever drive runs *this* machine owns (the local executor
+/// refuses a runner-owned shadow outright). `mode` picks which, and the
+/// distinction is not cosmetic — see [`RetryMode`].
 ///
 /// The subtlety is the second half. The step's failure already drove the
 /// feature terminal, so this run's `await_terminal_and_push` tail has
@@ -587,22 +613,40 @@ async fn retry_step(
         ));
     };
 
-    svc.ctx
-        .executor
-        .step_retry(
-            &params.step_execution_id,
-            params.model.as_deref(),
-            params.agent_kind.as_deref(),
-            params.effort,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    match params.mode {
+        RetryMode::Retry => svc
+            .ctx
+            .executor
+            .step_retry(
+                &params.step_execution_id,
+                params.model.as_deref(),
+                params.agent_kind.as_deref(),
+                params.effort,
+            )
+            .await
+            .map_err(|e| e.to_string())?,
+        RetryMode::Replay => {
+            svc.ctx
+                .executor
+                .replay_from_step(
+                    &params.step_execution_id,
+                    params.model.as_deref(),
+                    params.agent_kind.as_deref(),
+                    params.effort,
+                )
+                .await?
+        }
+    }
 
     let now = paths::now_ms();
     svc.ctx
         .runner_runs
         .update_status(&run.run_id, "running", None, None, None, None, now)?;
-    crate::run::emit(&svc.ctx, &run.run_id, "retried", &params.step_execution_id);
+    let event = match params.mode {
+        RetryMode::Retry => "retried",
+        RetryMode::Replay => "replayed",
+    };
+    crate::run::emit(&svc.ctx, &run.run_id, event, &params.step_execution_id);
 
     let svc_bg = svc.clone();
     let run_id_bg = run.run_id.clone();

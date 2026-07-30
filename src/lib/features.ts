@@ -62,9 +62,13 @@ export async function retryStep(input: {
 }
 
 /**
- * Rewind to a step and re-execute it plus everything downstream. Same rewind
- * as {@link retryStep} under the hood (`replay_steps_from(.., include_target:
- * true)`), and it re-pins the same three overrides.
+ * Rewind to a step and re-execute it plus everything downstream, re-pinning
+ * the same three overrides as {@link retryStep}.
+ *
+ * Close to {@link retryStep} but not the same call, and the differences bite:
+ * this one accepts a step of *any* status (a replay target is normally
+ * `completed`) and drops a sequence step's landed checkpoint so it runs its
+ * whole task list again.
  */
 export async function replayFromStep(input: {
   stepExecutionId: string;
@@ -81,9 +85,14 @@ export async function replayFromStep(input: {
 }
 
 /**
- * The detached twin of {@link retryStep} / {@link replayFromStep}: a run the
- * runner owns is retried *on the runner* (this machine has neither its driver
- * nor its worktree). One RPC serves both, since they are the same rewind.
+ * The detached twin of {@link retryStep}: a run the runner owns is rewound
+ * *on the runner* (this machine has neither its driver nor its worktree).
+ *
+ * Pair it with {@link remoteReplayStep} rather than reusing it for both.
+ * Routing replay through here is exactly what broke remote replay: the
+ * runner's retry arm calls `step_retry`, which rejects any step that is not
+ * `failed` / `interrupted` / `pending` — so replaying from a completed step
+ * failed with "Cannot retry a step in 'completed' status".
  */
 export async function remoteRetryStep(input: {
   machineId: string;
@@ -94,6 +103,25 @@ export async function remoteRetryStep(input: {
   effort: EffortLevel | null;
 }): Promise<void> {
   await invoke<void>("remote_retry_step", {
+    machineId: input.machineId,
+    runId: input.runId,
+    stepExecutionId: input.stepExecutionId,
+    model: input.model,
+    agentKind: input.agentKind,
+    effort: input.effort,
+  });
+}
+
+/** The detached twin of {@link replayFromStep} — see {@link remoteRetryStep}. */
+export async function remoteReplayStep(input: {
+  machineId: string;
+  runId: string;
+  stepExecutionId: string;
+  model: string | null;
+  agentKind: string | null;
+  effort: EffortLevel | null;
+}): Promise<void> {
+  await invoke<void>("remote_replay_step", {
     machineId: input.machineId,
     runId: input.runId,
     stepExecutionId: input.stepExecutionId,

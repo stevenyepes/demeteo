@@ -28,6 +28,7 @@ import {
   retryStep,
   replayFromStep,
   remoteRetryStep,
+  remoteReplayStep,
   isBlockingError,
   findActivePredecessor,
 } from '../lib/features';
@@ -864,10 +865,12 @@ export function FeatureDetail() {
       const agentParam = selectedAgent || null;
       const effortParam = selectedEffort || null;
       if (remoteRun) {
-        // `replay_from_step` and `step_retry` are the same rewind under the
-        // hood (`replay_steps_from(.., include_target: true)`), so the one
-        // runner-side retry RPC serves both — see `handleRetryStep`.
-        await remoteRetryStep({
+        // Deliberately the *replay* RPC, not `remoteRetryStep`. They are
+        // not one rewind wearing two labels: retry refuses a step that
+        // isn't failed/interrupted/pending, and a replay target is normally
+        // completed. Sharing the retry call made remote replay always fail
+        // with "Cannot retry a step in 'completed' status".
+        await remoteReplayStep({
           machineId: remoteRun.machine_id,
           runId: remoteRun.run_id,
           stepExecutionId: replayTarget.id,

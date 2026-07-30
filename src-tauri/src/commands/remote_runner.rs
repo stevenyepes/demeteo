@@ -247,9 +247,44 @@ pub async fn remote_retry_step(
         machine_id,
         run_id,
         step_execution_id,
-        model,
-        agent_kind,
-        effort,
+        RewindOverrides {
+            model,
+            agent_kind,
+            effort,
+        },
+        RemoteRewind::Retry,
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+/// Replay a detached run from a step — the remote twin of
+/// `replay_from_step`, and deliberately *not* `remote_retry_step` with a
+/// different label. The runner's retry arm rejects any step that is not
+/// `failed` / `interrupted` / `pending`, and a replay target is normally a
+/// `completed` one; it also keeps a sequence step's landed prefix, which an
+/// explicit redo must drop.
+#[tauri::command]
+pub async fn remote_replay_step(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+    step_execution_id: String,
+    model: Option<String>,
+    agent_kind: Option<String>,
+    effort: Option<crate::domain::models::EffortLevel>,
+) -> Result<(), AppError> {
+    retry_remote_step(
+        &ctx,
+        machine_id,
+        run_id,
+        step_execution_id,
+        RewindOverrides {
+            model,
+            agent_kind,
+            effort,
+        },
+        RemoteRewind::Replay,
     )
     .await
     .map_err(AppError::from)
