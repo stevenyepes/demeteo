@@ -3,11 +3,12 @@ import { UploadCloud, FileWarning, FilePlus2 } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   addAttachment,
-  computeLocalSha256,
-  extractImageFilesFromClipboard,
+  extractClipboardImageFiles,
+  stageBrowserFilesForLaunch,
   stageAttachmentMetadata,
   type AttachedFile,
   type AttachmentInput,
+  type LaunchStageEntry,
 } from "../lib/attachments";
 import { formatError } from "../lib/errors";
 import { AttachmentChip } from "./AttachmentChip";
@@ -19,24 +20,7 @@ import { AttachmentChip } from "./AttachmentChip";
  * so pre-launch composers stage files here and resolve them after
  * the launch call returns.
  */
-export interface LaunchStageEntry {
-  /** Lowercase hex SHA-256 of the picked bytes. */
-  sha256: string;
-  /** Sanitized filename for the chip label. */
-  name: string;
-  /** Original filename, kept verbatim for the user. */
-  source_filename: string;
-  /** IANA mime — picked from the File object or inferred from the path. */
-  mime: string;
-  /** Byte length, used to render the chip's size label. */
-  size: number;
-  /** Local data URL — produced from the browser File via FileReader. */
-  previewUrl: string | null;
-  /** Browser `File` handle (only when picked via `<input type="file">`). */
-  file: File | null;
-  /** Absolute disk path. Used by the Rust command when committing. */
-  sourcePath: string | null;
-}
+export type { LaunchStageEntry } from "../lib/attachments";
 
 interface AttachmentDropzoneProps {
   /** `launch` keeps entries local until {@link onCommitLaunch} runs;
@@ -205,31 +189,46 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
   // -- shared ingest ------------------------------------------------------
   const ingestFiles = useCallback(
     async (files: File[]) => {
+      if (mode === "launch") {
+        if (!onChangeStage) {
+          throw new Error("AttachmentDropzone: onChangeStage is required for launch mode");
+        }
+        try {
+          onChangeStage(await stageBrowserFilesForLaunch(files, stageEntries ?? []));
+        } catch (err) {
+          onError?.(formatError(err));
+        }
+        return;
+      }
+
       for (const file of files) {
         try {
-          if (mode === "direct") {
-            await ingestOneDirect({ kind: "file", file });
-          } else {
-            await ingestOneLaunch({ kind: "file", file });
-          }
+          await ingestOneDirect({ kind: "file", file });
         } catch (err) {
           const message = formatError(err);
           onError?.(message);
         }
       }
     },
+    // `ingestOneDirect` is declared below with the other direct-mode helpers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode, featureId, stageEntries],
+    [mode, featureId, stageEntries, onChangeStage, onError],
   );
 
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent<HTMLDivElement>) => {
-      const files = extractImageFilesFromClipboard(e.clipboardData);
-      if (files.length === 0) return;
+      const extraction = extractClipboardImageFiles(e.clipboardData);
+      if (extraction.kind === "none") return;
+      if (extraction.kind === "unavailable") {
+        onError?.(
+          "The clipboard offered an image, but this webview could not access its file. Save it and attach it, or try another clipboard source.",
+        );
+        return;
+      }
       e.preventDefault();
-      await ingestFiles(files);
+      await ingestFiles(extraction.files);
     },
-    [ingestFiles],
+    [ingestFiles, onError],
   );
 
   const ingestPaths = useCallback(
@@ -276,25 +275,16 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
   );
 
   const ingestOneLaunch = useCallback(
-    async (input: AttachmentInput) => {
+    async (input: Extract<AttachmentInput, { kind: "path" }>) => {
       if (!onChangeStage) {
         throw new Error(
           "AttachmentDropzone: onChangeStage is required for launch mode",
         );
       }
       const sourceFilename =
-        input.kind === "file"
-          ? input.file.name
-          : (input.sourceFilename ?? input.sourcePath.split(/[\\/]/).pop() ?? "attachment");
-      const mime =
-        input.kind === "file"
-          ? (input.file.type || guessMime(sourceFilename.toLowerCase()))
-          : (input.mime ?? guessMime(sourceFilename.toLowerCase()));
-      const sourcePath =
-        input.kind === "path"
-          ? input.sourcePath
-          : (input.file as File & { path?: string }).path ?? null;
-      const file = input.kind === "file" ? input.file : null;
+        input.sourceFilename ?? input.sourcePath.split(/[\\/]/).pop() ?? "attachment";
+      const mime = input.mime ?? guessMime(sourceFilename.toLowerCase());
+      const sourcePath = input.sourcePath;
 
       // Compute `sha256` + `size` from whatever bytes the ingest
       // surfaced. File-based picks get Web Crypto over the browser
@@ -307,34 +297,19 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
       // drops — see the bug repro tests/repro/attachment-dnd-staging.mjs).
       let sha256: string;
       let size: number;
-      if (input.kind === "file" && file) {
-        sha256 = await computeLocalSha256(file);
-        size = file.size;
-      } else if (input.kind === "path") {
-        try {
-          const meta = await stageAttachmentMetadata(
-            input.sourcePath,
-            input.mime ?? null,
-            sourceFilename,
-          );
-          sha256 = meta.sha256;
-          size = meta.size;
-        } catch (err) {
-          const message = formatError(err);
-          onError?.(message);
-          return;
-        }
-      } else {
-        // Should be unreachable — guarded by `input.kind` exhaustiveness.
-        const message = "AttachmentDropzone: unsupported ingest input kind";
+      try {
+        const meta = await stageAttachmentMetadata(
+          input.sourcePath,
+          input.mime ?? null,
+          sourceFilename,
+        );
+        sha256 = meta.sha256;
+        size = meta.size;
+      } catch (err) {
+        const message = formatError(err);
         onError?.(message);
         return;
       }
-
-      const previewUrl =
-        file && mime.startsWith("image/")
-          ? await readDataUrl(file)
-          : null;
 
       const entry: LaunchStageEntry = {
         sha256,
@@ -342,8 +317,8 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
         source_filename: sourceFilename,
         mime,
         size,
-        previewUrl,
-        file,
+        previewUrl: null,
+        file: null,
         sourcePath,
       };
 
@@ -581,19 +556,6 @@ function guessMime(lower: string): string {
   if (lower.endsWith(".txt")) return "text/plain";
   if (lower.endsWith(".json")) return "application/json";
   return "application/octet-stream";
-}
-
-function readDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
-    reader.onload = () => {
-      const out = reader.result;
-      if (typeof out === "string") resolve(out);
-      else reject(new Error("FileReader did not yield a string result"));
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 export default AttachmentDropzone;

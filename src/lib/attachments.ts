@@ -50,6 +50,22 @@ export interface AttachedFile {
 }
 
 /**
+ * A browser-file attachment retained until a newly launched Feature has an
+ * id. This is intentionally frontend-only: callers persist these through the
+ * existing `feature_add_attachment` flow after launch.
+ */
+export interface LaunchStageEntry {
+  sha256: string;
+  name: string;
+  source_filename: string;
+  mime: string;
+  size: number;
+  previewUrl: string | null;
+  file: File | null;
+  sourcePath: string | null;
+}
+
+/**
  * Input accepted by {@link addAttachment}. Either a browser `File`
  * (from `<input type="file">` or clipboard paste) OR an absolute local
  * path string (from Tauri's drag-drop event or `plugin-dialog`).
@@ -247,6 +263,45 @@ const SUPPORTED_CLIPBOARD_IMAGE_MIMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The browser-visible outcome of inspecting clipboard file entries for
+ * supported images. `unavailable` means a supported image was advertised,
+ * but its bytes cannot be obtained through the webview's `File` API.
+ */
+export type ClipboardImageExtraction =
+  | { kind: "files"; files: File[] }
+  | { kind: "none" }
+  | { kind: "unavailable"; mime: string };
+
+/**
+ * Extract supported clipboard images while preserving the distinction between
+ * no supported image and a supported image the browser cannot expose as a
+ * `File`. MIME matching and unavailable MIME reporting are lowercase.
+ *
+ * Text, HTML, and unsupported entries are deliberately not inspected: this
+ * helper only invokes `getAsFile()` after an item passes the existing file
+ * kind and MIME allow-list checks.
+ */
+export function extractClipboardImageFiles(
+  clipboardData: DataTransfer,
+): ClipboardImageExtraction {
+  const files: File[] = [];
+  const items = clipboardData.items;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind !== "file") continue;
+
+    const mime = item.type.toLowerCase();
+    if (!SUPPORTED_CLIPBOARD_IMAGE_MIMES.has(mime)) continue;
+
+    const file = item.getAsFile();
+    if (file === null) return { kind: "unavailable", mime };
+    files.push(file);
+  }
+
+  return files.length > 0 ? { kind: "files", files } : { kind: "none" };
+}
+
+/**
  * Extract the supported image `File` handles from a clipboard /
  * drag-paste `DataTransfer`. Returns the items in clipboard order;
  * `[]` when no supported image is present.
@@ -254,7 +309,9 @@ const SUPPORTED_CLIPBOARD_IMAGE_MIMES: ReadonlySet<string> = new Set([
  * Only entries whose `kind === "file"` and whose `type` matches the
  * exact allow-list of supported image MIME types (compared
  * case-insensitively) are considered. `getAsFile()` is invoked only
- * for items that pass both filters, and a `null` return is omitted.
+ * for items that pass both filters. A supported item whose file is
+ * unavailable maps to an empty compatibility result; callers needing to
+ * distinguish it from no image should use {@link extractClipboardImageFiles}.
  *
  * Pure: no I/O, no IPC, no `preventDefault`, no filename normalization
  * or hashing — those happen later in `ingestFiles` /
@@ -265,16 +322,8 @@ const SUPPORTED_CLIPBOARD_IMAGE_MIMES: ReadonlySet<string> = new Set([
 export function extractImageFilesFromClipboard(
   clipboardData: DataTransfer,
 ): File[] {
-  const items = clipboardData.items;
-  const out: File[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.kind !== "file") continue;
-    if (!SUPPORTED_CLIPBOARD_IMAGE_MIMES.has(item.type.toLowerCase())) continue;
-    const file = item.getAsFile();
-    if (file !== null) out.push(file);
-  }
-  return out;
+  const extraction = extractClipboardImageFiles(clipboardData);
+  return extraction.kind === "files" ? extraction.files : [];
 }
 
 /**
@@ -289,6 +338,39 @@ export async function computeLocalSha256(file: File): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+/**
+ * Build launch-stage entries for browser `File` values and replace prior
+ * entries with matching byte hashes. All browser-file launch entry points
+ * (picker, paste, modal, and composer) share this so their MIME fallback,
+ * preview generation, and SHA-256 deduplication cannot drift.
+ */
+export async function stageBrowserFilesForLaunch(
+  files: readonly File[],
+  stageEntries: readonly LaunchStageEntry[],
+): Promise<LaunchStageEntry[]> {
+  let next = [...stageEntries];
+
+  for (const file of files) {
+    const sourceFilename = file.name;
+    const mime = file.type.toLowerCase() || guessBrowserFileMime(sourceFilename.toLowerCase());
+    const sha256 = await computeLocalSha256(file);
+    const previewUrl = mime.startsWith("image/") ? await readFileAsDataUrl(file) : null;
+    const entry: LaunchStageEntry = {
+      sha256,
+      name: sourceFilename,
+      source_filename: sourceFilename,
+      mime,
+      size: file.size,
+      previewUrl,
+      file,
+      sourcePath: null,
+    };
+    next = [...next.filter((existing) => existing.sha256 !== sha256), entry];
+  }
+
+  return next;
 }
 
 /**
@@ -347,6 +429,19 @@ function readFileAsDataUrl(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
+}
+
+function guessBrowserFileMime(lowerFilename: string): string {
+  if (lowerFilename.endsWith(".png")) return "image/png";
+  if (lowerFilename.endsWith(".jpg") || lowerFilename.endsWith(".jpeg")) return "image/jpeg";
+  if (lowerFilename.endsWith(".gif")) return "image/gif";
+  if (lowerFilename.endsWith(".webp")) return "image/webp";
+  if (lowerFilename.endsWith(".tif") || lowerFilename.endsWith(".tiff")) return "image/tiff";
+  if (lowerFilename.endsWith(".pdf")) return "application/pdf";
+  if (lowerFilename.endsWith(".md") || lowerFilename.endsWith(".markdown")) return "text/markdown";
+  if (lowerFilename.endsWith(".txt")) return "text/plain";
+  if (lowerFilename.endsWith(".json")) return "application/json";
+  return "application/octet-stream";
 }
 
 /**

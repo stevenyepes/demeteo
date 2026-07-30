@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   computeLocalSha256,
+  extractClipboardImageFiles,
   extractImageFilesFromClipboard,
   stageAttachmentMetadata,
 } from "./attachments";
@@ -207,7 +208,7 @@ describe("extractImageFilesFromClipboard", () => {
     expect(extractImageFilesFromClipboard(dt)).toEqual([png, jpg]);
   });
 
-  it("omits a supported item whose getAsFile() returns null", () => {
+  it("returns no files when a supported item whose getAsFile() is null is unavailable", () => {
     const png = file("a.png", "image/png");
     const dt = makeClipboardData([
       { kind: "file", type: "image/png", getAsFile: () => null },
@@ -215,7 +216,7 @@ describe("extractImageFilesFromClipboard", () => {
       { kind: "file", type: "image/jpeg", getAsFile: () => null },
     ]);
 
-    expect(extractImageFilesFromClipboard(dt)).toEqual([png]);
+    expect(extractImageFilesFromClipboard(dt)).toEqual([]);
   });
 
   it("compares MIME types case-insensitively (IMAGE/PNG matches image/png)", () => {
@@ -247,5 +248,56 @@ describe("extractImageFilesFromClipboard", () => {
     expect(bmpSpy).not.toHaveBeenCalled();
     expect(svgSpy).not.toHaveBeenCalled();
     expect(pngSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("extractClipboardImageFiles", () => {
+  it("distinguishes no supported image without reading text, HTML, or unsupported items", () => {
+    const textSpy = vi.fn(() => null);
+    const htmlSpy = vi.fn(() => null);
+    const unsupportedSpy = vi.fn(() => file("a.bmp", "image/bmp"));
+    const dt = makeClipboardData([
+      { kind: "string", type: "text/plain", getAsFile: textSpy },
+      { kind: "string", type: "text/html", getAsFile: htmlSpy },
+      { kind: "file", type: "image/bmp", getAsFile: unsupportedSpy },
+    ]);
+
+    expect(extractClipboardImageFiles(dt)).toEqual({ kind: "none" });
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(htmlSpy).not.toHaveBeenCalled();
+    expect(unsupportedSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns supported files in clipboard order with case-insensitive MIME matching", () => {
+    const png = file("a.png", "image/png");
+    const jpeg = file("b.jpg", "image/jpeg");
+    const gif = file("c.gif", "image/gif");
+    const webp = file("d.webp", "image/webp");
+    const tiff = file("e.tiff", "image/tiff");
+    const dt = makeClipboardData([
+      { kind: "file", type: "IMAGE/PNG", getAsFile: () => png },
+      { kind: "file", type: "Image/Jpeg", getAsFile: () => jpeg },
+      { kind: "file", type: "image/GIF", getAsFile: () => gif },
+      { kind: "file", type: "image/WebP", getAsFile: () => webp },
+      { kind: "file", type: "IMAGE/TIFF", getAsFile: () => tiff },
+    ]);
+
+    expect(extractClipboardImageFiles(dt)).toEqual({
+      kind: "files",
+      files: [png, jpeg, gif, webp, tiff],
+    });
+  });
+
+  it("reports a supported image that the browser cannot expose as a File", () => {
+    const png = file("a.png", "image/png");
+    const dt = makeClipboardData([
+      { kind: "file", type: "IMAGE/TIFF", getAsFile: () => null },
+      { kind: "file", type: "image/png", getAsFile: () => png },
+    ]);
+
+    expect(extractClipboardImageFiles(dt)).toEqual({
+      kind: "unavailable",
+      mime: "image/tiff",
+    });
   });
 });
