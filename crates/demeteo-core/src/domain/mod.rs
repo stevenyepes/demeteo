@@ -3,6 +3,7 @@ pub mod agent_event;
 pub mod agent_session;
 pub mod app_view;
 pub mod artifact;
+pub(crate) mod artifact_capture;
 pub mod attachment;
 pub mod bootstrap;
 pub mod ecosystem;

@@ -5,10 +5,12 @@ use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
 pub(crate) mod artifacts;
+pub(crate) mod completion;
 pub(crate) mod context;
 pub(crate) mod error_message;
 pub(crate) mod prompt;
 pub(crate) mod spawn;
+pub(crate) mod teardown;
 pub(crate) mod turn;
 pub(crate) mod verdict;
 
@@ -19,7 +21,9 @@ pub(crate) use prompt::{
     append_retry_feedback_section, format_retry_feedback_section, template_uses_retry_section,
 };
 
+use completion::StepClose;
 use context::{AgentRunTarget, AgentSpend, AgentStepCtx, AgentWorktree, TurnBaseline};
+use teardown::SessionDisposition;
 use turn::{apply_turn_result, TurnDisposition};
 
 impl ExecutionDriver {
@@ -97,14 +101,7 @@ impl ExecutionDriver {
         };
 
         if *self.cancel_watch.borrow() {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                 .await;
             return StepOutcome::Cancelled;
         }
@@ -143,14 +140,7 @@ impl ExecutionDriver {
             {
                 Ok(outcome) => harness_section = Some(outcome),
                 Err(err) => {
-                    let _ = self
-                        .git_ops
-                        .cleanup_subtask_worktree(
-                            self.machine_id_opt.as_deref(),
-                            &self.target_dir,
-                            &self.branch_name,
-                            &subtask_id,
-                        )
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                         .await;
                     return err.into();
                 }
@@ -177,14 +167,7 @@ impl ExecutionDriver {
             .apply_artifact_scope(self.machine_id_opt.as_deref(), wt.path, &writable_paths)
             .await
         {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                 .await;
             return StepOutcome::Environmental(format!("artifact scope setup failed: {}", e));
         }
@@ -231,14 +214,7 @@ impl ExecutionDriver {
         {
             Ok(s) => s,
             Err(e) => {
-                let _ = self
-                    .git_ops
-                    .cleanup_subtask_worktree(
-                        self.machine_id_opt.as_deref(),
-                        &self.target_dir,
-                        &self.branch_name,
-                        &subtask_id,
-                    )
+                self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                     .await;
                 let descriptive =
                     error_message::format_agent_error_message(&e, wt.machine, &*self.exec).await;
@@ -306,30 +282,14 @@ impl ExecutionDriver {
                 cache_read_input_tokens: *spend.cache_read,
                 cache_creation_input_tokens: *spend.cache_creation,
             });
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                 .await;
-            let _ = self.registry.kill(target.session_key).await;
             return StepOutcome::Cancelled;
         }
 
         if let Some(failed_outcome) = run_failed {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                 .await;
-            let _ = self.registry.kill(target.session_key).await;
             return failed_outcome;
         }
 
@@ -341,16 +301,8 @@ impl ExecutionDriver {
         let (artifact_path, artifact_paths, missing_artifacts) = match artifacts_res {
             Ok((path, paths, missing)) => (path, paths, missing),
             Err(err) => {
-                let _ = self
-                    .git_ops
-                    .cleanup_subtask_worktree(
-                        self.machine_id_opt.as_deref(),
-                        &self.target_dir,
-                        &self.branch_name,
-                        &subtask_id,
-                    )
+                self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                     .await;
-                let _ = self.registry.kill(target.session_key).await;
                 return StepOutcome::Failed(err);
             }
         };
@@ -368,16 +320,8 @@ impl ExecutionDriver {
                 .has_new_commits(self.machine_id_opt.as_deref(), wt.path, baseline.base_ref)
                 .await
         {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                 .await;
-            let _ = self.registry.kill(target.session_key).await;
             tracing::warn!(
                 feature_id = %self.f_id,
                 step_id = %step_exec.step_id.0,
@@ -424,16 +368,8 @@ impl ExecutionDriver {
                             ..Default::default()
                         },
                     );
-                    let _ = self
-                        .git_ops
-                        .cleanup_subtask_worktree(
-                            self.machine_id_opt.as_deref(),
-                            &self.target_dir,
-                            &self.branch_name,
-                            &subtask_id,
-                        )
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                         .await;
-                    let _ = self.registry.kill(target.session_key).await;
                     return StepOutcome::VerdictFailed(failure);
                 }
                 verdict::VerdictDisposition::Unjudgeable { reason, message } => {
@@ -443,29 +379,13 @@ impl ExecutionDriver {
                         reason = %reason,
                         "verdict: environment — unjudgeable criteria, not an implementation defect"
                     );
-                    let _ = self
-                        .git_ops
-                        .cleanup_subtask_worktree(
-                            self.machine_id_opt.as_deref(),
-                            &self.target_dir,
-                            &self.branch_name,
-                            &subtask_id,
-                        )
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                         .await;
-                    let _ = self.registry.kill(target.session_key).await;
                     return StepOutcome::NonRetryable(message);
                 }
                 verdict::VerdictDisposition::NoVerdict(message) => {
-                    let _ = self
-                        .git_ops
-                        .cleanup_subtask_worktree(
-                            self.machine_id_opt.as_deref(),
-                            &self.target_dir,
-                            &self.branch_name,
-                            &subtask_id,
-                        )
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                         .await;
-                    let _ = self.registry.kill(target.session_key).await;
                     return StepOutcome::NonRetryable(message);
                 }
             }
@@ -487,30 +407,14 @@ impl ExecutionDriver {
         {
             Ok(v) => v,
             Err(e) => {
-                let _ = self
-                    .git_ops
-                    .cleanup_subtask_worktree(
-                        self.machine_id_opt.as_deref(),
-                        &self.target_dir,
-                        &self.branch_name,
-                        &subtask_id,
-                    )
+                self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                     .await;
-                let _ = self.registry.kill(target.session_key).await;
                 return StepOutcome::Failed(format!("out-of-scope diff check failed: {}", e));
             }
         };
         if !reverted.is_empty() {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                 .await;
-            let _ = self.registry.kill(target.session_key).await;
             self.capture_signal(
                 Some(step_exec.id.0.clone()),
                 crate::domain::memory::SignalKind::Retry,
@@ -584,145 +488,29 @@ impl ExecutionDriver {
             }
         }
 
-        let outcome = if run_cancelled || *self.cancel_watch.borrow() {
-            let wall = spend.start.elapsed().as_secs();
-            let _ = self.features.step_update(
-                &step_exec.id,
-                &StepExecutionPatch {
-                    last_failure_fingerprint: None,
-                    iteration_count: None,
-                    status: Some("interrupted".to_string()),
-                    cost_usd: Some(Some(*spend.cost)),
-                    tokens: Some(Some(*spend.tokens)),
-                    wall_clock_secs: Some(wall).map(|_v| Some(wall)),
-                    artifact_path: None,
-                    artifact_paths: None,
-                    error_message: Some(Some("Execution cancelled by user".to_string())),
-                    cache_read_input_tokens: Some(*spend.cache_read),
-                    cache_creation_input_tokens: Some(*spend.cache_creation),
-                },
-            );
-            let _ = self.notif.emit(&DomainEvent::StepProgress {
-                feature_id: self.f_id.clone(),
-                step_id: step_exec.step_id.0.clone(),
-                status: "interrupted".into(),
-                cost_usd: Some(*spend.cost),
-                tokens: Some(*spend.tokens),
-                wall_clock_secs: Some(wall),
-                cache_read_input_tokens: *spend.cache_read,
-                cache_creation_input_tokens: *spend.cache_creation,
-            });
-            StepOutcome::Cancelled
-        } else if let Some(failed_outcome) = run_failed {
-            failed_outcome
-        } else {
-            match merge_result {
-                // The step ran to a clean merge, but a declared
-                // deliverable (`ByName` / `LastWriteTo`) never
-                // materialised — fail instead of marking a green step
-                // with an empty artifact. This is the visible signal for
-                // the "agent ran but produced no plan/spec/report"
-                // misconfiguration class (bad model/tooling, a project
-                // `opencode.json` that blocks writes, agent wrote to the
-                // wrong path). The driver persists this message as the
-                // step's `error_message`, which the UI renders on the
-                // failed step, and routes it through `on_failure` retry.
-                Ok(()) if !missing_artifacts.is_empty() => {
-                    let deliverables = missing_artifacts
-                        .iter()
-                        .map(|m| format!("'{}' ({})", m.name, m.detail))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let plural = if missing_artifacts.len() == 1 {
-                        "declared artifact was"
-                    } else {
-                        "declared artifacts were"
-                    };
-                    StepOutcome::Failed(format!(
-                        "The step completed but {count} {plural} never produced: {deliverables}. \
-                         The agent ran but did not write its required deliverable — it may have \
-                         failed, written to a different path, or been blocked by its model/config \
-                         or the project's `opencode.json` (MCP servers, tool permissions). \
-                         Nothing downstream can consume this step.",
-                        count = missing_artifacts.len(),
-                        plural = plural,
-                        deliverables = deliverables,
-                    ))
-                }
-                Ok(()) => {
-                    let wall = spend.start.elapsed().as_secs();
-                    let _ = self.features.step_update(
-                        &step_exec.id,
-                        &StepExecutionPatch {
-                            last_failure_fingerprint: None,
-                            iteration_count: None,
-                            status: Some("completed".to_string()),
-                            cost_usd: Some(Some(*spend.cost)),
-                            tokens: Some(Some(*spend.tokens)),
-                            wall_clock_secs: Some(wall).map(|_v| Some(wall)),
-                            artifact_path: Some(artifact_path),
-                            artifact_paths: Some(artifact_paths),
-                            error_message: Some(None),
-                            cache_read_input_tokens: Some(*spend.cache_read),
-                            cache_creation_input_tokens: Some(*spend.cache_creation),
-                        },
-                    );
-                    let _ = self.notif.emit(&DomainEvent::StepProgress {
-                        feature_id: self.f_id.clone(),
-                        step_id: step_exec.step_id.0.clone(),
-                        status: "completed".into(),
-                        cost_usd: Some(*spend.cost),
-                        tokens: Some(*spend.tokens),
-                        wall_clock_secs: Some(wall),
-                        cache_read_input_tokens: *spend.cache_read,
-                        cache_creation_input_tokens: *spend.cache_creation,
-                    });
-                    // Capture the agent's final summary as a signal for the
-                    // memory worker. Cap length to keep the queue lightweight.
-                    let summary = text_buffer.trim();
-                    if !summary.is_empty() {
-                        let capped: String = summary.chars().take(4000).collect();
-                        self.capture_signal(
-                            Some(step_exec.id.0.clone()),
-                            crate::domain::memory::SignalKind::AgentSummary,
-                            format!(
-                                "Step '{}' completed. Agent summary:\n{}",
-                                step_exec.step_id.0, capped
-                            ),
-                        );
-                    }
-                    StepOutcome::Completed
-                }
-                Err(err) => StepOutcome::Failed(format!("agent step merge failed: {}", err)),
-            }
-        };
+        let outcome = self.settle_agent_step(
+            ctx,
+            &spend,
+            StepClose {
+                cancelled: run_cancelled,
+                failed: run_failed,
+                merge: merge_result,
+                artifact_path,
+                artifact_paths,
+                missing: &missing_artifacts,
+                text: &text_buffer,
+            },
+        );
 
         // Cleanup temporary worktree in all cases.
-        let _ = self
-            .git_ops
-            .cleanup_subtask_worktree(
-                self.machine_id_opt.as_deref(),
-                &self.target_dir,
-                &self.branch_name,
-                &subtask_id,
-            )
-            .await;
-
-        // The verifier is always its own session (keyed by
-        // `{f_id}-verifier`) — kill it regardless of outcome so
-        // the registry entry doesn't leak. The MAIN agent session
-        // (keyed by `f_id`) is preserved on success so the next
-        // step can `--continue` against the same captured session
-        // id; only kill on failure / cancellation paths (handled
-        // inline above in each early-return branch).
-        let _ = self
-            .registry
-            .kill(&format!("{}-verifier", self.f_id.as_str()))
-            .await;
-
-        if !matches!(outcome, StepOutcome::Completed) {
-            let _ = self.registry.kill(target.session_key).await;
-        }
+        self.tear_down_agent_step(
+            wt,
+            target,
+            SessionDisposition::Settle {
+                completed: matches!(outcome, StepOutcome::Completed),
+            },
+        )
+        .await;
 
         outcome
     }

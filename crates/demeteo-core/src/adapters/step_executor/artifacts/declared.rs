@@ -13,49 +13,10 @@ use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::execution::ExecutionPort;
 use std::sync::Arc;
 
-/// A declared artifact (`ByName` / `LastWriteTo`) that the agent's turn
-/// produced no matching output for. Surfaced by
-/// [`resolve_declared_artifacts`] so the step executor can **fail** the
-/// step with an actionable message instead of silently marking it
-/// `completed` with an empty deliverable (the "green step, no plan
-/// artifact" misconfiguration class). `detail` is a human hint about
-/// what the capture expected (the path or name).
-#[derive(Debug, Clone)]
-pub(crate) struct MissingArtifact {
-    pub name: String,
-    pub detail: String,
-}
-
-/// Append a note about undelivered artifacts to a *failing verdict's* reason.
-///
-/// A verdict failure returns before the ordinary declared-artifact check, and
-/// deliberately keeps doing so: the verdict is the more actionable outcome and
-/// its reason is what the rework step reads. But the step that consumes this
-/// one attaches the report by name, so "rejected, and there is no report to
-/// read" has to reach that step somehow — silently dropping it is how a
-/// verdict-failed validate came to look identical to one that never wrote its
-/// deliverable (S14).
-///
-/// Returns `reason` unchanged when nothing is missing, which is the common case.
-pub(crate) fn note_undelivered_artifacts(reason: &str, missing: &[MissingArtifact]) -> String {
-    if missing.is_empty() {
-        return reason.to_string();
-    }
-    let deliverables = missing
-        .iter()
-        .map(|m| format!("'{}' ({})", m.name, m.detail))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "{reason}\n\nNote for the next attempt: this step also failed to produce \
-         {deliverables}, so no report is attached for the step that reads it. The \
-         verdict above is the whole of the feedback available."
-    )
-}
-
-#[cfg(test)]
-#[path = "../../../../tests/infrastructure/step_executor/artifacts/undelivered_tests.rs"]
-mod undelivered_tests;
+// The two are re-exported rather than re-homed: they are decisions about
+// what a step delivered, not I/O, so they live in
+// `domain::artifact_capture` beside the message that fails the step.
+pub(crate) use crate::domain::artifact_capture::{note_undelivered_artifacts, MissingArtifact};
 
 /// Resolve `declarations` against the `ArtifactProduced` events emitted
 /// by the agent during a step turn. Writes matching artifacts through
