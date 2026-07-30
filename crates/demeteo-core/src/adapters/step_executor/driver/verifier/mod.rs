@@ -1,18 +1,21 @@
 use super::ExecutionDriver;
+use crate::adapters::step_executor::driver::verifier::environment::{
+    command_never_ran_error, notify_environment_not_ready,
+};
+use crate::adapters::step_executor::harness_shell::{
+    harness_ceiling_s, harness_shell_options, run_harness_command,
+};
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::harness_attribution::{
     split_by_determination, HarnessFailureSet, SubtractedFailures,
 };
-use crate::domain::harness_failure::{
-    build_missing_task_message, classify_exec_failure, detect_missing_command, detect_missing_task,
-    HarnessExecFailure,
-};
+use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::domain::harness_fingerprint::normalize_failure_fingerprint;
 use crate::domain::harness_outcome::{
     build_exclusion_note, build_failure_reason, combined_failure_output, merge_stderr_into_stdout,
     HarnessOutcome, HarnessRun,
 };
-use crate::domain::harness_remediation::build_environment_message;
+use crate::domain::harness_remediation::{build_environment_message, build_timeout_message};
 use crate::domain::harness_triage::{
     build_triage_prompt, parse_triage_text, triage_decision, TriageDecision, TriageVerdict,
 };
@@ -26,6 +29,8 @@ use crate::ports::agent_runtime::AgentContext;
 use crate::ports::notification::DomainEvent;
 use std::time::Instant;
 use tokio_stream::StreamExt;
+
+pub(crate) mod environment;
 
 impl ExecutionDriver {
     /// Resolve and run the project's prepare command + every harness that gates
@@ -88,7 +93,7 @@ impl ExecutionDriver {
                 crate::domain::verifier::resolve_harnesses(
                     &verifier_cfg.harness_names,
                     &s.worktree_strategy,
-                    self.harness_ceiling_s(),
+                    harness_ceiling_s(self.app_settings.as_ref()),
                 )
             })
             .unwrap_or_default();
@@ -113,12 +118,17 @@ impl ExecutionDriver {
         // `mise`/`asdf`/`nvm` shims) is established exactly as it is for the
         // agent — otherwise a project whose `npm test`/`pytest`/`cargo test` the
         // agent ran fine fails here with "command not found" on remote only.
-        let opts = self.harness_shell_options(wt_path);
+        let opts = harness_shell_options(self.app_settings.as_ref(), wt_path);
 
         if let Some(ref cmd) = prepare_command {
-            match self
-                .run_harness_command(machine_str, cmd, opts.clone())
-                .await
+            match run_harness_command(
+                self.exec.as_ref(),
+                self.cancel_watch.clone(),
+                machine_str,
+                cmd,
+                opts.clone(),
+            )
+            .await
             {
                 None => return Err(crate::domain::verifier::VerifierError::Cancelled),
                 Some(Ok(_)) => {}
@@ -141,9 +151,9 @@ impl ExecutionDriver {
                             machine_str,
                             wt_path,
                             cmd,
-                            self.harness_ceiling_s(),
+                            harness_ceiling_s(self.app_settings.as_ref()),
                         );
-                        self.notify_environment_not_ready(step_exec, &msg);
+                        notify_environment_not_ready(&self.environment_signal(), step_exec, &msg);
                         return Err(crate::domain::verifier::VerifierError::Environment(msg));
                     }
                     // A failing prepare is never subtracted. `measure_gates`
@@ -199,13 +209,14 @@ impl ExecutionDriver {
             // so the pass/fail gate below is unchanged. The newlines matter: a
             // command whose last line is a `#` comment would otherwise swallow
             // the closing paren.
-            let result = self
-                .run_harness_command(
-                    machine_str,
-                    &merge_stderr_into_stdout(&harness.command),
-                    opts,
-                )
-                .await;
+            let result = run_harness_command(
+                self.exec.as_ref(),
+                self.cancel_watch.clone(),
+                machine_str,
+                &merge_stderr_into_stdout(&harness.command),
+                opts,
+            )
+            .await;
             let run = |output: String| HarnessRun {
                 name: harness.name.clone(),
                 cmd: harness.command.clone(),
@@ -234,7 +245,7 @@ impl ExecutionDriver {
                             &harness.command,
                             harness.deadline_s,
                         );
-                        self.notify_environment_not_ready(step_exec, &msg);
+                        notify_environment_not_ready(&self.environment_signal(), step_exec, &msg);
                         return Err(crate::domain::verifier::VerifierError::Environment(msg));
                     }
                     // The one shape that is a verdict — record it and keep
@@ -256,9 +267,13 @@ impl ExecutionDriver {
             // tested nothing. Decision 44's table says so in its own row — 127
             // is terminal `Environment`, no baseline column — and a missing
             // script is that same row reached through exit 1.
-            if let Some(err) =
-                self.command_never_ran_error(step_exec, machine_str, wt_path, &failed)
-            {
+            if let Some(err) = command_never_ran_error(
+                &self.environment_signal(),
+                step_exec,
+                machine_str,
+                wt_path,
+                &failed,
+            ) {
                 return Err(err);
             }
 
@@ -331,7 +346,7 @@ impl ExecutionDriver {
                     &gate.reason,
                     &gate.remediation,
                 );
-                self.notify_environment_not_ready(step_exec, &msg);
+                notify_environment_not_ready(&self.environment_signal(), step_exec, &msg);
                 tracing::warn!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
@@ -428,104 +443,6 @@ impl ExecutionDriver {
         split_by_determination(failed, &comparisons, base_sha)
     }
 
-    /// Build the [`ShellOptions`](crate::ports::execution::ShellOptions) the
-    /// prepare/test harness runs under: the worktree as an explicit cwd (D2 —
-    /// never rely on ambient state) under an **interactive login shell**,
-    /// unconditionally.
-    ///
-    /// A prepare/test command is user-authored shell (`cargo test`, `npm test`,
-    /// `pytest`) whose binaries live on the *user's* `PATH`, which only a login
-    /// shell's profile establishes — and only an *interactive* one activates
-    /// `mise`/`asdf`/`nvm` shims, which hide behind the standard `~/.bashrc`
-    /// non-interactive guard. So the harness always needs the same shell the
-    /// agent probe already hardcodes (`ShellOptions::login_interactive`).
-    ///
-    /// This deliberately does **not** consult the machine's `use_login_shell`
-    /// flag. That flag is only reachable through the SSH adapter — i.e. an
-    /// *attached* run, where the desktop app drives commands over the wire. A
-    /// **detached** run executes inside `demeteo-runner` on the target box
-    /// itself, which registers its project as `compute_type: "local"`; `"local"`
-    /// is a sentinel that short-circuits the DB lookup and yields a synthetic
-    /// machine whose `use_login_shell` is hardcoded `None` (see
-    /// `machine_resolver::local_machine`). Gating on the flag therefore forced
-    /// every detached harness through a bare non-login `sh -c` no matter what
-    /// the user had ticked in the UI, and a bare `cargo` in the harness command
-    /// died with "cargo: not found" — while the *implement* step sailed through,
-    /// because the agent binary is resolved to an absolute path up front and so
-    /// never needed `PATH` at all.
-    ///
-    /// `pub(crate)` because the `command` node type (P3.5) runs
-    /// user-authored shell for the same reason under the same
-    /// constraints — sharing the decision beats re-deriving it there.
-    ///
-    /// # Deadline
-    ///
-    /// The options carry the run's `wall_cap_s` as an explicit
-    /// [`timeout`](crate::ports::execution::ShellOptions::timeout). Without one
-    /// the harness was the only unbounded wait in a step: `wall_cap_s` itself is
-    /// enforced inside `stream_agent_turn`, and the harness runs *before* any
-    /// turn starts, so a command that never exits hung the step until the app
-    /// restarted. It reuses the existing user-configurable cap rather than
-    /// introducing a second knob — a harness is bounded by the same "how long
-    /// may one step take" answer an agent turn is.
-    ///
-    /// The `command` node overrides this with its own `spec.timeout`, which is
-    /// why this is a default rather than a floor — and so does each resolved
-    /// harness, which carries the same ceiling as *its own*
-    /// [`deadline_s`](crate::domain::verifier::ResolvedHarness::deadline_s).
-    /// The cap answers "how long may one command take", so N gates get N
-    /// ceilings rather than a slice each; the sum a step may spend is therefore
-    /// unbounded in the number of gates its author declared. See that field for
-    /// why dividing would be worse.
-    pub(crate) fn harness_shell_options(
-        &self,
-        wt_path: &str,
-    ) -> crate::ports::execution::ShellOptions {
-        crate::ports::execution::ShellOptions {
-            cwd: Some(wt_path.to_string()),
-            timeout: Some(std::time::Duration::from_secs(self.harness_ceiling_s())),
-            ..crate::ports::execution::ShellOptions::login_interactive()
-        }
-    }
-
-    /// The wall-clock ceiling one prepare/harness command may consume, in
-    /// seconds. Read through the same resolver every agent-turn call site uses,
-    /// so one preferences change moves both.
-    pub(crate) fn harness_ceiling_s(&self) -> u64 {
-        crate::application::timeouts::resolve_effective(self.app_settings.as_ref()).wall_cap_s
-    }
-
-    /// Run one prepare/harness command, racing it against cancellation.
-    ///
-    /// Dropping the run future is what actually stops the work — the local
-    /// adapter kills the command's process group on drop — so the `biased`
-    /// select is the mechanism, not just a status check. Mirrors what
-    /// `steps/command.rs` already does for the `command` node type: both are
-    /// user-authored shell built from [`harness_shell_options`], and they must
-    /// not disagree about whether Stop works.
-    async fn run_harness_command(
-        &self,
-        machine_str: &str,
-        cmd: &str,
-        opts: crate::ports::execution::ShellOptions,
-    ) -> Option<Result<String, String>> {
-        let mut cancel_watch = self.cancel_watch.clone();
-        let cancelled = async move {
-            // `wait_for` also resolves — as `Err` — when the sender is dropped.
-            // That is "nobody can cancel this any more", not "this was
-            // cancelled", so park forever and let the command decide the
-            // outcome rather than killing a healthy step during teardown.
-            if cancel_watch.wait_for(|c| *c).await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        };
-        tokio::select! {
-            biased;
-            _ = cancelled => None,
-            r = self.exec.run_command_with(machine_str, cmd, opts) => Some(r),
-        }
-    }
-
     /// Turn one or more non-transport prepare/harness failures into the right
     /// [`VerifierError`](crate::domain::verifier::VerifierError) (C6/D7).
     ///
@@ -578,7 +495,13 @@ impl ExecutionDriver {
             );
         };
 
-        if let Some(err) = self.command_never_ran_error(step_exec, machine_str, wt_path, failures) {
+        if let Some(err) = command_never_ran_error(
+            &self.environment_signal(),
+            step_exec,
+            machine_str,
+            wt_path,
+            failures,
+        ) {
             return err;
         }
 
@@ -649,7 +572,7 @@ impl ExecutionDriver {
             } => {
                 let msg =
                     build_environment_message(machine_str, wt_path, cmd, &reason, &remediation);
-                self.notify_environment_not_ready(step_exec, &msg);
+                notify_environment_not_ready(&self.environment_signal(), step_exec, &msg);
                 tracing::warn!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
@@ -661,117 +584,6 @@ impl ExecutionDriver {
             }
             TriageVerdict::Regression => verdict,
         }
-    }
-
-    /// The exit-127 fast path: the shell could not find a binary a harness
-    /// command itself invokes. That is objectively an environment gap — the
-    /// code never ran, so no amount of editing it can help. Escalate straight
-    /// to the terminal `Environment` error rather than spending a `Verdict`
-    /// retry (which re-runs the agent against a gate that cannot pass) plus a
-    /// triage agent turn to reach the same conclusion on the *next* attempt.
-    /// This skips `should_triage`'s reproduce-unchanged requirement on purpose:
-    /// a 127 is deterministic, not flaky.
-    ///
-    /// A method rather than inline code because HB2c gave it a second caller:
-    /// `run_harness_first` asks it about the **unsubtracted** failure set,
-    /// before the baseline is consulted, so a missing binary stays terminal
-    /// even when it was equally missing at the base. `None` means no failure
-    /// here names a binary the shell could not find.
-    fn missing_command_error(
-        &self,
-        step_exec: &StepExecution,
-        machine_str: &str,
-        wt_path: &str,
-        failures: &[HarnessRun],
-    ) -> Option<crate::domain::verifier::VerifierError> {
-        let (failure, missing) = failures
-            .iter()
-            .find_map(|f| detect_missing_command(&f.cmd, &f.output).map(|m| (f, m)))?;
-        let cmd = failure.cmd.as_str();
-        let msg = build_environment_message(
-            machine_str,
-            wt_path,
-            cmd,
-            &format!(
-                "The shell could not find `{}` on PATH (exit 127), so the command never ran.",
-                missing
-            ),
-            &format!(
-                "Make `{missing}` *discoverable* on this machine — installed is not enough, it \
-                 has to be on the PATH of a fresh interactive login shell, which is what the \
-                 harness runs commands under. Check it with:\n\
-                 \x20 bash -l -i -c 'command -v {missing}'\n\
-                 If that prints nothing, either export the tool's directory from ~/.profile or \
-                 ~/.bashrc, or — if a version manager owns it (mise, asdf, nvm, pyenv, rbenv) — \
-                 declare it in that manager's *global* config so every shell activates it, not \
-                 just the directories that ask for it.",
-            ),
-        );
-        self.notify_environment_not_ready(step_exec, &msg);
-        tracing::warn!(
-            feature_id = %self.f_id,
-            step_id = %step_exec.step_id.0,
-            cmd = %cmd,
-            missing = %missing,
-            "harness command not found on PATH — terminating without retries"
-        );
-        Some(crate::domain::verifier::VerifierError::Environment(msg))
-    }
-
-    /// The sibling of [`missing_command_error`](Self::missing_command_error) for
-    /// the failures that *do* reach an exit code: a task runner that ran, but
-    /// was asked for a script or target this worktree does not define.
-    ///
-    /// Same conclusion, same fail-safe direction, different remediation — see
-    /// [`build_missing_task_message`] for why reusing the 127 path's wording
-    /// would send the user after a package that was never missing.
-    fn missing_task_error(
-        &self,
-        step_exec: &StepExecution,
-        machine_str: &str,
-        wt_path: &str,
-        failures: &[HarnessRun],
-    ) -> Option<crate::domain::verifier::VerifierError> {
-        let (failure, missing) = failures
-            .iter()
-            .find_map(|f| detect_missing_task(&f.cmd, &f.output).map(|m| (f, m)))?;
-        let cmd = failure.cmd.as_str();
-        let msg = build_missing_task_message(machine_str, wt_path, cmd, &missing);
-        self.notify_environment_not_ready(step_exec, &msg);
-        tracing::warn!(
-            feature_id = %self.f_id,
-            step_id = %step_exec.step_id.0,
-            cmd = %cmd,
-            runner = %missing.runner,
-            missing = %missing.name,
-            "harness command named a {} this worktree does not define — terminating without retries",
-            missing.noun()
-        );
-        Some(crate::domain::verifier::VerifierError::Environment(msg))
-    }
-
-    /// "The command never ran" — both shapes of it, in the order that gives the
-    /// most specific remediation.
-    ///
-    /// A binary the shell could not find (exit 127) and a script/target the
-    /// runner could not find (exit 1) are one category: the code was never
-    /// exercised, so a `Verdict` would redirect an agent to fix something that
-    /// was never tested, and it would reproduce identically on every retry until
-    /// the budget ran out. Both therefore skip `should_triage`'s
-    /// reproduce-unchanged requirement and terminate directly — neither is flaky.
-    ///
-    /// The 127 check goes first because it is the stronger claim: if the binary
-    /// itself is absent, "your project's script list is wrong" would be a
-    /// misdiagnosis of a machine that cannot run the tool at all.
-    fn command_never_ran_error(
-        &self,
-        step_exec: &StepExecution,
-        machine_str: &str,
-        wt_path: &str,
-        failures: &[HarnessRun],
-    ) -> Option<crate::domain::verifier::VerifierError> {
-        self.missing_command_error(step_exec, machine_str, wt_path, failures)
-            .or_else(|| self.missing_task_error(step_exec, machine_str, wt_path, failures))
     }
 
     /// Spawn a small classifier agent to decide regression vs. environment for
@@ -888,40 +700,6 @@ impl ExecutionDriver {
 
         let _ = self.registry.kill(&thread_id).await;
         verdict
-    }
-
-    /// Persist + emit the terminal environment-not-ready signal (C6.3), fired
-    /// *immediately* on triage (no wasted retries first). Mirrors the
-    /// `RetryBudgetExhausted` persistence path so the bell shows it after a
-    /// refresh, plus a live event for the toast.
-    ///
-    /// `pub(crate)` because the baseline node terminates on the same signal
-    /// (HB9): a gate that cannot run is the same news to the user whether the
-    /// engine noticed it at the head of the graph or at validate, and it must
-    /// arrive through the same channel — one that survives a refresh — rather
-    /// than as a step error string only the node panel shows.
-    pub(crate) fn notify_environment_not_ready(&self, step_exec: &StepExecution, message: &str) {
-        if let Ok(Some(feature)) = self.features.get(&self.f_id) {
-            let notification = crate::domain::models::Notification {
-                id: format!("notif-{}", crate::paths::now_ms()),
-                project_id: feature.project_id.0.clone(),
-                feature_id: self.f_id.0.clone(),
-                kind: crate::domain::models::NotificationKind::EnvironmentNotReady,
-                message: message.to_string(),
-                feature_url: Some(format!(
-                    "/projects/{}/features/{}",
-                    feature.project_id.0, self.f_id.0
-                )),
-                read: false,
-                created_at: crate::paths::now_ms(),
-            };
-            let _ = self.notifications.add(notification);
-        }
-        let _ = self.notif.emit(&DomainEvent::EnvironmentNotReady {
-            feature_id: self.f_id.clone(),
-            step_id: step_exec.step_id.0.clone(),
-            reason: message.to_string(),
-        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1201,39 +979,3 @@ impl ExecutionDriver {
         }
     }
 }
-
-/// User-facing remediation for a harness command that hit its ceiling.
-///
-/// A command that produces no exit status inside a generous wall-clock budget
-/// is overwhelmingly a runner left in **watch mode**, not a slow suite — and
-/// that is a configuration defect no retry can resolve, so the message leads
-/// with it. `scripts.test` is very often `vitest` or `jest --watch`, and
-/// detection used to emit a bare `npm test` for any repo with a root
-/// `package.json` — so this was the default path for a large class of projects,
-/// not an exotic one. HB3 now reads the script and either corrects it or
-/// declines to emit it, which shrinks the population that reaches here to
-/// hand-written commands and watch-mode forms detection does not recognise. It
-/// does not empty it: this message is still the only thing standing between a
-/// user and a silent half-hour.
-fn build_timeout_message(machine_str: &str, wt_path: &str, cmd: &str, ceiling_s: u64) -> String {
-    build_environment_message(
-        machine_str,
-        wt_path,
-        cmd,
-        &format!(
-            "The command produced no exit status within {}s and was abandoned, so nothing was \
-             tested. This is not a verdict on the code — the suite never finished running.",
-            ceiling_s
-        ),
-        "The usual cause is a test runner left in **watch mode**, which never exits: `vitest` \
-         (use `vitest run`), `jest --watch` (use `jest --ci`), `cargo watch`. Check what the \
-         command actually resolves to — for an `npm test` that is the `scripts.test` entry in \
-         `package.json` — and change the project's test command to the one-shot form. If the \
-         suite is genuinely slower than the ceiling, raise the wall-clock cap in preferences \
-         instead.",
-    )
-}
-
-#[cfg(test)]
-#[path = "../../../../tests/infrastructure/step_executor/verifier/triage_tests.rs"]
-mod triage_tests;

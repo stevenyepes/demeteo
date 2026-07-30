@@ -16,7 +16,7 @@
 //!    feature's code and cannot disturb the shared checkout.
 //! 2. Runs `command` there under an **interactive login shell** — the
 //!    same shell the harness runs under
-//!    ([`harness_shell_options`](crate::adapters::step_executor::driver::ExecutionDriver::harness_shell_options)),
+//!    ([`harness_shell_options`](crate::adapters::step_executor::harness_shell::harness_shell_options)),
 //!    for the same reason: user-authored commands (`cargo test`, `npm run
 //!    build`) resolve binaries off the user's `PATH`, which only a login
 //!    shell establishes and only an interactive one activates `mise` /
@@ -310,7 +310,10 @@ impl ExecutionDriver {
             cwd: Some(cwd),
             env: resolve_env(&spec.env_allowlist),
             timeout: spec.timeout,
-            ..self.harness_shell_options(wt_path)
+            ..crate::adapters::step_executor::harness_shell::harness_shell_options(
+                self.app_settings.as_ref(),
+                wt_path,
+            )
         };
 
         // Race the command against cancellation. Dropping the run future is

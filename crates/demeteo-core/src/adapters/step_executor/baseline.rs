@@ -45,6 +45,7 @@
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::failing_tests::{DriverExtractor, FailingTestExtractor};
+use crate::adapters::step_executor::harness_shell::{harness_ceiling_s, harness_shell_options};
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::harness_baseline::{
     fallback_baseline_needed, BaselineEnvironmentFault, BaselineProducer, HarnessBaseline,
@@ -432,7 +433,7 @@ impl ExecutionDriver {
         let gates = crate::domain::verifier::resolve_gating_harnesses(
             &self.steps,
             &settings.worktree_strategy,
-            self.harness_ceiling_s(),
+            harness_ceiling_s(self.app_settings.as_ref()),
         );
 
         crate::domain::harness_baseline::render_harness_briefing(
@@ -474,7 +475,7 @@ impl ExecutionDriver {
             site,
             prepare_command,
             harnesses,
-            self.harness_shell_options(site.wt_path),
+            harness_shell_options(self.app_settings.as_ref(), site.wt_path),
             crate::paths::now_secs() as i64,
         )
         .await;
@@ -629,7 +630,7 @@ impl ExecutionDriver {
         let harnesses = crate::domain::verifier::resolve_harnesses(
             declared,
             &settings.worktree_strategy,
-            self.harness_ceiling_s(),
+            harness_ceiling_s(self.app_settings.as_ref()),
         );
 
         let prepare = settings.worktree_strategy.prepare_command.as_deref();
@@ -703,7 +704,11 @@ impl ExecutionDriver {
                 gate.reason,
                 gate.remediation,
             );
-            self.notify_environment_not_ready(step_exec, &msg);
+            crate::adapters::step_executor::driver::verifier::environment::notify_environment_not_ready(
+                &self.environment_signal(),
+                step_exec,
+                &msg,
+            );
             tracing::warn!(
                 feature_id = %self.f_id,
                 step_id = %step_exec.step_id.0,

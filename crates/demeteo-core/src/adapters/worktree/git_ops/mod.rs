@@ -19,7 +19,7 @@ use std::sync::Arc;
 /// ambient process cwd. Toolchain-managed tools that *do* need the user's login
 /// profile (`mise`/`asdf`/`nvm` shims) never run through here; they run through
 /// the login-shell paths — the agent spawn (`spawn_interactive`), the harness
-/// gate (`driver::verifier::harness_shell_options`), and remote agent install.
+/// gate (`step_executor::harness_shell::harness_shell_options`), and remote agent install.
 #[derive(Clone)]
 pub struct GitOpsHelper {
     pub(crate) app_settings: Arc<dyn AppSettingsRepository>,

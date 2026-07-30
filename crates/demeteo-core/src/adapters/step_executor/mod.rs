@@ -29,6 +29,7 @@ pub(crate) mod driver;
 pub(crate) mod driver_registry;
 pub(crate) mod failing_tests;
 pub(crate) mod gate_waiter;
+pub(crate) mod harness_shell;
 pub(crate) mod impl_traits;
 pub mod node_catalog;
 pub mod node_lint;
