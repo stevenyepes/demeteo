@@ -10,6 +10,7 @@ pub(crate) mod error_message;
 pub(crate) mod prompt;
 pub(crate) mod spawn;
 pub(crate) mod turn;
+pub(crate) mod verdict;
 
 pub(crate) use error_message::format_agent_error_message;
 // The `sequence` step builds its own per-task prompts and reuses the
@@ -151,28 +152,7 @@ impl ExecutionDriver {
                             &subtask_id,
                         )
                         .await;
-                    return match err {
-                        crate::domain::verifier::VerifierError::Verdict(failure) => {
-                            StepOutcome::VerdictFailed(failure)
-                        }
-                        crate::domain::verifier::VerifierError::Infrastructure(msg) => {
-                            StepOutcome::NonRetryable(format!(
-                                "[verifier infrastructure error — check verifier config] {}",
-                                msg
-                            ))
-                        }
-                        // Triaged (C6) as an environment problem: the box is not
-                        // provisioned, editing source can't fix it. The message
-                        // is already user-facing remediation and the
-                        // notification was fired at triage time — terminate now.
-                        crate::domain::verifier::VerifierError::Environment(msg) => {
-                            StepOutcome::NonRetryable(msg)
-                        }
-                        // Stop was pressed while the harness was running. Not
-                        // a failure — the worktree is already cleaned up above
-                        // and nothing should be persisted as an error.
-                        crate::domain::verifier::VerifierError::Cancelled => StepOutcome::Cancelled,
-                    };
+                    return err.into();
                 }
             }
         }
@@ -417,78 +397,25 @@ impl ExecutionDriver {
         // objective half is green; the agent's verdict covers the
         // subjective half (correct and complete vs. the spec).
         if let Some(ref verifier_cfg) = step_conf.verifier {
-            use crate::domain::verifier::verdict::{parse_verdict_text, ParsedVerdict};
-            let mut verdict = parse_verdict_text(&text_buffer, &verifier_cfg.verdict_key);
+            let verdict = self
+                .read_step_verdict(&text_buffer, &session, verifier_cfg, target, wt, &mut spend)
+                .await;
 
-            // The turn produced no usable verdict object. Re-ask the SAME
-            // session with a strict JSON-only correction before giving up —
-            // one cheap resumed turn instead of a whole fresh verifier
-            // session.
-            if matches!(verdict, ParsedVerdict::Missing(_)) {
-                // Offers all three verdicts for the same reason the original
-                // contract does (S13): a correction that silently drops
-                // `environment` would push an agent that had correctly judged
-                // the criteria unprovable into `fail` on the retry.
-                let correction = format!(
-                    "Your previous reply did not end with a usable verdict object. \
-                     Reply with ONLY a single JSON object — no prose, no code fence — \
-                     of one of these forms:\n\
-                     {{ \"{key}\": \"pass\" }}\n\
-                     {{ \"{key}\": \"fail\", \"reason\": \"...\", \
-                     \"failing_tests\": [], \"implicated_files\": [] }}\n\
-                     {{ \"{key}\": \"environment\", \"reason\": \"...\" }}\n\
-                     Use `environment` when what you could not confirm is something \
-                     this project is not configured to run, rather than something the \
-                     implementation got wrong.",
-                    key = verifier_cfg.verdict_key,
-                );
-                let correction_res = self
-                    .run_silent_turn(&session, &correction, target, wt)
-                    .await;
-                if let crate::adapters::agent::event_stream::TurnResult::Success(outcome) =
-                    correction_res
-                {
-                    *spend.cost += outcome.cost_usd;
-                    *spend.tokens += outcome.tokens;
-                    verdict = parse_verdict_text(&outcome.text, &verifier_cfg.verdict_key);
-                }
-            }
-
-            match verdict {
-                ParsedVerdict::Pass => {
+            match verdict::verdict_disposition(verdict, &missing_artifacts) {
+                verdict::VerdictDisposition::Pass => {
                     tracing::info!(
                         feature_id = %self.f_id,
                         step_id = %step_exec.step_id.0,
                         "verdict: pass"
                     );
                 }
-                ParsedVerdict::Fail(mut failure) => {
+                verdict::VerdictDisposition::Fail(failure) => {
                     tracing::warn!(
                         feature_id = %self.f_id,
                         step_id = %step_exec.step_id.0,
                         reason = %failure.reason,
                         "verdict: fail"
                     );
-                    // S14: record what the turn *did* produce, and say so when
-                    // it didn't. This return used to jump the declared-artifact
-                    // check and the path persistence further down, so a
-                    // validate step that failed on a verdict left
-                    // `artifact_paths` empty even when its report existed on
-                    // disk — and "the agent judged the work and rejected it"
-                    // became indistinguishable from "the agent never wrote its
-                    // report" in the row.
-                    //
-                    // Deliberately not converted into an artifact *failure*:
-                    // the verdict is the more actionable outcome and its reason
-                    // is what the rework step reads. A missing report is
-                    // appended to that reason instead of replacing it, because
-                    // the step downstream attaches `[attached — s-validate]`
-                    // and will find nothing there.
-                    failure.reason =
-                        crate::adapters::step_executor::artifacts::note_undelivered_artifacts(
-                            &failure.reason,
-                            &missing_artifacts,
-                        );
                     let _ = self.features.step_update(
                         &step_exec.id,
                         &StepExecutionPatch {
@@ -509,14 +436,7 @@ impl ExecutionDriver {
                     let _ = self.registry.kill(target.session_key).await;
                     return StepOutcome::VerdictFailed(failure);
                 }
-                // The criteria this step could not satisfy demand something
-                // the *project* is not configured to do — a build or test
-                // command that was never set. Re-running the implementation
-                // cannot add a setting, so opening a rework loop here would
-                // spend the whole retry budget re-implementing a feature
-                // that was already correct and end no better informed.
-                // Terminate once, carrying remediation the user can act on.
-                ParsedVerdict::Environment(reason) => {
+                verdict::VerdictDisposition::Unjudgeable { reason, message } => {
                     tracing::warn!(
                         feature_id = %self.f_id,
                         step_id = %step_exec.step_id.0,
@@ -533,12 +453,9 @@ impl ExecutionDriver {
                         )
                         .await;
                     let _ = self.registry.kill(target.session_key).await;
-                    return StepOutcome::NonRetryable(format!(
-                        "[project configuration — retrying cannot fix this] {}",
-                        reason
-                    ));
+                    return StepOutcome::NonRetryable(message);
                 }
-                ParsedVerdict::Missing(desc) => {
+                verdict::VerdictDisposition::NoVerdict(message) => {
                     let _ = self
                         .git_ops
                         .cleanup_subtask_worktree(
@@ -549,11 +466,7 @@ impl ExecutionDriver {
                         )
                         .await;
                     let _ = self.registry.kill(target.session_key).await;
-                    return StepOutcome::NonRetryable(format!(
-                        "[verifier infrastructure error — no usable verdict from the \
-                         validate turn] {}",
-                        desc
-                    ));
+                    return StepOutcome::NonRetryable(message);
                 }
             }
         }
