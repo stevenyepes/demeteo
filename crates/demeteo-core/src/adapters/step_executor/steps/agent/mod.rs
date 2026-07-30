@@ -359,8 +359,9 @@ impl ExecutionDriver {
         // the end of its reply. The turn both writes the report artifact
         // and issues the verdict — replacing the old flow of (agent re-runs
         // tests) + (orchestrator re-runs tests) + (third verifier session).
-        // The harness block renders its own heading (`HarnessOutcome::
-        // render_section`) so this template cannot label an empty result
+        // The harness block renders its own heading
+        // (`domain::harness_outcome::HarnessOutcome::render_section`) so this
+        // template cannot label an empty result
         // "already executed by the orchestrator" — see S12.
         //
         // All three verdicts are offered. `environment` used to be described in

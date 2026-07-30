@@ -82,7 +82,8 @@ pub struct BaselineEnvironmentFault {
 
 /// One gate's measurement at the base commit.
 ///
-/// Mirrors `HarnessRun` in `driver/verifier.rs` field for field on the three
+/// Mirrors [`HarnessRun`](crate::domain::harness_outcome::HarnessRun) field for
+/// field on the three
 /// that identify a run (`name`, the command, and what it said), so HB2c's
 /// subtraction and HB7's rendering are a comparison rather than a translation
 /// layer.

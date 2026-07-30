@@ -1,4 +1,4 @@
-// Tests extracted from `src/domain/verifier.rs` (mirrored-tests convention).
+// Tests extracted from `src/domain/verifier/mod.rs` (mirrored-tests convention).
 // `super` resolves to that module.
 //
 // HB5 (`docs/HARNESS_BASELINE.md`): which harnesses gate a step, and what

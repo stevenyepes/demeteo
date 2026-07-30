@@ -3,7 +3,8 @@
 //!
 //! The C6 pure helpers (fingerprint normalization both directions,
 //! `should_triage`, `parse_triage_text`, `build_environment_message`) are unit-
-//! tested next to their definitions in `driver/verifier.rs`. What those unit
+//! tested next to their definitions in `domain/harness_fingerprint.rs`,
+//! `domain/harness_triage.rs` and `domain/harness_remediation.rs`. What those unit
 //! tests *cannot* cover is the wiring: that a red harness inside a real running
 //! feature actually
 //!
