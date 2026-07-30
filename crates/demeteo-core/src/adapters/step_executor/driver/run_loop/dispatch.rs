@@ -86,7 +86,9 @@ impl ExecutionDriver {
         // row: the resume guard compares it against the live workspace
         // after a crash, and it seeds the attempt's idempotency key.
         let fingerprint = self.current_workspace_fingerprint().await;
-        let attempt = self.open_attempt(
+        let attempt = super::attempt::open_attempt(
+            &*self.features,
+            &self.f_id,
             step_exec,
             *accumulated_cost,
             *accumulated_tokens,
@@ -198,17 +200,25 @@ impl ExecutionDriver {
         // outcome is acted on so every exit path below — including
         // the early `return`s — leaves a closed row behind.
         let wall_ms = step_start.elapsed().as_millis() as u64;
+        let class = super::attempt::classify(
+            &outcome,
+            verdict_failure.is_some(),
+            is_cancelled,
+            &self.target_dir,
+        );
+        let spend = StepSpend {
+            cost: *accumulated_cost,
+            tokens: *accumulated_tokens,
+            cache: self.cache_tokens(),
+            start: step_start,
+        };
         self.close_attempt(
             step_exec,
             attempt.as_ref(),
-            &outcome,
-            *accumulated_cost,
-            *accumulated_tokens,
+            class,
+            spend,
             wall_ms,
-            failure_decision.as_ref(),
-            verdict_failure.as_ref(),
-            &self.target_dir,
-            is_cancelled,
+            failure_decision.as_ref().map(|d| d.rule_id.as_str()),
         );
 
         Some(DispatchResult {
