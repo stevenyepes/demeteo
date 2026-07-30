@@ -45,6 +45,9 @@ use std::time::Instant;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::scheduler::{evaluate_ready_set, ScheduleError};
+use crate::adapters::step_executor::step_status::{
+    update_step_status, CacheTokens, StepTransition,
+};
 use crate::adapters::step_executor::updates;
 use crate::domain::expr::ExprValue;
 
@@ -203,19 +206,15 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
             driver.ensure_feature_running();
         }
 
-        updates::update_step_status(
-            &*driver.features,
-            &*driver.notif,
+        update_step_status(
+            driver.status_writers(),
             step_exec,
             &driver.f_id,
-            "running",
-            step_exec.cost_usd.unwrap_or(0.0),
-            step_exec.tokens,
-            step_exec.wall_clock_secs.unwrap_or(0),
-            None,
-            None,
-            None,
-            None,
+            StepTransition::running(
+                step_exec.cost_usd.unwrap_or(0.0),
+                step_exec.tokens,
+                step_exec.wall_clock_secs.unwrap_or(0),
+            ),
         );
 
         let step_start = Instant::now();
@@ -283,19 +282,17 @@ async fn fail_unschedulable(
     if let ScheduleError::Deadlock(stuck) = err {
         for node_id in stuck {
             if let Some(row) = step_execs.iter().find(|s| s.step_id == *node_id) {
-                updates::update_step_status(
-                    &*driver.features,
-                    &*driver.notif,
+                update_step_status(
+                    driver.status_writers(),
                     row,
                     &driver.f_id,
-                    "failed",
-                    row.cost_usd.unwrap_or(0.0),
-                    row.tokens,
-                    row.wall_clock_secs.unwrap_or(0),
-                    None,
-                    Some(msg.clone()),
-                    None,
-                    None,
+                    StepTransition::failed(
+                        row.cost_usd.unwrap_or(0.0),
+                        row.tokens,
+                        row.wall_clock_secs.unwrap_or(0),
+                        msg.clone(),
+                        CacheTokens::default(),
+                    ),
                 );
             }
         }

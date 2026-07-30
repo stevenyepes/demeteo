@@ -31,6 +31,7 @@ use std::collections::HashMap;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::scheduler::NodeState;
+use crate::adapters::step_executor::step_status::{try_update_step_status, StepTransition};
 use crate::domain::ids::StepId;
 use crate::domain::models::StepExecution;
 use crate::domain::workflow_graph::WorkflowGraph;
@@ -167,19 +168,17 @@ impl ExecutionDriver {
         reason: &str,
     ) -> Result<(), String> {
         let row = skip_target(step_execs, node_id)?;
-        super::super::super::updates::try_update_step_status(
-            &*self.features,
-            &*self.notif,
+        try_update_step_status(
+            self.status_writers(),
             row,
             &self.f_id,
-            STATUS_SKIPPED,
-            row.cost_usd.unwrap_or(0.0),
-            row.tokens,
-            row.wall_clock_secs.unwrap_or(0),
-            None,
-            Some(reason.to_string()),
-            None,
-            None,
+            StepTransition::skipped(
+                STATUS_SKIPPED,
+                row.cost_usd.unwrap_or(0.0),
+                row.tokens,
+                row.wall_clock_secs.unwrap_or(0),
+                reason.to_string(),
+            ),
         )
     }
 }

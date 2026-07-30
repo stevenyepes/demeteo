@@ -1,5 +1,6 @@
 use super::ExecutionDriver;
 use crate::adapters::step_executor::retry_policy::{RetryAction, RetryDecision};
+use crate::adapters::step_executor::step_status::{update_step_status, StepTransition};
 use crate::domain::ids::StepId;
 use crate::domain::models::{Notification, NotificationKind, StepExecution};
 use crate::ports::db::StepExecutionPatch;
@@ -54,19 +55,17 @@ impl ExecutionDriver {
         step_start: Instant,
     ) {
         let wall = step_start.elapsed().as_secs();
-        super::super::updates::update_step_status(
-            &*self.features,
-            &*self.notif,
+        update_step_status(
+            self.status_writers(),
             step_exec,
             &self.f_id,
-            "failed",
-            accumulated_cost,
-            Some(accumulated_tokens),
-            wall,
-            None,
-            Some(msg.to_string()),
-            self.last_cache_read,
-            self.last_cache_creation,
+            StepTransition::failed(
+                accumulated_cost,
+                Some(accumulated_tokens),
+                wall,
+                msg.to_string(),
+                self.cache_tokens(),
+            ),
         );
         super::super::updates::finish_feature(
             &*self.features,
@@ -134,19 +133,17 @@ impl ExecutionDriver {
             "{} (retry budget exhausted: {} of {} attempts on '{}')",
             msg, already, max, target_id.0
         );
-        super::super::updates::update_step_status(
-            &*self.features,
-            &*self.notif,
+        update_step_status(
+            self.status_writers(),
             step_exec,
             &self.f_id,
-            "failed",
-            accumulated_cost,
-            Some(accumulated_tokens),
-            wall,
-            None,
-            Some(final_msg.clone()),
-            self.last_cache_read,
-            self.last_cache_creation,
+            StepTransition::failed(
+                accumulated_cost,
+                Some(accumulated_tokens),
+                wall,
+                final_msg.clone(),
+                self.cache_tokens(),
+            ),
         );
         // Persist a `notifications` row so the user sees the
         // signal in the bell after a refresh, mirroring how
@@ -213,22 +210,20 @@ impl ExecutionDriver {
             max,
             "step retry → redirecting"
         );
-        super::super::updates::update_step_status(
-            &*self.features,
-            &*self.notif,
+        update_step_status(
+            self.status_writers(),
             step_exec,
             &self.f_id,
-            "failed",
-            accumulated_cost,
-            Some(accumulated_tokens),
-            step_start.elapsed().as_secs(),
-            None,
-            Some(format!(
-                "{} (retrying: will jump to '{}' on attempt {} of {})",
-                msg, target_id.0, attempt, max
-            )),
-            self.last_cache_read,
-            self.last_cache_creation,
+            StepTransition::failed(
+                accumulated_cost,
+                Some(accumulated_tokens),
+                step_start.elapsed().as_secs(),
+                format!(
+                    "{} (retrying: will jump to '{}' on attempt {} of {})",
+                    msg, target_id.0, attempt, max
+                ),
+                self.cache_tokens(),
+            ),
         );
 
         let _ = self.features.step_update(
@@ -262,22 +257,17 @@ impl ExecutionDriver {
                 step_exec.step_id.0, msg
             ),
         );
-        super::super::updates::update_step_status(
-            &*self.features,
-            &*self.notif,
+        update_step_status(
+            self.status_writers(),
             step_exec,
             &self.f_id,
-            "pending",
-            accumulated_cost,
-            Some(accumulated_tokens),
-            step_start.elapsed().as_secs(),
-            None,
-            Some(format!(
-                "{} (environment issue — retrying step in place)",
-                msg
-            )),
-            self.last_cache_read,
-            self.last_cache_creation,
+            StepTransition::pending(
+                accumulated_cost,
+                accumulated_tokens,
+                step_start.elapsed().as_secs(),
+                format!("{} (environment issue — retrying step in place)", msg),
+                self.cache_tokens(),
+            ),
         );
     }
 }

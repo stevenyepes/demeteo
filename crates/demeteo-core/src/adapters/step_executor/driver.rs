@@ -28,14 +28,18 @@ use crate::ports::pricing::PricingTable;
 // `run_loop/mod.rs` for the loop's decomposition into dispatch / outcome /
 // attempt / cleanup.
 //
-// **TODO — `StepStatusWriter` port.** The `super::updates::update_step_status(...)`
-// + `super::updates::finish_feature(...)` call sites (spread over
-// `driver/failure.rs`, `run_loop/{mod,outcome,cleanup,schedule}.rs`)
-// hand-roll an 11-arg `update_step_status` signature each. The natural next
-// step is a `StepStatusWriter` port trait with named transition methods
-// (`mark_running`, `mark_completed`, `mark_failed`, `mark_interrupted`,
-// `mark_pending`, `finish_feature`) — proposed as D6 in the backend refactor
-// plan, never landed. Out of scope for this PR.
+// **Why the step-status write is not a port.** These call sites (spread over
+// `driver/failure.rs` and `run_loop/{mod,outcome,schedule}.rs`) each used to
+// hand-roll a twelve-argument `update_step_status`, and D6 in the backend
+// refactor plan proposed a `StepStatusWriter` port trait with named transition
+// methods to end that. It was never landed, and a trait is the wrong answer:
+// it would have exactly one implementation, added only so a test could mock
+// it, which AGENTS.md §2's restraint on ports rules out. The readability D6
+// was after came from the named constructors instead —
+// `super::step_status::StepTransition::{running, completed, failed,
+// interrupted, pending, skipped}` — which fix each status against the payload
+// it may carry, and are reachable from a test over two borrowed ports rather
+// than a mocked trait.
 
 pub(crate) mod failure;
 pub(crate) mod publish;

@@ -8,8 +8,8 @@
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::retry_policy::RetryAction;
+use crate::adapters::step_executor::step_status::{update_step_status, StepTransition};
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::adapters::step_executor::updates;
 use crate::domain::models::StepExecution;
 use crate::domain::verifier::VerdictFailure;
 
@@ -72,19 +72,17 @@ impl ExecutionDriver {
         );
         let latest_step = self.features.step_get(&step_exec.id).ok().flatten();
         let art_path = latest_step.as_ref().and_then(|s| s.artifact_path.clone());
-        updates::update_step_status(
-            &*self.features,
-            &*self.notif,
+        update_step_status(
+            self.status_writers(),
             step_exec,
             &self.f_id,
-            "completed",
-            dr.accumulated_cost,
-            Some(dr.accumulated_tokens),
-            wall,
-            art_path,
-            None,
-            self.last_cache_read,
-            self.last_cache_creation,
+            StepTransition::completed(
+                dr.accumulated_cost,
+                dr.accumulated_tokens,
+                wall,
+                art_path,
+                self.cache_tokens(),
+            ),
         );
         // Context-window watchdog: pull the live session's
         // cumulative tokens and decide whether to reset
@@ -124,19 +122,17 @@ impl ExecutionDriver {
         let is_cancelled = *self.cancel_watch.borrow();
         if is_cancelled {
             let wall = dr.step_start.elapsed().as_secs();
-            updates::update_step_status(
-                &*self.features,
-                &*self.notif,
+            update_step_status(
+                self.status_writers(),
                 step_exec,
                 &self.f_id,
-                "interrupted",
-                dr.accumulated_cost,
-                Some(dr.accumulated_tokens),
-                wall,
-                None,
-                Some(format!("Cancelled while step was failing: {}", msg)),
-                self.last_cache_read,
-                self.last_cache_creation,
+                StepTransition::interrupted(
+                    dr.accumulated_cost,
+                    dr.accumulated_tokens,
+                    wall,
+                    format!("Cancelled while step was failing: {}", msg),
+                    self.cache_tokens(),
+                ),
             );
             self.cancel_feature().await;
             return RunAction::Terminate;

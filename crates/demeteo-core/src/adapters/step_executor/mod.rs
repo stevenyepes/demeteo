@@ -38,6 +38,7 @@ pub(crate) mod registry;
 pub(crate) mod retry_policy;
 pub mod scheduler;
 pub mod setup;
+pub(crate) mod step_status;
 pub(crate) mod steps;
 pub(crate) mod sync;
 pub(crate) mod updates;
