@@ -786,13 +786,16 @@ impl ExecutionDriver {
             .filter(|r| failed.iter().any(|f| f.name == r.name))
             .cloned()
             .collect();
-        let names: Vec<String> = gates.iter().map(|g| g.name.clone()).collect();
 
+        // The resolved gates go in whole, name *and* command: a stored record
+        // that holds this gate's name under a command the project has since
+        // changed is not a measurement of what is about to be subtracted, and
+        // only the command string can show that.
         if !fallback_baseline_needed(
             !failed.is_empty(),
             base_sha,
             feature.harness_baseline.as_ref(),
-            &names,
+            &gates,
         ) {
             return;
         }

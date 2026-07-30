@@ -281,6 +281,28 @@ impl HarnessBaseline {
 /// not merely omit a command list: it says nothing will run, says what that
 /// means for a criterion, and names the settings that would change it.
 ///
+/// # A gate is looked up by name, but answered for by command
+///
+/// [`HarnessBaseline::harness`] keys on the gate's *name*, and the name a
+/// project's `test_command` runs under is always `default` — so a project that
+/// changes `test_command` mid-run keeps a stored measurement that matches by
+/// name while describing a command nobody now runs. That happened: a feature
+/// whose baseline measured `npm run checks` was, the next day, gated on
+/// `npm run checks:code`, and this block would have told the spec agent that
+/// `checks:code` passed before the feature started when nothing had ever run it.
+///
+/// So a stored measurement is a status for this gate only when its command is
+/// the one now configured — the same stance
+/// [`compare_gate`](crate::domain::harness_delta::compare_gate) already takes
+/// before subtracting: *a different command is a different question*. The
+/// mismatch renders as its own line rather than collapsing into the plain "not
+/// measured" wording, because the two absences have different remedies: nothing
+/// can be done about a gate nobody measured, while a reader told the command
+/// changed knows both why the evidence is missing and that the baseline node
+/// measured *something* — and may still phrase criteria against the command that
+/// will actually run. It keeps the "not measured" phrasing as its opening clause
+/// so no reading of it can yield a green claim.
+///
 /// Pure over the two values the caller already holds, so every wording decision
 /// above is assertable without a driver.
 pub fn render_harness_briefing(
@@ -311,6 +333,16 @@ pub fn render_harness_briefing(
     for gate in gates {
         let measured = baseline.and_then(|b| b.harness(&gate.name));
         let status = match measured {
+            // A different command is a different question (see the doc comment,
+            // and `compare_gate`, which refuses to subtract on the same grounds).
+            // Checked before either status arm, so no measurement of another
+            // command can reach one.
+            Some(run) if run.command.trim() != gate.command.trim() => format!(
+                "not measured before this feature started — the gate was configured as \
+                 `{}` when the baseline was taken, and nothing has run `{}` on this \
+                 repository since, so that measurement says nothing about this command",
+                run.command, gate.command
+            ),
             // Named as "before this feature started" rather than "at the base",
             // because the reader needs the attribution, not the git vocabulary.
             Some(run) if run.exit_ok => {
@@ -368,19 +400,38 @@ pub fn render_harness_briefing(
 ///   a baseline could excuse.
 /// * **no covering measurement already** — a record that
 ///   [`covers`](HarnessBaseline::covers) this base *and* already holds every
-///   gate in `gates` answers the question. Re-measuring would burn the same
-///   minutes on the second validate attempt of the same run, which is exactly
-///   what caching the fallback's own write exists to prevent. A record covering
-///   a *different* sha does not count: it describes other code.
+///   gate in `gates` **under the command that gate now runs** answers the
+///   question. Re-measuring would burn the same minutes on the second validate
+///   attempt of the same run, which is exactly what caching the fallback's own
+///   write exists to prevent. A record covering a *different* sha does not
+///   count: it describes other code.
+///
+///   The command is half of that condition and not a fifth one, because it is
+///   the same question — *does a measurement of this gate exist?* — asked
+///   without assuming the gate's name pins its command. It does not: the
+///   project's `test_command` is always measured under the name `default`, so
+///   editing that setting mid-run leaves a record that matches by name while
+///   describing a command nobody runs any more. A run whose baseline measured
+///   `npm run checks` was gated the next day on `npm run checks:code`, and a
+///   name-only check declined to re-measure — leaving the subtraction to
+///   compare against a command that had never been run.
+///   [`compare_gate`](crate::domain::harness_delta::compare_gate) will refuse
+///   that record anyway, so the name-only answer was not merely stale but
+///   *useless*: it withheld the one measurement that could have made the
+///   subtraction fire. Hence `gates` carries
+///   [`ResolvedHarness`](crate::domain::verifier::ResolvedHarness) — the same
+///   name-and-command pair `resolve_harnesses` hands validate — rather than
+///   names alone, which is a shape that cannot express the question.
 ///
 /// Note what is **not** here: whether the baseline was green or red. A stored
 /// measurement is an answer either way, and re-measuring a gate that was
-/// already measured at this commit cannot produce new information.
+/// already measured at this commit, under this command, cannot produce new
+/// information.
 pub fn fallback_baseline_needed(
     harness_failed: bool,
     base_sha: &str,
     existing: Option<&HarnessBaseline>,
-    gates: &[String],
+    gates: &[crate::domain::verifier::ResolvedHarness],
 ) -> bool {
     if !harness_failed || base_sha.trim().is_empty() || gates.is_empty() {
         return false;
@@ -388,7 +439,11 @@ pub fn fallback_baseline_needed(
     let Some(existing) = existing.filter(|b| b.covers(base_sha)) else {
         return true;
     };
-    gates.iter().any(|g| existing.harness(g).is_none())
+    gates.iter().any(|g| {
+        existing
+            .harness(&g.name)
+            .is_none_or(|run| run.command.trim() != g.command.trim())
+    })
 }
 
 /// The gate a baseline measurement found unrunnable, named so the caller can

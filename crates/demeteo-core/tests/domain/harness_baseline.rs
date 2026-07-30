@@ -289,8 +289,14 @@ fn a_different_base_sha_replaces_rather_than_blends() {
 // against a cold checkout, i.e. minutes. Every test here is about *not* paying
 // that unless the answer it buys is worth it.
 
-fn gates(names: &[&str]) -> Vec<String> {
-    names.iter().map(|s| s.to_string()).collect()
+/// The gates that just went red, exactly as `resolve_harnesses` hands them over
+/// — name **and** command. The commands match what [`run`] records, so a test
+/// that wants a mismatch has to state one.
+fn gates(names: &[&str]) -> Vec<crate::domain::verifier::ResolvedHarness> {
+    names
+        .iter()
+        .map(|n| gate(n, &format!("npm run {n}")))
+        .collect()
 }
 
 #[test]
@@ -320,7 +326,8 @@ fn a_red_harness_with_no_record_measures() {
 fn a_covering_record_holding_every_failing_gate_does_not_re_measure() {
     // The cache. A second validate attempt in the same run must not pay for
     // the same measurement twice — which is the whole reason the fallback
-    // persists what it measured.
+    // persists what it measured. Name *and* command agree here (`gates` builds
+    // the command `run` records), which is the only shape that may skip.
     let stored = baseline("abc123", vec![run("unit", false, "fp")]);
     assert!(!fallback_baseline_needed(
         true,
@@ -387,6 +394,45 @@ fn an_unresolvable_base_never_measures() {
 #[test]
 fn no_gates_never_measures() {
     assert!(!fallback_baseline_needed(true, "abc123", None, &[]));
+}
+
+/// The `f-1d0209a0e43d5b67` incident. A project's `test_command` is always
+/// measured under the name `default`, so changing that setting mid-run leaves a
+/// record that matches by name while describing a command nobody runs any more.
+/// A name-only check declined to re-measure — and `compare_gate` then refused
+/// the record for the same mismatch, so the run got no subtraction *and* no
+/// measurement that could have provided one.
+#[test]
+fn a_record_measured_under_a_different_command_measures_again() {
+    let stored = baseline(
+        "abc123",
+        vec![HarnessBaselineRun {
+            command: "npm run checks".to_string(),
+            ..run("default", false, "fp")
+        }],
+    );
+    assert!(fallback_baseline_needed(
+        true,
+        "abc123",
+        Some(&stored),
+        &[gate("default", "npm run checks:code")]
+    ));
+}
+
+/// The other direction, and the one that keeps the guard from costing minutes
+/// on every failure path: a command that differs only in surrounding whitespace
+/// is the same command. `compare_gate` compares trimmed for the same reason, and
+/// the two must agree or the fallback re-measures a record the subtraction would
+/// have accepted.
+#[test]
+fn a_command_differing_only_in_whitespace_is_still_measured() {
+    let stored = baseline("abc123", vec![run("unit", false, "fp")]);
+    assert!(!fallback_baseline_needed(
+        true,
+        "abc123",
+        Some(&stored),
+        &[gate("unit", "  npm run unit\n")]
+    ));
 }
 
 // ── unrunnable_baseline_gate (HB9) ───────────────────────────────────────────
@@ -589,6 +635,93 @@ fn a_gate_green_at_the_base_says_it_passed() {
 
     assert!(rendered.contains("passed"), "got:\n{rendered}");
     assert!(!rendered.contains("already failing"), "got:\n{rendered}");
+}
+
+/// The `f-1d0209a0e43d5b67` incident, in the prompt. The gate is named `default`
+/// on both sides — the name a project's `test_command` always runs under — so a
+/// name-only lookup finds a measurement of `npm run checks` and tells the spec
+/// agent that `npm run checks:code`, which nothing has ever run here, passed
+/// before the feature started. The agent then writes criteria against a claim
+/// that is false, which is the whole failure this block exists to stop.
+#[test]
+fn a_gate_measured_under_a_different_command_is_not_reported_as_passing() {
+    let record = baseline(
+        "abc123",
+        vec![HarnessBaselineRun {
+            command: "npm run checks".to_string(),
+            ..run("default", true, "")
+        }],
+    );
+    let rendered =
+        render_harness_briefing(&[gate("default", "npm run checks:code")], Some(&record));
+
+    assert!(
+        !rendered.contains("passed"),
+        "a measurement of another command must not read as this gate's green; got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("not measured"),
+        "the honest statement is that nothing measured *this* command; got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("`npm run checks`"),
+        "naming what the baseline did measure is what makes the line more useful \
+         than a bare 'not measured'; got:\n{rendered}"
+    );
+}
+
+/// The same guard, from the other side: a *red* measurement of a different
+/// command must not be flagged against this gate either. It pins the arm order —
+/// the command check has to precede both status arms, not just the green one.
+#[test]
+fn a_red_measurement_of_a_different_command_is_not_flagged_against_this_gate() {
+    let record = baseline(
+        "abc123",
+        vec![HarnessBaselineRun {
+            command: "npm run checks".to_string(),
+            ..run("default", false, "fp")
+        }],
+    );
+    let rendered =
+        render_harness_briefing(&[gate("default", "npm run checks:code")], Some(&record));
+
+    assert!(
+        !rendered.contains("already failing"),
+        "the gate now configured has never been run here, so nothing is known to \
+         be failing in it; got:\n{rendered}"
+    );
+    assert!(rendered.contains("not measured"), "got:\n{rendered}");
+}
+
+/// The regression guard for the overwhelmingly common case. A command check that
+/// fired one character too eagerly would render *every* gate as unknown, and no
+/// substring assertion elsewhere in this file would notice — so pin the lines.
+#[test]
+fn a_matching_command_renders_exactly_as_it_did() {
+    let record = baseline(
+        "abc123",
+        vec![run("lint", true, ""), run("unit", false, "fp")],
+    );
+    let rendered = render_harness_briefing(
+        &[gate("lint", "npm run lint"), gate("unit", "npm run unit")],
+        Some(&record),
+    );
+
+    assert!(
+        rendered.contains(
+            "- `lint` → `npm run lint`\n  - passed against this repository before this feature \
+             started\n"
+        ),
+        "got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("- `unit` → `npm run unit`\n  - **already failing**"),
+        "got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("was configured as"),
+        "no mismatch line may appear when the commands agree; got:\n{rendered}"
+    );
 }
 
 /// Absent is not green, in the prompt as well as in the verdict. A gate with no
