@@ -12,6 +12,7 @@ pub mod harness_delta;
 pub mod harness_failure;
 pub mod harness_fingerprint;
 pub mod harness_remediation;
+pub mod harness_triage;
 pub mod ids;
 pub mod intercept;
 pub mod memory;
