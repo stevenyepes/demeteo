@@ -1,7 +1,6 @@
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::agent_event::AgentEvent;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
@@ -10,6 +9,7 @@ pub(crate) mod context;
 pub(crate) mod error_message;
 pub(crate) mod prompt;
 pub(crate) mod spawn;
+pub(crate) mod turn;
 
 pub(crate) use error_message::format_agent_error_message;
 // The `sequence` step builds its own per-task prompts and reuses the
@@ -19,26 +19,19 @@ pub(crate) use prompt::{
 };
 
 use context::{AgentRunTarget, AgentSpend, AgentStepCtx, AgentWorktree, TurnBaseline};
+use turn::{apply_turn_result, TurnDisposition};
 
 impl ExecutionDriver {
     pub(crate) async fn handle_agent_step(
         &self,
         ctx: AgentStepCtx<'_>,
-        spend: AgentSpend<'_>,
+        mut spend: AgentSpend<'_>,
     ) -> StepOutcome {
         let AgentStepCtx {
             step_exec,
             step_conf,
             ..
         } = ctx;
-        let AgentSpend {
-            cost: accumulated_cost,
-            tokens: accumulated_tokens,
-            start: step_start,
-            cache_read: out_cache_read,
-            cache_creation: out_cache_creation,
-        } = spend;
-
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
         // Extend the model override to the runtime default when no explicit override
         // is set, so UsageAccumulator can use the pricing table and compute cost_usd.
@@ -137,9 +130,9 @@ impl ExecutionDriver {
                 feature_id: self.f_id.clone(),
                 step_id: step_exec.step_id.0.clone(),
                 status: "verifying".into(),
-                cost_usd: Some(*accumulated_cost),
-                tokens: Some(*accumulated_tokens),
-                wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                cost_usd: Some(*spend.cost),
+                tokens: Some(*spend.tokens),
+                wall_clock_secs: Some(spend.start.elapsed().as_secs()),
                 cache_read_input_tokens: None,
                 cache_creation_input_tokens: None,
             });
@@ -288,94 +281,50 @@ impl ExecutionDriver {
         // 2. Stream turn
         let mut run_failed = None;
         let mut run_cancelled = false;
-        let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
 
-        let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
-            &*session,
-            &prompt,
-            timeouts,
-            Some(self.cancel_watch.clone()),
-            wt.machine,
-            &*self.exec,
-            target.override_model.map(str::to_string),
-            self.pricing.clone(),
-            |event| {
-                if let AgentEvent::Text { delta } = event {
-                    let _ = self.notif.emit(&DomainEvent::AgentStream {
-                        feature_id: self.f_id.clone(),
-                        step_execution_id: step_exec.id.clone(),
-                        content: delta.clone(),
-                    });
-                    let _ = self.notif.emit(&DomainEvent::StepProgress {
-                        feature_id: self.f_id.clone(),
-                        step_id: step_exec.step_id.0.clone(),
-                        status: "running".into(),
-                        cost_usd: Some(*accumulated_cost),
-                        tokens: Some(*accumulated_tokens),
-                        wall_clock_secs: Some(step_start.elapsed().as_secs()),
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
-                    });
-                }
-            },
-        )
-        .await;
+        let turn_res = self
+            .run_agent_turn(&session, &prompt, ctx, target, wt, &spend)
+            .await;
 
         let mut produced_artifacts = Vec::new();
         let mut text_buffer = String::new();
 
-        match turn_res {
-            crate::adapters::agent::event_stream::TurnResult::Interrupted => {
-                run_cancelled = true;
+        match apply_turn_result(turn_res, &mut spend) {
+            TurnDisposition::Answered { text, produced } => {
+                produced_artifacts = produced;
+                text_buffer = text;
             }
-            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
-                run_failed = Some(StepOutcome::Failed(descriptive));
-            }
-            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
-                run_failed = Some(StepOutcome::Environmental(descriptive));
-            }
-            crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
-                *accumulated_cost += outcome.cost_usd;
-                *accumulated_tokens += outcome.tokens;
-                produced_artifacts = outcome.produced_artifacts;
-                text_buffer = outcome.text;
-                // Surface cache telemetry from the just-completed
-                // turn on the out-params. The driver loop reads
-                // these for the final `StepProgress` notification
-                // + DB row update so the UI's "Saved $X by cache"
-                // chip has fresh numbers.
-                *out_cache_read = Some(outcome.cache_read_input_tokens);
-                *out_cache_creation = Some(outcome.cache_creation_input_tokens);
-            }
+            TurnDisposition::Cancelled => run_cancelled = true,
+            TurnDisposition::Broken(outcome) => run_failed = Some(outcome),
         }
 
         if run_cancelled || *self.cancel_watch.borrow() {
-            let wall = step_start.elapsed().as_secs();
+            let wall = spend.start.elapsed().as_secs();
             let _ = self.features.step_update(
                 &step_exec.id,
                 &StepExecutionPatch {
                     last_failure_fingerprint: None,
                     iteration_count: None,
                     status: Some("interrupted".to_string()),
-                    cost_usd: Some(Some(*accumulated_cost)),
-                    tokens: Some(Some(*accumulated_tokens)),
+                    cost_usd: Some(Some(*spend.cost)),
+                    tokens: Some(Some(*spend.tokens)),
                     wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                     artifact_path: None,
                     artifact_paths: None,
                     error_message: Some(Some("Execution cancelled by user".to_string())),
-                    cache_read_input_tokens: Some(*out_cache_read),
-                    cache_creation_input_tokens: Some(*out_cache_creation),
+                    cache_read_input_tokens: Some(*spend.cache_read),
+                    cache_creation_input_tokens: Some(*spend.cache_creation),
                 },
             );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
                 step_id: step_exec.step_id.0.clone(),
                 status: "interrupted".into(),
-                cost_usd: Some(*accumulated_cost),
-                tokens: Some(*accumulated_tokens),
+                cost_usd: Some(*spend.cost),
+                tokens: Some(*spend.tokens),
                 wall_clock_secs: Some(wall),
-                cache_read_input_tokens: *out_cache_read,
-                cache_creation_input_tokens: *out_cache_creation,
+                cache_read_input_tokens: *spend.cache_read,
+                cache_creation_input_tokens: *spend.cache_creation,
             });
             let _ = self
                 .git_ops
@@ -493,25 +442,14 @@ impl ExecutionDriver {
                      implementation got wrong.",
                     key = verifier_cfg.verdict_key,
                 );
-                let timeouts =
-                    crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
-                let correction_res = crate::adapters::agent::event_stream::stream_agent_turn(
-                    &*session,
-                    &correction,
-                    timeouts,
-                    Some(self.cancel_watch.clone()),
-                    wt.machine,
-                    &*self.exec,
-                    target.override_model.map(str::to_string),
-                    self.pricing.clone(),
-                    |_event| {},
-                )
-                .await;
+                let correction_res = self
+                    .run_silent_turn(&session, &correction, target, wt)
+                    .await;
                 if let crate::adapters::agent::event_stream::TurnResult::Success(outcome) =
                     correction_res
                 {
-                    *accumulated_cost += outcome.cost_usd;
-                    *accumulated_tokens += outcome.tokens;
+                    *spend.cost += outcome.cost_usd;
+                    *spend.tokens += outcome.tokens;
                     verdict = parse_verdict_text(&outcome.text, &verifier_cfg.verdict_key);
                 }
             }
@@ -699,9 +637,9 @@ impl ExecutionDriver {
                     wt.machine,
                     wt.path,
                     target.override_model,
-                    accumulated_cost,
-                    accumulated_tokens,
-                    step_start,
+                    spend.cost,
+                    spend.tokens,
+                    spend.start,
                 )
                 .await
             {
@@ -711,8 +649,8 @@ impl ExecutionDriver {
                 Ok(ConflictPass::Resolved(billing)) => {
                     // Conflict resolution is always an agent step's last turn,
                     // so its cache counts are the ones the UI should show.
-                    *out_cache_read = Some(billing.cache_read_input_tokens);
-                    *out_cache_creation = Some(billing.cache_creation_input_tokens);
+                    *spend.cache_read = Some(billing.cache_read_input_tokens);
+                    *spend.cache_creation = Some(billing.cache_creation_input_tokens);
                     merge_result = self
                         .git_ops
                         .merge_subtask(
@@ -734,32 +672,32 @@ impl ExecutionDriver {
         }
 
         let outcome = if run_cancelled || *self.cancel_watch.borrow() {
-            let wall = step_start.elapsed().as_secs();
+            let wall = spend.start.elapsed().as_secs();
             let _ = self.features.step_update(
                 &step_exec.id,
                 &StepExecutionPatch {
                     last_failure_fingerprint: None,
                     iteration_count: None,
                     status: Some("interrupted".to_string()),
-                    cost_usd: Some(Some(*accumulated_cost)),
-                    tokens: Some(Some(*accumulated_tokens)),
+                    cost_usd: Some(Some(*spend.cost)),
+                    tokens: Some(Some(*spend.tokens)),
                     wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                     artifact_path: None,
                     artifact_paths: None,
                     error_message: Some(Some("Execution cancelled by user".to_string())),
-                    cache_read_input_tokens: Some(*out_cache_read),
-                    cache_creation_input_tokens: Some(*out_cache_creation),
+                    cache_read_input_tokens: Some(*spend.cache_read),
+                    cache_creation_input_tokens: Some(*spend.cache_creation),
                 },
             );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
                 step_id: step_exec.step_id.0.clone(),
                 status: "interrupted".into(),
-                cost_usd: Some(*accumulated_cost),
-                tokens: Some(*accumulated_tokens),
+                cost_usd: Some(*spend.cost),
+                tokens: Some(*spend.tokens),
                 wall_clock_secs: Some(wall),
-                cache_read_input_tokens: *out_cache_read,
-                cache_creation_input_tokens: *out_cache_creation,
+                cache_read_input_tokens: *spend.cache_read,
+                cache_creation_input_tokens: *spend.cache_creation,
             });
             StepOutcome::Cancelled
         } else if let Some(failed_outcome) = run_failed {
@@ -799,32 +737,32 @@ impl ExecutionDriver {
                     ))
                 }
                 Ok(()) => {
-                    let wall = step_start.elapsed().as_secs();
+                    let wall = spend.start.elapsed().as_secs();
                     let _ = self.features.step_update(
                         &step_exec.id,
                         &StepExecutionPatch {
                             last_failure_fingerprint: None,
                             iteration_count: None,
                             status: Some("completed".to_string()),
-                            cost_usd: Some(Some(*accumulated_cost)),
-                            tokens: Some(Some(*accumulated_tokens)),
+                            cost_usd: Some(Some(*spend.cost)),
+                            tokens: Some(Some(*spend.tokens)),
                             wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                             artifact_path: Some(artifact_path),
                             artifact_paths: Some(artifact_paths),
                             error_message: Some(None),
-                            cache_read_input_tokens: Some(*out_cache_read),
-                            cache_creation_input_tokens: Some(*out_cache_creation),
+                            cache_read_input_tokens: Some(*spend.cache_read),
+                            cache_creation_input_tokens: Some(*spend.cache_creation),
                         },
                     );
                     let _ = self.notif.emit(&DomainEvent::StepProgress {
                         feature_id: self.f_id.clone(),
                         step_id: step_exec.step_id.0.clone(),
                         status: "completed".into(),
-                        cost_usd: Some(*accumulated_cost),
-                        tokens: Some(*accumulated_tokens),
+                        cost_usd: Some(*spend.cost),
+                        tokens: Some(*spend.tokens),
                         wall_clock_secs: Some(wall),
-                        cache_read_input_tokens: *out_cache_read,
-                        cache_creation_input_tokens: *out_cache_creation,
+                        cache_read_input_tokens: *spend.cache_read,
+                        cache_creation_input_tokens: *spend.cache_creation,
                     });
                     // Capture the agent's final summary as a signal for the
                     // memory worker. Cap length to keep the queue lightweight.
