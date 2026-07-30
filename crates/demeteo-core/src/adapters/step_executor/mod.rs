@@ -38,6 +38,12 @@ pub mod preflight;
 pub(crate) mod registry;
 pub(crate) mod retry_policy;
 pub mod scheduler;
+// One strict `ExecutionPort` double for `baseline` and `preflight`, mounted
+// exactly once so the same source file is not loaded into the crate graph
+// twice (`clippy::duplicate-mod`) — the pattern `adapters/agent/test_stubs.rs`
+// already documents.
+#[cfg(test)]
+pub(crate) mod scripted_exec;
 pub mod setup;
 pub(crate) mod spend;
 pub(crate) mod step_status;

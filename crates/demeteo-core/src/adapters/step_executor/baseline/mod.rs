@@ -809,5 +809,5 @@ fn build_unmeasurable_message(
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/infrastructure/step_executor/baseline_tests.rs"]
-mod baseline_tests;
+#[path = "../../../../tests/infrastructure/step_executor/baseline/measure/mod.rs"]
+mod measure_tests;

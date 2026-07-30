@@ -2,111 +2,11 @@
 // (mirrored-tests convention). `super` resolves to that module.
 
 use super::*;
+use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::models::WorktreeStrategy;
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
-use std::collections::HashMap;
-use std::sync::Mutex;
 
 // ── probe_configured_commands ────────────────────────────────────────────────
-
-/// An `ExecutionPort` double that **errors on anything it was not explicitly
-/// told to answer**. AGENTS.md §7 calls out the opposite shape — the e2e
-/// `FakeExec` returning `Ok("")` for every command — as the thing that makes a
-/// suite unable to fail: a probe asserted against a default is asserted against
-/// nothing.
-struct ScriptedExec {
-    answers: HashMap<String, Result<String, String>>,
-    seen: Mutex<Vec<String>>,
-}
-
-impl ScriptedExec {
-    fn new(answers: &[(&str, Result<&str, &str>)]) -> Self {
-        Self {
-            answers: answers
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.to_string(),
-                        match v {
-                            Ok(s) => Ok(s.to_string()),
-                            Err(e) => Err(e.to_string()),
-                        },
-                    )
-                })
-                .collect(),
-            seen: Mutex::new(Vec::new()),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl ExecutionPort for ScriptedExec {
-    async fn test_connection(&self, _m: &str) -> Result<(), String> {
-        Ok(())
-    }
-    async fn run_command_with(
-        &self,
-        _m: &str,
-        cmd: &str,
-        _o: ShellOptions,
-    ) -> Result<String, String> {
-        self.seen.lock().unwrap().push(cmd.to_string());
-        self.answers
-            .get(cmd)
-            .cloned()
-            .unwrap_or_else(|| Err(format!("ScriptedExec: unscripted command `{cmd}`")))
-    }
-    async fn read_file(&self, _m: &str, _p: &str) -> Result<String, String> {
-        Err("unscripted read_file".into())
-    }
-    async fn write_file(&self, _m: &str, _p: &str, _c: &str) -> Result<(), String> {
-        Err("unscripted write_file".into())
-    }
-    async fn write_file_bytes(&self, _m: &str, _p: &str, _c: &[u8]) -> Result<(), String> {
-        Err("unscripted write_file_bytes".into())
-    }
-    async fn get_metadata(
-        &self,
-        _m: &str,
-        _p: &str,
-    ) -> Result<crate::ports::execution::SftpEntry, String> {
-        Err("unscripted get_metadata".into())
-    }
-    async fn list_dir(
-        &self,
-        _m: &str,
-        _p: &str,
-    ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
-        Err("unscripted list_dir".into())
-    }
-    async fn setup_worktree(&self, _m: &str, _r: &str, _b: &str, _s: &str) -> Result<(), String> {
-        Err("unscripted setup_worktree".into())
-    }
-    async fn resolve_home(&self, _m: &str) -> Result<String, String> {
-        Err("unscripted resolve_home".into())
-    }
-    async fn resolve_user(&self, _m: &str) -> Result<String, String> {
-        Err("unscripted resolve_user".into())
-    }
-    async fn control_rpc(
-        &self,
-        _m: &str,
-        _method: &str,
-        _params: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        Err("unscripted control_rpc".into())
-    }
-    fn spawn_interactive(
-        &self,
-        _m: &str,
-        _binary: &str,
-        _args: &[String],
-        _cwd: &str,
-        _env: &std::collections::HashMap<String, String>,
-    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
-        Err("unscripted spawn_interactive".into())
-    }
-}
 
 const T: Duration = Duration::from_secs(5);
 
@@ -153,7 +53,7 @@ async fn nothing_configured_at_all_is_not_configured_and_never_touches_the_port(
     assert!(v.permits_launch(), "an unconfigured harness must not block");
     assert_eq!(v.phase_status(), "skipped");
     assert!(
-        exec.seen.lock().unwrap().is_empty(),
+        exec.commands().is_empty(),
         "nothing to probe means nothing should be run"
     );
 }
@@ -170,7 +70,7 @@ async fn blank_commands_everywhere_are_treated_as_unconfigured() {
     )
     .await;
     assert_eq!(v, PreflightVerdict::NotConfigured);
-    assert!(exec.seen.lock().unwrap().is_empty());
+    assert!(exec.commands().is_empty());
 }
 
 #[tokio::test]
@@ -289,7 +189,7 @@ async fn a_command_of_pure_builtins_asserts_nothing_and_proceeds() {
         v.detail().is_none(),
         "having verified nothing, it should claim nothing"
     );
-    assert!(exec.seen.lock().unwrap().is_empty());
+    assert!(exec.commands().is_empty());
 }
 
 #[tokio::test]
@@ -369,7 +269,7 @@ async fn a_binary_named_by_two_sources_is_probed_exactly_once() {
         }
     );
     assert_eq!(
-        *exec.seen.lock().unwrap(),
+        exec.commands(),
         vec!["command -v npm".to_string()],
         "one distinct tool must cost one probe however many commands name it"
     );
@@ -450,85 +350,18 @@ async fn the_settings_probe_reads_no_repository_directory() {
     // project may be configured for a runner it has never been provisioned on.
     // Naming a directory that does not exist there would fail every probe at
     // spawn time and read as a missing toolchain.
-    struct CwdSpy(Mutex<Vec<Option<String>>>);
-    #[async_trait::async_trait]
-    impl ExecutionPort for CwdSpy {
-        async fn test_connection(&self, _m: &str) -> Result<(), String> {
-            Ok(())
-        }
-        async fn run_command_with(
-            &self,
-            _m: &str,
-            _cmd: &str,
-            o: ShellOptions,
-        ) -> Result<String, String> {
-            self.0.lock().unwrap().push(o.cwd.clone());
-            Ok("/usr/bin/npm".to_string())
-        }
-        async fn read_file(&self, _m: &str, _p: &str) -> Result<String, String> {
-            Err("unscripted read_file".into())
-        }
-        async fn write_file(&self, _m: &str, _p: &str, _c: &str) -> Result<(), String> {
-            Err("unscripted write_file".into())
-        }
-        async fn write_file_bytes(&self, _m: &str, _p: &str, _c: &[u8]) -> Result<(), String> {
-            Err("unscripted write_file_bytes".into())
-        }
-        async fn get_metadata(
-            &self,
-            _m: &str,
-            _p: &str,
-        ) -> Result<crate::ports::execution::SftpEntry, String> {
-            Err("unscripted get_metadata".into())
-        }
-        async fn list_dir(
-            &self,
-            _m: &str,
-            _p: &str,
-        ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
-            Err("unscripted list_dir".into())
-        }
-        async fn setup_worktree(
-            &self,
-            _m: &str,
-            _r: &str,
-            _b: &str,
-            _s: &str,
-        ) -> Result<(), String> {
-            Err("unscripted setup_worktree".into())
-        }
-        async fn resolve_home(&self, _m: &str) -> Result<String, String> {
-            Err("unscripted resolve_home".into())
-        }
-        async fn resolve_user(&self, _m: &str) -> Result<String, String> {
-            Err("unscripted resolve_user".into())
-        }
-        async fn control_rpc(
-            &self,
-            _m: &str,
-            _method: &str,
-            _params: serde_json::Value,
-        ) -> Result<serde_json::Value, String> {
-            Err("unscripted control_rpc".into())
-        }
-        fn spawn_interactive(
-            &self,
-            _m: &str,
-            _binary: &str,
-            _args: &[String],
-            _cwd: &str,
-            _env: &std::collections::HashMap<String, String>,
-        ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
-            Err("unscripted spawn_interactive".into())
-        }
-    }
-
-    let spy = CwdSpy(Mutex::new(Vec::new()));
-    let _ = probe_project_commands(&spy, "local", &test_only("npm test"), T).await;
+    let exec = ScriptedExec::new(&[("command -v npm", Ok("/usr/bin/npm"))]);
+    let _ = probe_project_commands(&exec, "local", &test_only("npm test"), T).await;
+    let opts = exec.options();
+    assert_eq!(opts.len(), 1, "one distinct tool, one probe");
     assert_eq!(
-        *spy.0.lock().unwrap(),
-        vec![None],
+        opts[0].cwd, None,
         "the settings probe must leave the working directory to the adapter"
+    );
+    assert!(
+        opts[0].login_shell && opts[0].interactive,
+        "and it must still be the interactive login shell the harness itself \
+         runs under, or half a developer's toolchain reads as missing"
     );
 }
 
