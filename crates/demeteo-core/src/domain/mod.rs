@@ -29,6 +29,7 @@ pub mod rework;
 pub mod run_control;
 pub mod run_spec;
 pub mod sequence;
+pub mod staged_deliverable;
 pub mod text;
 pub mod usage;
 pub mod verifier;

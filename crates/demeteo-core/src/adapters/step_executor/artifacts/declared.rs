@@ -16,10 +16,12 @@ use std::sync::Arc;
 // Re-exported rather than re-homed: they are decisions about what a step
 // delivered, not I/O, so they live in `domain::artifact_capture` beside the
 // message that fails the step.
+use crate::adapters::step_executor::artifacts::add_exclusions::resolve_add_exclusions;
 use crate::domain::artifact_capture::{
     all_writes_selection, resolve_capture, CaptureOutcome, UnwiredCapture,
 };
 pub(crate) use crate::domain::artifact_capture::{note_undelivered_artifacts, MissingArtifact};
+use crate::domain::staged_deliverable::{judge_stage, normalize_artifact_subdir, StageVerdict};
 
 /// Resolve `declarations` against the `ArtifactProduced` events emitted
 /// by the agent during a step turn. Writes matching artifacts through
@@ -228,98 +230,18 @@ pub async fn commit_worktree_changes(
     commit_artifacts: bool,
     non_artifact_writes: &[String],
 ) -> Result<String, String> {
-    // Build the `git add` invocation. When the user has opted out
-    // of committing artifacts, use a pathspec exclusion to keep
-    // them out of the index. The subdir is repo-relative, so we
-    // can drop a leading `./` and trim trailing slashes for a
-    // cleaner pathspec.
-    let trimmed = artifact_subdir.trim().trim_start_matches("./");
-    let trimmed = trimmed.trim_end_matches('/');
-
-    // Probe the worktree for the exclusions the `git add` needs, in one
-    // round trip. Two independent rules, and a shared gate:
-    //
-    //   * `artifact_subdir`, when the caller opted out of committing
-    //     artifacts.
-    //   * Any of `paths::DEPENDENCY_CACHE_DIRS` that is a symlink in
-    //     *this* worktree — i.e. one `provision_subtask_worktree` linked
-    //     in from the primary checkout. A symlink standing in for a
-    //     directory isn't recognized against a trailing-slash
-    //     `.gitignore` pattern (see `paths::DEPENDENCY_CACHE_DIRS`), so
-    //     without the exclusion the symlink itself — an absolute host
-    //     path — gets staged and committed onto the feature branch.
-    //     Testing `-L` (rather than excluding the names unconditionally)
-    //     means a project that legitimately tracks a directory sharing
-    //     one of these names (e.g. Go's vendored `vendor/`) is
-    //     unaffected — we only ever skip our own symlinks, never a real
-    //     tracked directory.
-    //
-    // The shared gate is `check-ignore`: a candidate git already ignores
-    // must NOT be excluded. Naming a path in a pathspec makes git treat
-    // it as explicitly requested even when the pathspec is negative, so
-    // `git add -A -- ':!node_modules'` fails outright ("The following
-    // paths are ignored by one of your .gitignore files") whenever
-    // `node_modules` is gitignored — which is the common case, since a
-    // `.gitignore` entry without a trailing slash matches our symlink
-    // too. The exclusion is redundant for an ignored path anyway (`git
-    // add -A` never stages one), so dropping it costs nothing.
-    //
-    // `; true` at the end matters: the loop's exit status would
-    // otherwise be that of its last test, which is false (non-zero)
-    // whenever the final candidate isn't excluded — `run_command` treats
-    // any non-zero exit as `Err` and the whole exclusion list would be
-    // silently dropped.
-    let not_ignored = |p: &str| {
-        // `check-ignore -q` exits 0 when ignored and 1 when not; only a
-        // definite 1 clears a candidate for exclusion, so an error exit
-        // (128) leaves it out rather than reintroducing the failure above.
-        format!(
-            "git check-ignore -q -- {p} 2>/dev/null; [ $? -eq 1 ] && echo {p}",
-            p = p,
-        )
-    };
-    let artifact_probe = if !commit_artifacts && !trimmed.is_empty() {
-        format!("{}; ", not_ignored(&paths::shell_escape_posix(trimmed)))
-    } else {
-        String::new()
-    };
-    // `cd` guards with `|| exit 1` rather than `&&`: the `;`-separated
-    // probes that follow would otherwise still run, in the wrong
-    // directory, and report exclusions for the wrong repo.
-    let exclusion_probe = format!(
-        "cd {wt} || exit 1; {artifact_probe}for d in {dirs}; do [ -L \"$d\" ] && {{ {gate}; }}; done; true",
-        wt = paths::shell_escape_posix(worktree_root),
-        dirs = crate::paths::DEPENDENCY_CACHE_DIRS.join(" "),
-        gate = not_ignored("\"$d\""),
-    );
-    let mut exclusions = String::new();
-    match exec.run_command(machine_id, &exclusion_probe).await {
-        Ok(out) => {
-            for name in out.lines().map(str::trim).filter(|s| !s.is_empty()) {
-                exclusions.push_str(&format!(" ':!{name}'"));
-            }
-        }
-        Err(e) => {
-            // The probe realistically only fails when the transport is
-            // gone, in which case the `git add` below fails too and the
-            // step surfaces that instead. Keep the artifact exclusion so
-            // a probe failure can never quietly commit reports into the
-            // PR.
-            tracing::warn!(
-                worktree = %worktree_root,
-                error = %e,
-                "commit_worktree_changes: exclusion probe failed; falling back to the artifact exclusion alone",
-            );
-            if !commit_artifacts && !trimmed.is_empty() {
-                exclusions.push_str(&format!(" ':!{trimmed}'"));
-            }
-        }
-    }
-    let add_paths = if exclusions.is_empty() {
-        String::new()
-    } else {
-        format!(" --{exclusions}")
-    };
+    // When the user has opted out of committing artifacts, a pathspec
+    // exclusion keeps them out of the index. The subdir is repo-relative, so
+    // the leading `./` and trailing slashes go for a cleaner pathspec.
+    let trimmed = normalize_artifact_subdir(artifact_subdir);
+    let add_paths = resolve_add_exclusions(
+        exec,
+        machine_id,
+        worktree_root,
+        artifact_subdir,
+        commit_artifacts,
+    )
+    .await;
     let add_cmd = format!(
         "git -C {} add -A{add_paths}",
         paths::shell_escape_posix(worktree_root),
@@ -352,44 +274,25 @@ pub async fn commit_worktree_changes(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
-        if staged.is_empty() && !non_artifact_writes.is_empty() {
-            tracing::warn!(
-                worktree = %worktree_root,
-                message = %message,
-                expected_non_artifact_writes = ?non_artifact_writes,
-                "commit_worktree_changes: stage is empty but the agent reported writes outside `{}` — the agent's deliverable did not reach the index",
-                artifact_subdir,
-            );
-        } else if !non_artifact_writes.is_empty() && !staged.is_empty() {
-            let trimmed_subdir = artifact_subdir
-                .trim()
-                .trim_start_matches("./")
-                .trim_end_matches('/');
-            let stage_has_non_artifact = staged.iter().any(|p| !is_under_prefix(p, trimmed_subdir));
-            if !stage_has_non_artifact {
-                // Fail the step instead of silently producing a commit
-                // that contains only the summary report. The
-                // historical docs-update bug was exactly this: the
-                // agent emitted the real doc body under
-                // `artifacts/s-draft.md` instead of `docs/<area>/<topic>.md`,
-                // and the orchestrator happily committed the summary
-                // report (or, with `commit_artifacts=false`, silently
-                // produced an empty commit). Surfacing this as a
-                // `StepOutcome::Failed` lets the retry loop feed the
-                // failure reason back into `{{retry_feedback}}` so the
-                // next attempt is directed at the real repo path.
-                // See d9dcd53 for the original warn-only behaviour and
-                // the docs-update workflow's two-distinct-outputs
-                // prompt for the agent-side mitigation.
-                let reason = format!(
-                    "agent stranded the deliverable under `{}` instead of writing it to \
-                     the real repo path. Stage contains only artifact paths \
-                     ({:?}) while the agent reported writes outside the report subdir \
-                     ({:?}). Re-read the survey's 'Files to Create' / 'Files to Update' \
-                     sections and write the doc body to the real repo path (e.g. \
-                     `docs/<area>/<topic>.md`), NOT to {}/s-*.md.",
-                    trimmed_subdir, staged, non_artifact_writes, trimmed_subdir,
+        match judge_stage(&staged, non_artifact_writes, trimmed) {
+            StageVerdict::Ok => {}
+            StageVerdict::EmptyStage => {
+                tracing::warn!(
+                    worktree = %worktree_root,
+                    message = %message,
+                    expected_non_artifact_writes = ?non_artifact_writes,
+                    "commit_worktree_changes: stage is empty but the agent reported writes outside `{}` — the agent's deliverable did not reach the index",
+                    artifact_subdir,
                 );
+            }
+            // Fail the step instead of silently producing a commit that
+            // contains only the summary report. Surfacing this as a
+            // `StepOutcome::Failed` lets the retry loop feed the failure
+            // reason back into `{{retry_feedback}}` so the next attempt is
+            // directed at the real repo path. See d9dcd53 for the original
+            // warn-only behaviour and the docs-update workflow's
+            // two-distinct-outputs prompt for the agent-side mitigation.
+            StageVerdict::Stranded { reason } => {
                 tracing::error!(
                     worktree = %worktree_root,
                     message = %message,
@@ -428,17 +331,6 @@ pub async fn commit_worktree_changes(
                 eprintln!("[commit_worktree_changes] {}", out.trim());
             }
         })
-}
-
-/// True when `path` sits at or under the directory `prefix` (a
-/// directory path with no trailing slash, e.g. `"artifacts"`).
-/// Matches both the directory itself (`"artifacts"`) and any file
-/// inside it (`"artifacts/s-draft.md"`).
-pub(crate) fn is_under_prefix(path: &str, prefix: &str) -> bool {
-    if prefix.is_empty() {
-        return false;
-    }
-    path == prefix || path.starts_with(&format!("{prefix}/"))
 }
 
 fn is_likely_binary(content: &str) -> bool {

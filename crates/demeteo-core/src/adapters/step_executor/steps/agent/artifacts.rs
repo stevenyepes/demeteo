@@ -1,10 +1,11 @@
 use crate::adapters::step_executor::artifacts::{
-    commit_worktree_changes, compute_git_diff, is_under_prefix, read_worktree_file,
-    resolve_declared_artifacts, MissingArtifact,
+    commit_worktree_changes, compute_git_diff, read_worktree_file, resolve_declared_artifacts,
+    MissingArtifact,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::artifact::Artifact;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::staged_deliverable::{is_under_prefix, normalize_artifact_subdir};
 
 use super::context::{AgentWorktree, TurnBaseline};
 
@@ -39,11 +40,7 @@ impl ExecutionDriver {
         // asked the agent to create or modify. We capture them
         // before consuming `changed` in the loop below so they can
         // be forwarded to `commit_worktree_changes`'s guard log.
-        let trimmed_subdir = self
-            .artifact_subdir
-            .trim()
-            .trim_start_matches("./")
-            .trim_end_matches('/');
+        let trimmed_subdir = normalize_artifact_subdir(&self.artifact_subdir);
         let non_artifact_writes: Vec<String> = changed
             .iter()
             .filter(|p| !is_under_prefix(p, trimmed_subdir))
