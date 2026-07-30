@@ -7,15 +7,18 @@
 //! is on the default `PATH` of both a local `sh -c` and a bare SSH channel, and
 //! no login profile is consulted, so local and SSH capture identically (D2). No
 //! call here relies on ambient env or ambient cwd.
-use crate::domain::artifact::{Artifact, ArtifactCapture, ArtifactDecl, ArtifactSource};
+use crate::domain::artifact::{Artifact, ArtifactDecl, ArtifactSource};
 use crate::paths;
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::execution::ExecutionPort;
 use std::sync::Arc;
 
-// The two are re-exported rather than re-homed: they are decisions about
-// what a step delivered, not I/O, so they live in
-// `domain::artifact_capture` beside the message that fails the step.
+// Re-exported rather than re-homed: they are decisions about what a step
+// delivered, not I/O, so they live in `domain::artifact_capture` beside the
+// message that fails the step.
+use crate::domain::artifact_capture::{
+    all_writes_selection, resolve_capture, CaptureOutcome, UnwiredCapture,
+};
 pub(crate) use crate::domain::artifact_capture::{note_undelivered_artifacts, MissingArtifact};
 
 /// Resolve `declarations` against the `ArtifactProduced` events emitted
@@ -41,51 +44,8 @@ pub(crate) fn resolve_declared_artifacts(
     let mut missing = Vec::new();
 
     for decl in declarations {
-        let matched: Option<&Artifact> = match &decl.capture {
-            ArtifactCapture::ByName { name } => produced
-                .iter()
-                .find(|a| a.name == *name || strip_extension(&a.name).is_some_and(|s| s == *name)),
-            ArtifactCapture::LastWriteTo { path } => produced
-                .iter()
-                .rfind(|a| matches!(&a.source, ArtifactSource::ToolWrite { path: p } if p == path)),
-            ArtifactCapture::AllWrites => {
-                // Collect all tool-write artifacts. We still produce the
-                // named artifacts below; the `AllWrites` catch-all emits
-                // one artifact per unique path.
-                continue; // handled separately below
-            }
-            ArtifactCapture::ChangedFiles { .. } => {
-                // ChangedFiles artifacts are detected directly via git diff
-                // in agent.rs and added to produced_artifacts there. They
-                // are named by their file basenames, so they can be matched
-                // here by name if needed. We just continue — they are already
-                // in the produced list.
-                continue;
-            }
-            ArtifactCapture::Diff { .. } => {
-                // Diff artifacts are derived at materialisation time by
-                // `GitOpsHelper`. No agent event matches them. The
-                // orchestrator should synthesise them at TurnComplete
-                // when `GitOpsHelper` methods are available (next step).
-                eprintln!(
-                    "[artifacts] step={} decl={}: Diff declaration skipped — GitOpsHelper not yet wired",
-                    step_id, decl.name,
-                );
-                continue;
-            }
-            ArtifactCapture::Worktree { .. } => {
-                // Worktree-ref artifacts are synthesised by the executor
-                // from branch/machine state. No agent event matches them.
-                eprintln!(
-                    "[artifacts] step={} decl={}: Worktree declaration skipped — GitOpsHelper not yet wired",
-                    step_id, decl.name,
-                );
-                continue;
-            }
-        };
-
-        if let Some(artifact) = matched {
-            match store.put(feature_id, step_id, artifact) {
+        match resolve_capture(decl, produced) {
+            CaptureOutcome::Store(artifact) => match store.put(feature_id, step_id, artifact) {
                 Ok(reference) => refs.push(reference),
                 Err(e) => {
                     tracing::warn!(
@@ -95,57 +55,43 @@ pub(crate) fn resolve_declared_artifacts(
                         "resolve_declared_artifacts: failed to store artifact",
                     );
                 }
+            },
+            CaptureOutcome::Skip(None) => {}
+            // The orchestrator should synthesise these at TurnComplete when
+            // `GitOpsHelper` methods are available (next step).
+            CaptureOutcome::Skip(Some(UnwiredCapture::Diff)) => {
+                eprintln!(
+                    "[artifacts] step={} decl={}: Diff declaration skipped — GitOpsHelper not yet wired",
+                    step_id, decl.name,
+                );
             }
-        } else {
-            // D3: a declared capture (e.g. `LastWriteTo`) that matched no
-            // `ArtifactProduced` event is a surfaced diagnostic, not a silent
-            // skip — this is the signal that the step "succeeded" but its
-            // declared deliverable never materialised. Only `ByName` /
-            // `LastWriteTo` reach this branch (catch-all captures `continue`
-            // above), so every entry here is a genuinely missing deliverable
-            // the caller will fail the step on.
-            let detail = match &decl.capture {
-                ArtifactCapture::LastWriteTo { path } => {
-                    format!("expected a write to `{}`", path)
-                }
-                ArtifactCapture::ByName { name } => {
-                    format!("expected an artifact named `{}`", name)
-                }
-                // Unreachable — the other captures `continue` before here —
-                // but keep it total so a future capture kind is handled.
-                _ => "no matching agent output".to_string(),
-            };
-            tracing::warn!(
-                step = %step_id,
-                decl = %decl.name,
-                capture = ?decl.capture,
-                "resolve_declared_artifacts: no ArtifactProduced event matched this declaration — failing the step",
-            );
-            missing.push(MissingArtifact {
-                name: decl.name.clone(),
-                detail,
-            });
+            CaptureOutcome::Skip(Some(UnwiredCapture::Worktree)) => {
+                eprintln!(
+                    "[artifacts] step={} decl={}: Worktree declaration skipped — GitOpsHelper not yet wired",
+                    step_id, decl.name,
+                );
+            }
+            CaptureOutcome::Missing(entry) => {
+                tracing::warn!(
+                    step = %step_id,
+                    decl = %decl.name,
+                    capture = ?decl.capture,
+                    "resolve_declared_artifacts: no ArtifactProduced event matched this declaration — failing the step",
+                );
+                missing.push(entry);
+            }
         }
     }
 
-    // Handle `AllWrites` catch-all: collect every unique ToolWrite path.
-    let has_all_writes = declarations
-        .iter()
-        .any(|d| matches!(d.capture, ArtifactCapture::AllWrites));
-    if has_all_writes {
-        let mut seen_paths = std::collections::HashSet::new();
-        for artifact in produced {
-            if let ArtifactSource::ToolWrite { path } = &artifact.source {
-                if seen_paths.insert(path.clone()) {
-                    match store.put(feature_id, step_id, artifact) {
-                        Ok(reference) => refs.push(reference),
-                        Err(e) => {
-                            eprintln!(
-                            "[artifacts] step={} path={}: Failed to store AllWrites artifact: {}",
-                            step_id, path, e,
-                        );
-                        }
-                    }
+    for artifact in all_writes_selection(declarations, produced) {
+        match store.put(feature_id, step_id, artifact) {
+            Ok(reference) => refs.push(reference),
+            Err(e) => {
+                if let ArtifactSource::ToolWrite { path } = &artifact.source {
+                    eprintln!(
+                        "[artifacts] step={} path={}: Failed to store AllWrites artifact: {}",
+                        step_id, path, e,
+                    );
                 }
             }
         }
@@ -523,13 +469,6 @@ fn head_str(s: &str, max: usize) -> &str {
         end -= 1;
     }
     &s[..end]
-}
-
-fn strip_extension(name: &str) -> Option<String> {
-    std::path::Path::new(name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
 }
 
 #[cfg(test)]
