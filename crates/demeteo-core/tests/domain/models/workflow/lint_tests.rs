@@ -389,3 +389,123 @@ fn legacy_parallel_kind_is_treated_as_a_sequence_step() {
         lint_workflow_steps(&steps)
     );
 }
+
+// ── A verify step must not produce its own evidence (decision 44) ────────────
+
+fn verify_step_running(cmd_token: &str) -> Vec<StepConfig> {
+    let mut s = step("s-validate", StepCapability::Verify, Some("s-impl"));
+    s.prompt_template = Some(format!(
+        "You are a QA engineer. [attached — s-impl]\nRun the suite: {cmd_token}"
+    ));
+    s.verifier = Some(VerifierConfig {
+        agent_kind: None,
+        model: None,
+        effort: None,
+        instructions: "Return pass or fail.".into(),
+        harness_names: Vec::new(),
+        verdict_key: "verdict".into(),
+    });
+    vec![step("s-impl", StepCapability::Implement, None), s]
+}
+
+#[test]
+fn a_verify_step_told_to_run_the_test_command_is_flagged() {
+    let errs = lint_workflow_steps(&verify_step_running("{{test_command}}"));
+    assert!(
+        errs.iter().any(|e| e.contains("test_command")),
+        "a verify step that runs its own harness produces the evidence it is \
+         judging, and does it under a write fence that forbids the writes a \
+         build needs: {errs:?}"
+    );
+}
+
+#[test]
+fn a_verify_step_told_to_run_the_build_command_is_flagged() {
+    let errs = lint_workflow_steps(&verify_step_running("{{build_command}}"));
+    assert!(errs.iter().any(|e| e.contains("build_command")), "{errs:?}");
+}
+
+#[test]
+fn a_verify_step_told_to_install_dependencies_is_flagged() {
+    // The bugfix smoke step's opening instruction, which the `Verify`
+    // capability's `ArtifactsOnly` fence denies outright.
+    let errs = lint_workflow_steps(&verify_step_running("npm ci"));
+    assert!(errs.iter().any(|e| e.contains("npm ci")), "{errs:?}");
+}
+
+/// The rule is about *producing evidence for a verdict*, not about commands.
+/// An `Implement` step running the suite for its own feedback is fine — it is
+/// not the thing judging the result, and its capability grants the writes.
+#[test]
+fn an_implement_step_running_the_test_command_is_clean() {
+    let mut s = step("s-impl", StepCapability::Implement, None);
+    s.prompt_template = Some("Run the tests before declaring done: {{test_command}}".into());
+    let steps = vec![s];
+    assert!(
+        lint_workflow_steps(&steps).is_empty(),
+        "{:?}",
+        lint_workflow_steps(&steps)
+    );
+}
+
+/// A verify step that reads the orchestrator's harness output is the shape
+/// this rule exists to steer authors toward.
+#[test]
+fn a_verify_step_reading_the_harness_output_is_clean() {
+    let mut s = step("s-validate", StepCapability::Verify, Some("s-impl"));
+    s.prompt_template = Some(
+        "You do NOT re-run the build or tests: the orchestrator has already executed \
+         the harness and its results are appended. [attached — s-impl]"
+            .into(),
+    );
+    s.verifier = Some(VerifierConfig {
+        agent_kind: None,
+        model: None,
+        effort: None,
+        instructions: "Return pass, fail, or environment.".into(),
+        harness_names: Vec::new(),
+        verdict_key: "verdict".into(),
+    });
+    let steps = vec![step("s-impl", StepCapability::Implement, None), s];
+    assert!(
+        lint_workflow_steps(&steps).is_empty(),
+        "{:?}",
+        lint_workflow_steps(&steps)
+    );
+}
+
+// ── The shipped starters are the fixture set ────────────────────────────────
+//
+// Every other test here builds its own steps, which means the rules only ever
+// bind fixtures — and a rule no shipped workflow is checked against is a rule
+// the product can violate indefinitely. `s-smoke` did: a `Verify`-capability
+// step whose prompt ordered `npm ci`, under a fence that denies it.
+
+#[test]
+fn every_shipped_starter_lints_clean() {
+    const STARTERS: [&str; 7] = [
+        "bugfix-pipeline",
+        "ci-fix",
+        "docs-update",
+        "experiment",
+        "refactor",
+        "simple-task",
+        "standard-feature-pipeline",
+    ];
+    for name in STARTERS {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src-tauri/workflows")
+            .join(format!("{name}.json"));
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read starter {}: {e}", path.display()));
+        let doc: serde_json::Value = serde_json::from_str(&body).expect("starter parses");
+        let steps: Vec<StepConfig> =
+            serde_json::from_value(doc["steps"].clone()).expect("steps parse as StepConfig");
+
+        let errors = lint_workflow_steps(&steps);
+        assert!(
+            errors.is_empty(),
+            "shipped starter '{name}' violates a structural lint rule: {errors:#?}"
+        );
+    }
+}

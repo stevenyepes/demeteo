@@ -1,7 +1,7 @@
 {
   "id": "wf-starter-bugfix",
   "name": "Bugfix Pipeline",
-  "description": "Reproduce the bug, confirm the root cause with the user, apply a targeted fix, smoke test, verify with the full regression suite, then ship. Best for isolated, well-scoped bugs.",
+  "description": "Reproduce the bug, confirm the root cause with the user, scope the fix into tickets, apply it, then gate on the project's test harness run by the orchestrator before shipping. Best for isolated, well-scoped bugs.",
   "is_starter": true,
   "steps": [
     {
@@ -53,14 +53,36 @@
       "max_iterations": null
     },
     {
-      "id": "s-fix",
+      "id": "s-plan-fix",
       "kind": "agent",
+      "title": "Decompose The Fix",
+      "agent_kind": null,
+      "prompt_template": "You are a technical lead turning a confirmed diagnosis into the ordered list of tickets the fix step will execute \u2014 one fresh agent per ticket, in the order you give, each committing before the next starts.\n\nBug report: {{feature_description}}\nProject conventions: {{project_conventions}}\nDiagnosis \u2014 the root cause and fix boundary you are decomposing: [attached \u2014 s-reproduce]\n\nIf this is a retry, revise the existing `artifacts/task-list.json` in light of the feedback rather than rewriting from scratch.\n\n## Most bugs are one ticket\nThis is a bugfix pipeline, not a feature pipeline. The diagnosis names a root cause and a fix boundary; if one agent can close it in one sitting, emit exactly one ticket and stop. Splitting a surgical fix across tickets makes each agent see less of the change than the bug spans, which is how a one-line fix becomes three partial ones.\n\nEmit more than one ticket only when the diagnosis genuinely names separable work \u2014 for example the fix plus a distinct migration, or the same root cause reached through two independent call paths that must each be closed. If you cannot name why a ticket is separable, it is not.\n\n## Every ticket owes\n- Scope inside the diagnosis's Fix Boundary. Files the diagnosis marks out of scope stay untouched.\n- A self-contained `description`: the agent implementing it sees the diagnosis and the list of already-completed tickets, but none of your reasoning. Name the files, the approach, and what it must not touch.\n- 1\u20133 binary `acceptance` statements \u2014 its definition of done. The reproduction case passing is an acceptance criterion of whichever ticket closes the root cause.\n- A `test_command` that proves it done.\n- `blocked_by`: ids of earlier tickets in this list it builds on; `[]` if none.\n\n## Output (required)\nWrite `artifacts/task-list.json` \u2014 create the file. Producing it only as your reply is NOT sufficient; the file must exist.\n\n```json\n{\"kind\": \"greenfield\", \"tasks\": [{\"id\": \"fix-1\", \"title\": \"...\", \"description\": \"...\", \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"acceptance\": [\"...\"], \"blocked_by\": []}]}\n```\n\n## Stop condition\nYou are done when `artifacts/task-list.json` exists, parses as the shape above, every ticket sits inside the diagnosis's Fix Boundary, and the list order respects every `blocked_by` edge.\n\n{{retry_feedback_section}}",
+      "capability": "artifacts",
+      "allow_shell": true,
+      "artifacts": [
+        {
+          "name": "task-list",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/task-list.json"
+          },
+          "mode": "full"
+        }
+      ],
+      "on_failure": null,
+      "max_iterations": 2,
+      "rework_prompt_template": "You are a technical lead scoping a **rework cycle**. The fix has already been applied: every ticket from the previous cycle is written, tested, and committed on the feature branch. The regression check then rejected the result, and your job is to turn that rejection into the smallest ordered list of tickets that closes it.\n\nBug report: {{feature_description}}\nProject conventions: {{project_conventions}}\nDiagnosis \u2014 the root cause originally confirmed: [attached \u2014 s-reproduce]\nRegression report \u2014 what was rejected and why: [attached \u2014 s-verify]\n\nRejected by: `{{retry_origin}}` (rework cycle {{rework_cycle}})\n\nFiles the reviewer implicated:\n{{implicated_files}}\n\nFailing tests, if any:\n{{failing_tests}}\n\n## What this is NOT\nThis is **not** a re-decomposition of the fix. The previous cycle's code exists and is committed; re-emitting it would send a fresh agent to redo, from scratch, a change that already landed \u2014 at full cost, with a real chance of reverting the part that was correct. Do not restate or \"consolidate\" tickets from the previous cycle.\n\n## What to emit\nOne ticket per distinct regression or unclosed defect the report named. For each:\n- Read the relevant code as it exists **now** before writing the ticket. The report describes symptoms; you are specifying the fix.\n- Scope it to the change that closes the finding \u2014 not the subsystem around it.\n- Quote the reviewer's own words for what is wrong.\n- Give it a `test_command` that would have caught it.\n\nFailures the report marks **pre-existing** are not this feature's defect and get no ticket. Neither does a finding the report could not evidence because the project's harness does not run the required command \u2014 that is a project-configuration gap, not something a ticket can fix. Say so by writing an empty `tasks` array with a `notes` field explaining why. That is a supported answer, not a failure: it ends the run and puts the decision in front of a human, which is the only place a configuration gap can be resolved. Inventing a ticket to have something to emit costs a full cycle and closes nothing.\n\n## Output (required)\nWrite `artifacts/task-list.json` \u2014 create the file. Producing it only as your reply is NOT sufficient.\n\n```json\n{\"kind\": \"rework\", \"tasks\": [{\"id\": \"rework-1-fix-...\", \"title\": \"...\", \"description\": \"...\", \"files\": [\"src/foo.rs\"], \"test_command\": \"...\", \"acceptance\": [\"...\"], \"blocked_by\": []}]}\n```\n\n- `kind`: `\"rework\"` \u2014 **required**, and load-bearing. It tells the fix step the branch already carries a landed fix and these tickets sit on top of it. Omit it and every agent is told it is starting from an empty tree.\n- `id`: kebab-case, unique, and **distinct from every ticket id in the previous cycle**.\n- `blocked_by`: only ids from *this* list.\n- `notes`: optional prose. **Required when `tasks` is empty**, where it is the only thing the human stopping to look at this run will see.\n\nWhen no ticket is warranted, that file is exactly:\n\n```json\n{\"kind\": \"rework\", \"tasks\": [], \"notes\": \"...\"}\n```\n\n## Stop condition\nYou are done when `artifacts/task-list.json` exists, declares `\"kind\": \"rework\"`, and holds one well-scoped ticket per real defect the report named \u2014 and nothing else. An empty `tasks` array with a `notes` explanation also satisfies this when no real defect was named."
+    },
+    {
+      "id": "s-fix",
+      "kind": "sequence",
       "title": "Apply Fix",
       "agent_kind": null,
-      "prompt_template": "You are a senior software engineer applying a surgical fix.\n\nBug report: {{feature_description}}\nDiagnosis artifact: [attached \u2014 from s-reproduce]\n\n## Rules (non-negotiable)\n1. Touch ONLY the files listed in the Fix Boundary section of the diagnosis artifact.\n2. Do NOT refactor unrelated code \u2014 one bug, one fix.\n3. Make the reproduction test case pass.\n4. Do NOT break any existing tests.\n5. Run the reproduction test immediately after your fix: {{test_command}}\n\n## Reflection\nAfter applying the fix, re-read the Root Cause section of the diagnosis artifact. Verify your change addresses the stated cause directly. If it does not, revise before declaring done.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} \u2014 verification failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt \u2014 ignore this section.\n\n## Output artifact\n- Files changed (list)\n- The specific lines modified (diff summary)\n- Reproduction test result: PASS / FAIL\n- Confidence: HIGH / MEDIUM / LOW (with reason)\n\n## Stop condition\nYou are done when the reproduction test passes and the output artifact is written.",
+      "prompt_template": "You are a senior software engineer applying a surgical fix. The bug has been diagnosed and the fix decomposed into an ordered ticket list; you have been assigned exactly ONE ticket from it.\n\nBug report: {{feature_description}}\nDiagnosis \u2014 root cause and fix boundary: [attached \u2014 s-reproduce]\n\n## Your ticket ({{task_index}} of {{task_total}}): {{task_title}}\n{{task_description}}\n\nFiles you are expected to touch: {{task_files}}\n\n## Acceptance criteria (your definition of done)\n{{task_acceptance}}\n\n## Already done (committed, on your branch, by earlier agents)\n{{completed_tasks}}\n\nYou are working in a worktree that ALREADY CONTAINS the committed work of every ticket above. Read it before you start. Build on it \u2014 do not reimplement it, and do not revert it.\n\n## Rules (non-negotiable)\n1. Stay inside the diagnosis's Fix Boundary. Files it marks out of scope stay untouched.\n2. Do NOT refactor unrelated code \u2014 one bug, one fix.\n3. Implement your ticket and only your ticket. Later tickets in the list are somebody else's job.\n4. Do NOT break any existing tests.\n5. Run your ticket's tests before declaring done: {{test_command}}\n6. Do NOT commit. The orchestrator commits your work when your turn ends.\n\n## Reflection\nAfter applying the fix, re-read the Root Cause section of the diagnosis. Verify your change addresses the stated cause directly rather than masking its symptom. If it does not, revise before declaring done.\n\n{{retry_feedback_section}}\n\n## Stop condition\nYou are done when every acceptance criterion above holds and your ticket's tests pass.\n\n## Output\n- Files changed, and the specific lines modified\n- Each acceptance criterion: MET / NOT MET\n- Test results (pass/fail counts)\n- Anything a later ticket needs to know",
       "capability": "implement",
-      "on_failure": "s-reproduce",
-      "max_iterations": 3,
+      "on_failure": "s-gate-confirm",
+      "max_iterations": 2,
       "artifacts": [
         {
           "name": "changed-files",
@@ -69,40 +91,21 @@
           },
           "mode": "summary_only"
         }
-      ]
-    },
-    {
-      "id": "s-smoke",
-      "kind": "agent",
-      "title": "Smoke Test",
-      "agent_kind": null,
-      "prompt_template": "You are a QA engineer running a targeted smoke test before the full regression suite.\n\nFix artifact: [attached \u2014 from s-fix]\n\n## Your task\n0. **Environment setup** \u2014 before running any test or build, ensure the project's dependencies are installed.\n   - Detect the package manager / toolchain from repository markers (`package.json` + lockfile, `pyproject.toml` / `requirements*.txt`, `Cargo.toml`, `go.mod`, etc.).\n   - Skip the install only if a marker directory (`node_modules/`, `target/`, `.venv/`, \u2026) already exists for the project.\n   - Run the appropriate install command, preferring locked installs:\n     - Node + `package-lock.json` \u2192 `npm ci`\n     - Node + `pnpm-lock.yaml` \u2192 `pnpm install --frozen-lockfile`\n     - Node + `yarn.lock` \u2192 `yarn install --frozen-lockfile`\n     - Python + `requirements.txt` \u2192 `pip install -r requirements.txt`\n     - Python + `pyproject.toml` \u2192 `pip install -e .` (or project-defined extras)\n     - Rust \u2192 no-op (note in the artifact: `Environment setup: SKIPPED (cargo fetches deps on first test run)`)\n     - Go \u2192 `go mod download`\n   - If no package manager is detected, record `Environment setup: NONE (no package manager detected)` and continue.\n   - Record the outcome as a new bullet in the output artifact: `Environment setup: <command> \u2014 PASS / FAIL`.\n1. Run the reproduction test case: {{test_command}}. Confirm it passes.\n2. Run the tests for the files touched by the fix.\n3. Run a basic build/compile check: {{build_command}}\n\n## Output artifact\n- Environment setup: <command> \u2014 PASS / FAIL (or `SKIPPED` / `NONE` per the rules above)\n- Reproduction test: PASS / FAIL\n- Touched-file tests: X passed, Y failed\n- Build: PASS / FAIL\n- **Proceed to full regression?** YES / NO (with reason)\n\n## Stop condition\nOutput the artifact and stop. Do NOT apply any fixes in this step.\n\nWrite your complete output to `artifacts/s-smoke.md`.",
-      "capability": "verify",
-      "on_failure": null,
-      "max_iterations": 1,
-      "artifacts": [
-        {
-          "name": "smoke",
-          "capture": {
-            "kind": "last_write_to",
-            "path": "artifacts/s-smoke.md"
-          },
-          "mode": "full"
-        }
-      ]
+      ],
+      "task_list_from": "s-plan-fix"
     },
     {
       "id": "s-verify",
       "kind": "agent",
       "title": "Full Regression Check",
       "agent_kind": null,
-      "prompt_template": "You are a QA engineer running the full regression suite. You VERIFY only \u2014 you do not modify source code. If the fix introduced a regression, you report it precisely; the fix step addresses it on retry.\n\nSmoke test artifact: [attached \u2014 from s-smoke]\n\n## Pre-condition\nCheck the smoke test artifact. If 'Proceed to full regression?' is NO, output a BLOCKED status and stop \u2014 do not run the full suite.\n\n## Task (if smoke passed)\nRun the full test suite: {{test_command}}\n\nFor any test that fails:\n1. Determine if the failure is caused by the fix (regression) or was already failing (pre-existing).\n2. If it is a regression: do NOT fix it yourself. Describe precisely which test fails and why, so the fix step can resolve it on retry; mark the overall verdict BLOCKED.\n3. If it is pre-existing: document it in the artifact but do not fix it.\n\n## Output artifact\n- Full suite result: X passed, Y failed, Z skipped\n- Regressions introduced: list (should be empty; describe each precisely if present)\n- Pre-existing failures: list\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the full suite has run and the artifact is written.\n\nWrite your complete output to `artifacts/s-verify.md`.",
+      "prompt_template": "You are a QA engineer running the final regression gate before this fix ships. You VERIFY only \u2014 you do not modify source code, and you do NOT run the build or the tests: the orchestrator has already executed this project's test harness in this worktree and its results are appended to this prompt under 'Harness Results'. Treat that output as authoritative.\n\nBug report: {{feature_description}}\nDiagnosis \u2014 the root cause and the reproduction case: [attached \u2014 s-reproduce]\nFix summaries: [attached \u2014 all s-fix summaries]\n\n## Verification sequence\n1. **Interpret the harness output** \u2014 pass/fail counts, failing tests verbatim.\n2. **Confirm the reproduction case** \u2014 the diagnosis names the test that captured the bug. Find it in the harness output and confirm it now passes. If the harness output does not mention it at all, say so plainly rather than assuming either answer.\n3. **Attribute every failure** \u2014 for each failing test, decide whether it is a regression this fix introduced or a failure that was already there. Gates the orchestrator lists as pre-existing were measured red before this feature started and are not this fix's defect.\n4. **Review the change** \u2014 inspect the diff (`git diff` / `git log` are available read-only) against the diagnosis's Fix Boundary. Flag anything touched that the boundary excluded.\n\n## When the harness cannot speak to the fix\nA regression is a test that fails. It is a different thing entirely when the harness cannot address the question at all \u2014 no gate is configured, a gate could not run, or no configured command exercises the reproduction case. The Harness Results block lists every command that was executed, and there are no others. No amount of re-fixing changes that, so do not report it as a defect in the fix: record it under **Unprovable**, naming the exact command that is missing.\n\n## Output artifact\n- Harness: summary of the provided results\n- Reproduction case: PASSES / STILL FAILS / NOT EXERCISED BY ANY CONFIGURED COMMAND\n- Regressions introduced: list, or 'none' \u2014 describe each precisely so the next cycle can scope a ticket to it\n- Pre-existing failures: list, or 'none'\n- Out-of-boundary changes: list, or 'none'\n- Unprovable: one line per question the configured harness cannot evidence, naming the missing command \u2014 or 'none'\n- **Overall: READY TO SHIP / BLOCKED**\n\n## Stop condition\nYou are done when the artifact contains all sections and an Overall verdict, and your reply ends with the required verdict JSON described below.\n\nWrite your complete output to `artifacts/s-verify.md`.",
       "capability": "verify",
-      "on_failure": "s-fix",
+      "on_failure": "s-plan-fix",
       "max_iterations": null,
       "verifier": {
         "agent_kind": null,
-        "instructions": "Decide whether the bug is fixed and no regressions were introduced. The full test-suite output is provided above. Return \"pass\" only if the suite succeeded (no new failures) AND the reproduction case now passes; otherwise return \"fail\" with a concise, actionable reason naming exactly what is still broken.",
+        "instructions": "Decide whether the bug is fixed and no regressions were introduced.\n\nRead the Harness Results block before anything else and check what it actually says. The orchestrator has already run this project's gating harnesses in this worktree; that output is the evidence, and there is no other. Gates it lists as pre-existing failures were red before this feature started \u2014 they are not this fix's defect, and failing on them sends correct work back to be redone.\n\nReturn \"pass\" only if every gate that ran succeeded (or its failures were subtracted as pre-existing) AND the reproduction case now passes.\n\nReturn \"fail\" when the implementation is wrong \u2014 naming exactly what is still broken, which tests fail, and which files are implicated. \"fail\" sends the work back to be re-scoped into tickets and re-fixed, so it must name something an agent can change.\n\nReturn \"environment\" \u2014 NOT \"fail\" \u2014 when the harness could not speak to the fix at all: no gate is configured, a gate could not run, or no configured command exercises the reproduction case. Nothing an agent writes can add a project setting, so \"fail\" there burns the entire rework budget and ends no better informed.",
         "harness_name": null,
         "verdict_key": "verdict"
       },
@@ -123,7 +126,7 @@
       "gate_class": "dangerous",
       "title": "Review Fix Before Merging",
       "agent_kind": null,
-      "prompt_template": "Review the Fix artifact (s-fix) and the Regression Check artifact (s-verify). Approve to merge the fix into the feature branch and optionally open an MR. Redirect to re-run a prior step with specific feedback. Cancel to abort.",
+      "prompt_template": "Review the Diagnosis artifact (s-reproduce), the fix summaries (s-fix), and the Regression Check artifact (s-verify). Approve to merge the fix into the feature branch and optionally open an MR. Redirect to re-run a prior step with specific feedback. Cancel to abort.",
       "on_failure": null,
       "max_iterations": null
     },

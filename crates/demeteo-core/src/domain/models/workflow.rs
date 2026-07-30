@@ -337,8 +337,8 @@ fn declares_unconstrained_write(artifacts: Option<&[ArtifactDecl]>) -> bool {
 /// Returns a list of human-readable violations; empty means the
 /// workflow is structurally sound.
 ///
-/// Exercised as a lint over the shipped `workflows/*.json` templates
-/// (see `tests/workflows_lint.rs`); workflow authors can call it too.
+/// Exercised over the shipped `src-tauri/workflows/*.json` templates by
+/// `every_shipped_starter_lints_clean`; workflow authors can call it too.
 pub fn lint_workflow_steps(steps: &[StepConfig]) -> Vec<String> {
     let mut errors = Vec::new();
 
@@ -499,6 +499,70 @@ pub fn lint_workflow_steps(steps: &[StepConfig]) -> Vec<String> {
                  attaches no upstream artifact (`[attached — <step>]`) — the judge would grade \
                  against a spec/plan it was never given",
                 step.id.0
+            ));
+        }
+    }
+
+    // 5. A `Verify` step must not run the harness itself (decision 44).
+    //
+    // Two independent things break when it does, and they break quietly.
+    //
+    // *It produces the evidence it is judging.* The verdict is supposed to be
+    // an engine measurement — the orchestrator runs the project's gates before
+    // the turn and appends their output — precisely so the thing being judged
+    // does not control whether it passed. An agent running its own suite can
+    // report a pass through a subset, a `--no-fail-fast`, a misread, or plain
+    // optimism, and the attempt-to-attempt comparability that
+    // `normalize_failure_fingerprint` and the baseline subtraction depend on is
+    // gone with it.
+    //
+    // *And it cannot run it anyway.* `Verify` compiles to
+    // `WriteScope::ArtifactsOnly`, so the chmod fence makes everything outside
+    // `artifacts/` read-only before the turn starts. A prompt ordering
+    // `npm ci` or a build is ordering exactly what the capability forbids: the
+    // install fails on a permission error, the agent reports that as its
+    // verdict, and because a self-reported verdict is classified `verdict`
+    // rather than `environment` it opens a rework loop against a permission
+    // bit — which no amount of re-implementing can change.
+    //
+    // The shape that works is the one the standard pipeline's validate step
+    // uses: say the orchestrator has already run the harness, that its output
+    // is authoritative, and that the step must not re-run it.
+    //
+    // Applied to every `Verify` step, not just the gating ones, because the
+    // fence does not care whether the step declares `on_failure`.
+    const HARNESS_TOKENS: [&str; 3] = [
+        "{{test_command}}",
+        "{{build_command}}",
+        "{{coverage_command}}",
+    ];
+    const INSTALL_COMMANDS: [&str; 6] = [
+        "npm ci",
+        "npm install",
+        "pnpm install",
+        "yarn install",
+        "pip install",
+        "go mod download",
+    ];
+    for step in steps {
+        if step.effective_capability() != StepCapability::Verify {
+            continue;
+        }
+        let prompt = step.prompt_template.as_deref().unwrap_or("");
+        let offenders: Vec<&str> = HARNESS_TOKENS
+            .iter()
+            .chain(INSTALL_COMMANDS.iter())
+            .copied()
+            .filter(|needle| prompt.contains(needle))
+            .collect();
+        if !offenders.is_empty() {
+            errors.push(format!(
+                "step '{}' is verify-capability but its prompt_template tells it to run {} \
+                 itself — a verify step judges the orchestrator's harness output, it does not \
+                 produce it, and its `ArtifactsOnly` write fence denies the writes a build or \
+                 install needs",
+                step.id.0,
+                offenders.join(", ")
             ));
         }
     }
