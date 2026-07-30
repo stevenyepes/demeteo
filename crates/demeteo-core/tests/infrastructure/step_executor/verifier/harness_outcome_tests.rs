@@ -8,8 +8,8 @@
 // could be asserted without standing up a driver and twenty ports it never read.
 
 use super::{
-    build_exclusion_note, build_exclusion_reason, build_failure_reason, merge_stderr_into_stdout,
-    verdict_contract, ExcludedRun, HarnessOutcome, HarnessRun,
+    build_exclusion_note, build_exclusion_reason, build_failure_reason, combined_failure_output,
+    merge_stderr_into_stdout, verdict_contract, ExcludedRun, HarnessOutcome, HarnessRun,
 };
 use crate::domain::harness_baseline::{BaselineProducer, HarnessBaselineRun};
 
@@ -202,6 +202,78 @@ fn the_tail_budget_is_shared_not_multiplied() {
             "every gate keeps the tail of its own output; {n} lost"
         );
     }
+}
+
+// ── the prompt section is bounded by the argv ceiling ────────────────────────
+
+/// The section is handed to the agent as one `execve` argument, and the OS caps
+/// that at 128 KiB. `s-validate` pastes the orchestrator's own harness output
+/// into it verbatim, so a chatty suite — 212 KB from `npm run checks` — made the
+/// spawn fail with `E2BIG` *after* the implement budget had been spent. The
+/// budget lives in `domain::prompt_budget`; this asserts the renderer applies it.
+#[test]
+fn an_oversized_harness_log_is_windowed_before_it_reaches_the_prompt() {
+    let huge = format!(
+        "RUN v3.2.7 /worktrees/wt-1\n{}\ntest result: FAILED. 1 failed\n",
+        "a line of vitest output\n".repeat(10_000)
+    );
+    assert!(huge.len() > 200_000, "fixture must exceed the argv ceiling");
+
+    let rendered =
+        HarnessOutcome::from_runs(vec![run("default", "npm run checks", &huge)]).render_section();
+
+    assert!(
+        rendered.len() < crate::domain::prompt_budget::ARGV_STRING_LIMIT_BYTES,
+        "the section alone is {} bytes — the spawn would die on E2BIG",
+        rendered.len()
+    );
+    // Both ends of the evidence survive, and the gap is declared.
+    assert!(rendered.contains("RUN v3.2.7 /worktrees/wt-1"), "head lost");
+    assert!(
+        rendered.contains("test result: FAILED. 1 failed"),
+        "tail lost"
+    );
+    assert!(
+        rendered.contains("omitted from the middle"),
+        "gap not named"
+    );
+}
+
+/// An excluded gate renders its full block too, so the budget has to cover it —
+/// and be shared with the passing gates rather than paid on top of them.
+#[test]
+fn an_excluded_gates_output_is_windowed_on_the_same_shared_budget() {
+    let huge = format!("HEAD-lint\n{}\nTAIL-lint\n", "noise\n".repeat(40_000));
+    let rendered = HarnessOutcome::from_runs_with_exclusions(
+        vec![run("unit", "npm run unit", &huge.replace("lint", "unit"))],
+        vec![excluded("lint", "npm run lint", &huge)],
+    )
+    .render_section();
+
+    assert!(
+        rendered.len() < crate::domain::prompt_budget::ARGV_STRING_LIMIT_BYTES,
+        "two gates rendered {} bytes",
+        rendered.len()
+    );
+    for marker in ["HEAD-unit", "TAIL-unit", "HEAD-lint", "TAIL-lint"] {
+        assert!(rendered.contains(marker), "{marker} lost from:\n…");
+    }
+}
+
+/// The fingerprint compares two *whole* failures — truncating it first would let
+/// a difference past the window read as a reproduction, which is what decides
+/// whether a failure goes to triage as an environment problem. The prompt budget
+/// must not leak into that path.
+#[test]
+fn the_failure_fingerprint_path_is_still_unwindowed() {
+    let huge = format!("HEAD\n{}\nTAIL\n", "noise\n".repeat(40_000));
+    let combined = combined_failure_output(&[run("default", "npm run checks", &huge)]);
+
+    assert!(
+        combined.contains(&huge),
+        "the fingerprint input must carry the output whole"
+    );
+    assert!(!combined.contains("omitted from the middle"));
 }
 
 // ── S11: a green run's stderr must survive ───────────────────────────────────

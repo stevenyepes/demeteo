@@ -661,3 +661,66 @@ fn apply_static_env_injects_defaults_but_never_overrides_caller() {
         "a caller-provided value must win over the runtime's static env"
     );
 }
+
+// ── spawn diagnostics ────────────────────────────────────────────────────────
+
+/// `E2BIG` is the one spawn failure that is *our* defect, not the machine's: the
+/// prompt we built exceeded the OS's per-argument ceiling, so `execve` refused
+/// and no agent ever ran. Surfaced raw it reads `Argument list too long (os error
+/// 7)` under the `[environment — not an implementation failure]` banner, which is
+/// actively misleading — one observed run lost its whole pipeline to it after
+/// `s-implement` had already spent 3.8 M tokens.
+#[test]
+fn an_oversized_prompt_is_reported_as_ours_with_the_numbers() {
+    let msg = spawn_error_message(
+        &std::io::Error::from_raw_os_error(7),
+        "claude",
+        "/home/u/.local/bin/claude",
+        230_400,
+    );
+
+    assert!(
+        msg.contains("Nothing about the machine is wrong"),
+        "must not read as an environment problem; got: {msg}"
+    );
+    assert!(
+        msg.contains("230400"),
+        "the prompt's actual size; got: {msg}"
+    );
+    assert!(
+        msg.contains(&crate::domain::prompt_budget::ARGV_STRING_LIMIT_BYTES.to_string()),
+        "the ceiling it cleared; got: {msg}"
+    );
+    assert!(
+        !msg.contains("os error 7"),
+        "the raw errno adds nothing a user can act on; got: {msg}"
+    );
+}
+
+/// The two shapes that are *not* ours must keep saying exactly what they said —
+/// a missing binary is the user's to install, and for anything else the OS's own
+/// words are better than ours.
+#[test]
+fn the_other_spawn_failures_read_exactly_as_before() {
+    assert_eq!(
+        spawn_error_message(
+            &std::io::Error::from(std::io::ErrorKind::NotFound),
+            "claude",
+            "/home/u/.local/bin/claude",
+            42,
+        ),
+        "binary not found at '/home/u/.local/bin/claude'"
+    );
+
+    let other = spawn_error_message(
+        &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        "claude",
+        "/home/u/.local/bin/claude",
+        42,
+    );
+    assert!(other.starts_with("failed to spawn claude (/home/u/.local/bin/claude): "));
+    assert!(
+        !other.contains("Nothing about the machine is wrong"),
+        "a permission problem really is the machine's; got: {other}"
+    );
+}

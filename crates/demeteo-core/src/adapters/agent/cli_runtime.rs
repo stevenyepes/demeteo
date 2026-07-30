@@ -269,11 +269,7 @@ impl UnifiedCliSession {
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                let msg = if e.kind() == std::io::ErrorKind::NotFound {
-                    format!("binary not found at '{}'", binary)
-                } else {
-                    format!("failed to spawn {} ({}): {}", self.ctx.binary, binary, e)
-                };
+                let msg = spawn_error_message(&e, &self.ctx.binary, binary, text.len());
                 let _ = tx.try_send(AgentEvent::Error {
                     code: "spawn_failed".to_string(),
                     message: msg,
@@ -755,6 +751,39 @@ fn drain_lines<R, F>(
                 });
             }
         }
+    }
+}
+
+/// How a failed local spawn must be described to the user. Pure over the error,
+/// so the whole policy is decidable in a unit test — `spawn_local` itself is
+/// only reachable by standing up a session and an `AgentContext` it never reads.
+///
+/// Three shapes, and they are three *different* problems:
+///
+/// - `NotFound` — the agent isn't installed. The user's machine, the user's fix.
+/// - `ArgumentListTooLong` (`E2BIG`) — **ours**. The prompt we built exceeded the
+///   ceiling the OS puts on a single command-line argument, so `execve` refused
+///   and no agent process ever existed. Raw, this surfaces as `os error 7` under
+///   the `[environment — not an implementation failure]` banner, which sends the
+///   user auditing a machine that is fine; it cost one observed run its whole
+///   pipeline after `s-implement` had already spent 3.8 M tokens. Name the size,
+///   the ceiling, and whose fault it is. See `domain::prompt_budget`.
+/// - anything else — pass the OS's own words through; we have nothing to add.
+fn spawn_error_message(
+    e: &std::io::Error,
+    agent_binary: &str,
+    resolved_binary: &str,
+    prompt_bytes: usize,
+) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => format!("binary not found at '{}'", resolved_binary),
+        std::io::ErrorKind::ArgumentListTooLong => {
+            crate::domain::prompt_budget::argv_too_long_message(agent_binary, prompt_bytes)
+        }
+        _ => format!(
+            "failed to spawn {} ({}): {}",
+            agent_binary, resolved_binary, e
+        ),
     }
 }
 

@@ -13,6 +13,7 @@ pub mod intercept;
 pub mod memory;
 pub mod models;
 pub mod permission;
+pub mod prompt_budget;
 pub mod prompt_context;
 pub mod rework;
 pub mod run_spec;

@@ -1558,6 +1558,15 @@ impl HarnessOutcome {
     /// answerable from the prompt alone — and an excluded gate gets a block
     /// that says *why* it does not count, so the report can name the
     /// subtraction (HB2c).
+    ///
+    /// Each gate's output is windowed to its share of
+    /// [`HARNESS_SECTION_BUDGET_BYTES`](crate::domain::prompt_budget::HARNESS_SECTION_BUDGET_BYTES).
+    /// The prompt is handed to the agent as a single `execve` argument, which the
+    /// OS caps at 128 KiB — so an unbudgeted log does not make the prompt merely
+    /// expensive, it makes the spawn fail outright with `E2BIG` after the whole
+    /// implement budget has already been spent. See `domain::prompt_budget`.
+    /// The *fingerprint* path (`combined_failure_output`) stays unwindowed on
+    /// purpose: it compares two whole failures.
     pub(crate) fn render_section(&self) -> String {
         match self {
             HarnessOutcome::Ran { passed, excluded } => format!(
@@ -1569,10 +1578,19 @@ impl HarnessOutcome {
                 count = plural_harnesses(passed.len() + excluded.len()),
                 blocks = passed
                     .iter()
-                    .map(|r| harness_block(&r.name, &r.cmd, &r.output))
+                    .map(|r| harness_block(
+                        &r.name,
+                        &r.cmd,
+                        &crate::domain::prompt_budget::window_harness_log(
+                            &r.output,
+                            crate::domain::prompt_budget::per_gate_budget(
+                                passed.len() + excluded.len()
+                            ),
+                        ),
+                    ))
                     .collect::<Vec<_>>()
                     .join("\n"),
-                exclusions = render_exclusions(excluded),
+                exclusions = render_exclusions(excluded, passed.len() + excluded.len()),
             ),
             // Everything here is load-bearing. Naming the absence, refusing the
             // inference, and pointing at the verdict that fits it are what stop
@@ -1637,17 +1655,26 @@ fn short_sha(sha: &str) -> String {
 /// Empty when nothing was subtracted, so a run with no exclusions renders
 /// byte-for-byte as it did before HB2c — the overwhelmingly common case, and
 /// the one every existing prompt expectation was written against.
-fn render_exclusions(excluded: &[ExcludedRun]) -> String {
+///
+/// `gate_count` is the *whole* section's gate count, not `excluded.len()`: the
+/// output budget is shared across passed and excluded gates alike, because both
+/// render their full block into the same single `execve` argument.
+fn render_exclusions(excluded: &[ExcludedRun], gate_count: usize) -> String {
     if excluded.is_empty() {
         return String::new();
     }
+    let budget = crate::domain::prompt_budget::per_gate_budget(gate_count);
     let blocks = excluded
         .iter()
         .map(|e| {
             format!(
                 "{}\n{}",
                 e.reason,
-                harness_block(&e.run.name, &e.run.cmd, &e.run.output)
+                harness_block(
+                    &e.run.name,
+                    &e.run.cmd,
+                    &crate::domain::prompt_budget::window_harness_log(&e.run.output, budget),
+                )
             )
         })
         .collect::<Vec<_>>()
