@@ -43,9 +43,10 @@
 
 use std::time::Instant;
 
+use crate::adapters::step_executor::context::StepCtx;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::scheduler::{evaluate_ready_set, ScheduleError};
-use crate::adapters::step_executor::spend::StepSpend;
+use crate::adapters::step_executor::spend::{StepSpend, StepTotals};
 use crate::adapters::step_executor::step_status::{
     update_step_status, CacheTokens, StepTransition,
 };
@@ -216,25 +217,19 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
         );
 
         let step_start = Instant::now();
-        let mut accumulated_cost = step_exec.cost_usd.unwrap_or(0.0);
-        let mut accumulated_tokens = step_exec.tokens.unwrap_or(0);
-        let mut step_cache_read: Option<u64> = None;
-        let mut step_cache_creation: Option<u64> = None;
+        let mut totals = StepTotals {
+            cost: step_exec.cost_usd.unwrap_or(0.0),
+            tokens: step_exec.tokens.unwrap_or(0),
+            cache: CacheTokens::default(),
+        };
 
-        let Some(dr) = driver
-            .dispatch_step(
-                step_exec,
-                &step_conf,
-                &step_execs,
-                step_index,
-                step_start,
-                &mut accumulated_cost,
-                &mut accumulated_tokens,
-                &mut step_cache_read,
-                &mut step_cache_creation,
-            )
-            .await
-        else {
+        let ctx = StepCtx {
+            step_exec,
+            step_conf: &step_conf,
+            step_index,
+            step_execs: &step_execs,
+        };
+        let Some(dr) = driver.dispatch_step(ctx, step_start, &mut totals).await else {
             return;
         };
 

@@ -39,3 +39,31 @@ impl StepSpend {
         self.start.elapsed().as_secs()
     }
 }
+
+/// The running totals one step's dispatch advances, owned by the run loop
+/// for the length of one iteration.
+///
+/// The mutable peer of [`StepSpend`]: the handler writes into these
+/// through [`NodeCtx`](super::registry::NodeCtx), and every terminal write
+/// path afterwards reads the snapshot. They were four `&mut` locals passed
+/// side by side, which is the same bundle without the name.
+pub(crate) struct StepTotals {
+    pub cost: f64,
+    pub tokens: i64,
+    /// Out-slot: what the last turn reported about the prompt cache. The
+    /// live cache chip renders it, and the driver keeps the last value for
+    /// the terminal transition.
+    pub cache: CacheTokens,
+}
+
+impl StepTotals {
+    /// The totals as of now, for a write path that reports them.
+    pub(crate) fn snapshot(&self, start: Instant) -> StepSpend {
+        StepSpend {
+            cost: self.cost,
+            tokens: self.tokens,
+            cache: self.cache,
+            start,
+        }
+    }
+}

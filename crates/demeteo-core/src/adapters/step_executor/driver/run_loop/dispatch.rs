@@ -4,13 +4,13 @@
 
 use std::time::Instant;
 
+use crate::adapters::step_executor::context::StepCtx;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::registry::{NodeCtx, NodeTypeRegistry};
 use crate::adapters::step_executor::retry_policy::{FailureClass, RetryDecision};
-use crate::adapters::step_executor::spend::StepSpend;
+use crate::adapters::step_executor::spend::{StepSpend, StepTotals};
 use crate::adapters::step_executor::step_status::CacheTokens;
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::verifier::VerdictFailure;
 
 /// Everything the outcome handler needs to apply one step's result,
@@ -65,19 +65,18 @@ impl ExecutionDriver {
     /// the equivalent of v1's "Unknown step kind" failure, which has
     /// already written a `failed` step row and a `failed` feature row
     /// by the time it returns; the orchestrator exits the run loop.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn dispatch_step(
         &mut self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        step_execs: &[StepExecution],
-        step_index: usize,
+        ctx: StepCtx<'_>,
         step_start: Instant,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_cache_read: &mut Option<u64>,
-        step_cache_creation: &mut Option<u64>,
+        totals: &mut StepTotals,
     ) -> Option<DispatchResult> {
+        let StepCtx {
+            step_exec,
+            step_conf,
+            step_index,
+            step_execs,
+        } = ctx;
         // Per-attempt history (V31, task P1.8): one row per dispatch,
         // closed below with this attempt's own outcome and spend
         // deltas — retries stop overwriting history. Telemetry only,
@@ -90,8 +89,8 @@ impl ExecutionDriver {
             &*self.features,
             &self.f_id,
             step_exec,
-            *accumulated_cost,
-            *accumulated_tokens,
+            totals.cost,
+            totals.tokens,
             fingerprint.as_deref(),
         );
 
@@ -107,21 +106,21 @@ impl ExecutionDriver {
                         driver: self,
                         step_exec,
                         step_conf,
-                        accumulated_cost,
-                        accumulated_tokens,
+                        accumulated_cost: &mut totals.cost,
+                        accumulated_tokens: &mut totals.tokens,
                         step_start,
                         step_index,
                         step_execs,
-                        out_cache_read: step_cache_read,
-                        out_cache_creation: step_cache_creation,
+                        out_cache_read: &mut totals.cache.read,
+                        out_cache_creation: &mut totals.cache.creation,
                     })
                     .await
             }
             None => {
                 let msg = format!("Unknown step kind: {}", step_conf.kind);
                 let spend = StepSpend {
-                    cost: *accumulated_cost,
-                    tokens: *accumulated_tokens,
+                    cost: totals.cost,
+                    tokens: totals.tokens,
                     cache: self.cache_tokens(),
                     start: step_start,
                 };
@@ -133,8 +132,8 @@ impl ExecutionDriver {
         // Stash the step's cache telemetry on the driver so the
         // final `update_step_status` (and the watchdog's session
         // lifetime tracking) can read it.
-        self.last_cache_read = *step_cache_read;
-        self.last_cache_creation = *step_cache_creation;
+        self.last_cache_read = totals.cache.read;
+        self.last_cache_creation = totals.cache.creation;
 
         // A verdict failure follows the exact same on_failure path as a
         // plain failure — normalize it here and keep the structured
@@ -206,12 +205,7 @@ impl ExecutionDriver {
             is_cancelled,
             &self.target_dir,
         );
-        let spend = StepSpend {
-            cost: *accumulated_cost,
-            tokens: *accumulated_tokens,
-            cache: self.cache_tokens(),
-            start: step_start,
-        };
+        let spend = totals.snapshot(step_start);
         self.close_attempt(
             step_exec,
             attempt.as_ref(),
@@ -225,8 +219,8 @@ impl ExecutionDriver {
             outcome,
             failure_decision,
             verdict_failure,
-            accumulated_cost: *accumulated_cost,
-            accumulated_tokens: *accumulated_tokens,
+            accumulated_cost: totals.cost,
+            accumulated_tokens: totals.tokens,
             step_start,
         })
     }

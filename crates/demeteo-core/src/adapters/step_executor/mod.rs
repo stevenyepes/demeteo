@@ -25,6 +25,7 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 
 pub(crate) mod artifacts;
 pub(crate) mod baseline;
+pub(crate) mod context;
 pub(crate) mod driver;
 pub(crate) mod driver_registry;
 pub(crate) mod failing_tests;
