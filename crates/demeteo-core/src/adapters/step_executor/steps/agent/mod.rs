@@ -1,33 +1,39 @@
-use std::time::Instant;
-
 use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
 use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{StepConfig, StepExecution};
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
 pub(crate) mod artifacts;
+pub(crate) mod context;
 pub(crate) mod error_message;
 pub(crate) mod spawn;
 
 pub(crate) use error_message::format_agent_error_message;
 
+use context::{AgentRunTarget, AgentSpend, AgentStepCtx, AgentWorktree, TurnBaseline};
+
 impl ExecutionDriver {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_agent_step(
         &self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
-        step_index: usize,
-        step_execs: &[StepExecution],
-        out_cache_read: &mut Option<u64>,
-        out_cache_creation: &mut Option<u64>,
+        ctx: AgentStepCtx<'_>,
+        spend: AgentSpend<'_>,
     ) -> StepOutcome {
+        let AgentStepCtx {
+            step_exec,
+            step_conf,
+            step_index,
+            step_execs,
+        } = ctx;
+        let AgentSpend {
+            cost: accumulated_cost,
+            tokens: accumulated_tokens,
+            start: step_start,
+            cache_read: out_cache_read,
+            cache_creation: out_cache_creation,
+        } = spend;
+
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
         // Extend the model override to the runtime default when no explicit override
         // is set, so UsageAccumulator can use the pricing table and compute cost_usd.
@@ -49,6 +55,12 @@ impl ExecutionDriver {
             override_model.as_deref(),
             effort,
         );
+        let target = AgentRunTarget {
+            agent_kind: &agent_kind,
+            override_model: override_model.as_deref(),
+            effort,
+            session_key: &session_key,
+        };
 
         let (gate_decision, gate_feedback) =
             crate::adapters::step_executor::artifacts::get_latest_gate_decision(
@@ -210,6 +222,11 @@ impl ExecutionDriver {
                 ));
             }
         };
+        let wt = AgentWorktree {
+            machine: &machine_str,
+            subtask_id: &subtask_id,
+            path: &wt_path,
+        };
 
         if *self.cancel_watch.borrow() {
             let _ = self
@@ -228,8 +245,8 @@ impl ExecutionDriver {
         let worktree_snapshot =
             crate::adapters::step_executor::artifacts::WorktreeSnapshot::capture(
                 &*self.exec,
-                &machine_str,
-                &wt_path,
+                wt.machine,
+                wt.path,
             )
             .await;
 
@@ -253,7 +270,7 @@ impl ExecutionDriver {
                 cache_creation_input_tokens: None,
             });
             match self
-                .run_harness_first(step_exec, verifier_cfg, &wt_path, &machine_str)
+                .run_harness_first(step_exec, verifier_cfg, wt.path, wt.machine)
                 .await
             {
                 Ok(outcome) => harness_section = Some(outcome),
@@ -310,7 +327,7 @@ impl ExecutionDriver {
             );
         if let Err(e) = self
             .git_ops
-            .apply_artifact_scope(self.machine_id_opt.as_deref(), &wt_path, &writable_paths)
+            .apply_artifact_scope(self.machine_id_opt.as_deref(), wt.path, &writable_paths)
             .await
         {
             let _ = self
@@ -328,7 +345,7 @@ impl ExecutionDriver {
         let worktree_base_ref = self
             .exec
             .run_command(
-                &machine_str,
+                wt.machine,
                 &format!(
                     "git -C {} rev-parse {}",
                     crate::paths::shell_escape_posix(&self.target_dir),
@@ -338,6 +355,10 @@ impl ExecutionDriver {
             .await
             .map(|s| s.trim().to_string())
             .ok();
+        let baseline = TurnBaseline {
+            snapshot: &worktree_snapshot,
+            base_ref: worktree_base_ref.as_deref(),
+        };
 
         // Copy any external artifact paths referenced in path manifests into
         // the worktree so opencode's `external_directory: deny` doesn't block
@@ -348,9 +369,9 @@ impl ExecutionDriver {
         let prompt =
             crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
                 &prompt,
-                &wt_path,
+                wt.path,
                 &*self.exec,
-                &machine_str,
+                wt.machine,
             )
             .await;
 
@@ -392,11 +413,11 @@ impl ExecutionDriver {
             .spawn_agent_session(
                 step_exec,
                 step_conf,
-                &agent_kind,
-                override_model.as_deref(),
-                effort,
-                &machine_str,
-                &wt_path,
+                target.agent_kind,
+                target.override_model,
+                target.effort,
+                wt.machine,
+                wt.path,
             )
             .await
         {
@@ -412,7 +433,7 @@ impl ExecutionDriver {
                     )
                     .await;
                 let descriptive =
-                    error_message::format_agent_error_message(&e, &machine_str, &*self.exec).await;
+                    error_message::format_agent_error_message(&e, wt.machine, &*self.exec).await;
                 return StepOutcome::Failed(descriptive);
             }
         };
@@ -439,9 +460,9 @@ impl ExecutionDriver {
             &prompt,
             timeouts,
             Some(self.cancel_watch.clone()),
-            &machine_str,
+            wt.machine,
             &*self.exec,
-            override_model.clone(),
+            target.override_model.map(str::to_string),
             self.pricing.clone(),
             |event| {
                 if let AgentEvent::Text { delta } = event {
@@ -530,7 +551,7 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            let _ = self.registry.kill(&session_key).await;
+            let _ = self.registry.kill(target.session_key).await;
             return StepOutcome::Cancelled;
         }
 
@@ -544,21 +565,13 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            let _ = self.registry.kill(&session_key).await;
+            let _ = self.registry.kill(target.session_key).await;
             return failed_outcome;
         }
 
         // 3. Process artifacts (delta, diff, commit, resolve decls)
         let artifacts_res = self
-            .process_agent_artifacts(
-                step_exec,
-                step_conf,
-                &machine_str,
-                &wt_path,
-                &worktree_snapshot,
-                worktree_base_ref.as_deref(),
-                &mut produced_artifacts,
-            )
+            .process_agent_artifacts(step_exec, step_conf, wt, baseline, &mut produced_artifacts)
             .await;
 
         let (artifact_path, artifact_paths, missing_artifacts) = match artifacts_res {
@@ -573,7 +586,7 @@ impl ExecutionDriver {
                         &subtask_id,
                     )
                     .await;
-                let _ = self.registry.kill(&session_key).await;
+                let _ = self.registry.kill(target.session_key).await;
                 return StepOutcome::Failed(err);
             }
         };
@@ -588,11 +601,7 @@ impl ExecutionDriver {
                 == crate::domain::permission::StepCapability::Implement
             && !self
                 .git_ops
-                .has_new_commits(
-                    self.machine_id_opt.as_deref(),
-                    &wt_path,
-                    worktree_base_ref.as_deref(),
-                )
+                .has_new_commits(self.machine_id_opt.as_deref(), wt.path, baseline.base_ref)
                 .await
         {
             let _ = self
@@ -604,7 +613,7 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            let _ = self.registry.kill(&session_key).await;
+            let _ = self.registry.kill(target.session_key).await;
             tracing::warn!(
                 feature_id = %self.f_id,
                 step_id = %step_exec.step_id.0,
@@ -656,9 +665,9 @@ impl ExecutionDriver {
                     &correction,
                     timeouts,
                     Some(self.cancel_watch.clone()),
-                    &machine_str,
+                    wt.machine,
                     &*self.exec,
-                    override_model.clone(),
+                    target.override_model.map(str::to_string),
                     self.pricing.clone(),
                     |_event| {},
                 )
@@ -724,7 +733,7 @@ impl ExecutionDriver {
                             &subtask_id,
                         )
                         .await;
-                    let _ = self.registry.kill(&session_key).await;
+                    let _ = self.registry.kill(target.session_key).await;
                     return StepOutcome::VerdictFailed(failure);
                 }
                 // The criteria this step could not satisfy demand something
@@ -750,7 +759,7 @@ impl ExecutionDriver {
                             &subtask_id,
                         )
                         .await;
-                    let _ = self.registry.kill(&session_key).await;
+                    let _ = self.registry.kill(target.session_key).await;
                     return StepOutcome::NonRetryable(format!(
                         "[project configuration — retrying cannot fix this] {}",
                         reason
@@ -766,7 +775,7 @@ impl ExecutionDriver {
                             &subtask_id,
                         )
                         .await;
-                    let _ = self.registry.kill(&session_key).await;
+                    let _ = self.registry.kill(target.session_key).await;
                     return StepOutcome::NonRetryable(format!(
                         "[verifier infrastructure error — no usable verdict from the \
                          validate turn] {}",
@@ -785,7 +794,7 @@ impl ExecutionDriver {
             .git_ops
             .verify_and_revert_out_of_scope_writes(
                 self.machine_id_opt.as_deref(),
-                &wt_path,
+                wt.path,
                 &writable_paths,
             )
             .await
@@ -801,7 +810,7 @@ impl ExecutionDriver {
                         &subtask_id,
                     )
                     .await;
-                let _ = self.registry.kill(&session_key).await;
+                let _ = self.registry.kill(target.session_key).await;
                 return StepOutcome::Failed(format!("out-of-scope diff check failed: {}", e));
             }
         };
@@ -815,7 +824,7 @@ impl ExecutionDriver {
                     &subtask_id,
                 )
                 .await;
-            let _ = self.registry.kill(&session_key).await;
+            let _ = self.registry.kill(target.session_key).await;
             self.capture_signal(
                 Some(step_exec.id.0.clone()),
                 crate::domain::memory::SignalKind::Retry,
@@ -837,9 +846,9 @@ impl ExecutionDriver {
             .git_ops
             .merge_subtask(
                 self.machine_id_opt.as_deref(),
-                &wt_path,
+                wt.path,
                 &self.branch_name,
-                &subtask_id,
+                wt.subtask_id,
             )
             .await;
 
@@ -852,9 +861,9 @@ impl ExecutionDriver {
                 .resolve_merge_conflicts_via_agent(
                     step_exec,
                     &*session,
-                    &machine_str,
-                    &wt_path,
-                    override_model.as_deref(),
+                    wt.machine,
+                    wt.path,
+                    target.override_model,
                     accumulated_cost,
                     accumulated_tokens,
                     step_start,
@@ -873,9 +882,9 @@ impl ExecutionDriver {
                         .git_ops
                         .merge_subtask(
                             self.machine_id_opt.as_deref(),
-                            &wt_path,
+                            wt.path,
                             &self.branch_name,
-                            &subtask_id,
+                            wt.subtask_id,
                         )
                         .await;
                 }
@@ -1026,7 +1035,7 @@ impl ExecutionDriver {
             .await;
 
         if !matches!(outcome, StepOutcome::Completed) {
-            let _ = self.registry.kill(&session_key).await;
+            let _ = self.registry.kill(target.session_key).await;
         }
 
         outcome
@@ -1222,15 +1231,19 @@ impl crate::adapters::step_executor::registry::NodeHandler for AgentNodeHandler 
     ) -> StepOutcome {
         ctx.driver
             .handle_agent_step(
-                ctx.step_exec,
-                ctx.step_conf,
-                ctx.accumulated_cost,
-                ctx.accumulated_tokens,
-                ctx.step_start,
-                ctx.step_index,
-                ctx.step_execs,
-                ctx.out_cache_read,
-                ctx.out_cache_creation,
+                AgentStepCtx {
+                    step_exec: ctx.step_exec,
+                    step_conf: ctx.step_conf,
+                    step_index: ctx.step_index,
+                    step_execs: ctx.step_execs,
+                },
+                AgentSpend {
+                    cost: ctx.accumulated_cost,
+                    tokens: ctx.accumulated_tokens,
+                    start: ctx.step_start,
+                    cache_read: ctx.out_cache_read,
+                    cache_creation: ctx.out_cache_creation,
+                },
             )
             .await
     }
