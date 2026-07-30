@@ -35,7 +35,7 @@
 //!
 //! Every transition is written through the repositories *before* the loop
 //! acts on it and the matching event fires after the write — the same
-//! durable-first ordering `updates::update_step_status` has always
+//! durable-first ordering `step_status::update_step_status` has always
 //! enforced per row. (A single multi-row SQLite transaction per tick
 //! needs a transactional port seam the repos don't expose yet; each
 //! per-row write is atomic, and the loop tolerates re-observing any

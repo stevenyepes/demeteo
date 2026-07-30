@@ -5,9 +5,8 @@
 //! `close_attempt` references when it writes the terminal `status` and
 //! the attempt's own spend / classification / applied-rule telemetry.
 //!
-//! The retry-policy (`RetryDecision`) and the structured verifier failure
-//! (`VerdictFailure`) are passed through unchanged so the audit row names
-//! the rule that answered each failure — see
+//! The retry policy's `rule_id` reaches the row verbatim so the audit
+//! names the rule that answered each failure — see
 //! `step_attempts.applied_rule` and the `step_attempts.error_class` field.
 
 use crate::adapters::step_executor::driver::ExecutionDriver;

@@ -5,7 +5,7 @@
 //! rewinds. The impure half: persist those decisions (skip statuses,
 //! redirect resets) *before* the loop acts on them, emitting the matching
 //! `StepProgress` events after each write — the same durable-first
-//! ordering `updates::update_step_status` has always used.
+//! ordering `step_status::update_step_status` has always used.
 //!
 //! # Why states are derived, not held
 //!
