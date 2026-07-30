@@ -32,6 +32,14 @@ function imageItem(file: File): ClipboardItemFixture {
   };
 }
 
+function unavailableImageItem(type: string): ClipboardItemFixture {
+  return {
+    kind: "file",
+    type,
+    getAsFile: () => null,
+  };
+}
+
 function stringItem(type: "text/plain" | "text/html"): ClipboardItemFixture {
   return {
     kind: "string",
@@ -73,13 +81,22 @@ function paste(items: ClipboardItemFixture[]) {
   return preventDefault;
 }
 
-function LaunchHarness({ onError }: { onError?: (message: string) => void }) {
+function LaunchHarness({
+  onError,
+  onStage,
+}: {
+  onError?: (message: string) => void;
+  onStage?: (entries: LaunchStageEntry[]) => void;
+}) {
   const [entries, setEntries] = useState<LaunchStageEntry[]>([]);
   return (
     <AttachmentDropzone
       mode="launch"
       stageEntries={entries}
-      onChangeStage={setEntries}
+      onChangeStage={(next) => {
+        setEntries(next);
+        onStage?.(next);
+      }}
       onError={onError}
     />
   );
@@ -189,10 +206,22 @@ describe("AttachmentDropzone paste behavior", () => {
   it("computes SHA-256 and dedupes pasted launch files by content hash", async () => {
     const first = imageFile("first.png", "image/png", "identical bytes");
     const duplicate = imageFile("duplicate.png", "image/png", "identical bytes");
-    render(<LaunchHarness />);
+    const onStage = vi.fn();
+    render(<LaunchHarness onStage={onStage} />);
 
     paste([imageItem(first)]);
     await screen.findByText("first.png");
+    expect(onStage).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        name: "first.png",
+        source_filename: "first.png",
+        mime: "image/png",
+        size: first.size,
+        file: first,
+        sourcePath: null,
+        previewUrl: expect.stringMatching(/^data:image\/png;base64,/),
+      }),
+    ]);
     paste([imageItem(duplicate)]);
 
     await waitFor(() => {
@@ -200,6 +229,20 @@ describe("AttachmentDropzone paste behavior", () => {
       expect(screen.getByText("duplicate.png")).toBeInTheDocument();
     });
     expect(screen.getAllByRole("button", { name: /^remove /i })).toHaveLength(1);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("reports an unavailable supported clipboard image without consuming paste", () => {
+    const onError = vi.fn();
+    render(<LaunchHarness onError={onError} />);
+
+    const preventDefault = paste([stringItem("text/plain"), unavailableImageItem("image/png")]);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      "The clipboard offered an image, but this webview could not access its file. Save it and attach it, or try another clipboard source.",
+    );
+    expect(screen.queryByRole("button", { name: /^remove /i })).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalled();
   });
 

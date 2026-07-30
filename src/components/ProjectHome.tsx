@@ -11,7 +11,10 @@ import { StartSessionButton } from './StartSessionButton';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
 import { buildWorkflowById, classifyWorkflowBadge } from '../lib/workflowBadge';
-import { computeLocalSha256, extractImageFilesFromClipboard } from '../lib/attachments';
+import {
+    extractClipboardImageFiles,
+    stageBrowserFilesForLaunch,
+} from '../lib/attachments';
 
 /**
  * Left accent bar per tone. Local to this component (the way StatusBadge
@@ -64,48 +67,22 @@ const ProjectHome = () => {
     // surface (Alternative A): it captures a title + attachments and
     // hands off to the Start Feature modal, which owns every launch
     // knob (repos, runner, overrides) and the actual start_feature call.
-    const stageClipboardFile = useCallback(async (file: File) => {
+    const stageClipboardFiles = useCallback(async (files: File[]) => {
         try {
-            const sourceFilename = file.name;
-            const lower = sourceFilename.toLowerCase();
-            const mime = file.type || guessComposerMime(lower);
-            const sha256 = await computeLocalSha256(file);
-            const previewUrl = mime.startsWith('image/') ? await readDataUrl(file) : null;
-            const entry: LaunchStageEntry = {
-                sha256,
-                name: sourceFilename,
-                source_filename: sourceFilename,
-                mime,
-                size: file.size,
-                previewUrl,
-                file,
-                sourcePath: null,
-            };
-            setAttachments((prev) => [...prev.filter((e) => e.sha256 !== sha256), entry]);
+            setAttachments(await stageBrowserFilesForLaunch(files, attachments));
         } catch (err) {
             console.error('ProjectHome: failed to stage pasted attachment', err);
         }
-    }, []);
+    }, [attachments]);
 
     const handleComposerPaste = useCallback(
         (e: React.ClipboardEvent<HTMLDivElement>) => {
-            const target = e.target;
-            if (
-                target instanceof HTMLInputElement ||
-                target instanceof HTMLTextAreaElement
-            ) {
-                return;
-            }
-            const files = extractImageFilesFromClipboard(e.clipboardData);
-            if (files.length === 0) return;
+            const extraction = extractClipboardImageFiles(e.clipboardData);
+            if (extraction.kind !== 'files') return;
             e.preventDefault();
-            void (async () => {
-                for (const file of files) {
-                    await stageClipboardFile(file);
-                }
-            })();
+            void stageClipboardFiles(extraction.files);
         },
-        [stageClipboardFile],
+        [stageClipboardFiles],
     );
     const openStartFeature = () => {
         uiDispatch({
@@ -766,28 +743,3 @@ function TerminalTabOpener({
 }
 
 export default ProjectHome;
-
-function guessComposerMime(lower: string): string {
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-    if (lower.endsWith('.gif')) return 'image/gif';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    if (lower.endsWith('.pdf')) return 'application/pdf';
-    if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'text/markdown';
-    if (lower.endsWith('.txt')) return 'text/plain';
-    if (lower.endsWith('.json')) return 'application/json';
-    return 'application/octet-stream';
-}
-
-function readDataUrl(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'));
-        reader.onload = () => {
-            const out = reader.result;
-            if (typeof out === 'string') resolve(out);
-            else reject(new Error('FileReader did not yield a string result'));
-        };
-        reader.readAsDataURL(file);
-    });
-}

@@ -22,6 +22,7 @@ import {
   UIStateProvider,
   TerminalPanelProvider,
   useProject,
+  useUIState,
 } from '../context';
 import ProjectHome from './ProjectHome';
 import type { Project } from '../types';
@@ -114,6 +115,7 @@ function mount(project: Project) {
           <TerminalPanelProvider>
             <ProjectSeed project={project}>
               <ProjectHome />
+              <StartFeatureSeedProbe />
             </ProjectSeed>
           </TerminalPanelProvider>
         </UIStateProvider>
@@ -130,6 +132,15 @@ function mount(project: Project) {
 function renderHome() {
   mockBackend(['/repo/one']);
   mount(baseProject({ compute_type: 'local' }));
+}
+
+function StartFeatureSeedProbe() {
+  const { ui } = useUIState();
+  return (
+    <output data-testid="start-feature-seed">
+      {JSON.stringify(ui.startFeatureSeed)}
+    </output>
+  );
 }
 
 interface ClipboardItemFixture {
@@ -197,7 +208,30 @@ describe('ProjectHome inline composer paste', () => {
     expect(screen.queryByText(/clipboard\.bmp/)).not.toBeInTheDocument();
   });
 
-  it('keeps normal text paste in the title input intact (no preventDefault)', async () => {
+  it('stages a supported image from the focused title input and passes it to the modal seed', async () => {
+    renderHome();
+    const composer = await screen.findByTestId('project-home-composer');
+    const input = composer.querySelector('input') as HTMLInputElement;
+    const file = new File(['focused image'], 'focused.png', { type: 'image/png' });
+
+    const preventDefault = paste(input, [imageItem(file)]);
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByText(/focused\.png/)).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => {
+      const seed = JSON.parse(screen.getByTestId('start-feature-seed').textContent ?? 'null');
+      expect(seed.attachments).toHaveLength(1);
+      expect(seed.attachments[0]).toMatchObject({
+        name: 'focused.png',
+        source_filename: 'focused.png',
+        mime: 'image/png',
+      });
+    });
+  });
+
+  it('keeps normal text paste in the focused title input intact (no preventDefault)', async () => {
     renderHome();
     const composer = await screen.findByTestId('project-home-composer');
     const input = composer.querySelector('input') as HTMLInputElement;

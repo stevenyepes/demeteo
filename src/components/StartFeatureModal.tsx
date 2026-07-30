@@ -3,6 +3,8 @@ import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, Eye
 import { invoke } from '@tauri-apps/api/core';
 import type { EffortLevel, Machine, Repository, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
+import { extractClipboardImageFiles, stageBrowserFilesForLaunch } from '../lib/attachments';
+import { formatError } from '../lib/errors';
 import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 import { getAgentModels } from '../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
@@ -179,10 +181,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // after `start_feature` returns the new feature id; see the
   // `attachments` field on `onLaunch`.
   const [attachments, setAttachments] = useState<LaunchStageEntry[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   // Soft vision-support warning. Dismissable per-modal so the user
   // doesn't see it on every keystroke; resets on close.
   const [visionWarningDismissed, setVisionWarningDismissed] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   // Remote execution (M6.1): "Where to run" + optional budget caps.
   // `machineId === ''` means "run here" (today's behavior); any other
@@ -242,12 +246,59 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setLoopIterations('');
       setRepoOverride(null);
       setAttachments([]);
+      setAttachmentError(null);
       setVisionWarningDismissed(false);
       setMachineId('');
       setMaxCostUsd('');
       setMaxWallClockMins('');
     }
   }, [isOpen, workflows, defaultWorkflowId, workflowId, seedTitle, seedAttachments]);
+
+  // The dropzone can only observe paste events targeted at itself. Route
+  // image files pasted into the title, description, or any other modal
+  // descendant through the same launch staging helper, while leaving text
+  // and HTML paste entirely to the browser. The listener deliberately
+  // excludes the embedded dropzone because it already owns its own paste
+  // handler and staging path.
+  useEffect(() => {
+    if (!isOpen) return;
+    const modal = modalRef.current;
+    if (!modal) return;
+    let cancelled = false;
+
+    const handlePaste = async (event: ClipboardEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || !modal.contains(target)) return;
+      if (target instanceof Element && target.closest('[data-attachment-dropzone]')) return;
+      if (!event.clipboardData) return;
+
+      const extraction = extractClipboardImageFiles(event.clipboardData);
+      if (extraction.kind === 'none') return;
+      if (extraction.kind === 'unavailable') {
+        setAttachmentError(
+          'The clipboard offered an image, but this webview could not access its file. Save it and attach it, or try another clipboard source.',
+        );
+        return;
+      }
+
+      event.preventDefault();
+      try {
+        const next = await stageBrowserFilesForLaunch(extraction.files, attachments);
+        if (!cancelled) {
+          setAttachments(next);
+          setAttachmentError(null);
+        }
+      } catch (err) {
+        if (!cancelled) setAttachmentError(formatError(err));
+      }
+    };
+
+    modal.addEventListener('paste', handlePaste);
+    return () => {
+      cancelled = true;
+      modal.removeEventListener('paste', handlePaste);
+    };
+  }, [isOpen, attachments]);
 
   // Fetch selectable workflows whenever the modal opens. Fetched here
   // rather than threaded through from the parent so the picker is never
@@ -595,7 +646,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       {/* Viewport-capped panel: the form body scrolls internally while the
           header and footer stay pinned, so expanding "Customize…" (per-step
           overrides) can never grow the modal past the screen. */}
-      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
+      <div ref={modalRef} className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
         <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-[#050508] shrink-0">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-cyan-400" />
@@ -618,7 +669,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               Drop, paste, or pick up to 10 files (100 MB each). The dropzone
               stages locally in `LaunchStageEntry[]` — see the
               `attachments` field on `onLaunch` for the commit step. */}
-          <div>
+          <div data-attachment-dropzone>
             <div className="flex items-center gap-2 mb-1.5">
               <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
                 Attachments
@@ -632,8 +683,14 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               label="Add files"
               stageEntries={attachments}
               onChangeStage={setAttachments}
+              onError={setAttachmentError}
               maxChips={6}
             />
+            {attachmentError && (
+              <p role="alert" className="mt-1.5 text-[11px] font-mono text-ruby-200">
+                {attachmentError}
+              </p>
+            )}
             {detached && attachments.length > 0 && (
               <p className={`text-[10px] font-mono mt-1.5 ${oversizedForDetached.length > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
                 {oversizedForDetached.length > 0
