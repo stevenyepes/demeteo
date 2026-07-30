@@ -804,7 +804,7 @@ fn build_unmeasurable_message(
         // The settings panel (HB6) states the same two facts before a run is
         // ever paid for, so the sentence lives in one place and both sites read
         // it — a second copy would drift out of agreement with this one.
-        crate::adapters::step_executor::preflight::FRESH_CHECKOUT_REMEDIATION,
+        crate::domain::harness_preflight::verdict::FRESH_CHECKOUT_REMEDIATION,
     )
 }
 
