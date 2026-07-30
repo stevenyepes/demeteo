@@ -59,6 +59,40 @@ impl PromptContext {
         out
     }
 
+    /// Render a template whose result will be **executed** rather than read.
+    ///
+    /// [`render`](Self::render) is built for prose: an unset token collapses
+    /// to `""`, which costs an agent one missing sentence. A shell command is
+    /// the opposite — `{{build_command}}` on a project that configures none
+    /// would render to the empty string, and an empty command is not a command
+    /// that did nothing, it is a gate that reported success without running.
+    /// That is the "absent is not green" failure the harness baseline exists to
+    /// prevent, arriving through a different door.
+    ///
+    /// So every token here must resolve to a non-empty value, and the `Err` is
+    /// author-facing: it names the token and therefore the project setting that
+    /// fills it. Callers surface it as a terminal outcome with remediation —
+    /// no retry can add a project setting, so opening a rework loop over one
+    /// spends the whole budget and ends no better informed (S13, decision 43).
+    ///
+    /// Pure, so a workflow's command resolution is assertable without a driver.
+    pub fn render_executable(&self, template: &str) -> Result<String, String> {
+        for token in referenced_tokens(template) {
+            if self.get(&token).trim().is_empty() {
+                return Err(format!(
+                    "`{{{{{token}}}}}` is not configured for this project, so \
+                     there is no command to run. Set it in the project's \
+                     settings, or remove the token from this step."
+                ));
+            }
+        }
+        let rendered = self.render(template);
+        if rendered.trim().is_empty() {
+            return Err("resolves to an empty command".to_string());
+        }
+        Ok(rendered)
+    }
+
     /// Clone the context — useful when adding step-level variables on top of a
     /// shared feature-level base context.
     pub fn extend(self, key: &str, value: impl Into<String>) -> Self {
@@ -84,6 +118,37 @@ impl Clone for PromptContext {
             vars: self.vars.clone(),
         }
     }
+}
+
+/// Every `{{token}}` name `template` references, in order, deduplicated.
+///
+/// An unclosed `{{` yields nothing: [`collapse_unknown_placeholders`] emits it
+/// literally rather than treating it as a token, and the two must agree or
+/// [`PromptContext::render_executable`] would reject a command over a brace
+/// that renders as an ordinary character.
+fn referenced_tokens(template: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '{' || chars.peek() != Some(&'{') {
+            continue;
+        }
+        chars.next(); // consume the second `{`
+        let mut token = String::new();
+        let mut closed = false;
+        while let Some(tc) = chars.next() {
+            if tc == '}' && chars.peek() == Some(&'}') {
+                chars.next();
+                closed = true;
+                break;
+            }
+            token.push(tc);
+        }
+        if closed && !out.contains(&token) {
+            out.push(token);
+        }
+    }
+    out
 }
 
 /// Scans `s` for any remaining `{{...}}` tokens, logs them as warnings,
