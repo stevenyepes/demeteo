@@ -213,8 +213,8 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [showHealthPanel, setShowHealthPanel] = useState(false);
   const [healthError, setHealthError] = useState('');
 
-  const [defaultBranch, setDefaultBranch] = useState('main');
-  const [branchPrefix, setBranchPrefix] = useState('demeteo/features/');
+  const [defaultBranch, setDefaultBranch] = useState('');
+  const [branchPrefix, setBranchPrefix] = useState('');
   const [testCommand, setTestCommand] = useState('');
   const [buildCommand, setBuildCommand] = useState('');
   const [coverageCommand, setCoverageCommand] = useState('');
@@ -631,15 +631,21 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
 
   const proceedWithReBootstrap = async () => {
     setBootstrapStep('bootstrapping'); setBootstrapError('');
+    // Preserves a value the user edited in a prior strategy_proposal round
+    // before this call's fetches (which may reset the state) run.
+    const currentDefaultBranch = defaultBranch;
+    const currentBranchPrefix = branchPrefix;
+    const currentTestCommand = testCommand;
+    const currentPrTemplate = prTemplate;
     try {
       const existing = await invoke<ProjectSettingsData | null>('get_proposed_strategy', { projectId: activeProject.id });
       await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
       const strategy = await invoke<WorktreeStrategy>('bootstrap_project', { projectId: activeProject.id });
       const ext = existing?.worktree_strategy;
-      setDefaultBranch(ext?.default_branch ?? strategy.default_branch);
-      setBranchPrefix(ext?.branch_prefix ?? strategy.branch_prefix);
-      setTestCommand(ext?.test_command ?? strategy.test_command ?? '');
-      setPrTemplate(ext?.pr_template ?? strategy.pr_template ?? '');
+      setDefaultBranch(currentDefaultBranch || ext?.default_branch || strategy.default_branch);
+      setBranchPrefix(currentBranchPrefix || ext?.branch_prefix || strategy.branch_prefix);
+      setTestCommand(currentTestCommand || ext?.test_command || strategy.test_command || '');
+      setPrTemplate(currentPrTemplate || ext?.pr_template || strategy.pr_template || '');
       setBootstrapStep('strategy_proposal');
     } catch (err) { setBootstrapStep('error'); setBootstrapError(formatError(err)); }
   };

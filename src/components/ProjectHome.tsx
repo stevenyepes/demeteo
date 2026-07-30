@@ -101,8 +101,8 @@ const ProjectHome = () => {
     const [bootstrapError, setBootstrapError] = useState('');
 
     // Strategy Form States
-    const [defaultBranch, setDefaultBranch] = useState('main');
-    const [branchPrefix, setBranchPrefix] = useState('demeteo/features/');
+    const [defaultBranch, setDefaultBranch] = useState('');
+    const [branchPrefix, setBranchPrefix] = useState('');
     const [testCommand, setTestCommand] = useState('');
     const [prTemplate, setPrTemplate] = useState('');
     const [conflictPolicy, setConflictPolicy] = useState('always_gate');
@@ -112,6 +112,12 @@ const ProjectHome = () => {
     const handleRetryBootstrap = async () => {
         setLocalBootstrapStep('bootstrapping');
         setBootstrapError('');
+        // Preserves a value the user edited in a prior strategy_proposal
+        // round before this call's fetches (which may reset the state) run.
+        const currentDefaultBranch = defaultBranch;
+        const currentBranchPrefix = branchPrefix;
+        const currentTestCommand = testCommand;
+        const currentPrTemplate = prTemplate;
         try {
             // Read existing settings so we preserve user-customized values
             const existing = await invoke<ProjectSettingsData | null>('get_proposed_strategy', {
@@ -123,10 +129,10 @@ const ProjectHome = () => {
             });
 
             const ext = existing?.worktree_strategy;
-            setDefaultBranch(ext?.default_branch ?? strategy.default_branch);
-            setBranchPrefix(ext?.branch_prefix ?? strategy.branch_prefix);
-            setTestCommand(ext?.test_command ?? strategy.test_command ?? '');
-            setPrTemplate(ext?.pr_template ?? strategy.pr_template ?? '');
+            setDefaultBranch(currentDefaultBranch || ext?.default_branch || strategy.default_branch);
+            setBranchPrefix(currentBranchPrefix || ext?.branch_prefix || strategy.branch_prefix);
+            setTestCommand(currentTestCommand || ext?.test_command || strategy.test_command || '');
+            setPrTemplate(currentPrTemplate || ext?.pr_template || strategy.pr_template || '');
             setLocalBootstrapStep('strategy_proposal');
         } catch (err: any) {
             setLocalBootstrapStep('error');
