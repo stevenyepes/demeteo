@@ -45,6 +45,7 @@ pub(crate) mod artifacts;
 pub(crate) mod completion;
 pub(crate) mod context;
 pub(crate) mod error_message;
+pub(crate) mod gate_decision;
 mod handler;
 pub(crate) mod prompt;
 mod schema;

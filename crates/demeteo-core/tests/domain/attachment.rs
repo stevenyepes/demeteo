@@ -101,3 +101,68 @@ fn attached_file_serde_roundtrip() {
     let back: AttachedFile = serde_json::from_str(&json).unwrap();
     assert_eq!(back, f);
 }
+
+// ── resolved_ext / worktree_display_path ─────────────────────────────────────
+//
+// The ladder and the path choice each existed in three and two byte-identical
+// copies, one of them inside an `async fn` where no test could reach it. Both
+// decide the `<sha256>.<ext>` filename a prompt tells the agent to `Read`.
+
+fn att(mime: &str, source_filename: &str) -> AttachedFile {
+    AttachedFile {
+        id: "at-1".to_string(),
+        name: "shot".to_string(),
+        mime: mime.to_string(),
+        sha256: "abc123".to_string(),
+        size: 10,
+        source_filename: source_filename.to_string(),
+    }
+}
+
+#[test]
+fn a_known_mime_decides_the_extension() {
+    assert_eq!(resolved_ext(&att("image/png", "whatever.jpeg")), "png");
+}
+
+#[test]
+fn an_unknown_mime_falls_back_to_the_filenames_own_extension_lowercased() {
+    assert_eq!(
+        resolved_ext(&att("application/x-thing", "Report.MD")),
+        "md",
+        "the on-disk name is content-addressed and lowercase; an upper-case ext \
+         would produce a path nothing wrote"
+    );
+}
+
+#[test]
+fn an_unknown_mime_and_no_extension_is_bin() {
+    assert_eq!(resolved_ext(&att("application/x-thing", "README")), "bin");
+}
+
+#[test]
+fn a_worktree_dir_wins_over_the_host_local_store_path() {
+    let stored = std::path::Path::new("/home/u/.local/share/demeteo/attachments/f-1/abc123.png");
+    assert_eq!(
+        worktree_display_path(
+            &att("image/png", "shot.png"),
+            "png",
+            Some("/wt/artifacts/_context"),
+            stored
+        ),
+        std::path::Path::new("/wt/artifacts/_context")
+            .join("attachments")
+            .join("abc123.png")
+            .to_string_lossy()
+            .to_string(),
+        "the copy inside the fence is the only path `external_directory: deny` accepts"
+    );
+}
+
+#[test]
+fn with_no_worktree_dir_the_stored_path_is_all_there_is() {
+    let stored = std::path::Path::new("/store/f-1/abc123.png");
+    assert_eq!(
+        worktree_display_path(&att("image/png", "shot.png"), "png", None, stored),
+        "/store/f-1/abc123.png"
+    );
+}

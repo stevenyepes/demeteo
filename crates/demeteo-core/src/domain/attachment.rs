@@ -92,6 +92,48 @@ pub fn ext_for_mime(mime: &str) -> Option<&'static str> {
     }
 }
 
+/// The on-disk extension for one attachment: its mime's, else the extension
+/// its original filename carried, else `bin`.
+///
+/// The ladder existed three times byte for byte — once inside an `async fn`,
+/// where nothing could reach it — and all three feed the same content-addressed
+/// `<sha256>.<ext>` filename. Three copies of a filename rule is three chances
+/// for a prompt to point at a path nothing wrote.
+pub fn resolved_ext(att: &AttachedFile) -> String {
+    ext_for_mime(&att.mime)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            std::path::Path::new(&att.source_filename)
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "bin".to_string())
+        })
+}
+
+/// Where a prompt should tell the agent this attachment is.
+///
+/// When a worktree context dir is known, `materialize_user_attachments_to_worktree`
+/// has already copied the file into `{wt}/artifacts/_context/attachments/`, and
+/// naming that destination is what lets the `external_directory: deny` fence
+/// accept the `Read`. With no worktree dir the host-local store path is all
+/// there is.
+pub fn worktree_display_path(
+    att: &AttachedFile,
+    ext: &str,
+    worktree_artifacts_dir: Option<&str>,
+    stored: &std::path::Path,
+) -> String {
+    match worktree_artifacts_dir {
+        Some(wt_dir) => std::path::Path::new(wt_dir)
+            .join("attachments")
+            .join(format!("{}.{}", att.sha256, ext))
+            .to_string_lossy()
+            .to_string(),
+        None => stored.to_string_lossy().to_string(),
+    }
+}
+
 /// Lowercase extension → IANA mime guess.
 pub fn mime_for_ext(ext: &str) -> Option<&'static str> {
     let e = ext.to_ascii_lowercase();
