@@ -44,7 +44,11 @@ import { WorkflowNode } from './nodes/WorkflowNode';
 import { toFlowGraph, type GraphOrientation, type WorkflowFlowNode } from './flowGraph';
 import {
   isUnarranged,
-  pickDirection,
+  needsMiniMap,
+  planLayout,
+  FIT_PADDING,
+  MAX_ZOOM,
+  MIN_ZOOM,
   type ContainerSize,
   type LayoutDirection,
 } from './layoutDirection';
@@ -57,13 +61,12 @@ import type { GraphDiff } from './graphDiff';
 import type { LintIndex } from './lint';
 import type { NodeRunStatus, PositionV2, WorkflowDefinitionV2 } from './types';
 
-/** Below this node count the minimap is noise, so it auto-hides (PRD §6.1). */
-const MINIMAP_THRESHOLD = 8;
-
 const NODE_TYPES = { workflow: WorkflowNode };
 
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 1.75;
+/** Every `fitView` call passes these, so the scale React Flow settles on is the
+ *  one `planLayout` estimated against — the zoom bound and the margin both come
+ *  from `layoutDirection`, which is why neither is spelled here. */
+const FIT_VIEW_OPTIONS = { maxZoom: MAX_ZOOM, padding: 1 - FIT_PADDING };
 
 export type CanvasMode = 'run' | 'design';
 
@@ -213,7 +216,33 @@ function CanvasInner({
     );
   }, [selectedNodeId, setNodes]);
 
-  const showMiniMap = nodes.length >= MINIMAP_THRESHOLD;
+  /** Structural fingerprint of the graph as the layout cares about it: ids,
+   *  measurements, endpoints. The live status overlay re-seeds `nodes` on every
+   *  event without touching any of that, so keying the plan on this — rather
+   *  than on the array identity — is what keeps a status tick from re-deciding
+   *  the orientation and re-running elk (spec Constraint 7). */
+  const graphKey = `${nodes
+    .map((n) => `${n.id}:${n.measured?.width ?? 0}x${n.measured?.height ?? 0}`)
+    .join(',')}|${edges.map((e) => `${e.source}>${e.target}`).join(',')}`;
+
+  /** The one layout verdict for this graph in this container: orientation,
+   *  estimated box, and the scale fit-view will settle on. Both the auto-layout
+   *  and the re-orient effect read it, so they cannot disagree. */
+  const plan = useMemo(
+    () =>
+      planLayout(
+        nodes.map((n) => ({ id: n.id, measured: n.measured })),
+        edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+        containerSize,
+        MAX_ZOOM,
+      ),
+    // `graphKey` stands in for `nodes`/`edges` on purpose — see above.
+    [graphKey, containerSize],
+  );
+
+  // The minimap earns its space on node count *or* on a fit scale too low to
+  // read the labels at — the second case is what a responsive box introduces.
+  const showMiniMap = needsMiniMap(plan, nodes.length);
 
   /** Lay the graph out, choosing the orientation that renders largest in the
    *  space the canvas currently has. Reads nodes/edges imperatively so it
@@ -227,7 +256,7 @@ function CanvasInner({
         source: e.source,
         target: e.target,
       }));
-      const direction = pickDirection(layoutNodes, layoutEdges, containerSize, MAX_ZOOM);
+      const direction = plan.direction;
 
       const positions = await layout(layoutNodes, layoutEdges, direction);
       if (positions.length === 0) return;
@@ -245,9 +274,11 @@ function CanvasInner({
         }),
       );
       // Let React Flow commit the new positions before fitting the viewport.
-      window.requestAnimationFrame(() => void fitView({ duration: opts.duration ?? 300 }));
+      window.requestAnimationFrame(
+        () => void fitView({ ...FIT_VIEW_OPTIONS, duration: opts.duration ?? 300 }),
+      );
     },
-    [containerSize, getEdges, getNodes, layout, setNodes, fitView],
+    [plan, getEdges, getNodes, layout, setNodes, fitView],
   );
 
   /** Nobody arranged this graph, so the canvas may arrange it for the window.
@@ -262,19 +293,9 @@ function CanvasInner({
   // the time via `appliedDirRef`, so dragging a window edge doesn't thrash elk.
   useEffect(() => {
     if (!autoArrange || !nodesInitialized || !containerSize) return;
-    const layoutNodes = (getNodes() as WorkflowFlowNode[]).map((n) => ({
-      id: n.id,
-      measured: n.measured,
-    }));
-    const next = pickDirection(
-      layoutNodes,
-      getEdges().map((e) => ({ id: e.id, source: e.source, target: e.target })),
-      containerSize,
-      MAX_ZOOM,
-    );
-    if (next === appliedDirRef.current) {
+    if (plan.direction === appliedDirRef.current) {
       // Same shape, more (or less) room: just re-fit into it.
-      void fitView({ duration: 200 });
+      void fitView({ ...FIT_VIEW_OPTIONS, duration: 200 });
       return;
     }
     void runAutoLayout({ duration: appliedDirRef.current ? 300 : 0 });
@@ -285,8 +306,7 @@ function CanvasInner({
     definition,
     nodesInitialized,
     containerSize,
-    getEdges,
-    getNodes,
+    plan,
     fitView,
     runAutoLayout,
   ]);
@@ -547,6 +567,7 @@ function CanvasInner({
         onEdgesDelete={design ? onEdgesDelete : undefined}
         elementsSelectable
         fitView
+        fitViewOptions={FIT_VIEW_OPTIONS}
         proOptions={{ hideAttribution: true }}
         minZoom={MIN_ZOOM}
         maxZoom={MAX_ZOOM}
@@ -574,7 +595,7 @@ function CanvasInner({
             </button>
             <button
               type="button"
-              onClick={() => void fitView({ duration: 300 })}
+              onClick={() => void fitView({ ...FIT_VIEW_OPTIONS, duration: 300 })}
               className="flex h-7 w-7 items-center justify-center text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-white"
               title="Fit view"
               aria-label="Fit view"

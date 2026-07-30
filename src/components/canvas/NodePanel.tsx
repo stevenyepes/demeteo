@@ -86,6 +86,11 @@ export interface NodePanelProps {
   onClose: () => void;
   /** Open a worktree-ref artifact in the code editor (passed to `ArtifactViewer`). */
   onOpenEditorForPath?: (filePath: string) => void;
+  /** Delegate an artifact click to the host's shared artifact overlay
+   *  (`ArtifactModal`) instead of previewing it inline. When passed, the panel
+   *  renders no `ArtifactViewer` of its own, so the graph drill-down and the
+   *  timeline open the same surface. Omitted = today's inline preview. */
+  onOpenArtifact?: (artifactPath: string) => void;
   /** The run's unified `run_events` feed (P1.13) — local push or remote poll,
    *  same shape either way (P2.6). Rendered raw in the Overview tab, replacing
    *  the standalone `RunEventTimeline` as a separate surface. */
@@ -118,6 +123,7 @@ export function NodePanel({
   step,
   onClose,
   onOpenEditorForPath,
+  onOpenArtifact,
   runEvents,
   liveStream,
   isStreaming,
@@ -189,7 +195,11 @@ export function NodePanel({
   const hasActions = !!(onRetry || onReplay || onStop || onDecideGate);
 
   return (
-    <div className="flex h-full w-[62%] min-w-0 flex-col border-l border-white/5 bg-[#0d0f14]/80 backdrop-blur-xl">
+    // Clamped, not a fixed percentage: at 4K a flat 62% is a ~2100px panel and
+    // leaves the canvas 38% of the window, while in a half-width window the
+    // same fraction is too narrow to read. A basis with a floor and a ceiling
+    // gives the graph everything past the panel's comfortable reading width.
+    <div className="flex h-full basis-[42%] min-w-[20rem] max-w-[38rem] shrink-0 flex-col border-l border-white/5 bg-[#0d0f14]/80 backdrop-blur-xl">
       {/* Header */}
       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/5 px-5 py-4">
         <div className="min-w-0">
@@ -266,6 +276,7 @@ export function NodePanel({
             selectedArtifact={selectedArtifact}
             onSelectArtifact={setSelectedArtifact}
             onOpenEditorForPath={onOpenEditorForPath}
+            onOpenArtifact={onOpenArtifact}
           />
         )}
         {tab === 'actions' && (
@@ -677,6 +688,7 @@ function OutputTab({
   selectedArtifact,
   onSelectArtifact,
   onOpenEditorForPath,
+  onOpenArtifact,
 }: {
   step: StepExecution | null;
   hasOutput: boolean;
@@ -684,6 +696,7 @@ function OutputTab({
   selectedArtifact: string | null;
   onSelectArtifact: (path: string) => void;
   onOpenEditorForPath?: (filePath: string) => void;
+  onOpenArtifact?: (artifactPath: string) => void;
 }) {
   // Cache-bust the viewer the same way the timeline does: a re-pull can
   // overwrite an artifact at the same path, so key on what changes on a fresh
@@ -724,11 +737,13 @@ function OutputTab({
           </div>
           {artifactPaths.map((path) => {
             const cls = classifyArtifact(path);
-            const selected = selectedArtifact === path;
+            // Nothing stays "selected" when the host owns the preview — the
+            // modal is the selection.
+            const selected = !onOpenArtifact && selectedArtifact === path;
             return (
               <button
                 key={path}
-                onClick={() => onSelectArtifact(path)}
+                onClick={() => (onOpenArtifact ? onOpenArtifact(path) : onSelectArtifact(path))}
                 className={`flex w-full items-center gap-3 rounded border p-2.5 text-left font-mono text-xs transition ${
                   selected
                     ? 'border-violet-500/30 bg-violet-950/20 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
@@ -748,8 +763,9 @@ function OutputTab({
         </div>
       )}
 
-      {/* Selected artifact body */}
-      {selectedArtifact && (
+      {/* Selected artifact body — only when the host hasn't taken the preview
+          over via `onOpenArtifact`. */}
+      {!onOpenArtifact && selectedArtifact && (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ArtifactViewer
             artifactPath={selectedArtifact}
