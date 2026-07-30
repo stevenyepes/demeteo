@@ -429,3 +429,181 @@ describe('ProjectHome — persistent Start Session affordance', () => {
     });
   });
 });
+
+// Regression tests for `handleRetryBootstrap` — reached from the "Retry
+// Bootstrap" button on the "Workspace Bootstrap Failed" banner. The bug:
+// it re-fetches a stale `get_proposed_strategy` result and a freshly
+// re-detected `bootstrap_project` strategy, then overwrites the in-scope
+// testCommand (and sibling) state with `ext?.field ?? strategy.field ?? ''`
+// — discarding any edit already sitting in the "STRATEGY DETECTED" popup's
+// Test Command field from a prior pass through this same handler.
+describe('ProjectHome — handleRetryBootstrap testCommand precedence', () => {
+  const EXISTING_TEST_COMMAND = 'A: stale existing command';
+  const STRATEGY_TEST_COMMAND = 'B: freshly re-detected command';
+
+  function mockRetryBootstrapBackend() {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'fetch_active_features':
+          return Promise.resolve([]);
+        case 'get_repositories_for_project':
+          return Promise.resolve([]);
+        case 'workflow_list':
+          return Promise.resolve([]);
+        case 'remote_list_mirrored_runs':
+          return Promise.resolve([]);
+        case 'get_proposed_strategy':
+          return Promise.resolve({
+            worktree_strategy: {
+              default_branch: 'main',
+              branch_prefix: 'demeteo/features/',
+              test_command: EXISTING_TEST_COMMAND,
+              pr_template: null,
+            },
+          });
+        case 'bootstrap_project':
+          return Promise.resolve({
+            default_branch: 'main',
+            branch_prefix: 'demeteo/features/',
+            test_command: STRATEGY_TEST_COMMAND,
+            pr_template: null,
+          });
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+  }
+
+  async function retryBootstrap() {
+    await userEvent.click(await screen.findByRole('button', { name: /Retry Bootstrap/i }));
+    await screen.findByText('STRATEGY DETECTED');
+  }
+
+  it('shows the value the user just typed, not the stale existing/strategy reads', async () => {
+    mockRetryBootstrapBackend();
+    mount(baseProject({ status: 'error' }));
+
+    // First pass: open the popup so the Test Command input exists, and
+    // simulate a prior user edit in it.
+    await retryBootstrap();
+    const input = screen.getByPlaceholderText('e.g. npm test or cargo test');
+    const typedCommand = 'C: what the user just typed';
+    await userEvent.clear(input);
+    await userEvent.type(input, typedCommand);
+    expect(input).toHaveValue(typedCommand);
+
+    // Back out to the error banner without saving, then retry again — this
+    // second pass through handleRetryBootstrap is the interaction under test.
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await retryBootstrap();
+
+    expect(screen.getByPlaceholderText('e.g. npm test or cargo test')).toHaveValue(typedCommand);
+  });
+
+  it('falls back to ext.test_command, then strategy.test_command, when nothing was typed', async () => {
+    mockRetryBootstrapBackend();
+    mount(baseProject({ status: 'error' }));
+
+    await retryBootstrap();
+
+    // ext.test_command (EXISTING_TEST_COMMAND) wins over strategy.test_command
+    // (STRATEGY_TEST_COMMAND) — unchanged pre-fix fallback behavior.
+    expect(screen.getByPlaceholderText('e.g. npm test or cargo test')).toHaveValue(EXISTING_TEST_COMMAND);
+  });
+});
+
+// Regression tests for the same `handleRetryBootstrap` precedence bug, but for
+// `defaultBranch`/`branchPrefix`. Unlike `testCommand`/`prTemplate`, these two
+// used to be seeded with non-empty placeholders (`'main'` /
+// `'demeteo/features/'`) that are always truthy, so `currentDefaultBranch ||
+// ext?.default_branch || strategy.default_branch` never fell through to the
+// detected/persisted value — the popup showed the hardcoded placeholder for
+// any repo whose real default branch wasn't literally `main`.
+describe('ProjectHome — handleRetryBootstrap defaultBranch/branchPrefix precedence', () => {
+  const EXISTING_DEFAULT_BRANCH = 'develop';
+  const STRATEGY_DEFAULT_BRANCH = 'staging';
+  const EXISTING_BRANCH_PREFIX = 'feature/';
+  const STRATEGY_BRANCH_PREFIX = 'df/';
+
+  function mockRetryBootstrapBackend() {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'fetch_active_features':
+          return Promise.resolve([]);
+        case 'get_repositories_for_project':
+          return Promise.resolve([]);
+        case 'workflow_list':
+          return Promise.resolve([]);
+        case 'remote_list_mirrored_runs':
+          return Promise.resolve([]);
+        case 'get_proposed_strategy':
+          return Promise.resolve({
+            worktree_strategy: {
+              default_branch: EXISTING_DEFAULT_BRANCH,
+              branch_prefix: EXISTING_BRANCH_PREFIX,
+              test_command: null,
+              pr_template: null,
+            },
+          });
+        case 'bootstrap_project':
+          return Promise.resolve({
+            default_branch: STRATEGY_DEFAULT_BRANCH,
+            branch_prefix: STRATEGY_BRANCH_PREFIX,
+            test_command: null,
+            pr_template: null,
+          });
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+  }
+
+  async function retryBootstrap() {
+    await userEvent.click(await screen.findByRole('button', { name: /Retry Bootstrap/i }));
+    await screen.findByText('STRATEGY DETECTED');
+  }
+
+  // The label isn't wired to the input via htmlFor/id — it's a plain sibling
+  // — so getByLabelText can't resolve it. Walk from the label text to the
+  // input in the same wrapper div instead.
+  function getInputByLabel(text: string): HTMLInputElement {
+    const label = screen.getByText(text);
+    return label.parentElement!.querySelector('input') as HTMLInputElement;
+  }
+
+  it('shows the freshly re-detected/persisted branch values, not the old "main"/"demeteo/features/" placeholders, on the first call', async () => {
+    mockRetryBootstrapBackend();
+    mount(baseProject({ status: 'error' }));
+
+    await retryBootstrap();
+
+    // ext.default_branch / ext.branch_prefix win over strategy.* — same
+    // fallback precedence already proven for testCommand above.
+    expect(getInputByLabel('Default Branch')).toHaveValue(EXISTING_DEFAULT_BRANCH);
+    expect(getInputByLabel('Branch Prefix')).toHaveValue(EXISTING_BRANCH_PREFIX);
+  });
+
+  it('preserves a defaultBranch/branchPrefix edit across cancel-then-retry', async () => {
+    mockRetryBootstrapBackend();
+    mount(baseProject({ status: 'error' }));
+
+    // First pass: open the popup, then simulate a prior user edit.
+    await retryBootstrap();
+    const typedBranch = 'release/2026';
+    const typedPrefix = 'wt/';
+    await userEvent.clear(getInputByLabel('Default Branch'));
+    await userEvent.type(getInputByLabel('Default Branch'), typedBranch);
+    await userEvent.clear(getInputByLabel('Branch Prefix'));
+    await userEvent.type(getInputByLabel('Branch Prefix'), typedPrefix);
+    expect(getInputByLabel('Default Branch')).toHaveValue(typedBranch);
+    expect(getInputByLabel('Branch Prefix')).toHaveValue(typedPrefix);
+
+    // Back out without saving, then retry again — the edited values must
+    // survive this second pass through handleRetryBootstrap.
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await retryBootstrap();
+
+    expect(getInputByLabel('Default Branch')).toHaveValue(typedBranch);
+    expect(getInputByLabel('Branch Prefix')).toHaveValue(typedPrefix);
+  });
+});
