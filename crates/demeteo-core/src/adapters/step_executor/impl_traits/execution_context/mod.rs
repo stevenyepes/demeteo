@@ -3,10 +3,13 @@ use crate::adapters::step_executor::setup::{
     build_base_ctx, fetch_default_settings, slug_from_description,
 };
 use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
+use crate::domain::models::workflow_v2::definition_matches_steps;
 use crate::domain::models::{ProjectSettings, StepConfig};
 use crate::domain::prompt_context::PromptContext;
 use crate::domain::workflow_overrides::{bake_step_overrides, overlay_workflow_defaults};
 use crate::paths;
+
+pub(crate) mod repo_probe;
 
 pub struct ExecutionContext {
     pub project_id: ProjectId,
@@ -249,21 +252,10 @@ impl DagStepExecutor {
         // The run's topology. Prefers the version's stored v2 document (V34,
         // P3.6) so a graph authored in the builder runs the edges it was
         // drawn with; falls back to migrating `steps` for every pre-P3.6 row.
-        //
-        // The two representations are written together and so agree by
-        // construction — but a hand-edited row could disagree, and a graph
-        // naming nodes the step list doesn't have would fail the whole run at
-        // schedule time. Rather than trust it, check the id sets match and
-        // fall back to the migration when they don't: `steps` is what the
-        // engine can actually execute, so it is the safer authority for a
-        // definition that has already lost their agreement.
+        // `definition_matches_steps` owns why that fallback exists.
         let definition = {
             let stored = version.definition(wf_id.as_str());
-            let ids: std::collections::HashSet<&str> =
-                steps.iter().map(|s| s.id.as_str()).collect();
-            let matches = stored.nodes.len() == steps.len()
-                && stored.nodes.iter().all(|n| ids.contains(n.id.as_str()));
-            if matches {
+            if definition_matches_steps(&stored, &steps) {
                 stored
             } else {
                 tracing::warn!(
@@ -295,34 +287,11 @@ impl DagStepExecutor {
             .clone()
             .unwrap_or_else(|| crate::domain::ids::LOCAL_MACHINE.to_string());
 
-        // Path probe
-        let parent_dir = std::path::Path::new(&target_dir)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let probe = format!(
-            "echo __DEMETEO_DIAG__ home=\\\"$HOME\\\" pwd=\\\"$PWD\\\"; \
-             ls -la {} 2>&1; \
-             test -d {} && echo __DEMETEO_DIAG__ exists || echo __DEMETEO_DIAG__ missing",
-            paths::shell_escape_posix(&parent_dir),
-            paths::shell_escape_posix(&target_dir),
-        );
         emit(bp::VERIFYING_REPO, "running", None);
-        let probe_output = self
-            .exec
-            .run_command(&machine_id_for_check, &probe)
-            .await
-            .unwrap_or_else(|e| format!("probe failed: {}", e));
-        let path_ok = probe_output.contains("__DEMETEO_DIAG__ exists");
-        if !path_ok {
-            let e = format!(
-                "Repository target dir does not exist on '{}': {}\n\
-                 Remote diagnostic probe output:\n{}\n\n\
-                 If the parent dir listing is empty, the bootstrap clone \
-                 did not actually run for this project — re-save the \
-                 workspace settings to trigger a fresh bootstrap.",
-                machine_id_for_check, target_dir, probe_output
-            );
+        if let Err(e) =
+            repo_probe::verify_repo_present(self.exec.as_ref(), &machine_id_for_check, &target_dir)
+                .await
+        {
             emit(bp::VERIFYING_REPO, "failed", Some(e.clone()));
             return Err(e);
         }
