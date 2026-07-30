@@ -24,15 +24,15 @@
       "error": null
     },
     {
-      "step_id": "s-fix",
+      "step_id": "s-plan-fix",
       "kind": "agent",
       "status": "completed",
       "iterations": 0,
       "error": null
     },
     {
-      "step_id": "s-smoke",
-      "kind": "agent",
+      "step_id": "s-fix",
+      "kind": "sequence",
       "status": "completed",
       "iterations": 0,
       "error": null
@@ -86,9 +86,9 @@
       "# stub artifact\n\npath: artifacts/s-verify.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
-      "s-reproduce",
-      "s-reproduce.md",
-      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
+      "s-plan-fix",
+      "task-list.json",
+      "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
     ],
     [
       "s-reproduce",
@@ -96,9 +96,9 @@
       "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
-      "s-smoke",
-      "s-smoke.md",
-      "# stub artifact\n\npath: artifacts/s-smoke.md\ngenerated-by: demeteo stub agent\n"
+      "s-reproduce",
+      "s-reproduce.md",
+      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
       "s-verify",

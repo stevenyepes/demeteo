@@ -79,12 +79,15 @@ fn on_failure_becomes_verdict_redirect_retry() {
     let steps = steps_of(&doc);
     let def = migrate_v1_to_v2("wf-bugfix".into(), "Bugfix", &steps);
 
-    // s-fix: on_failure = s-reproduce, max_iterations = 3.
+    // s-fix: on_failure = s-gate-confirm, max_iterations = 2.
     let fix = def.nodes.iter().find(|n| n.id.as_str() == "s-fix").unwrap();
     let rule = fix.retry.as_ref().unwrap().verdict.as_ref().unwrap();
     assert_eq!(rule.strategy, RetryStrategy::Redirect);
-    assert_eq!(rule.redirect_to.as_ref().unwrap().as_str(), "s-reproduce");
-    assert_eq!(rule.max_attempts, Some(3));
+    assert_eq!(
+        rule.redirect_to.as_ref().unwrap().as_str(),
+        "s-gate-confirm"
+    );
+    assert_eq!(rule.max_attempts, Some(2));
     assert!(rule.feedback, "RetryContext append behavior is preserved");
     // v1 routed plain agent failures through the same on_failure path —
     // the migrated policy must cover `agent_failure` identically, or the
@@ -98,15 +101,21 @@ fn on_failure_becomes_verdict_redirect_retry() {
     assert!(fix.config.get("max_iterations").is_none());
     assert!(fix.config.get("on_failure").is_none());
 
-    // s-verify: on_failure = s-fix, no max_iterations → attempts resolve
+    // s-verify: on_failure = s-plan-fix, no max_iterations → attempts resolve
     // through the runtime precedence chain, so the policy carries None.
+    //
+    // The target is the step that *produces* `s-fix`'s task list, not `s-fix`
+    // itself (decision 43): a rework cycle re-scopes the defect into fresh
+    // tickets against the branch the previous cycle already landed, rather
+    // than re-running an execution step whose list still describes work that
+    // is committed.
     let verify = def
         .nodes
         .iter()
         .find(|n| n.id.as_str() == "s-verify")
         .unwrap();
     let rule = verify.retry.as_ref().unwrap().verdict.as_ref().unwrap();
-    assert_eq!(rule.redirect_to.as_ref().unwrap().as_str(), "s-fix");
+    assert_eq!(rule.redirect_to.as_ref().unwrap().as_str(), "s-plan-fix");
     assert_eq!(rule.max_attempts, None);
 
     // A step without on_failure gets no retry policy; its inert
