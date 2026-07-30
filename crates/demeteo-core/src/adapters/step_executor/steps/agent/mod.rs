@@ -1,3 +1,40 @@
+//! The `agent` step: one agent turn against an ephemeral worktree, cut from
+//! the feature branch and merged back once the turn is judged.
+//!
+//! This file is the orchestration and nothing else — the stages in the order
+//! they run, with the judgement between them. Each stage is a module:
+//!
+//! * [`context`] — the parameter bundles the stages hand each other
+//! * [`prompt`] — everything the agent is told, in a strict order
+//! * [`spawn`] — which session it talks to, and when that session is unsafe
+//!   to reuse
+//! * [`turn`] — streaming one turn, and what the feature owes for it
+//! * [`artifacts`] — what the turn wrote, committed and resolved against the
+//!   step's declarations
+//! * [`verdict`] — what a validate step does about the verdict its own turn
+//!   emitted
+//! * [`completion`] — how the step ends, once there is nothing left to run
+//! * [`teardown`] — what it drops on the way out, on every path out
+//! * [`handler`] / [`schema`] — the node-type registration
+//!
+//! # What the order here is load-bearing for, and no type enforces
+//!
+//! Three sequencing rules survive only as the order of the calls below, and
+//! breaking any of them produces a run that still passes every test:
+//!
+//! * The objective harness commands run **before** the chmod fence — build
+//!   tools have to write `target/`, `node_modules/` — and before any agent
+//!   turn. Hoisting `apply_artifact_scope` for tidiness silently breaks
+//!   every project whose gate builds anything, and nothing goes red.
+//! * The capability-driven scope fence (`AGENTS.md` §2: never widen it) is
+//!   applied after the harness-first run and **before** the spawn.
+//! * The post-step diff guard runs **before** the merge, so files it reverts
+//!   never reach the feature branch.
+//!
+//! The three cancellation reads are likewise placed, not incidental: one
+//! after provisioning, one after the turn, one at the close. An extra read
+//! is a new race window; a missing one is a Stop that does nothing.
+
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
