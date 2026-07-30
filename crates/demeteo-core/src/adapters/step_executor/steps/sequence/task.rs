@@ -220,10 +220,10 @@ impl ExecutionDriver {
             &*self.exec,
             target.machine,
             wt.path,
-            &format!(
-                "feat({}): {}",
+            &crate::domain::sequence::tasks::task_commit_message(
                 self.f_id.as_str(),
-                task.title.to_lowercase()
+                &task.id,
+                &task.title,
             ),
             &self.artifact_subdir,
             self.commit_artifacts,

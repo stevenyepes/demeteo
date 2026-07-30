@@ -496,3 +496,106 @@ fn the_overlap_fallback_sees_the_cached_plans_own_tasks_not_only_its_history() {
         "a re-decomposition reusing ids is not"
     );
 }
+
+/// The rework prompt tells the producer to write no tickets when the review
+/// named nothing a ticket can fix, and to say why. `notes` was not a field,
+/// so serde dropped that "why" on the floor and the run failed with a
+/// message about unreadable JSON — over an artifact that parsed perfectly.
+#[test]
+fn a_producers_reason_for_an_empty_rework_list_survives_the_parse() {
+    let body = r#"{"kind": "rework", "tasks": [],
+        "notes": "the failing check is a project-configuration gap, not an implementation defect"}"#;
+    let plan = extract_task_plan(body).expect("an empty rework list is still valid JSON");
+    assert_eq!(plan.kind, PlanKind::Rework);
+    assert!(plan.tasks.is_empty());
+    assert_eq!(
+        plan.notes.as_deref(),
+        Some("the failing check is a project-configuration gap, not an implementation defect")
+    );
+}
+
+/// `notes` is the producer's contract, not execution state, so a plan that
+/// carries none must serialize exactly as it did before the field existed —
+/// the durable plan cache stores this JSON.
+#[test]
+fn a_plan_without_notes_serializes_without_the_key() {
+    let json = serde_json::to_string(&plan()).expect("serializes");
+    assert!(!json.contains("notes"), "{json}");
+}
+
+#[test]
+fn a_short_task_title_becomes_the_commit_subject_unchanged() {
+    let msg = task_commit_message("f-1d0209a0e43d5b67", "ticket-1", "Add the settings context");
+    assert_eq!(msg, "feat(f-1d0209a0e43d5b67): add the settings context");
+    assert!(!msg.contains('\n'), "no body when nothing was dropped");
+}
+
+/// The loop this exists to break: an agent-written ticket title goes into a
+/// commit subject verbatim, the subject busts commitlint's 72, the target
+/// repo's own `npm run checks` fails on `origin/master..HEAD`, validate
+/// rejects the feature, and the rework ticket raised to fix it contributes
+/// its own over-long title as the next bad commit.
+#[test]
+fn an_over_long_title_is_cut_to_fit_commitlints_limits() {
+    let title = "collapse the merged duplicate branch line so no non-compliant commit remains in origin/master..HEAD";
+    let msg = task_commit_message("f-1d0209a0e43d5b67", "rework-2", title);
+    let header = msg.lines().next().expect("a header");
+
+    let subject = header.split_once(": ").expect("conventional header").1;
+    assert!(
+        subject.chars().count() <= 72,
+        "subject was {} chars: {subject}",
+        subject.chars().count()
+    );
+    assert!(
+        header.chars().count() <= 100,
+        "header was {} chars",
+        header.chars().count()
+    );
+    assert!(
+        !subject.ends_with('.'),
+        "commitlint's subject-full-stop rejects it: {subject}"
+    );
+    assert!(header.starts_with("feat(f-1d0209a0e43d5b67): collapse the merged duplicate"));
+
+    // Nothing is lost — the full title is preserved in the body, wrapped
+    // so it cannot trip body-max-line-length in turn.
+    let body = msg.split_once("\n\n").expect("a body").1;
+    assert_eq!(
+        body.split_whitespace().collect::<Vec<_>>().join(" "),
+        title.to_lowercase()
+    );
+    assert!(
+        body.lines().all(|l| l.chars().count() <= 100),
+        "body line over 100: {body}"
+    );
+}
+
+/// `subject-case` rejects sentence/start/pascal/upper case, and a title
+/// arriving as a sentence is the common shape.
+#[test]
+fn a_title_is_lowercased_and_stripped_of_its_trailing_period() {
+    let msg = task_commit_message("f-abc", "t-1", "Wire The Context Provider.");
+    assert_eq!(msg, "feat(f-abc): wire the context provider");
+}
+
+/// A title is agent-written and may be blank or whitespace; a header of
+/// `feat(f-abc): ` is rejected by `subject-empty` and would fail the commit
+/// rather than the lint.
+#[test]
+fn a_blank_title_falls_back_to_the_task_id() {
+    let msg = task_commit_message("f-abc", "ticket-7", "   ");
+    assert_eq!(msg, "feat(f-abc): ticket-7");
+}
+
+/// A single unbroken token longer than the budget has no word boundary to
+/// cut on, and returning an empty subject there would be worse than a
+/// mid-token cut.
+#[test]
+fn a_title_with_no_usable_word_boundary_is_still_cut_to_fit() {
+    let title = "a".repeat(200);
+    let msg = task_commit_message("f-abc", "t-1", &title);
+    let header = msg.lines().next().expect("a header");
+    let subject = header.split_once(": ").expect("conventional header").1;
+    assert_eq!(subject.chars().count(), 72);
+}

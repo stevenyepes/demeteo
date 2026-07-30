@@ -186,6 +186,24 @@ impl ExecutionDriver {
         // one. A gate revision reaching here re-reads a *greenfield* list
         // and must keep being treated as one, however its ids compare.
         let in_rework_cycle = self.rework_mode(step_conf).is_rework();
+
+        // Nothing to run. Two very different situations wear the same shape,
+        // and they must not end the same way — so this is decided here,
+        // where the cycle is known, rather than at the read. Deliberately
+        // ahead of the cache write below: an empty list must not overwrite
+        // the decomposition it was a (non-)delta against.
+        if plan.tasks.is_empty() {
+            return Err(self.empty_task_list_outcome(
+                step_conf
+                    .task_list_from
+                    .as_ref()
+                    .map(|s| s.0.as_str())
+                    .unwrap_or("the planner"),
+                &plan,
+                in_rework_cycle,
+            ));
+        }
+
         let is_delta =
             in_rework_cycle && !planner_sourced && is_rework_plan(&plan, cached.as_ref());
 
@@ -330,6 +348,57 @@ impl ExecutionDriver {
         filtered
     }
 
+    /// How a step reacts to a task list that parses but holds no tasks.
+    ///
+    /// **In a rework cycle this is a sanctioned answer, not a fault.** The
+    /// rework prompt tells the producer to emit nothing when the review it
+    /// is scoping named no defect an implementation ticket can close — a
+    /// criterion the project's harness cannot evidence, say. Retrying
+    /// cannot help: the producer has already looked at the report and the
+    /// code and concluded there is no ticket to write, and asking again
+    /// spends another cycle to be told the same thing (or, worse, to be
+    /// handed invented work). So it stops the run and hands the producer's
+    /// own reason to the human, who is the only one who *can* act on it.
+    ///
+    /// **Outside a rework cycle it is a fault**, and a retryable one: a
+    /// decomposition step that returned no tickets for a feature that has
+    /// not been built yet simply failed at its job, and re-running it is a
+    /// reasonable thing to try.
+    fn empty_task_list_outcome(
+        &self,
+        producer: &str,
+        plan: &TaskPlan,
+        in_rework_cycle: bool,
+    ) -> StepOutcome {
+        if in_rework_cycle || plan.kind == PlanKind::Rework {
+            let reason = plan
+                .notes
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .unwrap_or("It gave no reason.");
+            tracing::info!(
+                feature_id = %self.f_id,
+                producer = %producer,
+                "sequence step: rework cycle scoped to zero tickets — stopping the loop"
+            );
+            StepOutcome::NonRetryable(format!(
+                "sequence step: step '{}' scoped this rework cycle to zero tickets — it found \
+                 nothing in the review feedback that an implementation ticket can fix, so there \
+                 is no code change to make and re-running it would only ask the same question \
+                 again. This needs a human decision. Its stated reason: {}",
+                producer, reason
+            ))
+        } else {
+            StepOutcome::Failed(format!(
+                "sequence step: step '{}' wrote a task list containing no tickets, so there is \
+                 nothing to implement. A greenfield decomposition must emit at least one ticket \
+                 covering the spec's acceptance criteria.",
+                producer
+            ))
+        }
+    }
+
     /// Read the `task-list` artifact produced by step `source_step_id`.
     fn load_task_list_artifact(
         &self,
@@ -373,6 +442,12 @@ impl ExecutionDriver {
                 .filter(|r| !r.to_lowercase().contains("task-list")),
         );
 
+        // A list that parses but carries no tasks is *not* a read failure,
+        // and conflating the two is how a deliberate "nothing to do here"
+        // got reported as malformed JSON. Keep the first one so the caller
+        // can tell them apart, but keep looking: an empty list in one
+        // candidate must not shadow a real one in the next.
+        let mut parsed_empty: Option<TaskPlan> = None;
         for reference in candidates {
             let Ok(body) = self.artifacts.get(reference) else {
                 continue;
@@ -381,7 +456,11 @@ impl ExecutionDriver {
                 if !plan.tasks.is_empty() {
                     return Ok(plan);
                 }
+                parsed_empty.get_or_insert(plan);
             }
+        }
+        if let Some(plan) = parsed_empty {
+            return Ok(plan);
         }
 
         Err(StepOutcome::Failed(format!(

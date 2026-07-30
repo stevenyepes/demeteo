@@ -127,6 +127,19 @@ pub struct TaskPlan {
     /// starting from nothing.
     #[serde(skip)]
     pub resumes_landed_work: bool,
+    /// The producer's prose reason for the list it wrote, carried through
+    /// from the artifact.
+    ///
+    /// It exists for one case, and that case is the whole justification: a
+    /// rework producer is *told* to emit no tickets when the review it is
+    /// scoping named nothing an implementation ticket can fix ("Say so in
+    /// the ticket list's absence rather than inventing work"). Its reason
+    /// for doing so is the only thing that makes that outcome legible to a
+    /// human, and before this field `serde` silently dropped it as an
+    /// unknown key — leaving a zero-task list that looked indistinguishable
+    /// from a broken one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
 }
 
 /// One finished cycle of a step's decomposition, as stored in
@@ -582,6 +595,123 @@ fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+/// Commitlint's header limits, as `@commitlint/config-conventional` sets
+/// them out of the box.
+///
+/// Demeteo cannot read the *target* repo's `.commitlintrc` — it may not have
+/// one, and reading it would mean parsing a JS config from a worktree — so
+/// these are the defaults, and they are the right guess: a project that
+/// lints commits at all almost always extends config-conventional, and a
+/// project that lints nothing is unharmed by a message that would have
+/// passed.
+const SUBJECT_MAX: usize = 72;
+const HEADER_MAX: usize = 100;
+/// Classic git body width, comfortably under config-conventional's
+/// `body-max-line-length` of 100 — which a long title *would* trip if the
+/// overflow were emitted as one line.
+const BODY_WRAP: usize = 72;
+
+/// The commit message for one finished task.
+///
+/// Every task in a `sequence` step commits before the next one starts, and
+/// those commits land on the feature branch — inside the very range
+/// (`<default>..HEAD`) that the target repo's own harness lints. So this
+/// message is not cosmetic: an over-long subject fails the project's
+/// `commitlint` run, which fails its test harness, which fails the validate
+/// step, which opens a rework cycle — whose ticket title becomes the next
+/// over-long subject. The loop is self-feeding and no ticket can break it,
+/// because the defect is in the orchestrator's own commit, not in the code
+/// under review. Hence the truncation here rather than a check somewhere
+/// that could only report the problem after the fact.
+///
+/// Task titles are written by an agent against a rubric that never mentioned
+/// a length limit, so treating a long one as an error would fail a step over
+/// a naming choice. The title is shortened for the subject and preserved in
+/// full in the body instead.
+pub fn task_commit_message(feature_id: &str, task_id: &str, title: &str) -> String {
+    let mut full = normalize_subject(title);
+    if full.is_empty() {
+        full = normalize_subject(task_id);
+    }
+    if full.is_empty() {
+        full = "implement task".to_string();
+    }
+
+    // Both limits bind, and the header's is the tighter one once the scope
+    // is long enough. `feat(): ` is the 8 fixed characters around the scope.
+    // The floor keeps an absurd scope from producing an empty subject — that
+    // header is over the limit whatever we do, and a truncated subject is
+    // still more useful than none.
+    let cap = SUBJECT_MAX
+        .min(HEADER_MAX.saturating_sub(feature_id.chars().count() + "feat(): ".len()))
+        .max(20);
+
+    let subject = truncate_on_word_boundary(&full, cap);
+    let header = format!("feat({}): {}", feature_id, subject);
+    if subject == full {
+        header
+    } else {
+        format!("{}\n\n{}", header, wrap_body(&full, BODY_WRAP))
+    }
+}
+
+/// Fold an agent-written title into something a conventional-commit subject
+/// line accepts: one line, lower case (commitlint's `subject-case` rejects
+/// sentence/start/pascal/upper), no trailing period (`subject-full-stop`).
+fn normalize_subject(title: &str) -> String {
+    let collapsed = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed
+        .to_lowercase()
+        .trim_end_matches(['.', ' '])
+        .to_string()
+}
+
+/// Cut `s` to at most `cap` characters, preferring the last word boundary.
+///
+/// Falls back to a hard cut when the boundary would leave less than half the
+/// budget — a two-word subject truncated to one word says less than a
+/// mid-word cut does.
+fn truncate_on_word_boundary(s: &str, cap: usize) -> String {
+    if s.chars().count() <= cap {
+        return s.to_string();
+    }
+    let end = s.char_indices().nth(cap).map(|(i, _)| i).unwrap_or(s.len());
+    let head = &s[..end];
+    let cut = match head.rfind(' ') {
+        Some(i) if i >= cap / 2 => i,
+        _ => head.len(),
+    };
+    let out = head[..cut].trim_end_matches([' ', '.', ',', ';', ':', '-']);
+    if out.is_empty() {
+        head.to_string()
+    } else {
+        out.to_string()
+    }
+}
+
+/// Greedy word wrap. A single word longer than `width` gets its own
+/// over-long line rather than being cut — the body is prose for a human,
+/// and an unbroken token (a path, a symbol) is worth more intact.
+fn wrap_body(s: &str, width: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in s.split_whitespace() {
+        if line.is_empty() {
+            line.push_str(word);
+        } else if line.chars().count() + 1 + word.chars().count() <= width {
+            line.push(' ');
+            line.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut line));
+            line.push_str(word);
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
