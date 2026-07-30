@@ -48,8 +48,8 @@ use crate::adapters::step_executor::failing_tests::{DriverExtractor, FailingTest
 use crate::adapters::step_executor::harness_shell::{harness_ceiling_s, harness_shell_options};
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::harness_baseline::{
-    fallback_baseline_needed, BaselineEnvironmentFault, BaselineProducer, HarnessBaseline,
-    HarnessBaselineRun,
+    fallback_baseline_needed, fallback_gates, BaselineEnvironmentFault, BaselineNodeVerdict,
+    BaselineProducer, HarnessBaseline, HarnessBaselineRun,
 };
 use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::domain::harness_outcome::{harness_block, merge_stderr_into_stdout, HarnessRun};
@@ -547,28 +547,12 @@ impl ExecutionDriver {
     ///
     /// # It records a verdict; it does not judge one
     ///
-    /// A gate that is simply **red** here completes the step. That is the whole
-    /// purpose of the baseline: a repository whose suite was already failing is
-    /// not this feature's defect, and failing the run at its first node would
-    /// restate exactly the misattribution HB2 exists to remove — before a
-    /// single line has been written.
-    ///
-    /// Two things do end the run, and both are the same statement: **this
-    /// machine cannot produce evidence about this project.**
-    ///
-    /// * No measurement at all — a `prepare_command` that fails, or gates that
-    ///   never reach an exit status. The worktree can never be made runnable.
-    /// * A measurement whose classifier said the gate was red *because it could
-    ///   not run here* (HB9). That gate reached an exit status but proved
-    ///   nothing, and it will prove nothing at validate either — where the same
-    ///   answer already terminates the run, after the entire implement budget.
-    ///   Asking here costs zero implement budget, which is the point.
-    ///
-    /// The decision itself is
-    /// [`unrunnable_baseline_gate`](crate::domain::harness_baseline::unrunnable_baseline_gate)
+    /// What a measurement means for the run is
+    /// [`BaselineNodeVerdict`](crate::domain::harness_baseline::BaselineNodeVerdict)
     /// — pure, in `domain/`, reachable from a test with no port doubles
-    /// (AGENTS.md §3). What is left here is the notification and the
-    /// [`StepOutcome`](super::steps::StepOutcome) it maps onto.
+    /// (AGENTS.md §3), and where the reasoning for all three answers lives. What
+    /// is left here is the notification, the terminal wordings, and the
+    /// [`StepOutcome`](super::steps::StepOutcome) each verdict maps onto.
     ///
     /// Returns the same `(outcome, artifact refs)` pair the authored-command
     /// path does, so `handle_command_step` treats the two identically.
@@ -634,11 +618,7 @@ impl ExecutionDriver {
         );
 
         let prepare = settings.worktree_strategy.prepare_command.as_deref();
-        if harnesses.is_empty() && prepare.is_none_or(str::is_empty) {
-            // Nothing is configured. An absence of evidence, not a pass — and
-            // not a failure either: a project with no harness is a valid one,
-            // it just gets no subtraction. S12's rule applies to how the record
-            // reads, and an unwritten record reads as "never measured".
+        if crate::domain::harness_baseline::nothing_to_measure(&harnesses, prepare) {
             let refs = self
                 .store_baseline_note(
                     &step_exec.step_id.0,
@@ -668,13 +648,10 @@ impl ExecutionDriver {
             return (StepOutcome::Cancelled, Vec::new());
         }
 
-        if runs.is_empty() {
-            // `measure_gates` records nothing when the prepare command fails or
-            // when no gate reached an exit status. Both are the same terminal
-            // answer: the machine cannot produce a measurement of this project,
-            // which no amount of implementing will change (HB2c's `prepare`
-            // row).
-            return (
+        let refs: Vec<String> = runs.iter().filter_map(|r| r.output_ref.clone()).collect();
+
+        match crate::domain::harness_baseline::baseline_node_verdict(&runs) {
+            BaselineNodeVerdict::Unmeasurable => (
                 StepOutcome::Environmental(build_unmeasurable_message(
                     machine_str,
                     wt_path,
@@ -682,45 +659,35 @@ impl ExecutionDriver {
                     &harnesses,
                 )),
                 Vec::new(),
-            );
+            ),
+            // The artifact references survive into the failure: the gate's
+            // output is the evidence for the remediation, and a terminal step
+            // whose Output tab is blank is the opposite of what it is for.
+            BaselineNodeVerdict::Unrunnable(gate) => {
+                let msg = crate::domain::harness_remediation::build_environment_message(
+                    machine_str,
+                    wt_path,
+                    gate.command,
+                    gate.reason,
+                    gate.remediation,
+                );
+                crate::adapters::step_executor::driver::verifier::environment::notify_environment_not_ready(
+                    &self.environment_signal(),
+                    step_exec,
+                    &msg,
+                );
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    harness = %gate.name,
+                    base_sha = %base_sha,
+                    "a gate that validation depends on cannot run on this machine — ending the run \
+                     at the head of the graph rather than after the implement budget"
+                );
+                (StepOutcome::Environmental(msg), refs)
+            }
+            BaselineNodeVerdict::Measured => (StepOutcome::Completed, refs),
         }
-
-        let refs: Vec<String> = runs.iter().filter_map(|r| r.output_ref.clone()).collect();
-
-        // A gate that could not run on this machine. The record already knows
-        // it — the classifier answered when the gate was measured, moments ago
-        // — and validate would reach the identical conclusion from the identical
-        // field, only after the whole implement budget has been spent. So say it
-        // here, where nothing has been spent at all.
-        //
-        // The artifact references survive into the failure: the gate's output is
-        // the evidence for the remediation, and a terminal step whose Output tab
-        // is blank is the opposite of what it is for.
-        if let Some(gate) = crate::domain::harness_baseline::unrunnable_baseline_gate(&runs) {
-            let msg = crate::domain::harness_remediation::build_environment_message(
-                machine_str,
-                wt_path,
-                gate.command,
-                gate.reason,
-                gate.remediation,
-            );
-            crate::adapters::step_executor::driver::verifier::environment::notify_environment_not_ready(
-                &self.environment_signal(),
-                step_exec,
-                &msg,
-            );
-            tracing::warn!(
-                feature_id = %self.f_id,
-                step_id = %step_exec.step_id.0,
-                harness = %gate.name,
-                base_sha = %base_sha,
-                "a gate that validation depends on cannot run on this machine — ending the run \
-                 at the head of the graph rather than after the implement budget"
-            );
-            return (StepOutcome::Environmental(msg), refs);
-        }
-
-        (StepOutcome::Completed, refs)
     }
 
     /// Store a short human-readable note as the node's output artifact, so the
@@ -785,11 +752,7 @@ impl ExecutionDriver {
             return;
         };
 
-        let gates: Vec<ResolvedHarness> = resolved
-            .iter()
-            .filter(|r| failed.iter().any(|f| f.name == r.name))
-            .cloned()
-            .collect();
+        let gates = fallback_gates(resolved, failed);
 
         // The resolved gates go in whole, name *and* command: a stored record
         // that holds this gate's name under a command the project has since

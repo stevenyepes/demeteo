@@ -447,6 +447,120 @@ pub fn fallback_baseline_needed(
     })
 }
 
+/// Whether a baseline node has anything to measure at all — asked *before* any
+/// measurement exists, which is why it is not a variant of
+/// [`BaselineNodeVerdict`].
+///
+/// Nothing is configured: no gate resolved, and no `prepare_command` to run
+/// either. That is an absence of evidence, **not a pass** — and not a failure
+/// either: a project with no harness is a valid one, it just gets no
+/// subtraction. S12's rule applies to how the record reads, and an unwritten
+/// record reads as "never measured", so the node completes and says so in its
+/// output rather than writing a record that could be misread as a green base.
+///
+/// `prepare` alone is enough to measure: a project whose install step fails is
+/// unmeasurable for exactly the reason HB2c's `prepare` row exists, and finding
+/// that out at the head of the graph is the whole point.
+pub fn nothing_to_measure(
+    harnesses: &[crate::domain::verifier::ResolvedHarness],
+    prepare: Option<&str>,
+) -> bool {
+    harnesses.is_empty() && prepare.is_none_or(str::is_empty)
+}
+
+/// What a completed baseline measurement means for the run.
+///
+/// # It records a verdict; it does not judge one
+///
+/// A gate that is simply **red** is [`Measured`](Self::Measured) and the run
+/// continues. That is the whole purpose of the baseline: a repository whose
+/// suite was already failing is not this feature's defect, and ending the run at
+/// its first node would restate exactly the misattribution HB2 exists to remove
+/// — before a single line has been written.
+///
+/// Two things do end the run, and both are the same statement: **this machine
+/// cannot produce evidence about this project.**
+///
+/// * [`Unmeasurable`](Self::Unmeasurable) — a `prepare_command` that fails, or
+///   gates that never reach an exit status. The worktree can never be made
+///   runnable.
+/// * [`Unrunnable`](Self::Unrunnable) — a measurement whose classifier said the
+///   gate was red *because it could not run here* (HB9). That gate reached an
+///   exit status but proved nothing, and it will prove nothing at validate
+///   either — where the same answer already terminates the run, after the entire
+///   implement budget. Asking here costs **zero implement budget**, which is the
+///   point.
+///
+/// It carries no rendered text. The two terminal wordings are the adapter's,
+/// because both are built from things this decision never sees — the machine
+/// alias, the worktree path, and the command a reproduce line needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineNodeVerdict<'a> {
+    /// Evidence was produced. Red gates included — that is what a baseline is
+    /// for.
+    Measured,
+    /// Nothing was recorded at all. `measure_gates` records nothing when the
+    /// prepare command fails or when no gate reached an exit status; both are
+    /// the same terminal answer, and no amount of implementing changes either
+    /// (HB2c's `prepare` row).
+    ///
+    /// **An empty measurement is terminal, not a pass.** Reading it as a pass is
+    /// the exact inversion the module header warns about: a fabricated green
+    /// base excuses a real regression.
+    Unmeasurable,
+    /// A gate could not run on this machine. The record already knows it — the
+    /// classifier answered when the gate was measured, moments ago — and
+    /// validate would reach the identical conclusion from the identical field,
+    /// only after the whole implement budget has been spent. So say it here,
+    /// where nothing has been spent at all.
+    Unrunnable(UnrunnableBaselineGate<'a>),
+}
+
+/// Read a completed baseline measurement as an answer about the run.
+///
+/// Total and synchronous over the gates **this measurement** produced, so the
+/// three outcomes are assertable without a driver, a port double, or a
+/// worktree — which is what the empty case needed and never had.
+///
+/// Deliberately a second function rather than a variant of
+/// [`nothing_to_measure`]: that one fires before any measurement exists and this
+/// one after, and one function answering both would have to accept inputs it
+/// cannot have at either call site.
+pub fn baseline_node_verdict(measured: &[HarnessBaselineRun]) -> BaselineNodeVerdict<'_> {
+    if measured.is_empty() {
+        return BaselineNodeVerdict::Unmeasurable;
+    }
+    match unrunnable_baseline_gate(measured) {
+        Some(gate) => BaselineNodeVerdict::Unrunnable(gate),
+        None => BaselineNodeVerdict::Measured,
+    }
+}
+
+/// The gates the lazy fallback measures: the resolved gates that just went red,
+/// name **and** command.
+///
+/// The pair [`fallback_baseline_needed`] is asked about, produced by the same
+/// filter. Only the gates that actually failed are measured — the green ones
+/// need no baseline, because nothing is being subtracted from them — and they
+/// are still the *resolved* gates rather than the live run's, so each command is
+/// byte-identical to the one validate just ran.
+///
+/// The command travels because the name alone cannot express the question: the
+/// project's `test_command` is always measured under the name `default`, so a
+/// record matching by name may describe a command nobody runs any more. See
+/// [`fallback_baseline_needed`], which refuses such a record for the same
+/// reason.
+pub fn fallback_gates(
+    resolved: &[crate::domain::verifier::ResolvedHarness],
+    failed: &[crate::domain::harness_outcome::HarnessRun],
+) -> Vec<crate::domain::verifier::ResolvedHarness> {
+    resolved
+        .iter()
+        .filter(|r| failed.iter().any(|f| f.name == r.name))
+        .cloned()
+        .collect()
+}
+
 /// The gate a baseline measurement found unrunnable, named so the caller can
 /// build the terminal message without searching the record a second time.
 ///

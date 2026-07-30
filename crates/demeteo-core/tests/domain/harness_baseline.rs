@@ -740,3 +740,127 @@ fn an_unmeasured_gate_is_reported_as_unknown_not_as_passing() {
         "an unmeasured gate must not borrow another gate's green; got:\n{rendered}"
     );
 }
+
+// ── The baseline node's verdict (HB2b, HB9) ──────────────────────────────────
+//
+// The node's answer about the run, read from the gates it just measured. The
+// empty case was previously spelled inside an `async fn` between two `.await`s
+// and no test could see it.
+
+/// A gate red for a reason the classifier called a regression — a pre-existing
+/// code defect, which is exactly what the subtraction exists to excuse.
+fn regression(name: &str) -> HarnessBaselineRun {
+    run(name, false, "fp")
+}
+
+#[test]
+fn an_empty_measurement_is_terminal_and_never_a_pass() {
+    assert_eq!(
+        baseline_node_verdict(&[]),
+        BaselineNodeVerdict::Unmeasurable
+    );
+}
+
+#[test]
+fn a_red_but_regression_gate_lets_the_run_continue() {
+    assert_eq!(
+        baseline_node_verdict(&[regression("unit")]),
+        BaselineNodeVerdict::Measured,
+        "a repository already failing at the base is not this feature's defect — \
+         continuing is the whole point of measuring a baseline"
+    );
+}
+
+#[test]
+fn one_unrunnable_gate_among_green_ones_is_unrunnable() {
+    let measured = vec![
+        run("lint", true, ""),
+        unrunnable("unit"),
+        run("fmt", true, ""),
+    ];
+    let BaselineNodeVerdict::Unrunnable(gate) = baseline_node_verdict(&measured) else {
+        panic!("a gate that cannot run here must end the run");
+    };
+    assert_eq!(gate.name, "unit");
+    assert_eq!(gate.command, "npm run unit");
+    assert_eq!(gate.remediation, "install libgtk-3-dev");
+}
+
+#[test]
+fn a_green_gate_carrying_an_environment_fault_is_still_measured() {
+    // `measure_gates` classifies only red gates, so this shape is one nothing
+    // wrote. Refusing to act on it is the safe reading of a record we do not
+    // understand.
+    let green_with_fault = HarnessBaselineRun {
+        environment: Some(BaselineEnvironmentFault {
+            reason: "pkg-config cannot find gdk-3.0".to_string(),
+            remediation: "install libgtk-3-dev".to_string(),
+        }),
+        ..run("unit", true, "")
+    };
+    assert_eq!(
+        baseline_node_verdict(&[green_with_fault]),
+        BaselineNodeVerdict::Measured
+    );
+}
+
+#[test]
+fn a_project_with_no_gate_and_no_prepare_has_nothing_to_measure() {
+    assert!(nothing_to_measure(&[], None));
+    assert!(nothing_to_measure(&[], Some("")));
+}
+
+#[test]
+fn a_prepare_command_alone_is_still_something_to_measure() {
+    assert!(
+        !nothing_to_measure(&[], Some("npm ci")),
+        "a prepare command that fails is unmeasurable for exactly the reason HB2c's \
+         `prepare` row exists — finding that out here costs no implement budget"
+    );
+}
+
+#[test]
+fn a_resolved_gate_is_something_to_measure_whatever_prepare_says() {
+    assert!(!nothing_to_measure(&gates(&["unit"]), None));
+    assert!(!nothing_to_measure(&gates(&["unit"]), Some("")));
+}
+
+// ── fallback_gates ───────────────────────────────────────────────────────────
+
+fn live_run(name: &str) -> crate::domain::harness_outcome::HarnessRun {
+    crate::domain::harness_outcome::HarnessRun {
+        name: name.to_string(),
+        cmd: format!("npm run {name}"),
+        output: "boom".to_string(),
+    }
+}
+
+#[test]
+fn only_the_gates_that_failed_are_measured() {
+    let selected = fallback_gates(&gates(&["lint", "unit", "fmt"]), &[live_run("unit")]);
+    assert_eq!(
+        selected.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+        vec!["unit"],
+        "a green gate needs no baseline — nothing is being subtracted from it"
+    );
+}
+
+#[test]
+fn a_failure_naming_a_gate_that_did_not_resolve_invents_nothing() {
+    let selected = fallback_gates(&gates(&["lint"]), &[live_run("unit")]);
+    assert!(
+        selected.is_empty(),
+        "the command has to come from the resolved gate; a name alone cannot be measured"
+    );
+}
+
+#[test]
+fn the_selected_gate_carries_its_resolved_command_not_just_its_name() {
+    // `fallback_baseline_needed` compares commands, so a selection that dropped
+    // the command would make the fallback re-measure on every attempt.
+    let resolved = vec![gate("default", "npm run checks:code")];
+    let selected = fallback_gates(&resolved, &[live_run("default")]);
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].command, "npm run checks:code");
+    assert_eq!(selected[0].deadline_s, resolved[0].deadline_s);
+}
