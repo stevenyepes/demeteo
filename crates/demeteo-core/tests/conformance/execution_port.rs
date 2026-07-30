@@ -462,9 +462,7 @@ impl Drop for FlakyProxy {
 #[cfg(feature = "ssh-conformance")]
 #[tokio::test]
 async fn ssh_client_adapter_absorbs_a_brief_drop_and_still_reports_a_lasting_one() {
-    use crate::adapters::step_executor::driver::verifier::{
-        classify_exec_failure, HarnessExecFailure,
-    };
+    use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
