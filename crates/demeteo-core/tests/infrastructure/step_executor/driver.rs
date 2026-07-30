@@ -1,7 +1,6 @@
 // Tests extracted from `crates/demeteo-core/src/adapters/step_executor/driver.rs` (mirrored-tests convention). `super` = that module.
 
 use super::resolution::{resolve_agent_model, resolve_effort, resolve_loop_iterations};
-use super::ExecutionDriver;
 use crate::domain::ids::StepId;
 use crate::domain::models::{EffortLevel, StepConfig, StepOverride};
 
@@ -173,28 +172,6 @@ fn a_none_tier_does_not_clobber_a_lower_one() {
     assert_eq!(
         resolve_effort(Some(&ov), None, &step(None, None), Some(EffortLevel::Max)),
         EffortLevel::Max
-    );
-}
-
-/// AC6 — regression guard. `UnifiedCliSession` freezes its `AgentContext` at
-/// spawn and rebuilds argv from that frozen copy every turn, so two steps that
-/// shared a session key would run at whichever effort spawned first: the
-/// second step's effort would be silently dropped. Two efforts must therefore
-/// produce two keys.
-#[test]
-fn session_key_distinguishes_two_efforts() {
-    let step = step(None, None);
-    let low = ExecutionDriver::agent_session_key("f-1", &step, Some("m"), EffortLevel::Low);
-    let max = ExecutionDriver::agent_session_key("f-1", &step, Some("m"), EffortLevel::Max);
-    assert_ne!(
-        low, max,
-        "a change in effort alone must force a fresh session"
-    );
-    // ...and the same effort still shares one (the `--resume` cache hit the
-    // fingerprint scoping exists to preserve).
-    assert_eq!(
-        low,
-        ExecutionDriver::agent_session_key("f-1", &step, Some("m"), EffortLevel::Low)
     );
 }
 

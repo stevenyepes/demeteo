@@ -340,7 +340,3 @@ impl ExecutionDriver {
 #[cfg(test)]
 #[path = "../../../tests/infrastructure/step_executor/driver.rs"]
 mod resolution_tests;
-
-#[cfg(test)]
-#[path = "../../../tests/infrastructure/step_executor/driver_watchdog.rs"]
-mod watchdog_tests;

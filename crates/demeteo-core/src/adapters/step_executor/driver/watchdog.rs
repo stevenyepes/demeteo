@@ -1,85 +1,42 @@
 //! Watchdog / context-window management for [`ExecutionDriver`].
 //!
-//! Extracted from the parent `driver.rs` to keep the per-driver-turn
-//! budget math and the context-window threshold logic in one
-//! reviewable place. The watchdog is the Tier-1 "compact or reset"
-//! mechanism from the reliability plan: at 80% of the model's known
-//! context window, the driver kills the current agent session and the
-//! next step's `spawn_agent_session` re-spawns fresh with a one-shot
-//! recap of what the prior session concluded.
+//! The watchdog is the Tier-1 "compact or reset" mechanism from the
+//! reliability plan: at 80% of the model's known context window, the
+//! driver kills the current agent session and the next step's
+//! `spawn_agent_session` re-spawns fresh with a one-shot recap of what
+//! the prior session concluded.
+//!
+//! What it does is here; what the bounds *are* is in
+//! [`crate::domain::agent_session`].
 
+use crate::domain::agent_session::{budget, context_window, key};
 use crate::domain::models::{EffortLevel, StepConfig};
 
 use super::ExecutionDriver;
 
 impl ExecutionDriver {
-    /// The fraction of the model's context window at which the
-    /// watchdog resets the feature-wide agent session. Per the
-    /// Tier-1 plan: 80% leaves 20% headroom for the new turn's
-    /// growth and the in-flight prompt + tools.
-    pub(crate) const WATCHDOG_THRESHOLD: f64 = 0.80;
+    pub(crate) const BUDGET_FRACTION_TRIAGE: f64 = budget::BUDGET_FRACTION_TRIAGE;
+    pub(crate) const BUDGET_FRACTION_FINALIZE: f64 = budget::BUDGET_FRACTION_FINALIZE;
+    pub(crate) const BUDGET_FRACTION_VERIFIER: f64 = budget::BUDGET_FRACTION_VERIFIER;
+    pub(crate) const BUDGET_FRACTION_PLANNER: f64 = budget::BUDGET_FRACTION_PLANNER;
 
-    /// Engine default per-turn dollar budget when neither the run
-    /// (`Feature::max_budget_usd`) nor the project
-    /// (`ProjectSettings::default_max_budget_usd`) sets one. This is the
-    /// *base* ceiling for the primary coding turn — generous enough that only
-    /// a true runaway trips it (the context watchdog resets long-running
-    /// sessions well before then), while still capping open-ended spend.
-    pub(crate) const DEFAULT_MAX_BUDGET_USD: f64 = 20.0;
-
-    /// Fractions of the resolved base budget granted to each bounded role
-    /// turn. These mirror the anti-runaway posture of the per-role
-    /// `max_turns` caps: a single-purpose turn that only interprets inlined
-    /// input into one answer should never approach the coding turn's spend.
-    /// At the $20 default these resolve to ~$0.50 / $2 / $5 / $8.
-    pub(crate) const BUDGET_FRACTION_TRIAGE: f64 = 0.025;
-    pub(crate) const BUDGET_FRACTION_FINALIZE: f64 = 0.10;
-    pub(crate) const BUDGET_FRACTION_VERIFIER: f64 = 0.25;
-    pub(crate) const BUDGET_FRACTION_PLANNER: f64 = 0.40;
-
-    /// The resolved *base* per-turn dollar budget for this run: the per-run
-    /// override, else the project default, else the engine default. Always
-    /// `Some` — every turn carries a ceiling (see
-    /// [`DEFAULT_MAX_BUDGET_USD`](Self::DEFAULT_MAX_BUDGET_USD)).
     pub(crate) fn base_max_budget_usd(&self) -> f64 {
-        self.max_budget_usd_override
-            .or(self.project_default_max_budget_usd)
-            .unwrap_or(Self::DEFAULT_MAX_BUDGET_USD)
+        budget::base_max_budget_usd(
+            self.max_budget_usd_override,
+            self.project_default_max_budget_usd,
+        )
     }
 
-    /// The per-turn dollar ceiling for a role turn, as `fraction` of the
-    /// resolved base budget. Pass `1.0` for the primary coding turn.
     pub(crate) fn role_max_budget_usd(&self, fraction: f64) -> Option<f64> {
-        Some(self.base_max_budget_usd() * fraction)
-    }
-
-    /// Pure-function watchdog threshold check — returns `true` when
-    /// `cumulative >= WATCHDOG_THRESHOLD × budget`. Returns `false`
-    /// when the budget is unknown (`None` — legacy behavior) or
-    /// cumulative is zero (first turn). Extracted so the logic is
-    /// unit-testable without constructing an `ExecutionDriver`.
-    pub(crate) fn watchdog_breached_pure(cumulative: u64, budget: Option<u64>) -> bool {
-        let Some(budget) = budget else {
-            return false;
-        };
-        if cumulative == 0 {
-            return false;
-        }
-        let threshold = ((budget as f64) * Self::WATCHDOG_THRESHOLD) as u64;
-        cumulative >= threshold
+        budget::role_max_budget_usd(self.base_max_budget_usd(), fraction)
     }
 
     /// Check the watchdog against the current session's cumulative
     /// token usage. Returns `true` when the session has exceeded
-    /// `WATCHDOG_THRESHOLD × context_budget_tokens` and should be
+    /// [`context_window::THRESHOLD`] × `context_budget_tokens` and should be
     /// reset by the next step's `spawn_agent_session`.
-    ///
-    /// Returns `false` when:
-    /// * the model's context window is unknown (`None` — legacy behavior),
-    /// * the session has no recorded token usage yet, or
-    /// * the budget has not been breached.
     pub(crate) fn watchdog_breached(&self) -> bool {
-        Self::watchdog_breached_pure(self.session_cumulative_tokens, self.context_budget_tokens)
+        context_window::breached(self.session_cumulative_tokens, self.context_budget_tokens)
     }
 
     /// Build a compact summary of the feature's progress so far, to
@@ -138,50 +95,13 @@ impl ExecutionDriver {
         parts.join("\n\n")
     }
 
-    /// Registry key for an agent step's session.
-    ///
-    /// Scoped to the feature **and** its effective permission profile
-    /// and model, not just the bare feature id. Anthropic's prompt
-    /// cache is invalidated wholesale (tools + system + messages) by
-    /// any change to the tool list, and Claude Code's
-    /// `--disallowedTools` removes bare tool names from the
-    /// wire-level tool definitions themselves (not just a permission
-    /// hook layer) — see `adapters/agent/claude_code/mod.rs`'s
-    /// `disallowed_tools_for`. Workflow steps deliberately vary their
-    /// tool set by role (a read-only critic vs. a shell-capable
-    /// implement step), so `--resume`ing one shared session across a
-    /// role change was paying full price to reprocess the *entire*
-    /// accumulated conversation on every such transition — strictly
-    /// worse than starting fresh, since a fresh session can still hit
-    /// Anthropic's cross-session prefix-hash cache for the same
-    /// role's byte-identical tools+system prefix (see `bare_mode`).
-    /// Steps whose profile+model+effort match the previous step still
-    /// share one key (and its `--resume`d cache, e.g. `s-implement` →
-    /// `s-validate`); a change in any of them forces a fresh session
-    /// instead of paying that double tax.
-    ///
-    /// Effort is part of the fingerprint for a harder reason than cost:
-    /// [`UnifiedCliSession`](crate::adapters::agent::cli_runtime) freezes
-    /// its `AgentContext` at spawn and rebuilds argv from that frozen copy
-    /// on every turn. Two steps differing *only* in effort would otherwise
-    /// share one session, and the second step's effort would be silently
-    /// dropped — the run would claim `max` and execute at `low`.
     pub(crate) fn agent_session_key(
         f_id: &str,
         step_conf: &StepConfig,
         model: Option<&str>,
         effort: EffortLevel,
     ) -> String {
-        let permissions = crate::domain::permission::resolve_profile(
-            step_conf.effective_capability(),
-            step_conf.allow_network,
-            step_conf.allow_shell,
-        );
-        format!(
-            "{f_id}::{permissions:?}::{}::{}",
-            model.unwrap_or("default"),
-            effort.as_str()
-        )
+        key::agent_session_key(f_id, step_conf, model, effort)
     }
 
     /// Called after a step completes successfully. Reads the live

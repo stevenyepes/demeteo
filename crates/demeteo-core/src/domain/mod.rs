@@ -1,5 +1,6 @@
 pub mod action;
 pub mod agent_event;
+pub mod agent_session;
 pub mod app_view;
 pub mod artifact;
 pub mod attachment;
