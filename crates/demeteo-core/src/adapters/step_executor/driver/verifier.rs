@@ -227,15 +227,17 @@ impl ExecutionDriver {
         // Hard gate: a non-zero exit is objective — but *whose* defect it is is
         // not, and that is what HB2c decides here before anything fails.
         if !failed.is_empty() {
-            // The exit-127 fast path runs on the **unsubtracted** set and
+            // The never-ran fast path runs on the **unsubtracted** set and
             // before the baseline is consulted at all. A binary the shell
-            // cannot find is terminal whether or not it was equally missing at
-            // the base: the code never ran, so there is nothing for a
-            // subtraction to be evidence about, and "pre-existing" would
-            // quietly pass a step that tested nothing. Decision 44's table says
-            // so in its own row — 127 is terminal `Environment`, no baseline
-            // column.
-            if let Some(err) = self.missing_command_error(step_exec, machine_str, wt_path, &failed)
+            // cannot find — or a script this worktree does not define — is
+            // terminal whether or not it was equally missing at the base: the
+            // code never ran, so there is nothing for a subtraction to be
+            // evidence about, and "pre-existing" would quietly pass a step that
+            // tested nothing. Decision 44's table says so in its own row — 127
+            // is terminal `Environment`, no baseline column — and a missing
+            // script is that same row reached through exit 1.
+            if let Some(err) =
+                self.command_never_ran_error(step_exec, machine_str, wt_path, &failed)
             {
                 return Err(err);
             }
@@ -586,9 +588,9 @@ impl ExecutionDriver {
     ///
     /// With several gates red, the *fingerprint* and the *verdict reason* cover
     /// all of them — the retry loop needs every failure or it fixes one and
-    /// rediscovers the next — while the 127 fast path and the triage agent are
-    /// asked about a single gate each: the first whose binary is missing, and
-    /// the first that failed, respectively. Both of those answer "is this
+    /// rediscovers the next — while the never-ran fast path and the triage agent
+    /// are asked about a single gate each: the first that never ran, and the
+    /// first that failed, respectively. Both of those answer "is this
     /// machine able to run this command", which is a per-command question, and
     /// both attach a copy-pasteable reproduce line that only means anything for
     /// one command.
@@ -611,7 +613,7 @@ impl ExecutionDriver {
             );
         };
 
-        if let Some(err) = self.missing_command_error(step_exec, machine_str, wt_path, failures) {
+        if let Some(err) = self.command_never_ran_error(step_exec, machine_str, wt_path, failures) {
             return err;
         }
 
@@ -756,6 +758,62 @@ impl ExecutionDriver {
             "harness command not found on PATH — terminating without retries"
         );
         Some(crate::domain::verifier::VerifierError::Environment(msg))
+    }
+
+    /// The sibling of [`missing_command_error`](Self::missing_command_error) for
+    /// the failures that *do* reach an exit code: a task runner that ran, but
+    /// was asked for a script or target this worktree does not define.
+    ///
+    /// Same conclusion, same fail-safe direction, different remediation — see
+    /// [`build_missing_task_message`] for why reusing the 127 path's wording
+    /// would send the user after a package that was never missing.
+    fn missing_task_error(
+        &self,
+        step_exec: &StepExecution,
+        machine_str: &str,
+        wt_path: &str,
+        failures: &[HarnessRun],
+    ) -> Option<crate::domain::verifier::VerifierError> {
+        let (failure, missing) = failures
+            .iter()
+            .find_map(|f| detect_missing_task(&f.cmd, &f.output).map(|m| (f, m)))?;
+        let cmd = failure.cmd.as_str();
+        let msg = build_missing_task_message(machine_str, wt_path, cmd, &missing);
+        self.notify_environment_not_ready(step_exec, &msg);
+        tracing::warn!(
+            feature_id = %self.f_id,
+            step_id = %step_exec.step_id.0,
+            cmd = %cmd,
+            runner = %missing.runner,
+            missing = %missing.name,
+            "harness command named a {} this worktree does not define — terminating without retries",
+            missing.noun()
+        );
+        Some(crate::domain::verifier::VerifierError::Environment(msg))
+    }
+
+    /// "The command never ran" — both shapes of it, in the order that gives the
+    /// most specific remediation.
+    ///
+    /// A binary the shell could not find (exit 127) and a script/target the
+    /// runner could not find (exit 1) are one category: the code was never
+    /// exercised, so a `Verdict` would redirect an agent to fix something that
+    /// was never tested, and it would reproduce identically on every retry until
+    /// the budget ran out. Both therefore skip `should_triage`'s
+    /// reproduce-unchanged requirement and terminate directly — neither is flaky.
+    ///
+    /// The 127 check goes first because it is the stronger claim: if the binary
+    /// itself is absent, "your project's script list is wrong" would be a
+    /// misdiagnosis of a machine that cannot run the tool at all.
+    fn command_never_ran_error(
+        &self,
+        step_exec: &StepExecution,
+        machine_str: &str,
+        wt_path: &str,
+        failures: &[HarnessRun],
+    ) -> Option<crate::domain::verifier::VerifierError> {
+        self.missing_command_error(step_exec, machine_str, wt_path, failures)
+            .or_else(|| self.missing_task_error(step_exec, machine_str, wt_path, failures))
     }
 
     /// Spawn a small classifier agent to decide regression vs. environment for
@@ -1888,13 +1946,7 @@ fn build_timeout_message(machine_str: &str, wt_path: &str, cmd: &str, ceiling_s:
 /// through to the existing triage path, which reaches the same verdict one
 /// attempt later.
 fn detect_missing_command(cmd: &str, output: &str) -> Option<String> {
-    let invoked = |name: &str| -> bool {
-        !name.is_empty()
-            && !name.contains(char::is_whitespace)
-            && cmd
-                .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
-                .any(|tok| tok == name)
-    };
+    let invoked = |name: &str| -> bool { command_invokes(cmd, name) };
 
     output.lines().map(str::trim).find_map(|line| {
         // Scan *within* the line rather than anchoring to its end: the SSH
@@ -1952,6 +2004,266 @@ fn quoted_missing_command(line: &str) -> Option<&str> {
         .or_else(|| after.starts_with("found").then_some(name))
 }
 
+/// Does `cmd` name `name` as one of its own tokens?
+///
+/// The false-positive guard both "the command never ran" detectors share: a
+/// name lifted out of *output* only counts when the harness command demonstrably
+/// asks for it, so a suite that merely prints a diagnostic in its own output
+/// stays a normal `Verdict` instead of terminating the step. Splitting on shell
+/// separators as well as whitespace is what makes `cargo test;pytest` match
+/// `pytest`, and comparing whole tokens is what keeps `cargo` from matching
+/// `cargo-nextest`.
+fn command_invokes(cmd: &str, name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(char::is_whitespace)
+        && cmd
+            .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
+            .any(|tok| tok == name)
+}
+
+/// A task runner that started fine but was asked for a script/target this
+/// worktree does not define.
+///
+/// Distinct from a missing *binary* ([`detect_missing_command`]) in exactly one
+/// way that matters: the remediation. A missing binary means "provision the
+/// machine"; this means "the project's configured command and this worktree's
+/// contents disagree", and telling a user to install something would send them
+/// after a package that is already there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MissingTask {
+    /// The runner that reported it, as it appears in the harness command.
+    runner: &'static str,
+    /// The script / target name it could not find.
+    name: String,
+}
+
+impl MissingTask {
+    /// What the runner calls the thing it could not find — the word the user
+    /// will search their own project for.
+    fn noun(&self) -> &'static str {
+        if self.runner == "make" {
+            "target"
+        } else {
+            "script"
+        }
+    }
+
+    /// A command that prints what this worktree *does* define, so the
+    /// remediation ends with something to run rather than something to believe.
+    fn list_command(&self) -> String {
+        if self.runner == "make" {
+            "grep -E '^[A-Za-z0-9_.-]+:' Makefile".to_string()
+        } else {
+            format!("{} run", self.runner)
+        }
+    }
+}
+
+/// The task runners whose missing-script wording does not name them, so the
+/// harness command is what tells us which one spoke.
+const TASK_RUNNERS: [&str; 4] = ["npm", "pnpm", "yarn", "bun"];
+
+/// Detect "the runner started, but the script/target it was asked for does not
+/// exist here" and return what was missing.
+///
+/// The second half of the exit-127 story. A missing binary and a missing script
+/// are the same *category* — the command never ran, so no edit to the source can
+/// turn it green — but only the first exits 127 and emits a shell diagnostic.
+/// A missing script exits **1** and prints the runner's own wording, which is
+/// indistinguishable from a red build to everything downstream: it became a
+/// `Verdict`, fed the rework loop, and reproduced forever. That is precisely how
+/// feature `f-1d0209a0e43d5b67` spent ~27 agent attempts on
+/// `npm error Missing script: "checks:code"`.
+///
+/// Recognized wordings:
+///
+/// ```text
+/// npm error Missing script: "checks:code"          npm ≥ 9
+/// npm ERR! Missing script: "checks:code"           npm 7–8
+/// npm ERR! missing script: checks:code             npm 6
+/// ERR_PNPM_NO_SCRIPT  Missing script: checks:code  pnpm
+/// error Command "checks:code" not found.           yarn 1
+/// make: *** No rule to make target 'checks'.  Stop.
+/// ```
+///
+/// # The false-positive guard
+///
+/// Escalating here is terminal, so a suite that merely *prints* one of these
+/// strings must not trip it. Three conditions must hold together: the missing
+/// name is a token of the harness command ([`command_invokes`], the same guard
+/// the 127 path uses), the runner that would have reported it is *also* a token
+/// of that command, and the text immediately preceding the marker reads as a
+/// runner's own error preamble rather than prose quoting one
+/// ([`is_runner_preamble`]). An assertion message like
+/// `expected 'Missing script: "test"'` fails the third; a `cargo test` run fails
+/// the second.
+///
+/// The cost, as with the 127 path, is indirect invocation: `make: *** No rule to
+/// make target 'x', needed by 'y'` names a prerequisite the harness command
+/// never mentions, so it falls through to the ordinary triage path and reaches
+/// the same conclusion one attempt later. Documented, not accidental.
+fn detect_missing_task(cmd: &str, output: &str) -> Option<MissingTask> {
+    output.lines().map(str::trim).find_map(|line| {
+        let lower = line.to_ascii_lowercase();
+
+        // npm (every major) and pnpm: `… Missing script: "checks:code"`.
+        if let Some(i) = lower.find("missing script:") {
+            let (before, rest) = line.split_at(i);
+            let name = clean_task_name(rest["missing script:".len()..].split_whitespace().next()?);
+            let runner = runner_invoked_in(cmd, &TASK_RUNNERS)?;
+            if is_runner_preamble(before) && name != runner && command_invokes(cmd, &name) {
+                return Some(MissingTask { runner, name });
+            }
+            return None;
+        }
+
+        // yarn 1: `error Command "checks:code" not found.`
+        //
+        // The severity word is *required* here, unlike the two families below.
+        // Debian's `command-not-found` handler opens a line with the very same
+        // `Command 'x' not found` and means the opposite thing — a binary that
+        // is not installed — which the 127 path owns and answers with the right
+        // remediation. Demanding yarn's `error ` prefix is what keeps this
+        // detector from claiming it.
+        if let Some(i) = line.find("Command ") {
+            let rest = &line[i + "Command ".len()..];
+            if let Some(name) = quoted_token(rest, "not found") {
+                let name = clean_task_name(name);
+                let runner = runner_invoked_in(cmd, &TASK_RUNNERS)?;
+                let before = line[..i].trim();
+                if !before.is_empty()
+                    && is_runner_preamble(before)
+                    && name != runner
+                    && command_invokes(cmd, &name)
+                {
+                    return Some(MissingTask { runner, name });
+                }
+                return None;
+            }
+        }
+
+        // make: `make: *** No rule to make target 'checks'.  Stop.`
+        const MAKE_MARKER: &str = "No rule to make target ";
+        if let Some(i) = line.find(MAKE_MARKER) {
+            let rest = &line[i + MAKE_MARKER.len()..];
+            let name = clean_task_name(quoted_token(rest, "")?);
+            if is_runner_preamble(&line[..i])
+                && command_invokes(cmd, "make")
+                && command_invokes(cmd, &name)
+            {
+                return Some(MissingTask {
+                    runner: "make",
+                    name,
+                });
+            }
+        }
+
+        None
+    })
+}
+
+/// Which of `candidates` the harness command actually runs. `None` when it runs
+/// none of them — the guard that keeps a `cargo test` whose output happens to
+/// contain "Missing script" from being read as an npm failure.
+fn runner_invoked_in(cmd: &str, candidates: &[&'static str]) -> Option<&'static str> {
+    candidates.iter().copied().find(|r| command_invokes(cmd, r))
+}
+
+/// Is the text preceding a marker a task runner's *own* error preamble, rather
+/// than prose that quotes one?
+///
+/// Anchoring on the start of the line is not an option: the execution adapters
+/// wrap the failure (`Command failed (exit code: Some(1)): npm error Missing
+/// script: …`), and the SSH adapter substitutes remote stderr for the exit code
+/// entirely. So the check is on what sits immediately *before* the marker — a
+/// runner's severity word, or nothing at all. A quote, a colon-space, or the
+/// tail of an assertion message all fail it.
+fn is_runner_preamble(before: &str) -> bool {
+    let b = before.trim_end().to_ascii_lowercase();
+    let b = b.trim_end_matches(':').trim_end();
+    b.is_empty()
+        || b.ends_with("error")
+        || b.ends_with("err!")
+        || b.ends_with("err_pnpm_no_script")
+        // GNU make's own severity marker.
+        || b.ends_with("***")
+}
+
+/// The quoted token at the head of `s`, when the text after the closing quote
+/// starts with `expect` (pass `""` to accept anything).
+///
+/// Opening and closing quotes are matched loosely — `'x'`, `"x"`, and GNU make's
+/// historical `` `x' `` all appear across tool and release — because the caller
+/// still gates on the name being a token of the harness command, so a loose
+/// match here cannot manufacture an escalation on its own.
+fn quoted_token<'a>(s: &'a str, expect: &str) -> Option<&'a str> {
+    let rest = s.trim_start().strip_prefix(['\'', '"', '`'])?;
+    let (name, after) = rest.split_once(['\'', '"', '`'])?;
+    after.trim_start().starts_with(expect).then_some(name)
+}
+
+/// Strip the quoting and trailing punctuation a runner leaves glued to the name
+/// it could not find (`"checks:code"`, `'checks'.`). No real script or target
+/// name ends in one of these.
+fn clean_task_name(raw: &str) -> String {
+    raw.trim()
+        .trim_matches(['\'', '"', '`'])
+        .trim_end_matches([')', ',', '.', ':', ';', '\'', '"', '`'])
+        .to_string()
+}
+
+/// The user-facing message for a missing script/target.
+///
+/// A free function, not a method, so the wording is reachable from a test
+/// without standing up an `ExecutionDriver` and the twenty ports it would not
+/// read (AGENTS.md §3).
+///
+/// It deliberately does **not** reuse the 127 path's "make it discoverable on
+/// PATH" remediation. The binary was found and did run; what is absent is a
+/// script in *this worktree's* `package.json`/`Makefile`. The motivating
+/// incident is the canonical shape of that: the project's test command had been
+/// changed to `npm run checks:code` while the step's worktree was pinned to a
+/// base commit predating the commit that added that script — so the setting and
+/// the tree were each individually fine and only disagreed with each other.
+/// Pointing the user at `apt`/`nvm` there would send them after a package that
+/// was never missing.
+fn build_missing_task_message(
+    machine: &str,
+    wt_path: &str,
+    cmd: &str,
+    missing: &MissingTask,
+) -> String {
+    let noun = missing.noun();
+    build_environment_message(
+        machine,
+        wt_path,
+        cmd,
+        &format!(
+            "`{runner}` started fine but found no {noun} named `{name}` in this worktree, so the \
+             command never ran and nothing was verified. This is not a verdict on the code — no \
+             source edit can add a {noun} the command is not looking for.",
+            runner = missing.runner,
+            noun = noun,
+            name = missing.name,
+        ),
+        &format!(
+            "Nothing needs installing — the tool itself ran. The command comes from this \
+             project's configured prepare/test command in its Demeteo project settings, and it \
+             names a {noun} this worktree does not define. The usual cause is that the setting \
+             was pointed at a {noun} added by a *later* commit while this step's worktree is \
+             pinned to an older base commit, so `{name}` is genuinely absent here. List what \
+             this worktree actually offers:\n\
+             \x20 {list}\n\
+             Then either point the project's prepare/test command at a {noun} that exists at \
+             this worktree's base commit, or move the feature's base onto the commit that adds \
+             `{name}`.",
+            noun = noun,
+            name = missing.name,
+            list = missing.list_command(),
+        ),
+    )
+}
+
 /// Truncate `s` to at most `max` characters, keeping the *tail* rather
 /// than the head. Build/test failures are almost always at the end of
 /// the output (the failing assertion, the panic message, the compiler
@@ -1990,21 +2302,52 @@ pub(crate) fn should_triage(prior_fingerprint: Option<&str>, current_fingerprint
 /// Normalize a failing harness/prepare output into a fingerprint that is
 /// stable across retries of the *same* failure while still differing for a
 /// genuinely different one (C6.2). Conservative: mask only known-volatile
-/// spans — the absolute worktree path (which carries the per-run subtask id)
-/// and long numeric runs (epoch/timestamps/ids of ≥6 digits) — and nothing
-/// else, so two runs of the same missing-lib failure fingerprint-**match**
-/// while a different regression error still differs.
+/// spans — the absolute worktree path (which carries the per-run subtask id),
+/// formatted date-times, and long numeric runs (epoch/ids of ≥6 digits) — and
+/// nothing else, so two runs of the same missing-lib failure
+/// fingerprint-**match** while a different regression error still differs.
 ///
 /// The gate is only a cheap pre-filter: a false match costs at most one triage
 /// call (the agent still makes the real regression/environment call), so this
 /// leans toward *matching* volatile-only differences rather than risk missing
 /// a genuine reproduction.
+///
+/// # Why a digit-run mask alone was not enough
+///
+/// Masking only ≥6-digit runs silently exempted the single most common
+/// volatile span in the ecosystem: a **formatted** timestamp, whose digits
+/// come in groups of two to four. Every npm failure ends with
+///
+/// ```text
+/// npm error A complete log of this run can be found in:
+/// npm error   /home/dev/.npm/_logs/2026-07-30T17_39_51_520Z-debug-0.log
+/// ```
+///
+/// whose longest digit run is `2026`. That line is not under the worktree
+/// path, so neither existing mask touched it, and the fingerprint therefore
+/// differed on *every* attempt of the *same* failure. [`should_triage`]
+/// requires equality, so on any npm-based project the C6 classifier could
+/// never be consulted at all — feature `f-1d0209a0e43d5b67` burned seven
+/// validate attempts and ~20 implement attempts on a missing npm script that
+/// no source edit could ever fix, and the runner's `step_attempts` rows show
+/// `verdict.redirect` seven times and `environment` never once.
+///
+/// So [`mask_timestamps`] now folds the ISO-8601-ish date-time shape (both the
+/// `:` form a log line prints and the `_` form npm substitutes for a
+/// filesystem-safe filename), and [`mask_debug_log_index`] folds the trailing
+/// `-debug-<n>` sequence of that same filename. Neither shape can carry build
+/// signal, so masking them cannot collapse two genuinely different compiler
+/// errors or assertion failures — which is the one thing this function must
+/// never do, since a false *match* only spends a triage call while a wrong
+/// escalation terminates a real regression.
 pub(crate) fn normalize_failure_fingerprint(output: &str, wt_path: &str) -> String {
     let mut s = output.to_string();
     if !wt_path.is_empty() {
         s = s.replace(wt_path, "<WT>");
     }
-    let masked = mask_long_digit_runs(&s);
+    // Timestamps first: the basic ISO form (`20260730T173951Z`) would
+    // otherwise be eaten piecemeal by the digit-run mask below.
+    let masked = mask_long_digit_runs(&mask_debug_log_index(&mask_timestamps(&s)));
     // Drop trailing whitespace per line so cosmetic reflow doesn't perturb the
     // fingerprint, but keep line structure (don't collapse everything).
     masked
@@ -2012,6 +2355,137 @@ pub(crate) fn normalize_failure_fingerprint(output: &str, wt_path: &str) -> Stri
         .map(|l| l.trim_end())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Replace every ISO-8601-ish date-time span with `<TS>`.
+///
+/// Deliberately anchored on a **full** `YYYY-MM-DD` date immediately followed
+/// by a time: a bare date, a bare clock time, or a version triple stays intact,
+/// so the mask cannot reach anything a build error is made of. Within that
+/// anchor it is permissive about the punctuation, because the same instant is
+/// written several ways by the tools whose output lands here:
+///
+/// ```text
+/// 2026-07-30T17:39:51.520Z     an ISO log line
+/// 2026-07-30T17_39_51_520Z     the same, made filesystem-safe by npm
+/// 2026-07-30 17:39:51          a plain log line
+/// 2026-07-30T17:39:51+02:00    with a zone offset
+/// ```
+fn mask_timestamps(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        // Never start a match mid-number: `12026-07-30T…` is not a timestamp,
+        // and folding its tail would drop a digit the fingerprint should keep.
+        let after_digit = i > 0 && chars[i - 1].is_ascii_digit();
+        match (!after_digit).then(|| timestamp_len(&chars[i..])).flatten() {
+            Some(n) => {
+                out.push_str("<TS>");
+                i += n;
+            }
+            None => {
+                out.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Length in `char`s of the date-time span starting at `c[0]`, or `None` when
+/// there isn't one. Split out from [`mask_timestamps`] so the shape is one
+/// readable sequence of "must have" steps rather than a nest inside a scanner.
+fn timestamp_len(c: &[char]) -> Option<usize> {
+    fn digits(c: &[char], at: usize, n: usize) -> bool {
+        c.len() >= at + n && c[at..at + n].iter().all(|d| d.is_ascii_digit())
+    }
+
+    // YYYY-MM-DD — the anchor. Without it nothing below is even attempted.
+    if !(digits(c, 0, 4)
+        && c.get(4) == Some(&'-')
+        && digits(c, 5, 2)
+        && c.get(7) == Some(&'-')
+        && digits(c, 8, 2))
+    {
+        return None;
+    }
+    let mut i = 10;
+
+    // The date/time separator: `T` in ISO, a space in a plain log line, `_` in
+    // a filename that could not use either.
+    if !matches!(c.get(i), Some('T' | 't' | ' ' | '_')) {
+        return None;
+    }
+    i += 1;
+
+    // HH?MM?SS, with one separator used consistently.
+    if !digits(c, i, 2) {
+        return None;
+    }
+    i += 2;
+    let sep = match c.get(i) {
+        Some(&s @ (':' | '_' | '-')) => s,
+        _ => return None,
+    };
+    i += 1;
+    if !(digits(c, i, 2) && c.get(i + 2) == Some(&sep) && digits(c, i + 3, 2)) {
+        return None;
+    }
+    i += 5;
+
+    // Optional fractional seconds. npm's filename separates them with `_`,
+    // which is why this is not simply a `.`.
+    if matches!(c.get(i), Some('.' | ',' | '_')) && digits(c, i + 1, 1) {
+        i += 1;
+        while digits(c, i, 1) {
+            i += 1;
+        }
+    }
+
+    // Optional zone: `Z`, `+HH:MM`, or `+HHMM`.
+    if matches!(c.get(i), Some('Z' | 'z')) {
+        i += 1;
+    } else if matches!(c.get(i), Some('+' | '-')) && digits(c, i + 1, 2) {
+        i += 3;
+        if c.get(i) == Some(&':') && digits(c, i + 1, 2) {
+            i += 3;
+        } else if digits(c, i, 2) {
+            i += 2;
+        }
+    }
+
+    Some(i)
+}
+
+/// Fold the trailing sequence number of an npm debug log filename
+/// (`…-debug-0.log`, `…-debug-1.log`) to `-debug-<N>.log`.
+///
+/// npm bumps it whenever two runs land on the same millisecond, so it is
+/// volatile for the same reason the timestamp beside it is — and a single
+/// digit is far below [`mask_long_digit_runs`]'s threshold, deliberately, since
+/// short numbers elsewhere in a build log are exactly the line numbers and exit
+/// codes the fingerprint must keep. Hence a shape-specific rule rather than a
+/// looser digit mask.
+fn mask_debug_log_index(s: &str) -> String {
+    const MARKER: &str = "-debug-";
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(MARKER) {
+        let (head, tail) = rest.split_at(i + MARKER.len());
+        out.push_str(head);
+        // ASCII digits only, so the byte length is also the char length and
+        // slicing `tail` at it stays on a boundary.
+        let n = tail.chars().take_while(char::is_ascii_digit).count();
+        if n > 0 && tail[n..].starts_with(".log") {
+            out.push_str("<N>");
+            rest = &tail[n..];
+        } else {
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Replace every maximal run of ≥6 ASCII digits with `<N>`. Six is above
@@ -2199,3 +2673,7 @@ mod parse_verdict_text_tests;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/step_executor/verifier/detect_missing_command_tests.rs"]
 mod detect_missing_command_tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/step_executor/verifier/detect_missing_task_tests.rs"]
+mod detect_missing_task_tests;
