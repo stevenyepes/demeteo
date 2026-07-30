@@ -91,7 +91,7 @@ impl DagStepExecutor {
     /// their use. Falls back to the legacy confidence/recency ordering when the
     /// agent is disabled or embedding fails, so prompts always get memory.
     pub(crate) async fn build_memory_md(&self, project_id: &ProjectId, query: &str) -> String {
-        use crate::domain::memory::{cosine_similarity, MemorySource, ProjectMemoryEntry};
+        use crate::domain::memory::{rank_memories, render_memory_md, ProjectMemoryEntry};
 
         let memories = self.memory.memory_list(project_id, 200).unwrap_or_default();
         if memories.is_empty() {
@@ -113,21 +113,7 @@ impl DagStepExecutor {
             {
                 Ok(mut vecs) if !vecs.is_empty() => {
                     let q = vecs.remove(0);
-                    let mut scored: Vec<(&ProjectMemoryEntry, f32)> = memories
-                        .iter()
-                        .filter(|m| m.confidence >= config.min_confidence)
-                        .filter_map(|m| {
-                            m.embedding
-                                .as_ref()
-                                .map(|e| (m, cosine_similarity(&q, e) * m.confidence as f32))
-                        })
-                        .collect();
-                    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-                    scored
-                        .into_iter()
-                        .take(config.top_k)
-                        .map(|(m, _)| m)
-                        .collect()
+                    rank_memories(&memories, &q, config.min_confidence, config.top_k)
                 }
                 _ => memories.iter().take(20).collect(),
             }
@@ -140,27 +126,7 @@ impl DagStepExecutor {
             .memory
             .memory_mark_used(&used_ids, crate::paths::now_ms());
 
-        let mut md = String::new();
-        for m in selected {
-            let source_label = match m.source {
-                MemorySource::Agent => "Agent",
-                MemorySource::Human => "Human",
-            };
-            let body = m.statement.as_deref().unwrap_or(&m.value);
-            match m.memory_type {
-                Some(t) => md.push_str(&format!(
-                    "- [{}] {} (Source: {})\n",
-                    t.as_str(),
-                    body,
-                    source_label
-                )),
-                None => md.push_str(&format!(
-                    "- **{}**: {} (Source: {})\n",
-                    m.key, body, source_label
-                )),
-            }
-        }
-        md
+        render_memory_md(&selected)
     }
 
     /// Resolve the context for a run. When `emit_bootstrap` is set (only the
