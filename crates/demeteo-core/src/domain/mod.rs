@@ -7,6 +7,7 @@ pub mod attachment;
 pub mod bootstrap;
 pub mod ecosystem;
 pub mod expr;
+pub mod harness_attribution;
 pub mod harness_baseline;
 pub mod harness_delta;
 pub mod harness_failure;
