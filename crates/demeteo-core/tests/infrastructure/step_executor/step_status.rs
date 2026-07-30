@@ -186,6 +186,7 @@ impl Harness {
         StatusWriters {
             features: &self.features,
             notif: &self.notif,
+            f_id: &self.f_id,
         }
     }
 
@@ -235,7 +236,6 @@ fn a_refused_write_emits_nothing() {
     let res = try_update_step_status(
         h.writers(),
         &step_exec(),
-        &h.f_id,
         StepTransition::failed(1.5, Some(20), 9, "boom".to_string(), CacheTokens::default()),
     );
 
@@ -255,7 +255,6 @@ fn the_infallible_form_swallows_the_error_without_emitting() {
     update_step_status(
         h.writers(),
         &step_exec(),
-        &h.f_id,
         StepTransition::completed(0.25, 7, 3, None, CacheTokens::default()),
     );
 
@@ -271,7 +270,6 @@ fn a_landed_write_emits_the_transition_it_persisted() {
     update_step_status(
         h.writers(),
         &step_exec(),
-        &h.f_id,
         StepTransition::completed(
             2.5,
             41,
@@ -317,7 +315,6 @@ fn a_none_artifact_path_leaves_the_column_alone() {
     update_step_status(
         h.writers(),
         &step_exec(),
-        &h.f_id,
         StepTransition::completed(0.0, 0, 1, None, CacheTokens::default()),
     );
 
@@ -336,7 +333,6 @@ fn a_supplied_artifact_path_is_written() {
     update_step_status(
         h.writers(),
         &step_exec(),
-        &h.f_id,
         StepTransition::completed(
             0.0,
             0,
@@ -385,7 +381,7 @@ fn every_constructor_writes_the_status_it_is_named_for() {
 
     for (transition, expected) in cases {
         let h = Harness::new(FeaturesDouble::accepting());
-        update_step_status(h.writers(), &step_exec(), &h.f_id, transition);
+        update_step_status(h.writers(), &step_exec(), transition);
         assert_eq!(h.statuses(), vec![expected.to_string()]);
     }
 }
@@ -399,7 +395,6 @@ fn a_success_carries_no_error_and_a_failure_carries_no_artifact() {
     update_step_status(
         h.writers(),
         &step_exec(),
-        &h.f_id,
         StepTransition::completed(0.0, 0, 0, None, CacheTokens::default()),
     );
     assert_eq!(h.features.patches()[0].error_message, None);
@@ -408,7 +403,6 @@ fn a_success_carries_no_error_and_a_failure_carries_no_artifact() {
     update_step_status(
         h.writers(),
         &step_exec(),
-        &h.f_id,
         StepTransition::failed(0.0, None, 0, "boom".to_string(), CacheTokens::default()),
     );
     let patch = &h.features.patches()[0];

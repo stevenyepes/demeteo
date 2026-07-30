@@ -45,6 +45,7 @@ use std::time::Instant;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::scheduler::{evaluate_ready_set, ScheduleError};
+use crate::adapters::step_executor::spend::StepSpend;
 use crate::adapters::step_executor::step_status::{
     update_step_status, CacheTokens, StepTransition,
 };
@@ -178,15 +179,13 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
                     return;
                 }
                 resume::GuardVerdict::Rejected(msg) => {
-                    driver
-                        .fail_step_and_feature(
-                            step_exec,
-                            &msg,
-                            step_exec.cost_usd.unwrap_or(0.0),
-                            step_exec.tokens.unwrap_or(0),
-                            Instant::now(),
-                        )
-                        .await;
+                    let spend = StepSpend {
+                        cost: step_exec.cost_usd.unwrap_or(0.0),
+                        tokens: step_exec.tokens.unwrap_or(0),
+                        cache: driver.cache_tokens(),
+                        start: Instant::now(),
+                    };
+                    driver.fail_step_and_feature(step_exec, &msg, spend).await;
                     return;
                 }
             }
@@ -209,7 +208,6 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
         update_step_status(
             driver.status_writers(),
             step_exec,
-            &driver.f_id,
             StepTransition::running(
                 step_exec.cost_usd.unwrap_or(0.0),
                 step_exec.tokens,
@@ -285,7 +283,6 @@ async fn fail_unschedulable(
                 update_step_status(
                     driver.status_writers(),
                     row,
-                    &driver.f_id,
                     StepTransition::failed(
                         row.cost_usd.unwrap_or(0.0),
                         row.tokens,

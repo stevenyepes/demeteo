@@ -16,12 +16,18 @@ use crate::domain::models::StepExecution;
 use crate::ports::db::{FeatureRepository, StepExecutionPatch};
 use crate::ports::notification::{DomainEvent, NotificationPort};
 
-/// The two ports one transition needs: the row's home and the event's
-/// channel. Never one without the other — a persisted status nobody is
-/// told about and an announced status nobody persisted are both bugs.
+/// Where one transition lands: the row's home, the event's channel, and
+/// the feature both are scoped to.
+///
+/// The two ports are never one without the other — a persisted status
+/// nobody is told about and an announced status nobody persisted are both
+/// bugs — and neither is addressable without the feature id, so all three
+/// travel as one.
+#[derive(Clone, Copy)]
 pub(crate) struct StatusWriters<'a> {
     pub features: &'a dyn FeatureRepository,
     pub notif: &'a dyn NotificationPort,
+    pub f_id: &'a FeatureId,
 }
 
 /// Prompt-cache telemetry for the turn that produced this transition:
@@ -185,6 +191,7 @@ impl crate::adapters::step_executor::driver::ExecutionDriver {
         StatusWriters {
             features: self.features.as_ref(),
             notif: self.notif.as_ref(),
+            f_id: &self.f_id,
         }
     }
 
@@ -204,10 +211,9 @@ impl crate::adapters::step_executor::driver::ExecutionDriver {
 pub(crate) fn update_step_status(
     writers: StatusWriters<'_>,
     step_exec: &StepExecution,
-    f_id: &FeatureId,
     transition: StepTransition,
 ) {
-    let _ = try_update_step_status(writers, step_exec, f_id, transition);
+    let _ = try_update_step_status(writers, step_exec, transition);
 }
 
 /// [`update_step_status`], but surfacing whether the **durable write** landed.
@@ -224,7 +230,6 @@ pub(crate) fn update_step_status(
 pub(crate) fn try_update_step_status(
     writers: StatusWriters<'_>,
     step_exec: &StepExecution,
-    f_id: &FeatureId,
     transition: StepTransition,
 ) -> Result<(), String> {
     let StepTransition {
@@ -253,7 +258,7 @@ pub(crate) fn try_update_step_status(
         },
     )?;
     let _ = writers.notif.emit(&DomainEvent::StepProgress {
-        feature_id: f_id.clone(),
+        feature_id: writers.f_id.clone(),
         step_id: step_exec.step_id.0.clone(),
         status: status.into(),
         cost_usd: Some(cost_usd),

@@ -6,6 +6,9 @@
 //! should continue. Returns [`RunAction`] to tell the orchestrator whether
 //! to iterate, jump, or exit.
 
+use crate::adapters::step_executor::driver::failure::{
+    begin_redirect, record_retry_exhausted, RetryBudget,
+};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::retry_policy::RetryAction;
 use crate::adapters::step_executor::step_status::{update_step_status, StepTransition};
@@ -75,7 +78,6 @@ impl ExecutionDriver {
         update_step_status(
             self.status_writers(),
             step_exec,
-            &self.f_id,
             StepTransition::completed(
                 dr.accumulated_cost,
                 dr.accumulated_tokens,
@@ -125,7 +127,6 @@ impl ExecutionDriver {
             update_step_status(
                 self.status_writers(),
                 step_exec,
-                &self.f_id,
                 StepTransition::interrupted(
                     dr.accumulated_cost,
                     dr.accumulated_tokens,
@@ -145,15 +146,17 @@ impl ExecutionDriver {
         self.emit_retry_decision(step_exec, &decision, msg);
         match decision.action {
             RetryAction::Redirect { target, feedback } => {
-                if let Some(redirect_idx) = self.begin_redirect(
+                if let Some(redirect_idx) = begin_redirect(
+                    self.status_writers(),
+                    &self.steps,
                     step_exec,
                     &target,
                     msg,
-                    decision.attempt,
-                    decision.max_attempts,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
+                    RetryBudget {
+                        attempt: decision.attempt,
+                        max: decision.max_attempts,
+                    },
+                    dr.spend(self.cache_tokens()),
                 ) {
                     // Capture the failure so the retried step's
                     // prompt isn't blind. `iteration_count` was
@@ -186,58 +189,36 @@ impl ExecutionDriver {
                 }
                 // Dangling redirect target — same terminal
                 // failure as v1's missing-`on_failure`-step.
-                self.fail_step_and_feature(
-                    step_exec,
-                    msg,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
-                )
-                .await;
+                self.fail_step_and_feature(step_exec, msg, dr.spend(self.cache_tokens()))
+                    .await;
             }
             RetryAction::Exhausted { target } => {
                 if let Some(target) = target.as_ref() {
-                    self.record_retry_exhausted(
+                    record_retry_exhausted(
+                        self.status_writers(),
+                        self.notifications.as_ref(),
                         step_exec,
                         target,
                         msg,
-                        decision.attempt.saturating_sub(1),
-                        decision.max_attempts,
-                        dr.accumulated_cost,
-                        dr.accumulated_tokens,
-                        dr.step_start,
+                        RetryBudget {
+                            attempt: decision.attempt.saturating_sub(1),
+                            max: decision.max_attempts,
+                        },
+                        dr.spend(self.cache_tokens()),
                     );
                 }
-                self.fail_step_and_feature(
-                    step_exec,
-                    msg,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
-                )
-                .await;
+                self.fail_step_and_feature(step_exec, msg, dr.spend(self.cache_tokens()))
+                    .await;
             }
             RetryAction::RetryInPlace { .. } => {
                 // Not derivable from v1 definitions for this
                 // class; supported for v2 policies (P1.12).
-                self.begin_in_place_retry(
-                    step_exec,
-                    msg,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
-                );
+                self.begin_in_place_retry(step_exec, msg, dr.spend(self.cache_tokens()));
                 return RunAction::Continue;
             }
             RetryAction::Fail => {
-                self.fail_step_and_feature(
-                    step_exec,
-                    msg,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
-                )
-                .await;
+                self.fail_step_and_feature(step_exec, msg, dr.spend(self.cache_tokens()))
+                    .await;
             }
         }
         RunAction::Terminate
@@ -275,22 +256,14 @@ impl ExecutionDriver {
             .expect("a non-cancelled Environmental outcome evaluates a retry decision");
         self.emit_retry_decision(step_exec, decision, msg);
         if matches!(decision.action, RetryAction::RetryInPlace { .. }) {
-            self.begin_in_place_retry(
-                step_exec,
-                msg,
-                dr.accumulated_cost,
-                dr.accumulated_tokens,
-                dr.step_start,
-            );
+            self.begin_in_place_retry(step_exec, msg, dr.spend(self.cache_tokens()));
             // Same step_index — the loop re-dispatches this step.
             return RunAction::Continue;
         }
         self.fail_step_and_feature(
             step_exec,
             &format!("[environment — not an implementation failure] {}", msg),
-            dr.accumulated_cost,
-            dr.accumulated_tokens,
-            dr.step_start,
+            dr.spend(self.cache_tokens()),
         )
         .await;
         RunAction::Terminate
@@ -311,14 +284,8 @@ impl ExecutionDriver {
         if let Some(decision) = dr.failure_decision.as_ref() {
             self.emit_retry_decision(step_exec, decision, msg);
         }
-        self.fail_step_and_feature(
-            step_exec,
-            msg,
-            dr.accumulated_cost,
-            dr.accumulated_tokens,
-            dr.step_start,
-        )
-        .await;
+        self.fail_step_and_feature(step_exec, msg, dr.spend(self.cache_tokens()))
+            .await;
         RunAction::Terminate
     }
 

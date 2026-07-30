@@ -171,7 +171,6 @@ impl ExecutionDriver {
         try_update_step_status(
             self.status_writers(),
             row,
-            &self.f_id,
             StepTransition::skipped(
                 STATUS_SKIPPED,
                 row.cost_usd.unwrap_or(0.0),

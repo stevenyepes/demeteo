@@ -7,6 +7,8 @@ use std::time::Instant;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::registry::{NodeCtx, NodeTypeRegistry};
 use crate::adapters::step_executor::retry_policy::{FailureClass, RetryDecision};
+use crate::adapters::step_executor::spend::StepSpend;
+use crate::adapters::step_executor::step_status::CacheTokens;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::verifier::VerdictFailure;
@@ -31,6 +33,21 @@ pub(crate) struct DispatchResult {
     pub accumulated_cost: f64,
     pub accumulated_tokens: i64,
     pub step_start: Instant,
+}
+
+impl DispatchResult {
+    /// This dispatch's totals as the terminal write paths report them.
+    /// The cache half is read from the driver at the call, not stored
+    /// here: a later turn can move it, and the transition must carry
+    /// whatever the driver last saw.
+    pub(crate) fn spend(&self, cache: CacheTokens) -> StepSpend {
+        StepSpend {
+            cost: self.accumulated_cost,
+            tokens: self.accumulated_tokens,
+            cache,
+            start: self.step_start,
+        }
+    }
 }
 
 impl ExecutionDriver {
@@ -100,14 +117,13 @@ impl ExecutionDriver {
             }
             None => {
                 let msg = format!("Unknown step kind: {}", step_conf.kind);
-                self.fail_step_and_feature(
-                    step_exec,
-                    &msg,
-                    *accumulated_cost,
-                    *accumulated_tokens,
-                    step_start,
-                )
-                .await;
+                let spend = StepSpend {
+                    cost: *accumulated_cost,
+                    tokens: *accumulated_tokens,
+                    cache: self.cache_tokens(),
+                    start: step_start,
+                };
+                self.fail_step_and_feature(step_exec, &msg, spend).await;
                 return None;
             }
         };
