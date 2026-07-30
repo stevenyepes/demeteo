@@ -59,6 +59,8 @@
   /* Color Palette */
   --bg-app: #08090c;
   --bg-sidebar: #0d0f14;
+  /* The darkest surface — terminal and code wells sunk into a panel. */
+  --bg-well: #050608;
   --bg-panel: rgba(18, 22, 30, 0.92);
   --bg-panel-hover: rgba(28, 34, 46, 0.85);
   --bg-input: rgba(10, 12, 16, 0.6);

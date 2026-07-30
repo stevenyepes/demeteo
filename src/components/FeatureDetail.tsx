@@ -11,14 +11,16 @@ import { formatError } from '../lib/errors';
 import {
   ShieldAlert, CheckCircle, RefreshCw, XCircle, ArrowRight, Hourglass, Cpu, X,
   GitPullRequest, RotateCcw, FileText, FileCode, FileJson, GitMerge, FileQuestion,
-  GitBranch, ExternalLink, AlertTriangle, Terminal, Paperclip, Network, List,
+  GitBranch, ExternalLink, AlertTriangle, Terminal, Paperclip,
 } from 'lucide-react';
 import { WorkflowCanvas } from './canvas/WorkflowCanvas';
 import { NodePanel } from './canvas/NodePanel';
 import { replayCone, descendantIds } from './canvas/graphOps';
 import type { WorkflowDefinitionV2 } from './canvas/types';
+import { useRunColumnLayout } from './useRunColumnLayout';
+import { RunViewToggle, type RunViewMode } from './RunViewToggle';
 import { useRunEvents } from '../hooks/useRunEvents';
-import { ArtifactViewer } from './ArtifactViewer';
+import { ArtifactModal } from './ArtifactModal';
 import { AttachmentChip } from './AttachmentChip';
 import { listAttachments, readAttachment, type AttachedFile } from '../lib/attachments';
 import { syncFeature, resolveSyncConflicts, fetchMrState } from '../lib/featureSync';
@@ -184,7 +186,7 @@ export function FeatureDetail() {
   // Run-mode visualization toggle (P2.2). The list timeline stays the default
   // — it's better for skimming long linear runs and preserves muscle memory;
   // the graph is opt-in until Phase-2 parity is signed off (PRD §6.1).
-  const [viewMode, setViewMode] = useState<'timeline' | 'graph'>('timeline');
+  const [viewMode, setViewMode] = useState<RunViewMode>('timeline');
   // The pinned version's schema-v2 graph (P1.15 + `feature_workflow_graph`),
   // migrated backend-side. Null until loaded / when the feature has none.
   const [graphDef, setGraphDef] = useState<WorkflowDefinitionV2 | null>(null);
@@ -494,10 +496,13 @@ export function FeatureDetail() {
   // to draw. An *awaiting* gate node opens the existing full-screen `GateView`
   // (the actionable HITL path); every other node opens the drill-down panel.
   const canShowGraph = graphDef !== null && steps.length > 0;
-  /** The graph is the one child of this column that *wants* the whole window:
-   *  it's a canvas, not prose, so it drops the reading-width cap and flexes to
-   *  the column's height instead of sitting in a fixed box. */
   const graphMode = canShowGraph && viewMode === 'graph';
+
+  /** Measuring the column, measuring the chrome above the graph, and turning
+   *  both into verdicts lives in `useRunColumnLayout` — this component only
+   *  hands out the refs and renders what comes back. */
+  const { setRunColumnEl, setMetaChromeEl, setToggleChromeEl, runLayout, graphBoxPx } =
+    useRunColumnLayout(graphDef);
   const onNodeActivate = useCallback(
     (nodeId: string) => {
       const run = runStatusByNode[nodeId];
@@ -545,6 +550,17 @@ export function FeatureDetail() {
     setReplayPreviewNodes(cone);
     setReplayTarget({ id: selectedStep.id, name: selectedNode.title, downstreamCount });
   }, [selectedNode, selectedStep, graphDef]);
+
+  // An artifact clicked in the graph drill-down opens the same `ArtifactModal`
+  // the timeline uses — one artifact surface, not two that drift apart. The
+  // step title comes from the panel's own node so the modal captions it.
+  const openArtifactFromPanel = useCallback(
+    (artifactPath: string) => {
+      setSelectedArtifactPath(artifactPath);
+      setSelectedStepTitle(selectedNodeId);
+    },
+    [selectedNodeId],
+  );
 
   // Dismiss the replay modal and drop the canvas highlight together.
   const closeReplay = useCallback(() => {
@@ -1106,6 +1122,17 @@ export function FeatureDetail() {
     }
   };
 
+  // A shadow step's artifact file can be overwritten in place at the same path
+  // by a forced re-pull (see `cache_step_artifacts` on the backend) — key on the
+  // same fields that signal a fresh attempt completed so the open viewer
+  // re-fetches instead of keeping the pre-overwrite content on screen. Derived
+  // as a plain string, never an object or a fresh closure: `ArtifactViewer` is
+  // memoized and this view polls every 3s.
+  const selectedArtifactStep = steps.find((s) => s.step_id === selectedStepTitle);
+  const selectedArtifactVersion = selectedArtifactStep
+    ? `${selectedArtifactStep.status}:${selectedArtifactStep.tokens}:${selectedArtifactStep.wall_clock_secs}:${selectedArtifactStep.cost_usd}`
+    : undefined;
+
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
       {/* Header telemetry panel */}
@@ -1341,7 +1368,7 @@ export function FeatureDetail() {
 
       {/* Feature Objective panel */}
       <div className="p-6 bg-[#08090c] border-b border-white/5">
-        <div className="max-w-4xl mx-auto flex flex-col gap-2">
+        <div className="max-w-[96ch] flex flex-col gap-2">
           <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
             Initial Prompt
           </div>
@@ -1357,7 +1384,7 @@ export function FeatureDetail() {
           metadata + click-to-view via the Modal below. */}
       {attachments.length > 0 && (
         <div className="px-6 py-4 bg-[#08090c] border-b border-white/5">
-          <div className="max-w-4xl mx-auto flex flex-col gap-2">
+          <div className="max-w-[96ch] flex flex-col gap-2">
             <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
               Attachments
               <span className="text-[10px] text-slate-500 font-mono normal-case tracking-tight">
@@ -1388,543 +1415,507 @@ export function FeatureDetail() {
         </div>
       ) : (
         <div className="flex-1 flex flex-row overflow-hidden w-full h-full">
-          {/* Left Column: Timeline */}
-          {/* `overflow-x-hidden` pairs with `overflow-y-auto` on purpose: set
+          {/* The run column. Chrome — stepper, gate table, graph — takes the
+              window, however wide it is; prose panels carry their own `ch` cap.
+              Artifact preview is an overlay (`ArtifactModal`) rather than a
+              second track, so the only width to negotiate is the meta track's.
+              Direction is `pickRunLayout`'s verdict on the measured width, not
+              a breakpoint; `flex-row-reverse` keeps the meta panels first in
+              the DOM — the order stacked reading needs — while painting them
+              to the right of the run.
+
+              `overflow-x-hidden` pairs with `overflow-y-auto` on purpose: set
               alone, `overflow-y` leaves `overflow-x` computed as `auto`, which
               is where the stray horizontal scrollbar under the timeline came
-              from. `min-w-0` lets the column shrink to its share of the split
-              instead of to its widest step card. */}
-          <div className={`flex min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-8 transition-all duration-500 ${
-            selectedArtifactPath
-              // Basis rather than width so the two columns' 1px borders come
-              // out of the split instead of adding to it.
-              ? 'basis-[40%] border-r border-white/5 bg-[#08090c]/40'
-              // Prose and step cards keep the 72rem reading cap; the graph
-              // takes the window, however wide it is.
-              : `w-full mx-auto ${graphMode ? '' : 'max-w-6xl'}`
-          }`}>
-            {remoteRun && (
-              /* Activity feed for a detached run: the runner's own event
-                 log (submitted → cloned → gates → pushed → PR), inline
-                 where the run lives instead of a separate modal. */
-              <div className="mb-6 w-full max-w-6xl shrink-0 space-y-1.5">
-                <RunEventTimeline
-                  run={remoteRun}
-                  machineName={remoteMachineName ?? remoteRun.machine_id}
-                  onEvents={handleRunEvents}
-                />
-                <div className="flex items-center justify-between gap-3 px-1">
-                  <p className="text-[10px] font-mono text-slate-500">
-                    {TERMINAL_STATUSES.includes(remoteRun.status)
-                      ? `Final state synced ${relativeTime(remoteRun.updated_at)}`
-                      : `Last synced ${relativeTime(remoteRun.updated_at)} · polling every 3s`}
-                  </p>
-                  {/* Same grouping as the Runs inbox: `over-budget` parks
-                      too, and RemoteGateActions already renders its
-                      no-gate explanation for it. */}
-                  {bucketFor(remoteRun.status) === 'parked' && (
-                    <RemoteGateActions run={remoteRun} onResolved={refreshRemoteRun} />
-                  )}
-                  {bucketFor(remoteRun.status) === 'needs_credentials' && (
-                    <ReinjectCredentials run={remoteRun} onResolved={refreshRemoteRun} />
-                  )}
-                </div>
-              </div>
-            )}
-            {showBootstrap && (
-              <div className="w-full max-w-6xl shrink-0">
-                <BootstrapStepper phases={orderedBootstrapPhases} />
-              </div>
-            )}
-            {/* Above the Graph|Timeline toggle so the verdict's evidence is in
-                the same place whichever view is selected: it is a property of
-                the run, not of one rendering of it. */}
-            <HarnessGateTable baseline={harnessBaseline} evidence={harnessEvidence} />
-            {canShowGraph && (
-              /* Graph | Timeline toggle (PRD §6.1). List stays default; the
-                 graph is the same pinned-version definition with the live
-                 `run_events`-driven overlay. */
-              <div className="mb-6 inline-flex shrink-0 self-start items-center gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1">
-                <button
-                  onClick={() => setViewMode('graph')}
-                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                    viewMode === 'graph'
-                      ? 'bg-cyan-500/15 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Network className="h-3.5 w-3.5" /> Graph
-                </button>
-                <button
-                  onClick={() => setViewMode('timeline')}
-                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                    viewMode === 'timeline'
-                      ? 'bg-cyan-500/15 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <List className="h-3.5 w-3.5" /> Timeline
-                </button>
-              </div>
-            )}
-            {graphMode ? (
-              /* Grows into whatever height the column has left rather than a
-                 fixed box, with a floor so a short window still shows a
-                 usable canvas instead of a sliver. */
-              <div className="flex min-h-[28rem] w-full flex-1 overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
-                <div className="min-w-0 flex-1">
-                  <WorkflowCanvas
-                    definition={graphDef!}
-                    statusByNode={runStatusByNode}
-                    onNodeActivate={onNodeActivate}
-                    selectedNodeId={selectedNodeId}
-                    highlightedNodeIds={replayPreviewNodes}
+              from. */}
+          <div
+            ref={setRunColumnEl}
+            className={`flex w-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-8 ${
+              runLayout === 'split' ? 'flex-row-reverse items-start gap-8' : 'flex-col'
+            }`}
+          >
+            {/* At 'split' the meta panels take their own track, so a wide window
+                gains a second column instead of a longer scroll — chronology
+                still reads top-to-bottom and prose keeps its measure. At
+                'stacked' they fall back above the graph, which is the only case
+                where they count as its chrome — hence the conditional ref. */}
+            <div
+              ref={runLayout === 'split' ? undefined : setMetaChromeEl}
+              className={`flex shrink-0 flex-col ${runLayout === 'split' ? 'w-[26rem]' : 'w-full min-w-0'}`}
+            >
+              {remoteRun && (
+                /* Activity feed for a detached run: the runner's own event
+                   log (submitted → cloned → gates → pushed → PR), inline
+                   where the run lives instead of a separate modal. */
+                <div className="mb-6 w-full shrink-0 space-y-1.5">
+                  <RunEventTimeline
+                    run={remoteRun}
+                    machineName={remoteMachineName ?? remoteRun.machine_id}
+                    onEvents={handleRunEvents}
                   />
-                </div>
-                {selectedNode && (
-                  <NodePanel
-                    featureId={featureId}
-                    node={selectedNode}
-                    run={selectedRun}
-                    step={selectedStep}
-                    onClose={() => setSelectedNodeId(null)}
-                    onOpenEditorForPath={openEditorForPath}
-                    runEvents={panelRunEvents}
-                    liveStream={selectedStep ? streamContent[selectedStep.id] : undefined}
-                    isStreaming={
-                      selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
-                    }
-                    blockedBy={selectedBlockedBy}
-                    onRetry={
-                      selectedStep &&
-                      (selectedStep.status === 'failed' || selectedStep.status === 'interrupted')
-                        ? () => handleRetryStep(selectedStep.id)
-                        : undefined
-                    }
-                    onReplay={selectedStep ? startReplayFromPanel : undefined}
-                    onStop={
-                      selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
-                        ? handleStopStep
-                        : undefined
-                    }
-                    onDecideGate={
-                      selectedNode.type === 'gate' && selectedRun?.stepExecutionId
-                        ? () =>
-                            navigate({
-                              kind: 'detail',
-                              featureId,
-                              featureTitle,
-                              gateStepExecutionId: selectedRun.stepExecutionId!,
-                            })
-                        : undefined
-                    }
-                  />
-                )}
-              </div>
-            ) : (
-            <div className="relative shrink-0 border-l border-white/5 ml-4 pl-8 space-y-6">
-              {remoteRun && steps.length === 0 && bootstrapPhases.size === 0 && (
-                /* Eager shadow, pre-hydration: the run was submitted a
-                   moment ago and the runner hasn't bootstrapped a
-                   feature yet, so there are no shadow steps to mirror.
-                   The 3s remote_refresh_run poll above fills this in as
-                   soon as the runner reports them. Suppressed once the
-                   richer bootstrap stepper has phases to show. */
-                <div className="glass-panel p-6 border border-cyan-500/20">
-                  <div className="flex items-center gap-3">
-                    <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin shrink-0" />
-                    <div>
-                      <h3 className="text-sm font-semibold text-white">
-                        Submitted to {remoteMachineName ?? remoteRun.machine_id}
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-1">
-                        The runner is cloning the repository and bootstrapping the workflow.
-                        Steps appear here automatically — you can close Demeteo; the run continues.
-                      </p>
-                    </div>
+                  <div className="flex items-center justify-between gap-3 px-1">
+                    <p className="text-[10px] font-mono text-slate-500">
+                      {TERMINAL_STATUSES.includes(remoteRun.status)
+                        ? `Final state synced ${relativeTime(remoteRun.updated_at)}`
+                        : `Last synced ${relativeTime(remoteRun.updated_at)} · polling every 3s`}
+                    </p>
+                    {/* Same grouping as the Runs inbox: `over-budget` parks
+                        too, and RemoteGateActions already renders its
+                        no-gate explanation for it. */}
+                    {bucketFor(remoteRun.status) === 'parked' && (
+                      <RemoteGateActions run={remoteRun} onResolved={refreshRemoteRun} />
+                    )}
+                    {bucketFor(remoteRun.status) === 'needs_credentials' && (
+                      <ReinjectCredentials run={remoteRun} onResolved={refreshRemoteRun} />
+                    )}
                   </div>
                 </div>
               )}
-              {steps.map((step, idx) => {
-                let icon = <Hourglass className="w-4 h-4 text-slate-500 animate-pulse" />;
-                let statusBg = 'border-white/5 bg-white/[0.01]';
-
-                if (step.status === 'completed') {
-                  icon = <CheckCircle className="w-4 h-4 text-emerald-400" />;
-                  statusBg = 'border-emerald-500/20 bg-emerald-950/5';
-                } else if (step.status === 'failed') {
-                  icon = <XCircle className="w-4 h-4 text-rose-400" />;
-                  statusBg = 'border-rose-500/20 bg-rose-950/5';
-                } else if (step.status === 'running') {
-                  icon = <Cpu className="w-4 h-4 text-cyan-400 animate-spin" />;
-                  statusBg = 'border-cyan-500/30 bg-cyan-950/10 shadow-[0_0_15px_rgba(6,182,212,0.05)]';
-                } else if (step.status === 'verifying') {
-                  icon = <RefreshCw className="w-4 h-4 text-violet-400 animate-spin" />;
-                  statusBg = 'border-violet-500/30 bg-violet-950/10 shadow-[0_0_15px_rgba(139,92,246,0.05)]';
-                } else if (step.status === 'awaiting_gate') {
-                  icon = <ShieldAlert className="w-4 h-4 text-amber-400 animate-bounce" />;
-                  statusBg = 'border-amber-500/40 bg-amber-950/10 shadow-[0_0_15px_rgba(245,158,11,0.08)]';
-                }
-
-                // `null` for every failure that is not the engine's terminal
-                // environment message — a verdict, an agent failure, an empty
-                // error. Guessing here would dress a real defect up as somebody
-                // else's problem.
-                const stepEnvironment = parseEnvironmentFailure(step.error_message);
-                const activePredecessor = findActivePredecessor(steps, step);
-                const isBlockedByPredecessor = (step.status === 'failed' || step.status === 'interrupted') && activePredecessor !== null;
-                const isActiveGate = view.gateStepExecutionId === step.id;
-
-                return (
-                  <div key={step.id} className="relative group">
-                    {/* Connector node circle */}
-                    <span className="absolute -left-[41px] top-1.5 flex items-center justify-center w-6 h-6 rounded-full bg-[#08090c] border border-white/10">
-                      <span className="text-[10px] text-slate-400 font-bold">{idx + 1}</span>
-                    </span>
-
-                    <div
-                      ref={(el) => { stepCardRefs.current[step.id] = el; }}
-                      data-step-id={step.id}
-                      className={`p-5 rounded-xl border transition-all duration-300 ${statusBg} ${isActiveGate ? 'ring-2 ring-amber-500/40' : ''}`}
-                    >
-                      {/* Title and metrics are one row while they fit and two
-                          when they don't — the narrow (artifact-open) column
-                          used to squeeze the metric group until the last value
-                          rendered outside the card. */}
-                      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                        {/* Wraps rather than truncates: the hover-only Replay
-                            button still reserves its width, and with a truncate
-                            here it spent that width shortening the step name to
-                            "Resea…" in a card that had room for it. */}
-                        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                          <span className="shrink-0">{icon}</span>
-                          <span className="font-semibold text-white tracking-wide text-sm break-words">{humanizeStepId(step.step_id)}</span>
-                          <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono shrink-0">
-                            {step.step_kind}
-                          </span>
-                          {(step.iteration_count ?? 0) > 0 && (
-                            <span
-                              className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono"
-                              title={`This step has been retried ${step.iteration_count} time${step.iteration_count !== 1 ? 's' : ''}`}
-                            >
-                              <RefreshCw className="w-2.5 h-2.5" />
-                              {step.iteration_count}x
-                            </span>
-                          )}
-                          <button
-                            onClick={() => setReplayTarget({
-                              id: step.id,
-                              name: humanizeStepId(step.step_id),
-                              downstreamCount: steps.length - idx - 1,
-                            })}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1 px-2 py-1 rounded text-[10px] text-cyan-400/60 hover:text-cyan-300 hover:bg-cyan-500/10 font-bold uppercase tracking-wider"
-                            title="Replay from this step"
-                          >
-                            <RotateCcw className="w-3 h-3" /> Replay
-                          </button>
-                        </div>
-
-                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs font-mono">
-                          {typeof step.cost_usd === 'number' && step.cost_usd > 0 && (
-                            <span
-                              className="text-emerald-400 whitespace-nowrap"
-                              title={`${step.cost_usd.toFixed(4)} USD`}
-                            >
-                              {formatCost(step.cost_usd)}
-                            </span>
-                          )}
-                          {typeof step.cache_read_input_tokens === 'number' && step.cache_read_input_tokens > 0 && (
-                            <span
-                              className="text-violet-400 whitespace-nowrap"
-                              title={`${step.cache_read_input_tokens.toLocaleString()} cache-read tokens (live from last turn)`}
-                            >
-                              {formatTokens(step.cache_read_input_tokens)}p cache
-                            </span>
-                          )}
-                          {typeof step.tokens === 'number' && <span className="text-cyan-400 whitespace-nowrap">{formatTokens(step.tokens)}</span>}
-                          {typeof step.wall_clock_secs === 'number' && <span className="text-slate-400 whitespace-nowrap">{formatDuration(step.wall_clock_secs)}</span>}
-                        </div>
+              {showBootstrap && (
+                <div className="w-full shrink-0">
+                  <BootstrapStepper phases={orderedBootstrapPhases} />
+                </div>
+              )}
+              {/* Above the Graph|Timeline toggle so the verdict's evidence is in
+                  the same place whichever view is selected: it is a property of
+                  the run, not of one rendering of it. */}
+              <HarnessGateTable baseline={harnessBaseline} evidence={harnessEvidence} />
+            </div>
+            <div className={runLayout === 'split' ? 'flex min-w-0 flex-1 flex-col' : 'contents'}>
+              {canShowGraph && (
+                <RunViewToggle mode={viewMode} onSelect={setViewMode} chromeRef={setToggleChromeEl} />
+              )}
+              {graphMode ? (
+                /* Height comes from the plan, not the column's leftovers: a
+                   `RIGHT` chain is one ~64px row, and flexing to fill left it
+                   floating in ~900px of empty canvas. The plan was made for
+                   `graphBox` — the space this element actually has — so the
+                   computed height can't push it past the fold either. `style=`
+                   carries a measurement, never a token; `min-h-[28rem]` keeps
+                   the floor in the class list, mirroring `MIN_GRAPH_BOX_PX`. */
+                <div
+                  className="flex min-h-[28rem] w-full shrink-0 overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40"
+                  style={{ height: graphBoxPx }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <WorkflowCanvas
+                      definition={graphDef!}
+                      statusByNode={runStatusByNode}
+                      onNodeActivate={onNodeActivate}
+                      selectedNodeId={selectedNodeId}
+                      highlightedNodeIds={replayPreviewNodes}
+                    />
+                  </div>
+                  {selectedNode && (
+                    <NodePanel
+                      featureId={featureId}
+                      node={selectedNode}
+                      run={selectedRun}
+                      step={selectedStep}
+                      onClose={() => setSelectedNodeId(null)}
+                      onOpenEditorForPath={openEditorForPath}
+                      onOpenArtifact={openArtifactFromPanel}
+                      runEvents={panelRunEvents}
+                      liveStream={selectedStep ? streamContent[selectedStep.id] : undefined}
+                      isStreaming={
+                        selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
+                      }
+                      blockedBy={selectedBlockedBy}
+                      onRetry={
+                        selectedStep &&
+                        (selectedStep.status === 'failed' || selectedStep.status === 'interrupted')
+                          ? () => handleRetryStep(selectedStep.id)
+                          : undefined
+                      }
+                      onReplay={selectedStep ? startReplayFromPanel : undefined}
+                      onStop={
+                        selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
+                          ? handleStopStep
+                          : undefined
+                      }
+                      onDecideGate={
+                        selectedNode.type === 'gate' && selectedRun?.stepExecutionId
+                          ? () =>
+                              navigate({
+                                kind: 'detail',
+                                featureId,
+                                featureTitle,
+                                gateStepExecutionId: selectedRun.stepExecutionId!,
+                              })
+                          : undefined
+                      }
+                    />
+                  )}
+                </div>
+              ) : (
+              <div className="relative shrink-0 border-l border-white/5 ml-4 pl-8 space-y-6">
+                {remoteRun && steps.length === 0 && bootstrapPhases.size === 0 && (
+                  /* Eager shadow, pre-hydration: the run was submitted a
+                     moment ago and the runner hasn't bootstrapped a
+                     feature yet, so there are no shadow steps to mirror.
+                     The 3s remote_refresh_run poll above fills this in as
+                     soon as the runner reports them. Suppressed once the
+                     richer bootstrap stepper has phases to show. */
+                  <div className="glass-panel p-6 border border-cyan-500/20">
+                    <div className="flex items-center gap-3">
+                      <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin shrink-0" />
+                      <div>
+                        <h3 className="text-sm font-semibold text-white">
+                          Submitted to {remoteMachineName ?? remoteRun.machine_id}
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-1">
+                          The runner is cloning the repository and bootstrapping the workflow.
+                          Steps appear here automatically — you can close Demeteo; the run continues.
+                        </p>
                       </div>
+                    </div>
+                  </div>
+                )}
+                {steps.map((step, idx) => {
+                  let icon = <Hourglass className="w-4 h-4 text-slate-500 animate-pulse" />;
+                  let statusBg = 'border-white/5 bg-white/[0.01]';
 
-                      {step.status === 'awaiting_gate' && (
-                        <div className="mt-4 p-4 rounded bg-amber-500/5 border border-amber-500/20 flex flex-wrap justify-between items-center gap-3 animate-pulse">
-                          <div className="min-w-0 flex-1 text-xs text-amber-400 font-semibold uppercase tracking-wide">
-                            Pipeline paused. Awaiting manual review.
-                          </div>
-                          <button
-                            onClick={() => navigate({ kind: 'detail', featureId, featureTitle, gateStepExecutionId: step.id })}
-                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 bg-amber-500 hover:bg-amber-600 rounded text-xs font-bold text-black transition shadow-[0_0_10px_rgba(245,158,11,0.4)]"
-                          >
-                            Decide Gate <ArrowRight className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
+                  if (step.status === 'completed') {
+                    icon = <CheckCircle className="w-4 h-4 text-emerald-400" />;
+                    statusBg = 'border-emerald-500/20 bg-emerald-950/5';
+                  } else if (step.status === 'failed') {
+                    icon = <XCircle className="w-4 h-4 text-rose-400" />;
+                    statusBg = 'border-rose-500/20 bg-rose-950/5';
+                  } else if (step.status === 'running') {
+                    icon = <Cpu className="w-4 h-4 text-cyan-400 animate-spin" />;
+                    statusBg = 'border-cyan-500/30 bg-cyan-950/10 shadow-[0_0_15px_rgba(6,182,212,0.05)]';
+                  } else if (step.status === 'verifying') {
+                    icon = <RefreshCw className="w-4 h-4 text-violet-400 animate-spin" />;
+                    statusBg = 'border-violet-500/30 bg-violet-950/10 shadow-[0_0_15px_rgba(139,92,246,0.05)]';
+                  } else if (step.status === 'awaiting_gate') {
+                    icon = <ShieldAlert className="w-4 h-4 text-amber-400 animate-bounce" />;
+                    statusBg = 'border-amber-500/40 bg-amber-950/10 shadow-[0_0_15px_rgba(245,158,11,0.08)]';
+                  }
 
-                      {/* Two different things end a step, and they are not the
-                          same claim. An environment failure is not the feature's
-                          defect and carries an action, so it gets the
-                          remediation-first panel; everything else is a verdict
-                          the feature answers for and keeps the ruby block. */}
-                      {(step.status === 'failed' || step.status === 'interrupted') && stepEnvironment && (
-                        <EnvironmentNotReadyPanel
-                          failure={stepEnvironment}
-                          atBase={isBaselineEnvironmentFailure(stepEnvironment, harnessBaseline)}
-                        />
-                      )}
+                  // `null` for every failure that is not the engine's terminal
+                  // environment message — a verdict, an agent failure, an empty
+                  // error. Guessing here would dress a real defect up as somebody
+                  // else's problem.
+                  const stepEnvironment = parseEnvironmentFailure(step.error_message);
+                  const activePredecessor = findActivePredecessor(steps, step);
+                  const isBlockedByPredecessor = (step.status === 'failed' || step.status === 'interrupted') && activePredecessor !== null;
+                  const isActiveGate = view.gateStepExecutionId === step.id;
 
-                      {(step.status === 'failed' || step.status === 'interrupted') && !stepEnvironment && step.error_message && (
-                        <div className="mt-3 p-3 rounded bg-rose-500/5 border border-rose-500/20 text-xs text-rose-400 font-mono">
-                          {/* The backend composes this message with newlines and an indented
-                              reproduce line; render it verbatim instead of collapsing it. */}
-                          <div className="whitespace-pre-wrap">{step.error_message}</div>
-                        </div>
-                      )}
+                  return (
+                    <div key={step.id} className="relative group">
+                      {/* Connector node circle */}
+                      <span className="absolute -left-[41px] top-1.5 flex items-center justify-center w-6 h-6 rounded-full bg-[#08090c] border border-white/10">
+                        <span className="text-[10px] text-slate-400 font-bold">{idx + 1}</span>
+                      </span>
 
-                      {(step.status === 'failed' || step.status === 'interrupted') && (
-                        <div className="mt-4 p-4 rounded bg-rose-500/5 border border-rose-500/20 flex flex-col gap-3">
-                          <div className="flex justify-between items-center">
-                            <div className="text-xs text-rose-400 font-semibold uppercase tracking-wide">
-                              {stepEnvironment
-                                ? 'Fix the machine first — retrying before that fails the same way.'
-                                : 'Step failed. You can change harness/model and retry.'}
-                            </div>
+                      <div
+                        ref={(el) => { stepCardRefs.current[step.id] = el; }}
+                        data-step-id={step.id}
+                        className={`p-5 rounded-xl border transition-all duration-300 ${statusBg} ${isActiveGate ? 'ring-2 ring-amber-500/40' : ''}`}
+                      >
+                        {/* Title and metrics are one row while they fit and two
+                            when they don't — a half-width window squeezes the
+                            metric group until the last value renders outside the
+                            card. (It used to be the artifact split column that
+                            did this; the window alone is reason enough.) */}
+                        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                          {/* Wraps rather than truncates: the hover-only Replay
+                              button still reserves its width, and with a truncate
+                              here it spent that width shortening the step name to
+                              "Resea…" in a card that had room for it. */}
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                            <span className="shrink-0">{icon}</span>
+                            <span className="font-semibold text-white tracking-wide text-sm break-words">{humanizeStepId(step.step_id)}</span>
+                            <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono shrink-0">
+                              {step.step_kind}
+                            </span>
+                            {(step.iteration_count ?? 0) > 0 && (
+                              <span
+                                className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono"
+                                title={`This step has been retried ${step.iteration_count} time${step.iteration_count !== 1 ? 's' : ''}`}
+                              >
+                                <RefreshCw className="w-2.5 h-2.5" />
+                                {step.iteration_count}x
+                              </span>
+                            )}
                             <button
-                              onClick={() => handleRetryStep(step.id)}
-                              disabled={isBlockedByPredecessor}
-                              title={
-                                isBlockedByPredecessor
-                                  ? `Step '${activePredecessor?.step_id}' is still ${activePredecessor?.status}. Wait for it to finish before retrying.`
-                                  : 'Re-run this step from scratch'
-                              }
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-rose-900/40 disabled:hover:bg-rose-900/40 disabled:cursor-not-allowed text-white rounded text-xs font-bold transition shadow-[0_0_10px_rgba(239,68,68,0.4)] disabled:shadow-none"
+                              onClick={() => setReplayTarget({
+                                id: step.id,
+                                name: humanizeStepId(step.step_id),
+                                downstreamCount: steps.length - idx - 1,
+                              })}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1 px-2 py-1 rounded text-[10px] text-cyan-400/60 hover:text-cyan-300 hover:bg-cyan-500/10 font-bold uppercase tracking-wider"
+                              title="Replay from this step"
                             >
-                              <RefreshCw className="w-3 h-3 animate-pulse" /> Retry Step
+                              <RotateCcw className="w-3 h-3" /> Replay
                             </button>
                           </div>
 
-                          {isBlockedByPredecessor && activePredecessor && (
-                            <div
-                              data-testid="retry-blocked-banner"
-                              className="flex items-start gap-2 px-3 py-2 rounded bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-400 font-mono"
-                              title={`Cannot retry while '${activePredecessor.step_id}' is ${activePredecessor.status}`}
-                            >
-                              <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-                              <span>
-                                Blocked: <span className="font-semibold">{activePredecessor.step_id}</span> is still {activePredecessor.status}. Wait for it to finish before retrying.
+                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs font-mono">
+                            {typeof step.cost_usd === 'number' && step.cost_usd > 0 && (
+                              <span
+                                className="text-emerald-400 whitespace-nowrap"
+                                title={`${step.cost_usd.toFixed(4)} USD`}
+                              >
+                                {formatCost(step.cost_usd)}
                               </span>
-                            </div>
-                          )}
-
-                          {availableAgents.length > 0 && (
-                            <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
-                              <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Harness:</label>
-                              <select
-                                value={selectedAgent}
-                                onChange={(e) => handleAgentChange(e.target.value)}
-                                className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer capitalize"
+                            )}
+                            {typeof step.cache_read_input_tokens === 'number' && step.cache_read_input_tokens > 0 && (
+                              <span
+                                className="text-violet-400 whitespace-nowrap"
+                                title={`${step.cache_read_input_tokens.toLocaleString()} cache-read tokens (live from last turn)`}
                               >
-                                <option value="">Default ({featureAgentKind.replace(/-/g, ' ')})</option>
-                                {availableAgents.map((a) => (
-                                  <option key={a} value={a}>{a.replace(/-/g, ' ')}</option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-
-                          {isLoadingModels ? (
-                            <div className="text-[10px] text-slate-500 font-mono animate-pulse">
-                              Probing available models...
-                            </div>
-                          ) : availableModels.length > 0 ? (
-                            <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
-                              <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Model:</label>
-                              <select
-                                value={selectedModel}
-                                onChange={(e) => setSelectedModel(e.target.value)}
-                                className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
-                              >
-                                <option value="">Default (From Workflow)</option>
-                                {availableModels.map((m) => (
-                                  <option key={m.value} value={m.value}>
-                                    {m.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          ) : null}
-
-                          <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
-                            <label htmlFor={`retry-effort-${step.id}`} className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Effort:</label>
-                            <select
-                              id={`retry-effort-${step.id}`}
-                              value={selectedEffort}
-                              onChange={(e) => setSelectedEffort(e.target.value as EffortLevel | '')}
-                              disabled={retryEffortLevels.length === 0}
-                              title={retryEffortLevels.length === 0 ? `${(selectedAgent || featureAgentKind).replace(/-/g, ' ')} does not support effort selection` : undefined}
-                              className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              <option value="">{retryEffortLevels.length === 0 ? 'Not supported' : 'Keep current effort'}</option>
-                              {retryEffortLevels.map((l) => (
-                                <option key={l} value={l}>{EFFORT_LABELS[l]}</option>
-                              ))}
-                            </select>
+                                {formatTokens(step.cache_read_input_tokens)}p cache
+                              </span>
+                            )}
+                            {typeof step.tokens === 'number' && <span className="text-cyan-400 whitespace-nowrap">{formatTokens(step.tokens)}</span>}
+                            {typeof step.wall_clock_secs === 'number' && <span className="text-slate-400 whitespace-nowrap">{formatDuration(step.wall_clock_secs)}</span>}
                           </div>
                         </div>
-                      )}
 
-                      {(() => {
-                        // Dedupe: two runner artifacts that share a basename
-                        // cache to one local file, so `artifact_paths` can
-                        // carry the same local ref twice — a duplicate here is
-                        // a duplicate React key below. Keep first occurrence.
-                        const allPaths = Array.from(new Set(
-                          step.artifact_paths?.length
-                            ? step.artifact_paths
-                            : step.artifact_path ? [step.artifact_path] : []
-                        ));
-                        const isAgentStep = step.step_kind === 'agent';
-                        const visiblePaths = isAgentStep
-                          ? allPaths.filter(p => classifyArtifact(p).kind === 'markdown')
-                          : allPaths;
-                        const hiddenCount = allPaths.length - visiblePaths.length;
+                        {step.status === 'awaiting_gate' && (
+                          <div className="mt-4 p-4 rounded bg-amber-500/5 border border-amber-500/20 flex flex-wrap justify-between items-center gap-3 animate-pulse">
+                            <div className="min-w-0 flex-1 text-xs text-amber-400 font-semibold uppercase tracking-wide">
+                              Pipeline paused. Awaiting manual review.
+                            </div>
+                            <button
+                              onClick={() => navigate({ kind: 'detail', featureId, featureTitle, gateStepExecutionId: step.id })}
+                              className="flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 bg-amber-500 hover:bg-amber-600 rounded text-xs font-bold text-black transition shadow-[0_0_10px_rgba(245,158,11,0.4)]"
+                            >
+                              Decide Gate <ArrowRight className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
 
-                        return (
-                          <>
-                            {visiblePaths.map((path) => {
-                              const cls = classifyArtifact(path);
-                              const Icon = <ArtifactIcon kind={cls.kind} />;
-                              const labelColor = ARTIFACT_KIND_COLORS[cls.kind];
-                              return (
-                                <button
-                                  key={path}
-                                  title={cls.basename}
-                                  onClick={() => {
-                                    setSelectedArtifactPath(path);
-                                    setSelectedStepTitle(step.step_id);
-                                  }}
-                                  className={`mt-3 w-full text-left text-xs font-mono p-3 rounded border flex items-center gap-3 transition duration-300 ${
-                                    selectedArtifactPath === path
-                                      ? 'bg-violet-950/20 border-violet-500/30 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
-                                      : 'bg-[#050608] border-white/[0.02] text-slate-400 hover:border-white/10 hover:bg-white/[0.02] hover:text-white cursor-pointer'
-                                  }`}
-                                >
-                                  <span className={labelColor}>{Icon}</span>
-                                  <span className="truncate flex-1">{cls.basename}</span>
-                                  <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">
-                                    {ARTIFACT_KIND_LABELS[cls.kind]}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                            {isAgentStep && hiddenCount > 0 && (
-                              <div className="mt-3 text-[10px] text-slate-600 font-mono px-1">
-                                {hiddenCount} file{hiddenCount !== 1 ? 's' : ''} changed · use Browse Code to review
+                        {/* Two different things end a step, and they are not the
+                            same claim. An environment failure is not the feature's
+                            defect and carries an action, so it gets the
+                            remediation-first panel; everything else is a verdict
+                            the feature answers for and keeps the ruby block. */}
+                        {(step.status === 'failed' || step.status === 'interrupted') && stepEnvironment && (
+                          <EnvironmentNotReadyPanel
+                            failure={stepEnvironment}
+                            atBase={isBaselineEnvironmentFailure(stepEnvironment, harnessBaseline)}
+                          />
+                        )}
+
+                        {(step.status === 'failed' || step.status === 'interrupted') && !stepEnvironment && step.error_message && (
+                          <div className="mt-3 p-3 rounded bg-rose-500/5 border border-rose-500/20 text-xs text-rose-400 font-mono">
+                            {/* The backend composes this message with newlines and an indented
+                                reproduce line; render it verbatim instead of collapsing it. */}
+                            <div className="whitespace-pre-wrap">{step.error_message}</div>
+                          </div>
+                        )}
+
+                        {(step.status === 'failed' || step.status === 'interrupted') && (
+                          <div className="mt-4 p-4 rounded bg-rose-500/5 border border-rose-500/20 flex flex-col gap-3">
+                            <div className="flex justify-between items-center">
+                              <div className="text-xs text-rose-400 font-semibold uppercase tracking-wide">
+                                {stepEnvironment
+                                  ? 'Fix the machine first — retrying before that fails the same way.'
+                                  : 'Step failed. You can change harness/model and retry.'}
+                              </div>
+                              <button
+                                onClick={() => handleRetryStep(step.id)}
+                                disabled={isBlockedByPredecessor}
+                                title={
+                                  isBlockedByPredecessor
+                                    ? `Step '${activePredecessor?.step_id}' is still ${activePredecessor?.status}. Wait for it to finish before retrying.`
+                                    : 'Re-run this step from scratch'
+                                }
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-rose-900/40 disabled:hover:bg-rose-900/40 disabled:cursor-not-allowed text-white rounded text-xs font-bold transition shadow-[0_0_10px_rgba(239,68,68,0.4)] disabled:shadow-none"
+                              >
+                                <RefreshCw className="w-3 h-3 animate-pulse" /> Retry Step
+                              </button>
+                            </div>
+
+                            {isBlockedByPredecessor && activePredecessor && (
+                              <div
+                                data-testid="retry-blocked-banner"
+                                className="flex items-start gap-2 px-3 py-2 rounded bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-400 font-mono"
+                                title={`Cannot retry while '${activePredecessor.step_id}' is ${activePredecessor.status}`}
+                              >
+                                <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                                <span>
+                                  Blocked: <span className="font-semibold">{activePredecessor.step_id}</span> is still {activePredecessor.status}. Wait for it to finish before retrying.
+                                </span>
                               </div>
                             )}
-                          </>
-                        );
-                      })()}
 
-                      {(step.status === 'running' || step.status === 'verifying') && (
-                        <div className="mt-3 flex gap-2">
-                          <button
-                            onClick={() => setActiveStreamId(activeStreamId === step.id ? null : step.id)}
-                            className="flex-1 text-left text-xs font-mono p-3 rounded border flex items-center justify-between transition duration-300 bg-[#050608] border-white/[0.02] text-cyan-400 hover:border-cyan-500/30 hover:bg-cyan-950/20 cursor-pointer"
-                          >
-                            <span className="truncate flex items-center gap-2">
-                              <Cpu className="w-3 h-3 animate-spin" />
-                              View Agent Reasoning
-                            </span>
-                            <span className="text-[9px] uppercase font-bold text-cyan-500 shrink-0">
-                              {activeStreamId === step.id ? 'Hide Stream' : 'Live Stream'}
-                            </span>
-                          </button>
+                            {availableAgents.length > 0 && (
+                              <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
+                                <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Harness:</label>
+                                <select
+                                  value={selectedAgent}
+                                  onChange={(e) => handleAgentChange(e.target.value)}
+                                  className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer capitalize"
+                                >
+                                  <option value="">Default ({featureAgentKind.replace(/-/g, ' ')})</option>
+                                  {availableAgents.map((a) => (
+                                    <option key={a} value={a}>{a.replace(/-/g, ' ')}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
 
-                          <button
-                            onClick={handleStopStep}
-                            className="px-4 py-2.5 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5 shrink-0"
-                            title="Stop this step execution"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            Stop Step
-                          </button>
-                        </div>
-                      )}
+                            {isLoadingModels ? (
+                              <div className="text-[10px] text-slate-500 font-mono animate-pulse">
+                                Probing available models...
+                              </div>
+                            ) : availableModels.length > 0 ? (
+                              <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
+                                <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Model:</label>
+                                <select
+                                  value={selectedModel}
+                                  onChange={(e) => setSelectedModel(e.target.value)}
+                                  className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
+                                >
+                                  <option value="">Default (From Workflow)</option>
+                                  {availableModels.map((m) => (
+                                    <option key={m.value} value={m.value}>
+                                      {m.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : null}
 
-                      {activeStreamId === step.id && (
-                        <div className="mt-2 p-3 rounded-lg bg-[#020304] border border-cyan-500/20 max-h-64 overflow-y-auto font-mono text-[11px] shadow-inner flex flex-col-reverse">
-                          <pre className="text-cyan-300/80 whitespace-pre-wrap break-words">
-                            {streamContent[step.id] || 'Waiting for agent output...'}
-                          </pre>
-                        </div>
-                      )}
+                            <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5">
+                              <label htmlFor={`retry-effort-${step.id}`} className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Run with Effort:</label>
+                              <select
+                                id={`retry-effort-${step.id}`}
+                                value={selectedEffort}
+                                onChange={(e) => setSelectedEffort(e.target.value as EffortLevel | '')}
+                                disabled={retryEffortLevels.length === 0}
+                                title={retryEffortLevels.length === 0 ? `${(selectedAgent || featureAgentKind).replace(/-/g, ' ')} does not support effort selection` : undefined}
+                                className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              >
+                                <option value="">{retryEffortLevels.length === 0 ? 'Not supported' : 'Keep current effort'}</option>
+                                {retryEffortLevels.map((l) => (
+                                  <option key={l} value={l}>{EFFORT_LABELS[l]}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+
+                        {(() => {
+                          // Dedupe: two runner artifacts that share a basename
+                          // cache to one local file, so `artifact_paths` can
+                          // carry the same local ref twice — a duplicate here is
+                          // a duplicate React key below. Keep first occurrence.
+                          const allPaths = Array.from(new Set(
+                            step.artifact_paths?.length
+                              ? step.artifact_paths
+                              : step.artifact_path ? [step.artifact_path] : []
+                          ));
+                          const isAgentStep = step.step_kind === 'agent';
+                          const visiblePaths = isAgentStep
+                            ? allPaths.filter(p => classifyArtifact(p).kind === 'markdown')
+                            : allPaths;
+                          const hiddenCount = allPaths.length - visiblePaths.length;
+
+                          return (
+                            <>
+                              {visiblePaths.map((path) => {
+                                const cls = classifyArtifact(path);
+                                const Icon = <ArtifactIcon kind={cls.kind} />;
+                                const labelColor = ARTIFACT_KIND_COLORS[cls.kind];
+                                return (
+                                  <button
+                                    key={path}
+                                    title={cls.basename}
+                                    onClick={() => {
+                                      setSelectedArtifactPath(path);
+                                      setSelectedStepTitle(step.step_id);
+                                    }}
+                                    className={`mt-3 w-full text-left text-xs font-mono p-3 rounded border flex items-center gap-3 transition duration-300 ${
+                                      selectedArtifactPath === path
+                                        ? 'bg-violet-950/20 border-violet-500/30 text-violet-300 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
+                                        : 'bg-[#050608] border-white/[0.02] text-slate-400 hover:border-white/10 hover:bg-white/[0.02] hover:text-white cursor-pointer'
+                                    }`}
+                                  >
+                                    <span className={labelColor}>{Icon}</span>
+                                    <span className="truncate flex-1">{cls.basename}</span>
+                                    <span className="text-[9px] uppercase font-bold text-slate-500 shrink-0">
+                                      {ARTIFACT_KIND_LABELS[cls.kind]}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                              {isAgentStep && hiddenCount > 0 && (
+                                <div className="mt-3 text-[10px] text-slate-600 font-mono px-1">
+                                  {hiddenCount} file{hiddenCount !== 1 ? 's' : ''} changed · use Browse Code to review
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+
+                        {(step.status === 'running' || step.status === 'verifying') && (
+                          <div className="mt-3 flex gap-2">
+                            <button
+                              onClick={() => setActiveStreamId(activeStreamId === step.id ? null : step.id)}
+                              className="flex-1 text-left text-xs font-mono p-3 rounded border flex items-center justify-between transition duration-300 bg-[#050608] border-white/[0.02] text-cyan-400 hover:border-cyan-500/30 hover:bg-cyan-950/20 cursor-pointer"
+                            >
+                              <span className="truncate flex items-center gap-2">
+                                <Cpu className="w-3 h-3 animate-spin" />
+                                View Agent Reasoning
+                              </span>
+                              <span className="text-[9px] uppercase font-bold text-cyan-500 shrink-0">
+                                {activeStreamId === step.id ? 'Hide Stream' : 'Live Stream'}
+                              </span>
+                            </button>
+
+                            <button
+                              onClick={handleStopStep}
+                              className="px-4 py-2.5 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5 shrink-0"
+                              title="Stop this step execution"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Stop Step
+                            </button>
+                          </div>
+                        )}
+
+                        {activeStreamId === step.id && (
+                          <div className="mt-2 p-3 rounded-lg bg-[#020304] border border-cyan-500/20 max-h-64 overflow-y-auto font-mono text-[11px] shadow-inner flex flex-col-reverse">
+                            <pre className="text-cyan-300/80 whitespace-pre-wrap break-words">
+                              {streamContent[step.id] || 'Waiting for agent output...'}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-            )}
-          </div>
-
-          {/* Right Column: Artifact Viewer panel */}
-          <div 
-            className={`h-full min-w-0 overflow-hidden border-l border-white/5 bg-[#0d0f14]/60 backdrop-blur-xl flex flex-col transition-all duration-500 ${
-              selectedArtifactPath ? 'basis-[60%] opacity-100 translate-x-0' : 'basis-0 opacity-0 translate-x-[50px] pointer-events-none'
-            }`}
-          >
-            {selectedArtifactPath && (
-              <div className="flex-1 min-w-0 flex flex-col p-6 overflow-hidden h-full">
-                {/* Header */}
-                <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 shrink-0">
-                  <div>
-                    <h3 className="text-sm font-bold text-white font-display uppercase tracking-wider">
-                      Artifact Preview
-                    </h3>
-                    <p className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
-                      {selectedStepTitle ? humanizeStepId(selectedStepTitle) : ''}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setSelectedArtifactPath(null);
-                      setSelectedStepTitle(null);
-                    }}
-                    className="p-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition duration-150"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-                  <ArtifactViewer
-                    artifactPath={selectedArtifactPath}
-                    contentVersion={(() => {
-                      // A shadow step's artifact file can be overwritten in
-                      // place at the same path by a forced re-pull (see
-                      // `cache_step_artifacts` on the backend) — key on the
-                      // same fields that signal a fresh attempt completed
-                      // so the open viewer re-fetches instead of keeping
-                      // the pre-overwrite content on screen.
-                      const selectedStep = steps.find((s) => s.step_id === selectedStepTitle);
-                      return selectedStep
-                        ? `${selectedStep.status}:${selectedStep.tokens}:${selectedStep.wall_clock_secs}:${selectedStep.cost_usd}`
-                        : undefined;
-                    })()}
-                    onOpenEditorForPath={async (filePath) => {
-                      try {
-                        const info = await resolveWorktreeInfo();
-                        navigate({ kind: 'editor', editorContext: { machineId: info.machine_id, worktreePath: info.worktree_path, branch: info.branch, defaultBranch: info.default_branch, initialFile: filePath }, featureId, featureTitle });
-                      } catch (err) {
-                        reportError(err);
-                      }
-                    }}
-                  />
-                </div>
+                  );
+                })}
               </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
+      )}
+
+      {/* Artifact preview. Mounted only while a path is selected — the viewer
+          pulls `artifact_body` and can construct Monaco, so an always-mounted
+          copy would pay that on every 3s poll tick.
+
+          The `!view.gateStepExecutionId` guard is load-bearing, not defensive:
+          the Gate overlay and this modal are both `z-50` and each binds its own
+          window `keydown`, so with both mounted one Escape resolves nothing and
+          dismisses both. A gate is the more urgent surface, so it wins; the
+          artifact re-appears once the gate is resolved. */}
+      {selectedArtifactPath && !view.gateStepExecutionId && (
+        <ArtifactModal
+          artifactPath={selectedArtifactPath}
+          stepId={selectedStepTitle}
+          contentVersion={selectedArtifactVersion}
+          onClose={() => {
+            setSelectedArtifactPath(null);
+            setSelectedStepTitle(null);
+          }}
+          onOpenEditorForPath={openEditorForPath}
+        />
       )}
 
       {/* Attachment preview modal (sub-3). For image/* attachments the

@@ -11,12 +11,39 @@
  * lacks — stubbed below) to prove it renders node titles with no console
  * errors.
  */
+import type { ComponentProps } from 'react';
 import { render, screen, cleanup } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { toFlowGraph } from './flowGraph';
+import {
+  FIT_PADDING,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  MINIMAP_NODE_THRESHOLD,
+} from './layoutDirection';
 import { nodeTypeMeta, type WorkflowDefinitionV2 } from './types';
+
+/** Props every `ReactFlow` render was handed, newest last. Recorded by the
+ *  spy below so the zoom bounds can be asserted against the exported
+ *  constants — the canvas must not re-declare them (spec AC-3). */
+const { reactFlowProps } = vi.hoisted(() => ({
+  reactFlowProps: [] as Record<string, unknown>[],
+}));
+
+// A *recording* spy, not a stand-in: it delegates to the real `ReactFlow`, so
+// the seven fixture mounts below still exercise the actual canvas. A double
+// that answered with a bland render instead would let every one of them pass
+// while proving nothing (AGENTS §7).
+vi.mock('@xyflow/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@xyflow/react')>();
+  const Recording = (props: ComponentProps<typeof actual.ReactFlow>) => {
+    reactFlowProps.push(props as unknown as Record<string, unknown>);
+    return <actual.ReactFlow {...props} />;
+  };
+  return { ...actual, ReactFlow: Recording };
+});
 
 import bugfix from './__fixtures__/bugfix-pipeline.v2.json';
 import cifix from './__fixtures__/ci-fix.v2.json';
@@ -106,56 +133,59 @@ describe('toFlowGraph', () => {
   });
 });
 
+// Shared by every mounting suite in this file (the fixture mounts and the zoom
+// / minimap cases below), which is why it sits at file scope rather than inside
+// one `describe`.
+beforeAll(() => {
+  // React Flow reaches for browser APIs jsdom doesn't implement. Stub the
+  // minimal set so a mount renders node DOM without env warnings.
+  class RO {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal('ResizeObserver', RO);
+
+  class DOMMatrixStub {
+    m22 = 1;
+    constructor() {}
+  }
+  vi.stubGlobal('DOMMatrixReadOnly', DOMMatrixStub);
+  vi.stubGlobal('DOMMatrix', DOMMatrixStub);
+
+  window.matchMedia =
+    window.matchMedia ||
+    vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+  // Give every element a non-zero box so React Flow doesn't warn about a
+  // zero-dimension container.
+  Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      toJSON: () => {},
+    }),
+  });
+});
+
 describe('WorkflowCanvas render', () => {
   let consoleError: ReturnType<typeof vi.spyOn>;
-
-  beforeAll(() => {
-    // React Flow reaches for browser APIs jsdom doesn't implement. Stub the
-    // minimal set so a mount renders node DOM without env warnings.
-    class RO {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
-    vi.stubGlobal('ResizeObserver', RO);
-
-    class DOMMatrixStub {
-      m22 = 1;
-      constructor() {}
-    }
-    vi.stubGlobal('DOMMatrixReadOnly', DOMMatrixStub);
-    vi.stubGlobal('DOMMatrix', DOMMatrixStub);
-
-    window.matchMedia =
-      window.matchMedia ||
-      vi.fn().mockImplementation((query: string) => ({
-        matches: false,
-        media: query,
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      }));
-
-    // Give every element a non-zero box so React Flow doesn't warn about a
-    // zero-dimension container.
-    Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => ({
-        x: 0,
-        y: 0,
-        width: 800,
-        height: 600,
-        top: 0,
-        left: 0,
-        right: 800,
-        bottom: 600,
-        toJSON: () => {},
-      }),
-    });
-  });
 
   afterEach(() => {
     cleanup();
@@ -176,5 +206,79 @@ describe('WorkflowCanvas render', () => {
       expect(screen.getAllByText(node.title).length).toBeGreaterThan(0);
     }
     expect(consoleError).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The zoom bounds and the fit-view margin are `layoutDirection`'s, not the
+ * canvas's: `planLayout` estimates the fit scale against exactly the clamp
+ * React Flow will apply, so a literal re-hardcoded here would silently put the
+ * estimate and the real viewport back out of step (spec Constraint 10).
+ */
+describe('WorkflowCanvas zoom bounds', () => {
+  beforeEach(() => {
+    reactFlowProps.length = 0;
+  });
+
+  afterEach(cleanup);
+
+  it('hands ReactFlow the exported zoom constants, not its own', () => {
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas definition={simpleTask as unknown as WorkflowDefinitionV2} />
+      </div>,
+    );
+
+    const props = reactFlowProps[reactFlowProps.length - 1];
+    expect(props.maxZoom).toBe(MAX_ZOOM);
+    expect(props.minZoom).toBe(MIN_ZOOM);
+  });
+
+  it('fits the view with the same clamp and margin the estimate assumes', () => {
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas definition={simpleTask as unknown as WorkflowDefinitionV2} />
+      </div>,
+    );
+
+    const options = reactFlowProps[reactFlowProps.length - 1].fitViewOptions;
+    expect(options).toEqual(
+      expect.objectContaining({ maxZoom: MAX_ZOOM, padding: 1 - FIT_PADDING }),
+    );
+  });
+});
+
+/**
+ * The minimap is now `needsMiniMap`'s call rather than a threshold spelled in
+ * the component. Under jsdom the `ResizeObserver` stub never reports a box, so
+ * the plan carries no fit scale and the predicate falls back to node count —
+ * which is the branch these two starters straddle. The scale branch is covered
+ * where it is decidable, in `layoutDirection.test.ts`.
+ */
+describe('WorkflowCanvas minimap', () => {
+  afterEach(cleanup);
+
+  it('shows the minimap for a graph at the node-count threshold', () => {
+    const def = standard as unknown as WorkflowDefinitionV2;
+    expect(def.nodes.length).toBeGreaterThanOrEqual(MINIMAP_NODE_THRESHOLD);
+
+    const { container } = render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas definition={def} />
+      </div>,
+    );
+    expect(container.querySelector('.react-flow__minimap')).not.toBeNull();
+  });
+
+  it('hides it for a graph below the threshold that fits legibly', () => {
+    const def = simpleTask as unknown as WorkflowDefinitionV2;
+    expect(def.nodes.length).toBeLessThan(MINIMAP_NODE_THRESHOLD);
+
+    const { container } = render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas definition={def} />
+      </div>,
+    );
+    expect(container.querySelector('.react-flow__minimap')).toBeNull();
   });
 });

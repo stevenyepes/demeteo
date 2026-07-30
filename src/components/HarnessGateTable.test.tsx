@@ -164,6 +164,21 @@ describe('HarnessGateTable', () => {
     expect(screen.queryByText(/base commit [0-9a-f]/)).not.toBeInTheDocument();
   });
 
+  // Width is the layout owner's decision, not the card's: a cap here would
+  // re-narrow the panel on a wide viewport no matter what the page decided.
+  it('fills the width it is given', () => {
+    render(
+      <HarnessGateTable
+        baseline={BASELINE}
+        evidence={readHarnessEvidence([failedStep(VERDICT_MESSAGE)])}
+      />,
+    );
+
+    const className = screen.getByTestId('harness-gate-table').className;
+    expect(className).toContain('w-full');
+    expect(className).not.toContain('max-w-');
+  });
+
   it('renders nothing when there is neither a baseline nor a reported gate', () => {
     const { container } = render(<HarnessGateTable baseline={null} evidence={null} />);
     expect(container).toBeEmptyDOMElement();

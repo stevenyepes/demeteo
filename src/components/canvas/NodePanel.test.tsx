@@ -111,6 +111,22 @@ describe('NodePanel — Overview', () => {
   });
 });
 
+describe('NodePanel — layout', () => {
+  it('clamps its width', () => {
+    // A flat `w-[62%]` is a ~2100px panel at 4K and squeezes the canvas to 38%
+    // in a side-by-side window. The basis needs a floor and a ceiling.
+    const { container } = render(
+      <NodePanel featureId="f1" node={node()} run={null} step={null} onClose={() => {}} />,
+    );
+    const root = container.firstElementChild;
+    expect(root).not.toBeNull();
+    const cls = root!.className;
+    expect(cls).toContain('min-w-[20rem]');
+    expect(cls).toContain('max-w-[38rem]');
+    expect(cls).not.toContain('w-[62%]');
+  });
+});
+
 describe('NodePanel — Output', () => {
   it('shows harness/verifier output and the artifact chooser', async () => {
     invoke.mockResolvedValue([]);
@@ -134,6 +150,29 @@ describe('NodePanel — Output', () => {
 
     fireEvent.click(screen.getByText('report.md'));
     expect(screen.getByTestId('artifact-viewer')).toHaveTextContent('artifacts/report.md');
+  });
+
+  it('delegates the artifact click to onOpenArtifact instead of previewing inline', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'completed', stepExecutionId: 'se-1' };
+    const onOpenArtifact = vi.fn();
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'completed', artifact_paths: ['artifacts/report.md'] })}
+        onClose={() => {}}
+        onOpenArtifact={onOpenArtifact}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Output'));
+    fireEvent.click(screen.getByText('report.md'));
+
+    expect(onOpenArtifact).toHaveBeenCalledWith('artifacts/report.md');
+    // The host owns the preview — the panel mounts no viewer of its own.
+    expect(screen.queryByTestId('artifact-viewer')).not.toBeInTheDocument();
   });
 
   it('renders an empty state when the node produced no output', async () => {
