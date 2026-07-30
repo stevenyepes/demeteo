@@ -337,9 +337,7 @@ fn ceiling_message(limit: Option<Duration>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::step_executor::driver::verifier::{
-        classify_exec_failure, HarnessExecFailure,
-    };
+    use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
     use crate::domain::ids::{AgentProfileId, MachineId};
     use crate::domain::models::{AgentProfile, Machine};
     use crate::ports::db::MachineRepository;

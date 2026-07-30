@@ -44,8 +44,7 @@
 //! so it is structurally incapable of changing the verdict it runs beside.
 
 use crate::adapters::step_executor::driver::verifier::{
-    classify_exec_failure, harness_block, merge_stderr_into_stdout, HarnessExecFailure, HarnessRun,
-    TriageVerdict,
+    harness_block, merge_stderr_into_stdout, HarnessRun, TriageVerdict,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::failing_tests::{DriverExtractor, FailingTestExtractor};
@@ -54,6 +53,7 @@ use crate::domain::harness_baseline::{
     fallback_baseline_needed, BaselineEnvironmentFault, BaselineProducer, HarnessBaseline,
     HarnessBaselineRun,
 };
+use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::domain::verifier::ResolvedHarness;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
 
@@ -697,7 +697,7 @@ impl ExecutionDriver {
         // the evidence for the remediation, and a terminal step whose Output tab
         // is blank is the opposite of what it is for.
         if let Some(gate) = crate::domain::harness_baseline::unrunnable_baseline_gate(&runs) {
-            let msg = crate::adapters::step_executor::driver::verifier::build_environment_message(
+            let msg = crate::domain::harness_remediation::build_environment_message(
                 machine_str,
                 wt_path,
                 gate.command,
@@ -869,7 +869,7 @@ fn build_unmeasurable_message(
         .map(str::to_string)
         .or_else(|| harnesses.first().map(|h| h.command.clone()))
         .unwrap_or_default();
-    crate::adapters::step_executor::driver::verifier::build_environment_message(
+    crate::domain::harness_remediation::build_environment_message(
         machine,
         wt_path,
         &cmd,
