@@ -5,6 +5,7 @@ use crate::adapters::step_executor::setup::{
 use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::{ProjectSettings, StepConfig};
 use crate::domain::prompt_context::PromptContext;
+use crate::domain::workflow_overrides::{bake_step_overrides, overlay_workflow_defaults};
 use crate::paths;
 
 pub struct ExecutionContext {
@@ -257,22 +258,7 @@ impl DagStepExecutor {
             .list_overrides_for_workflow(&project_id_typed, &wf_id)
             .unwrap_or_default();
 
-        // Workflow-level override overlays the project defaults for THIS
-        // workflow only. This keeps `resolve_agent_model` untouched — it just
-        // becomes the effective `default_agent_kind` / `default_model`, so a
-        // more specific intent (step agent/model, feature-wide run override,
-        // per-step run override) still wins.
-        if let Some(wf_level) = project_overrides.iter().find(|o| o.step_id.is_none()) {
-            if wf_level.agent_kind.is_some() {
-                settings.default_agent_kind = wf_level.agent_kind.clone();
-            }
-            if wf_level.model.is_some() {
-                settings.default_model = wf_level.model.clone();
-            }
-            if wf_level.effort.is_some() {
-                settings.default_effort = wf_level.effort;
-            }
-        }
+        overlay_workflow_defaults(&mut settings, &project_overrides);
 
         // Decision 38 (V33): the run path reads the feature's *pinned*
         // version — never a re-resolved latest — so a mid-run workflow
@@ -333,26 +319,7 @@ impl DagStepExecutor {
             return Err(e);
         }
 
-        // Bake step-level project overrides onto the matching steps. Each field
-        // overlays independently, replacing the workflow author's value. This
-        // sits at the workflow-step tier of `resolve_agent_model`, so it beats
-        // the author's choice but still loses to a run-time launch override.
-        for ov in project_overrides.iter() {
-            let Some(step_id) = ov.step_id.as_deref() else {
-                continue;
-            };
-            if let Some(step) = steps.iter_mut().find(|s| s.id.0 == step_id) {
-                if ov.agent_kind.is_some() {
-                    step.agent_kind = ov.agent_kind.clone();
-                }
-                if ov.model.is_some() {
-                    step.model = ov.model.clone();
-                }
-                if ov.effort.is_some() {
-                    step.effort = ov.effort;
-                }
-            }
-        }
+        bake_step_overrides(&mut steps, &project_overrides);
 
         let slug = slug_from_description(description);
         let branch_name = format!("{}{}", settings.worktree_strategy.branch_prefix, feature_id);
