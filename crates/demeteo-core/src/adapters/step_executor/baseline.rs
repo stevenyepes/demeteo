@@ -314,7 +314,7 @@ pub(crate) async fn measure_gates(
                 fingerprint: if exit_ok {
                     String::new()
                 } else {
-                    crate::adapters::step_executor::driver::verifier::normalize_failure_fingerprint(
+                    crate::domain::harness_fingerprint::normalize_failure_fingerprint(
                         &harness_block(&harness.name, &harness.command, &output),
                         wt_path,
                     )

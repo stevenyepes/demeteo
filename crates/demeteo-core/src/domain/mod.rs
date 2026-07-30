@@ -9,6 +9,7 @@ pub mod ecosystem;
 pub mod expr;
 pub mod harness_baseline;
 pub mod harness_delta;
+pub mod harness_fingerprint;
 pub mod ids;
 pub mod intercept;
 pub mod memory;

@@ -10,10 +10,10 @@
 //! the rule that answered each failure — see
 //! `step_attempts.applied_rule` and the `step_attempts.error_class` field.
 
-use crate::adapters::step_executor::driver::verifier;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::retry_policy::RetryDecision;
 use crate::adapters::step_executor::steps::StepOutcome;
+use crate::domain::harness_fingerprint::normalize_failure_fingerprint;
 use crate::domain::models::StepExecution;
 
 /// One open attempt row — the `attempt_no` plus the running spend totals
@@ -112,27 +112,24 @@ impl ExecutionDriver {
                 } else {
                     error_class::AGENT_FAILURE
                 }),
-                Some(verifier::normalize_failure_fingerprint(msg, target_dir)),
+                Some(normalize_failure_fingerprint(msg, target_dir)),
             ),
             // Normalized into `Failed` above; kept exhaustive so a
             // future variant is a compile error, not a silent gap.
             StepOutcome::VerdictFailed(vf) => (
                 "failed",
                 Some(error_class::VERDICT),
-                Some(verifier::normalize_failure_fingerprint(
-                    &vf.to_feedback(),
-                    target_dir,
-                )),
+                Some(normalize_failure_fingerprint(&vf.to_feedback(), target_dir)),
             ),
             StepOutcome::Environmental(msg) => (
                 "failed",
                 Some(error_class::ENVIRONMENT),
-                Some(verifier::normalize_failure_fingerprint(msg, target_dir)),
+                Some(normalize_failure_fingerprint(msg, target_dir)),
             ),
             StepOutcome::NonRetryable(msg) => (
                 "failed",
                 Some(error_class::NON_RETRYABLE),
-                Some(verifier::normalize_failure_fingerprint(msg, target_dir)),
+                Some(normalize_failure_fingerprint(msg, target_dir)),
             ),
             StepOutcome::Cancelled => ("cancelled", None, None),
             StepOutcome::RedirectTo(_) => ("redirected", None, None),

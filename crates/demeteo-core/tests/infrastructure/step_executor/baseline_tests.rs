@@ -340,7 +340,7 @@ async fn the_fingerprint_is_built_the_same_way_the_live_failure_path_builds_it()
     let exec = ScriptedExec::new(&[("npm test", Err(output))]);
     let measured = measure(&exec, None, &[gate("unit", "npm test", 600)]).await;
 
-    let live = crate::adapters::step_executor::driver::verifier::normalize_failure_fingerprint(
+    let live = crate::domain::harness_fingerprint::normalize_failure_fingerprint(
         &crate::adapters::step_executor::driver::verifier::harness_block(
             "unit", "npm test", output,
         ),
