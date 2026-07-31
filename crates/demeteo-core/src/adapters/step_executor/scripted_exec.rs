@@ -24,26 +24,40 @@ use crate::ports::execution::{ExecutionPort, ShellOptions};
 
 pub(crate) struct ScriptedExec {
     answers: HashMap<String, Result<String, String>>,
+    files: HashMap<String, Result<String, String>>,
     seen: Mutex<Vec<(String, ShellOptions)>>,
+}
+
+fn script(entries: &[(&str, Result<&str, &str>)]) -> HashMap<String, Result<String, String>> {
+    entries
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                match v {
+                    Ok(s) => Ok(s.to_string()),
+                    Err(e) => Err(e.to_string()),
+                },
+            )
+        })
+        .collect()
 }
 
 impl ScriptedExec {
     pub(crate) fn new(answers: &[(&str, Result<&str, &str>)]) -> Self {
         Self {
-            answers: answers
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.to_string(),
-                        match v {
-                            Ok(s) => Ok(s.to_string()),
-                            Err(e) => Err(e.to_string()),
-                        },
-                    )
-                })
-                .collect(),
+            answers: script(answers),
+            files: HashMap::new(),
             seen: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Script `read_file` answers by absolute path. An unscripted path still
+    /// errors, so "the adapter read a file it was never told about" is a
+    /// failure rather than an empty string.
+    pub(crate) fn with_files(mut self, files: &[(&str, Result<&str, &str>)]) -> Self {
+        self.files = script(files);
+        self
     }
 
     /// Rewrite every scripted key through `f`, so a test can script the answer
@@ -52,6 +66,7 @@ impl ScriptedExec {
     pub(crate) fn map_keys(self, f: impl Fn(&str) -> String) -> Self {
         Self {
             answers: self.answers.into_iter().map(|(k, v)| (f(&k), v)).collect(),
+            files: self.files,
             seen: self.seen,
         }
     }
@@ -101,8 +116,11 @@ impl ExecutionPort for ScriptedExec {
             .cloned()
             .unwrap_or_else(|| Err(format!("ScriptedExec: unscripted command `{cmd}`")))
     }
-    async fn read_file(&self, _m: &str, _p: &str) -> Result<String, String> {
-        Err("unscripted read_file".into())
+    async fn read_file(&self, _m: &str, p: &str) -> Result<String, String> {
+        self.files
+            .get(p)
+            .cloned()
+            .unwrap_or_else(|| Err(format!("ScriptedExec: unscripted read_file `{p}`")))
     }
     async fn write_file(&self, _m: &str, _p: &str, _c: &str) -> Result<(), String> {
         Err("unscripted write_file".into())

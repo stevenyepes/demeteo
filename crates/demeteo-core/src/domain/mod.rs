@@ -7,6 +7,7 @@ pub(crate) mod artifact_capture;
 pub mod artifact_contract;
 pub mod attachment;
 pub mod bootstrap;
+pub(crate) mod command_step;
 pub mod ecosystem;
 pub mod expr;
 pub mod harness_attribution;

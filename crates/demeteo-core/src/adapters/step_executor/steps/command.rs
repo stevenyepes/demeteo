@@ -54,19 +54,25 @@
 //! | Malformed config | `NonRetryable` | `non_retryable` — no retry fixes a bad definition |
 
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::registry::{
     CancelBehavior, NodeCtx, NodeDisplay, NodeHandler, NodePorts, ResumePolicy,
 };
 use crate::domain::artifact::{Artifact, ArtifactCapture, ArtifactSource};
+use crate::domain::command_step::outcome::{
+    classify_run, feedback_tail, CommandRun, FEEDBACK_TAIL_BYTES,
+};
+use crate::domain::command_step::spec::{parse_spec, validate_relative_cwd, CommandSpec};
+use crate::domain::ids::FeatureId;
 use crate::domain::models::workflow_v2::{NodeConfig, PortType};
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::verifier::VerdictFailure;
 use crate::domain::workflow_graph::{LintFinding, WorkflowGraph};
+use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::StepExecutionPatch;
-use crate::ports::execution::{ShellOptions, TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
+use crate::ports::execution::{ExecutionPort, ShellOptions};
 use crate::ports::notification::DomainEvent;
 
 use super::StepOutcome;
@@ -80,98 +86,6 @@ pub(crate) const KIND: &str = "command";
 /// for every attempt — a command step whose output vanished on failure would
 /// be the opposite of the visibility this phase is for.
 const STDOUT_ARTIFACT: &str = "command-output";
-
-/// Head/tail budget for the stdout carried into a failure message. The
-/// full output is always in the artifact; this is only the inline
-/// feedback a redirected agent step reads.
-const FEEDBACK_TAIL_BYTES: usize = 4_000;
-
-// ── Config ───────────────────────────────────────────────────────────────────
-
-/// The validated `command` payload, parsed once per dispatch out of the
-/// v1 [`StepConfig`] fields (v2 storage is P3.6's prerequisite; the
-/// migration copies these verbatim into the node's `config`).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CommandSpec {
-    /// The authored shell command. Empty **only** when
-    /// [`measure_baseline`](Self::measure_baseline) is set, which is the one
-    /// mode where the commands to run come from the project rather than the
-    /// workflow.
-    pub command: String,
-    /// Worktree-relative, already validated as non-escaping. `None` =
-    /// worktree root.
-    pub cwd: Option<String>,
-    pub env_allowlist: Vec<String>,
-    pub timeout: Option<Duration>,
-    /// Unset reads as `false`: see [`StepConfig::idempotent`].
-    pub idempotent: bool,
-    /// Measure the harness baseline rather than run `command`
-    /// (`docs/HARNESS_BASELINE.md` HB2b). See
-    /// [`StepConfig::measure_baseline`].
-    pub measure_baseline: bool,
-}
-
-/// Parse + validate a step's command config. `Err` is an author-facing
-/// message; every case is a definition bug that no retry can fix, so the
-/// caller returns [`StepOutcome::NonRetryable`] and
-/// [`CommandNodeHandler::lint`] surfaces the same problems in the builder
-/// *before* a run is ever started.
-pub(crate) fn parse_spec(step: &StepConfig) -> Result<CommandSpec, String> {
-    let measure_baseline = step.measure_baseline.unwrap_or(false);
-    // A baseline node's commands come from the *project* — its
-    // `prepare_command` and the harnesses that gate validation — so demanding
-    // one in the workflow would be asking the author for a string they cannot
-    // know. Every other command node still owes one: it is the entire step.
-    let command = match step
-        .command
-        .as_deref()
-        .map(str::trim)
-        .filter(|c| !c.is_empty())
-    {
-        Some(cmd) => cmd.to_string(),
-        None if measure_baseline => String::new(),
-        None => return Err("command node declares no `command` to run".to_string()),
-    };
-
-    let cwd = match step.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-        None => None,
-        Some(dir) => {
-            validate_relative_cwd(dir)?;
-            Some(dir.trim_matches('/').to_string())
-        }
-    };
-
-    let timeout = match step.timeout_secs {
-        None => None,
-        Some(0) => return Err("`timeout_secs` must be greater than zero".to_string()),
-        Some(secs) => Some(Duration::from_secs(secs)),
-    };
-
-    Ok(CommandSpec {
-        command,
-        cwd,
-        env_allowlist: step.env_allowlist.clone(),
-        timeout,
-        idempotent: step.idempotent.unwrap_or(false),
-        measure_baseline,
-    })
-}
-
-/// A command's cwd may not leave the worktree it was handed. Absolute
-/// paths, `~`, and any `..` segment are refused: the node runs in a
-/// disposable worktree precisely so its blast radius is bounded, and a
-/// cwd that climbs out of it silently un-bounds that.
-fn validate_relative_cwd(dir: &str) -> Result<(), String> {
-    if dir.starts_with('/') || dir.starts_with('~') {
-        return Err(format!(
-            "`cwd` must be worktree-relative, got absolute path '{dir}'"
-        ));
-    }
-    if dir.split('/').any(|seg| seg == "..") {
-        return Err(format!("`cwd` must not escape the worktree, got '{dir}'"));
-    }
-    Ok(())
-}
 
 // ── Execution ────────────────────────────────────────────────────────────────
 
@@ -350,14 +264,10 @@ impl ExecutionDriver {
             r = self.exec.run_command_with(machine_str, &captured, opts) => r,
         };
 
-        // A transport failure is the machine, not the command: it never
-        // ran, so classifying it as a verdict would redirect an agent step
-        // to "fix" code that was never tested (C0.2 / D3). A timeout is the
-        // same call for the same reason — the command was abandoned, not
-        // judged.
-        let (output, exit_ok) = match result {
-            Ok(out) => (out, true),
-            Err(err) if err.starts_with(TRANSPORT_ERROR_PREFIX) => {
+        let evidence = self.command_evidence();
+        let (output, exit_ok) = match classify_run(result) {
+            CommandRun::Succeeded(out) => (out, true),
+            CommandRun::Transport(err) => {
                 return (
                     StepOutcome::Environmental(format!(
                         "command '{}' could not run: {err}",
@@ -366,7 +276,7 @@ impl ExecutionDriver {
                     Vec::new(),
                 )
             }
-            Err(err) if err.starts_with(TIMEOUT_ERROR_PREFIX) => {
+            CommandRun::TimedOut(err) => {
                 return (
                     StepOutcome::Environmental(format!(
                         "command '{}' timed out: {err}",
@@ -375,14 +285,15 @@ impl ExecutionDriver {
                     Vec::new(),
                 )
             }
-            Err(err) => (err, false),
+            CommandRun::Failed(err) => (err, false),
         };
 
         // Evidence first: stdout is persisted before any verdict, so a
         // failing command's output is on the node panel even though the
         // step is about to fail.
         let mut refs = Vec::new();
-        if let Some(r) = self.store_command_artifact(
+        if let Some(r) = store_command_artifact(
+            &evidence,
             step_exec,
             Artifact {
                 name: STDOUT_ARTIFACT.to_string(),
@@ -406,7 +317,7 @@ impl ExecutionDriver {
                 StepOutcome::VerdictFailed(VerdictFailure::from_reason(format!(
                     "Command '{}' failed.\nOutput:\n```\n{}\n```",
                     spec.command,
-                    tail(&output, FEEDBACK_TAIL_BYTES)
+                    feedback_tail(&output, FEEDBACK_TAIL_BYTES)
                 ))),
                 refs,
             );
@@ -416,9 +327,8 @@ impl ExecutionDriver {
         // worktree — this is what gives the node's `file` output port
         // meaning. A missing one is a verdict failure for the same reason
         // it is for an agent step: the step's whole point is its output.
-        let (produced, missing) = self
-            .collect_declared_files(step_exec, step_conf, machine_str, wt_path)
-            .await;
+        let (produced, missing) =
+            collect_declared_files(&evidence, step_exec, step_conf, machine_str, wt_path).await;
         refs.extend(produced);
         if !missing.is_empty() {
             return (
@@ -434,66 +344,13 @@ impl ExecutionDriver {
         (StepOutcome::Completed, refs)
     }
 
-    /// Read each declared `last_write_to` artifact out of the worktree.
-    /// Returns `(stored refs, missing descriptions)`. Capture shapes that
-    /// depend on agent tool-call events (`by_name`, `all_writes`) have no
-    /// meaning here — a shell command emits no events — and are skipped
-    /// rather than reported missing.
-    async fn collect_declared_files(
-        &self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        machine_str: &str,
-        wt_path: &str,
-    ) -> (Vec<String>, Vec<String>) {
-        let mut refs = Vec::new();
-        let mut missing = Vec::new();
-        for decl in step_conf.artifacts.as_deref().unwrap_or(&[]) {
-            let ArtifactCapture::LastWriteTo { path } = &decl.capture else {
-                continue;
-            };
-            let abs = format!(
-                "{}/{}",
-                wt_path.trim_end_matches('/'),
-                path.trim_start_matches('/')
-            );
-            match self.exec.read_file(machine_str, &abs).await {
-                Ok(body) => {
-                    if let Some(r) = self.store_command_artifact(
-                        step_exec,
-                        Artifact::tool_write(&decl.name, path.clone(), body),
-                    ) {
-                        refs.push(r);
-                    }
-                }
-                Err(_) => missing.push(format!("declared artifact '{}' at {path}", decl.name)),
-            }
-        }
-        (refs, missing)
-    }
-
-    /// Persist one artifact, degrading a store failure to a warning: a
-    /// missing evidence file must not turn a green command red.
-    fn store_command_artifact(
-        &self,
-        step_exec: &StepExecution,
-        artifact: Artifact,
-    ) -> Option<String> {
-        match self
-            .artifacts
-            .put(&self.f_id_str, &step_exec.step_id.0, &artifact)
-        {
-            Ok(r) => Some(r),
-            Err(e) => {
-                tracing::warn!(
-                    feature_id = %self.f_id,
-                    step_id = %step_exec.step_id.0,
-                    artifact = %artifact.name,
-                    error = %e,
-                    "failed to store command artifact"
-                );
-                None
-            }
+    /// The two ports a command node's evidence passes through, borrowed
+    /// together so the reading and the storing are one call each.
+    fn command_evidence(&self) -> CommandEvidence<'_> {
+        CommandEvidence {
+            exec: &*self.exec,
+            artifacts: &*self.artifacts,
+            f_id: &self.f_id,
         }
     }
 
@@ -568,17 +425,79 @@ fn resolve_env(allowlist: &[String]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Last `limit` bytes of `output`, on a char boundary, prefixed with an
-/// elision marker when truncated.
-fn tail(output: &str, limit: usize) -> String {
-    if output.len() <= limit {
-        return output.to_string();
+// ── Evidence ─────────────────────────────────────────────────────────────────
+
+/// Where a command node's evidence is read from and written to. The two ports
+/// travel together — every read is followed by a store — and neither is
+/// addressable without the feature the artifact is filed under.
+pub(crate) struct CommandEvidence<'a> {
+    pub exec: &'a dyn ExecutionPort,
+    pub artifacts: &'a dyn ArtifactStore,
+    pub f_id: &'a FeatureId,
+}
+
+/// Read each declared `last_write_to` artifact out of the worktree.
+/// Returns `(stored refs, missing descriptions)`. Capture shapes that
+/// depend on agent tool-call events (`by_name`, `all_writes`) have no
+/// meaning here — a shell command emits no events — and are skipped
+/// rather than reported missing.
+async fn collect_declared_files(
+    evidence: &CommandEvidence<'_>,
+    step_exec: &StepExecution,
+    step_conf: &StepConfig,
+    machine_str: &str,
+    wt_path: &str,
+) -> (Vec<String>, Vec<String>) {
+    let mut refs = Vec::new();
+    let mut missing = Vec::new();
+    for decl in step_conf.artifacts.as_deref().unwrap_or(&[]) {
+        let ArtifactCapture::LastWriteTo { path } = &decl.capture else {
+            continue;
+        };
+        let abs = format!(
+            "{}/{}",
+            wt_path.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        match evidence.exec.read_file(machine_str, &abs).await {
+            Ok(body) => {
+                if let Some(r) = store_command_artifact(
+                    evidence,
+                    step_exec,
+                    Artifact::tool_write(&decl.name, path.clone(), body),
+                ) {
+                    refs.push(r);
+                }
+            }
+            Err(_) => missing.push(format!("declared artifact '{}' at {path}", decl.name)),
+        }
     }
-    let mut start = output.len() - limit;
-    while start < output.len() && !output.is_char_boundary(start) {
-        start += 1;
+    (refs, missing)
+}
+
+/// Persist one artifact, degrading a store failure to a warning: a
+/// missing evidence file must not turn a green command red.
+fn store_command_artifact(
+    evidence: &CommandEvidence<'_>,
+    step_exec: &StepExecution,
+    artifact: Artifact,
+) -> Option<String> {
+    match evidence
+        .artifacts
+        .put(evidence.f_id.as_str(), &step_exec.step_id.0, &artifact)
+    {
+        Ok(r) => Some(r),
+        Err(e) => {
+            tracing::warn!(
+                feature_id = %evidence.f_id,
+                step_id = %step_exec.step_id.0,
+                artifact = %artifact.name,
+                error = %e,
+                "failed to store command artifact"
+            );
+            None
+        }
     }
-    format!("…(truncated)…\n{}", &output[start..])
 }
 
 // ── NodeHandler registration ─────────────────────────────────────────────────
@@ -784,3 +703,7 @@ impl NodeHandler for CommandNodeHandler {
 #[cfg(test)]
 #[path = "../../../../tests/adapters/step_executor/command_tests.rs"]
 mod command_tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/step_executor/steps/command_evidence.rs"]
+mod command_evidence_tests;
