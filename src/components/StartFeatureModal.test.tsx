@@ -107,6 +107,46 @@ describe('StartFeatureModal clipboard paste', () => {
     }));
   });
 
+  it('recovers an image from the async clipboard after WebKitGTK supplies empty items', async () => {
+    const clipboardRead = vi.fn().mockResolvedValue([{
+      types: ['image/png'],
+      getType: vi.fn().mockResolvedValue(new Blob(['png bytes'], { type: 'image/png' })),
+    }]);
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { read: clipboardRead } });
+    try {
+      renderModal();
+      const title = await screen.findByPlaceholderText(/add oauth2 login flow/i);
+
+      paste(title, []);
+
+      await waitFor(() => expect(clipboardRead).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText('pasted-image.png')).toBeInTheDocument();
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
+  it('shows a soft error when the async clipboard read is denied', async () => {
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { read: vi.fn().mockRejectedValue(new DOMException('denied', 'NotAllowedError')) },
+    });
+    try {
+      renderModal();
+      const title = await screen.findByPlaceholderText(/add oauth2 login flow/i);
+
+      paste(title, []);
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/could not read image bytes/i);
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
   it.each([
     ['title', /add oauth2 login flow/i],
     ['description', /what does this feature do/i],

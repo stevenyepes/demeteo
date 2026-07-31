@@ -129,7 +129,7 @@ describe("AttachmentDropzone paste behavior", () => {
       paste([]);
 
       await waitFor(() => expect(clipboardRead).toHaveBeenCalledTimes(1));
-      expect(onStage).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onStage).toHaveBeenCalledTimes(1));
       expect(onStage.mock.calls[0][0][0]).toEqual(
         expect.objectContaining({ mime: "image/png", size: 9 }),
       );
@@ -142,16 +142,47 @@ describe("AttachmentDropzone paste behavior", () => {
     }
   });
 
+  it("shows a soft error when empty WebKitGTK paste items cannot read clipboard bytes", async () => {
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    try {
+      const onError = vi.fn();
+      render(<LaunchHarness onError={onError} />);
+
+      const preventDefault = paste([]);
+
+      await waitFor(() => expect(onError).toHaveBeenCalledWith(
+        "This webview could not read image bytes from the clipboard. Save it and attach it, or try another clipboard source.",
+      ));
+      expect(preventDefault).not.toHaveBeenCalled();
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("prevents a single supported image paste and ingests the file", async () => {
     const file = imageFile("screen.png");
+    const clipboardRead = vi.fn();
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { read: clipboardRead },
+    });
     vi.mocked(invoke).mockResolvedValue(directAttachment("at-one", file));
     const onAdded = vi.fn();
-    render(<AttachmentDropzone mode="direct" featureId="feature-1" onAdded={onAdded} />);
+    try {
+      render(<AttachmentDropzone mode="direct" featureId="feature-1" onAdded={onAdded} />);
 
-    const preventDefault = paste([imageItem(file)]);
+      const preventDefault = paste([imageItem(file)]);
 
-    expect(preventDefault).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(onAdded).toHaveBeenCalledWith(directAttachment("at-one", file)));
+      expect(preventDefault).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onAdded).toHaveBeenCalledWith(directAttachment("at-one", file)));
+      expect(clipboardRead).not.toHaveBeenCalled();
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
   });
 
   it("ingests all supported images from a multi-image paste in order", async () => {

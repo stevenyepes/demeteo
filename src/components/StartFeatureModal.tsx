@@ -3,7 +3,7 @@ import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, Eye
 import { invoke } from '@tauri-apps/api/core';
 import type { EffortLevel, Machine, Repository, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
-import { extractClipboardImageFiles, stageBrowserFilesForLaunch } from '../lib/attachments';
+import { extractClipboardImageFiles, recoverClipboardImageFile, stageBrowserFilesForLaunch } from '../lib/attachments';
 import { formatError } from '../lib/errors';
 import { modelSupportsImagesByName } from '../lib/modelImageSupport';
 import { getAgentModels } from '../lib/agentModels';
@@ -273,7 +273,29 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       if (!event.clipboardData) return;
 
       const extraction = extractClipboardImageFiles(event.clipboardData);
-      if (extraction.kind === 'none') return;
+      if (extraction.kind === 'none') {
+        if (event.clipboardData.items.length !== 0) return;
+        const recovery = await recoverClipboardImageFile();
+        if (recovery.kind !== 'recovered') {
+          if (!cancelled) {
+            setAttachmentError(
+              'This webview could not read image bytes from the clipboard. Save it and attach it, or try another clipboard source.',
+            );
+          }
+          return;
+        }
+        event.preventDefault();
+        try {
+          const next = await stageBrowserFilesForLaunch([recovery.file], attachments);
+          if (!cancelled) {
+            setAttachments(next);
+            setAttachmentError(null);
+          }
+        } catch (err) {
+          if (!cancelled) setAttachmentError(formatError(err));
+        }
+        return;
+      }
       if (extraction.kind === 'unavailable') {
         setAttachmentError(
           'The clipboard offered an image, but this webview could not access its file. Save it and attach it, or try another clipboard source.',
