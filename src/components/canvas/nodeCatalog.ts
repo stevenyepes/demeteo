@@ -12,7 +12,7 @@
  * by every canvas via a module-level promise.
  */
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { listNodeTypes } from '../../lib/workflows';
 
 /** Coarse port type (mirrors Rust `PortType`, serde snake_case). */
 export type PortType = 'text' | 'file' | 'task_list' | 'verdict' | 'approval' | 'any';
@@ -36,7 +36,7 @@ export interface NodeTypeInfo {
 let cached: Promise<NodeTypeInfo[]> | null = null;
 
 export function loadNodeTypes(): Promise<NodeTypeInfo[]> {
-  cached ??= invoke<NodeTypeInfo[]>('node_types_list').catch((err) => {
+  cached ??= listNodeTypes().catch((err) => {
     // Let a later mount retry rather than caching the failure forever.
     cached = null;
     throw err;

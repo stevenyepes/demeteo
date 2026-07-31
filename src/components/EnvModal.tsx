@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Server, X, Key, AlertCircle, Cpu, Wifi, WifiOff, Loader } from "lucide-react";
 import { useAgentCatalog } from "../lib/agentCatalog";
+import {
+  addMachine,
+  deleteMachine,
+  deleteMachineSecret,
+  setMachineSecret,
+  testMachineConnection,
+  updateMachine,
+} from "../lib/machines";
 import { formatError } from "../lib/errors";
 
 
@@ -136,9 +143,9 @@ const EnvModal: React.FC<EnvModalProps> = ({
     if (!machineId) return;
 
     try {
-      await invoke("test_machine_connection", { machineId });
+      await testMachineConnection(machineId);
       setConnStatus("ok");
-    } catch (e: any) {
+    } catch (e) {
       setConnStatus("err");
       setConnError(formatError(e));
     }
@@ -189,20 +196,20 @@ const EnvModal: React.FC<EnvModalProps> = ({
       const id = form.id || `m-${Date.now()}`;
       const machine = buildMachine(id);
       if (form.id) {
-        await invoke("update_machine", { machine });
+        await updateMachine(machine);
       } else {
-        await invoke("add_machine", { machine });
+        await addMachine(machine);
       }
       // Secret: only write when explicitly entered, so editing a
       // record without retyping the passphrase doesn't wipe the
       // stored one.
       if (form.secret.trim().length > 0) {
-        await invoke("set_machine_secret", { machineId: id, secret: form.secret });
+        await setMachineSecret(id, form.secret);
       }
       setForm((prev) => ({ ...prev, id }));
       onSaved?.();
       return id;
-    } catch (e: any) {
+    } catch (e) {
       setSaveError(formatError(e));
       return null;
     } finally {
@@ -220,15 +227,15 @@ const EnvModal: React.FC<EnvModalProps> = ({
     if (!form.id) return;
     if (!confirm(`Delete machine "${form.name}"? This removes its stored credentials.`)) return;
     try {
-      await invoke("delete_machine", { id: form.id });
+      await deleteMachine(form.id);
       try {
-        await invoke("delete_machine_secret", { machineId: form.id });
+        await deleteMachineSecret(form.id);
       } catch {
         // Secret may not exist; ignore.
       }
       onDeleted?.();
       onClose();
-    } catch (e: any) {
+    } catch (e) {
       setSaveError(formatError(e));
     }
   };

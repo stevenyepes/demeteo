@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Server, RotateCw, AlertTriangle, Key, Sparkles } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 import { formatError } from '../lib/errors';
-import type { Machine } from '../types';
+import type { Machine, Project, WorktreeStrategy } from '../types';
 import { useErrorBus } from '../lib/errorBus';
 import { saveProjectSettings } from '../lib/project';
+import { listMachines, setMachineSecret, testMachineConnection } from '../lib/machines';
+import { fetchProviderRepos } from '../lib/providers';
+import { bootstrapProject, createProject } from '../lib/createProjectWizard';
 import { useNavigation, useProject } from '../context';
 
 interface AvailableRepo {
@@ -12,29 +14,15 @@ interface AvailableRepo {
     providerId: string;
 }
 
-interface WorktreeStrategy {
-    default_branch: string;
-    branch_prefix: string;
-    test_command: string | null;
-    pr_template: string | null;
-    /** Named per-ecosystem gates detection derived (HB3). */
-    harnesses: Record<string, string> | null;
-    /** Which of them are pre-ticked to gate validation — HB5's tier 2. */
-    validation_gates: string[] | null;
-    build_command: string | null;
-    /** The install step a fresh `git worktree add` needs before any suite. */
-    prepare_command: string | null;
-}
-
 const NewProjectView = () => {
     const { navigate } = useNavigation();
     const { state: { providers }, dispatch: projDispatch } = useProject();
-    const setProjects = (updater: (prev: any[]) => any[]) => projDispatch({ type: 'UPDATE_PROJECTS', updater });
+    const setProjects = (updater: (prev: Project[]) => Project[]) => projDispatch({ type: 'UPDATE_PROJECTS', updater });
     const setCurrentProjectId = (id: string) => projDispatch({ type: 'SET_CURRENT', id });
     const onOpenMachinesSettings = () => navigate({ kind: 'settings' });
     const { reportError } = useErrorBus();
     const [projectName, setProjectName] = useState('');
-    const [computeType, setComputeType] = useState('local');
+    const [computeType, setComputeType] = useState<'local' | 'remote'>('local');
     const [remoteHost, setRemoteHost] = useState('');
     const [machines, setMachines] = useState<Machine[]>([]);
     const [keyPassphrase, setKeyPassphrase] = useState('');
@@ -69,9 +57,7 @@ const NewProjectView = () => {
         try {
             const allRepos = await Promise.all(providers.map(async (p) => {
                 try {
-                    const repos = await invoke<string[]>('fetch_provider_repos', {
-                        providerId: p.id
-                    });
+                    const repos = await fetchProviderRepos(p.id);
                     return repos.map(r => ({ path: r, providerId: p.id }));
                 } catch (err) {
                     reportError(err, { kind: "provider" });
@@ -108,7 +94,7 @@ const NewProjectView = () => {
         let cancelled = false;
         (async () => {
             try {
-                const list: Machine[] = await invoke('get_machines');
+                const list = await listMachines();
                 if (!cancelled) setMachines(list ?? []);
             } catch (err) {
                 reportError(err, { kind: "internal" });
@@ -153,7 +139,7 @@ const NewProjectView = () => {
         setIsTestingConnection(true);
         setConnectionStatus('idle');
         try {
-            await invoke('test_machine_connection', { machineId: remoteHost });
+            await testMachineConnection(remoteHost);
             setConnectionStatus('success');
         } catch (err) {
             console.error("Connection check failed:", err);
@@ -175,10 +161,7 @@ const NewProjectView = () => {
             //    bootstrap clone runs (the SSH layer reads the
             //    secret during bootstrap).
             if (computeType === 'remote' && keyPassphrase.trim().length > 0 && remoteHost) {
-                await invoke('set_machine_secret', {
-                    machineId: remoteHost,
-                    secret: keyPassphrase,
-                });
+                await setMachineSecret(remoteHost, keyPassphrase);
                 // Clear the in-memory passphrase; we don't want it
                 // lingering in component state once it's been written
                 // to the keyring.
@@ -186,24 +169,20 @@ const NewProjectView = () => {
             }
 
             // 1. Create the project record
-            const res = await invoke<{ id: string; success: boolean }>('create_project', {
-                config: {
-                    name: projectName,
-                    compute_type: computeType,
-                    remote_host: computeType === 'remote' ? remoteHost : null,
-                    repos: selectedRepos.map(r => ({
-                        repo_path: r.path,
-                        provider_id: r.providerId
-                    }))
-                }
+            const res = await createProject({
+                name: projectName,
+                compute_type: computeType,
+                remote_host: computeType === 'remote' ? remoteHost : null,
+                repos: selectedRepos.map(r => ({
+                    repo_path: r.path,
+                    provider_id: r.providerId
+                }))
             });
 
             if (res.success) {
                 setProjectId(res.id);
                 // 2. Perform the clone & strategy detection
-                const strategy = await invoke<WorktreeStrategy>('bootstrap_project', {
-                    projectId: res.id
-                });
+                const strategy = await bootstrapProject(res.id);
 
                 // 3. Set strategy proposal state
                 setDefaultBranch(strategy.default_branch);
@@ -215,7 +194,7 @@ const NewProjectView = () => {
             } else {
                 throw new Error("Failed to initialize project record");
             }
-        } catch (err: any) {
+        } catch (err) {
             setBootstrapStep('error');
             setBootstrapError(formatError(err));
         }
@@ -247,22 +226,23 @@ const NewProjectView = () => {
             // `activeProject.compute_type` as `undefined` and the form
             // defaults to "Local Compute", making a remote project
             // look like a local one even though the DB has the right
-            // values. Mirrors the wizard ADD_PROJECT path
-            // (CreateFromZeroWizard.tsx:107, CreateProjectWizard.tsx:247).
-            const newProj = {
+            // values. Mirrors the wizard ADD_PROJECT path in
+            // CreateFromZeroWizard and CreateProjectWizard.
+            const newProj: Project = {
                 id: projectId,
                 name: projectName,
                 status: 'idle',
                 repos: selectedRepos.length,
                 nodes: 0,
                 spend: 0.00,
+                tokens: 0,
                 compute_type: computeType,
                 remote_host: computeType === 'remote' ? remoteHost : null,
             };
             setProjects(prev => [...prev, newProj]);
             setCurrentProjectId(projectId);
             navigate({ kind: 'home' });
-        } catch (err: any) {
+        } catch (err) {
             setBootstrapStep('error');
             setBootstrapError(formatError(err));
         }

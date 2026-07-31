@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { setMachineSecret } from '../../lib/machines';
 import {
   bootstrapProject, createProject, providerCreateRepo, wizardError,
   type CreateRepoRequest, type CreatedRepo,
@@ -104,11 +104,11 @@ export function useCreateZeroBootstrap(): UseCreateZeroBootstrapApi {
     setPhases(initialPhases());
     setRunning(true);
     try {
-      // 1. write passphrase to keyring BEFORE the clone runs (mirrors
-      // NewProjectView.tsx:164-173). Skip silently for password-auth
-      // machines; the wizard never stores secrets in component state.
+      // 1. write passphrase to keyring BEFORE the clone runs, as
+      // NewProjectView does. Skip silently for password-auth machines; the
+      // wizard never stores secrets in component state.
       if (input.machineKind === 'remote' && input.keyPassphrase.trim().length > 0 && input.machineId) {
-        await invoke('set_machine_secret', { machineId: input.machineId, secret: input.keyPassphrase });
+        await setMachineSecret(input.machineId, input.keyPassphrase);
       }
 
       // 2. create the repo on the provider

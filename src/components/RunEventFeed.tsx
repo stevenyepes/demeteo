@@ -83,6 +83,29 @@ const STEP_STATUS_LABEL: Record<string, string> = {
 };
 
 /**
+ * The union of every field the structured event kinds carry. Declared as one
+ * all-optional record rather than a discriminated union because the runner is
+ * versioned separately from the laptop: a payload from a newer runner may
+ * carry fields this build has never heard of, and every read below is already
+ * written to survive a missing one.
+ */
+interface RunEventPayload {
+  status?: string;
+  step_id?: string;
+  tokens?: number;
+  cost_usd?: number;
+  wall_clock_secs?: number;
+  text?: string;
+  error_class?: string;
+  rule_id?: string;
+  action?: string;
+  attempt?: number;
+  max?: number;
+  reason?: string;
+  decision?: string;
+}
+
+/**
  * Turn one `RunEvent` into a `{ label, detail, tone }` triple for a feed row.
  * Structured per-step kinds get a compact rendering; legacy string-payload
  * kinds fall back to `formatPayload`.
@@ -92,10 +115,10 @@ export function describeEvent(
   payloadJson: string | null,
 ): { label: string; detail: string; tone: EventTone } {
   const fallbackLabel = EVENT_KIND_LABEL[kind] ?? kind;
-  let p: any = null;
+  let p: RunEventPayload | null = null;
   if (payloadJson) {
     try {
-      p = JSON.parse(payloadJson);
+      p = JSON.parse(payloadJson) as RunEventPayload;
     } catch {
       /* not JSON — handled by formatPayload fallback below */
     }
