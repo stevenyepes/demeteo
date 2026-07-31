@@ -16,9 +16,9 @@
  * re-derives its React Flow arrays constantly) costs no IPC.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { lintWorkflow } from '../../lib/workflows';
 
-import { EMPTY_LINT, indexFindings, type LintFinding, type LintIndex } from './lint';
+import { EMPTY_LINT, indexFindings, type LintIndex } from './lint';
 import type { WorkflowDefinitionV2 } from './types';
 
 /** Long enough that typing in the config panel doesn't spam the backend,
@@ -60,7 +60,7 @@ export function useWorkflowLint(
     setChecking(true);
     const mine = (seq.current += 1);
     const timer = setTimeout(() => {
-      invoke<LintFinding[]>('workflow_lint', { definition: JSON.parse(payload) })
+      lintWorkflow(JSON.parse(payload))
         .then((findings) => {
           if (mine < rendered.current) return; // a newer lint already landed
           rendered.current = mine;

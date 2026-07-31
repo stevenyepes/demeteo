@@ -200,6 +200,7 @@ impl ExecutionDriver {
                 _features: &self.features,
                 agent_exec: &self.agent_exec,
                 app_settings: &self.app_settings,
+                git_ops: &self.git_ops,
                 feature_id: &self.f_id,
                 resolved_cwd,
                 machine_str,

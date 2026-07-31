@@ -158,3 +158,30 @@ fn an_oversized_harness_log_is_windowed_before_it_reaches_the_prompt() {
         "gap not named"
     );
 }
+
+#[test]
+fn complete_logs_remain_available_outside_the_bounded_prompt_section() {
+    let outcome = HarnessOutcome::from_runs(vec![run(
+        "default",
+        "npm run checks:code",
+        "target regression: passed\nall checks passed",
+    )]);
+
+    let artifacts = outcome.full_log_artifacts();
+
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(artifacts[0].name, "harness-default");
+    assert_eq!(artifacts[0].mime, "text/plain");
+    assert_eq!(
+        artifacts[0].content,
+        "target regression: passed\nall checks passed"
+    );
+
+    let references = outcome.render_full_log_references(&[(
+        "default".to_string(),
+        "/artifacts/f-1/s-verify/harness-default.txt".to_string(),
+    )]);
+    assert!(references.contains("- `/artifacts/f-1/s-verify/harness-default.txt`"));
+    assert!(references.contains("Read or search the complete log"));
+    assert!(references.contains("Do NOT re-run"));
+}

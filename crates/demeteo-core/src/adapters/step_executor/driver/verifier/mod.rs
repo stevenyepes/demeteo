@@ -1,4 +1,5 @@
 use super::ExecutionDriver;
+use crate::adapters::step_executor::artifacts::materialize_external_artifact_paths;
 use crate::adapters::step_executor::driver::verifier::environment::notify_environment_not_ready;
 use crate::adapters::step_executor::harness_shell::{
     harness_ceiling_s, harness_shell_options, run_harness_command,
@@ -37,6 +38,43 @@ pub(crate) struct VerifierTarget<'a> {
 }
 
 impl ExecutionDriver {
+    /// Persist complete harness logs for the validator without making its argv
+    /// exceed the prompt budget. A failed artifact write leaves the bounded
+    /// evidence intact; it must not turn a green harness into a failed step.
+    pub(crate) fn store_harness_logs(
+        &self,
+        step_exec: &StepExecution,
+        outcome: &HarnessOutcome,
+    ) -> String {
+        let references = outcome
+            .full_log_artifacts()
+            .into_iter()
+            .filter_map(|artifact| {
+                let name = artifact
+                    .name
+                    .strip_prefix("harness-")
+                    .unwrap_or(&artifact.name);
+                match self
+                    .artifacts
+                    .put(&self.f_id_str, &step_exec.step_id.0, &artifact)
+                {
+                    Ok(reference) => Some((name.to_string(), reference)),
+                    Err(error) => {
+                        tracing::warn!(
+                            feature_id = %self.f_id,
+                            step_id = %step_exec.step_id.0,
+                            harness = %name,
+                            %error,
+                            "failed to store complete harness output"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        outcome.render_full_log_references(&references)
+    }
+
     /// Resolve and run the project's prepare command + every harness that gates
     /// this step inside `wt_path`, and return the formatted "harness results"
     /// section for an agent prompt.
@@ -304,10 +342,20 @@ impl ExecutionDriver {
         // primitive. A non-zero exit propagates as a Verdict failure
         // before any verifier agent spawns.
         let harness_label = verifier_cfg.harness_label();
-        let harness_section = self
+        let harness_outcome = self
             .run_harness_first(step_exec, verifier_cfg, wt_path, machine_str)
-            .await?
-            .render_section();
+            .await?;
+        let harness_section = materialize_external_artifact_paths(
+            &format!(
+                "{}{}",
+                harness_outcome.render_section(),
+                self.store_harness_logs(step_exec, &harness_outcome)
+            ),
+            wt_path,
+            self.exec.as_ref(),
+            machine_str,
+        )
+        .await;
 
         let verifier_prompt = build_verifier_prompt(
             &verifier_cfg.instructions,

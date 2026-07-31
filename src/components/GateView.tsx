@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { RemoteRunMirror, StepExecution } from '../types';
 import { Check, ArrowRight, X, ShieldAlert, Terminal, Sparkles, AlertTriangle } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
 import { useErrorBus } from '../lib/errorBus';
 import {
   decideGate,
+  getStepExecution,
   isBlockingError,
   findActivePredecessor,
+  listStepsForRun,
   type GateBlocker,
 } from '../lib/features';
+import { decideRemoteGate, remoteRunForFeature } from '../lib/remoteRuns';
 
 interface GateViewProps {
   stepExecutionId: string;
@@ -42,20 +44,14 @@ export const GateView: React.FC<GateViewProps> = ({
 
   const loadGateData = useCallback(async () => {
     try {
-      const execDetails = await invoke<StepExecution>('step_get', { executionId: stepExecutionId });
+      const execDetails = await getStepExecution(stepExecutionId);
       setStepExec(execDetails);
-      setRemoteRun(
-        await invoke<RemoteRunMirror | null>('remote_run_for_feature', {
-          featureId: execDetails.feature_id,
-        }),
-      );
+      setRemoteRun(await remoteRunForFeature(execDetails.feature_id));
       // Re-probe the predecessor set on every load. The parent's
       // `feature_status_changed` event triggers a remount via the
       // navigation effect, so the banner clears within one tick of
       // the blocking predecessor transitioning to `completed`.
-      const all = await invoke<StepExecution[]>('step_list_for_run', {
-        featureId: execDetails.feature_id,
-      });
+      const all = await listStepsForRun(execDetails.feature_id);
       const blocker = findActivePredecessor(all, execDetails);
       setBlockedBy(
         blocker
@@ -90,7 +86,7 @@ export const GateView: React.FC<GateViewProps> = ({
         // step_execution_id and delegates to the same `GatePresenter`
         // call as the local path, so `approve | redirect | cancel` mean
         // exactly what they mean here.
-        await invoke('remote_decide_gate', {
+        await decideRemoteGate({
           machineId: remoteRun.machine_id,
           runId: remoteRun.run_id,
           gateId: stepExecutionId,

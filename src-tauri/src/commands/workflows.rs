@@ -2,11 +2,13 @@ use crate::adapters::step_executor::node_catalog::{node_type_catalog, NodeTypeIn
 use crate::adapters::step_executor::node_lint::lint_definition;
 use crate::domain::ids::{FeatureId, WorkflowId, WorkflowVersionId};
 use crate::domain::models::workflow_migrate::{
-    migrate_definition, migrate_v1_to_v2, project_v2_to_v1,
+    migrate_v1_to_v2, project_v2_to_v1, read_import, write_export,
 };
 use crate::domain::models::workflow_v2::{validate_workflow_v2, WorkflowDefinitionV2};
-use crate::domain::models::{StepConfig, Workflow, WorkflowVersion};
-use crate::domain::workflow_graph::{has_errors, LintFinding, LintSeverity};
+use crate::domain::models::{Workflow, WorkflowVersion, WorkflowWithSteps};
+use crate::domain::workflow_graph::{error_summary, LintFinding};
+use crate::domain::workflow_history::{ensure_owned_by, next_version_number, version_id};
+use crate::domain::workflow_starters::{self, SeedAction, StarterDefinition};
 use crate::error::AppError;
 use crate::paths;
 use crate::ports::db::WorkflowRepository;
@@ -14,108 +16,51 @@ use crate::state::AppContext;
 use std::sync::Arc;
 use tauri::State;
 
+/// The starter pack this build ships, read by the first-launch seed below and
+/// by `workflow_revert_to_default`.
+const STARTER_FILES: &[&str] = &[
+    include_str!("../../workflows/standard-feature-pipeline.json"),
+    include_str!("../../workflows/bugfix-pipeline.json"),
+    include_str!("../../workflows/docs-update.json"),
+    include_str!("../../workflows/refactor.json"),
+    include_str!("../../workflows/experiment.json"),
+    include_str!("../../workflows/ci-fix.json"),
+    include_str!("../../workflows/simple-task.json"),
+];
+
 /// Seed starter-pack workflows on first launch if the `workflows` table is empty.
 pub fn seed_starter_workflows(workflows: &Arc<dyn WorkflowRepository>) {
-    let starters: &[(&str, &str)] = &[
-        (
-            include_str!("../../workflows/standard-feature-pipeline.json"),
-            "standard-feature-pipeline",
-        ),
-        (
-            include_str!("../../workflows/bugfix-pipeline.json"),
-            "bugfix-pipeline",
-        ),
-        (
-            include_str!("../../workflows/docs-update.json"),
-            "docs-update",
-        ),
-        (include_str!("../../workflows/refactor.json"), "refactor"),
-        (
-            include_str!("../../workflows/experiment.json"),
-            "experiment",
-        ),
-        (include_str!("../../workflows/ci-fix.json"), "ci-fix"),
-        (
-            include_str!("../../workflows/simple-task.json"),
-            "simple-task",
-        ),
-    ];
+    for json in STARTER_FILES {
+        let Some(starter) = StarterDefinition::parse(json) else {
+            continue;
+        };
+        let Ok(stored) = workflows.get(&starter.id) else {
+            continue;
+        };
+        let latest = if stored.is_some() {
+            workflows.latest_version(&starter.id).unwrap_or_default()
+        } else {
+            None
+        };
+        let now = paths::now_ms();
 
-    for (json, _slug) in starters {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
-            let id = WorkflowId::from(v["id"].as_str().unwrap_or("").to_string());
-            let name = v["name"].as_str().unwrap_or("").to_string();
-            let description = v["description"].as_str().unwrap_or("").to_string();
-            let is_starter = v["is_starter"].as_bool().unwrap_or(false);
-            let steps: Vec<StepConfig> =
-                serde_json::from_value(v["steps"].clone()).unwrap_or_default();
-            let steps_json = serde_json::to_string(&steps).unwrap_or_default();
-            let now = paths::now_ms();
-
-            match workflows.get(&id) {
-                Ok(Some(w)) => {
-                    // Check if steps have changed compared to the latest DB version
-                    if let Ok(Some(latest_ver)) = workflows.latest_version(&id) {
-                        let db_steps: Vec<StepConfig> =
-                            serde_json::from_str(&latest_ver.steps_json).unwrap_or_default();
-                        if db_steps != steps {
-                            let all_versions = workflows.versions(&id).unwrap_or_default();
-                            let next_version = all_versions
-                                .iter()
-                                .map(|ver| ver.version)
-                                .max()
-                                .unwrap_or(0)
-                                + 1;
-
-                            if w.name != name || w.description != description {
-                                let _ = workflows.update_meta(&id, &name, &description);
-                            }
-
-                            let version = WorkflowVersion {
-                                id: WorkflowVersionId::from(format!(
-                                    "{}-v{}",
-                                    id.as_str(),
-                                    next_version
-                                )),
-                                workflow_id: id.clone(),
-                                version: next_version,
-                                steps_json,
-                                // Starters ship as v1 files; readers migrate
-                                // them on the fly (V34 fallback), which keeps
-                                // the bundled definitions the single source.
-                                definition_json: None,
-                                note: Some(
-                                    "System auto-update to latest starter template".to_string(),
-                                ),
-                                created_at: now,
-                            };
-                            let _ = workflows.save_version(version);
-                        }
-                    }
+        match workflow_starters::plan_seed(&starter, stored.as_ref(), latest.as_ref()) {
+            SeedAction::Skip => {}
+            SeedAction::Create => {
+                let _ = workflows.create(starter.workflow_row(now));
+                let _ = workflows.save_version(starter.version_row(1, "Initial version", now));
+            }
+            SeedAction::Republish { rename } => {
+                let version =
+                    next_version_number(&workflows.versions(&starter.id).unwrap_or_default());
+                if rename {
+                    let _ = workflows.update_meta(&starter.id, &starter.name, &starter.description);
                 }
-                Ok(None) => {
-                    let workflow = Workflow {
-                        id: id.clone(),
-                        name,
-                        description,
-                        is_starter,
-                        created_at: now,
-                        updated_at: now,
-                        schedule: None,
-                    };
-                    let _ = workflows.create(workflow);
-                    let version = WorkflowVersion {
-                        id: WorkflowVersionId::from(format!("{}-v1", id.as_str())),
-                        workflow_id: id,
-                        version: 1,
-                        steps_json,
-                        definition_json: None,
-                        note: Some("Initial version".to_string()),
-                        created_at: now,
-                    };
-                    let _ = workflows.save_version(version);
-                }
-                Err(_) => {}
+                let _ = workflows.save_version(starter.version_row(
+                    version,
+                    "System auto-update to latest starter template",
+                    now,
+                ));
             }
         }
     }
@@ -125,45 +70,13 @@ pub fn seed_starter_workflows(workflows: &Arc<dyn WorkflowRepository>) {
 // Tauri Commands
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct WorkflowWithSteps {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub is_starter: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub steps: Vec<StepConfig>,
-    pub version: u32,
-    pub version_id: String,
-    pub schedule: Option<crate::domain::models::WorkflowSchedule>,
-}
-
 #[tauri::command]
 pub fn workflow_list(ctx: State<'_, AppContext>) -> Result<Vec<WorkflowWithSteps>, AppError> {
     let workflows = &ctx.workflows;
-    let ws = workflows.list()?;
     let mut result = Vec::new();
-    for w in ws {
+    for w in workflows.list()? {
         let latest = workflows.latest_version(&w.id)?;
-        let (steps, version, version_id) = if let Some(v) = latest {
-            let steps = serde_json::from_str::<Vec<StepConfig>>(&v.steps_json).unwrap_or_default();
-            (steps, v.version, v.id.0)
-        } else {
-            (vec![], 0, String::new())
-        };
-        result.push(WorkflowWithSteps {
-            id: w.id.0,
-            name: w.name,
-            description: w.description,
-            is_starter: w.is_starter,
-            created_at: w.created_at,
-            updated_at: w.updated_at,
-            steps,
-            version,
-            version_id,
-            schedule: w.schedule.clone(),
-        });
+        result.push(WorkflowWithSteps::joined(w, latest));
     }
     Ok(result)
 }
@@ -180,24 +93,7 @@ pub fn workflow_get(
         .map_err(AppError::from)?
         .ok_or_else(|| AppError::not_found(format!("Workflow not found: {}", workflow_id)))?;
     let latest = workflows.latest_version(&wf_id).map_err(AppError::from)?;
-    let (steps, version, version_id) = if let Some(v) = latest {
-        let steps = serde_json::from_str::<Vec<StepConfig>>(&v.steps_json).unwrap_or_default();
-        (steps, v.version, v.id.0)
-    } else {
-        (vec![], 0, String::new())
-    };
-    Ok(WorkflowWithSteps {
-        id: w.id.0,
-        name: w.name,
-        description: w.description,
-        is_starter: w.is_starter,
-        created_at: w.created_at,
-        updated_at: w.updated_at,
-        steps,
-        version,
-        version_id,
-        schedule: w.schedule.clone(),
-    })
+    Ok(WorkflowWithSteps::joined(w, latest))
 }
 
 /// The **schema-v2 graph** for a feature's *pinned* workflow version
@@ -274,27 +170,12 @@ fn ensure_valid_definition(def: &WorkflowDefinitionV2) -> Result<(), AppError> {
         ))
     })?;
 
-    let findings = lint_definition(def);
-    if has_errors(&findings) {
-        let detail = findings
-            .iter()
-            .filter(|f| f.severity == LintSeverity::Error)
-            .map(|f| {
-                let anchor = f
-                    .node
-                    .as_ref()
-                    .map(|n| format!("{n}: "))
-                    .or_else(|| f.edge.as_ref().map(|(a, b)| format!("{a} → {b}: ")))
-                    .unwrap_or_default();
-                format!("  - [{}] {anchor}{}", f.code, f.message)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(AppError::validation(format!(
+    match error_summary(&lint_definition(def)) {
+        Some(detail) => Err(AppError::validation(format!(
             "workflow definition has structural errors:\n{detail}"
-        )));
+        ))),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Structural lint for a schema-v2 definition the builder holds in memory
@@ -413,7 +294,7 @@ pub fn save_definition(
     workflows
         .update_meta(&wf_id, name, description)
         .map_err(AppError::from)?;
-    let (version, version_id) = append_version(
+    let appended = append_version(
         workflows,
         &wf_id,
         steps_json,
@@ -430,8 +311,8 @@ pub fn save_definition(
         created_at,
         updated_at: now,
         steps,
-        version,
-        version_id: version_id.0,
+        version: appended.version,
+        version_id: appended.id.0,
         schedule,
     })
 }
@@ -530,33 +411,22 @@ pub fn restore_version(
     // Both representations are copied verbatim, so a restore reproduces the
     // stored version exactly — layout included — rather than a graph that
     // merely migrates to the same shape.
-    let (version, new_version_id) = append_version(
+    let appended = append_version(
         workflows,
         workflow_id,
-        source.steps_json.clone(),
-        source.definition_json.clone(),
+        source.steps_json,
+        source.definition_json,
         Some(format!("Restored from v{}", source.version)),
         now,
     )?;
 
     Ok(WorkflowWithSteps {
-        id: workflow_id.0.clone(),
-        name: w.name,
-        description: w.description,
-        is_starter: w.is_starter,
-        created_at: w.created_at,
         updated_at: now,
-        steps: serde_json::from_str(&source.steps_json).unwrap_or_default(),
-        version,
-        version_id: new_version_id.0,
-        schedule: w.schedule,
+        ..WorkflowWithSteps::joined(w, Some(appended))
     })
 }
 
 /// Load a version row and prove it belongs to the workflow the caller named.
-/// Version ids are guessable by construction (`<workflow-id>-v3`), so the
-/// pairing is checked rather than assumed — a mismatched pair would otherwise
-/// let one workflow's history be restored onto another.
 fn version_of(
     workflows: &Arc<dyn WorkflowRepository>,
     workflow_id: &WorkflowId,
@@ -566,19 +436,8 @@ fn version_of(
         .version_get(version_id)
         .map_err(AppError::from)?
         .ok_or_else(|| AppError::not_found(format!("Workflow version not found: {version_id}")))?;
-    if &version.workflow_id != workflow_id {
-        return Err(AppError::validation(format!(
-            "Version {version_id} belongs to workflow {}, not {workflow_id}.",
-            version.workflow_id
-        )));
-    }
+    ensure_owned_by(&version, workflow_id).map_err(AppError::validation)?;
     Ok(version)
-}
-
-/// One past the highest version that exists. Numbering never reuses a value,
-/// so a version id derived from it is unique for the life of the workflow.
-fn next_version_number(existing: &[WorkflowVersion]) -> u32 {
-    existing.iter().map(|v| v.version).max().unwrap_or(0) + 1
 }
 
 /// Append an immutable version row and report what it became.
@@ -596,29 +455,25 @@ fn append_version(
     definition_json: Option<String>,
     note: Option<String>,
     now: i64,
-) -> Result<(u32, WorkflowVersionId), AppError> {
+) -> Result<WorkflowVersion, AppError> {
     let existing = workflows.versions(workflow_id).map_err(AppError::from)?;
     let version = next_version_number(&existing);
-    let id = WorkflowVersionId::from(format!("{}-v{}", workflow_id.as_str(), version));
-    workflows.save_version(WorkflowVersion {
-        id: id.clone(),
+    let row = WorkflowVersion {
+        id: version_id(workflow_id, version),
         workflow_id: workflow_id.clone(),
         version,
         steps_json,
         definition_json,
         note,
         created_at: now,
-    })?;
-    Ok((version, id))
+    };
+    workflows.save_version(row.clone())?;
+    Ok(row)
 }
 
 /// Export the latest version as a **schema-v2 document, positions included**
 /// (P3.6). Pre-P3.6 versions migrate on the way out, so every workflow
 /// exports as v2 regardless of when it was saved.
-///
-/// `description` rides alongside the definition: it lives on the workflow row,
-/// not in the graph (the v2 schema has no place for it), and dropping it would
-/// make export → import lose the workflow's own summary.
 #[tauri::command]
 pub fn workflow_export(
     workflow_id: String,
@@ -635,12 +490,7 @@ pub fn workflow_export(
         .map_err(AppError::from)?
         .ok_or_else(|| AppError::not_found("No versions found"))?;
 
-    let definition = latest.definition(&w.name);
-    let mut export = serde_json::to_value(&definition).map_err(|e| e.to_string())?;
-    if let Some(obj) = export.as_object_mut() {
-        obj.insert("description".into(), serde_json::json!(w.description));
-    }
-    serde_json::to_string_pretty(&export).map_err(|e| e.to_string().into())
+    write_export(&latest.definition(&w.name), &w.description).map_err(AppError::from)
 }
 
 /// Import a workflow file of **either schema version** (P3.6).
@@ -660,33 +510,14 @@ pub fn workflow_import(
     ctx: State<'_, AppContext>,
 ) -> Result<WorkflowWithSteps, AppError> {
     let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-
-    // A v2 document is validated against the published JSON Schema first, so a
-    // hand-edited file gets located, readable errors rather than a serde
-    // message about a missing field somewhere in a hundred-node graph.
-    let is_v2 = v.get("schema_version").and_then(|s| s.as_u64()) == Some(2);
-    if is_v2 {
-        validate_workflow_v2(&v).map_err(|e| {
-            AppError::validation(format!("schema-v2 workflow failed validation:\n{e}"))
-        })?;
-    }
-
-    let definition = migrate_definition(&v).map_err(AppError::validation)?;
-    let name = if definition.name.trim().is_empty() {
-        "Imported Workflow".to_string()
-    } else {
-        definition.name.clone()
-    };
-    // The v2 schema has no `description`; export writes it alongside, and a v1
-    // file has always carried one at the top level.
-    let description = v["description"].as_str().unwrap_or("").to_string();
+    let imported = read_import(&v).map_err(AppError::validation)?;
 
     save_definition(
         &ctx.workflows,
         None,
-        &name,
-        &description,
-        definition,
+        &imported.name,
+        &imported.description,
+        imported.definition,
         Some("Imported".to_string()),
     )
 }
@@ -720,55 +551,33 @@ pub fn workflow_revert_to_default(
             "Only starter pack workflows can be reverted to default.",
         ));
     }
+    let starter = workflow_starters::find(STARTER_FILES, &wf_id).ok_or_else(|| {
+        AppError::not_found("Starter pack source not found for this workflow id.")
+    })?;
 
-    let starters: &[&str] = &[
-        include_str!("../../workflows/standard-feature-pipeline.json"),
-        include_str!("../../workflows/bugfix-pipeline.json"),
-        include_str!("../../workflows/docs-update.json"),
-        include_str!("../../workflows/refactor.json"),
-        include_str!("../../workflows/experiment.json"),
-        include_str!("../../workflows/ci-fix.json"),
-        include_str!("../../workflows/simple-task.json"),
-    ];
-    for json in starters {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
-            if v["id"].as_str().unwrap_or("") == workflow_id {
-                let name = v["name"].as_str().unwrap_or("").to_string();
-                let description = v["description"].as_str().unwrap_or("").to_string();
-                let steps: Vec<StepConfig> =
-                    serde_json::from_value(v["steps"].clone()).unwrap_or_default();
-                let steps_json = serde_json::to_string(&steps).map_err(|e| e.to_string())?;
-                let now = paths::now_ms();
-                workflows.update_meta(&wf_id, &name, &description)?;
-                let (next_version, version_id) = append_version(
-                    workflows,
-                    &wf_id,
-                    steps_json,
-                    // The bundled starter is a v1 file and has no authored
-                    // layout; readers migrate it, so a revert lands the same
-                    // graph the starter has always produced.
-                    None,
-                    Some("Reverted to default".to_string()),
-                    now,
-                )?;
-                return Ok(WorkflowWithSteps {
-                    id: workflow_id,
-                    name,
-                    description,
-                    is_starter: true,
-                    created_at: w.created_at,
-                    updated_at: now,
-                    steps,
-                    version: next_version,
-                    version_id: version_id.0,
-                    schedule: w.schedule.clone(),
-                });
-            }
-        }
-    }
-    Err(AppError::not_found(
-        "Starter pack source not found for this workflow id.",
-    ))
+    let steps_json = starter.steps_json().map_err(|e| e.to_string())?;
+    let now = paths::now_ms();
+    workflows.update_meta(&wf_id, &starter.name, &starter.description)?;
+    let appended = append_version(
+        workflows,
+        &wf_id,
+        steps_json,
+        None,
+        Some("Reverted to default".to_string()),
+        now,
+    )?;
+    Ok(WorkflowWithSteps {
+        id: workflow_id,
+        name: starter.name,
+        description: starter.description,
+        is_starter: true,
+        created_at: w.created_at,
+        updated_at: now,
+        steps: starter.steps,
+        version: appended.version,
+        version_id: appended.id.0,
+        schedule: w.schedule,
+    })
 }
 
 #[tauri::command]

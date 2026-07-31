@@ -20,25 +20,14 @@
  * the row then, so an abandoned "new workflow" never leaves a husk behind.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { RefreshCw } from 'lucide-react';
 
 import { formatError } from '../../lib/errors';
+import { getWorkflow, saveWorkflow, workflowVersionGraph } from '../../lib/workflows';
 import { WorkflowBuilder, type WorkflowSaveRequest } from './WorkflowBuilder';
 import type { WorkflowScheduleValue } from './ScheduleDrawer';
 import { TemplatePicker, type TemplateChoice } from './TemplatePicker';
 import type { WorkflowDefinitionV2 } from './types';
-
-/** Serde shape of the Rust `WorkflowWithSteps`. */
-interface WorkflowRow {
-  id: string;
-  name: string;
-  description: string;
-  is_starter: boolean;
-  version: number;
-  version_id: string;
-  schedule: WorkflowScheduleValue | null;
-}
 
 export interface WorkflowBuilderScreenProps {
   /** `null` opens the template picker for a brand-new workflow. */
@@ -63,11 +52,8 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
   const [loading, setLoading] = useState(workflowId != null);
 
   const loadWorkflow = useCallback(async (id: string): Promise<Loaded> => {
-    const row = await invoke<WorkflowRow>('workflow_get', { workflowId: id });
-    const definition = await invoke<WorkflowDefinitionV2>('workflow_version_graph', {
-      workflowId: id,
-      versionId: row.version_id,
-    });
+    const row = await getWorkflow(id);
+    const definition = await workflowVersionGraph(id, row.version_id);
     return {
       workflowId: id,
       definition,
@@ -143,7 +129,7 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
 
   const save = useCallback(
     async ({ definition, name, description }: WorkflowSaveRequest) => {
-      const row = await invoke<WorkflowRow>('workflow_save', {
+      const row = await saveWorkflow({
         workflowId: loaded?.workflowId ?? null,
         name,
         description,

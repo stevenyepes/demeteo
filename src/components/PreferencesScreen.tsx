@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain, Timer, Minimize2 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import MachinesView from './MachinesView';
 import MemoryAgentSettings from './MemoryAgentSettings';
@@ -10,6 +9,7 @@ import { useNavigation } from '../context';
 import { getAgentTimeouts, setAgentTimeouts } from '../lib/timeouts';
 import { getRunInBackground, setRunInBackground } from '../lib/background';
 import { getAppVersion } from '../lib/appVersion';
+import { getWorkspaceDir, getWorkspaceDirSetting, setWorkspaceDirSetting } from '../lib/workspace';
 import type { AgentTimeouts as AgentTimeoutsType, AppVersion } from '../types';
 import { useErrorBus } from '../lib/errorBus';
 import { TimeoutField } from './ui/TimeoutField';
@@ -24,7 +24,7 @@ type PrefTab = 'machines' | 'providers' | 'defaults' | 'memory' | 'about';
 
 const PreferencesScreen = () => {
   const { navigate } = useNavigation();
-  const onNavigate = (view: string) => navigate({ kind: view as any });
+  const onNavigate = (view: 'home' | 'providers') => navigate({ kind: view });
   const [activeTab, setActiveTab] = useState<PrefTab>('machines');
 
   // Workspace directory state
@@ -53,8 +53,8 @@ const PreferencesScreen = () => {
     if (activeTab !== 'defaults') return;
     (async () => {
       const [effective, override, timeouts, background] = await Promise.all([
-        invoke<string>('get_workspace_dir'),
-        invoke<string | null>('get_workspace_dir_setting'),
+        getWorkspaceDir(),
+        getWorkspaceDirSetting(),
         getAgentTimeouts().catch(() => DEFAULT_AGENT_TIMEOUTS),
         getRunInBackground().catch(() => false),
       ]);
@@ -87,8 +87,8 @@ const PreferencesScreen = () => {
   const handleSaveWorkspaceDir = async () => {
     setWorkspaceDirSaving(true);
     try {
-      await invoke('set_workspace_dir_setting', { path: workspaceDirInput || null });
-      const effective = await invoke<string>('get_workspace_dir');
+      await setWorkspaceDirSetting(workspaceDirInput || null);
+      const effective = await getWorkspaceDir();
       setEffectiveWorkspaceDir(effective);
       setWorkspaceDirSaved(true);
       setTimeout(() => setWorkspaceDirSaved(false), 2500);

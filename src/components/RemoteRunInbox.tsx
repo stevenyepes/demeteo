@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import {
   RefreshCw,
   CheckCircle2,
@@ -20,6 +19,13 @@ import { runStatusMeta, TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../
 import { relativeTime } from '../lib/utils';
 import { useNavigation } from '../context';
 import { formatError } from '../lib/errors';
+import { listMachines } from '../lib/machines';
+import {
+  cancelRemoteRun,
+  listMirroredRuns,
+  reconcileRuns,
+  remoteRunDiffUrl,
+} from '../lib/remoteRuns';
 
 /**
  * Runs — the cross-machine attention hub (docs/REMOTE_EXECUTION.md
@@ -113,7 +119,7 @@ const DiffLinkButton: React.FC<{ run: RemoteRunMirror }> = ({ run }) => {
       return;
     }
     let cancelled = false;
-    invoke<string | null>('remote_run_diff_url', { projectId: run.project_id, branch: run.pushed_branch })
+    remoteRunDiffUrl(run.project_id, run.pushed_branch)
       .then((u) => { if (!cancelled) setUrl(u); })
       .catch(() => { if (!cancelled) setUrl(null); });
     return () => { cancelled = true; };
@@ -148,10 +154,7 @@ const RemoteRunInbox: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
-      const [list, machineList] = await Promise.all([
-        invoke<RemoteRunMirror[]>('remote_list_mirrored_runs'),
-        invoke<Machine[]>('get_machines'),
-      ]);
+      const [list, machineList] = await Promise.all([listMirroredRuns(), listMachines()]);
       setRuns(list ?? []);
       setMachines(machineList ?? []);
     } catch (e) {
@@ -165,7 +168,7 @@ const RemoteRunInbox: React.FC = () => {
     setReconciling(true);
     setError('');
     try {
-      const list = await invoke<RemoteRunMirror[]>('remote_reconcile_runs');
+      const list = await reconcileRuns();
       setRuns(list ?? []);
     } catch (e) {
       setError(formatError(e));
@@ -193,7 +196,7 @@ const RemoteRunInbox: React.FC = () => {
 
   const cancelRun = async (run: RemoteRunMirror) => {
     try {
-      await invoke('remote_cancel_run', { machineId: run.machine_id, runId: run.run_id });
+      await cancelRemoteRun(run.machine_id, run.run_id);
       await reconcile();
     } catch (e) {
       setError(formatError(e));

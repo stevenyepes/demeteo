@@ -1,7 +1,7 @@
 //! Attachment-commit logic shared by the Tauri `commands::attachments`
 //! wrappers (`src-tauri/src/commands/attachments.rs`) and the step executor's
 //! pre-execution staged-attachment path
-//! (`adapters/step_executor/impl_traits/mod.rs`). Split out so both call
+//! (`adapters/step_executor/impl_traits/bootstrap.rs`). Split out so both call
 //! sites — one behind a Tauri command, one inside the engine — share
 //! identical validation, dedup, and storage rules.
 

@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import Editor from '@monaco-editor/react';
 import { DiffEditor } from '@monaco-editor/react';
 import {
@@ -7,25 +6,20 @@ import {
   GitCommit, FilePlus, FileMinus, FileEdit,
 } from 'lucide-react';
 import { formatError } from '../lib/errors';
+import {
+  gitChangedFiles,
+  gitFileAtRef,
+  listDir,
+  readFile,
+  type ChangedFile,
+  type SftpEntry,
+} from '../lib/files';
 import { MONACO_RESIZE_SAFE } from '../lib/monaco';
-
-interface SftpEntry {
-  name: string;
-  path: string;
-  is_dir: boolean;
-  size: number;
-  modified: number;
-}
 
 interface FileNode {
   entry: SftpEntry;
   children?: FileNode[];
   expanded: boolean;
-}
-
-interface ChangedFile {
-  path: string;
-  status: string; // M | A | D | R | ?
 }
 
 interface CodeEditorViewProps {
@@ -120,7 +114,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
 
   // ── File tree ─────────────────────────────────────────────────────
   const loadDir = useCallback(async (path: string): Promise<FileNode[]> => {
-    const entries = await invoke<SftpEntry[]>('sftp_list_dir', { machineId, path });
+    const entries = await listDir(machineId, path);
     return sortNodes(
       entries.filter(e => !IGNORED.has(e.name)).map(e => ({ entry: e, expanded: false }))
     );
@@ -160,7 +154,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     setChangesLoading(true);
     setChangesError(null);
     try {
-      const files = await invoke<ChangedFile[]>('git_changed_files', {
+      const files = await gitChangedFiles({
         machineId,
         worktreePath,
         baseRef: defaultBranch,
@@ -185,7 +179,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     setFileLoading(true);
     setFileError(null);
     try {
-      setFileContent(await invoke<string>('sftp_read_file', { machineId, path }));
+      setFileContent(await readFile(machineId, path));
     } catch (err) {
       setFileError(formatError(err));
     } finally {
@@ -207,7 +201,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
       const [original, modified] = await Promise.all([
         file.status === 'A'
           ? Promise.resolve('')
-          : invoke<string>('git_file_at_ref', {
+          : gitFileAtRef({
               machineId,
               worktreePath,
               gitRef: defaultBranch,
@@ -215,7 +209,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             }),
         file.status === 'D'
           ? Promise.resolve('')
-          : invoke<string>('git_file_at_ref', {
+          : gitFileAtRef({
               machineId,
               worktreePath,
               gitRef: branch,
@@ -237,7 +231,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     const path = selectedPathRef.current;
     if (!path) return;
     try {
-      setFileContent(await invoke<string>('sftp_read_file', { machineId, path }));
+      setFileContent(await readFile(machineId, path));
     } catch { /* silent */ }
   }, [machineId]);
 

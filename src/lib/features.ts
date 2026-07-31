@@ -1,6 +1,69 @@
 import { invoke } from "@tauri-apps/api/core";
 import { asAppError } from "./errors";
-import type { EffortLevel, StepExecution } from "../types";
+import type {
+  EffortLevel,
+  Feature,
+  SequenceState,
+  StepAttempt,
+  StepExecution,
+} from "../types";
+
+/** Features still executing (or awaiting a gate) in a project. */
+export async function fetchActiveFeatures(projectId: string): Promise<Feature[]> {
+  return invoke<Feature[]>("fetch_active_features", { projectId });
+}
+
+/** Where a feature's worktree lives, resolved at call time. Mirrors the Rust
+ *  `FeatureWorktreeInfo`, which the runner's `get_worktree` RPC returns too —
+ *  so a caller opening a terminal on it needs no transport branch. */
+export interface FeatureWorktreeInfo {
+  machine_id: string;
+  worktree_path: string;
+  branch: string;
+  default_branch: string;
+}
+
+export async function getFeatureWorktree(featureId: string): Promise<FeatureWorktreeInfo> {
+  return invoke<FeatureWorktreeInfo>("feature_get_worktree", { featureId });
+}
+
+export async function getStepExecution(executionId: string): Promise<StepExecution> {
+  return invoke<StepExecution>("step_get", { executionId });
+}
+
+export async function listStepsForRun(featureId: string): Promise<StepExecution[]> {
+  return invoke<StepExecution[]>("step_list_for_run", { featureId });
+}
+
+/** Per-attempt history for one step execution. */
+export async function listStepAttempts(executionId: string): Promise<StepAttempt[]> {
+  return invoke<StepAttempt[]>("step_attempts_list", { executionId });
+}
+
+/** A `sequence` node's task list, split into the landed prefix and what is
+ *  still pending. `nodeId` is the graph node id; a non-sequence or
+ *  not-yet-planned node reads back `unplanned`. */
+export async function getSequenceState(input: {
+  featureId: string;
+  nodeId: string;
+  executionId: string;
+}): Promise<SequenceState> {
+  return invoke<SequenceState>("sequence_tasks_list", {
+    featureId: input.featureId,
+    nodeId: input.nodeId,
+    executionId: input.executionId,
+  });
+}
+
+/**
+ * The UTF-8 body of a run's declared artifact. A *display* read of a run
+ * surface, so it goes through `RunView` rather than `sftp_read_file` — the
+ * seam that lets a runner-owned feature's artifact resolve from the laptop
+ * shadow. General filesystem browsing stays on `lib/files.ts`.
+ */
+export async function artifactBody(machineId: string, path: string): Promise<string> {
+  return invoke<string>("artifact_body", { machineId, path });
+}
 
 /**
  * Subset of `StepExecution` the gate-modal block-banner actually needs.
@@ -203,7 +266,7 @@ export async function listBlockingPredecessor(
   featureId: string,
   target: Pick<StepExecution, "id" | "step_index">,
 ): Promise<GateBlocker | null> {
-  const steps = await invoke<StepExecution[]>("step_list_for_run", { featureId });
+  const steps = await listStepsForRun(featureId);
   const found = findActivePredecessor(steps, target);
   if (!found) return null;
   return {

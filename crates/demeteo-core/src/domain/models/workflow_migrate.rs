@@ -51,8 +51,8 @@
 use crate::domain::ids::{StepId, WorkflowId};
 use crate::domain::models::workflow::StepConfig;
 use crate::domain::models::workflow_v2::{
-    EdgeConfig, NodeConfig, Position, RetryPolicy, RetryRule, RetryStrategy, WorkflowDefaults,
-    WorkflowDefinitionV2, WORKFLOW_SCHEMA_V2,
+    validate_workflow_v2, EdgeConfig, NodeConfig, Position, RetryPolicy, RetryRule, RetryStrategy,
+    WorkflowDefaults, WorkflowDefinitionV2, WORKFLOW_SCHEMA_V2,
 };
 
 /// Vertical spacing between synthesized node positions. Arbitrary but
@@ -372,6 +372,64 @@ pub fn migrate_definition(value: &serde_json::Value) -> Result<WorkflowDefinitio
     let v1: V1File = serde_json::from_value(value.clone())
         .map_err(|e| format!("not a v1 workflow definition (needs `steps`): {e}"))?;
     Ok(migrate_v1_to_v2(v1.id, v1.name, &v1.steps))
+}
+
+/// The workflow file `workflow_export` writes: the schema-v2 definition with
+/// the workflow's `description` beside it.
+///
+/// `description` lives on the workflow row, not in the graph — the v2 schema
+/// has no place for it — so an export that dropped it would lose the
+/// workflow's own summary. [`read_import`] reads it back from exactly here,
+/// which is what makes export → import a round trip.
+pub fn write_export(
+    definition: &WorkflowDefinitionV2,
+    description: &str,
+) -> Result<String, String> {
+    let mut export = serde_json::to_value(definition).map_err(|e| e.to_string())?;
+    if let Some(obj) = export.as_object_mut() {
+        obj.insert("description".into(), serde_json::json!(description));
+    }
+    serde_json::to_string_pretty(&export).map_err(|e| e.to_string())
+}
+
+/// A workflow file read for import: the graph it describes, plus the two
+/// fields that graph cannot carry.
+#[derive(Debug)]
+pub struct ImportedWorkflow {
+    pub definition: WorkflowDefinitionV2,
+    pub name: String,
+    pub description: String,
+}
+
+/// Read a workflow file of **either schema version** into something storable
+/// (P3.6).
+///
+/// A v2 document is checked against the published JSON Schema **before**
+/// [`migrate_definition`] deserializes it, so a hand-edited file gets located,
+/// readable errors instead of a serde message about one missing field
+/// somewhere in a hundred-node graph.
+///
+/// The two fields alongside `definition` are the ones a v2 document has no
+/// place for. `name` falls back to a placeholder because a nameless workflow
+/// is unfindable in the library; `description` is read from the top level,
+/// where `workflow_export` writes it and where a v1 file has always carried
+/// it.
+pub fn read_import(value: &serde_json::Value) -> Result<ImportedWorkflow, String> {
+    if value.get("schema_version").and_then(|v| v.as_u64()) == Some(WORKFLOW_SCHEMA_V2 as u64) {
+        validate_workflow_v2(value)
+            .map_err(|e| format!("schema-v2 workflow failed validation:\n{e}"))?;
+    }
+    let definition = migrate_definition(value)?;
+    let name = if definition.name.trim().is_empty() {
+        "Imported Workflow".to_string()
+    } else {
+        definition.name.clone()
+    };
+    Ok(ImportedWorkflow {
+        definition,
+        name,
+        description: value["description"].as_str().unwrap_or("").to_string(),
+    })
 }
 
 #[cfg(test)]

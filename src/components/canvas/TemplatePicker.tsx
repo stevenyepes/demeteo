@@ -9,10 +9,10 @@
  * from an empty canvas, and it is the path the J3 script takes.
  */
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Copy, LayoutTemplate, RefreshCw, X } from 'lucide-react';
 
 import { formatError } from '../../lib/errors';
+import { listWorkflows } from '../../lib/workflows';
 import { WORKFLOW_TEMPLATES, type WorkflowTemplate } from './templates';
 
 export type TemplateChoice =
@@ -38,7 +38,7 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
 
   useEffect(() => {
     let live = true;
-    invoke<WorkflowRow[]>('workflow_list')
+    listWorkflows()
       .then((list) => live && setRows(list))
       .catch((err) => live && setError(formatError(err)))
       .finally(() => live && setLoading(false));

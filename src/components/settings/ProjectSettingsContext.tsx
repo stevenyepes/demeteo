@@ -1,22 +1,43 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, WorkflowOverride, StepConfig, Machine, Project, WorktreeStrategy, ProjectSettingsData } from '../../types';
+import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, StepConfig, Machine, Project } from '../../types';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { DEFAULT_EFFORT, reconcileEffort } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
-import { probeProjectCommands, saveProjectSettings, setWorkflowOverride, type CommandProbeReport } from '../../lib/project';
+import {
+  checkReposDirty,
+  deleteProject,
+  deleteProjectMemory,
+  getProposedStrategy,
+  getRepositoriesForProject,
+  getWorkflowOverrides,
+  getWorkspaceHealth,
+  listProjectMemory,
+  probeProjectCommands,
+  saveProjectSettings,
+  setWorkflowOverride,
+  updateProject,
+  upsertProjectMemory,
+  type CommandProbeReport,
+  type RepoDirtyStatus,
+  type RepoHealthStatus,
+} from '../../lib/project';
+import {
+  getAgentConfigs,
+  listMachines,
+  setAgentConfigs as writeAgentConfigs,
+  testMachineConnection,
+  type AgentConfigView,
+} from '../../lib/machines';
+import { fetchProviderRepos } from '../../lib/providers';
+import { bootstrapProject } from '../../lib/createProjectWizard';
+import { listWorkflows } from '../../lib/workflows';
 import { useNavigation, useProject } from '../../context';
 
 export interface AvailableRepo { path: string; providerId: string; }
-export interface RepoDirtyStatus { repo_path: string; has_uncommitted: boolean; has_unpushed: boolean; }
-export interface WorktreeInfo { path: string; branch: string | null; is_locked: boolean; }
-export interface RepoHealthStatus {
-  repo_path: string; is_cloned: boolean; head_branch: string | null;
-  worktrees: WorktreeInfo[]; has_uncommitted: boolean; has_unpushed: boolean;
-}
-export interface AgentConfigView { kind: string; enabled: boolean; available: boolean; install_command: string; display_label: string; }
+export type { RepoDirtyStatus, RepoHealthStatus, WorktreeInfo } from '../../lib/project';
+export type { AgentConfigView } from '../../lib/machines';
 
 /** How long the panel waits after a keystroke before asking the machine. A
  *  probe per character would be a `command -v` per character, on a machine
@@ -372,8 +393,8 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
         setIsLoadingOverrides(true); setOverridesError('');
         try {
           const [wfList, ovList] = await Promise.all([
-            invoke<{ id: string; name: string; description: string; steps: StepConfig[] }[]>('workflow_list'),
-            invoke<WorkflowOverride[]>('get_workflow_overrides', { projectId: activeProject.id }),
+            listWorkflows(),
+            getWorkflowOverrides(activeProject.id),
           ]);
           setWorkflows(wfList.map(w => ({ id: w.id, name: w.name, description: w.description, steps: w.steps ?? [] })));
           const map: Record<string, OverrideRowValue> = {};
@@ -410,7 +431,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     let cancelled = false;
     (async () => {
       try {
-        const list: Machine[] = await invoke('get_machines');
+        const list = await listMachines();
         if (!cancelled) setMachines(list ?? []);
       } catch (err) { reportError(err, { kind: 'internal' }); }
     })();
@@ -422,7 +443,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     if (computeType === 'remote' && !remoteHost) { setAgentConfigs([]); return; }
     if (refresh) setIsRefreshingAgents(true);
     try {
-      const configs = await invoke<AgentConfigView[]>('get_agent_configs', { machineId, refresh });
+      const configs = await getAgentConfigs(machineId, refresh);
       setAgentConfigs(configs);
     } catch (err) {
       console.warn('No agent configs for machine:', machineId, formatError(err));
@@ -468,7 +489,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const fetchWorkspaceHealth = async () => {
     setIsLoadingHealth(true); setHealthError('');
     try {
-      const data = await invoke<RepoHealthStatus[]>('get_workspace_health', { projectId: activeProject.id });
+      const data = await getWorkspaceHealth(activeProject.id);
       setHealthData(data); setShowHealthPanel(true); setHealthExpanded(true);
     } catch (err) {
       setHealthError(formatError(err)); setHealthData([]); setShowHealthPanel(false);
@@ -479,7 +500,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     (async () => {
       setIsLoading(true);
       try {
-        const res = await invoke<ProjectSettingsData | null>('get_proposed_strategy', { projectId: activeProject.id });
+        const res = await getProposedStrategy(activeProject.id);
         if (res) {
           setDefaultBranch(res.worktree_strategy.default_branch);
           setBranchPrefix(res.worktree_strategy.branch_prefix);
@@ -502,7 +523,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setCommitArtifacts(Boolean(res.commit_artifacts));
           setExtraWritablePaths(res.worktree_strategy.extra_writable_paths || []);
         }
-        const reposRes = await invoke<any[]>('get_repositories_for_project', { projectId: activeProject.id });
+        const reposRes = await getRepositoriesForProject(activeProject.id);
         const mappedRepos = reposRes.map(r => ({ path: r.repo_path, providerId: r.provider_id }));
         setSelectedRepos(mappedRepos); setOriginalRepos(mappedRepos);
       } catch (err) {
@@ -520,7 +541,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const fetchMemories = async () => {
     setIsMemoriesLoading(true); setMemError('');
     try {
-      const list = await invoke<ProjectMemoryEntry[]>('project_memory_list', { projectId: activeProject.id });
+      const list = await listProjectMemory(activeProject.id);
       setMemories(list ?? []);
     } catch (err) { setMemError(formatError(err)); }
     finally { setIsMemoriesLoading(false); }
@@ -531,14 +552,14 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     const key = newMemKey.trim(); const value = newMemVal.trim();
     if (!key || !value) { setMemError('Key and Value cannot be empty.'); return; }
     try {
-      await invoke('project_memory_upsert', { id: editingMemory ? editingMemory.id : null, projectId: activeProject.id, key, value, source: editingMemory ? editingMemory.source : 'human' });
+      await upsertProjectMemory(activeProject.id, key, value, editingMemory ? editingMemory.source : 'human', editingMemory ? editingMemory.id : null);
       setNewMemKey(''); setNewMemVal(''); setEditingMemory(null);
       fetchMemories();
     } catch (err) { setMemError(formatError(err)); }
   };
 
   const handleDeleteMemory = async (id: string) => {
-    try { await invoke('project_memory_delete', { id }); fetchMemories(); }
+    try { await deleteProjectMemory(id); fetchMemories(); }
     catch (err) { setMemError(formatError(err)); }
   };
 
@@ -551,7 +572,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     try {
       const allRepos = await Promise.all(providers.map(async p => {
         try {
-          const repos = await invoke<string[]>('fetch_provider_repos', { providerId: p.id });
+          const repos = await fetchProviderRepos(p.id);
           return repos.map(r => ({ path: r, providerId: p.id }));
         } catch (err) { reportError(err, { kind: 'provider' }); return []; }
       }));
@@ -568,7 +589,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const handleTestConnection = async () => {
     if (!remoteHost) return;
     setIsTestingConnection(true); setConnectionStatus('idle');
-    try { await invoke('test_machine_connection', { machineId: remoteHost }); setConnectionStatus('success'); }
+    try { await testMachineConnection(remoteHost); setConnectionStatus('success'); }
     catch (err) { setConnectionStatus('error'); setErrorMsg('Connection test failed: ' + formatError(err)); setStatus('error'); }
     finally { setIsTestingConnection(false); }
   };
@@ -576,7 +597,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const checkDirtyRepositories = async (repos: AvailableRepo[]): Promise<RepoDirtyStatus[]> => {
     if (repos.length === 0) return [];
     try {
-      const res = await invoke<RepoDirtyStatus[]>('check_repos_dirty', { projectId: activeProject.id, repoPaths: repos.map(r => r.path) });
+      const res = await checkReposDirty(activeProject.id, repos.map(r => r.path));
       return res.filter(r => r.has_uncommitted || r.has_unpushed);
     } catch (err) { reportError(err, { kind: 'internal' }); return []; }
   };
@@ -590,10 +611,10 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const saveAllSettings = async () => {
     const machineId = computeType === 'remote' ? remoteHost : 'local';
     if (machineId) {
-      try { await invoke('set_agent_configs', { machineId, agents: agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled })) }); }
+      try { await writeAgentConfigs(machineId, agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled }))); }
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
-    await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
+    await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
 await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
   };
 
@@ -604,7 +625,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     const isCurrentlyFailedOrBootstrapping = activeProject.status === 'error' || activeProject.status === 'bootstrapping';
     const machineId = computeType === 'remote' ? remoteHost : 'local';
     if (machineId) {
-      try { await invoke('set_agent_configs', { machineId, agents: agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled })) }); }
+      try { await writeAgentConfigs(machineId, agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled }))); }
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     if (reposChanged || computeChanged || isCurrentlyFailedOrBootstrapping) {
@@ -616,7 +637,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
       await proceedWithReBootstrap();
     } else {
       try {
-        await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
+        await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
         await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
         // Keep `compute_type` / `remote_host` in sync with the DB so the
         // Settings tab doesn't fall back to "Local Compute" the next
@@ -638,9 +659,9 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     const currentTestCommand = testCommand;
     const currentPrTemplate = prTemplate;
     try {
-      const existing = await invoke<ProjectSettingsData | null>('get_proposed_strategy', { projectId: activeProject.id });
-      await invoke('update_project', { id: activeProject.id, config: { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) } });
-      const strategy = await invoke<WorktreeStrategy>('bootstrap_project', { projectId: activeProject.id });
+      const existing = await getProposedStrategy(activeProject.id);
+      await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
+      const strategy = await bootstrapProject(activeProject.id);
       const ext = existing?.worktree_strategy;
       setDefaultBranch(currentDefaultBranch || ext?.default_branch || strategy.default_branch);
       setBranchPrefix(currentBranchPrefix || ext?.branch_prefix || strategy.branch_prefix);
@@ -667,7 +688,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
   const proceedWithDelete = async () => {
     setIsLoading(true);
     try {
-      await invoke('delete_project', { id: activeProject.id });
+      await deleteProject(activeProject.id);
       setProjects(prev => prev.filter(p => p.id !== activeProject.id));
       setCurrentProject(null);
       navigate({ kind: 'empty-state' });

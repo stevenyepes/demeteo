@@ -50,6 +50,11 @@ export interface Machine {
   agents?: string | null;
   use_login_shell?: boolean | null;
   setup_commands?: string | null;
+  /** "Away" notification webhook (docs/REMOTE_EXECUTION.md M6.3) — any URL
+   *  accepting `{"text": "..."}`, which is the shape Slack incoming webhooks
+   *  and ntfy.sh have in common. Injected into the runner's systemd unit at
+   *  install time; blank disables it. */
+  notify_webhook_url?: string | null;
 }
 
 export interface EditorContext {

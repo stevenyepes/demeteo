@@ -1,13 +1,11 @@
 /**
- * Artifact classification shared by the run surfaces. The timeline
- * (`FeatureDetail`) keeps its own local copy — per the P2.2 scoping precedent
- * for `formatDuration`, the 1963-line file isn't churned to route through this;
- * the node drill-down panel (`NodePanel`, P2.3) and future canvas surfaces use
- * this module so classification stays in one place for them.
+ * Artifact classification shared by every run surface — the timeline
+ * (`StepArtifactList`), the node drill-down panel (`NodePanel`), and the
+ * canvas — so a file cannot read as one kind here and another there.
  *
- * Kept byte-faithful to `FeatureDetail`'s classifier — including the quirk that
- * `.worktree-ref.json` is matched *after* plain `.json`, so today it reads as
- * `json`; changing that ordering is out of scope for P2.3.
+ * One quirk is load-bearing and deliberate: `.worktree-ref.json` is matched
+ * *after* plain `.json`, so today it classifies as `json`. Surfaces render
+ * off that verdict, so reordering the two is a UI change, not a cleanup.
  */
 import {
   FileText,

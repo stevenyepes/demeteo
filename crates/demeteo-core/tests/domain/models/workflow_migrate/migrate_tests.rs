@@ -507,3 +507,82 @@ fn a_version_prefers_its_stored_document_and_falls_back_to_migration() {
     let broken = row(Some("{not json".to_string())).definition("Simple Task");
     assert_eq!(broken.nodes.len(), migrated.nodes.len());
 }
+
+// ── import (task P3.6) ───────────────────────────────────────────────────
+
+/// A v1 file keeps importing, and its top-level `description` — which the v2
+/// schema has no place for — survives beside the graph.
+#[test]
+fn a_v1_file_imports_with_its_description() {
+    let mut doc = load_starter("simple-task");
+    doc["description"] = serde_json::json!("the shipped summary");
+
+    let imported = read_import(&doc).expect("a v1 starter imports");
+    assert_eq!(imported.definition.schema_version, 2);
+    assert_eq!(imported.description, "the shipped summary");
+    assert_eq!(imported.name, doc["name"].as_str().expect("named"));
+}
+
+/// The round trip `workflow_export` writes: a v2 document with `description`
+/// added alongside comes back as the same graph.
+#[test]
+fn a_v2_document_imports_unchanged() {
+    let migrated = migrate_definition(&load_starter("simple-task")).expect("migrates");
+    let mut doc = serde_json::to_value(&migrated).expect("serializes");
+    doc["description"] = serde_json::json!("exported earlier");
+
+    let imported = read_import(&doc).expect("a v2 document imports");
+    assert_eq!(imported.definition.nodes.len(), migrated.nodes.len());
+    assert_eq!(imported.description, "exported earlier");
+}
+
+/// What export writes, import reads — graph *and* the description the graph
+/// itself has no place for.
+#[test]
+fn what_export_writes_import_reads_back() {
+    let migrated =
+        migrate_definition(&load_starter("standard-feature-pipeline")).expect("migrates");
+    let file = write_export(&migrated, "the workflow's own summary").expect("exports");
+
+    let doc: serde_json::Value = serde_json::from_str(&file).expect("export is JSON");
+    let imported = read_import(&doc).expect("its own export imports");
+
+    assert_eq!(imported.definition, migrated, "the graph survives verbatim");
+    assert_eq!(imported.description, "the workflow's own summary");
+}
+
+/// A nameless workflow would be unfindable in the library, so import names it.
+#[test]
+fn a_blank_name_falls_back_to_a_placeholder() {
+    let mut doc = load_starter("simple-task");
+    doc["name"] = serde_json::json!("   ");
+
+    assert_eq!(
+        read_import(&doc).expect("imports").name,
+        "Imported Workflow"
+    );
+}
+
+/// A hand-edited v2 file is judged by the published schema *before* serde
+/// sees it, so the refusal locates the violation instead of naming a field.
+#[test]
+fn a_schema_invalid_v2_document_is_refused_by_the_schema() {
+    let migrated = migrate_definition(&load_starter("simple-task")).expect("migrates");
+    let mut doc = serde_json::to_value(&migrated).expect("serializes");
+    doc["nodes"][0]["id"] = serde_json::json!(42);
+
+    let err = read_import(&doc).expect_err("a numeric node id is not schema-valid");
+    assert!(
+        err.contains("schema-v2 workflow failed validation"),
+        "{err}"
+    );
+}
+
+/// Neither shape: the error says what was missing rather than passing an
+/// unusable definition on to the write path.
+#[test]
+fn a_document_of_neither_shape_is_refused() {
+    let err = read_import(&serde_json::json!({ "name": "no steps here" }))
+        .expect_err("neither v1 nor v2");
+    assert!(err.contains("not a v1 workflow definition"), "{err}");
+}
