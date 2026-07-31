@@ -7,9 +7,9 @@
 //! rollback undo it, leaving the interesting field unobserved. As free
 //! functions they answer directly.
 
-use super::{rewind_patch, unwind_patch};
+use super::{can_restore_successful_ancestor, rewind_patch, unwind_patch};
 use crate::domain::ids::{FeatureId, StepExecutionId, StepId};
-use crate::domain::models::StepExecution;
+use crate::domain::models::{StepAttempt, StepExecution};
 
 fn step_with(status: &str, iteration_count: u32) -> StepExecution {
     StepExecution {
@@ -90,4 +90,39 @@ fn a_failed_arm_puts_the_spent_budget_back() {
     // the way out either.
     assert_eq!(patch.cost_usd, None);
     assert_eq!(patch.tokens, None);
+}
+
+fn attempt(status: &str) -> StepAttempt {
+    StepAttempt {
+        step_execution_id: StepExecutionId::from("se-1".to_string()),
+        attempt_no: 1,
+        status: status.to_string(),
+        cost_usd: None,
+        tokens: None,
+        wall_clock_ms: None,
+        error_class: None,
+        failure_fingerprint: None,
+        applied_rule: None,
+        workspace_fingerprint: None,
+        idempotency_key: None,
+        started_at: 0,
+        ended_at: Some(1),
+    }
+}
+
+#[test]
+fn downstream_replay_restores_only_an_ancestor_with_a_prior_success() {
+    let failed = step_with("failed", 0);
+    assert!(can_restore_successful_ancestor(
+        &failed,
+        &[attempt("completed"), attempt("failed")]
+    ));
+    assert!(!can_restore_successful_ancestor(
+        &failed,
+        &[attempt("failed")]
+    ));
+    assert!(!can_restore_successful_ancestor(
+        &step_with("interrupted", 0),
+        &[attempt("completed")]
+    ));
 }
