@@ -1,6 +1,6 @@
 use super::super::DagStepExecutor;
 use crate::adapters::step_executor::setup::{
-    build_base_ctx, fetch_default_settings, slug_from_description,
+    build_base_ctx, fetch_default_settings, slug_from_description, FeatureIdentity, ProjectCommands,
 };
 use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::workflow_v2::definition_matches_steps;
@@ -331,13 +331,17 @@ impl DagStepExecutor {
         let memory_md = self.build_memory_md(&project_id_typed, description).await;
 
         let base_ctx = build_base_ctx(
-            description,
-            &slug,
-            &branch_name,
+            FeatureIdentity {
+                description,
+                slug: &slug,
+                branch_name: &branch_name,
+            },
             &repo_list_str,
-            &test_cmd,
-            &build_cmd,
-            &coverage_cmd,
+            ProjectCommands {
+                test: &test_cmd,
+                build: &build_cmd,
+                coverage: &coverage_cmd,
+            },
             &conventions_content,
             &memory_md,
             &settings.artifact_subdir,
