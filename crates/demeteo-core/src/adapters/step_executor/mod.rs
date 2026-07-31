@@ -53,7 +53,7 @@ pub(crate) mod sync_worktree;
 pub(crate) mod updates;
 
 #[cfg(test)]
-#[path = "../../../tests/e2e/step_executor.rs"]
+#[path = "../../../tests/e2e/step_executor/mod.rs"]
 mod tests;
 
 // ── Core struct ────────────────────────────────────────────────────────────────
