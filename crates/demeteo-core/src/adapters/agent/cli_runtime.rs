@@ -656,10 +656,7 @@ fn drain_lines<R, F>(
                             }
                         }
                     }
-                    let is_terminal = matches!(
-                        evt,
-                        AgentEvent::TurnComplete { .. } | AgentEvent::Error { .. }
-                    );
+                    let is_terminal = evt.ends_turn();
                     if tx.blocking_send(evt).is_err() {
                         return;
                     }

@@ -132,7 +132,7 @@ where
                         produced_artifacts.push(artifact.clone());
                     }
                     AgentEvent::TurnComplete { .. } => break,
-                    AgentEvent::Error { message, code, .. } => {
+                    AgentEvent::Error { message, code, .. } if event.ends_turn() => {
                         let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(message, machine_str, exec).await;
                         // A process that couldn't spawn, died with a
                         // non-zero exit, or whose output stream we lost
@@ -265,3 +265,7 @@ where
         cache_creation_input_tokens: acc.cache_creation_input_tokens(),
     })
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/agent/event_stream.rs"]
+mod tests;

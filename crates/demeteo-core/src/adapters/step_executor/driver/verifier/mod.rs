@@ -493,7 +493,7 @@ impl ExecutionDriver {
                             text_buffer.push_str(delta);
                         }
                         AgentEvent::TurnComplete { .. } => break,
-                        AgentEvent::Error { message, .. } => {
+                        AgentEvent::Error { message, .. } if event.ends_turn() => {
                             run_failed = Some(format!("Verifier agent error: {}", message));
                             break;
                         }

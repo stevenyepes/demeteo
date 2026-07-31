@@ -151,6 +151,71 @@ fn drain_lines_stops_at_terminal_event_even_if_more_data_pending() {
     assert!(matches!(&events[1], AgentEvent::TurnComplete { .. }));
 }
 
+/// Like [`mock_parse_event`], but `warning` lines produce a **recoverable**
+/// error — codex's shape, where a runtime warning has no channel of its own
+/// and rides the same non-fatal error item as a real per-item failure.
+fn mock_parse_event_with_warnings(line: &str) -> Option<AgentEvent> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    if v.get("type").and_then(|t| t.as_str()) != Some("warning") {
+        return mock_parse_event(line);
+    }
+    Some(AgentEvent::Error {
+        code: "item_error".to_string(),
+        message: v
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("warning")
+            .to_string(),
+        recoverable: true,
+        usage: None,
+    })
+}
+
+#[test]
+fn drain_lines_keeps_reading_past_a_recoverable_error() {
+    // A codex turn that hit its own backpressure mid-flight. The warning is
+    // surfaced, but the turn is still running: truncating here dropped the
+    // real result and reported "Resolver failed. in-process app-server event
+    // stream lagged; dropped 13 events" while the agent was still working.
+    let full = br#"{"type":"text","delta":"before"}
+{"type":"warning","message":"in-process app-server event stream lagged; dropped 13 events"}
+{"type":"text","delta":"after"}
+{"type":"end_turn"}
+"#;
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
+    std::thread::spawn(move || {
+        drain_lines(
+            Cursor::new(full.to_vec()),
+            mock_parse_event_with_warnings,
+            || Some(0),
+            tx,
+            None,
+            None,
+        );
+    });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let events = rt.block_on(async {
+        let mut events = Vec::new();
+        while let Some(e) = rx.recv().await {
+            events.push(e);
+        }
+        events
+    });
+
+    assert_eq!(events.len(), 4, "got: {:?}", events);
+    assert!(matches!(&events[0], AgentEvent::Text { delta } if delta == "before"));
+    assert!(matches!(&events[1], AgentEvent::Error { recoverable, .. } if *recoverable));
+    assert!(
+        matches!(&events[2], AgentEvent::Text { delta } if delta == "after"),
+        "everything after the warning was truncated: {:?}",
+        events
+    );
+    assert!(matches!(&events[3], AgentEvent::TurnComplete { .. }));
+}
+
 /// A reader that yields some data, then fails with a read error — the shape
 /// of the remote SSH stream when the transport drops mid-turn.
 struct FailingReader {
