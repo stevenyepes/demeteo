@@ -28,9 +28,9 @@ import {
   TerminalPanelProvider,
   UIStateProvider,
   useNavigation,
-} from '../context';
+} from '../../context';
 import { FeatureDetail } from './FeatureDetail';
-import type { StepExecution } from '../types';
+import type { StepExecution } from '../../types';
 
 vi.mock('react-markdown', () => ({
   default: ({ children }: { children?: ReactNode }) => (
