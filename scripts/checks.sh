@@ -6,9 +6,10 @@
 #
 # It exists because "cargo test passes" is not the same as "CI is green": CI
 # also enforces `clippy -D warnings` (on the pinned toolchain, see
-# rust-toolchain.toml), `fmt --check`, `tsc --noEmit`, the Vitest frontend
-# suite, and commitlint on the commit range. Running the real gates locally is
-# the only reliable way to avoid the "passed here, failed in CI" round trip.
+# rust-toolchain.toml), `fmt --check`, `tsc --noEmit`, Biome, the Vitest
+# frontend suite, and commitlint on the commit range. Running the real gates
+# locally is the only reliable way to avoid the "passed here, failed in CI"
+# round trip.
 #
 # Usage:
 #   scripts/checks.sh                 # run every gate, including commitlint
@@ -40,6 +41,14 @@ step() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 
 step "TypeScript type-check (tsc --noEmit)"
 npx tsc --noEmit
+
+# The frontend counterpart to `check-doc-refs.sh`: the AGENTS.md §3 rules a
+# compiler cannot see. Chief among them, `noRestrictedImports` denies
+# `@tauri-apps/api/core` under components/, hooks/ and context/, so "never
+# invoke() raw in a component" is enforced rather than reviewed. biome.jsonc
+# keeps everything else advisory — only an error fails this gate.
+step "Frontend lint (biome check)"
+npx --no-install biome check .
 
 step "Frontend tests (vitest run)"
 npx vitest run
