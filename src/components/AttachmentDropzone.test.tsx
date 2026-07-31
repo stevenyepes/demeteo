@@ -107,6 +107,41 @@ beforeEach(() => {
 });
 
 describe("AttachmentDropzone paste behavior", () => {
+  it("stages an image exposed only through the async clipboard after WebKitGTK supplies empty paste items", async () => {
+    // WebKitGTK bug 218519 can dispatch a real paste gesture with no
+    // DataTransfer items even though the clipboard contains image/png.
+    // The async Clipboard API remains the only browser-visible byte source.
+    const clipboardRead = vi.fn().mockResolvedValue([
+      {
+        types: ["image/png"],
+        getType: vi.fn().mockResolvedValue(new Blob(["png bytes"], { type: "image/png" })),
+      },
+    ]);
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { read: clipboardRead },
+    });
+    try {
+      const onStage = vi.fn();
+      render(<LaunchHarness onStage={onStage} />);
+
+      paste([]);
+
+      await waitFor(() => expect(clipboardRead).toHaveBeenCalledTimes(1));
+      expect(onStage).toHaveBeenCalledTimes(1);
+      expect(onStage.mock.calls[0][0][0]).toEqual(
+        expect.objectContaining({ mime: "image/png", size: 9 }),
+      );
+    } finally {
+      if (previousClipboard) {
+        Object.defineProperty(navigator, "clipboard", previousClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+    }
+  });
+
   it("prevents a single supported image paste and ingests the file", async () => {
     const file = imageFile("screen.png");
     vi.mocked(invoke).mockResolvedValue(directAttachment("at-one", file));
