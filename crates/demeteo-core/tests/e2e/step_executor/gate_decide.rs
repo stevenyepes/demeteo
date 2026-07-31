@@ -248,7 +248,13 @@ async fn test_executor_gate_decide() {
         .await;
     assert!(decide_res.is_ok());
 
-    let decision = waiter.wait().await.expect("waiter should deliver");
+    // Bounded: `wait()` has no deadline of its own, so a `deliver` that never
+    // fires used to hang this test until CI killed the whole job — a job
+    // timeout names no test, and the one that broke is the one you cannot see.
+    let decision = tokio::time::timeout(std::time::Duration::from_secs(10), waiter.wait())
+        .await
+        .expect("gate decision was never delivered")
+        .expect("waiter should deliver");
     assert_eq!(decision.decision.as_deref(), Some("approve"));
     assert_eq!(decision.feedback.as_deref(), Some("looks good"));
 
