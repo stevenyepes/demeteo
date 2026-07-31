@@ -50,7 +50,10 @@ impl ExecutionDriver {
             .full_log_artifacts()
             .into_iter()
             .filter_map(|artifact| {
-                let name = artifact.name.strip_prefix("harness-").unwrap_or(&artifact.name);
+                let name = artifact
+                    .name
+                    .strip_prefix("harness-")
+                    .unwrap_or(&artifact.name);
                 match self
                     .artifacts
                     .put(&self.f_id_str, &step_exec.step_id.0, &artifact)
