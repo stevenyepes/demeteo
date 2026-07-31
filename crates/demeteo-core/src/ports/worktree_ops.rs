@@ -71,6 +71,20 @@ pub trait WorktreeOpsPort: Send + Sync {
         repo_dir: &str,
     ) -> Result<Vec<WorktreeInfo>, String>;
 
+    /// Create a user-requested linked worktree without altering or reclaiming
+    /// any existing worktree state.
+    ///
+    /// This creates a **new** branch from the current primary-checkout HEAD.
+    /// Supplying a branch that already exists is an error; implementations
+    /// must not reuse, reset, or check out that branch in a new worktree.
+    async fn create_terminal_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        branch: &str,
+        worktree_name: &str,
+    ) -> Result<WorktreeInfo, String>;
+
     /// Detect the worktree strategy and return it.
     async fn detect_worktree_strategy(
         &self,

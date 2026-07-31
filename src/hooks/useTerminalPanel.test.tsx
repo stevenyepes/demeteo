@@ -86,6 +86,7 @@ describe('useTerminalPanel — open()', () => {
     expect(starts).toHaveLength(1);
     expect(starts[0][1]).toMatchObject({
       machineId: 'local',
+      workDir: '/tmp/repo',
       workBranch: null,
     });
     expect(commandsOf('resolve_repo_dir')).toHaveLength(1);
@@ -679,7 +680,7 @@ describe('useTerminalPanel — default title', () => {
 });
 
 describe('useTerminalPanel — workDir bypass', () => {
-  it('uses the explicit workDir verbatim and skips resolve_repo_dir (feature worktrees)', async () => {
+  it('preserves an explicit worktree target in identity and start arguments', async () => {
     const h = mountHarness();
 
     await act(async () => {
@@ -687,7 +688,9 @@ describe('useTerminalPanel — workDir bypass', () => {
         machineId: 'local',
         machineLabel: 'local',
         projectId: 'p1',
+        repoPath: 'main-repository',
         workDir: '/srv/workspaces/demeteo-wt-abc123',
+        workBranch: 'feature/terminal-worktree',
       });
     });
 
@@ -696,8 +699,65 @@ describe('useTerminalPanel — workDir bypass', () => {
     expect(starts[0][1]).toMatchObject({
       machineId: 'local',
       workDir: '/srv/workspaces/demeteo-wt-abc123',
+      workBranch: 'feature/terminal-worktree',
     });
     expect(commandsOf('resolve_repo_dir')).toHaveLength(0);
+    expect(h.panel.state.tabs[0]).toMatchObject({
+      repoPath: '/srv/workspaces/demeteo-wt-abc123',
+      workBranch: 'feature/terminal-worktree',
+    });
+
+    await act(async () => {
+      await h.panel.open({
+        machineId: 'local',
+        machineLabel: 'local',
+        projectId: 'p1',
+        repoPath: 'a-different-main-repository-label',
+        workDir: '/srv/workspaces/demeteo-wt-abc123',
+        workBranch: 'feature/terminal-worktree',
+      });
+    });
+
+    expect(commandsOf('start_terminal_session')).toHaveLength(1);
+    expect(h.panel.state.tabs).toHaveLength(1);
+  });
+
+  it('keeps explicit forceNew opens distinct and starts before writing an agent command', async () => {
+    const h = mountHarness();
+    const target = {
+      machineId: 'local',
+      machineLabel: 'local',
+      projectId: 'p1',
+      workDir: '/srv/workspaces/demeteo-wt-abc123',
+      workBranch: 'feature/terminal-worktree',
+      forceNew: true,
+      launchCommand: 'opencode',
+    };
+
+    await act(async () => {
+      await h.panel.open(target);
+      await h.panel.open(target);
+    });
+
+    const calls = vi.mocked(invoke).mock.calls;
+    const starts = calls
+      .map(([command]) => command)
+      .reduce<number[]>((indices, command, index) => {
+        if (command === 'start_terminal_session') indices.push(index);
+        return indices;
+      }, []);
+    const writes = calls
+      .map(([command]) => command)
+      .reduce<number[]>((indices, command, index) => {
+        if (command === 'write_terminal_session') indices.push(index);
+        return indices;
+      }, []);
+
+    expect(starts).toHaveLength(2);
+    expect(writes).toHaveLength(2);
+    expect(starts[0]).toBeLessThan(writes[0]);
+    expect(starts[1]).toBeLessThan(writes[1]);
+    expect(h.panel.state.tabs).toHaveLength(2);
   });
 });
 

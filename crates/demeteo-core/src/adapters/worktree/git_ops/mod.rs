@@ -76,6 +76,17 @@ impl WorktreeOpsPort for GitOpsHelper {
         self.list_worktrees(machine_id, repo_dir).await
     }
 
+    async fn create_terminal_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        branch: &str,
+        worktree_name: &str,
+    ) -> Result<WorktreeInfo, String> {
+        self.create_terminal_worktree(machine_id, repo_dir, branch, worktree_name)
+            .await
+    }
+
     async fn detect_worktree_strategy(
         &self,
         machine_id: Option<&str>,

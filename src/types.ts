@@ -845,6 +845,21 @@ export interface SessionInfo {
   agent?: string | null;
 }
 
+/** A selectable repository checkout returned by the terminal-worktree API. */
+export interface TerminalWorktree {
+  path: string;
+  branch: string | null;
+  isLocked: boolean;
+}
+
+/** The only caller-controlled inputs for creating a terminal worktree. */
+export interface CreateTerminalWorktreeRequest {
+  projectId: string;
+  repositoryId: string;
+  branch: string;
+  worktreeName: string;
+}
+
 /**
  * What the agent in a terminal is doing right now, layered on top of
  * presence (`agentKind`). Sourced live from the backend activity sweep

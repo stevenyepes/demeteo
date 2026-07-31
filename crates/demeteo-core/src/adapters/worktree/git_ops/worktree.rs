@@ -1,7 +1,7 @@
 use super::GitOpsHelper;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 impl GitOpsHelper {
     /// Get the current HEAD branch for a repo directory
@@ -117,6 +117,41 @@ impl GitOpsHelper {
         }
 
         Ok(worktrees)
+    }
+
+    /// Create a linked worktree for an interactive terminal session.
+    ///
+    /// Unlike subtask provisioning, this path never removes an existing
+    /// worktree, resets a branch, or falls back to an existing branch. `git
+    /// worktree add -b` creates the requested branch from the current
+    /// primary-checkout HEAD; an existing requested branch is rejected rather
+    /// than reused. The caller owns both names, so a collision is an error the
+    /// user must resolve rather than stale pipeline state to reclaim.
+    pub async fn create_terminal_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        branch: &str,
+        worktree_name: &str,
+    ) -> Result<WorktreeInfo, String> {
+        validate_terminal_branch(branch)?;
+        let destination = terminal_worktree_dir(repo_dir, worktree_name)?;
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let command = terminal_worktree_create_cmd(repo_dir, branch, &destination)?;
+        self.exec
+            .run_command(machine_str, &command)
+            .await
+            .map_err(|e| {
+                format!(
+                    "create_terminal_worktree: git worktree add for branch '{branch}' failed: {e}"
+                )
+            })?;
+
+        Ok(WorktreeInfo {
+            path: destination,
+            branch: Some(branch.to_string()),
+            is_locked: false,
+        })
     }
 
     /// Create a feature branch off the default branch in the main repo.
@@ -801,6 +836,158 @@ impl GitOpsHelper {
 /// silently misses its target, so it is written once.
 fn worktree_dir(repo_dir: &str, worktree_id: &str) -> String {
     format!("{}_wt_{}", repo_dir, worktree_id)
+}
+
+/// Resolve a terminal worktree beneath a directory controlled by Demeteo, not
+/// by the interactive caller. A relative name may contain normal path
+/// components, but it may never select the repository root, an absolute path,
+/// or an ancestor of that directory.
+fn terminal_worktree_dir(repo_dir: &str, worktree_name: &str) -> Result<String, String> {
+    let name = Path::new(worktree_name);
+    if worktree_name.trim().is_empty()
+        || name.is_absolute()
+        // A remote repository may use POSIX paths while the desktop host is
+        // Windows (or vice versa), so reject the other platform's absolute
+        // path forms instead of trusting this host's `Path` parser alone.
+        || worktree_name.contains('\\')
+        || worktree_name.contains(':')
+        || name.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
+                    | Component::CurDir
+            )
+        })
+    {
+        return Err("create_terminal_worktree: worktree name must be a non-empty relative path without traversal".to_string());
+    }
+
+    let worktree_area = terminal_worktree_area(repo_dir)?;
+    let destination: PathBuf = worktree_area.join(name);
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+fn terminal_worktree_area(repo_dir: &str) -> Result<PathBuf, String> {
+    let repo = Path::new(repo_dir);
+    let parent = repo.parent().ok_or_else(|| {
+        "create_terminal_worktree: repository path has no trusted parent directory".to_string()
+    })?;
+    let repo_name = repo.file_name().ok_or_else(|| {
+        "create_terminal_worktree: repository path has no directory name".to_string()
+    })?;
+    Ok(parent.join(format!(
+        ".{}.demeteo-terminal-worktrees",
+        repo_name.to_string_lossy()
+    )))
+}
+
+/// Build the one target-machine transaction used to prepare a terminal
+/// worktree destination and add it to Git.
+///
+/// The worktree area and every requested parent are created one component at
+/// a time. `mkdir -p` is deliberately not used: it silently follows a
+/// symlink. Starting at the repository's retained sibling directory, this
+/// flow checks and then enters every component relative to its current working
+/// directory. It also compares the physical directory after every `cd` with
+/// the expected child. Once the final parent is entered, Git receives only the
+/// destination basename, so a later rename-and-symlink substitution cannot
+/// redirect it by causing another pathname resolution of that parent.
+fn terminal_worktree_create_cmd(
+    repo_dir: &str,
+    branch: &str,
+    destination: &str,
+) -> Result<String, String> {
+    let destination_path = Path::new(destination);
+    let area = terminal_worktree_area(repo_dir)?;
+    let parent = destination_path.parent().ok_or_else(|| {
+        "create_terminal_worktree: destination has no parent directory".to_string()
+    })?;
+    let area_parent = area.parent().ok_or_else(|| {
+        "create_terminal_worktree: controlled area has no parent directory".to_string()
+    })?;
+
+    let mut directories: Vec<&Path> = parent
+        .ancestors()
+        .take_while(|candidate| *candidate != area_parent)
+        .collect();
+    directories.reverse();
+    if directories.first().copied() != Some(area.as_path()) {
+        return Err("create_terminal_worktree: destination escaped controlled area".to_string());
+    }
+
+    let trusted_parent = paths::shell_escape_posix(&area_parent.to_string_lossy());
+    let prepare = directories
+        .iter()
+        .map(|directory| {
+            let component = directory.file_name().ok_or_else(|| {
+                "create_terminal_worktree: controlled parent has no directory name".to_string()
+            })?;
+            let component = paths::shell_escape_posix(&component.to_string_lossy());
+            Ok(format!(
+                "if [ -L ./{component} ]; then echo 'terminal worktree parent is a symlink' >&2; exit 1; fi; \\
+                 if [ -e ./{component} ]; then [ -d ./{component} ] || {{ echo 'terminal worktree parent is not a directory' >&2; exit 1; }}; \\
+                 else mkdir ./{component}; fi; \\
+                 [ ! -L ./{component} ] && [ -d ./{component} ] || {{ echo 'terminal worktree parent changed during creation' >&2; exit 1; }}; \\
+                 expected_child=\"${{expected_parent}}\"/{component}; cd ./{component}; actual_parent=$(pwd -P); \\
+                 [ \"$actual_parent\" = \"$expected_child\" ] || {{ echo 'terminal worktree parent changed during creation' >&2; exit 1; }}; \\
+                 expected_parent=$actual_parent"
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?
+        .join("; ");
+    let destination_name = destination_path
+        .file_name()
+        .ok_or_else(|| "create_terminal_worktree: destination has no directory name".to_string())?;
+    let destination_name = paths::shell_escape_posix(&destination_name.to_string_lossy());
+    let git_dir = paths::shell_escape_posix(&format!("{repo_dir}/.git"));
+    let work_tree = paths::shell_escape_posix(repo_dir);
+    let branch = paths::shell_escape_posix(branch);
+
+    // This deterministic rendezvous exists only in the in-crate infrastructure
+    // test. It lets that test replace the pathname after validation but before
+    // Git is invoked, without adding a production hook or weakening the
+    // transport-neutral ExecutionPort boundary.
+    #[cfg(test)]
+    let synchronization = "if [ -n \"${DEMETEO_TERMINAL_WORKTREE_TEST_READY:-}\" ]; then : > \"$DEMETEO_TERMINAL_WORKTREE_TEST_READY\"; while [ ! -e \"$DEMETEO_TERMINAL_WORKTREE_TEST_RELEASE\" ]; do sleep 0.01; done; fi; ";
+    #[cfg(not(test))]
+    let synchronization = "";
+
+    Ok(format!(
+        "set -eu; cd {trusted_parent}; expected_parent=$(pwd -P); {prepare}; \\
+         {synchronization}if [ -e ./{destination_name} ] || [ -L ./{destination_name} ]; then echo 'terminal worktree destination already exists' >&2; exit 1; fi; \\
+         git --git-dir={git_dir} --work-tree={work_tree} worktree add -b {branch} ./{destination_name}",
+    ))
+}
+
+/// Validate the user branch before it is handed to Git. This is the
+/// `check-ref-format --branch` safety subset: it rejects ambiguous refs and
+/// command-like names while allowing ordinary slash-separated branch names.
+fn validate_terminal_branch(branch: &str) -> Result<(), String> {
+    let invalid = branch.is_empty()
+        || branch == "@"
+        || branch.starts_with('-')
+        || branch.starts_with('/')
+        || branch.ends_with('/')
+        || branch.ends_with('.')
+        || branch.contains("..")
+        || branch.contains("@{")
+        || branch.contains("//")
+        || branch.chars().any(|character| {
+            character.is_ascii_control()
+                || character.is_whitespace()
+                || matches!(character, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+        })
+        || branch
+            .split('/')
+            .any(|component| component.starts_with('.') || component.ends_with(".lock"));
+    if invalid {
+        return Err(format!(
+            "create_terminal_worktree: branch '{branch}' is not a safe Git branch name"
+        ));
+    }
+    Ok(())
 }
 
 /// Build the shell command that symlinks each entry in

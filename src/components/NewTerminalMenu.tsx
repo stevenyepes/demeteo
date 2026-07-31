@@ -6,13 +6,10 @@ import {
   ChevronRight,
   Sparkles,
   Search,
-  GitBranch,
-  House,
-  Check,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
-import type { Machine, Feature } from '../types';
+import type { Machine } from '../types';
 import { useTerminalPanel } from '../hooks/useTerminalPanel';
 import { useProject } from '../context/ProjectContext';
 import { AGENTS, agentLabel, defaultAgentKinds, type AgentMeta } from '../lib/agents';
@@ -22,7 +19,12 @@ import {
   RECENTS_SHOWN,
   type TerminalRecent,
 } from '../lib/terminalRecents';
+import { formatError } from '../lib/errors';
 import { MachineDot } from './ui/MachineDot';
+import {
+  TerminalWorktreeLocationPicker,
+  type TerminalWorktreeLocation,
+} from './TerminalWorktreeLocationPicker';
 
 /** One openable target: a machine plus the coding agents it offers. */
 interface MachineTarget {
@@ -32,14 +34,6 @@ interface MachineTarget {
   sublabel: string;
   local: boolean;
   agents: AgentMeta[];
-}
-
-/** Wire shape of `feature_get_worktree` / `remote_get_worktree`. */
-interface FeatureWorktree {
-  machine_id: string;
-  worktree_path: string;
-  branch: string;
-  default_branch: string;
 }
 
 /** Resolve the enabled, known agents for a machine from its stored `agents`
@@ -105,12 +99,9 @@ export interface NewTerminalMenuProps {
  *   • a two-pane machine → runtime picker (rail scrolls machines, right pane
  *     lists that machine's runtimes once) with a search field on top.
  *
- * The right pane also carries an "Open in" location switch: for the current
- * project's machine it lists the project's live feature branches, so a shell
- * or agent can start inside a feature's worktree checkout rather than the
- * machine's default directory. A feature's machine + path + branch resolve
- * lazily at launch via `feature_get_worktree`, which is also the guard that
- * the branch still exists — a resolution failure aborts the open.
+ * The right pane also carries the shared terminal worktree picker for the
+ * current project's repository. It exposes the primary checkout, existing
+ * linked worktrees, and creation through the same typed API as Project Home.
  *
  * Every open uses `forceNew` so the launcher can stack multiple sessions on
  * the same machine. Absorbs the agent-config loading the retired
@@ -128,9 +119,11 @@ export function NewTerminalMenu({
     () => projectState.projects.find((p) => p.id === currentProjectId) ?? null,
     [projectState.projects, currentProjectId],
   );
-  /** The one machine the current project's worktrees live on — the only
-   *  machine that can host a feature checkout. */
+  /** The one machine the current project's repositories live on. */
   const projectMachineId = currentProject ? currentProject.remote_host || 'local' : null;
+  const projectRepository = currentProjectId
+    ? projectState.reposByProject[currentProjectId]?.[0] ?? null
+    : null;
 
   const [openMenu, setOpenMenu] = useState(false);
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -141,10 +134,11 @@ export function NewTerminalMenu({
   const [query, setQuery] = useState('');
   const [activeMachineId, setActiveMachineId] = useState('local');
   const [recents, setRecents] = useState<TerminalRecent[]>([]);
-  const [features, setFeatures] = useState<Feature[]>([]);
-  /** Selected feature checkout to launch into; null = machine default dir. */
-  const [locationFeatureId, setLocationFeatureId] = useState<string | null>(null);
-  const [locationMenuOpen, setLocationMenuOpen] = useState(false);
+  const [location, setLocation] = useState<TerminalWorktreeLocation | null>(null);
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const launchingRef = useRef(false);
+  const locationTargetRef = useRef(`${currentProjectId ?? ''}:${projectRepository?.id ?? ''}`);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -184,32 +178,6 @@ export function NewTerminalMenu({
     };
   }, [openMenu]);
 
-  // Load the current project's live feature branches each time the menu opens
-  // (active features change as pipelines run, so this stays fresh rather than
-  // caching). Only active features are offered — they're the ones with a live
-  // worktree; a merged/cleaned branch is never "active".
-  useEffect(() => {
-    if (!openMenu || !currentProjectId) {
-      setFeatures([]);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list =
-          (await invoke<Feature[]>('fetch_active_features', {
-            projectId: currentProjectId,
-          })) || [];
-        if (!cancelled) setFeatures(list);
-      } catch {
-        if (!cancelled) setFeatures([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [openMenu, currentProjectId]);
-
   const targets = useMemo<MachineTarget[]>(() => {
     const local: MachineTarget = {
       machineId: 'local',
@@ -244,15 +212,14 @@ export function NewTerminalMenu({
     [filteredTargets, activeMachineId],
   );
 
-  // Feature checkouts are only openable on the machine their worktree lives
-  // on — the current project's machine. On any other machine the "Open in"
-  // switch is hidden and launches use the default directory.
+  // Project repository worktrees are only openable on their project's machine.
   const showLocationSwitch =
-    !!activeTarget && activeTarget.machineId === projectMachineId && features.length > 0;
-  const selectedFeature = useMemo(
-    () => features.find((f) => f.id === locationFeatureId) ?? null,
-    [features, locationFeatureId],
-  );
+    !!activeTarget && activeTarget.machineId === projectMachineId && !!projectRepository;
+  // The split button always targets local. When local is the current
+  // project's machine, it must enter the same explicit location flow as the
+  // menu rather than silently opening the primary checkout.
+  const primaryRequiresLocationSelection =
+    projectMachineId === 'local' && !!projectRepository && !!currentProjectId;
 
   // Recent launches resolved against the *live* machine list: drop any whose
   // machine no longer exists, and refresh the label so a rename shows through.
@@ -283,18 +250,28 @@ export function NewTerminalMenu({
     setRecents(loadRecents());
     setQuery('');
     setActiveMachineId('local');
-    setLocationFeatureId(null);
-    setLocationMenuOpen(false);
+    setError(null);
   }, [openMenu]);
 
-  // A feature checkout is bound to its machine, so moving off that machine
-  // clears the selection — you can't check a branch out where it doesn't live.
+  // A project checkout is bound to its machine, so moving off that machine
+  // clears the selection — it must never be opened on another host.
   useEffect(() => {
     if (!showLocationSwitch) {
-      setLocationFeatureId(null);
-      setLocationMenuOpen(false);
+      setLocation(null);
+      setError(null);
     }
   }, [showLocationSwitch]);
+
+  // A launch failure belongs to one repository selection. Do not leave it
+  // visible after the current project changes while remaining on local (or
+  // after a repository refresh replaces the selected checkout).
+  useEffect(() => {
+    const target = `${currentProjectId ?? ''}:${projectRepository?.id ?? ''}`;
+    if (locationTargetRef.current === target) return;
+    locationTargetRef.current = target;
+    setLocation(null);
+    setError(null);
+  }, [currentProjectId, projectRepository?.id]);
 
   // While open: close on an outside click or Escape, and move focus into the
   // search field so keyboard users can type-to-filter straight away.
@@ -324,24 +301,24 @@ export function NewTerminalMenu({
   }, [openMenu]);
 
   const launch = useCallback(
-    async (target: MachineTarget, agent?: AgentMeta, feature?: Feature | null) => {
-      if (launching) return;
+    async (target: MachineTarget, agent?: AgentMeta) => {
+      if (launchingRef.current || locationBusy) return;
+      // A project checkout is never an implicit target. This also protects
+      // Enter from the search field if the disabled action has not yet painted.
+      if (showLocationSwitch && !location) return;
+      launchingRef.current = true;
       setLaunching(true);
       setOpenMenu(false);
+      setError(null);
       try {
-        if (feature) {
-          // Resolve the worktree at launch time — the machine, path, and
-          // branch all come from here, and a failure (branch/worktree gone)
-          // aborts the open rather than dropping the user in the wrong dir.
-          const info = await invoke<FeatureWorktree>('feature_get_worktree', {
-            featureId: feature.id,
-          });
+        if (showLocationSwitch && location && projectRepository && currentProjectId) {
           await open({
-            machineId: info.machine_id,
+            machineId: target.machineId,
             machineLabel: target.machineLabel,
-            projectId: currentProjectId ?? undefined,
-            workDir: info.worktree_path,
-            workBranch: info.branch,
+            projectId: currentProjectId,
+            repoPath: projectRepository.repo_path,
+            workDir: location.workDir ?? undefined,
+            workBranch: location.workBranch,
             forceNew: true,
             launchCommand: agent?.binary,
             agentKind: agent?.kind ?? null,
@@ -367,15 +344,23 @@ export function NewTerminalMenu({
         }
       } catch (err) {
         console.warn('[NewTerminalMenu] open failed:', err);
+        setError(formatError(err));
       } finally {
+        launchingRef.current = false;
         setLaunching(false);
       }
     },
-    [launching, open, currentProjectId],
+    [locationBusy, showLocationSwitch, location, projectRepository, currentProjectId, open],
   );
 
-  // Primary split-button action: a bare shell on the local host, no menu.
+  // Primary split-button action: preserve one-click machine-root launches,
+  // except when local is the active project's machine. That checkout needs a
+  // deliberate main/worktree choice, so reveal the shared chooser instead.
   const launchLocalShell = useCallback(() => {
+    if (primaryRequiresLocationSelection) {
+      setOpenMenu(true);
+      return;
+    }
     void launch({
       machineId: 'local',
       machineLabel: 'local',
@@ -383,7 +368,7 @@ export function NewTerminalMenu({
       local: true,
       agents: localAgents,
     });
-  }, [launch, localAgents]);
+  }, [launch, localAgents, primaryRequiresLocationSelection]);
 
   // Arrow keys move the highlighted machine within the rail; Enter from the
   // search field launches a shell on it (honoring the selected location).
@@ -393,7 +378,7 @@ export function NewTerminalMenu({
     (e: React.KeyboardEvent) => {
       if (e.key === 'Enter' && e.target === searchRef.current && activeTarget) {
         e.preventDefault();
-        void launch(activeTarget, undefined, showLocationSwitch ? selectedFeature : null);
+        void launch(activeTarget);
         return;
       }
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -407,7 +392,7 @@ export function NewTerminalMenu({
       );
       setActiveMachineId(filteredTargets[nextIdx].machineId);
     },
-    [filteredTargets, activeTarget, launch, selectedFeature, showLocationSwitch],
+    [filteredTargets, activeTarget, launch],
   );
 
   return (
@@ -431,7 +416,7 @@ export function NewTerminalMenu({
           onClick={() => setOpenMenu((v) => !v)}
           disabled={launching}
           className="flex items-center px-1.5 py-1 rounded-r-md text-[11px] font-mono border border-white/10 bg-white/5 text-slate-300 hover:bg-cyan-500/15 hover:border-cyan-500/40 hover:text-cyan-300 transition disabled:opacity-40"
-          title="More — pick a machine, agent, or feature checkout"
+          title="More — pick a machine, agent, or terminal location"
           aria-haspopup="menu"
           aria-expanded={openMenu}
           data-testid="new-terminal-caret"
@@ -566,85 +551,27 @@ export function NewTerminalMenu({
                     </span>
                   </div>
 
-                  {/* "Open in" location switch — machine default dir, or one of
-                      the current project's live feature checkouts. */}
+                  {/* The global launcher shares Project Home's typed terminal
+                      location selection instead of maintaining feature-only
+                      worktree state. */}
                   {showLocationSwitch && (
                     <div className="mx-1 mb-1.5" data-testid="new-terminal-location">
-                      <button
-                        type="button"
-                        onClick={() => setLocationMenuOpen((v) => !v)}
-                        className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-[11px] font-mono border border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] transition"
-                        aria-expanded={locationMenuOpen}
-                        title="Choose where the shell or agent starts"
-                      >
-                        <span className="text-[9px] uppercase tracking-wide text-slate-500 shrink-0">
-                          Open in
-                        </span>
-                        {selectedFeature ? (
-                          <GitBranch className="w-3 h-3 text-violet-400 shrink-0" />
-                        ) : (
-                          <House className="w-3 h-3 text-slate-400 shrink-0" />
-                        )}
-                        <span className="truncate flex-1 text-left">
-                          {selectedFeature ? selectedFeature.title || 'Untitled feature' : 'Home directory'}
-                        </span>
-                        <ChevronDown
-                          className={`w-3 h-3 opacity-70 shrink-0 transition-transform ${
-                            locationMenuOpen ? 'rotate-180' : ''
-                          }`}
-                        />
-                      </button>
-
-                      {locationMenuOpen && (
-                        <div className="mt-1 rounded-md border border-white/10 bg-[#0e0f15] p-1 max-h-[168px] overflow-y-auto">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setLocationFeatureId(null);
-                              setLocationMenuOpen(false);
-                            }}
-                            className="w-full flex items-center gap-2 rounded px-2 py-1.5 text-[11px] font-mono text-left text-slate-300 hover:bg-white/5 transition"
-                          >
-                            <House className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span className="flex-1">Home directory</span>
-                            {!selectedFeature && <Check className="w-3 h-3 text-cyan-400 shrink-0" />}
-                          </button>
-                          <div className="my-1 mx-1 border-t border-white/[0.06]" />
-                          <div className="px-2 pb-1 text-[8.5px] font-mono uppercase tracking-[0.16em] text-slate-600">
-                            Feature checkouts
-                          </div>
-                          {features.map((f) => (
-                            <button
-                              key={f.id}
-                              type="button"
-                              onClick={() => {
-                                setLocationFeatureId(f.id);
-                                setLocationMenuOpen(false);
-                              }}
-                              className="w-full flex items-center gap-2 rounded px-2 py-1.5 text-[11px] font-mono text-left text-slate-300 hover:bg-violet-500/10 hover:text-violet-200 transition"
-                              title={`Start in ${f.title || 'this feature'}'s checkout`}
-                            >
-                              <GitBranch className="w-3 h-3 text-violet-400 shrink-0" />
-                              <span className="flex-1 truncate">{f.title || 'Untitled feature'}</span>
-                              {f.agent_kind && (
-                                <span className="text-[9px] text-slate-500 shrink-0">
-                                  {agentLabel(f.agent_kind)}
-                                </span>
-                              )}
-                              {locationFeatureId === f.id && (
-                                <Check className="w-3 h-3 text-cyan-400 shrink-0" />
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                      <TerminalWorktreeLocationPicker
+                        projectId={currentProjectId ?? ''}
+                        repositoryId={projectRepository?.id ?? ''}
+                        onChange={setLocation}
+                        requireSelection
+                        onBusyChange={setLocationBusy}
+                        disabled={launching}
+                      />
                     </div>
                   )}
 
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => void launch(activeTarget, undefined, selectedFeature)}
+                    onClick={() => void launch(activeTarget)}
+                    disabled={launching || locationBusy || (showLocationSwitch && !location)}
                     className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-cyan-500/15 hover:text-cyan-200 transition"
                     title={`Open a shell on ${activeTarget.machineLabel}`}
                   >
@@ -664,7 +591,8 @@ export function NewTerminalMenu({
                       key={agent.kind}
                       type="button"
                       role="menuitem"
-                      onClick={() => void launch(activeTarget, agent, selectedFeature)}
+                      onClick={() => void launch(activeTarget, agent)}
+                      disabled={launching || locationBusy || (showLocationSwitch && !location)}
                       className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-violet-500/15 hover:text-violet-200 transition"
                       title={`Run ${agent.binary} in a new terminal on ${activeTarget.machineLabel}`}
                     >
@@ -712,6 +640,11 @@ export function NewTerminalMenu({
             </div>
           );
         })()}
+      {error && (
+        <div className="absolute left-0 top-full z-30 mt-1.5 max-w-xs rounded border border-ruby-500/30 bg-ruby-500/10 px-2 py-1.5 text-[11px] font-mono text-ruby-300" data-testid="new-terminal-error">
+          {error}
+        </div>
+      )}
     </div>
   );
 }

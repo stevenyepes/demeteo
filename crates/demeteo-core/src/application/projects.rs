@@ -1,5 +1,5 @@
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
-use crate::domain::models::{Project, RepoHealthStatus, Repository};
+use crate::domain::models::{Project, RepoHealthStatus, Repository, WorktreeInfo};
 use crate::paths;
 use crate::state::AppContext;
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,95 @@ pub async fn resolve_target_dir(
         )
         .await
     }
+}
+
+/// List the linked worktrees belonging to one repository of a project.
+///
+/// The project and repository IDs are the only authority accepted at this
+/// boundary. Resolving the machine and checkout path here prevents a terminal
+/// caller from directing Git operations to another project or host.
+pub async fn list_terminal_worktrees(
+    ctx: &AppContext,
+    project_id: String,
+    repository_id: String,
+) -> Result<Vec<WorktreeInfo>, String> {
+    let resolved = resolve_terminal_repository(ctx, &project_id, &repository_id).await?;
+    ctx.worktree_ops
+        .list_worktrees(resolved.machine_id.as_deref(), &resolved.repo_dir)
+        .await
+}
+
+/// Create a linked terminal worktree for one repository of a project.
+///
+/// `branch` and `worktree_name` remain untrusted user input; the worktree
+/// adapter validates them before deriving the final destination below the
+/// resolved repository area.
+pub async fn create_terminal_worktree(
+    ctx: &AppContext,
+    project_id: String,
+    repository_id: String,
+    branch: String,
+    worktree_name: String,
+) -> Result<WorktreeInfo, String> {
+    let resolved = resolve_terminal_repository(ctx, &project_id, &repository_id).await?;
+    ctx.worktree_ops
+        .create_terminal_worktree(
+            resolved.machine_id.as_deref(),
+            &resolved.repo_dir,
+            &branch,
+            &worktree_name,
+        )
+        .await
+}
+
+struct ResolvedTerminalRepository {
+    machine_id: Option<String>,
+    repo_dir: String,
+}
+
+/// Resolve trusted terminal-worktree I/O inputs before calling the Git port.
+/// Keeping this policy separate makes the ownership check testable without
+/// constructing an execution driver or allowing command adapters to select a
+/// host/path themselves.
+async fn resolve_terminal_repository(
+    ctx: &AppContext,
+    project_id: &str,
+    repository_id: &str,
+) -> Result<ResolvedTerminalRepository, String> {
+    let project_id_typed = ProjectId::from(project_id.to_string());
+    let project = ctx
+        .projects
+        .get_project(&project_id_typed)?
+        .ok_or_else(|| format!("Project not found: {project_id}"))?;
+    let repository_id_typed = RepositoryId::from(repository_id.to_string());
+    let repository = ctx
+        .projects
+        .get_repositories_for(&project_id_typed)?
+        .into_iter()
+        .find(|repository| repository.id == repository_id_typed)
+        .ok_or_else(|| {
+            format!("Repository {repository_id} does not belong to project {project_id}")
+        })?;
+
+    let machine_id = if project.compute_type.eq_ignore_ascii_case("local") {
+        None
+    } else {
+        Some(
+            project
+                .remote_host
+                .as_ref()
+                .map(|machine| machine.as_str())
+                .filter(|machine| !machine.trim().is_empty())
+                .ok_or_else(|| format!("Remote project {project_id} has no configured machine"))?
+                .to_string(),
+        )
+    };
+    let repo_dir = resolve_target_dir(ctx, &project, project_id, &repository.repo_path).await?;
+
+    Ok(ResolvedTerminalRepository {
+        machine_id,
+        repo_dir,
+    })
 }
 
 pub async fn update(ctx: &AppContext, id: String, config: ProjectConfig) -> Result<(), String> {
@@ -380,3 +469,7 @@ pub async fn health_check(
 
     Ok(results)
 }
+
+#[cfg(test)]
+#[path = "../../tests/application/projects.rs"]
+mod tests;

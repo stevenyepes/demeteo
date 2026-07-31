@@ -1,6 +1,25 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 
-import type { SessionInfo } from "../types";
+import type {
+  CreateTerminalWorktreeRequest,
+  SessionInfo,
+  TerminalWorktree,
+} from "../types";
+
+/** Rust's `WorktreeInfo` IPC shape. Keep this wire detail in this module. */
+interface TerminalWorktreeWire {
+  path: string;
+  branch: string | null;
+  is_locked: boolean;
+}
+
+function toTerminalWorktree(worktree: TerminalWorktreeWire): TerminalWorktree {
+  return {
+    path: worktree.path,
+    branch: worktree.branch,
+    isLocked: worktree.is_locked,
+  };
+}
 
 /**
  * Starts a terminal session on the specified machine.
@@ -116,6 +135,34 @@ export async function resolveRepoDir(
     projectId,
     repoPath,
   });
+}
+
+/** Lists linked worktrees available for a repository owned by a project. */
+export async function listTerminalWorktrees(
+  projectId: string,
+  repositoryId: string,
+): Promise<TerminalWorktree[]> {
+  const worktrees = await invoke<TerminalWorktreeWire[]>("list_terminal_worktrees", {
+    projectId,
+    repositoryId,
+  });
+  return worktrees.map(toTerminalWorktree);
+}
+
+/** Creates a linked worktree using a project-owned repository destination. */
+export async function createTerminalWorktree(
+  request: CreateTerminalWorktreeRequest,
+): Promise<TerminalWorktree> {
+  const worktree = await invoke<TerminalWorktreeWire>(
+    "create_terminal_worktree",
+    {
+      projectId: request.projectId,
+      repositoryId: request.repositoryId,
+      branch: request.branch,
+      worktreeName: request.worktreeName,
+    },
+  );
+  return toTerminalWorktree(worktree);
 }
 
 /**
