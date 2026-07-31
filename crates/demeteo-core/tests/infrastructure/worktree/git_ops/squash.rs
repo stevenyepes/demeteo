@@ -276,3 +276,56 @@ async fn test_validate_commit_message_runs_the_repos_commit_msg_hook() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn test_validate_commit_message_uses_a_linked_worktrees_git_dir() {
+    let (dir, helper) = make_repo("squash_validate_linked_worktree").await;
+    let repo = dir.to_string_lossy().to_string();
+    let worktree = dir.join("linked-worktree");
+    let worktree_path = worktree.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    exec.run_command(
+        "local",
+        &format!(
+            "git -C \"{repo}\" branch validation-worktree && git -C \"{repo}\" worktree add \"{worktree_path}\" validation-worktree"
+        ),
+    )
+    .await
+    .unwrap();
+
+    let hook = format!("{repo}/.git/hooks/commit-msg");
+    exec.write_file(
+        "local",
+        &hook,
+        "#!/bin/sh\ngrep -Eq '^chore: .+' \"$1\" || exit 1\n",
+    )
+    .await
+    .unwrap();
+    exec.run_command("local", &format!("chmod +x \"{hook}\""))
+        .await
+        .unwrap();
+
+    assert!(
+        helper
+            .validate_commit_message(None, &worktree_path, "chore: resolve sync conflicts")
+            .await
+            .is_ok(),
+        "a linked worktree must validate through its real git admin directory"
+    );
+    assert!(
+        helper
+            .validate_commit_message(None, &worktree_path, "not conventional")
+            .await
+            .is_err(),
+        "the hook must still reject invalid messages from a linked worktree"
+    );
+
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" worktree remove --force \"{worktree_path}\""),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}

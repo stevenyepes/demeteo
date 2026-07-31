@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
+use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::paths;
@@ -56,6 +57,7 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub _features: &'a Arc<dyn FeatureRepository>,
     pub agent_exec: &'a Arc<dyn AgentExecutionPort>,
     pub app_settings: &'a Arc<dyn AppSettingsRepository>,
+    pub git_ops: &'a GitOpsHelper,
     pub feature_id: &'a FeatureId,
     pub resolved_cwd: &'a str,
     pub machine_str: &'a str,
@@ -83,6 +85,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         _features,
         agent_exec,
         app_settings,
+        git_ops,
         feature_id,
         resolved_cwd,
         machine_str,
@@ -190,25 +193,77 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         crate::adapters::agent::event_stream::TurnResult::Success(_) => {}
     }
 
-    // Verify the agent actually removed the conflict markers.
+    // The agent's worktree fence deliberately excludes the linked-worktree
+    // index. Demeteo owns staging and committing after the agent resolves
+    // the conflicted content.
+    if let Err(reason) =
+        ensure_conflict_markers_removed(&**exec, machine_str, resolved_cwd, &pre_unmerged).await
+    {
+        let _ = registry.kill(&resolver_thread_id).await;
+        return Err(reason);
+    }
+
+    let conflict_paths = pre_unmerged
+        .iter()
+        .map(|file| paths::shell_escape_posix(&file.path))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if let Err(e) = exec
+        .run_command(
+            machine_str,
+            &format!(
+                "git -C {} add -- {}",
+                paths::shell_escape_posix(resolved_cwd),
+                conflict_paths,
+            ),
+        )
+        .await
+    {
+        let _ = registry.kill(&resolver_thread_id).await;
+        return Err(format!("Failed to stage conflict resolution: {}", e));
+    }
+
+    // Staging turns Git's unmerged index entries into the resolved files;
+    // this is the authoritative completion check, independent of agent kind.
     let still_unmerged = list_unmerged_files(&**exec, machine_str, resolved_cwd).await;
     if !still_unmerged.is_empty() {
         let _ = registry.kill(&resolver_thread_id).await;
-        return Err("Resolver did not remove all conflict markers.".to_string());
+        return Err("Resolver did not resolve every conflicted file.".to_string());
     }
 
-    // Commit the resolution.
+    let message = format!(
+        "chore: resolve sync conflicts with origin/{}",
+        default_branch
+    );
+    if let Err(rejection) = git_ops
+        .validate_commit_message(
+            if machine_str == crate::domain::ids::LOCAL_MACHINE {
+                None
+            } else {
+                Some(machine_str)
+            },
+            resolved_cwd,
+            &message,
+        )
+        .await
+    {
+        let _ = registry.kill(&resolver_thread_id).await;
+        return Err(format!(
+            "The repository's commit-msg hook rejected the sync-resolution commit: {}",
+            rejection.hook_output
+        ));
+    }
+
+    // The hook has already accepted this exact message above, matching the
+    // finalize flow's validate-then-commit split. Avoid rerunning arbitrary
+    // repository hooks after the merge has been staged.
     let commit_resolved = exec
         .run_command(
             machine_str,
             &format!(
-                "git -C {} add -A && {} commit -m {}",
-                paths::shell_escape_posix(resolved_cwd),
+                "{} -c user.email=demeteo@local -c user.name=demeteo commit -m {}",
                 paths::git_no_hooks(resolved_cwd),
-                paths::shell_escape_posix(&format!(
-                    "chore: resolve sync conflicts with origin/{}",
-                    default_branch
-                )),
+                paths::shell_escape_posix(&message),
             ),
         )
         .await;
@@ -251,6 +306,48 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         .unwrap_or_default();
 
     Ok(head_sha)
+}
+
+async fn ensure_conflict_markers_removed(
+    exec: &dyn ExecutionPort,
+    machine_str: &str,
+    worktree: &str,
+    conflict_files: &[crate::domain::models::ConflictFile],
+) -> Result<(), String> {
+    for file in conflict_files {
+        let path = worktree_file_path(machine_str, worktree, &file.path);
+        let content = exec
+            .read_file(machine_str, &path)
+            .await
+            .map_err(|e| format!("Failed to read resolved conflict file {}: {}", file.path, e))?;
+        if has_conflict_marker(&content) {
+            return Err(format!(
+                "Resolver left merge conflict markers in {}.",
+                file.path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn worktree_file_path(machine_str: &str, worktree: &str, relative_path: &str) -> String {
+    if machine_str == crate::domain::ids::LOCAL_MACHINE {
+        return std::path::Path::new(worktree)
+            .join(relative_path)
+            .to_string_lossy()
+            .into_owned();
+    }
+    format!("{}/{}", worktree.trim_end_matches('/'), relative_path)
+}
+
+fn has_conflict_marker(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("<<<<<<<")
+            || trimmed.starts_with("=======")
+            || trimmed.starts_with(">>>>>>>")
+            || trimmed.starts_with("|||||||")
+    })
 }
 
 impl DagStepExecutor {
@@ -391,6 +488,7 @@ impl DagStepExecutor {
             _features: &self.features,
             agent_exec: &self.agent_exec,
             app_settings: &self.app_settings,
+            git_ops: &self.git_ops,
             feature_id: &fid,
             resolved_cwd: &resolved_cwd,
             machine_str: &machine_str,
@@ -517,10 +615,23 @@ fn build_resolver_prompt(
          - Remove all conflict markers.\n\
          - Do NOT modify any other file or any other part of the listed files.\n\
          - When done, run the project's build / test suite to confirm nothing is broken.\n\
-         - Stage your resolution (`git add -A`). Do NOT commit — the tool will commit for you.\n\
+         - Do NOT stage or commit — Demeteo validates, stages, and commits the resolution.\n\
          - Report back with a one-line summary when you're done.",
         default = default_branch,
         feature = feature_branch,
         files = files_list,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_conflict_marker;
+
+    #[test]
+    fn merge_markers_are_rejected_before_demeteo_stages_the_resolution() {
+        assert!(has_conflict_marker(
+            "const value = 1;\n<<<<<<< HEAD\nconst branch = 'feature';\n=======\nconst branch = 'main';\n>>>>>>> origin/master\n"
+        ));
+        assert!(!has_conflict_marker("const value = 1;\n"));
+    }
 }
