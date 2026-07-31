@@ -273,6 +273,56 @@ export type ClipboardImageExtraction =
   | { kind: "unavailable"; mime: string };
 
 /**
+ * Result of the async Clipboard API recovery path. This is deliberately
+ * separate from {@link ClipboardImageExtraction}: callers use it only when a
+ * paste event exposed no items at all (the WebKitGTK 218519 shape).
+ */
+export type AsyncClipboardImageRecovery =
+  | { kind: "recovered"; file: File }
+  | { kind: "unavailable" }
+  | { kind: "denied" }
+  | { kind: "no-bytes" };
+
+/**
+ * Read one supported clipboard image directly from the async Clipboard API.
+ *
+ * This must be called from the paste gesture, after the synchronous
+ * DataTransfer path found no image. It does not broaden the MIME allow-list:
+ * only types in {@link SUPPORTED_CLIPBOARD_IMAGE_MIMES} are requested.
+ */
+export async function recoverClipboardImageFile(): Promise<AsyncClipboardImageRecovery> {
+  const clipboard = navigator.clipboard;
+  if (!clipboard?.read) return { kind: "unavailable" };
+
+  let items: ClipboardItem[];
+  try {
+    items = await clipboard.read();
+  } catch {
+    return { kind: "denied" };
+  }
+
+  for (const item of items) {
+    for (const advertisedType of item.types) {
+      const mime = advertisedType.toLowerCase();
+      if (!SUPPORTED_CLIPBOARD_IMAGE_MIMES.has(mime)) continue;
+      try {
+        const blob = await item.getType(advertisedType);
+        if (blob.size === 0) continue;
+        const extension = mime === "image/jpeg" ? "jpg" : mime.slice("image/".length);
+        return {
+          kind: "recovered",
+          file: new File([blob], `pasted-image.${extension}`, { type: mime }),
+        };
+      } catch {
+        // Another clipboard item may still expose usable bytes.
+      }
+    }
+  }
+
+  return { kind: "no-bytes" };
+}
+
+/**
  * Extract supported clipboard images while preserving the distinction between
  * no supported image and a supported image the browser cannot expose as a
  * `File`. MIME matching and unavailable MIME reporting are lowercase.
