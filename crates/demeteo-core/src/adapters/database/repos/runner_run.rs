@@ -68,7 +68,7 @@ impl RunnerRunPort for SqliteAdapter {
         // in the laptop's return inbox and `get_status`. This column is a
         // laptop-visible sink, so scrub any credential-shaped substring
         // here — the single choke point that also covers the direct
-        // failure-path writers in `rpc.rs` that don't go through
+        // failure-path writers in `rpc/` that don't go through
         // `run::emit`.
         let error = error.map(|e| scrub_secrets(e).into_owned());
         let conn = self.conn.lock()?;

@@ -50,8 +50,8 @@ without interfering with each other. Concretely:
 | `run_id` is client-minted (`laptop-{uuid}`) | `commands/remote_runner.rs` | Globally unique; no cross-client collision |
 | `feature_id` is client-minted (`f-{uuid}`) | `commands/remote_runner.rs` | Unique; laptop & runner share one id |
 | Each run creates its **own project** | `runner/src/run.rs` (`projects::create`) | Separate workspace dir, clone, and settings row per run |
-| One tokio task per run | `runner/src/rpc.rs` (`submit_run` → `tokio::spawn`) | Runner is already structurally concurrent |
-| Credentials / event log / status keyed by `run_id` | `runner/src/{run,rpc}.rs` | Per-run, not global |
+| One tokio task per run | `runner/src/rpc/lifecycle.rs` (`submit_run` → `tokio::spawn`) | Runner is already structurally concurrent |
+| Credentials / event log / status keyed by `run_id` | `runner/src/run.rs`, `runner/src/rpc/` | Per-run, not global |
 | Client **never calls `list_runs`** | verified: only doc-comment references | Reconcile is *mirror-driven*, not enumeration-driven — B has no row for A's run and never polls it |
 
 **Takeaway:** the *happy-path* "A's run isn't reported to B" already holds,
@@ -61,7 +61,7 @@ because each client only reconciles `run_id`s in its own local
 
 ### 2.2 What does NOT isolate (the gaps)
 
-The runner's entire authz model is *"exactly one trusted laptop"* (`rpc.rs`
+The runner's entire authz model is *"exactly one trusted laptop"* (`rpc/mod.rs`
 header + `main.rs::ensure_private_data_dir`: security = `0600` socket + `0700`
 dir, "no *other OS user* can reach it").
 
@@ -207,7 +207,7 @@ project settings; an old client (no `client_id`) still works unchanged.
   `''` (the "legacy/unknown" tenant).
 - **Where:** `crates/demeteo-core/migrations/V26__runner_runs_owner.sql`;
   `ports/runner_run.rs`; the sqlite adapter impl of `RunnerRunPort`;
-  `runner/src/rpc.rs::submit_run` (stamp from the request).
+  `runner/src/rpc/lifecycle.rs::submit_run` (stamp from the request).
 - **Why:** MC-D2 — durable ownership is the enforcement substrate.
 - **DoD:** migration applies idempotently; `get_or_create` round-trips
   `owner_client_id`; legacy rows read back `''`; existing runner tests green.
@@ -218,7 +218,8 @@ project settings; an old client (no `client_id`) still works unchanged.
   Add `fn require_owner(svc, run_id, client_id) -> Result<RunnerRun, String>`
   that loads the run and returns the **"no such run"** error on owner mismatch
   (never distinguishing "exists but not yours" from "absent").
-- **Where:** `crates/demeteo-runner/src/rpc.rs`.
+- **Where:** `crates/demeteo-runner/src/rpc/mod.rs` (dispatch);
+  `crates/demeteo-runner/src/rpc/ownership.rs` (the guard).
 - **Why:** MC-D2/MC-D3 — a single choke point so no method forgets the check, and
   no existence leak.
 - **DoD:** unit tests: owner match → `Ok`; mismatch → same error string as
@@ -231,7 +232,8 @@ project settings; an old client (no `client_id`) still works unchanged.
   `inject_credentials` through `require_owner`. For `decide_gate`, resolve
   `gate_id → step_exec → feature → run` then owner-check (closes the bare-gate
   trust). Filter `list_runs` by `owner_client_id`.
-- **Where:** `crates/demeteo-runner/src/rpc.rs` (each method + `dispatch`).
+- **Where:** `crates/demeteo-runner/src/rpc/` (each method + `dispatch` in
+  `mod.rs`).
 - **Why:** MC-D2 — this is the isolation guarantee, enforced server-side.
 - **DoD:** integration test (in-process runner on a temp socket, two `client_id`s):
   client B gets "no such run" for A's `run_id` on **every** RPC; `list_runs`

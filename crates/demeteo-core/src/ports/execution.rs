@@ -273,7 +273,7 @@ pub trait ExecutionPort: Send + Sync {
     /// listening port, authz inherited from the SSH session. `method` /
     /// `params` / the returned value are the same newline-delimited-JSON
     /// shapes `demeteo-runner`'s RPC server speaks
-    /// (`crates/demeteo-runner/src/rpc.rs`). Local machines have no
+    /// (`crates/demeteo-runner/src/rpc/mod.rs`). Local machines have no
     /// runner (remote runs are Linux-remote-only, R2) and always error.
     async fn control_rpc(
         &self,
