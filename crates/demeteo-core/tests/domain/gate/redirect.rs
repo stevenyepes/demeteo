@@ -1,9 +1,9 @@
-// Regression tests for gate redirect handling.
-// Extracted from `steps/gate.rs` (kept out of the source file per the
-// crate's mirrored-tests convention); `super` resolves to that module.
+// Regression tests for gate redirect handling, kept out of the source file
+// per the crate's mirrored-tests convention; `super` resolves to
+// `domain::gate::redirect`.
 
 use super::*;
-use crate::domain::ids::StepId;
+use crate::domain::models::StepConfig;
 
 fn step(id: &str) -> StepConfig {
     StepConfig {
