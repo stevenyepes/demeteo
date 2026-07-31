@@ -243,7 +243,12 @@ src-tauri/src/
 │   ├── memory_worker.rs
 │   ├── memory_llm.rs
 │   ├── mr_monitor.rs              # background MR-state poller
-│   ├── mr_publisher.rs
+│   ├── mr_publisher/
+│   │   ├── mod.rs
+│   │   ├── github.rs
+│   │   ├── gitlab.rs
+│   │   ├── http.rs                # HttpClient + ReqwestHttp
+│   │   └── push.rs                # token-free origin + GIT_ASKPASS branch push
 │   ├── pricing.rs
 │   ├── provider_http.rs
 │   ├── conflict.rs
