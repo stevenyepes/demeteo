@@ -1,6 +1,20 @@
 use async_trait::async_trait;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 use tokio::sync::watch;
+
+/// Take one of the executor's in-memory lookup maps, surviving a poisoned lock.
+///
+/// `cancel_senders` and `gate_waiters` are registries — one entry per running
+/// feature, one per step execution awaiting a decision. A panic elsewhere
+/// while the lock is held leaves the map itself structurally fine, so
+/// poisoning here is evidence that some other task died, not that this data is
+/// bad. Propagating it would trade one task's panic for a Stop button that can
+/// never fire again and a gate that can never be answered for the rest of the
+/// process's life — which is the worse of the two failures by a wide margin.
+fn lock_registry<T>(map: &Mutex<T>) -> MutexGuard<'_, T> {
+    map.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 use crate::adapters::step_executor::preflight::PREFLIGHT_PROBE_TIMEOUT_S;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
@@ -356,10 +370,7 @@ impl DagStepExecutor {
         self.driver_registry.register(f_id.clone());
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        self.cancel_senders
-            .lock()
-            .unwrap()
-            .insert(feature_id.to_string(), cancel_tx);
+        lock_registry(&self.cancel_senders).insert(feature_id.to_string(), cancel_tx);
 
         // Snapshot agent/model + loop-budget resolution inputs. Project
         // defaults come from the resolved settings; the per-run overrides
@@ -642,7 +653,7 @@ impl StepExecutor for DagStepExecutor {
         if self.runner_owned_features().contains(feature_id) {
             return Err(shadow_refusal(RunAction::Cancel, feature_id));
         }
-        if let Some(tx) = self.cancel_senders.lock().unwrap().get(feature_id) {
+        if let Some(tx) = lock_registry(&self.cancel_senders).get(feature_id) {
             let _ = tx.send(true);
         }
         Ok(())
@@ -819,10 +830,7 @@ impl GatePresenter for DagStepExecutor {
         //    step's waiter, deliver the decision in-memory. Missing
         //    waiter is *not* an error — the DB row will be picked up
         //    when the driver reconciles on its next startup.
-        if let Some(waiter) = self
-            .gate_waiters
-            .lock()
-            .unwrap()
+        if let Some(waiter) = lock_registry(&self.gate_waiters)
             .get(step_execution_id)
             .cloned()
         {
