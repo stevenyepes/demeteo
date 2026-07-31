@@ -12,10 +12,10 @@
 //! `tests/infrastructure/agent/*.rs` reuses these via the
 //! crate-path `use crate::adapters::agent::test_stubs::...`).
 //!
-//! NOTE: keep this in sync with `FakeAgentExec` / `FakeExec` in
-//! `tests/e2e/step_executor.rs`. We duplicate rather than share
-//! because the e2e stubs are heavier (they wire up actual
-//! intercept_id routing).
+//! `tests/e2e/step_executor/harness.rs` carries a second no-op
+//! `AgentExecutionPort` stub of its own. Neither routes anything — both exist
+//! only to satisfy a trait bound — and they stay separate so two unrelated
+//! test trees do not depend on each other's fixtures.
 
 use crate::domain::action::AgentAction;
 use crate::domain::intercept::ExecutionResult;

@@ -1,1 +1,1 @@
-// Relocated to tests/e2e/step_executor.rs
+// Relocated to tests/e2e/step_executor/.

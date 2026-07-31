@@ -9,7 +9,7 @@
 //! Only the fold is testable here. The streaming half reaches `notif`,
 //! `pricing`, `app_settings` and the cancel watch — four of the driver's
 //! eighteen ports — so it stays a method on `ExecutionDriver` and stays
-//! covered by `tests/e2e/step_executor.rs` alone. Splitting the fold out is
+//! covered by `tests/e2e/step_executor/` alone. Splitting the fold out is
 //! what makes the part with a decision in it reachable without a fixture.
 
 use std::sync::Arc;

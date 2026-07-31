@@ -144,10 +144,10 @@ pub(crate) fn build_base_ctx(
         // surfaced in the UI as an artifact, NOT the deliverable) instead
         // of the misleading historical `artifact_dir`. Both names resolve
         // to the same value so old `{{artifact_dir}}` templates keep
-        // rendering unchanged. The renderer at
-        // `crates/demeteo-core/src/domain/prompt_context.rs:121` collapses
-        // unknown tokens to "", so dropping the alias is safe once every
-        // starter workflow + UI hint has migrated.
+        // rendering unchanged. `PromptContext`'s
+        // `collapse_unknown_placeholders` reduces unknown tokens to "", so
+        // dropping the alias is safe once every starter workflow + UI hint
+        // has migrated.
         .set("report_dir", artifact_dir)
         .set("session_resume_summary", session_resume_summary)
 }
