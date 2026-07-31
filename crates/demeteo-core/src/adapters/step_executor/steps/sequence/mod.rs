@@ -48,7 +48,9 @@
 //! synchronous policy in [`crate::domain::sequence`], reachable from a test
 //! without a port double.
 
+use crate::adapters::step_executor::driver::verifier::VerifierTarget;
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::sequence::checkpoint::{
     verdict_disposition, CheckpointDisposition, CheckpointResume,
@@ -385,14 +387,18 @@ impl ExecutionDriver {
                 .run_verifier_logic(
                     step_exec,
                     verifier_cfg,
-                    wt.path,
+                    VerifierTarget {
+                        machine: target.machine,
+                        wt_path: wt.path,
+                        agent_kind: target.agent_kind,
+                        override_model: target.override_model,
+                    },
                     &[],
-                    spend.cost,
-                    spend.tokens,
-                    spend.start,
-                    target.agent_kind,
-                    target.override_model,
-                    target.machine,
+                    RunningSpend {
+                        cost: spend.cost,
+                        tokens: spend.tokens,
+                        start: spend.start,
+                    },
                 )
                 .await;
 

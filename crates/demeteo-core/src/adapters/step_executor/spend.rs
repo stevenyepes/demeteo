@@ -40,6 +40,23 @@ impl StepSpend {
     }
 }
 
+/// The feature-wide totals a stage advances, borrowed for the length of the
+/// one call that spends against them.
+///
+/// The borrowed peer of [`StepSpend`]: a stage that *runs* an agent has to
+/// fold what the turn cost back into the driver's running totals, so it needs
+/// the `&mut` the snapshot deliberately does not give. `start` rides along
+/// because every site that reports the totals reports wall-clock beside them.
+///
+/// This lives here rather than in either caller's module because both callers
+/// are reached from `steps/sequence`, and a step importing another step's
+/// context types is the coupling `steps/sequence/context.rs` argues against.
+pub(crate) struct RunningSpend<'a> {
+    pub cost: &'a mut f64,
+    pub tokens: &'a mut i64,
+    pub start: Instant,
+}
+
 /// The running totals one step's dispatch advances, owned by the run loop
 /// for the length of one iteration.
 ///

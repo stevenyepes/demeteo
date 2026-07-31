@@ -39,9 +39,8 @@
 //! can stay branch-agnostic. But do not "simplify" the ignored merge error or
 //! the retry away: each is load-bearing in exactly one of the two cases.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::StepExecution;
@@ -76,8 +75,7 @@ impl ExecutionDriver {
     /// Merge the feature branch into `wt_path` and have `session` resolve
     /// whatever conflicts that surfaces, committing the resolution.
     ///
-    /// `accumulated_cost` / `accumulated_tokens` are updated in place.
-    #[allow(clippy::too_many_arguments)]
+    /// `spend`'s totals are updated in place.
     pub(crate) async fn resolve_merge_conflicts_via_agent(
         &self,
         step_exec: &StepExecution,
@@ -85,10 +83,13 @@ impl ExecutionDriver {
         machine_str: &str,
         wt_path: &str,
         override_model: Option<&str>,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
+        spend: RunningSpend<'_>,
     ) -> Result<ConflictPass, ConflictPassError> {
+        let RunningSpend {
+            cost: accumulated_cost,
+            tokens: accumulated_tokens,
+            start: step_start,
+        } = spend;
         let _ = self
             .exec
             .run_command(

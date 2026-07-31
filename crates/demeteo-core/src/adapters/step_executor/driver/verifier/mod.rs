@@ -3,6 +3,7 @@ use crate::adapters::step_executor::driver::verifier::environment::notify_enviro
 use crate::adapters::step_executor::harness_shell::{
     harness_ceiling_s, harness_shell_options, run_harness_command,
 };
+use crate::adapters::step_executor::spend::RunningSpend;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::harness_attribution::HarnessFailureSet;
 use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
@@ -15,11 +16,25 @@ use crate::domain::verifier::verdict::{
 use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::notification::DomainEvent;
-use std::time::Instant;
 use tokio_stream::StreamExt;
 
 mod adjudication;
 pub(crate) mod environment;
+
+/// Who runs the verifier turn, and where.
+///
+/// The four values the caller has already resolved for the step and never
+/// splits: the machine and the worktree address the same one place, and the
+/// harness/model pair is the answer `resolve_step_agent` gave once at the top
+/// of the step. A verifier that ran on a different machine from the tasks it
+/// judges, or under a model the step did not ask for, would be a bug that
+/// four loose arguments make easy to write.
+pub(crate) struct VerifierTarget<'a> {
+    pub machine: &'a str,
+    pub wt_path: &'a str,
+    pub agent_kind: &'a str,
+    pub override_model: Option<&'a str>,
+}
 
 impl ExecutionDriver {
     /// Resolve and run the project's prepare command + every harness that gates
@@ -255,20 +270,25 @@ impl ExecutionDriver {
         Ok(HarnessOutcome::from_runs(ran))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_verifier_logic(
         &self,
         step_exec: &StepExecution,
         verifier_cfg: &crate::domain::verifier::VerifierConfig,
-        wt_path: &str,
+        target: VerifierTarget<'_>,
         produced_artifacts: &[crate::domain::artifact::Artifact],
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
-        default_agent_kind: &str,
-        override_model: Option<&str>,
-        machine_str: &str,
+        spend: RunningSpend<'_>,
     ) -> Result<(), crate::domain::verifier::VerifierError> {
+        let VerifierTarget {
+            machine: machine_str,
+            wt_path,
+            agent_kind: default_agent_kind,
+            override_model,
+        } = target;
+        let RunningSpend {
+            cost: accumulated_cost,
+            tokens: accumulated_tokens,
+            start: step_start,
+        } = spend;
         let _ = self.notif.emit(&DomainEvent::StepProgress {
             feature_id: self.f_id.clone(),
             step_id: step_exec.step_id.0.clone(),

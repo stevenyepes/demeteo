@@ -36,6 +36,7 @@
 //! is a new race window; a missing one is a Stop that does nothing.
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::ports::db::StepExecutionPatch;
@@ -495,9 +496,11 @@ impl ExecutionDriver {
                     wt.machine,
                     wt.path,
                     target.override_model,
-                    spend.cost,
-                    spend.tokens,
-                    spend.start,
+                    RunningSpend {
+                        cost: spend.cost,
+                        tokens: spend.tokens,
+                        start: spend.start,
+                    },
                 )
                 .await
             {
