@@ -1,23 +1,24 @@
 use crate::adapters::step_executor::artifacts::{
-    commit_worktree_changes, compute_git_diff, is_under_prefix, read_worktree_file,
-    resolve_declared_artifacts, MissingArtifact, WorktreeSnapshot,
+    commit_worktree_changes, compute_git_diff, read_worktree_file, resolve_declared_artifacts,
+    MissingArtifact,
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::artifact::Artifact;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::staged_deliverable::{is_under_prefix, normalize_artifact_subdir};
+
+use super::context::{AgentWorktree, TurnBaseline};
 
 impl ExecutionDriver {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn process_agent_artifacts(
         &self,
         step_exec: &StepExecution,
         step_conf: &StepConfig,
-        machine_str: &str,
-        wt_path: &str,
-        worktree_snapshot: &WorktreeSnapshot,
-        worktree_base_ref: Option<&str>,
+        wt: AgentWorktree<'_>,
+        baseline: TurnBaseline<'_>,
         produced_artifacts: &mut Vec<Artifact>,
     ) -> Result<(Option<String>, Vec<String>, Vec<MissingArtifact>), String> {
+        let (machine_str, wt_path) = (wt.machine, wt.path);
         let decls = step_conf.artifacts.as_deref().unwrap_or(&[]);
 
         // 1. Process files using delta
@@ -30,7 +31,8 @@ impl ExecutionDriver {
                 _ => None,
             })
             .collect();
-        let changed = worktree_snapshot
+        let changed = baseline
+            .snapshot
             .delta(&*self.exec, machine_str, wt_path, &always, &[])
             .await;
         // Snapshot the subset of `changed` that sits OUTSIDE the
@@ -38,11 +40,7 @@ impl ExecutionDriver {
         // asked the agent to create or modify. We capture them
         // before consuming `changed` in the loop below so they can
         // be forwarded to `commit_worktree_changes`'s guard log.
-        let trimmed_subdir = self
-            .artifact_subdir
-            .trim()
-            .trim_start_matches("./")
-            .trim_end_matches('/');
+        let trimmed_subdir = normalize_artifact_subdir(&self.artifact_subdir);
         let non_artifact_writes: Vec<String> = changed
             .iter()
             .filter(|p| !is_under_prefix(p, trimmed_subdir))
@@ -63,16 +61,16 @@ impl ExecutionDriver {
 
         // 2. Compute git diff. Prefer the feature's fork point (where
         // `branch_name` diverged from the default branch) over
-        // `worktree_base_ref` (this attempt's pre-run tip) so the review
+        // `baseline.base_ref` (this attempt's pre-run tip) so the review
         // diff always covers the complete feature change, not just the
         // latest retry's incremental fix — see `resolve_fork_point_ref`.
-        // `worktree_base_ref` remains the fallback (fork point
+        // `baseline.base_ref` remains the fallback (fork point
         // unavailable, e.g. default branch not configured) and is still
         // used unchanged by the no-op-commit guard in `handle_agent_step`.
         let fork_point = self.resolve_fork_point_ref(machine_str).await;
         let diff_ref = fork_point
             .as_deref()
-            .or(worktree_base_ref)
+            .or(baseline.base_ref)
             .unwrap_or("HEAD")
             .to_string();
         let diff_body = compute_git_diff(&*self.exec, machine_str, wt_path, &diff_ref).await;

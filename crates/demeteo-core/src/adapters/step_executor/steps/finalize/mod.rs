@@ -25,6 +25,7 @@
 use std::time::Instant;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::domain::finalize::authored::Authored;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::permission::StepCapability;
 use crate::ports::db::StepExecutionPatch;
@@ -37,60 +38,31 @@ pub(crate) mod context;
 pub(crate) mod prompt;
 mod turn;
 
+/// Which repository, on which machine. The two never travel apart: every git
+/// read finalize makes needs both, and a `repo_dir` addressed to the wrong
+/// machine is not a path at all.
+pub(crate) struct RepoSite<'a> {
+    pub machine: &'a str,
+    pub repo_dir: &'a str,
+}
+
+/// What one turn is allowed to add to the step's running totals, held by
+/// reference because the caller folds every turn into the same pair.
+///
+/// A near-duplicate of `steps/sequence/context.rs`'s `StepSpend`, deliberately:
+/// that one also carries a `start: Instant` which no finalize turn reads, and
+/// a step importing another step's context types is a worse coupling than a
+/// two-field struct written twice. Deduplicating them is a follow-up.
+pub(crate) struct TurnSpend<'a> {
+    pub cost: &'a mut f64,
+    pub tokens: &'a mut i64,
+}
+
 /// How many times the agent may be asked for a usable message. One authoring
 /// turn plus two repairs: enough for a commitlint config to be satisfied,
 /// bounded so a hook that can never be satisfied (a `commit-msg` that always
 /// exits 1) costs three turns rather than an infinite run.
 const MAX_AUTHORING_ATTEMPTS: usize = 3;
-
-/// What the agent produced.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Authored {
-    pub commit_subject: String,
-    pub commit_body: String,
-    pub pr_title: String,
-    pub pr_body: String,
-}
-
-impl Authored {
-    /// The full commit message: subject, blank line, body.
-    pub(crate) fn commit_message(&self) -> String {
-        if self.commit_body.trim().is_empty() {
-            self.commit_subject.trim().to_string()
-        } else {
-            format!(
-                "{}\n\n{}",
-                self.commit_subject.trim(),
-                self.commit_body.trim()
-            )
-        }
-    }
-
-    /// The last resort, when the agent never returned usable JSON.
-    ///
-    /// The work is already committed and correct at this point — only the
-    /// wrapper is missing. Failing the run here would throw away a complete
-    /// feature over a formatting problem, so we publish with a mechanical
-    /// title instead. This is the same shape the old UI dialog pre-filled:
-    /// the first five words of the feature title.
-    pub(crate) fn fallback(feature_title: &str) -> Self {
-        let words: Vec<&str> = feature_title.split_whitespace().take(5).collect();
-        let mut subject = words.join(" ");
-        if subject.chars().count() > 40 {
-            subject = subject.chars().take(40).collect::<String>();
-            subject = subject.trim_end().to_string();
-        }
-        if subject.is_empty() {
-            subject = "update".to_string();
-        }
-        Self {
-            commit_subject: format!("chore: {}", subject.to_lowercase()),
-            commit_body: String::new(),
-            pr_title: feature_title.to_string(),
-            pr_body: String::new(),
-        }
-    }
-}
 
 impl ExecutionDriver {
     /// Handle a `kind == "finalize"` step.
@@ -139,13 +111,19 @@ impl ExecutionDriver {
             .unwrap_or_default();
         let work = context::gather_branch_work(
             &*self.exec,
-            self.artifacts.as_ref(),
-            &steps,
-            step_exec.step_id.0.as_str(),
-            machine_str,
-            &repo_dir,
-            &feature_branch,
-            &default_branch,
+            RepoSite {
+                machine: machine_str,
+                repo_dir: &repo_dir,
+            },
+            context::BranchRange {
+                feature_branch: &feature_branch,
+                default_branch: &default_branch,
+            },
+            context::PriorWork {
+                artifacts: self.artifacts.as_ref(),
+                steps: &steps,
+                finalize_step_id: step_exec.step_id.0.as_str(),
+            },
             self.f_id.as_str(),
         )
         .await;
@@ -175,12 +153,15 @@ impl ExecutionDriver {
                 .run_finalize_turn(
                     step_exec,
                     step_conf,
-                    &feature,
-                    &repo_dir,
-                    machine_str,
+                    RepoSite {
+                        machine: machine_str,
+                        repo_dir: &repo_dir,
+                    },
                     &prompt,
-                    accumulated_cost,
-                    accumulated_tokens,
+                    TurnSpend {
+                        cost: accumulated_cost,
+                        tokens: accumulated_tokens,
+                    },
                 )
                 .await;
 
@@ -308,16 +289,7 @@ impl ExecutionDriver {
         // terminal publish (the driver on the desktop, `demeteo-runner` when
         // headless) picks it up. Both paths therefore open an identically
         // titled PR without either holding a secret it doesn't need.
-        let body = if hook_bypassed {
-            format!(
-                "{}\n\n---\n> ⚠️ This repository's `commit-msg` hook rejected every commit \
-                 message Demeteo proposed, so the squashed commit was written without its \
-                 approval. Its message may not satisfy your commit lint.",
-                authored.pr_body
-            )
-        } else {
-            authored.pr_body.clone()
-        };
+        let body = authored.pr_body_with_hook_warning(hook_bypassed);
 
         if let Err(e) = self.features.update(
             &self.f_id,

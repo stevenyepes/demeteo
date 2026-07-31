@@ -39,9 +39,8 @@
 //! can stay branch-agnostic. But do not "simplify" the ignored merge error or
 //! the retry away: each is load-bearing in exactly one of the two cases.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::StepExecution;
@@ -76,8 +75,7 @@ impl ExecutionDriver {
     /// Merge the feature branch into `wt_path` and have `session` resolve
     /// whatever conflicts that surfaces, committing the resolution.
     ///
-    /// `accumulated_cost` / `accumulated_tokens` are updated in place.
-    #[allow(clippy::too_many_arguments)]
+    /// `spend`'s totals are updated in place.
     pub(crate) async fn resolve_merge_conflicts_via_agent(
         &self,
         step_exec: &StepExecution,
@@ -85,10 +83,13 @@ impl ExecutionDriver {
         machine_str: &str,
         wt_path: &str,
         override_model: Option<&str>,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
+        spend: RunningSpend<'_>,
     ) -> Result<ConflictPass, ConflictPassError> {
+        let RunningSpend {
+            cost: accumulated_cost,
+            tokens: accumulated_tokens,
+            start: step_start,
+        } = spend;
         let _ = self
             .exec
             .run_command(
@@ -198,7 +199,7 @@ impl ExecutionDriver {
         //
         // A clean tree with the conflicts gone *is* the success condition, so
         // treat "nothing to commit" as done rather than as an error.
-        if self.worktree_has_pending_commit(machine_str, wt_path).await {
+        if worktree_has_pending_commit(&*self.exec, machine_str, wt_path).await {
             self.exec
                 .run_command(
                     machine_str,
@@ -222,31 +223,37 @@ impl ExecutionDriver {
 
         Ok(ConflictPass::Resolved(billing))
     }
-
-    /// Is there anything for `git commit` to record in `wt_path` — either an
-    /// in-progress merge to conclude, or modified tracked files?
-    ///
-    /// `git status --porcelain` is empty exactly when the tree is clean, and
-    /// `MERGE_HEAD` exists exactly while a merge is awaiting its commit. An
-    /// agent that resolved *and committed* leaves neither.
-    async fn worktree_has_pending_commit(&self, machine_str: &str, wt_path: &str) -> bool {
-        let safe = paths::shell_escape_posix(wt_path);
-        let merge_in_progress = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!("git -C {} rev-parse --verify --quiet MERGE_HEAD", safe),
-            )
-            .await
-            .map(|out| !out.trim().is_empty())
-            .unwrap_or(false);
-        if merge_in_progress {
-            return true;
-        }
-        self.exec
-            .run_command(machine_str, &format!("git -C {} status --porcelain", safe))
-            .await
-            .map(|out| !out.trim().is_empty())
-            .unwrap_or(false)
-    }
 }
+
+/// Is there anything for `git commit` to record in `wt_path` — either an
+/// in-progress merge to conclude, or modified tracked files?
+///
+/// `git status --porcelain` is empty exactly when the tree is clean, and
+/// `MERGE_HEAD` exists exactly while a merge is awaiting its commit. An
+/// agent that resolved *and committed* leaves neither.
+async fn worktree_has_pending_commit(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_str: &str,
+    wt_path: &str,
+) -> bool {
+    let safe = paths::shell_escape_posix(wt_path);
+    let merge_in_progress = exec
+        .run_command(
+            machine_str,
+            &format!("git -C {} rev-parse --verify --quiet MERGE_HEAD", safe),
+        )
+        .await
+        .map(|out| !out.trim().is_empty())
+        .unwrap_or(false);
+    if merge_in_progress {
+        return true;
+    }
+    exec.run_command(machine_str, &format!("git -C {} status --porcelain", safe))
+        .await
+        .map(|out| !out.trim().is_empty())
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/step_executor/steps/pending_commit.rs"]
+mod pending_commit_tests;

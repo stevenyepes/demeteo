@@ -209,6 +209,81 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot / (na.sqrt() * nb.sqrt())
 }
 
+/// Which memories a prompt gets, and in what order.
+///
+/// The score is similarity **× confidence**, not similarity alone: a memory
+/// the distiller was unsure of should not outrank a confident one just because
+/// it happens to use the feature description's words. `min_confidence` is the
+/// floor below which a memory is not offered at any similarity, and `top_k`
+/// the ceiling on how many reach the prompt.
+///
+/// A memory with no `embedding` is dropped rather than scored at zero. It has
+/// not been embedded yet (the field fills in asynchronously), and admitting it
+/// with a fabricated score would let un-embedded rows crowd out ranked ones at
+/// the tail of `top_k`.
+///
+/// The sort is **stable**, and that is observable: two memories with the same
+/// score keep the order the repository returned them in, which is the order
+/// the prompt renders. `sort_unstable_by` would make the prompt vary between
+/// runs over identical data.
+///
+/// Takes the already-computed query embedding. The memory agent's endpoint and
+/// its API key stay with the caller — the key lives in the OS keyring and must
+/// not reach a type that can be logged or serialised.
+pub fn rank_memories<'a>(
+    memories: &'a [ProjectMemoryEntry],
+    query_embedding: &[f32],
+    min_confidence: f64,
+    top_k: usize,
+) -> Vec<&'a ProjectMemoryEntry> {
+    let mut scored: Vec<(&ProjectMemoryEntry, f32)> = memories
+        .iter()
+        .filter(|m| m.confidence >= min_confidence)
+        .filter_map(|m| {
+            m.embedding.as_ref().map(|e| {
+                (
+                    m,
+                    cosine_similarity(query_embedding, e) * m.confidence as f32,
+                )
+            })
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored.into_iter().take(top_k).map(|(m, _)| m).collect()
+}
+
+/// Render the selected memories as the `project_memory` markdown block every
+/// agent prompt carries.
+///
+/// Two shapes, chosen by whether the memory is typed: a typed one leads with
+/// its category, an untyped (legacy or manually entered) one with its key.
+/// Both name the source, because "the agent decided this" and "a human told us
+/// this" are not the same instruction and an agent reading the block has no
+/// other way to tell them apart.
+pub fn render_memory_md(selected: &[&ProjectMemoryEntry]) -> String {
+    let mut md = String::new();
+    for m in selected {
+        let source_label = match m.source {
+            MemorySource::Agent => "Agent",
+            MemorySource::Human => "Human",
+        };
+        let body = m.statement.as_deref().unwrap_or(&m.value);
+        match m.memory_type {
+            Some(t) => md.push_str(&format!(
+                "- [{}] {} (Source: {})\n",
+                t.as_str(),
+                body,
+                source_label
+            )),
+            None => md.push_str(&format!(
+                "- **{}**: {} (Source: {})\n",
+                m.key, body, source_label
+            )),
+        }
+    }
+    md
+}
+
 /// Serialize an f32 embedding to a little-endian byte blob for SQLite storage.
 pub fn embedding_to_blob(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);

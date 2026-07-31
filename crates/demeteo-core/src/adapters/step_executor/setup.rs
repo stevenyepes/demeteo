@@ -99,29 +99,42 @@ pub(crate) async fn resolve_path_probe(
     Ok(())
 }
 
+/// The three commands a project configures for its own gates.
+///
+/// Bundled because they are three adjacent `&str`s that mean different things:
+/// positionally, transposing two of them compiles, renders, and produces a
+/// wrong prompt for the rest of the run. Naming them makes that impossible.
+pub(crate) struct ProjectCommands<'a> {
+    pub test: &'a str,
+    pub build: &'a str,
+    pub coverage: &'a str,
+}
+
+/// How the feature names itself: to a human, to a path, to git.
+pub(crate) struct FeatureIdentity<'a> {
+    pub description: &'a str,
+    pub slug: &'a str,
+    pub branch_name: &'a str,
+}
+
 /// Build the feature-level base PromptContext, shared by every step.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_base_ctx(
-    description: &str,
-    slug: &str,
-    branch_name: &str,
+    feature: FeatureIdentity<'_>,
     repo_list_str: &str,
-    test_cmd: &str,
-    build_cmd: &str,
-    coverage_cmd: &str,
+    commands: ProjectCommands<'_>,
     conventions_content: &str,
     project_memory: &str,
     artifact_dir: &str,
     session_resume_summary: &str,
 ) -> PromptContext {
     PromptContext::new()
-        .set("feature_description", description)
-        .set("feature_slug", slug)
-        .set("feature_branch", branch_name)
+        .set("feature_description", feature.description)
+        .set("feature_slug", feature.slug)
+        .set("feature_branch", feature.branch_name)
         .set("repo_list", repo_list_str)
-        .set("test_command", test_cmd)
-        .set("build_command", build_cmd)
-        .set("coverage_command", coverage_cmd)
+        .set("test_command", commands.test)
+        .set("build_command", commands.build)
+        .set("coverage_command", commands.coverage)
         .set("project_conventions", conventions_content)
         .set("project_memory", project_memory)
         .set("artifact_dir", artifact_dir)
@@ -131,10 +144,10 @@ pub(crate) fn build_base_ctx(
         // surfaced in the UI as an artifact, NOT the deliverable) instead
         // of the misleading historical `artifact_dir`. Both names resolve
         // to the same value so old `{{artifact_dir}}` templates keep
-        // rendering unchanged. The renderer at
-        // `crates/demeteo-core/src/domain/prompt_context.rs:121` collapses
-        // unknown tokens to "", so dropping the alias is safe once every
-        // starter workflow + UI hint has migrated.
+        // rendering unchanged. `PromptContext`'s
+        // `collapse_unknown_placeholders` reduces unknown tokens to "", so
+        // dropping the alias is safe once every starter workflow + UI hint
+        // has migrated.
         .set("report_dir", artifact_dir)
         .set("session_resume_summary", session_resume_summary)
 }

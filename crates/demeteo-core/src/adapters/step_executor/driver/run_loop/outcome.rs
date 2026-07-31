@@ -6,10 +6,13 @@
 //! should continue. Returns [`RunAction`] to tell the orchestrator whether
 //! to iterate, jump, or exit.
 
+use crate::adapters::step_executor::driver::failure::{
+    begin_redirect, record_retry_exhausted, RetryBudget,
+};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::retry_policy::RetryAction;
+use crate::adapters::step_executor::step_status::{update_step_status, StepTransition};
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::adapters::step_executor::updates;
 use crate::domain::models::StepExecution;
 use crate::domain::verifier::VerdictFailure;
 
@@ -72,19 +75,16 @@ impl ExecutionDriver {
         );
         let latest_step = self.features.step_get(&step_exec.id).ok().flatten();
         let art_path = latest_step.as_ref().and_then(|s| s.artifact_path.clone());
-        updates::update_step_status(
-            &*self.features,
-            &*self.notif,
+        update_step_status(
+            self.status_writers(),
             step_exec,
-            &self.f_id,
-            "completed",
-            dr.accumulated_cost,
-            Some(dr.accumulated_tokens),
-            wall,
-            art_path,
-            None,
-            self.last_cache_read,
-            self.last_cache_creation,
+            StepTransition::completed(
+                dr.accumulated_cost,
+                dr.accumulated_tokens,
+                wall,
+                art_path,
+                self.cache_tokens(),
+            ),
         );
         // Context-window watchdog: pull the live session's
         // cumulative tokens and decide whether to reset
@@ -124,19 +124,16 @@ impl ExecutionDriver {
         let is_cancelled = *self.cancel_watch.borrow();
         if is_cancelled {
             let wall = dr.step_start.elapsed().as_secs();
-            updates::update_step_status(
-                &*self.features,
-                &*self.notif,
+            update_step_status(
+                self.status_writers(),
                 step_exec,
-                &self.f_id,
-                "interrupted",
-                dr.accumulated_cost,
-                Some(dr.accumulated_tokens),
-                wall,
-                None,
-                Some(format!("Cancelled while step was failing: {}", msg)),
-                self.last_cache_read,
-                self.last_cache_creation,
+                StepTransition::interrupted(
+                    dr.accumulated_cost,
+                    dr.accumulated_tokens,
+                    wall,
+                    format!("Cancelled while step was failing: {}", msg),
+                    self.cache_tokens(),
+                ),
             );
             self.cancel_feature().await;
             return RunAction::Terminate;
@@ -149,15 +146,17 @@ impl ExecutionDriver {
         self.emit_retry_decision(step_exec, &decision, msg);
         match decision.action {
             RetryAction::Redirect { target, feedback } => {
-                if let Some(redirect_idx) = self.begin_redirect(
+                if let Some(redirect_idx) = begin_redirect(
+                    self.status_writers(),
+                    &self.steps,
                     step_exec,
                     &target,
                     msg,
-                    decision.attempt,
-                    decision.max_attempts,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
+                    RetryBudget {
+                        attempt: decision.attempt,
+                        max: decision.max_attempts,
+                    },
+                    dr.spend(self.cache_tokens()),
                 ) {
                     // Capture the failure so the retried step's
                     // prompt isn't blind. `iteration_count` was
@@ -190,58 +189,36 @@ impl ExecutionDriver {
                 }
                 // Dangling redirect target — same terminal
                 // failure as v1's missing-`on_failure`-step.
-                self.fail_step_and_feature(
-                    step_exec,
-                    msg,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
-                )
-                .await;
+                self.fail_step_and_feature(step_exec, msg, dr.spend(self.cache_tokens()))
+                    .await;
             }
             RetryAction::Exhausted { target } => {
                 if let Some(target) = target.as_ref() {
-                    self.record_retry_exhausted(
+                    record_retry_exhausted(
+                        self.status_writers(),
+                        self.notifications.as_ref(),
                         step_exec,
                         target,
                         msg,
-                        decision.attempt.saturating_sub(1),
-                        decision.max_attempts,
-                        dr.accumulated_cost,
-                        dr.accumulated_tokens,
-                        dr.step_start,
+                        RetryBudget {
+                            attempt: decision.attempt.saturating_sub(1),
+                            max: decision.max_attempts,
+                        },
+                        dr.spend(self.cache_tokens()),
                     );
                 }
-                self.fail_step_and_feature(
-                    step_exec,
-                    msg,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
-                )
-                .await;
+                self.fail_step_and_feature(step_exec, msg, dr.spend(self.cache_tokens()))
+                    .await;
             }
             RetryAction::RetryInPlace { .. } => {
                 // Not derivable from v1 definitions for this
                 // class; supported for v2 policies (P1.12).
-                self.begin_in_place_retry(
-                    step_exec,
-                    msg,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
-                );
+                self.begin_in_place_retry(step_exec, msg, dr.spend(self.cache_tokens()));
                 return RunAction::Continue;
             }
             RetryAction::Fail => {
-                self.fail_step_and_feature(
-                    step_exec,
-                    msg,
-                    dr.accumulated_cost,
-                    dr.accumulated_tokens,
-                    dr.step_start,
-                )
-                .await;
+                self.fail_step_and_feature(step_exec, msg, dr.spend(self.cache_tokens()))
+                    .await;
             }
         }
         RunAction::Terminate
@@ -279,22 +256,14 @@ impl ExecutionDriver {
             .expect("a non-cancelled Environmental outcome evaluates a retry decision");
         self.emit_retry_decision(step_exec, decision, msg);
         if matches!(decision.action, RetryAction::RetryInPlace { .. }) {
-            self.begin_in_place_retry(
-                step_exec,
-                msg,
-                dr.accumulated_cost,
-                dr.accumulated_tokens,
-                dr.step_start,
-            );
+            self.begin_in_place_retry(step_exec, msg, dr.spend(self.cache_tokens()));
             // Same step_index — the loop re-dispatches this step.
             return RunAction::Continue;
         }
         self.fail_step_and_feature(
             step_exec,
             &format!("[environment — not an implementation failure] {}", msg),
-            dr.accumulated_cost,
-            dr.accumulated_tokens,
-            dr.step_start,
+            dr.spend(self.cache_tokens()),
         )
         .await;
         RunAction::Terminate
@@ -315,14 +284,8 @@ impl ExecutionDriver {
         if let Some(decision) = dr.failure_decision.as_ref() {
             self.emit_retry_decision(step_exec, decision, msg);
         }
-        self.fail_step_and_feature(
-            step_exec,
-            msg,
-            dr.accumulated_cost,
-            dr.accumulated_tokens,
-            dr.step_start,
-        )
-        .await;
+        self.fail_step_and_feature(step_exec, msg, dr.spend(self.cache_tokens()))
+            .await;
         RunAction::Terminate
     }
 

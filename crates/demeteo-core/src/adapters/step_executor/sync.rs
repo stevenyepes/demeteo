@@ -23,9 +23,9 @@
 use std::sync::Arc;
 
 use crate::adapters::agent::registry::AgentRegistry;
+use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::ids::{FeatureId, StepExecutionId};
-use crate::domain::models::ConflictFile;
 use crate::paths;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::agent_runtime::AgentContext;
@@ -36,6 +36,7 @@ use crate::ports::notification::NotificationPort;
 use crate::ports::pricing::PricingTable;
 use crate::ports::step_executor::{StepExecutor, SyncOutcomeView};
 
+use super::sync_worktree::discard_sync_worktree;
 use super::DagStepExecutor;
 
 /// The thread-id suffix for the conflict-resolution agent. We use a
@@ -99,7 +100,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
     let fid = feature_id;
 
     // Safety check: is a merge actually active?
-    let pre_unmerged = list_unmerged(&**exec, machine_str, resolved_cwd).await;
+    let pre_unmerged = list_unmerged_files(&**exec, machine_str, resolved_cwd).await;
     let merge_in_progress = exec
         .run_command(
             machine_str,
@@ -190,7 +191,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
     }
 
     // Verify the agent actually removed the conflict markers.
-    let still_unmerged = list_unmerged(&**exec, machine_str, resolved_cwd).await;
+    let still_unmerged = list_unmerged_files(&**exec, machine_str, resolved_cwd).await;
     if !still_unmerged.is_empty() {
         let _ = registry.kill(&resolver_thread_id).await;
         return Err("Resolver did not remove all conflict markers.".to_string());
@@ -406,37 +407,7 @@ impl DagStepExecutor {
         .await
         {
             Ok(head_sha) => {
-                // Cleanup the sync worktree if one was used.
-                if resolved_cwd != repo_dir {
-                    let _ = self
-                        .exec
-                        .run_command(
-                            &machine_str,
-                            &format!(
-                                "git -C {} worktree remove --force {}",
-                                paths::shell_escape_posix(&repo_dir),
-                                paths::shell_escape_posix(&resolved_cwd)
-                            ),
-                        )
-                        .await;
-                    let _ = self
-                        .exec
-                        .run_command(
-                            &machine_str,
-                            &format!("rm -rf {}", paths::shell_escape_posix(&resolved_cwd)),
-                        )
-                        .await;
-                    let _ = self
-                        .exec
-                        .run_command(
-                            &machine_str,
-                            &format!(
-                                "git -C {} worktree prune",
-                                paths::shell_escape_posix(&repo_dir)
-                            ),
-                        )
-                        .await;
-                }
+                discard_sync_worktree(&*self.exec, &machine_str, &repo_dir, &resolved_cwd).await;
 
                 // After a successful resolution, replay the validation step
                 if let Some(se_id) = revalidate_step_execution_id {
@@ -454,7 +425,8 @@ impl DagStepExecutor {
                 })
             }
             Err(reason) => {
-                let conflict_list = list_unmerged(&*self.exec, &machine_str, &resolved_cwd).await;
+                let conflict_list =
+                    list_unmerged_files(&*self.exec, &machine_str, &resolved_cwd).await;
                 Ok(SyncOutcomeView::ResolutionFailed {
                     reason,
                     conflict_files: conflict_list,
@@ -551,44 +523,4 @@ fn build_resolver_prompt(
         feature = feature_branch,
         files = files_list,
     )
-}
-
-/// Walk `git status --porcelain` and pull out the unmerged paths.
-async fn list_unmerged(
-    exec: &dyn crate::ports::execution::ExecutionPort,
-    machine_id: &str,
-    repo_dir: &str,
-) -> Vec<ConflictFile> {
-    let raw = match exec
-        .run_command(
-            machine_id,
-            &format!(
-                "git -C {} status --porcelain --untracked-files=no",
-                paths::shell_escape_posix(repo_dir)
-            ),
-        )
-        .await
-    {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    raw.lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            if line.len() < 3 {
-                return None;
-            }
-            let xy = &line[..2];
-            let path = line[3..].trim().to_string();
-            let kind = match xy {
-                "UU" | "AA" | "DD" => "both-modified".to_string(),
-                "UA" => "added-by-them".to_string(),
-                "AU" => "added-by-us".to_string(),
-                "UD" => "deleted-by-them".to_string(),
-                "DU" => "deleted-by-us".to_string(),
-                _ => return None,
-            };
-            Some(ConflictFile { path, kind })
-        })
-        .collect()
 }

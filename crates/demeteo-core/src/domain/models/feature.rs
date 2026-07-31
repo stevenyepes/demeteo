@@ -68,7 +68,8 @@ pub struct Feature {
     /// Per-run override of the per-turn dollar budget passed to the agent as
     /// `--max-budget-usd`. `None` = inherit the project default
     /// (`ProjectSettings::default_max_budget_usd`) or the engine default
-    /// ([`ExecutionDriver::DEFAULT_MAX_BUDGET_USD`]). This is the *base*
+    /// ([`crate::domain::agent_session::budget::DEFAULT_MAX_BUDGET_USD`]).
+    /// This is the *base*
     /// budget for the primary coding turn; the bounded role turns (triage,
     /// finalize, verifier, planner) each get a fixed fraction of it. See
     /// migration V30.

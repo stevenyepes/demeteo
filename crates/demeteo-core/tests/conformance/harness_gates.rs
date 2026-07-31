@@ -3,7 +3,7 @@
 //!
 //! The resolution chain and the per-harness deadline are pure decisions and are
 //! unit-tested next to [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses)
-//! in `domain/verifier.rs`. What those cannot cover is the wiring — that the
+//! in `domain/verifier/`. What those cannot cover is the wiring — that the
 //! engine actually
 //!
 //! 1. runs **every** resolved harness, in declared order, **even after one

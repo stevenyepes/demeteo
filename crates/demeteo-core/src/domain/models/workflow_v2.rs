@@ -273,6 +273,36 @@ pub fn validate_workflow_v2(value: &serde_json::Value) -> Result<(), String> {
     }
 }
 
+/// Whether `definition` and `steps` describe the same set of nodes.
+///
+/// A workflow version stores both representations, written together, so they
+/// agree by construction. A hand-edited row can disagree — and the consequence
+/// is not a failed load but a *silently different run*: the definition owns the
+/// edges, so a definition that has lost agreement with `steps` schedules a
+/// topology the user never drew, and a graph naming nodes the step list does
+/// not have fails the whole run at schedule time.
+///
+/// The caller's fallback when this is `false` is to migrate `steps` instead:
+/// `steps` is what the engine can actually execute, so it is the safer
+/// authority for a pair that has already lost their agreement.
+///
+/// Ids only, both directions. The length check is not redundant with the
+/// membership one — without it a definition holding a *subset* of the steps
+/// (a node deleted from the document but not the list) passes, and the run
+/// silently drops a step.
+pub fn definition_matches_steps(
+    definition: &WorkflowDefinitionV2,
+    steps: &[super::workflow::StepConfig],
+) -> bool {
+    let ids: std::collections::HashSet<&str> = steps.iter().map(|s| s.id.as_str()).collect();
+    definition.nodes.len() == steps.len()
+        && definition.nodes.iter().all(|n| ids.contains(n.id.as_str()))
+}
+
+#[cfg(test)]
+#[path = "../../../tests/domain/models/workflow_v2/definition_match_tests.rs"]
+mod definition_match_tests;
+
 #[cfg(test)]
 #[path = "../../../tests/domain/models/workflow_v2/serde_tests.rs"]
 mod serde_tests;

@@ -1,33 +1,84 @@
-use std::time::Instant;
+//! The `agent` step: one agent turn against an ephemeral worktree, cut from
+//! the feature branch and merged back once the turn is judged.
+//!
+//! This file is the orchestration and nothing else — the stages in the order
+//! they run, with the judgement between them. Each stage is a module:
+//!
+//! * [`context`] — the parameter bundles the stages hand each other
+//! * [`prompt`] — everything the agent is told, in a strict order
+//! * [`spawn`] — which session it talks to, and when that session is unsafe
+//!   to reuse
+//! * [`turn`] — streaming one turn, and what the feature owes for it
+//! * [`artifacts`] — what the turn wrote, committed and resolved against the
+//!   step's declarations
+//! * [`verdict`] — what a validate step does about the verdict its own turn
+//!   emitted
+//! * [`completion`] — how the step ends, once there is nothing left to run
+//! * [`teardown`] — what it drops on the way out, on every path out
+//! * [`handler`] / [`schema`] — the node-type registration
+//!
+//! # What the order here is load-bearing for, and no type enforces
+//!
+//! Three sequencing rules survive only as the order of the calls below, and
+//! breaking any of them produces a run that still passes every test:
+//!
+//! * The objective harness commands run **before** the chmod fence — build
+//!   tools have to write `target/`, `node_modules/` — and before any agent
+//!   turn. Hoisting `apply_artifact_scope` for tidiness silently breaks
+//!   every project whose gate builds anything, and nothing goes red.
+//! * The capability-driven scope fence (`AGENTS.md` §2: never widen it) is
+//!   applied after the harness-first run and **before** the spawn.
+//! * The post-step diff guard runs **before** the merge, so files it reverts
+//!   never reach the feature branch.
+//!
+//! The three cancellation reads are likewise placed, not incidental: one
+//! after provisioning, one after the turn, one at the close. An extra read
+//! is a new race window; a missing one is a Stop that does nothing.
 
-use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
+use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::adapters::step_executor::steps::StepOutcome;
-use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{StepConfig, StepExecution};
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
 pub(crate) mod artifacts;
+pub(crate) mod completion;
+pub(crate) mod context;
 pub(crate) mod error_message;
+pub(crate) mod gate_decision;
+mod handler;
+pub(crate) mod prompt;
+mod schema;
 pub(crate) mod spawn;
+pub(crate) mod teardown;
+pub(crate) mod turn;
+pub(crate) mod verdict;
 
 pub(crate) use error_message::format_agent_error_message;
+pub(crate) use handler::AgentNodeHandler;
+// The `sequence` step builds its own per-task prompts and reuses the
+// retry-feedback section verbatim; it reaches these through this module.
+pub(crate) use prompt::{
+    append_retry_feedback_section, format_retry_feedback_section, template_uses_retry_section,
+};
+
+use completion::StepClose;
+use context::{AgentRunTarget, AgentSpend, AgentStepCtx, AgentWorktree, TurnBaseline};
+use teardown::SessionDisposition;
+use turn::{apply_turn_result, TurnDisposition};
 
 impl ExecutionDriver {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_agent_step(
         &self,
-        step_exec: &StepExecution,
-        step_conf: &StepConfig,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
-        step_start: Instant,
-        step_index: usize,
-        step_execs: &[StepExecution],
-        out_cache_read: &mut Option<u64>,
-        out_cache_creation: &mut Option<u64>,
+        ctx: AgentStepCtx<'_>,
+        mut spend: AgentSpend<'_>,
     ) -> StepOutcome {
+        let AgentStepCtx {
+            step_exec,
+            step_conf,
+            ..
+        } = ctx;
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
         // Extend the model override to the runtime default when no explicit override
         // is set, so UsageAccumulator can use the pricing table and compute cost_usd.
@@ -49,139 +100,14 @@ impl ExecutionDriver {
             override_model.as_deref(),
             effort,
         );
-
-        let (gate_decision, gate_feedback) =
-            crate::adapters::step_executor::artifacts::get_latest_gate_decision(
-                &*self.gates,
-                self.f_id.as_str(),
-            );
-
-        let (retry_feedback, retry_iteration, retry_max) = match &self.retry_ctx {
-            Some(rc) => (
-                rc.feedback.clone(),
-                rc.iteration.to_string(),
-                rc.max.to_string(),
-            ),
-            None => (String::new(), String::new(), String::new()),
+        let target = AgentRunTarget {
+            agent_kind: &agent_kind,
+            override_model: override_model.as_deref(),
+            effort,
+            session_key: &session_key,
         };
 
-        // Why this step is running decides *which* template it renders. A
-        // step re-entered because a verdict from behind its task list's
-        // consumer rejected the work has a different job from one whose own
-        // output was rejected, and `rework_prompt_template` is where a
-        // workflow says so. Absent → the ordinary template, unchanged.
-        let mode = self.rework_mode(step_conf);
-        let template = crate::adapters::step_executor::driver::rework::effective_prompt_template(
-            step_conf, mode,
-        );
-        // Promote the retry-feedback section to a first-class
-        // placeholder so workflow authors can place it exactly where
-        // they want it. Templates that don't reference
-        // `{{retry_feedback_section}}` get an auto-appended safety-net
-        // copy below.
-        let retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
-        let uses_retry_section = template_uses_retry_section(template);
-
-        // Pull the per-feature user attachment manifest fresh on every
-        // agent turn (the same live-query pattern used for the gate
-        // decision in the line below) so a file added at the Gate
-        // view becomes visible to the redirected step without any
-        // extra wiring through `RetryContext`. The empty path is the
-        // no-feature-attachments case — substitution is a no-op.
-        let feature_for_attachments = self.features.get(&self.f_id).ok().flatten();
-        let feature_attachments_str = feature_for_attachments
-            .as_ref()
-            .map(|f| f.attachments.as_slice())
-            .unwrap_or(&[]);
-
-        // What the project's gates are, and what they already said about this
-        // repository (HB2c). Computed only when the template asks for it: it
-        // costs two DB reads, and every step that does not reference the token
-        // would otherwise pay them on every attempt.
-        //
-        // This is the fix for the failure in `docs/HARNESS_BASELINE.md` §1 —
-        // both validate attempts in `f-1785157902856` failed because the spec's
-        // acceptance criteria named commands the harness never ran. The
-        // `{{test_command}}` the spec prompt used instead has been wrong since
-        // harnesses became plural (HB5): a project gated on `lint` and `unit`
-        // runs neither that string nor one command.
-        let harness_briefing = if template.contains("{{harness_baseline}}") {
-            self.render_harness_briefing(feature_for_attachments.as_ref())
-        } else {
-            String::new()
-        };
-
-        let ctx = crate::adapters::step_executor::driver::rework::bind_rework_context(
-            self.base_ctx.clone(),
-            mode,
-            self.retry_ctx.as_ref(),
-        );
-        let prompt = ctx
-            .set("harness_baseline", &harness_briefing)
-            .set("retry_feedback_section", &retry_section)
-            .set("gate_feedback", &gate_feedback)
-            .set("gate_decision", &gate_decision)
-            .set("retry_feedback", &retry_feedback)
-            .set("iteration", &retry_iteration)
-            .set("max_iterations", &retry_max)
-            .set("session_resume_summary", &self.session_resume_summary)
-            .render(template);
-        let prompt = crate::adapters::step_executor::artifacts::resolve_attached_artifacts(
-            &prompt,
-            step_execs,
-            step_index,
-            &*self.artifacts,
-            &self.steps,
-        );
-        // `[attachment — <name>]` placeholders resolved against the
-        // feature's manifest, emitting a path-manifest block pointing
-        // at the worktree-local copy (created by `spawn.rs`
-        // pre-agent-turn) or the canonical FS store when no worktree
-        // is in scope.
-        let wt_ctx_dir = std::path::Path::new(&self.target_dir)
-            .join("_context")
-            .join("attachments")
-            .to_string_lossy()
-            .to_string();
-        let wt_ctx_opt: Option<&str> = if feature_attachments_str.is_empty() {
-            None
-        } else {
-            Some(wt_ctx_dir.as_str())
-        };
-        let prompt = crate::adapters::step_executor::artifacts::resolve_attached_user_attachments(
-            &prompt,
-            self.f_id.as_str(),
-            feature_attachments_str,
-            &*self.attachments,
-            wt_ctx_opt,
-        );
-        // Safety net: if the template opted in via
-        // `{{retry_feedback_section}}`, the section already appears in
-        // place; don't duplicate. If it didn't, append so the feedback
-        // reaches the agent anyway.
-        let prompt = if uses_retry_section {
-            prompt
-        } else {
-            append_retry_feedback_section(prompt, self.retry_ctx.as_ref())
-        };
-
-        let prompt = crate::adapters::step_executor::artifacts::inject_artifact_contract(
-            &prompt,
-            step_conf.artifacts.as_deref(),
-        );
-
-        // Prepend the capability's prohibitive Operating Boundary block —
-        // the prompt-level mirror of the OS fence and tool policy. Keeps a
-        // redirected non-implementation step from "just fixing" code.
-        let capability = step_conf.effective_capability();
-        let profile = crate::domain::permission::resolve_profile(
-            capability,
-            step_conf.allow_network,
-            step_conf.allow_shell,
-        );
-        let prompt = crate::adapters::step_executor::artifacts::inject_operating_boundary(
-            &prompt, capability, &profile,
-        );
+        let prompt = self.build_agent_prompt(ctx);
 
         let machine_str = self.machine_id().to_string();
 
@@ -210,16 +136,14 @@ impl ExecutionDriver {
                 ));
             }
         };
+        let wt = AgentWorktree {
+            machine: &machine_str,
+            subtask_id: &subtask_id,
+            path: &wt_path,
+        };
 
         if *self.cancel_watch.borrow() {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                 .await;
             return StepOutcome::Cancelled;
         }
@@ -228,8 +152,8 @@ impl ExecutionDriver {
         let worktree_snapshot =
             crate::adapters::step_executor::artifacts::WorktreeSnapshot::capture(
                 &*self.exec,
-                &machine_str,
-                &wt_path,
+                wt.machine,
+                wt.path,
             )
             .await;
 
@@ -240,57 +164,27 @@ impl ExecutionDriver {
         // cost; a green harness's output is injected into the step's single
         // agent turn, which writes the report artifact AND emits the verdict
         // JSON itself — no separate verifier session, no second test run.
-        let mut harness_section: Option<
-            crate::adapters::step_executor::driver::verifier::HarnessOutcome,
-        > = None;
+        let mut harness_section: Option<crate::domain::harness_outcome::HarnessOutcome> = None;
         if let Some(ref verifier_cfg) = step_conf.verifier {
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
                 step_id: step_exec.step_id.0.clone(),
                 status: "verifying".into(),
-                cost_usd: Some(*accumulated_cost),
-                tokens: Some(*accumulated_tokens),
-                wall_clock_secs: Some(step_start.elapsed().as_secs()),
+                cost_usd: Some(*spend.cost),
+                tokens: Some(*spend.tokens),
+                wall_clock_secs: Some(spend.start.elapsed().as_secs()),
                 cache_read_input_tokens: None,
                 cache_creation_input_tokens: None,
             });
             match self
-                .run_harness_first(step_exec, verifier_cfg, &wt_path, &machine_str)
+                .run_harness_first(step_exec, verifier_cfg, wt.path, wt.machine)
                 .await
             {
                 Ok(outcome) => harness_section = Some(outcome),
                 Err(err) => {
-                    let _ = self
-                        .git_ops
-                        .cleanup_subtask_worktree(
-                            self.machine_id_opt.as_deref(),
-                            &self.target_dir,
-                            &self.branch_name,
-                            &subtask_id,
-                        )
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                         .await;
-                    return match err {
-                        crate::domain::verifier::VerifierError::Verdict(failure) => {
-                            StepOutcome::VerdictFailed(failure)
-                        }
-                        crate::domain::verifier::VerifierError::Infrastructure(msg) => {
-                            StepOutcome::NonRetryable(format!(
-                                "[verifier infrastructure error — check verifier config] {}",
-                                msg
-                            ))
-                        }
-                        // Triaged (C6) as an environment problem: the box is not
-                        // provisioned, editing source can't fix it. The message
-                        // is already user-facing remediation and the
-                        // notification was fired at triage time — terminate now.
-                        crate::domain::verifier::VerifierError::Environment(msg) => {
-                            StepOutcome::NonRetryable(msg)
-                        }
-                        // Stop was pressed while the harness was running. Not
-                        // a failure — the worktree is already cleaned up above
-                        // and nothing should be persisted as an error.
-                        crate::domain::verifier::VerifierError::Cancelled => StepOutcome::Cancelled,
-                    };
+                    return err.into();
                 }
             }
         }
@@ -312,17 +206,10 @@ impl ExecutionDriver {
             );
         if let Err(e) = self
             .git_ops
-            .apply_artifact_scope(self.machine_id_opt.as_deref(), &wt_path, &writable_paths)
+            .apply_artifact_scope(self.machine_id_opt.as_deref(), wt.path, &writable_paths)
             .await
         {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                 .await;
             return StepOutcome::Environmental(format!("artifact scope setup failed: {}", e));
         }
@@ -330,7 +217,7 @@ impl ExecutionDriver {
         let worktree_base_ref = self
             .exec
             .run_command(
-                &machine_str,
+                wt.machine,
                 &format!(
                     "git -C {} rev-parse {}",
                     crate::paths::shell_escape_posix(&self.target_dir),
@@ -340,81 +227,39 @@ impl ExecutionDriver {
             .await
             .map(|s| s.trim().to_string())
             .ok();
+        let baseline = TurnBaseline {
+            snapshot: &worktree_snapshot,
+            base_ref: worktree_base_ref.as_deref(),
+        };
 
-        // Copy any external artifact paths referenced in path manifests into
-        // the worktree so opencode's `external_directory: deny` doesn't block
-        // the agent from reading them. The write is routed through the
-        // machine-aware exec port so remote worktrees receive the file via
-        // SSH instead of (the previous) std::fs which silently dropped the
-        // bytes on the wrong host.
-        let prompt =
-            crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
-                &prompt,
-                &wt_path,
-                &*self.exec,
-                &machine_str,
+        let prompt = self
+            .bind_worktree_context(
+                prompt,
+                wt,
+                step_conf.verifier.as_ref(),
+                harness_section.as_ref(),
             )
             .await;
-
-        // Single-turn validate contract: hand the agent the harness output
-        // the orchestrator already captured and require the verdict JSON at
-        // the end of its reply. The turn both writes the report artifact
-        // and issues the verdict — replacing the old flow of (agent re-runs
-        // tests) + (orchestrator re-runs tests) + (third verifier session).
-        // The harness block renders its own heading (`HarnessOutcome::
-        // render_section`) so this template cannot label an empty result
-        // "already executed by the orchestrator" — see S12.
-        //
-        // All three verdicts are offered. `environment` used to be described in
-        // the verifier's prose instructions while the JSON menu listed only
-        // pass and fail, so an agent that correctly judged a criterion
-        // *unprovable* still had to answer `fail` — which opens a rework loop
-        // that re-implements a feature whose defect is a project setting. That
-        // is not hypothetical: it cost $14.63 and 11M tokens in one observed
-        // run (S13).
-        let prompt = match (&step_conf.verifier, &harness_section) {
-            (Some(verifier_cfg), Some(outcome)) => format!(
-                "{prompt}\n\n\
-                 {section}\n\
-                 ## Required Verdict\n\
-                 {instructions}\n\
-                 {contract}",
-                prompt = prompt,
-                section = outcome.render_section(),
-                instructions = verifier_cfg.instructions,
-                contract = crate::adapters::step_executor::driver::verifier::verdict_contract(
-                    &verifier_cfg.verdict_key,
-                ),
-            ),
-            _ => prompt,
-        };
 
         // 1. Spawn session
         let session = match self
             .spawn_agent_session(
                 step_exec,
                 step_conf,
-                &agent_kind,
-                override_model.as_deref(),
-                effort,
-                &machine_str,
-                &wt_path,
+                target.agent_kind,
+                target.override_model,
+                target.effort,
+                wt.machine,
+                wt.path,
             )
             .await
         {
             Ok(s) => s,
             Err(e) => {
-                let _ = self
-                    .git_ops
-                    .cleanup_subtask_worktree(
-                        self.machine_id_opt.as_deref(),
-                        &self.target_dir,
-                        &self.branch_name,
-                        &subtask_id,
-                    )
+                self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                     .await;
                 let descriptive =
-                    error_message::format_agent_error_message(&e, &machine_str, &*self.exec).await;
+                    error_message::format_agent_error_message(&e, wt.machine, &*self.exec).await;
                 return StepOutcome::Failed(descriptive);
             }
         };
@@ -434,148 +279,72 @@ impl ExecutionDriver {
         // 2. Stream turn
         let mut run_failed = None;
         let mut run_cancelled = false;
-        let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
 
-        let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
-            &*session,
-            &prompt,
-            timeouts,
-            Some(self.cancel_watch.clone()),
-            &machine_str,
-            &*self.exec,
-            override_model.clone(),
-            self.pricing.clone(),
-            |event| {
-                if let AgentEvent::Text { delta } = event {
-                    let _ = self.notif.emit(&DomainEvent::AgentStream {
-                        feature_id: self.f_id.clone(),
-                        step_execution_id: step_exec.id.clone(),
-                        content: delta.clone(),
-                    });
-                    let _ = self.notif.emit(&DomainEvent::StepProgress {
-                        feature_id: self.f_id.clone(),
-                        step_id: step_exec.step_id.0.clone(),
-                        status: "running".into(),
-                        cost_usd: Some(*accumulated_cost),
-                        tokens: Some(*accumulated_tokens),
-                        wall_clock_secs: Some(step_start.elapsed().as_secs()),
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
-                    });
-                }
-            },
-        )
-        .await;
+        let turn_res = self
+            .run_agent_turn(&session, &prompt, ctx, target, wt, &spend)
+            .await;
 
         let mut produced_artifacts = Vec::new();
         let mut text_buffer = String::new();
 
-        match turn_res {
-            crate::adapters::agent::event_stream::TurnResult::Interrupted => {
-                run_cancelled = true;
+        match apply_turn_result(turn_res, &mut spend) {
+            TurnDisposition::Answered { text, produced } => {
+                produced_artifacts = produced;
+                text_buffer = text;
             }
-            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
-                run_failed = Some(StepOutcome::Failed(descriptive));
-            }
-            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
-                run_failed = Some(StepOutcome::Environmental(descriptive));
-            }
-            crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
-                *accumulated_cost += outcome.cost_usd;
-                *accumulated_tokens += outcome.tokens;
-                produced_artifacts = outcome.produced_artifacts;
-                text_buffer = outcome.text;
-                // Surface cache telemetry from the just-completed
-                // turn on the out-params. The driver loop reads
-                // these for the final `StepProgress` notification
-                // + DB row update so the UI's "Saved $X by cache"
-                // chip has fresh numbers.
-                *out_cache_read = Some(outcome.cache_read_input_tokens);
-                *out_cache_creation = Some(outcome.cache_creation_input_tokens);
-            }
+            TurnDisposition::Cancelled => run_cancelled = true,
+            TurnDisposition::Broken(outcome) => run_failed = Some(outcome),
         }
 
         if run_cancelled || *self.cancel_watch.borrow() {
-            let wall = step_start.elapsed().as_secs();
+            let wall = spend.start.elapsed().as_secs();
             let _ = self.features.step_update(
                 &step_exec.id,
                 &StepExecutionPatch {
                     last_failure_fingerprint: None,
                     iteration_count: None,
                     status: Some("interrupted".to_string()),
-                    cost_usd: Some(Some(*accumulated_cost)),
-                    tokens: Some(Some(*accumulated_tokens)),
+                    cost_usd: Some(Some(*spend.cost)),
+                    tokens: Some(Some(*spend.tokens)),
                     wall_clock_secs: Some(wall).map(|_v| Some(wall)),
                     artifact_path: None,
                     artifact_paths: None,
                     error_message: Some(Some("Execution cancelled by user".to_string())),
-                    cache_read_input_tokens: Some(*out_cache_read),
-                    cache_creation_input_tokens: Some(*out_cache_creation),
+                    cache_read_input_tokens: Some(*spend.cache_read),
+                    cache_creation_input_tokens: Some(*spend.cache_creation),
                 },
             );
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
                 step_id: step_exec.step_id.0.clone(),
                 status: "interrupted".into(),
-                cost_usd: Some(*accumulated_cost),
-                tokens: Some(*accumulated_tokens),
+                cost_usd: Some(*spend.cost),
+                tokens: Some(*spend.tokens),
                 wall_clock_secs: Some(wall),
-                cache_read_input_tokens: *out_cache_read,
-                cache_creation_input_tokens: *out_cache_creation,
+                cache_read_input_tokens: *spend.cache_read,
+                cache_creation_input_tokens: *spend.cache_creation,
             });
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                 .await;
-            let _ = self.registry.kill(&session_key).await;
             return StepOutcome::Cancelled;
         }
 
         if let Some(failed_outcome) = run_failed {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                 .await;
-            let _ = self.registry.kill(&session_key).await;
             return failed_outcome;
         }
 
         // 3. Process artifacts (delta, diff, commit, resolve decls)
         let artifacts_res = self
-            .process_agent_artifacts(
-                step_exec,
-                step_conf,
-                &machine_str,
-                &wt_path,
-                &worktree_snapshot,
-                worktree_base_ref.as_deref(),
-                &mut produced_artifacts,
-            )
+            .process_agent_artifacts(step_exec, step_conf, wt, baseline, &mut produced_artifacts)
             .await;
 
         let (artifact_path, artifact_paths, missing_artifacts) = match artifacts_res {
             Ok((path, paths, missing)) => (path, paths, missing),
             Err(err) => {
-                let _ = self
-                    .git_ops
-                    .cleanup_subtask_worktree(
-                        self.machine_id_opt.as_deref(),
-                        &self.target_dir,
-                        &self.branch_name,
-                        &subtask_id,
-                    )
+                self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                     .await;
-                let _ = self.registry.kill(&session_key).await;
                 return StepOutcome::Failed(err);
             }
         };
@@ -590,23 +359,11 @@ impl ExecutionDriver {
                 == crate::domain::permission::StepCapability::Implement
             && !self
                 .git_ops
-                .has_new_commits(
-                    self.machine_id_opt.as_deref(),
-                    &wt_path,
-                    worktree_base_ref.as_deref(),
-                )
+                .has_new_commits(self.machine_id_opt.as_deref(), wt.path, baseline.base_ref)
                 .await
         {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                 .await;
-            let _ = self.registry.kill(&session_key).await;
             tracing::warn!(
                 feature_id = %self.f_id,
                 step_id = %step_exec.step_id.0,
@@ -626,91 +383,25 @@ impl ExecutionDriver {
         // objective half is green; the agent's verdict covers the
         // subjective half (correct and complete vs. the spec).
         if let Some(ref verifier_cfg) = step_conf.verifier {
-            use crate::adapters::step_executor::driver::verifier::{
-                parse_verdict_text, ParsedVerdict,
-            };
-            let mut verdict = parse_verdict_text(&text_buffer, &verifier_cfg.verdict_key);
-
-            // The turn produced no usable verdict object. Re-ask the SAME
-            // session with a strict JSON-only correction before giving up —
-            // one cheap resumed turn instead of a whole fresh verifier
-            // session.
-            if matches!(verdict, ParsedVerdict::Missing(_)) {
-                // Offers all three verdicts for the same reason the original
-                // contract does (S13): a correction that silently drops
-                // `environment` would push an agent that had correctly judged
-                // the criteria unprovable into `fail` on the retry.
-                let correction = format!(
-                    "Your previous reply did not end with a usable verdict object. \
-                     Reply with ONLY a single JSON object — no prose, no code fence — \
-                     of one of these forms:\n\
-                     {{ \"{key}\": \"pass\" }}\n\
-                     {{ \"{key}\": \"fail\", \"reason\": \"...\", \
-                     \"failing_tests\": [], \"implicated_files\": [] }}\n\
-                     {{ \"{key}\": \"environment\", \"reason\": \"...\" }}\n\
-                     Use `environment` when what you could not confirm is something \
-                     this project is not configured to run, rather than something the \
-                     implementation got wrong.",
-                    key = verifier_cfg.verdict_key,
-                );
-                let timeouts =
-                    crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
-                let correction_res = crate::adapters::agent::event_stream::stream_agent_turn(
-                    &*session,
-                    &correction,
-                    timeouts,
-                    Some(self.cancel_watch.clone()),
-                    &machine_str,
-                    &*self.exec,
-                    override_model.clone(),
-                    self.pricing.clone(),
-                    |_event| {},
-                )
+            let verdict = self
+                .read_step_verdict(&text_buffer, &session, verifier_cfg, target, wt, &mut spend)
                 .await;
-                if let crate::adapters::agent::event_stream::TurnResult::Success(outcome) =
-                    correction_res
-                {
-                    *accumulated_cost += outcome.cost_usd;
-                    *accumulated_tokens += outcome.tokens;
-                    verdict = parse_verdict_text(&outcome.text, &verifier_cfg.verdict_key);
-                }
-            }
 
-            match verdict {
-                ParsedVerdict::Pass => {
+            match verdict::verdict_disposition(verdict, &missing_artifacts) {
+                verdict::VerdictDisposition::Pass => {
                     tracing::info!(
                         feature_id = %self.f_id,
                         step_id = %step_exec.step_id.0,
                         "verdict: pass"
                     );
                 }
-                ParsedVerdict::Fail(mut failure) => {
+                verdict::VerdictDisposition::Fail(failure) => {
                     tracing::warn!(
                         feature_id = %self.f_id,
                         step_id = %step_exec.step_id.0,
                         reason = %failure.reason,
                         "verdict: fail"
                     );
-                    // S14: record what the turn *did* produce, and say so when
-                    // it didn't. This return used to jump the declared-artifact
-                    // check and the path persistence further down, so a
-                    // validate step that failed on a verdict left
-                    // `artifact_paths` empty even when its report existed on
-                    // disk — and "the agent judged the work and rejected it"
-                    // became indistinguishable from "the agent never wrote its
-                    // report" in the row.
-                    //
-                    // Deliberately not converted into an artifact *failure*:
-                    // the verdict is the more actionable outcome and its reason
-                    // is what the rework step reads. A missing report is
-                    // appended to that reason instead of replacing it, because
-                    // the step downstream attaches `[attached — s-validate]`
-                    // and will find nothing there.
-                    failure.reason =
-                        crate::adapters::step_executor::artifacts::note_undelivered_artifacts(
-                            &failure.reason,
-                            &missing_artifacts,
-                        );
                     let _ = self.features.step_update(
                         &step_exec.id,
                         &StepExecutionPatch {
@@ -719,63 +410,25 @@ impl ExecutionDriver {
                             ..Default::default()
                         },
                     );
-                    let _ = self
-                        .git_ops
-                        .cleanup_subtask_worktree(
-                            self.machine_id_opt.as_deref(),
-                            &self.target_dir,
-                            &self.branch_name,
-                            &subtask_id,
-                        )
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                         .await;
-                    let _ = self.registry.kill(&session_key).await;
                     return StepOutcome::VerdictFailed(failure);
                 }
-                // The criteria this step could not satisfy demand something
-                // the *project* is not configured to do — a build or test
-                // command that was never set. Re-running the implementation
-                // cannot add a setting, so opening a rework loop here would
-                // spend the whole retry budget re-implementing a feature
-                // that was already correct and end no better informed.
-                // Terminate once, carrying remediation the user can act on.
-                ParsedVerdict::Environment(reason) => {
+                verdict::VerdictDisposition::Unjudgeable { reason, message } => {
                     tracing::warn!(
                         feature_id = %self.f_id,
                         step_id = %step_exec.step_id.0,
                         reason = %reason,
                         "verdict: environment — unjudgeable criteria, not an implementation defect"
                     );
-                    let _ = self
-                        .git_ops
-                        .cleanup_subtask_worktree(
-                            self.machine_id_opt.as_deref(),
-                            &self.target_dir,
-                            &self.branch_name,
-                            &subtask_id,
-                        )
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                         .await;
-                    let _ = self.registry.kill(&session_key).await;
-                    return StepOutcome::NonRetryable(format!(
-                        "[project configuration — retrying cannot fix this] {}",
-                        reason
-                    ));
+                    return StepOutcome::NonRetryable(message);
                 }
-                ParsedVerdict::Missing(desc) => {
-                    let _ = self
-                        .git_ops
-                        .cleanup_subtask_worktree(
-                            self.machine_id_opt.as_deref(),
-                            &self.target_dir,
-                            &self.branch_name,
-                            &subtask_id,
-                        )
+                verdict::VerdictDisposition::NoVerdict(message) => {
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                         .await;
-                    let _ = self.registry.kill(&session_key).await;
-                    return StepOutcome::NonRetryable(format!(
-                        "[verifier infrastructure error — no usable verdict from the \
-                         validate turn] {}",
-                        desc
-                    ));
+                    return StepOutcome::NonRetryable(message);
                 }
             }
         }
@@ -789,37 +442,21 @@ impl ExecutionDriver {
             .git_ops
             .verify_and_revert_out_of_scope_writes(
                 self.machine_id_opt.as_deref(),
-                &wt_path,
+                wt.path,
                 &writable_paths,
             )
             .await
         {
             Ok(v) => v,
             Err(e) => {
-                let _ = self
-                    .git_ops
-                    .cleanup_subtask_worktree(
-                        self.machine_id_opt.as_deref(),
-                        &self.target_dir,
-                        &self.branch_name,
-                        &subtask_id,
-                    )
+                self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                     .await;
-                let _ = self.registry.kill(&session_key).await;
                 return StepOutcome::Failed(format!("out-of-scope diff check failed: {}", e));
             }
         };
         if !reverted.is_empty() {
-            let _ = self
-                .git_ops
-                .cleanup_subtask_worktree(
-                    self.machine_id_opt.as_deref(),
-                    &self.target_dir,
-                    &self.branch_name,
-                    &subtask_id,
-                )
+            self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                 .await;
-            let _ = self.registry.kill(&session_key).await;
             self.capture_signal(
                 Some(step_exec.id.0.clone()),
                 crate::domain::memory::SignalKind::Retry,
@@ -841,9 +478,9 @@ impl ExecutionDriver {
             .git_ops
             .merge_subtask(
                 self.machine_id_opt.as_deref(),
-                &wt_path,
+                wt.path,
                 &self.branch_name,
-                &subtask_id,
+                wt.subtask_id,
             )
             .await;
 
@@ -856,12 +493,14 @@ impl ExecutionDriver {
                 .resolve_merge_conflicts_via_agent(
                     step_exec,
                     &*session,
-                    &machine_str,
-                    &wt_path,
-                    override_model.as_deref(),
-                    accumulated_cost,
-                    accumulated_tokens,
-                    step_start,
+                    wt.machine,
+                    wt.path,
+                    target.override_model,
+                    RunningSpend {
+                        cost: spend.cost,
+                        tokens: spend.tokens,
+                        start: spend.start,
+                    },
                 )
                 .await
             {
@@ -871,15 +510,15 @@ impl ExecutionDriver {
                 Ok(ConflictPass::Resolved(billing)) => {
                     // Conflict resolution is always an agent step's last turn,
                     // so its cache counts are the ones the UI should show.
-                    *out_cache_read = Some(billing.cache_read_input_tokens);
-                    *out_cache_creation = Some(billing.cache_creation_input_tokens);
+                    *spend.cache_read = Some(billing.cache_read_input_tokens);
+                    *spend.cache_creation = Some(billing.cache_creation_input_tokens);
                     merge_result = self
                         .git_ops
                         .merge_subtask(
                             self.machine_id_opt.as_deref(),
-                            &wt_path,
+                            wt.path,
                             &self.branch_name,
-                            &subtask_id,
+                            wt.subtask_id,
                         )
                         .await;
                 }
@@ -893,353 +532,30 @@ impl ExecutionDriver {
             }
         }
 
-        let outcome = if run_cancelled || *self.cancel_watch.borrow() {
-            let wall = step_start.elapsed().as_secs();
-            let _ = self.features.step_update(
-                &step_exec.id,
-                &StepExecutionPatch {
-                    last_failure_fingerprint: None,
-                    iteration_count: None,
-                    status: Some("interrupted".to_string()),
-                    cost_usd: Some(Some(*accumulated_cost)),
-                    tokens: Some(Some(*accumulated_tokens)),
-                    wall_clock_secs: Some(wall).map(|_v| Some(wall)),
-                    artifact_path: None,
-                    artifact_paths: None,
-                    error_message: Some(Some("Execution cancelled by user".to_string())),
-                    cache_read_input_tokens: Some(*out_cache_read),
-                    cache_creation_input_tokens: Some(*out_cache_creation),
-                },
-            );
-            let _ = self.notif.emit(&DomainEvent::StepProgress {
-                feature_id: self.f_id.clone(),
-                step_id: step_exec.step_id.0.clone(),
-                status: "interrupted".into(),
-                cost_usd: Some(*accumulated_cost),
-                tokens: Some(*accumulated_tokens),
-                wall_clock_secs: Some(wall),
-                cache_read_input_tokens: *out_cache_read,
-                cache_creation_input_tokens: *out_cache_creation,
-            });
-            StepOutcome::Cancelled
-        } else if let Some(failed_outcome) = run_failed {
-            failed_outcome
-        } else {
-            match merge_result {
-                // The step ran to a clean merge, but a declared
-                // deliverable (`ByName` / `LastWriteTo`) never
-                // materialised — fail instead of marking a green step
-                // with an empty artifact. This is the visible signal for
-                // the "agent ran but produced no plan/spec/report"
-                // misconfiguration class (bad model/tooling, a project
-                // `opencode.json` that blocks writes, agent wrote to the
-                // wrong path). The driver persists this message as the
-                // step's `error_message`, which the UI renders on the
-                // failed step, and routes it through `on_failure` retry.
-                Ok(()) if !missing_artifacts.is_empty() => {
-                    let deliverables = missing_artifacts
-                        .iter()
-                        .map(|m| format!("'{}' ({})", m.name, m.detail))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let plural = if missing_artifacts.len() == 1 {
-                        "declared artifact was"
-                    } else {
-                        "declared artifacts were"
-                    };
-                    StepOutcome::Failed(format!(
-                        "The step completed but {count} {plural} never produced: {deliverables}. \
-                         The agent ran but did not write its required deliverable — it may have \
-                         failed, written to a different path, or been blocked by its model/config \
-                         or the project's `opencode.json` (MCP servers, tool permissions). \
-                         Nothing downstream can consume this step.",
-                        count = missing_artifacts.len(),
-                        plural = plural,
-                        deliverables = deliverables,
-                    ))
-                }
-                Ok(()) => {
-                    let wall = step_start.elapsed().as_secs();
-                    let _ = self.features.step_update(
-                        &step_exec.id,
-                        &StepExecutionPatch {
-                            last_failure_fingerprint: None,
-                            iteration_count: None,
-                            status: Some("completed".to_string()),
-                            cost_usd: Some(Some(*accumulated_cost)),
-                            tokens: Some(Some(*accumulated_tokens)),
-                            wall_clock_secs: Some(wall).map(|_v| Some(wall)),
-                            artifact_path: Some(artifact_path),
-                            artifact_paths: Some(artifact_paths),
-                            error_message: Some(None),
-                            cache_read_input_tokens: Some(*out_cache_read),
-                            cache_creation_input_tokens: Some(*out_cache_creation),
-                        },
-                    );
-                    let _ = self.notif.emit(&DomainEvent::StepProgress {
-                        feature_id: self.f_id.clone(),
-                        step_id: step_exec.step_id.0.clone(),
-                        status: "completed".into(),
-                        cost_usd: Some(*accumulated_cost),
-                        tokens: Some(*accumulated_tokens),
-                        wall_clock_secs: Some(wall),
-                        cache_read_input_tokens: *out_cache_read,
-                        cache_creation_input_tokens: *out_cache_creation,
-                    });
-                    // Capture the agent's final summary as a signal for the
-                    // memory worker. Cap length to keep the queue lightweight.
-                    let summary = text_buffer.trim();
-                    if !summary.is_empty() {
-                        let capped: String = summary.chars().take(4000).collect();
-                        self.capture_signal(
-                            Some(step_exec.id.0.clone()),
-                            crate::domain::memory::SignalKind::AgentSummary,
-                            format!(
-                                "Step '{}' completed. Agent summary:\n{}",
-                                step_exec.step_id.0, capped
-                            ),
-                        );
-                    }
-                    StepOutcome::Completed
-                }
-                Err(err) => StepOutcome::Failed(format!("agent step merge failed: {}", err)),
-            }
-        };
+        let outcome = self.settle_agent_step(
+            ctx,
+            &spend,
+            StepClose {
+                cancelled: run_cancelled,
+                failed: run_failed,
+                merge: merge_result,
+                artifact_path,
+                artifact_paths,
+                missing: &missing_artifacts,
+                text: &text_buffer,
+            },
+        );
 
         // Cleanup temporary worktree in all cases.
-        let _ = self
-            .git_ops
-            .cleanup_subtask_worktree(
-                self.machine_id_opt.as_deref(),
-                &self.target_dir,
-                &self.branch_name,
-                &subtask_id,
-            )
-            .await;
-
-        // The verifier is always its own session (keyed by
-        // `{f_id}-verifier`) — kill it regardless of outcome so
-        // the registry entry doesn't leak. The MAIN agent session
-        // (keyed by `f_id`) is preserved on success so the next
-        // step can `--continue` against the same captured session
-        // id; only kill on failure / cancellation paths (handled
-        // inline above in each early-return branch).
-        let _ = self
-            .registry
-            .kill(&format!("{}-verifier", self.f_id.as_str()))
-            .await;
-
-        if !matches!(outcome, StepOutcome::Completed) {
-            let _ = self.registry.kill(&session_key).await;
-        }
+        self.tear_down_agent_step(
+            wt,
+            target,
+            SessionDisposition::Settle {
+                completed: matches!(outcome, StepOutcome::Completed),
+            },
+        )
+        .await;
 
         outcome
     }
 }
-
-/// Format the "Previous Attempt Feedback" section as a self-contained
-/// string. Returns `""` when there's no retry or no feedback.
-///
-/// Two-step pattern: this helper produces the formatted text, then
-/// callers either inject it via the `{{retry_feedback_section}}`
-/// placeholder (workflow authors can place it exactly where they
-/// want it in their template) or auto-append it at the end of the
-/// prompt (safety net for templates that don't reference the
-/// placeholder). The pattern scales to other transient context
-/// (`{{gate_feedback_section}}`, etc.) — see `template_uses_retry_section`
-/// for the detection helper.
-pub(crate) fn format_retry_feedback_section(retry_ctx: Option<&RetryContext>) -> String {
-    let Some(rc) = retry_ctx else {
-        return String::new();
-    };
-    if rc.feedback.trim().is_empty() {
-        return String::new();
-    }
-    format!(
-        "\n\n---\n\n## Previous Attempt Feedback\n\
-         This step is being retried because the previous attempt was redirected \
-         (or otherwise failed). Apply this guidance by revising *this step's own \
-         artifact* — your role and Operating Boundary are unchanged. The feedback \
-         is direction for your deliverable, not a request to take on the next \
-         step's job (e.g. a redirected spec/research step revises its document; it \
-         does not start implementing). Do not ignore the feedback or redo the same \
-         thing:\n\n\
-         {}\n",
-        rc.feedback
-    )
-}
-
-/// True when the template opts into the new placement-by-placeholder
-/// behavior. When true, the caller should NOT auto-append (the section
-/// already appears where the template asked for it). When false, the
-/// caller should auto-append as a safety net.
-pub(crate) fn template_uses_retry_section(template: &str) -> bool {
-    template.contains("{{retry_feedback_section}}")
-}
-
-/// Safety-net fallback: append the formatted section to a prompt
-/// that didn't reference `{{retry_feedback_section}}`. Idempotent —
-/// no-op when there's nothing to append.
-pub(crate) fn append_retry_feedback_section(
-    prompt: String,
-    retry_ctx: Option<&RetryContext>,
-) -> String {
-    let section = format_retry_feedback_section(retry_ctx);
-    if section.is_empty() {
-        prompt
-    } else {
-        format!("{}{}", prompt, section)
-    }
-}
-
-// ── NodeHandler registration (P1.6) ───────────────────────────────────────────
-
-/// The `agent` node type behind the [`NodeHandler`] seam. Pure
-/// delegation: execution is [`ExecutionDriver::handle_agent_step`],
-/// byte-for-byte the behavior the old `match` arm dispatched.
-///
-/// [`NodeHandler`]: crate::adapters::step_executor::registry::NodeHandler
-pub(crate) struct AgentNodeHandler;
-
-/// JSON Schema for the `agent` node's `config` payload — the residual
-/// [`StepConfig`] fields the v1→v2 migration leaves in `config` after
-/// lifting id/kind/title/on_failure/task_list_from into first-class
-/// structure (see `workflow_migrate.rs::LIFTED_FIELDS`).
-#[allow(dead_code)] // Read via `NodeHandler::config_schema` (first runtime caller: P3.1).
-static AGENT_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
-    std::sync::LazyLock::new(|| {
-        serde_json::json!({
-            "type": "object",
-            "description": "Configuration for an `agent` node: one agent turn \
-                against the feature worktree, producing declared artifacts \
-                and optionally verified by a harness/verifier turn.",
-            "properties": {
-                "agent_kind": {
-                    "type": ["string", "null"],
-                    "description": "Per-step agent runtime override (e.g. \
-                        `claude-code`). Unset inherits the run/project chain."
-                },
-                "model": {
-                    "type": ["string", "null"],
-                    "description": "Per-step model override. Resolves below the \
-                        run-time per-step override, above the project default."
-                },
-                "effort": {
-                    "type": ["string", "null"],
-                    "enum": ["low", "medium", "high", "xhigh", "max", null],
-                    "description": "Per-step reasoning-effort override. \
-                        Unset inherits."
-                },
-                "prompt_template": {
-                    "type": ["string", "null"],
-                    "description": "The step's prompt template. Supports the \
-                        `{{...}}` placeholders documented in PROMPT_CONTEXT."
-                },
-                "rework_prompt_template": {
-                    "type": ["string", "null"],
-                    "description": "Prompt rendered instead of \
-                        `prompt_template` when a verdict from behind this \
-                        step's task-list consumer sends the run back here \
-                        — the previous cycle's code is already on the \
-                        branch, so the step emits a delta rather than a \
-                        whole decomposition. Unset falls back to \
-                        `prompt_template`."
-                },
-                "max_iterations": {
-                    "type": ["integer", "null"],
-                    "minimum": 1,
-                    "description": "v1 legacy retry budget. In v2 the retry \
-                        block owns budgets; migration lifts this when an \
-                        on_failure existed, and keeps it here only as inert \
-                        author intent."
-                },
-                "artifacts": {
-                    "type": ["array", "null"],
-                    "description": "Declared artifact captures \
-                        (name/path/capture strategy) committed or stored after \
-                        the turn.",
-                    "items": { "type": "object" }
-                },
-                "verifier": {
-                    "type": ["object", "null"],
-                    "description": "Optional harness/verifier turn run after \
-                        the agent turn; a FAIL verdict feeds the retry policy."
-                },
-                "capability": {
-                    "type": ["string", "null"],
-                    "enum": ["read_only", "artifacts", "verify", "implement", null],
-                    "description": "Write-scope capability class (ReadOnly / \
-                        Artifacts / Implement). Unset infers the safe default."
-                },
-                "allow_network": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Opt this step into web search / fetch."
-                },
-                "allow_shell": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Opt a non-shell capability into the shell."
-                }
-            },
-            "additionalProperties": true
-        })
-    });
-
-#[async_trait::async_trait]
-impl crate::adapters::step_executor::registry::NodeHandler for AgentNodeHandler {
-    fn kind(&self) -> &'static str {
-        "agent"
-    }
-
-    fn config_schema(&self) -> &'static serde_json::Value {
-        &AGENT_CONFIG_SCHEMA
-    }
-
-    fn display(&self) -> crate::adapters::step_executor::registry::NodeDisplay {
-        crate::adapters::step_executor::registry::NodeDisplay {
-            label: "Agent",
-            summary: "One agent turn against the feature worktree: writes the \
-                      declared artifacts, optionally checked by a verifier.",
-        }
-    }
-
-    fn ports(&self) -> crate::adapters::step_executor::registry::NodePorts {
-        use crate::domain::models::workflow_v2::PortType;
-        crate::adapters::step_executor::registry::NodePorts {
-            inputs: &[PortType::Any],
-            // An agent turn can emit prose, files, a task plan (the v1
-            // `task-list.json` a sequence node consumes), and — when a
-            // verifier is attached — a verdict.
-            outputs: &[
-                PortType::Text,
-                PortType::File,
-                PortType::TaskList,
-                PortType::Verdict,
-            ],
-        }
-    }
-
-    async fn execute(
-        &self,
-        ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,
-    ) -> StepOutcome {
-        ctx.driver
-            .handle_agent_step(
-                ctx.step_exec,
-                ctx.step_conf,
-                ctx.accumulated_cost,
-                ctx.accumulated_tokens,
-                ctx.step_start,
-                ctx.step_index,
-                ctx.step_execs,
-                ctx.out_cache_read,
-                ctx.out_cache_creation,
-            )
-            .await
-    }
-}
-
-#[cfg(test)]
-#[path = "../../../../../tests/infrastructure/step_executor/steps/agent.rs"]
-mod retry_feedback_tests;

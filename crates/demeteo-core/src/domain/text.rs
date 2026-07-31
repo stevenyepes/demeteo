@@ -117,6 +117,22 @@ pub(crate) fn find_matching_close_brace(bytes: &[u8], start: usize) -> Option<us
     None
 }
 
+/// Truncate `s` to at most `max` characters, keeping the *tail* rather
+/// than the head. Build/test failures are almost always at the end of
+/// the output (the failing assertion, the panic message, the compiler
+/// error) — a long build log's useful signal is at the bottom. Keeping
+/// the head instead (the previous behavior) surfaced the install/build
+/// banner and truncated away exactly the information the retry loop
+/// needs to act on.
+pub fn tail_chars(s: &str, max: usize) -> String {
+    let total = s.chars().count();
+    if total <= max {
+        return s.to_string();
+    }
+    let skip = total - max;
+    s.chars().skip(skip).collect()
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/text.rs"]
 mod tests;

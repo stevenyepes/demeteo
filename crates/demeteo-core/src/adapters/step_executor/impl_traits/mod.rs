@@ -1,13 +1,29 @@
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 use tokio::sync::watch;
+
+/// Take one of the executor's in-memory lookup maps, surviving a poisoned lock.
+///
+/// `cancel_senders` and `gate_waiters` are registries — one entry per running
+/// feature, one per step execution awaiting a decision. A panic elsewhere
+/// while the lock is held leaves the map itself structurally fine, so
+/// poisoning here is evidence that some other task died, not that this data is
+/// bad. Propagating it would trade one task's panic for a Stop button that can
+/// never fire again and a gate that can never be answered for the rest of the
+/// process's life — which is the worse of the two failures by a wide margin.
+fn lock_registry<T>(map: &Mutex<T>) -> MutexGuard<'_, T> {
+    map.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 use crate::adapters::step_executor::preflight::PREFLIGHT_PROBE_TIMEOUT_S;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::application::attachments::{commit_staged_attachments, StagedAttachmentInput};
 use crate::domain::ids::{FeatureId, GateDecisionId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{Feature, GateDecision, StepExecution};
+use crate::domain::run_control::{
+    active_predecessor_refusal, retry_refusal, shadow_refusal, RunAction,
+};
 use crate::error::AppError;
 use crate::paths;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
@@ -20,6 +36,7 @@ use super::DagStepExecutor;
 
 pub(crate) mod execution_context;
 pub(crate) mod replay;
+pub(crate) mod startup_recovery;
 
 /// Bootstrap phase vocabulary — `(id, label)`. Emitted as
 /// [`DomainEvent::BootstrapProgress`] during [`StepExecutor::feature_start`]
@@ -353,10 +370,7 @@ impl DagStepExecutor {
         self.driver_registry.register(f_id.clone());
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        self.cancel_senders
-            .lock()
-            .unwrap()
-            .insert(feature_id.to_string(), cancel_tx);
+        lock_registry(&self.cancel_senders).insert(feature_id.to_string(), cancel_tx);
 
         // Snapshot agent/model + loop-budget resolution inputs. Project
         // defaults come from the resolved settings; the per-run overrides
@@ -475,11 +489,7 @@ impl DagStepExecutor {
         // steps do sit in `awaiting_gate`) would otherwise arm a local
         // driver against a run another machine is driving.
         if self.runner_owned_features().contains(feature_id) {
-            return Err(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 this machine never drives it (decide its gates via the remote run instead)",
-                feature_id
-            ));
+            return Err(shadow_refusal(RunAction::Drive, feature_id));
         }
 
         let feature = self
@@ -641,13 +651,9 @@ impl StepExecutor for DagStepExecutor {
         // rather than find no sender in the map and report success — a
         // silent `Ok` here is a "Stop" the user watched do nothing.
         if self.runner_owned_features().contains(feature_id) {
-            return Err(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 cancel it on the runner (remote_cancel_run), not locally",
-                feature_id
-            ));
+            return Err(shadow_refusal(RunAction::Cancel, feature_id));
         }
-        if let Some(tx) = self.cancel_senders.lock().unwrap().get(feature_id) {
+        if let Some(tx) = lock_registry(&self.cancel_senders).get(feature_id) {
             let _ = tx.send(true);
         }
         Ok(())
@@ -675,14 +681,8 @@ impl StepExecutor for DagStepExecutor {
                 AppError::not_found(format!("Step execution not found: {}", execution_id))
             })?;
 
-        if step_exec.status != "failed"
-            && step_exec.status != "interrupted"
-            && step_exec.status != "pending"
-        {
-            return Err(AppError::validation(format!(
-                "Cannot retry a step in '{}' status. Only failed or interrupted steps can be retried.",
-                step_exec.status
-            )));
+        if let Some(refusal) = retry_refusal(&step_exec.status) {
+            return Err(AppError::validation(refusal));
         }
 
         self.assert_no_active_predecessors(&step_exec, "retrying this step")?;
@@ -698,10 +698,9 @@ impl StepExecutor for DagStepExecutor {
             .runner_owned_features()
             .contains(step_exec.feature_id.as_str())
         {
-            return Err(AppError::validation(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 this machine cannot retry its steps",
-                step_exec.feature_id.0
+            return Err(AppError::validation(shadow_refusal(
+                RunAction::Retry,
+                &step_exec.feature_id.0,
             )));
         }
 
@@ -795,10 +794,9 @@ impl GatePresenter for DagStepExecutor {
             .runner_owned_features()
             .contains(step_exec.feature_id.as_str())
         {
-            return Err(AppError::validation(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 decide this gate on the runner (remote_decide_gate), not locally",
-                step_exec.feature_id.0
+            return Err(AppError::validation(shadow_refusal(
+                RunAction::DecideGate,
+                &step_exec.feature_id.0,
             )));
         }
 
@@ -832,10 +830,7 @@ impl GatePresenter for DagStepExecutor {
         //    step's waiter, deliver the decision in-memory. Missing
         //    waiter is *not* an error — the DB row will be picked up
         //    when the driver reconciles on its next startup.
-        if let Some(waiter) = self
-            .gate_waiters
-            .lock()
-            .unwrap()
+        if let Some(waiter) = lock_registry(&self.gate_waiters)
             .get(step_execution_id)
             .cloned()
         {
@@ -862,23 +857,13 @@ impl GatePresenter for DagStepExecutor {
 }
 
 impl DagStepExecutor {
-    /// Refuse to act on `target` while any of its graph *ancestors* is
-    /// still non-terminal (`pending`, `running`, `verifying`, or
-    /// `awaiting_gate`). Used by `step_retry` and `gate_decide` so a stale
-    /// retry / approve click does not race a still-running dependency.
+    /// Read what [`active_predecessor_refusal`] needs — the feature's step
+    /// rows and its ancestor set — and obey the answer. Used by `step_retry`
+    /// and `gate_decide`.
     ///
     /// The ancestor set comes from the feature's pinned workflow version
-    /// migrated to the v2 graph (P1.12) — for a v1 chain that is exactly
-    /// the old `step_index <` predecessor set, and for a DAG it correctly
-    /// leaves independent branches undisturbed. When the graph cannot be
-    /// resolved (legacy feature without a matching workflow, unparseable
-    /// version row), the guard falls back to the index comparison rather
-    /// than failing open.
-    ///
-    /// `intent` is the user-facing phrase that follows "before" in the
-    /// returned message (e.g. "retrying this step", "deciding this gate").
-    /// It is purely cosmetic so the two call sites can give the user a
-    /// tailored sentence.
+    /// migrated to the v2 graph (P1.12). A resolution miss hands `None` to the
+    /// policy, which has its own fallback.
     pub(crate) fn assert_no_active_predecessors(
         &self,
         target: &StepExecution,
@@ -897,28 +882,10 @@ impl DagStepExecutor {
                     .map(|set| set.into_iter().cloned().collect())
             });
 
-        for s in &siblings {
-            if s.id == target.id {
-                continue;
-            }
-            let blocks = match &ancestors {
-                Some(set) => set.contains(&s.step_id),
-                None => s.step_index < target.step_index,
-            };
-            if !blocks {
-                continue;
-            }
-            if matches!(
-                s.status.as_str(),
-                "pending" | "running" | "verifying" | "awaiting_gate"
-            ) {
-                return Err(AppError::validation(format!(
-                    "Step '{}' is still {}; wait for it to finish before {}.",
-                    s.step_id.0, s.status, intent
-                )));
-            }
+        match active_predecessor_refusal(target, &siblings, ancestors.as_ref(), intent) {
+            Some(refusal) => Err(AppError::validation(refusal)),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Best-effort resolution of a feature's scheduling graph: pinned
@@ -937,178 +904,5 @@ impl DagStepExecutor {
             .ok()?;
         let def = version.definition(wf_id.as_str());
         crate::domain::workflow_graph::WorkflowGraph::build(&def).ok()
-    }
-
-    /// Reconcile DB + notifications for any features that were left
-    /// mid-run by a previous process. Synchronous (no driver spawns) so
-    /// it can be called from the Tauri setup hook before the runtime
-    /// hands control to user-driven tasks. Pair with
-    /// [`resume_interrupted_features`] which spawns the actual drivers.
-    ///
-    /// Features present in the remote-run mirror (C4.2) are skipped:
-    /// those rows are read-only *shadows* of features a `demeteo-runner`
-    /// owns and is still driving on another machine. A shadow tracking a
-    /// live remote run legitimately sits in `running`/`gated` across an
-    /// app restart — no local process was ever driving it — so the
-    /// watchdog must not mark its steps interrupted or re-emit gate
-    /// prompts for it.
-    pub fn startup_watchdog(&self) {
-        let runner_owned = self.runner_owned_features();
-        let Ok(projects) = self.projects.get_projects() else {
-            return;
-        };
-        for p in &projects {
-            if let Ok(active) = self.features.get_active(&p.id) {
-                for f in active {
-                    if runner_owned.contains(f.id.as_str()) {
-                        continue;
-                    }
-                    if f.status == "running" || f.status == "gated" {
-                        let _ = self.projects.update_status(&p.id, "idle");
-                        if let Ok(steps) = self.features.steps_for_feature(&f.id) {
-                            for s in steps {
-                                if s.status == "running" || s.status == "awaiting_gate" {
-                                    let was_awaiting = s.status == "awaiting_gate";
-                                    // The step is being marked interrupted, so any
-                                    // `running` subtask_runs row of its sequence
-                                    // task loop is stale — close it, or the
-                                    // dashboard's "nodes" count (which counts
-                                    // running rows) over-reports forever.
-                                    if let Err(e) = self
-                                        .subtask_runs
-                                        .subtask_runs_interrupt_stale(&s.id, paths::now_ms())
-                                    {
-                                        tracing::warn!(
-                                            step_execution_id = %s.id.0,
-                                            error = %e,
-                                            "startup watchdog: could not close stale subtask_runs rows"
-                                        );
-                                    }
-                                    let _ = self.features.step_update(
-                                        &s.id,
-                                        &StepExecutionPatch {
-                                            last_failure_fingerprint: None,
-                                            status: Some("interrupted".to_string()),
-                                            cost_usd: s.cost_usd.map(Some),
-                                            wall_clock_secs: s.wall_clock_secs.map(Some),
-                                            artifact_path: s
-                                                .artifact_path
-                                                .as_deref()
-                                                .map(|v| Some(v.to_string())),
-                                            artifact_paths: Some(s.artifact_paths.clone()),
-                                            error_message: Some(Some(if was_awaiting {
-                                                "Gate interrupted by system restart".to_string()
-                                            } else {
-                                                "Step interrupted by system restart".to_string()
-                                            })),
-                                            ..Default::default()
-                                        },
-                                    );
-                                    if !was_awaiting {
-                                        let gate_dec_id =
-                                            GateDecisionId::from(format!("gd-syn-{}", s.id.0));
-                                        let gate_dec = GateDecision {
-                                            id: gate_dec_id,
-                                            step_execution_id: s.id.clone(),
-                                            decision: None,
-                                            feedback: None,
-                                            created_at: paths::now_ms(),
-                                        };
-                                        let _ = self.gates.create(gate_dec);
-                                    }
-                                    let _ = self.notif.emit(&DomainEvent::GateRequired {
-                                        feature_id: f.id.clone(),
-                                        step_execution_id: s.id.clone(),
-                                    });
-                                }
-                            }
-                            let _ = self.features.update(
-                                &f.id,
-                                &FeaturePatch {
-                                    status: Some("awaiting_gate".to_string()),
-                                    ..Default::default()
-                                },
-                            );
-                            let _ = self.notif.emit(&DomainEvent::FeatureStatusChanged {
-                                feature_id: f.id.clone(),
-                                status: "awaiting_gate".into(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        // Second pass: orphaned-pending reconciliation.
-        // Hard-kills (OOM, crash, force-quit) leave step_executions with
-        // status='pending' when the feature was already cancelled or failed.
-        // These steps can never advance — mark them interrupted so the UI
-        // shows a clean terminal state instead of a perpetual spinner.
-        for p in &projects {
-            if let Ok(all_features) = self.features.get_active(&p.id) {
-                for f in all_features {
-                    if runner_owned.contains(f.id.as_str()) {
-                        // A shadow's pending steps mirror the runner's own
-                        // rows mid-hydration — not orphans of a local crash.
-                        continue;
-                    }
-                    if !matches!(f.status.as_str(), "cancelled" | "failed") {
-                        continue;
-                    }
-                    if let Ok(steps) = self.features.steps_for_feature(&f.id) {
-                        for s in steps.iter().filter(|s| s.status == "pending") {
-                            let _ = self.features.step_update(
-                                &s.id,
-                                &StepExecutionPatch {
-                                    last_failure_fingerprint: None,
-                                    status: Some("interrupted".to_string()),
-                                    error_message: Some(Some(
-                                        "Step orphaned: feature ended before step ran".to_string(),
-                                    )),
-                                    ..Default::default()
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Resume every feature that [`startup_watchdog`] marked as
-    /// `awaiting_gate`. Idempotent via [`DriverRegistry`]: if the
-    /// runtime already has a driver alive for a feature, it's a no-op.
-    ///
-    /// Called once from the Tauri setup hook on a background task so
-    /// that the gate prompts the watchdog re-emitted are actually
-    /// backed by a live driver.
-    ///
-    /// Mirror-listed shadows are skipped (same rule as
-    /// [`startup_watchdog`]): a shadow in `awaiting_gate`/`gated` is
-    /// parked on the *runner*, not here — arming a local driver against
-    /// it would have two engines driving one feature.
-    pub async fn resume_interrupted_features(self: Arc<Self>) {
-        let runner_owned = self.runner_owned_features();
-        let Ok(projects) = self.projects.get_projects() else {
-            return;
-        };
-        for p in projects {
-            let Ok(active) = self.features.get_active(&p.id) else {
-                continue;
-            };
-            for f in active {
-                if runner_owned.contains(f.id.as_str()) {
-                    continue;
-                }
-                if f.status == "awaiting_gate" || f.status == "gated" {
-                    if let Err(e) = self.ensure_driver_running(&f.id.0).await {
-                        eprintln!(
-                            "resume_interrupted_features: failed to resume {}: {}",
-                            f.id.0, e
-                        );
-                    }
-                }
-            }
-        }
     }
 }

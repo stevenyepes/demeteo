@@ -86,7 +86,7 @@
 //! before rung 3 existed: the whole gate is the verdict and the retry is
 //! unscoped. Nothing here can move a gate between attributable and excluded.
 //!
-//! [`normalize_failure_fingerprint`]: crate::adapters::step_executor::driver::verifier::normalize_failure_fingerprint
+//! [`normalize_failure_fingerprint`]: crate::domain::harness_fingerprint::normalize_failure_fingerprint
 
 use crate::domain::harness_baseline::{HarnessBaseline, HarnessBaselineRun};
 

@@ -15,12 +15,25 @@
 use std::time::Instant;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
 use crate::domain::models::{StepConfig, StepExecution};
-use crate::paths;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
 use super::StepOutcome;
+
+/// What the failed merge left behind, and the two branches it was between.
+///
+/// `files` and `worktree_path` both come out of the same `ConflictFailure`;
+/// `feature_branch` and `default_branch` are computed together and never used
+/// apart. The resolution turn two frames down already takes a bundle of the
+/// same shape (`sync::ResolveSyncContext`).
+struct SyncConflict<'a> {
+    files: &'a [crate::domain::models::ConflictFile],
+    worktree_path: Option<&'a str>,
+    feature_branch: &'a str,
+    default_branch: &'a str,
+}
 
 impl ExecutionDriver {
     /// Handle a `kind == "sync"` step.
@@ -135,10 +148,12 @@ impl ExecutionDriver {
                 self.resolve_sync_conflicts_in_step(
                     step_exec,
                     step_conf,
-                    &failure.report.files,
-                    &feature_branch,
-                    &default_branch,
-                    failure.worktree_path.as_deref(),
+                    SyncConflict {
+                        files: &failure.report.files,
+                        worktree_path: failure.worktree_path.as_deref(),
+                        feature_branch: &feature_branch,
+                        default_branch: &default_branch,
+                    },
                     step_start,
                 )
                 .await
@@ -146,17 +161,19 @@ impl ExecutionDriver {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn resolve_sync_conflicts_in_step(
         &self,
         step_exec: &StepExecution,
         step_conf: &StepConfig,
-        conflict_files: &[crate::domain::models::ConflictFile],
-        feature_branch: &str,
-        default_branch: &str,
-        worktree_path: Option<&str>,
+        conflict: SyncConflict<'_>,
         step_start: Instant,
     ) -> StepOutcome {
+        let SyncConflict {
+            files: conflict_files,
+            worktree_path,
+            feature_branch,
+            default_branch,
+        } = conflict;
         let machine_str = self.machine_id();
         let repo_dir = &self.target_dir;
         let resolved_cwd = worktree_path.unwrap_or(repo_dir);
@@ -200,37 +217,7 @@ impl ExecutionDriver {
         .await
         {
             Ok(_head_sha) => {
-                // Cleanup the sync worktree if one was used.
-                if resolved_cwd != repo_dir {
-                    let _ = self
-                        .exec
-                        .run_command(
-                            machine_str,
-                            &format!(
-                                "git -C {} worktree remove --force {}",
-                                paths::shell_escape_posix(repo_dir),
-                                paths::shell_escape_posix(resolved_cwd)
-                            ),
-                        )
-                        .await;
-                    let _ = self
-                        .exec
-                        .run_command(
-                            machine_str,
-                            &format!("rm -rf {}", paths::shell_escape_posix(resolved_cwd)),
-                        )
-                        .await;
-                    let _ = self
-                        .exec
-                        .run_command(
-                            machine_str,
-                            &format!(
-                                "git -C {} worktree prune",
-                                paths::shell_escape_posix(repo_dir)
-                            ),
-                        )
-                        .await;
-                }
+                discard_sync_worktree(&*self.exec, machine_str, repo_dir, resolved_cwd).await;
 
                 let wall = step_start.elapsed().as_secs();
                 let _ = self.features.step_update(

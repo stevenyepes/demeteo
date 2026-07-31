@@ -2,6 +2,7 @@
 //! success path, and the partial one a mid-list failure salvages.
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::conflict_pass::{ConflictPass, ConflictPassError};
 use crate::domain::sequence::outcome::SequenceError;
 use crate::domain::sequence::progress::LandedTask;
@@ -58,9 +59,11 @@ impl ExecutionDriver {
                 target.machine,
                 wt.path,
                 target.override_model,
-                spend.cost,
-                spend.tokens,
-                spend.start,
+                RunningSpend {
+                    cost: spend.cost,
+                    tokens: spend.tokens,
+                    start: spend.start,
+                },
             )
             .await;
         let _ = self.registry.kill(&conflict_thread_id).await;

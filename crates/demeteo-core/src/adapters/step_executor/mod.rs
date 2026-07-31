@@ -25,10 +25,12 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 
 pub(crate) mod artifacts;
 pub(crate) mod baseline;
+pub(crate) mod context;
 pub(crate) mod driver;
 pub(crate) mod driver_registry;
 pub(crate) mod failing_tests;
 pub(crate) mod gate_waiter;
+pub(crate) mod harness_shell;
 pub(crate) mod impl_traits;
 pub mod node_catalog;
 pub mod node_lint;
@@ -36,13 +38,22 @@ pub mod preflight;
 pub(crate) mod registry;
 pub(crate) mod retry_policy;
 pub mod scheduler;
+// One strict `ExecutionPort` double for `baseline` and `preflight`, mounted
+// exactly once so the same source file is not loaded into the crate graph
+// twice (`clippy::duplicate-mod`) — the pattern `adapters/agent/test_stubs.rs`
+// already documents.
+#[cfg(test)]
+pub(crate) mod scripted_exec;
 pub mod setup;
+pub(crate) mod spend;
+pub(crate) mod step_status;
 pub(crate) mod steps;
 pub(crate) mod sync;
+pub(crate) mod sync_worktree;
 pub(crate) mod updates;
 
 #[cfg(test)]
-#[path = "../../../tests/e2e/step_executor.rs"]
+#[path = "../../../tests/e2e/step_executor/mod.rs"]
 mod tests;
 
 // ── Core struct ────────────────────────────────────────────────────────────────

@@ -35,7 +35,7 @@
 //!
 //! Every transition is written through the repositories *before* the loop
 //! acts on it and the matching event fires after the write — the same
-//! durable-first ordering `updates::update_step_status` has always
+//! durable-first ordering `step_status::update_step_status` has always
 //! enforced per row. (A single multi-row SQLite transaction per tick
 //! needs a transactional port seam the repos don't expose yet; each
 //! per-row write is atomic, and the loop tolerates re-observing any
@@ -43,8 +43,13 @@
 
 use std::time::Instant;
 
+use crate::adapters::step_executor::context::StepCtx;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::scheduler::{evaluate_ready_set, ScheduleError};
+use crate::adapters::step_executor::spend::{StepSpend, StepTotals};
+use crate::adapters::step_executor::step_status::{
+    update_step_status, CacheTokens, StepTransition,
+};
 use crate::adapters::step_executor::updates;
 use crate::domain::expr::ExprValue;
 
@@ -175,15 +180,13 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
                     return;
                 }
                 resume::GuardVerdict::Rejected(msg) => {
-                    driver
-                        .fail_step_and_feature(
-                            step_exec,
-                            &msg,
-                            step_exec.cost_usd.unwrap_or(0.0),
-                            step_exec.tokens.unwrap_or(0),
-                            Instant::now(),
-                        )
-                        .await;
+                    let spend = StepSpend {
+                        cost: step_exec.cost_usd.unwrap_or(0.0),
+                        tokens: step_exec.tokens.unwrap_or(0),
+                        cache: driver.cache_tokens(),
+                        start: Instant::now(),
+                    };
+                    driver.fail_step_and_feature(step_exec, &msg, spend).await;
                     return;
                 }
             }
@@ -203,41 +206,30 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
             driver.ensure_feature_running();
         }
 
-        updates::update_step_status(
-            &*driver.features,
-            &*driver.notif,
+        update_step_status(
+            driver.status_writers(),
             step_exec,
-            &driver.f_id,
-            "running",
-            step_exec.cost_usd.unwrap_or(0.0),
-            step_exec.tokens,
-            step_exec.wall_clock_secs.unwrap_or(0),
-            None,
-            None,
-            None,
-            None,
+            StepTransition::running(
+                step_exec.cost_usd.unwrap_or(0.0),
+                step_exec.tokens,
+                step_exec.wall_clock_secs.unwrap_or(0),
+            ),
         );
 
         let step_start = Instant::now();
-        let mut accumulated_cost = step_exec.cost_usd.unwrap_or(0.0);
-        let mut accumulated_tokens = step_exec.tokens.unwrap_or(0);
-        let mut step_cache_read: Option<u64> = None;
-        let mut step_cache_creation: Option<u64> = None;
+        let mut totals = StepTotals {
+            cost: step_exec.cost_usd.unwrap_or(0.0),
+            tokens: step_exec.tokens.unwrap_or(0),
+            cache: CacheTokens::default(),
+        };
 
-        let Some(dr) = driver
-            .dispatch_step(
-                step_exec,
-                &step_conf,
-                &step_execs,
-                step_index,
-                step_start,
-                &mut accumulated_cost,
-                &mut accumulated_tokens,
-                &mut step_cache_read,
-                &mut step_cache_creation,
-            )
-            .await
-        else {
+        let ctx = StepCtx {
+            step_exec,
+            step_conf: &step_conf,
+            step_index,
+            step_execs: &step_execs,
+        };
+        let Some(dr) = driver.dispatch_step(ctx, step_start, &mut totals).await else {
             return;
         };
 
@@ -283,19 +275,16 @@ async fn fail_unschedulable(
     if let ScheduleError::Deadlock(stuck) = err {
         for node_id in stuck {
             if let Some(row) = step_execs.iter().find(|s| s.step_id == *node_id) {
-                updates::update_step_status(
-                    &*driver.features,
-                    &*driver.notif,
+                update_step_status(
+                    driver.status_writers(),
                     row,
-                    &driver.f_id,
-                    "failed",
-                    row.cost_usd.unwrap_or(0.0),
-                    row.tokens,
-                    row.wall_clock_secs.unwrap_or(0),
-                    None,
-                    Some(msg.clone()),
-                    None,
-                    None,
+                    StepTransition::failed(
+                        row.cost_usd.unwrap_or(0.0),
+                        row.tokens,
+                        row.wall_clock_secs.unwrap_or(0),
+                        msg.clone(),
+                        CacheTokens::default(),
+                    ),
                 );
             }
         }

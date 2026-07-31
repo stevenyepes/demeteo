@@ -3,7 +3,7 @@
 //
 // The end-to-end proof that a command node *runs* lives in
 // `tests/conformance/command_node.rs` (task P3.5 "Done when"); this file
-// covers the pure surfaces: config parsing/validation, the lint rules the
+// covers what is left in the adapter: the env allowlist, the lint rules the
 // builder renders, the resume policy that ties `idempotent` to P1.14, and
 // the registry projection that puts the type in the palette for free.
 
@@ -21,83 +21,6 @@ fn step_from(config: serde_json::Value) -> StepConfig {
         obj.insert(k.clone(), v.clone());
     }
     serde_json::from_value(value).expect("step parses")
-}
-
-// ── Config parsing ───────────────────────────────────────────────────────────
-
-#[test]
-fn parses_a_full_command_config() {
-    let spec = parse_spec(&step_from(serde_json::json!({
-        "command": "  cargo test --all  ",
-        "cwd": "crates/core",
-        "env_allowlist": ["CI", "RUSTFLAGS"],
-        "timeout_secs": 900,
-        "idempotent": true,
-    })))
-    .expect("valid config");
-
-    // The command is trimmed but never rewritten — it is the author's shell.
-    assert_eq!(spec.command, "cargo test --all");
-    assert_eq!(spec.cwd.as_deref(), Some("crates/core"));
-    assert_eq!(spec.env_allowlist, vec!["CI", "RUSTFLAGS"]);
-    assert_eq!(spec.timeout, Some(Duration::from_secs(900)));
-    assert!(spec.idempotent);
-}
-
-#[test]
-fn defaults_are_the_cautious_reading() {
-    let spec = parse_spec(&step_from(serde_json::json!({ "command": "make" })))
-        .expect("command alone is enough to run");
-    assert_eq!(spec.cwd, None);
-    assert!(
-        spec.env_allowlist.is_empty(),
-        "nothing crosses unnamed (D2)"
-    );
-    assert_eq!(spec.timeout, None);
-    assert!(
-        !spec.idempotent,
-        "an undeclared command must not be silently re-runnable"
-    );
-}
-
-#[test]
-fn a_missing_or_blank_command_is_a_config_error() {
-    for config in [
-        serde_json::json!({}),
-        serde_json::json!({ "command": "" }),
-        serde_json::json!({ "command": "   " }),
-    ] {
-        let err = parse_spec(&step_from(config)).expect_err("must be refused");
-        assert!(err.contains("no `command`"), "unexpected message: {err}");
-    }
-}
-
-#[test]
-fn cwd_may_not_escape_the_worktree() {
-    for bad in ["/etc", "~/secrets", "../sibling", "src/../../out"] {
-        let err = parse_spec(&step_from(
-            serde_json::json!({ "command": "ls", "cwd": bad }),
-        ))
-        .expect_err("must be refused");
-        assert!(
-            err.contains("worktree"),
-            "'{bad}' should be refused as escaping, got: {err}"
-        );
-    }
-    // A path that merely *contains* dots is fine — only a `..` segment escapes.
-    assert!(parse_spec(&step_from(
-        serde_json::json!({ "command": "ls", "cwd": "src/..hidden" })
-    ))
-    .is_ok());
-}
-
-#[test]
-fn a_zero_timeout_is_refused_rather_than_meaning_forever() {
-    let err = parse_spec(&step_from(
-        serde_json::json!({ "command": "ls", "timeout_secs": 0 }),
-    ))
-    .expect_err("must be refused");
-    assert!(err.contains("greater than zero"), "got: {err}");
 }
 
 // ── Env allowlist ────────────────────────────────────────────────────────────
@@ -119,28 +42,6 @@ fn env_forwards_only_named_and_set_variables() {
         "an unset name is skipped, not exported empty"
     );
     std::env::remove_var("DEMETEO_CMD_TEST_VAR");
-}
-
-// ── Failure feedback ─────────────────────────────────────────────────────────
-
-#[test]
-fn long_output_is_tailed_for_feedback_but_marked() {
-    let short = "all good";
-    assert_eq!(tail(short, 100), short);
-
-    let long: String = "x".repeat(5_000);
-    let cut = tail(&long, 100);
-    assert!(cut.starts_with("…(truncated)…"));
-    assert!(cut.ends_with("xxxx"));
-    assert!(cut.len() < long.len());
-}
-
-#[test]
-fn tail_respects_char_boundaries() {
-    // A multi-byte tail must not panic on a mid-codepoint slice.
-    let text: String = "é".repeat(200);
-    let cut = tail(&text, 51);
-    assert!(cut.contains('é'));
 }
 
 // ── Lint (what the builder shows before a run costs anything) ────────────────
@@ -258,23 +159,6 @@ fn the_command_type_reaches_the_palette_without_a_frontend_edit() {
 // project's* prepare command and validation gates, which a workflow file
 // cannot know. Everything below is about that one exception not leaking into
 // the ordinary command node's contract.
-
-#[test]
-fn a_baseline_node_needs_no_command_of_its_own() {
-    let spec = parse_spec(&step_from(serde_json::json!({ "measure_baseline": true })))
-        .expect("the commands come from the project, not the workflow");
-    assert!(spec.measure_baseline);
-    assert!(spec.command.is_empty());
-}
-
-#[test]
-fn measure_baseline_is_off_unless_asked_for() {
-    // The exemption above must not reach any other command node: an ordinary
-    // one that forgot its command is still a definition bug.
-    let spec = parse_spec(&step_from(serde_json::json!({ "command": "make" }))).unwrap();
-    assert!(!spec.measure_baseline);
-    assert!(parse_spec(&step_from(serde_json::json!({ "measure_baseline": false }))).is_err());
-}
 
 #[test]
 fn lint_does_not_demand_a_command_from_a_baseline_node() {

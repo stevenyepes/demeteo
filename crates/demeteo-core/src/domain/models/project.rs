@@ -106,7 +106,8 @@ pub struct ProjectSettings {
     pub default_loop_iterations: Option<u32>,
     /// Project-level default per-turn dollar budget (`--max-budget-usd`).
     /// `None` = use the engine default
-    /// ([`ExecutionDriver::DEFAULT_MAX_BUDGET_USD`]). Overridable per run via
+    /// ([`crate::domain::agent_session::budget::DEFAULT_MAX_BUDGET_USD`]).
+    /// Overridable per run via
     /// `Feature::max_budget_usd`. See migration V30.
     #[serde(default)]
     pub default_max_budget_usd: Option<f64>,

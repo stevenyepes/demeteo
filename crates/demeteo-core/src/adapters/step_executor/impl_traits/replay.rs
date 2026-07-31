@@ -1,6 +1,7 @@
 use super::super::DagStepExecutor;
 use crate::domain::ids::StepExecutionId;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::run_control::{shadow_refusal, RunAction};
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
 use crate::ports::step_executor::StepExecutor;
@@ -112,11 +113,7 @@ impl DagStepExecutor {
         // on the runner's box. `step_retry` repeats this check to return a
         // typed validation error; this one is the backstop for every caller.
         if self.runner_owned_features().contains(feature_id.as_str()) {
-            return Err(format!(
-                "Feature '{}' is a read-only shadow of a run owned by a demeteo-runner; \
-                 replay it on the runner, not here",
-                feature_id.0
-            ));
+            return Err(shadow_refusal(RunAction::Replay, &feature_id.0));
         }
 
         let feature = self
