@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useNavigation, useProject } from '../../context';
 import { useErrorBus } from '../../lib/errorBus';
 import { formatError } from '../../lib/errors';
 import { listProviderNamespaces, type ProviderNamespace } from '../../lib/createProjectWizard';
+import {
+  beginCreateProject,
+  goBackCreateProject,
+  submitCreateProjectStep,
+} from '../../lib/createProject';
+import { listMachines, setMachineSecret } from '../../lib/machines';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { reconcileEffort, type EffortLevel } from '../../lib/effortLevels';
@@ -11,7 +16,6 @@ import type { Machine, Provider } from '../../types';
 import {
   BootstrapStep,
   STEP_ORDER,
-  type BootstrapOutcome,
   type BootstrapState,
   type CreateProjectStepPayload,
   type DescriptionStepPatch,
@@ -91,7 +95,7 @@ const EMPTY_DRAFT: WizardDraft = {
  *
  * **Architecture**
  *
- * - This component is the **only** place that calls `invoke()`. Each
+ * - This component owns every backend call the flow makes. Each
  *   step component is presentational and emits a typed
  *   `CreateProjectStepPayload` upward via `onSubmit`.
  * - The wizard owns the canonical `BootstrapState` (mirroring the
@@ -138,7 +142,7 @@ export function CreateProjectWizard(): ReactElement {
     let cancelled = false;
     (async () => {
       try {
-        const initial = await invoke<BootstrapState>('begin_create_project');
+        const initial = await beginCreateProject();
         if (cancelled) return;
         setBootstrap(initial);
       } catch (err) {
@@ -158,7 +162,7 @@ export function CreateProjectWizard(): ReactElement {
     let cancelled = false;
     (async () => {
       try {
-        const list = await invoke<Machine[]>('get_machines');
+        const list = await listMachines();
         if (cancelled) return;
         setMachines(list ?? []);
       } catch (err) {
@@ -235,10 +239,7 @@ export function CreateProjectWizard(): ReactElement {
   // ── Submit helpers ──────────────────────────────────────────────────
   const submitStep = useCallback(async (payload: CreateProjectStepPayload) => {
     try {
-      const outcome = await invoke<BootstrapOutcome>('submit_create_project_step', {
-        state: bootstrap,
-        payload,
-      });
+      const outcome = await submitCreateProjectStep(bootstrap, payload);
       if (outcome.kind === 'continue') {
         setBootstrap(outcome.state);
       } else {
@@ -367,15 +368,11 @@ export function CreateProjectWizard(): ReactElement {
         return;
       case BootstrapStep.Machine:
         if (draft.machineKind === 'remote' && !draft.machineId) return;
-        // Write passphrase to keyring BEFORE the bootstrap clone
-        // runs (mirrors NewProjectView.tsx:164-173). The Commit
-        // payload will follow.
+        // Write passphrase to keyring BEFORE the bootstrap clone runs
+        // (mirrors NewProjectView). The Commit payload will follow.
         if (draft.machineKind === 'remote' && draft.machineId && draft.keyPassphrase.trim().length > 0) {
           try {
-            await invoke('set_machine_secret', {
-              machineId: draft.machineId,
-              secret: draft.keyPassphrase,
-            });
+            await setMachineSecret(draft.machineId, draft.keyPassphrase);
             setDraft((d) => ({ ...d, keyPassphrase: '' }));
           } catch (err) {
             reportError(err, { kind: 'transport' });
@@ -445,7 +442,7 @@ export function CreateProjectWizard(): ReactElement {
   const onBack = useCallback(async () => {
     if (!canRewind(bootstrap)) return;
     try {
-      const rewound = await invoke<BootstrapState>('go_back_create_project', { state: bootstrap });
+      const rewound = await goBackCreateProject(bootstrap);
       setBootstrap(rewound);
     } catch (err) {
       reportError(err, { kind: 'internal' });

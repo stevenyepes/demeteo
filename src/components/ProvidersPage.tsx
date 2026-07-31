@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Globe, Plus, Edit2, Trash2, AlertTriangle, X } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 import type { Provider } from '../types';
 import { useProject, useUIState } from '../context';
 import { useErrorBus } from '../lib/errorBus';
+import { deleteProviderInstance } from '../lib/providers';
 import ProviderSettings from './ProviderSettings';
 import { OverlayPortal } from './ui/OverlayPortal';
 
@@ -38,7 +38,7 @@ export default function ProvidersPage() {
   const confirmDelete = async (provId: string) => {
     setPendingDelete(null);
     try {
-      await invoke('delete_provider_instance', { providerId: provId });
+      await deleteProviderInstance(provId);
       projDispatch({ type: 'SET_PROVIDERS', providers: providers.filter(p => p.id !== provId) });
     } catch (err) { reportError(err, { kind: 'provider' }); }
   };

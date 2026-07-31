@@ -120,7 +120,7 @@ npm run checks
 
 This is the same script CI runs (`scripts/checks.sh`, invoked by
 [`pr-checks.yml`](.github/workflows/pr-checks.yml)), so a green run locally means a
-green run inline on the PR. It covers `tsc --noEmit`, `cargo fmt --check`, `cargo clippy
+green run inline on the PR. It covers `tsc --noEmit`, `biome check .`, `cargo fmt --check`, `cargo clippy
 --all-targets -D warnings` on the pinned toolchain, the demeteo + core + runner test
 suites, the gate-feedback repro, and commitlint over `origin/master..HEAD`. Running a
 subset — `cargo test` alone, say — will not tell you whether CI is green.

@@ -7,7 +7,6 @@ import {
   Sparkles,
   Search,
 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 
 import type { Machine } from '../types';
 import { useTerminalPanel } from '../hooks/useTerminalPanel';
@@ -20,6 +19,7 @@ import {
   type TerminalRecent,
 } from '../lib/terminalRecents';
 import { formatError } from '../lib/errors';
+import { getAgentConfigs, listMachines } from '../lib/machines';
 import { MachineDot } from './ui/MachineDot';
 import {
   TerminalWorktreeLocationPicker,
@@ -155,16 +155,13 @@ export function NewTerminalMenu({
     let cancelled = false;
     void (async () => {
       try {
-        const list = (await invoke<Machine[]>('get_machines')) || [];
+        const list = (await listMachines()) || [];
         if (!cancelled) setMachines(list.filter((m) => m.auth_type !== 'local'));
       } catch {
         if (!cancelled) setMachines([]);
       }
       try {
-        const configs =
-          (await invoke<Array<{ kind: string; enabled: boolean }>>('get_agent_configs', {
-            machineId: 'local',
-          })) || [];
+        const configs = (await getAgentConfigs('local')) || [];
         const found = configs
           .filter((c) => c.enabled && AGENTS[c.kind])
           .map((c) => AGENTS[c.kind]);

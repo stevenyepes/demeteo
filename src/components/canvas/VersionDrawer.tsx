@@ -22,22 +22,18 @@
  *    property that makes trying a restore safe.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { GitCompare, History, RotateCcw, Undo2, X } from 'lucide-react';
 
 import { formatError } from '../../lib/errors';
+import {
+  listWorkflowVersions,
+  restoreWorkflowVersion,
+  revertWorkflowToDefault,
+  workflowVersionGraph,
+  type WorkflowVersionRow,
+} from '../../lib/workflows';
 import { relativeTime } from '../../lib/utils';
 import type { WorkflowDefinitionV2 } from './types';
-
-/** Serde shape of the Rust `WorkflowVersion` row. */
-export interface WorkflowVersionRow {
-  id: string;
-  workflow_id: string;
-  version: number;
-  steps_json: string;
-  note: string | null;
-  created_at: number;
-}
 
 /** One side of a comparison. A `null` graph means "the working copy", which
  *  only the builder holds. */
@@ -115,7 +111,7 @@ export function VersionDrawer({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const rows = await invoke<WorkflowVersionRow[]>('workflow_versions', { workflowId });
+      const rows = await listWorkflowVersions(workflowId);
       // Newest first: history is read backwards from where you are.
       setVersions([...rows].sort((a, b) => b.version - a.version));
       setError(null);
@@ -131,8 +127,7 @@ export function VersionDrawer({
   }, [load, reloadToken]);
 
   const graphFor = useCallback(
-    (versionId: string) =>
-      invoke<WorkflowDefinitionV2>('workflow_version_graph', { workflowId, versionId }),
+    (versionId: string) => workflowVersionGraph(workflowId, versionId),
     [workflowId],
   );
 
@@ -205,10 +200,7 @@ export function VersionDrawer({
     async (row: WorkflowVersionRow) => {
       setBusy(row.id);
       try {
-        const result = await invoke<WorkflowResult>('workflow_restore_version', {
-          workflowId,
-          versionId: row.id,
-        });
+        const result = await restoreWorkflowVersion(workflowId, row.id);
         await adopt(result, 'restore', row.version);
         setError(null);
       } catch (err) {
@@ -223,7 +215,7 @@ export function VersionDrawer({
   const revert = useCallback(async () => {
     setBusy('revert');
     try {
-      const result = await invoke<WorkflowResult>('workflow_revert_to_default', { workflowId });
+      const result = await revertWorkflowToDefault(workflowId);
       await adopt(result, 'revert');
       setError(null);
     } catch (err) {

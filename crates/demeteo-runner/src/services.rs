@@ -1,6 +1,6 @@
 //! Bundles the engine `AppContext` with runner-only, non-engine state
 //! (the in-memory credential store and the askpass helper path) so
-//! `run.rs` / `rpc.rs` / `reconcile.rs` only have to thread one handle.
+//! `run.rs` / `rpc/` / `reconcile.rs` only have to thread one handle.
 
 use crate::away_notify::AwayNotifier;
 use crate::credentials::CredentialStore;

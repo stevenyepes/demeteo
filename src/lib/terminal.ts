@@ -22,6 +22,19 @@ function toTerminalWorktree(worktree: TerminalWorktreeWire): TerminalWorktree {
 }
 
 /**
+ * The IPC channel a surface attaches to a session. Chunks arrive either as a
+ * `Uint8Array` or as a plain number array depending on the IPC path, so both
+ * are in the type and every consumer normalises.
+ */
+export type TerminalOutputChannel = Channel<Uint8Array | number[]>;
+
+/** Mint an output channel for {@link attachTerminalSession}. Exists so the
+ *  terminal surfaces never import the raw Tauri IPC primitives. */
+export function createTerminalChannel(): TerminalOutputChannel {
+  return new Channel<Uint8Array | number[]>();
+}
+
+/**
  * Starts a terminal session on the specified machine.
  *
  * The session streams no output until a surface calls
@@ -174,7 +187,7 @@ export async function createTerminalWorktree(
  */
 export async function attachTerminalSession(
   sessionId: string,
-  channel: Channel<Uint8Array | number[]>
+  channel: TerminalOutputChannel
 ): Promise<void> {
   return invoke<void>("attach_terminal_session", {
     sessionId,

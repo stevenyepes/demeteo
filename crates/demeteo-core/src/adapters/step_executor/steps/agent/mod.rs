@@ -165,6 +165,7 @@ impl ExecutionDriver {
         // agent turn, which writes the report artifact AND emits the verdict
         // JSON itself — no separate verifier session, no second test run.
         let mut harness_section: Option<crate::domain::harness_outcome::HarnessOutcome> = None;
+        let mut complete_harness_logs = String::new();
         if let Some(ref verifier_cfg) = step_conf.verifier {
             let _ = self.notif.emit(&DomainEvent::StepProgress {
                 feature_id: self.f_id.clone(),
@@ -180,7 +181,10 @@ impl ExecutionDriver {
                 .run_harness_first(step_exec, verifier_cfg, wt.path, wt.machine)
                 .await
             {
-                Ok(outcome) => harness_section = Some(outcome),
+                Ok(outcome) => {
+                    complete_harness_logs = self.store_harness_logs(step_exec, &outcome);
+                    harness_section = Some(outcome);
+                }
                 Err(err) => {
                     self.tear_down_agent_step(wt, target, SessionDisposition::Keep)
                         .await;
@@ -234,7 +238,7 @@ impl ExecutionDriver {
 
         let prompt = self
             .bind_worktree_context(
-                prompt,
+                format!("{prompt}{complete_harness_logs}"),
                 wt,
                 step_conf.verifier.as_ref(),
                 harness_section.as_ref(),

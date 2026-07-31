@@ -538,3 +538,43 @@ fn a_gate_between_a_producer_and_its_sequence_node_is_not_a_consumer() {
         "nothing executes this list, so there is no rework cycle to warn about: {findings:?}"
     );
 }
+
+/// A save that has to refuse names every error and no warning, so the author
+/// is told exactly what has to change and nothing else.
+#[test]
+fn error_summary_lists_only_the_blocking_findings_with_their_anchors() {
+    let d = def(
+        serde_json::json!([
+            { "id": "a", "config": { "prompt_template": "do" } },
+            { "id": "b", "type": "unknown-kind", "config": {} }
+        ]),
+        serde_json::json!([{ "from": "a", "to": "b" }]),
+    );
+    let findings = lint_workflow_v2(&d, &CORE_NODE_TYPES);
+    assert!(
+        has_errors(&findings),
+        "the fixture must block: {findings:?}"
+    );
+
+    let summary = error_summary(&findings).expect("a blocked save has something to say");
+    for f in &findings {
+        let listed = summary.contains(&f.message);
+        match f.severity {
+            LintSeverity::Error => assert!(listed, "error missing from summary: {f:?}"),
+            LintSeverity::Warning => assert!(!listed, "warning must not block: {f:?}"),
+        }
+    }
+    assert!(summary.contains("[unknown-node-type]"), "{summary}");
+    assert!(summary.contains("b: "), "anchored to the node: {summary}");
+}
+
+/// Nothing to refuse over reads as `None`, not an empty string — the caller
+/// branches on it rather than on a length.
+#[test]
+fn error_summary_is_none_when_nothing_blocks() {
+    let d = def(
+        serde_json::json!([{ "id": "a", "config": { "prompt_template": "do" } }]),
+        serde_json::json!([]),
+    );
+    assert_eq!(error_summary(&lint_workflow_v2(&d, &CORE_NODE_TYPES)), None);
+}

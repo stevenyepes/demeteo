@@ -183,6 +183,9 @@ export interface StartFeatureInput {
   effort?: EffortLevel | null;
   commitArtifacts?: boolean | null;
   loopIterations?: number | null;
+  /** Per-run dollar budget. `null` inherits the project default, then the
+   *  engine default — the wizard never sets one, the launch composer can. */
+  maxBudgetUsd?: number | null;
   /** Per-step overrides. The wizard does not currently produce any. */
   stepOverrides?: unknown[] | null;
   /** Pre-launch attachments. The wizard starts a new feature with no
@@ -204,6 +207,7 @@ export async function startFeature(input: StartFeatureInput): Promise<Feature> {
     effort: input.effort ?? null,
     commitArtifacts: input.commitArtifacts ?? null,
     loopIterations: input.loopIterations ?? null,
+    maxBudgetUsd: input.maxBudgetUsd ?? null,
     stepOverrides: input.stepOverrides ?? null,
     stagedAttachments: input.stagedAttachments ?? null,
   });

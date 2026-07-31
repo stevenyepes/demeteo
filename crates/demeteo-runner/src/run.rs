@@ -70,7 +70,7 @@ pub struct RunOutcome {
 ///
 /// **Secret scrubbing (M7.2, §6)** happens at the sink, not here: the
 /// `RunEventsPort::append` adapter scrubs every payload before it's
-/// persisted, so the *direct* failure-path appends in `rpc.rs` (which
+/// persisted, so the *direct* failure-path appends in `rpc/` (which
 /// bypass this helper) are covered by the same guarantee.
 pub(crate) fn emit(ctx: &AppContext, run_id: &str, kind: &str, payload: impl Serialize) {
     let payload_json = serde_json::to_string(&payload).ok();

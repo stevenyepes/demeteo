@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Search, Sliders, Globe, Settings, Inbox, TerminalSquare } from 'lucide-react';
 import { NotificationBell } from './NotificationBell';
 import { bucketFor } from './RemoteRunInbox';
 import { useNavigation, useUIState, useTerminalPanel } from '../context';
-import type { Provider, RemoteRunMirror } from '../types';
+import { listMirroredRuns } from '../lib/remoteRuns';
+import type { Provider } from '../types';
 
 interface TopBarProps {
   connectedProvider: Provider | null;
@@ -27,7 +27,7 @@ function TopBar({ connectedProvider }: TopBarProps) {
     let cancelled = false;
     const poll = async () => {
       try {
-        const runs = await invoke<RemoteRunMirror[]>('remote_list_mirrored_runs');
+        const runs = await listMirroredRuns();
         if (cancelled) return;
         const buckets = runs.map((r) => bucketFor(r.status));
         setActionableCount(buckets.filter((b) => b === 'parked' || b === 'needs_credentials' || b === 'failed').length);

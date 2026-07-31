@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Channel } from '@tauri-apps/api/core';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -9,6 +8,7 @@ import '@xterm/xterm/css/xterm.css';
 
 import {
   attachTerminalSession,
+  createTerminalChannel,
   detachTerminalSession,
   resizeTerminalSession,
   writeTerminalSession,
@@ -66,7 +66,7 @@ export interface TerminalSurfaceProps {
  * One xterm.js surface bound to one terminal session. Lifecycle:
  *
  *   1. Mount:    construct Terminal + FitAddon, open into the container,
- *                create a Tauri `Channel`, register `onmessage`, call
+ *                create an output channel, register `onmessage`, call
  *                `attach_terminal_session(sessionId, channel)`.
  *   2. Replay:   the backend replays the session's scrollback ring to
  *                the freshly-attached channel, so the shell prompt and
@@ -214,7 +214,7 @@ export function TerminalSurface({
     observer.observe(containerRef.current);
     resizeObserverRef.current = observer;
 
-    const channel = new Channel<Uint8Array | number[]>();
+    const channel = createTerminalChannel();
     const channelId = channel.id;
     channel.onmessage = (chunk: Uint8Array | number[]) => {
       if (terminalRef.current) {

@@ -42,7 +42,7 @@ function ProjectRail() {
   const currentProject = currentProjectId;
   const setCurrentProject = (id: string) => { dispatch({ type: 'SET_CURRENT', id }); navigate({ kind: 'home' }); };
   const onToggleCollapse = () => uiDispatch({ type: 'TOGGLE_SIDEBAR' });
-  const setView = (v: string) => navigate({ kind: v as any });
+  const setView = (v: 'home' | 'new-project') => navigate({ kind: v });
 
   const [searchQuery, setSearchQuery] = useState('');
 

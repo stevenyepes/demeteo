@@ -46,6 +46,25 @@ impl PreflightVerdict {
         !matches!(self, PreflightVerdict::MissingBinaries { .. })
     }
 
+    /// The error the feature terminates with, or `None` to proceed.
+    ///
+    /// Not "`detail` when there is one": [`NotConfigured`] carries a detail
+    /// the stepper shows and the launch must ignore, which is the whole
+    /// asymmetry this type exists for. Only a blocked verdict answers, and it
+    /// answers with the same sentence the stepper rendered, so the terminal
+    /// error and the phase the user watched fail can never disagree.
+    ///
+    /// [`NotConfigured`]: PreflightVerdict::NotConfigured
+    pub fn launch_refusal(&self) -> Option<String> {
+        if self.permits_launch() {
+            return None;
+        }
+        Some(
+            self.detail()
+                .unwrap_or_else(|| "harness preflight failed".to_string()),
+        )
+    }
+
     /// The `BootstrapProgress` status this verdict renders as.
     pub fn phase_status(&self) -> &'static str {
         match self {
@@ -98,3 +117,7 @@ impl PreflightVerdict {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/domain/harness_preflight/verdict.rs"]
+mod tests;

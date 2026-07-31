@@ -1,0 +1,51 @@
+//! The step rows a run is registered with.
+//!
+//! A free function over domain types alone, so what a freshly-seeded row
+//! carries is answerable from a test. Its call site is the `registering` phase
+//! of the bootstrap tail, wedged between an origin sync and a driver spawn —
+//! reaching it there means a `DagStepExecutor` with every port those
+//! neighbouring phases touch, which is why none of this was asserted anywhere.
+
+use crate::domain::ids::{FeatureId, StepExecutionId};
+use crate::domain::models::{StepConfig, StepExecution};
+
+/// One `pending` row per configured step, `step_index` following the slice
+/// order, spend measured at zero rather than unknown.
+///
+/// The id is derived from the pair — `se-<feature>-<step>` — rather than
+/// minted, so the same feature seeded twice names the same rows rather than a
+/// second set.
+pub fn seed_step_executions(
+    feature_id: &FeatureId,
+    steps: &[StepConfig],
+    now: i64,
+) -> Vec<StepExecution> {
+    steps
+        .iter()
+        .enumerate()
+        .map(|(i, step)| StepExecution {
+            id: StepExecutionId::from(format!("se-{}-{}", feature_id.as_str(), step.id.0)),
+            feature_id: feature_id.clone(),
+            step_id: step.id.clone(),
+            step_index: i as u32,
+            step_kind: step.kind.clone(),
+            status: "pending".to_string(),
+            cost_usd: Some(0.0),
+            tokens: Some(0),
+            wall_clock_secs: Some(0),
+            artifact_path: None,
+            artifact_paths: Vec::new(),
+            error_message: None,
+            iteration_count: 0,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            last_failure_fingerprint: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "../../tests/domain/step_seed.rs"]
+mod tests;

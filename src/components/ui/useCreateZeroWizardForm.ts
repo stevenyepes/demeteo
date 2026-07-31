@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { listMachines, testMachineConnection } from '../../lib/machines';
+import { listWorkflows } from '../../lib/workflows';
 import { getAgentModels } from '../../lib/agentModels';
 import { listProviderNamespaces, type ProviderNamespace } from '../../lib/createProjectWizard';
 import { useErrorBus } from '../../lib/errorBus';
@@ -153,13 +154,13 @@ export function useCreateZeroWizardForm(): WizardFormApi {
     let workflowsCancelled = false;
     (async () => {
       try {
-        const list = (await invoke<Machine[]>('get_machines')) ?? [];
+        const list = (await listMachines()) ?? [];
         if (!machinesCancelled) setMachines(list);
       } catch (err) { reportError(err, { kind: 'internal' }); }
     })();
     (async () => {
       try {
-        const list = (await invoke<WorkflowSummary[]>('workflow_list')) ?? [];
+        const list = (await listWorkflows()) ?? [];
         if (workflowsCancelled) return;
         setWorkflows(list);
         const starter = list.find((w) => w.id === WORKFLOW_ID_STARTER);
@@ -237,7 +238,7 @@ export function useCreateZeroWizardForm(): WizardFormApi {
     setMachineProbeError(null);
     (async () => {
       try {
-        await invoke('test_machine_connection', { machineId });
+        await testMachineConnection(machineId);
         if (!cancelled) {
           setMachineProbeStatus('success');
           setMachineProbeError(null);

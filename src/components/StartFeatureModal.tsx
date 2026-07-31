@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff, Server, MoonStar } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 import type { EffortLevel, Machine, Repository, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { extractClipboardImageFiles, stageBrowserFilesForLaunch } from '../lib/attachments';
@@ -10,7 +9,14 @@ import { getAgentModels } from '../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../lib/agentCatalog';
 import { reconcileEffort } from '../lib/effortLevels';
 import { HarnessModelPicker, type ModelOption } from './ui/HarnessModelPicker';
-import type { AgentConfigView } from './settings/ProjectSettingsContext';
+import {
+  getAgentConfigs,
+  listMachines,
+  type AgentConfigView,
+} from '../lib/machines';
+import { getRepositoriesForProject } from '../lib/project';
+import { fetchActiveFeatures } from '../lib/features';
+import { getWorkflow, listWorkflows, workflowVersionGraph } from '../lib/workflows';
 import { MiniGraph } from './canvas/MiniGraph';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 
@@ -308,7 +314,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     let cancelled = false;
     (async () => {
       try {
-        const list: WorkflowSummary[] = await invoke('workflow_list');
+        const list = await listWorkflows();
         if (!cancelled) setWorkflows(list ?? []);
       } catch (e) {
         console.warn('failed to load workflows for start-feature picker:', e);
@@ -328,7 +334,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     let cancelled = false;
     (async () => {
       try {
-        const list: Machine[] = await invoke('get_machines');
+        const list = await listMachines();
         if (!cancelled) setMachines(list ?? []);
       } catch (e) {
         console.warn('failed to load machines for remote-run picker:', e);
@@ -351,10 +357,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     const mid = machineId || 'local';
     (async () => {
       try {
-        const list: AgentConfigView[] = await invoke('get_agent_configs', {
-          machineId: mid,
-          refresh: false,
-        });
+        const list = await getAgentConfigs(mid, false);
         if (!cancelled) setAgentConfigs(list ?? []);
       } catch (e) {
         console.warn('failed to load agent configs for start-feature picker:', e);
@@ -383,21 +386,18 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     let cancelled = false;
     (async () => {
       try {
-        const w: any = await invoke('workflow_get', { workflowId });
+        const w = await getWorkflow(workflowId);
         if (cancelled) return;
         const rows: StepRow[] = (w.steps || [])
-          .filter((s: any) => s.kind !== 'gate')
-          .map((s: any) => ({ id: s.id, title: s.title, kind: s.kind }));
+          .filter((s) => s.kind !== 'gate')
+          .map((s) => ({ id: s.id, title: s.title, kind: s.kind }));
         setSteps(rows);
         // The graph the run will follow (P3.6). Fetched separately because the
         // override list is a flat list of agent steps and cannot show shape —
         // a fan-out or a gate is exactly what a launcher wants to confirm.
         // Best-effort: a failure leaves the preview off, never blocks launch.
         try {
-          const def = await invoke<WorkflowDefinitionV2>('workflow_version_graph', {
-            workflowId,
-            versionId: w.version_id,
-          });
+          const def = await workflowVersionGraph(workflowId, w.version_id);
           if (!cancelled) setGraph(def);
         } catch {
           if (!cancelled) setGraph(null);
@@ -541,11 +541,11 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     let cancelled = false;
     (async () => {
       try {
-        const active: any[] = await invoke('fetch_active_features', { projectId });
+        const active = await fetchActiveFeatures(projectId);
         if (cancelled) return;
         const usedRepos = new Set<string>();
         for (const f of active) {
-          const fRepos: any[] = await invoke('get_repositories_for_project', { projectId: f.project_id });
+          const fRepos = await getRepositoriesForProject(f.project_id);
           for (const fr of fRepos) {
             if (f.id !== /* self */ undefined) usedRepos.add(fr.id);
           }

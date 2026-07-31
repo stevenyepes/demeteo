@@ -93,9 +93,24 @@ impl GitOpsHelper {
             return Ok(());
         }
 
-        // Stage the candidate message inside the git dir so it can never
-        // dirty the working tree the way a repo-root temp file would.
-        let msg_path = format!("{}/.git/DEMETEO_COMMIT_MSG", repo_dir.trim_end_matches('/'));
+        // Ask Git for its admin path rather than joining `<repo>/.git`.
+        // In a linked worktree `.git` is a file whose gitdir lives in the
+        // primary checkout, so only Git can locate a temp message that both
+        // stays outside the working tree and is writable by the host.
+        let msg_path = match self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} rev-parse --path-format=absolute --git-path DEMETEO_COMMIT_MSG",
+                    safe_dir
+                ),
+            )
+            .await
+        {
+            Ok(path) if !path.trim().is_empty() => path.trim().to_string(),
+            _ => return Ok(()),
+        };
         if self
             .exec
             .write_file_bytes(machine_str, &msg_path, message.as_bytes())

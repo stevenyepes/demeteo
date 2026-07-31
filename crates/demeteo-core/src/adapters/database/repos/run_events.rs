@@ -27,7 +27,7 @@ impl RunEventsPort for SqliteAdapter {
         // streamed verbatim to the laptop over the control channel, so it's
         // exactly the sink a credential-bearing foreign error string could
         // leak through. Scrub at the write — the single choke point that
-        // covers both `run::emit` and the direct `rpc.rs` failure-path
+        // covers both `run::emit` and the direct `rpc/` failure-path
         // appends — so a missed upstream redaction can't persist a token.
         let payload_json = payload_json.map(|p| scrub_secrets(p).into_owned());
         let conn = self.conn.lock()?;

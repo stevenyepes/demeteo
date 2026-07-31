@@ -1,6 +1,6 @@
 use super::super::DagStepExecutor;
 use crate::domain::ids::StepExecutionId;
-use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::models::{StepAttempt, StepConfig, StepExecution};
 use crate::domain::run_control::{shadow_refusal, RunAction};
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
@@ -56,6 +56,12 @@ fn unwind_patch(original_status: &str, original_iterations: u32) -> StepExecutio
         cache_read_input_tokens: None,
         cache_creation_input_tokens: None,
     }
+}
+
+/// A downstream replay may pass an ancestor that completed before a later
+/// retry-policy outcome replaced its current row with `failed`.
+fn can_restore_successful_ancestor(step: &StepExecution, attempts: &[StepAttempt]) -> bool {
+    step.status == "failed" && attempts.iter().any(|attempt| attempt.status == "completed")
 }
 
 #[cfg(test)]
@@ -213,6 +219,14 @@ impl DagStepExecutor {
             });
 
         let all_steps = self.features.steps_for_feature(feature_id)?;
+        let resume_ancestors = self.resolve_feature_graph(feature_id).and_then(|graph| {
+            graph.ancestors(&step_exec.step_id).map(|ancestors| {
+                ancestors
+                    .into_iter()
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>()
+            })
+        });
         let mut patch_list: Vec<(StepExecutionId, (String, u32))> = Vec::new();
         for s in &all_steps {
             let is_in_range = match &reset_ids {
@@ -256,6 +270,46 @@ impl DagStepExecutor {
                         .sequence_checkpoint_clear(feature_id, &s.step_id.0);
                 }
             }
+        }
+
+        for ancestor in &all_steps {
+            let is_ancestor = match &resume_ancestors {
+                Some(ids) => ids.contains(&ancestor.step_id),
+                None => ancestor.step_index < step_exec.step_index,
+            };
+            if !is_ancestor {
+                continue;
+            }
+            let attempts = self.features.attempts_for_step(&ancestor.id)?;
+            if !can_restore_successful_ancestor(ancestor, &attempts) {
+                continue;
+            }
+            self.features.step_update(
+                &ancestor.id,
+                &StepExecutionPatch {
+                    status: Some("completed".to_string()),
+                    error_message: Some(None),
+                    last_failure_fingerprint: None,
+                    iteration_count: None,
+                    cost_usd: None,
+                    tokens: None,
+                    wall_clock_secs: None,
+                    artifact_path: None,
+                    artifact_paths: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
+                },
+            )?;
+            let _ = self.notif.emit(&DomainEvent::StepProgress {
+                feature_id: feature_id.clone(),
+                step_id: ancestor.step_id.0.clone(),
+                status: "completed".into(),
+                cost_usd: ancestor.cost_usd,
+                tokens: ancestor.tokens,
+                wall_clock_secs: ancestor.wall_clock_secs,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            });
         }
 
         let prev_feature_status = feature.status.clone();

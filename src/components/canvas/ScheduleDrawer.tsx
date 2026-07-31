@@ -22,10 +22,11 @@
  * how the command has always expressed "no schedule".
  */
 import { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { CalendarClock, Loader2, X } from 'lucide-react';
 
 import { useErrorBus } from '../../lib/errorBus';
+import { getProjects } from '../../lib/project';
+import { saveWorkflowSchedule } from '../../lib/workflows';
 
 export interface WorkflowScheduleValue {
   cron: string;
@@ -87,7 +88,7 @@ export function ScheduleDrawer({
 
   useEffect(() => {
     let live = true;
-    invoke<{ id: string; name: string }[]>('get_projects')
+    getProjects()
       .then((list) => live && setProjects(list.map((p) => ({ id: p.id, name: p.name }))))
       // The target dropdown stays empty and save is blocked on it, so say so
       // rather than presenting an unusable form.
@@ -114,7 +115,7 @@ export function ScheduleDrawer({
 
     setSaving(true);
     try {
-      await invoke('workflow_save_schedule', { workflowId, schedule: next });
+      await saveWorkflowSchedule(workflowId, next);
       onSaved(next);
       onClose();
     } catch (err) {

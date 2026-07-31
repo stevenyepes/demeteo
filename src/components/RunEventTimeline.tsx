@@ -1,9 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, ChevronUp, KeyRound, Loader, Radio, ThumbsDown, ThumbsUp, WifiOff } from 'lucide-react';
 import type { RemoteRunMirror, RunEvent } from '../types';
 import { TERMINAL_STATUSES } from '../lib/runStatus';
 import { formatError } from '../lib/errors';
+import {
+  decideRemoteGate,
+  getRemoteRunStatus,
+  parkedGateId,
+  reinjectRemoteCredentials,
+  streamRemoteEvents,
+} from '../lib/remoteRuns';
 import { RunEventFeed } from './RunEventFeed';
 
 /**
@@ -26,8 +32,8 @@ export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () 
     let cancelled = false;
     (async () => {
       try {
-        const status: any = await invoke('remote_get_status', { machineId: run.machine_id, runId: run.run_id });
-        if (!cancelled) setGateId(status?.parked_gate_id ?? null);
+        const status = await getRemoteRunStatus(run.machine_id, run.run_id);
+        if (!cancelled) setGateId(parkedGateId(status));
       } catch (e) {
         if (!cancelled) setErr(formatError(e));
       } finally {
@@ -41,7 +47,7 @@ export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () 
     if (!gateId) return;
     setDeciding(true);
     try {
-      await invoke('remote_decide_gate', {
+      await decideRemoteGate({
         machineId: run.machine_id,
         runId: run.run_id,
         gateId,
@@ -106,10 +112,7 @@ export const ReinjectCredentials: React.FC<{ run: RemoteRunMirror; onResolved: (
     setBusy(true);
     setErr('');
     try {
-      await invoke('remote_reinject_credentials', {
-        machineId: run.machine_id,
-        runId: run.run_id,
-      });
+      await reinjectRemoteCredentials(run.machine_id, run.run_id);
       onResolved();
     } catch (e) {
       setErr(formatError(e));
@@ -184,11 +187,7 @@ export const RunEventTimeline: React.FC<{
     let cancelled = false;
     const poll = async () => {
       try {
-        const fresh = await invoke<RunEvent[]>('remote_stream_events', {
-          machineId: run.machine_id,
-          runId: run.run_id,
-          fromOffset: offsetRef.current,
-        });
+        const fresh = await streamRemoteEvents(run.machine_id, run.run_id, offsetRef.current);
         if (cancelled) return;
         setError('');
         setConsecutiveFailures(0);
