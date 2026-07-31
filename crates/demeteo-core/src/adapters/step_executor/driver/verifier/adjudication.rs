@@ -484,7 +484,9 @@ impl ExecutionDriver {
                     match ev {
                         Some(AgentEvent::Text { delta }) => text.push_str(&delta),
                         Some(AgentEvent::TurnComplete { .. }) | None => break parse_triage_text(&text),
-                        Some(AgentEvent::Error { .. }) => break TriageVerdict::Regression,
+                        Some(ref e @ AgentEvent::Error { .. }) if e.ends_turn() => {
+                            break TriageVerdict::Regression
+                        }
                         Some(_) => {}
                     }
                 }

@@ -195,8 +195,10 @@ where
                         if let crate::domain::agent_event::AgentEvent::Error { message, .. } =
                             &other_event
                         {
-                            final_status = "error".to_string();
-                            final_reason = Some(message.clone());
+                            if other_event.ends_turn() {
+                                final_status = "error".to_string();
+                                final_reason = Some(message.clone());
+                            }
                         }
 
                         let payload = serde_json::json!({

@@ -258,7 +258,7 @@ impl ExecutionDriver {
                     match ev {
                         Some(AgentEvent::Text { delta }) => text.push_str(&delta),
                         Some(AgentEvent::TurnComplete { .. }) | None => break parse_test_ids_text(&text),
-                        Some(AgentEvent::Error { .. }) => break Vec::new(),
+                        Some(ref e @ AgentEvent::Error { .. }) if e.ends_turn() => break Vec::new(),
                         Some(_) => {}
                     }
                 }
