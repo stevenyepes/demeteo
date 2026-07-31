@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { Channel } from '@tauri-apps/api/core';
 import { Terminal } from '@xterm/headless';
 
 import {
   attachTerminalSession,
+  createTerminalChannel,
   detachTerminalSession,
   reportScreenActivity,
 } from '../lib/terminal';
@@ -151,7 +151,7 @@ export function TerminalApprovalRecognizer({
         entry.timer = setTimeout(runScan, SCAN_DEBOUNCE_MS);
       };
 
-      const channel = new Channel<Uint8Array | number[]>();
+      const channel = createTerminalChannel();
       entry.channelId = channel.id;
       channel.onmessage = (chunk: Uint8Array | number[]) => {
         const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);

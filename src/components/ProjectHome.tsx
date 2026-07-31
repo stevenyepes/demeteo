@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
-import { Feature, WorktreeStrategy, ProjectSettingsData } from '../types';
+import { Feature } from '../types';
 import { formatTokens } from '../lib/utils';
 import { formatError } from '../lib/errors';
-import { saveProjectSettings } from '../lib/project';
+import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
+import { bootstrapProject } from '../lib/createProjectWizard';
+import { fetchActiveFeatures } from '../lib/features';
+import { listMirroredRuns } from '../lib/remoteRuns';
+import { listWorkflows } from '../lib/workflows';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { StartSessionButton } from './StartSessionButton';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
@@ -54,7 +57,7 @@ const ProjectHome = () => {
     });
 
     // Repositories drive the terminal tab / coding-session target.
-    const [repositories, setRepositories] = useState<any[]>([]);
+    const [repositories, setRepositories] = useState<{ path: string; name: string }[]>([]);
     // Workflow id → display meta, used to label the Active Pipelines list.
     const [workflowById, setWorkflowById] = useState<Map<string, { name: string; is_starter: boolean }>>(new Map());
 
@@ -120,13 +123,9 @@ const ProjectHome = () => {
         const currentPrTemplate = prTemplate;
         try {
             // Read existing settings so we preserve user-customized values
-            const existing = await invoke<ProjectSettingsData | null>('get_proposed_strategy', {
-                projectId: activeProject.id
-            });
+            const existing = await getProposedStrategy(activeProject.id);
 
-            const strategy = await invoke<WorktreeStrategy>('bootstrap_project', {
-                projectId: activeProject.id
-            });
+            const strategy = await bootstrapProject(activeProject.id);
 
             const ext = existing?.worktree_strategy;
             setDefaultBranch(currentDefaultBranch || ext?.default_branch || strategy.default_branch);
@@ -134,7 +133,7 @@ const ProjectHome = () => {
             setTestCommand(currentTestCommand || ext?.test_command || strategy.test_command || '');
             setPrTemplate(currentPrTemplate || ext?.pr_template || strategy.pr_template || '');
             setLocalBootstrapStep('strategy_proposal');
-        } catch (err: any) {
+        } catch (err) {
             setLocalBootstrapStep('error');
             setBootstrapError(formatError(err));
         }
@@ -156,7 +155,7 @@ const ProjectHome = () => {
             // Update parent projects status to 'idle'
             projDispatch({ type: 'UPDATE_PROJECTS', updater: prev => prev.map(p => p.id === activeProject.id ? { ...p, status: 'idle' } : p) });
             setLocalBootstrapStep('idle');
-        } catch (err: any) {
+        } catch (err) {
             setLocalBootstrapStep('error');
             setBootstrapError(formatError(err));
         }
@@ -176,10 +175,10 @@ const ProjectHome = () => {
             setIsLoadingFeatures(true);
 
             const [featuresRes, reposRes, workflowsRes, mirrorsRes] = await Promise.allSettled([
-                invoke<Feature[]>('fetch_active_features', { projectId: activeProject.id }),
-                invoke<any[]>('get_repositories_for_project', { projectId: activeProject.id }),
-                invoke<any[]>('workflow_list'),
-                invoke<{ feature_id: string | null }[]>('remote_list_mirrored_runs'),
+                fetchActiveFeatures(activeProject.id),
+                getRepositoriesForProject(activeProject.id),
+                listWorkflows(),
+                listMirroredRuns(),
             ]);
 
             // Detached runs: any active feature that has a remote-run mirror.
@@ -199,7 +198,7 @@ const ProjectHome = () => {
             if (featuresRes.status === 'fulfilled' && featuresRes.value) {
                 const res = featuresRes.value;
                 if (res && res.length > 0) {
-                    const mapped: Feature[] = res.map((f: any) => ({
+                    const mapped: Feature[] = res.map((f) => ({
                         id: f.id,
                         project_id: f.project_id,
                         workflow_id: f.workflow_id ?? undefined,
@@ -574,7 +573,7 @@ const ProjectHome = () => {
                                 </p>
                             </div>
                         ) : (
-                            features.map((feature: any) => {
+                            features.map((feature) => {
                                 const meta = runStatusMeta(featureRunStatus(feature));
                                 return (
                                 <div

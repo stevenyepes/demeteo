@@ -1,24 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Plus, Server, Key, Lock, Cpu, Edit2, Trash2, Wifi, WifiOff, Loader, AlertCircle, RefreshCw, Monitor, Rocket, CheckCircle2, X } from 'lucide-react';
 import EnvModal, { blankForm, type EnvFormState } from './EnvModal';
 import { formatError } from '../lib/errors';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { useAgentCatalog, agentLabel } from '../lib/agentCatalog';
-
-interface Machine {
-  id: string;
-  name: string;
-  host: string;
-  port: number;
-  username: string;
-  auth_type: string;
-  key_path?: string | null;
-  agents?: string | null;
-  use_login_shell?: boolean | null;
-  setup_commands?: string | null;
-  notify_webhook_url?: string | null;
-}
+import {
+  deleteMachine,
+  deleteMachineSecret,
+  listMachines,
+  parseMachineAgents,
+  testMachineConnection,
+} from '../lib/machines';
+import {
+  cancelRunnerDownload,
+  checkLocalRunner,
+  downloadRunner,
+  enableRemoteRuns,
+  getRunnerStatus,
+  type LocalRunnerCheck,
+} from '../lib/runner';
+import type { Machine } from '../types';
 
 interface MachinesViewProps {
   /** Optional callback fired when a machine is added/updated/deleted,
@@ -72,31 +73,19 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
     }));
   });
 
-  type LocalRunnerCheck =
-    | { status: 'ready'; path: string; version: string | null; expected: string; stale_warning: string | null }
-    | { status: 'missing'; expected: string };
-
   // Ambient, no-network/no-SSH info about what this laptop can push right
   // now — populated on mount so machines don't all look unknown until the
   // user clicks something, without auto-probing any remote host over SSH.
   const [localRunnerInfo, setLocalRunnerInfo] = useState<LocalRunnerCheck | null>(null);
 
   useEffect(() => {
-    invoke<LocalRunnerCheck>('remote_runner_local_check').then(setLocalRunnerInfo).catch(() => {});
+    checkLocalRunner().then(setLocalRunnerInfo).catch(() => {});
   }, []);
 
   const probeRunner = async (m: Machine) => {
     setRunnerState((s) => ({ ...s, [m.id]: { ...s[m.id], status: 'checking' } }));
     try {
-      const [result, local] = await Promise.all([
-        invoke<{
-          installed: boolean;
-          version: string | null;
-          service_active: boolean | null;
-          lingering: boolean | null;
-        }>('remote_runner_status', { machineId: m.id }),
-        invoke<LocalRunnerCheck>('remote_runner_local_check'),
-      ]);
+      const [result, local] = await Promise.all([getRunnerStatus(m.id), checkLocalRunner()]);
       setRunnerState((s) => ({
         ...s,
         [m.id]: {
@@ -117,12 +106,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
   const probeRunnerSilent = async (machineId: string) => {
     setRunnerState((s) => ({ ...s, [machineId]: { ...s[machineId], status: 'checking' } }));
     try {
-      const result = await invoke<{
-        installed: boolean;
-        version: string | null;
-        service_active: boolean | null;
-        lingering: boolean | null;
-      }>('remote_runner_status', { machineId });
+      const result = await getRunnerStatus(machineId);
       setRunnerState((s) => ({
         ...s,
         [machineId]: {
@@ -144,7 +128,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
 
   const enableRunner = async (m: Machine) => {
     try {
-      const check: LocalRunnerCheck = await invoke('remote_runner_local_check');
+      const check = await checkLocalRunner();
       setLocalRunnerInfo(check);
       let localBinPath: string;
       if (check.status === 'ready') {
@@ -159,15 +143,14 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
         setRunnerState((s) => ({ ...s, [m.id]: { status: 'downloading', expectedVersion: check.expected } }));
         downloadingMachineIdRef.current = m.id;
         try {
-          const downloaded: { path: string; version: string } = await invoke('remote_runner_download');
+          const downloaded = await downloadRunner();
           localBinPath = downloaded.path;
         } finally {
           downloadingMachineIdRef.current = null;
         }
       }
       setRunnerState((s) => ({ ...s, [m.id]: { status: 'installing', expectedVersion: check.expected } }));
-      const result: { version: string | null; linger_enabled: boolean; warning: string | null } =
-        await invoke('remote_enable_runs', { machineId: m.id, localBinPath });
+      const result = await enableRemoteRuns(m.id, localBinPath);
       setRunnerState((s) => ({
         ...s,
         [m.id]: {
@@ -185,7 +168,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
 
   const cancelDownload = async () => {
     try {
-      await invoke('remote_runner_download_cancel');
+      await cancelRunnerDownload();
     } catch {
       // best-effort — the in-flight download call will surface its own
       // "cancelled" error to the catch block in enableRunner either way
@@ -196,10 +179,10 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
     setLoading(true);
     setError('');
     try {
-      const list: Machine[] = await invoke('get_machines');
+      const list = await listMachines();
       setMachines(list ?? []);
       list.forEach((m) => { void probeRunnerSilent(m.id); });
-    } catch (e: any) {
+    } catch (e) {
       setError(formatError(e));
       setMachines([]);
     } finally {
@@ -215,18 +198,10 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
     // Parse the persisted agents JSON into the UI's kind list. EnvModal keys
     // its selectable-agent buttons off the registry catalog by kind and
     // renders the display label itself, so we store kinds here (not labels).
-    let agentNames: string[] = [];
-    try {
-      const arr = m.agents ? JSON.parse(m.agents) : [];
-      if (Array.isArray(arr)) {
-        agentNames = arr
-          .filter((a: any) => a?.enabled !== false)
-          .map((a: any) => a?.kind ?? '')
-          .filter((k: string) => k);
-      }
-    } catch {
-      // ignore malformed JSON
-    }
+    const agentNames = parseMachineAgents(m.agents)
+      .filter((a) => a.enabled !== false)
+      .map((a) => a.kind ?? '')
+      .filter((k) => k);
     const connection = m.username
       ? `${m.username}@${m.host}${m.port && m.port !== 22 ? `:${m.port}` : ''}`
       : `${m.host}${m.port && m.port !== 22 ? `:${m.port}` : ''}`;
@@ -272,9 +247,9 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
     setTestState((s) => ({ ...s, [m.id]: 'testing' }));
     setTestErrors((s) => ({ ...s, [m.id]: '' }));
     try {
-      await invoke('test_machine_connection', { machineId: m.id });
+      await testMachineConnection(m.id);
       setTestState((s) => ({ ...s, [m.id]: 'ok' }));
-    } catch (e: any) {
+    } catch (e) {
       setTestState((s) => ({ ...s, [m.id]: 'err' }));
       setTestErrors((s) => ({ ...s, [m.id]: formatError(e) }));
     }
@@ -283,11 +258,11 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
   const handleQuickDelete = async (m: Machine) => {
     if (!confirm(`Delete machine "${m.name}"? This removes its stored credentials.`)) return;
     try {
-      await invoke('delete_machine', { id: m.id });
-      try { await invoke('delete_machine_secret', { machineId: m.id }); } catch { /* ok */ }
+      await deleteMachine(m.id);
+      try { await deleteMachineSecret(m.id); } catch { /* ok */ }
       fetchMachines();
       onChange?.();
-    } catch (e: any) {
+    } catch (e) {
       setError(formatError(e));
     }
   };
@@ -391,16 +366,9 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
           <div className="space-y-3">
             {machines.map((m) => {
               const conn = testState[m.id] ?? 'idle';
-              const agents: string[] = (() => {
-                try {
-                  const arr = m.agents ? JSON.parse(m.agents) : [];
-                  return Array.isArray(arr)
-                    ? arr
-                        .filter((a: any) => a?.enabled !== false)
-                        .map((a: any) => agentLabel(agentCatalog, a?.kind ?? '?'))
-                    : [];
-                } catch { return []; }
-              })();
+              const agents = parseMachineAgents(m.agents)
+                .filter((a) => a.enabled !== false)
+                .map((a) => agentLabel(agentCatalog, a.kind ?? '?'));
               const authLabel =
                 m.auth_type === 'key' ? 'Private Key' :
                 m.auth_type === 'password' ? 'Password' :

@@ -3,6 +3,10 @@ import TopBar from "./components/TopBar";
 import ProjectRail from "./components/ProjectRail";
 import { formatError } from "./lib/errors";
 import { ErrorBusProvider } from "./lib/errorBus";
+import { fetchActiveFeatures } from "./lib/features";
+import { getProjects, getRepositoriesForProject, seedSampleProject } from "./lib/project";
+import { listProviderInstances } from "./lib/providers";
+import { reconcileRuns } from "./lib/remoteRuns";
 import { ErrorToast, ERROR_TOAST_CTA_EVENT } from "./components/ErrorToast";
 import EmptyStateCard from "./components/EmptyStateCard";
 import NewProjectView from "./components/NewProjectView";
@@ -182,10 +186,9 @@ function AppInner() {
     let cancelled = false;
     const fetchFeatures = async () => {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const list = await invoke<any[]>('fetch_active_features', { projectId: currentProjectId });
+        const list = await fetchActiveFeatures(currentProjectId);
         if (cancelled) return;
-        const mapped: Feature[] = (list ?? []).map((f: any) => ({
+        const mapped: Feature[] = (list ?? []).map((f) => ({
           id: f.id,
           project_id: f.project_id,
           workflow_id: f.workflow_id ?? undefined,
@@ -285,8 +288,6 @@ function AppInner() {
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-
         // M6.3's "reconcile-on-reopen" desktop notification only fires
         // from inside this call — previously it only ran when the user
         // manually opened the Remote Runs inbox, which defeats the
@@ -294,23 +295,23 @@ function AppInner() {
         // never blocks the rest of startup, and any newly-actionable run
         // (PR ready/failed/parked/needs-credentials) surfaces as a
         // notification right away instead of waiting for a manual check.
-        invoke('remote_reconcile_runs').catch((err) => {
+        reconcileRuns().catch((err) => {
           console.error('Failed to reconcile remote runs on startup:', err);
         });
 
-        const backendProviders: any[] = await invoke('list_provider_instances');
+        const backendProviders = await listProviderInstances();
         const mappedProviders: Provider[] = backendProviders.map(p => ({
           id: p.id, type: p.kind, name: p.kind, host: p.host,
           pat: 'hidden', username: p.username, avatarUrl: p.avatar_url,
         }));
         projDispatch({ type: 'SET_PROVIDERS', providers: mappedProviders });
 
-        const backendProjects: any[] = await invoke('get_projects');
+        const backendProjects = await getProjects();
         const repoMap: Record<string, import('./types').Repository[]> = {};
         const mappedProjects: Project[] = await Promise.all(backendProjects.map(async p => {
-          let reposList: any[] = [];
-          try { reposList = await invoke<any[]>('get_repositories_for_project', { projectId: p.id }); } catch {}
-          repoMap[p.id] = reposList.map((r: any) => ({ id: r.id, repo_path: r.repo_path, provider_id: r.provider_id ?? '' }));
+          let reposList: import('./types').Repository[] = [];
+          try { reposList = await getRepositoriesForProject(p.id); } catch {}
+          repoMap[p.id] = reposList.map((r) => ({ id: r.id, repo_path: r.repo_path, provider_id: r.provider_id ?? '' }));
           return {
             id: p.id, name: p.name, status: p.status,
             repos: reposList.length, nodes: p.nodes, spend: p.spend,
@@ -400,8 +401,7 @@ function AppInner() {
 
   const handleSeedSample = async () => {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const sample: any = await invoke('seed_sample_project');
+      const sample = await seedSampleProject();
       const sampleProject: Project = {
         id: sample.id, name: sample.name, status: sample.status,
         repos: 2, nodes: sample.nodes, spend: sample.spend,

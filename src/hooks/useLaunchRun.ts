@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { startFeature } from '../lib/createProjectWizard';
+import { submitRemoteRun } from '../lib/remoteRuns';
 import { useNavigation } from '../context';
 import { useErrorBus } from '../lib/errorBus';
 import type { LaunchStageEntry } from '../components/AttachmentDropzone';
@@ -85,12 +86,7 @@ export function useLaunchRun(options: {
           // runner drives it; the laptop keeps an eager shadow Feature
           // (inserted by `remote_submit_run` before the RPC) that the
           // reconcile loop hydrates as the runner reports progress.
-          const handle = await invoke<{
-            run_id: string;
-            machine_id: string;
-            status: string;
-            feature_id: string;
-          }>('remote_submit_run', {
+          const handle = await submitRemoteRun({
             machineId: params.machineId,
             projectId,
             workflowId: params.workflowId,
@@ -130,7 +126,7 @@ export function useLaunchRun(options: {
           return feature;
         }
 
-        const res: any = await invoke('start_feature', {
+        const res = await startFeature({
           projectId,
           workflowId: params.workflowId,
           title: params.title,

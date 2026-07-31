@@ -1,10 +1,94 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   EffortLevel,
+  Project,
   ProjectMemoryEntry,
+  ProjectSettingsData,
   MemoryAgentConfig,
   MemoryAgentTestResult,
+  Repository,
+  WorkflowOverride,
 } from "../types";
+
+// ── Project records ─────────────────────────────────────────────────────
+
+export async function getProjects(): Promise<Project[]> {
+  return invoke<Project[]>("get_projects");
+}
+
+/** Create the demo project. The backend pins a fixed id and discards the
+ *  insert result, so a second call resolves with the same record whether or
+ *  not a row was written — treat the result as the intended shape, not as
+ *  proof of what is stored. */
+export async function seedSampleProject(): Promise<Project> {
+  return invoke<Project>("seed_sample_project");
+}
+
+export async function getRepositoriesForProject(projectId: string): Promise<Repository[]> {
+  return invoke<Repository[]>("get_repositories_for_project", { projectId });
+}
+
+/** Mirrors the Rust `ProjectConfig`. Sent whole on every update, so a caller
+ *  that drops `repos` drops the project's repositories. */
+export interface ProjectConfigInput {
+  name: string;
+  compute_type: string;
+  remote_host: string | null;
+  repos: Array<{ repo_path: string; provider_id: string }>;
+}
+
+export async function updateProject(id: string, config: ProjectConfigInput): Promise<void> {
+  return invoke<void>("update_project", { id, config });
+}
+
+/** Delete the project and its cloned workspace. */
+export async function deleteProject(id: string): Promise<void> {
+  return invoke<void>("delete_project", { id });
+}
+
+/** Uncommitted / unpushed state of the named repos. Mirrors the Rust
+ *  `RepoDirtyStatus`. */
+export interface RepoDirtyStatus {
+  repo_path: string;
+  has_uncommitted: boolean;
+  has_unpushed: boolean;
+}
+
+export async function checkReposDirty(
+  projectId: string,
+  repoPaths: string[],
+): Promise<RepoDirtyStatus[]> {
+  return invoke<RepoDirtyStatus[]>("check_repos_dirty", { projectId, repoPaths });
+}
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null;
+  is_locked: boolean;
+}
+
+/** Mirrors the Rust `RepoHealthStatus`. */
+export interface RepoHealthStatus {
+  repo_path: string;
+  is_cloned: boolean;
+  head_branch: string | null;
+  worktrees: WorktreeInfo[];
+  has_uncommitted: boolean;
+  has_unpushed: boolean;
+}
+
+export async function getWorkspaceHealth(projectId: string): Promise<RepoHealthStatus[]> {
+  return invoke<RepoHealthStatus[]>("get_workspace_health", { projectId });
+}
+
+/** The project's stored settings, or `null` before its first save. */
+export async function getProposedStrategy(
+  projectId: string,
+): Promise<ProjectSettingsData | null> {
+  return invoke<ProjectSettingsData | null>("get_proposed_strategy", { projectId });
+}
+
+// ── Project memory ──────────────────────────────────────────────────────
 
 export async function listProjectMemory(projectId: string): Promise<ProjectMemoryEntry[]> {
   return invoke<ProjectMemoryEntry[]>("project_memory_list", { projectId });
@@ -71,6 +155,12 @@ export async function listMemoryAgentModels(
 }
 
 // ── Workflow / step overrides ──────────────────────────────────────────
+
+/** Every override configured for a project, workflow-level and step-level.
+ *  Anything inheriting has no row and is absent from the list. */
+export async function getWorkflowOverrides(projectId: string): Promise<WorkflowOverride[]> {
+  return invoke<WorkflowOverride[]>("get_workflow_overrides", { projectId });
+}
 
 /**
  * Upsert one project-scoped override. `stepId === null` is the
@@ -201,9 +291,7 @@ export async function saveProjectSettings(
   projectId: string,
   input: ProjectSettingsInput,
 ): Promise<void> {
-  const existing = await invoke<any | null>("get_proposed_strategy", {
-    projectId,
-  });
+  const existing = await getProposedStrategy(projectId);
   const baseWs = existing?.worktree_strategy;
 
   const merged = {

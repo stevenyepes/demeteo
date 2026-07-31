@@ -10,7 +10,6 @@ import {
   House,
   Check,
 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 
 import type { Machine, Feature } from '../types';
 import { useTerminalPanel } from '../hooks/useTerminalPanel';
@@ -22,6 +21,8 @@ import {
   RECENTS_SHOWN,
   type TerminalRecent,
 } from '../lib/terminalRecents';
+import { getAgentConfigs, listMachines } from '../lib/machines';
+import { fetchActiveFeatures, getFeatureWorktree } from '../lib/features';
 import { MachineDot } from './ui/MachineDot';
 
 /** One openable target: a machine plus the coding agents it offers. */
@@ -32,14 +33,6 @@ interface MachineTarget {
   sublabel: string;
   local: boolean;
   agents: AgentMeta[];
-}
-
-/** Wire shape of `feature_get_worktree` / `remote_get_worktree`. */
-interface FeatureWorktree {
-  machine_id: string;
-  worktree_path: string;
-  branch: string;
-  default_branch: string;
 }
 
 /** Resolve the enabled, known agents for a machine from its stored `agents`
@@ -161,16 +154,13 @@ export function NewTerminalMenu({
     let cancelled = false;
     void (async () => {
       try {
-        const list = (await invoke<Machine[]>('get_machines')) || [];
+        const list = (await listMachines()) || [];
         if (!cancelled) setMachines(list.filter((m) => m.auth_type !== 'local'));
       } catch {
         if (!cancelled) setMachines([]);
       }
       try {
-        const configs =
-          (await invoke<Array<{ kind: string; enabled: boolean }>>('get_agent_configs', {
-            machineId: 'local',
-          })) || [];
+        const configs = (await getAgentConfigs('local')) || [];
         const found = configs
           .filter((c) => c.enabled && AGENTS[c.kind])
           .map((c) => AGENTS[c.kind]);
@@ -196,10 +186,7 @@ export function NewTerminalMenu({
     let cancelled = false;
     void (async () => {
       try {
-        const list =
-          (await invoke<Feature[]>('fetch_active_features', {
-            projectId: currentProjectId,
-          })) || [];
+        const list = (await fetchActiveFeatures(currentProjectId)) || [];
         if (!cancelled) setFeatures(list);
       } catch {
         if (!cancelled) setFeatures([]);
@@ -333,9 +320,7 @@ export function NewTerminalMenu({
           // Resolve the worktree at launch time — the machine, path, and
           // branch all come from here, and a failure (branch/worktree gone)
           // aborts the open rather than dropping the user in the wrong dir.
-          const info = await invoke<FeatureWorktree>('feature_get_worktree', {
-            featureId: feature.id,
-          });
+          const info = await getFeatureWorktree(feature.id);
           await open({
             machineId: info.machine_id,
             machineLabel: target.machineLabel,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, memo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { formatError } from '../lib/errors';
+import { artifactBody } from '../lib/features';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -57,15 +57,16 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
         // `artifact_body` command (C3), not `sftp_read_file` directly — so a
         // runner-owned feature's artifact can later resolve from the laptop
         // shadow without this component knowing where the run executed.
-        const fileContent = await invoke<string>('artifact_body', {
-          machineId: 'local',
-          path: artifactPath,
-        });
+        const fileContent = await artifactBody('local', artifactPath);
 
         // Worktree-ref dispatch via explicit mime prop
         if (mime === 'application/x-demeteo-worktree-ref') {
           try {
-            const ref = JSON.parse(fileContent);
+            const ref = JSON.parse(fileContent) as {
+              machine_id?: string;
+              branch?: string;
+              path?: string;
+            };
             setWorktreeRef({
               machine_id: ref.machine_id || 'local',
               branch: ref.branch || '',
@@ -312,7 +313,12 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </td>
               ),
               // Code highlighter (inline and block)
-              code: ({ node, className, children, ...props }: any) => {
+              code: ({
+                node,
+                className,
+                children,
+                ...props
+              }: React.ComponentPropsWithoutRef<'code'> & { node?: unknown }) => {
                 const match = /language-(\w+)/.exec(className || '');
                 const codeContent = String(children).replace(/\n$/, '');
                 

@@ -18,7 +18,6 @@
  *    them in, so the canvas and timeline drive the exact same code paths.
  */
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import {
   AlertCircle,
   Check,
@@ -41,6 +40,7 @@ import {
   classifyArtifact,
 } from '../../lib/artifacts';
 import { formatError } from '../../lib/errors';
+import { getSequenceState, listStepAttempts } from '../../lib/features';
 import { formatDuration } from '../../lib/utils';
 import { runStatusMeta, TONE_CHIP, TONE_TEXT } from '../../lib/runStatus';
 import type { RunEvent, SequenceState, StepAttempt, StepExecution } from '../../types';
@@ -157,7 +157,7 @@ export function NodePanel({
     let cancelled = false;
     setAttemptsLoading(true);
     setAttemptsError(null);
-    invoke<StepAttempt[]>('step_attempts_list', { executionId: stepExecutionId })
+    listStepAttempts(stepExecutionId)
       .then((rows) => {
         if (!cancelled) setAttempts(rows);
       })
@@ -475,11 +475,7 @@ function SequenceTasks({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    invoke<SequenceState>('sequence_tasks_list', {
-      featureId,
-      nodeId,
-      executionId: stepExecutionId,
-    })
+    getSequenceState({ featureId, nodeId, executionId: stepExecutionId })
       .then((s) => {
         if (!cancelled) setState(s);
       })

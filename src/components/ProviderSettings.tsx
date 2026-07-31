@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { ShieldAlert, Check, Server, Code, GitBranch, X } from 'lucide-react';
 import { formatError } from '../lib/errors';
+import { connectProviderInstance } from '../lib/providers';
 import { OverlayPortal } from './ui/OverlayPortal';
 
 interface ProviderSettingsProps {
@@ -34,11 +34,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
         setErrorMsg('');
 
         try {
-            const res: any = await invoke('connect_provider_instance', {
-                providerType,
-                host: host.trim(),
-                pat: pat.trim()
-            });
+            const res = await connectProviderInstance(providerType, host.trim(), pat.trim());
 
             setStatus('success');
             setTimeout(() => {
@@ -52,7 +48,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
                     avatarUrl: res.avatar_url
                 });
             }, 1000);
-        } catch (err: any) {
+        } catch (err) {
             setStatus('error');
             setErrorMsg(formatError(err));
         }

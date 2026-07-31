@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { WorkflowWithSteps } from '../types';
 import { Play, Pencil, Download, Upload, Trash, RefreshCw, Plus, Cpu, GitBranch, ShieldAlert, Clock } from 'lucide-react';
 import { useErrorBus } from '../lib/errorBus';
 import { formatError } from '../lib/errors';
+import {
+  deleteWorkflow,
+  exportWorkflow,
+  importWorkflow,
+  listWorkflows,
+  revertWorkflowToDefault,
+  workflowVersionGraph,
+} from '../lib/workflows';
 import { MiniGraph } from './canvas/MiniGraph';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 
@@ -27,7 +34,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
   const loadWorkflows = async () => {
     setLoading(true);
     try {
-      const list = await invoke<WorkflowWithSteps[]>('workflow_list');
+      const list = await listWorkflows();
       setWorkflows(list);
       if (list.length > 0 && !selectedId) {
         setSelectedId(list[0].id);
@@ -44,7 +51,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
     e.stopPropagation();
     if (!confirm('Are you sure you want to delete this custom workflow?')) return;
     try {
-      await invoke('workflow_delete', { workflowId: id });
+      await deleteWorkflow(id);
       loadWorkflows();
     } catch (err) {
       reportError(err);
@@ -55,7 +62,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
     e.stopPropagation();
     if (!confirm('Revert this starter pack workflow to its default settings?')) return;
     try {
-      await invoke('workflow_revert_to_default', { workflowId: id });
+      await revertWorkflowToDefault(id);
       loadWorkflows();
     } catch (err) {
       reportError(err);
@@ -66,9 +73,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
    *  keep their layout, v1 step lists migrate on the way in (P3.6). */
   const handleImportFile = async (file: File) => {
     try {
-      const imported = await invoke<WorkflowWithSteps>('workflow_import', {
-        json: await file.text(),
-      });
+      const imported = await importWorkflow(await file.text());
       await loadWorkflows();
       setSelectedId(imported.id);
     } catch (err) {
@@ -79,7 +84,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
   const handleExport = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      const json = await invoke<string>('workflow_export', { workflowId: id });
+      const json = await exportWorkflow(id);
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -108,10 +113,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
     // Drop the old shape before fetching the new one: holding it would render
     // the previously selected workflow's graph beside this one's name.
     setGraph(null);
-    invoke<WorkflowDefinitionV2>('workflow_version_graph', {
-      workflowId: selectedWorkflow.id,
-      versionId: selectedWorkflow.version_id,
-    })
+    workflowVersionGraph(selectedWorkflow.id, selectedWorkflow.version_id)
       .then((def) => live && setGraph(def))
       // Informational: a failure hides the preview, never the workflow.
       .catch(() => live && setGraph(null));
