@@ -79,6 +79,48 @@ reflex. Line count was the symptom; this is the cause:
 - `#[allow(clippy::too_many_arguments)]` is a review trigger, not a fix. Bundle
   the parameters that travel together, then delete the attribute.
 
+### Comments
+
+**Default to no comment.** The generative reflex is to narrate, and narration is
+the one kind of comment this tree does not have: a sweep of `demeteo-core` found
+16 narration openers across 60k lines, against 12k lines of rustdoc that carry
+decisions. Holding that ratio is the point — every comment you add is an
+exception that has to earn its place, and most do not.
+
+A comment earns it by carrying what is **not** discoverable by reading the code
+— the rule this document applies to itself. An agent recovers *what* cheaply and
+cannot recover *why* at all, so the measure is non-recoverable information, never
+length. A thirty-line header recording a decision earns its place; `// increment
+the counter` does not, at any length. Never cap or trim a comment by size alone.
+
+**Do not write these** — each is a review trigger on its own:
+
+- Restatement: derivable from the line under it, or rustdoc re-spelling the
+  signature (`/// Returns the name.` over `fn name()`).
+- Change narration — `// Now also handles the remote case`, `// Fixed: used to
+  return early`. That describes a diff, not the code: stale on landing, and it
+  reads as authoritative forever. The commit message holds it instead.
+- Ticket echoes, and play-by-play (`// Step 1`, `// Now build the args`). If the
+  steps need labelling they need naming — extract functions.
+- Explaining Rust or the stdlib to the next reader.
+- `TODO`/`FIXME` as an invitation: an agent reads it as an instruction and acts
+  on it mid-task. Leave an inert fact with a scope, or a ticket.
+
+**The traps:**
+
+- **Prefer encoding over describing.** A type or test that makes the wrong thing
+  impossible beats a comment asking for the right thing — a comment can lie, a
+  test cannot. `domain/` having no `async fn` is why that boundary holds; a
+  comment requesting it would not.
+- **Put a constraint where the wrong edit would be made**, not only in `docs/`.
+  Agents read slices: the doc may be out of context, the line above the
+  temptation never is. "We tried X, it breaks Y" is worth more than it looks,
+  because agents rewrite unfamiliar code a human would leave alone.
+- **You changed the code, you own the comment above it.** A stale comment is
+  worse than none — adjacent prose reads as high-confidence signal and steers
+  the next agent wrong. Never cite line numbers; the tree has exactly one.
+- If a diff's comment density is visibly above the file around it, you narrated.
+
 ### Cross-OS
 
 The desktop app ships on **Linux x86_64, macOS aarch64, and Windows x86_64**
