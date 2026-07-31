@@ -135,3 +135,62 @@ fn get_returns_none_for_unknown_run() {
     let adapter = setup();
     assert!(adapter.get("m1", "does-not-exist").unwrap().is_none());
 }
+
+#[test]
+fn delete_for_feature_removes_all_target_mirrors_and_preserves_unrelated_rows() {
+    let adapter = setup();
+    adapter
+        .upsert_submitted(
+            "m1",
+            "r-target-1",
+            Some("p1"),
+            Some("f-target"),
+            "Target one",
+            1000,
+        )
+        .unwrap();
+    adapter
+        .upsert_submitted(
+            "m1",
+            "r-unrelated",
+            Some("p1"),
+            Some("f-other"),
+            "Other",
+            1001,
+        )
+        .unwrap();
+    adapter
+        .upsert_submitted(
+            "m1",
+            "r-target-2",
+            Some("p1"),
+            Some("f-target"),
+            "Target two",
+            1002,
+        )
+        .unwrap();
+    adapter
+        .upsert_submitted("m1", "r-no-feature", Some("p1"), None, "No feature", 1003)
+        .unwrap();
+
+    adapter.delete_for_feature("f-target").unwrap();
+
+    assert!(adapter.get("m1", "r-target-1").unwrap().is_none());
+    assert!(adapter.get("m1", "r-target-2").unwrap().is_none());
+    assert!(adapter.get("m1", "r-unrelated").unwrap().is_some());
+    assert!(adapter.get("m1", "r-no-feature").unwrap().is_some());
+}
+
+#[test]
+fn delete_for_absent_feature_is_a_successful_no_op() {
+    let adapter = setup();
+    adapter
+        .upsert_submitted("m1", "r1", Some("p1"), Some("f-existing"), "Existing", 1000)
+        .unwrap();
+
+    adapter.delete_for_feature("f-absent").unwrap();
+
+    let rows = adapter.list().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].feature_id.as_deref(), Some("f-existing"));
+}

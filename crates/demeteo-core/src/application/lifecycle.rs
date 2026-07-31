@@ -1,5 +1,6 @@
 use crate::domain::ids::{FeatureId, ProjectId};
-use crate::ports::db::FeaturePatch;
+use crate::ports::db::{FeaturePatch, FeatureRepository};
+use crate::ports::remote_run_mirror::RemoteRunMirrorPort;
 use crate::state::AppContext;
 use serde::Serialize;
 
@@ -62,13 +63,7 @@ pub async fn feature_cleanup(
             warnings: vec![],
         }),
         "archive" => {
-            let _ = ctx.features.update(
-                &fid,
-                &FeaturePatch {
-                    status: Some("archived".to_string()),
-                    ..Default::default()
-                },
-            );
+            finalize_feature_cleanup(ctx, &fid, "archived").await?;
             Ok(CleanupResult {
                 policy,
                 action: "archived".to_string(),
@@ -114,13 +109,7 @@ pub async fn feature_cleanup(
             };
 
             // Phase 2: Always update the DB regardless of git success.
-            let _ = ctx.features.update(
-                &fid,
-                &FeaturePatch {
-                    status: Some("deleted".to_string()),
-                    ..Default::default()
-                },
-            );
+            finalize_feature_cleanup(ctx, &fid, "deleted").await?;
             Ok(CleanupResult {
                 policy,
                 action: "deleted".to_string(),
@@ -134,9 +123,43 @@ pub async fn feature_cleanup(
     }
 }
 
+/// Persist a terminal local lifecycle state before dismissing the laptop-side
+/// remote-run mirror that could otherwise rehydrate the feature on reconcile.
+async fn finalize_feature_cleanup(
+    ctx: &AppContext,
+    feature_id: &FeatureId,
+    status: &str,
+) -> Result<(), String> {
+    // Reconciliation may have already listed this mirror. Holding the guard
+    // through both local writes means it either hydrates before this terminal
+    // transition, or reclaims the row after dismissal and finds it absent.
+    let _guard = ctx.remote_run_mirror_guard.lock().await;
+    persist_feature_cleanup(&*ctx.features, &*ctx.remote_run_mirror, feature_id, status)
+}
+
+fn persist_feature_cleanup(
+    features: &dyn FeatureRepository,
+    remote_run_mirror: &dyn RemoteRunMirrorPort,
+    feature_id: &FeatureId,
+    status: &str,
+) -> Result<(), String> {
+    features.update(
+        feature_id,
+        &FeaturePatch {
+            status: Some(status.to_string()),
+            ..Default::default()
+        },
+    )?;
+    remote_run_mirror.delete_for_feature(feature_id.as_str())
+}
+
 fn resolve_machine(
     _settings: &crate::domain::models::ProjectSettings,
     _project_id: &str,
 ) -> String {
     "local".to_string()
 }
+
+#[cfg(test)]
+#[path = "../../tests/application/lifecycle.rs"]
+mod tests;
