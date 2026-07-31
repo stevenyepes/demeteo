@@ -16,8 +16,8 @@
  *      means a re-fetch of `artifact_body` and a Monaco remount every tick
  *      (the regression `ArtifactViewer.rerender.test.tsx` pins).
  *
- * Classification comes from `lib/artifacts` — the shared copy. `FeatureDetail`
- * carries a byte-faithful local duplicate; this file must not become a third.
+ * Classification comes from `lib/artifacts`, which every run surface now
+ * shares; this file must not grow a copy of it.
  */
 import { X, ExternalLink } from 'lucide-react';
 
