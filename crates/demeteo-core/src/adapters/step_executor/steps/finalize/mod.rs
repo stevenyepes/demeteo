@@ -153,7 +153,6 @@ impl ExecutionDriver {
                 .run_finalize_turn(
                     step_exec,
                     step_conf,
-                    &feature,
                     RepoSite {
                         machine: machine_str,
                         repo_dir: &repo_dir,

@@ -4,7 +4,7 @@ use crate::adapters::agent::event_stream::{stream_agent_turn, TurnResult};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::finalize::authored::{parse_authored, Authored};
-use crate::domain::models::{Feature, StepConfig, StepExecution};
+use crate::domain::models::{StepConfig, StepExecution};
 use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::notification::DomainEvent;
@@ -27,7 +27,6 @@ impl ExecutionDriver {
         &self,
         step_exec: &StepExecution,
         step_conf: &StepConfig,
-        feature: &Feature,
         site: RepoSite<'_>,
         prompt: &str,
         spend: TurnSpend<'_>,
@@ -36,12 +35,7 @@ impl ExecutionDriver {
             machine: machine_str,
             repo_dir,
         } = site;
-        let agent_kind = step_conf
-            .agent_kind
-            .clone()
-            .or_else(|| feature.agent_kind.clone())
-            .unwrap_or_else(|| "opencode".to_string());
-        let override_model = step_conf.model.clone().or_else(|| feature.model.clone());
+        let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
 
         // A fresh session per turn, keyed off the feature so the registry's
         // per-feature sweep tears it down with everything else.
@@ -71,12 +65,10 @@ impl ExecutionDriver {
             cwd: repo_dir.to_string(),
             model: override_model.clone(),
             // Authoring a PR title/body is a medium job; pinned rather than
-            // inherited so a `max`-effort run doesn't pay for it. NOTE: the
-            // `agent_kind` / `override_model` above resolve as
-            // `step_conf ?? feature`, which inverts the model chain's tiers 2
-            // and 3 and ignores `step_overrides` / `default_model`. That is a
-            // pre-existing bug, deliberately not copied here and out of scope
-            // to fix.
+            // inherited so a `max`-effort run doesn't pay for it. The
+            // agent/model pair above is *not* pinned — it comes from the same
+            // chain every other step uses, so a run-time override reaches this
+            // turn too.
             effort: Some(crate::domain::models::EffortLevel::FINALIZE),
             title: Some("Finalize: summarize the work".to_string()),
             agent_exec: self.agent_exec.clone(),
