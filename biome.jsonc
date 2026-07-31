@@ -1,0 +1,101 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+  "vcs": { "enabled": false, "clientKind": "git", "useIgnoreFile": false },
+  "files": {
+    // `.claude/` is excluded because git worktrees get created under it, each
+    // a full checkout carrying its own copy of this file. Biome treats a
+    // second config inside the project as a nested root and refuses to run at
+    // all, so without this the gate fails for anyone with a worktree open —
+    // and this repo orchestrates worktrees for a living.
+    "includes": ["src/**/*.ts", "src/**/*.tsx", "*.ts", "!**/*.d.ts", "!.claude/**"]
+  },
+  // Off, not absent: the tree is genuinely mixed (roughly 2:1 single-to-double
+  // quotes, lines past 100 columns throughout), so turning the formatter on
+  // rewrites most of src/ in one commit and collides with every branch in
+  // flight. The settings below are the majority style as measured, so whoever
+  // schedules that reformat inherits a decision instead of a default.
+  "formatter": {
+    "enabled": false,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true
+    }
+  },
+  // Import order is formatting by another name — same collision, same reason.
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "domains": { "react": "recommended", "test": "recommended" },
+    "rules": {
+      "preset": "none",
+      // `warn` here does not mean "optional" — Biome exits nonzero on errors
+      // only, so a warn rule reports without failing `npm run checks`. Every
+      // rule demoted below has a pre-existing backlog that no single change
+      // can clear; they are ratchets, to be promoted to `error` as each backlog
+      // reaches zero. Nothing new should be demoted to keep a diff green.
+      "correctness": {
+        "preset": "recommended",
+        "useExhaustiveDependencies": "warn",
+        "useHookAtTopLevel": "warn",
+        "useJsxKeyInIterable": "error"
+      },
+      "suspicious": {
+        "preset": "recommended",
+        "noExplicitAny": "warn",
+        "noArrayIndexKey": "warn",
+        "noAssignInExpressions": "warn",
+        "useIterableCallbackReturn": "warn"
+      },
+      "style": { "noRestrictedImports": "off" }
+    }
+  },
+  "overrides": [
+    {
+      // AGENTS.md §3, "never `invoke()` raw in a component", as a gate rather
+      // than a review habit. `src/lib/` is the whole of the exception: that is
+      // where the typed wrappers live, so it stays on the base config's `off`.
+      //
+      // `src/App.tsx` is listed because it reaches the transport through
+      // `await import('@tauri-apps/api/core')` rather than a static import —
+      // the rule catches the dynamic form, but App.tsx sits at `src/` root and
+      // no directory glob above would have covered it.
+      //
+      // Tests are exempt: they mock the transport with
+      // `vi.mock('@tauri-apps/api/core')` and import the mocked `invoke`, which
+      // is the transport boundary doing its job, not a component bypassing it.
+      "includes": [
+        "src/components/**",
+        "src/hooks/**",
+        "src/context/**",
+        "src/App.tsx",
+        "!**/*.test.ts",
+        "!**/*.test.tsx",
+        "!src/test/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@tauri-apps/api/core": "AGENTS.md §3: reach a Tauri command through its typed wrapper in src/lib/ — never invoke() from a component, hook, or context."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

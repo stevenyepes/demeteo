@@ -196,7 +196,8 @@ they just aren't yours to decide alone.
 npm run checks        # === scripts/checks.sh ===
 ```
 
-Covers tsc, `cargo fmt --check`, clippy `--all-targets -D warnings` on the toolchain
+Covers tsc, `biome check .` (the §3 TypeScript rules, mechanically — see `biome.jsonc`),
+`cargo fmt --check`, clippy `--all-targets -D warnings` on the toolchain
 pinned in `rust-toolchain.toml` (so local clippy == CI clippy), `cargo doc` for
 intra-doc links, `scripts/check-doc-refs.sh`, the demeteo + core + runner test suites,
 the gate-feedback repro, and commitlint on `origin/master..HEAD`.
