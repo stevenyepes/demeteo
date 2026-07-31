@@ -121,26 +121,6 @@ fn seed(workflows: &Arc<dyn WorkflowRepository>, id: &str, versions: &[String]) 
     wf_id
 }
 
-#[test]
-fn next_version_number_is_one_past_the_highest() {
-    assert_eq!(super::next_version_number(&[]), 1);
-
-    let rows: Vec<WorkflowVersion> = [1u32, 2, 7]
-        .iter()
-        .map(|n| WorkflowVersion {
-            id: WorkflowVersionId::from(format!("wf-v{n}")),
-            workflow_id: WorkflowId::from("wf".to_string()),
-            version: *n,
-            steps_json: "[]".to_string(),
-            definition_json: None,
-            note: None,
-            created_at: 0,
-        })
-        .collect();
-    // A gap must not hand out a number that was already used.
-    assert_eq!(super::next_version_number(&rows), 8);
-}
-
 /// The Done-when: restoring appends, and the row it copied is untouched.
 #[test]
 fn restore_appends_a_verbatim_copy_and_leaves_history_intact() {

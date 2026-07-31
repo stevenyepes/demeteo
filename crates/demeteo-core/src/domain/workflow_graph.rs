@@ -588,6 +588,35 @@ pub fn has_errors(findings: &[LintFinding]) -> bool {
     findings.iter().any(|f| f.severity == LintSeverity::Error)
 }
 
+/// The same verdict as [`has_errors`], rendered for a caller that has to
+/// *refuse* and say why — `None` when nothing blocks.
+///
+/// Warnings are dropped rather than listed, so the refusal names only what the
+/// author has to fix. Each error is prefixed with the node or edge it is
+/// anchored to, because the recipient of the message is holding a file or an
+/// IPC error rather than the canvas that would have badged the offender.
+pub fn error_summary(findings: &[LintFinding]) -> Option<String> {
+    if !has_errors(findings) {
+        return None;
+    }
+    Some(
+        findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Error)
+            .map(|f| {
+                let anchor = f
+                    .node
+                    .as_ref()
+                    .map(|n| format!("{n}: "))
+                    .or_else(|| f.edge.as_ref().map(|(a, b)| format!("{a} → {b}: ")))
+                    .unwrap_or_default();
+                format!("  - [{}] {anchor}{}", f.code, f.message)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
 /// Does `target` write a task list that some node consumes, without a
 /// `rework_prompt_template` to answer a verdict with?
 ///

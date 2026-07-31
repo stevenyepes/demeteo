@@ -13,6 +13,7 @@ pub mod timeouts;
 pub mod workflow;
 pub mod workflow_migrate;
 pub mod workflow_v2;
+pub mod workflow_view;
 
 pub use agent_config::*;
 pub use effort::*;
@@ -27,3 +28,4 @@ pub use step_attempt::*;
 pub use thread::*;
 pub use timeouts::*;
 pub use workflow::*;
+pub use workflow_view::*;
