@@ -1,12 +1,12 @@
-// Regression tests for gate redirect handling.
-// Extracted from `steps/gate.rs` (kept out of the source file per the
-// crate's mirrored-tests convention); `super` resolves to that module.
+// Regression tests for gate redirect handling, kept out of the source file
+// per the crate's mirrored-tests convention; `super` resolves to
+// `steps::gate::redirect_reset`.
 
 use super::*;
 use crate::adapters::database::SqliteAdapter;
-use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
-use crate::domain::models::Feature;
-use crate::ports::db::{FeatureRepository, GateRepository, ProjectRepository};
+use crate::domain::ids::{GateDecisionId, ProjectId, WorkflowId};
+use crate::domain::models::{Feature, GateDecision};
+use crate::ports::db::ProjectRepository;
 use rusqlite::Connection;
 
 /// Construct an in-memory `SqliteAdapter` that implements every
@@ -195,7 +195,19 @@ fn reset_marks_target_step_pending_and_clears_artifacts() {
         vec!["artifacts/spec.md".to_string()]
     );
 
-    reset_for_redirect(&*features, &*gates, &notif, &f_id, &step_execs, 1, &gate.id);
+    reset_gate_target(
+        GateWriters {
+            features: &*features,
+            gates: &*gates,
+            notif: &notif,
+        },
+        &f_id,
+        RedirectReset {
+            step_execs: &step_execs,
+            target_idx: 1,
+            gate_step_execution_id: &gate.id,
+        },
+    );
 
     // Post-condition: spec is pending with cleared counters
     // and dropped artifacts. The driver will now see the spec
@@ -249,7 +261,19 @@ fn reset_clears_gate_decision_row() {
         make_step_exec("se-spec", "s-spec", 1, "completed"),
         gate.clone(),
     ];
-    reset_for_redirect(&*features, &*gates, &notif, &f_id, &step_execs, 1, &gate.id);
+    reset_gate_target(
+        GateWriters {
+            features: &*features,
+            gates: &*gates,
+            notif: &notif,
+        },
+        &f_id,
+        RedirectReset {
+            step_execs: &step_execs,
+            target_idx: 1,
+            gate_step_execution_id: &gate.id,
+        },
+    );
 
     // The decision row is gone; `latest_for_step` returns None
     // and the gate's reconciliation will treat this as
@@ -276,7 +300,19 @@ fn reset_flips_gate_status_to_pending() {
         gate.clone(),
     ];
 
-    reset_for_redirect(&*features, &*gates, &notif, &f_id, &step_execs, 1, &gate.id);
+    reset_gate_target(
+        GateWriters {
+            features: &*features,
+            gates: &*gates,
+            notif: &notif,
+        },
+        &f_id,
+        RedirectReset {
+            step_execs: &step_execs,
+            target_idx: 1,
+            gate_step_execution_id: &gate.id,
+        },
+    );
 
     // Gate status is no longer `awaiting_gate`.
     let gate_after = features.step_get(&gate.id).unwrap().unwrap();
@@ -305,7 +341,19 @@ fn reset_emits_step_progress_for_both_affected_steps() {
     features.step_create(spec.clone()).unwrap();
     features.step_create(gate.clone()).unwrap();
 
-    reset_for_redirect(&*features, &*gates, &notif, &f_id, &step_execs, 1, &gate.id);
+    reset_gate_target(
+        GateWriters {
+            features: &*features,
+            gates: &*gates,
+            notif: &notif,
+        },
+        &f_id,
+        RedirectReset {
+            step_execs: &step_execs,
+            target_idx: 1,
+            gate_step_execution_id: &gate.id,
+        },
+    );
 
     let events = notif.snapshot();
     let step_progress: Vec<_> = events
@@ -353,14 +401,18 @@ fn reset_is_noop_when_target_index_out_of_bounds() {
         .unwrap();
 
     let step_execs = vec![gate.clone()];
-    reset_for_redirect(
-        &*features,
-        &*gates,
-        &notif,
+    reset_gate_target(
+        GateWriters {
+            features: &*features,
+            gates: &*gates,
+            notif: &notif,
+        },
         &f_id,
-        &step_execs,
-        99,
-        &gate.id,
+        RedirectReset {
+            step_execs: &step_execs,
+            target_idx: 99,
+            gate_step_execution_id: &gate.id,
+        },
     );
 
     // The decision was still cleared; the out-of-bounds target

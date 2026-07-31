@@ -15,4 +15,5 @@
 //! memory signal, resetting the redirect target's durable state, and mapping
 //! the verdict onto the executor's own `StepOutcome`.
 
+pub(crate) mod decision;
 pub(crate) mod redirect;
