@@ -9,7 +9,7 @@ fn update_status_scrubs_secrets_from_error() {
     // The `error` column is surfaced verbatim in the laptop's return
     // inbox, so it's the most-visible secret sink — a token in a
     // failed-run error must not survive the write (M7.2, §6). This
-    // also guards the direct `rpc.rs` failure-path writer, which
+    // also guards the direct `rpc/` failure-path writer, which
     // doesn't go through `run::emit`.
     let adapter = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
     adapter.get_or_create("run-1", "{}", "", 1).unwrap();
