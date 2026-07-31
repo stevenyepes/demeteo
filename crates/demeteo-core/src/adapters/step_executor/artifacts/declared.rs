@@ -59,18 +59,23 @@ pub(crate) fn resolve_declared_artifacts(
                 }
             },
             CaptureOutcome::Skip(None) => {}
-            // The orchestrator should synthesise these at TurnComplete when
-            // `GitOpsHelper` methods are available (next step).
-            CaptureOutcome::Skip(Some(UnwiredCapture::Diff)) => {
-                eprintln!(
-                    "[artifacts] step={} decl={}: Diff declaration skipped — GitOpsHelper not yet wired",
-                    step_id, decl.name,
-                );
-            }
-            CaptureOutcome::Skip(Some(UnwiredCapture::Worktree)) => {
-                eprintln!(
-                    "[artifacts] step={} decl={}: Worktree declaration skipped — GitOpsHelper not yet wired",
-                    step_id, decl.name,
+            // Neither kind is synthesised anywhere yet: `GitOpsHelper` is wired
+            // into the driver, but nothing derives a `Diff` or a `Worktree`
+            // artifact from it, so a workflow declaring one gets silence. The
+            // warning is the only signal that the declaration did nothing —
+            // keep it until a producer exists, and route it through `tracing`
+            // like every other diagnostic in this function rather than writing
+            // to the host's stderr.
+            CaptureOutcome::Skip(Some(kind)) => {
+                let capture = match kind {
+                    UnwiredCapture::Diff => "Diff",
+                    UnwiredCapture::Worktree => "Worktree",
+                };
+                tracing::warn!(
+                    step = %step_id,
+                    decl = %decl.name,
+                    capture = %capture,
+                    "resolve_declared_artifacts: declaration skipped — no producer synthesises this capture kind",
                 );
             }
             CaptureOutcome::Missing(entry) => {
