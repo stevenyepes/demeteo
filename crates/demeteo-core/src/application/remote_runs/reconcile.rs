@@ -279,6 +279,14 @@ pub(super) async fn reconcile_one_run(
     ctx: &AppContext,
     row: &RemoteRunMirror,
 ) -> Option<(String, Option<String>)> {
+    // `reconcile_all_runs` intentionally lists before its runner awaits. A
+    // cleanup can dismiss a row in that interval, so reclaim it while sharing
+    // cleanup's guard before any runner status is persisted or hydrated.
+    let _guard = ctx.remote_run_mirror_guard.lock().await;
+    let row = match ctx.remote_run_mirror.get(&row.machine_id, &row.run_id) {
+        Ok(Some(row)) => row,
+        Ok(None) | Err(_) => return None,
+    };
     let now = crate::paths::now_ms();
     let result = remote_rpc(
         ctx,

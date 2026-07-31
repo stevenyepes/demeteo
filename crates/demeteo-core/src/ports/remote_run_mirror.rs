@@ -73,6 +73,11 @@ pub trait RemoteRunMirrorPort: Send + Sync {
         now: i64,
     ) -> Result<(), String>;
     fn mark_notified(&self, machine_id: &str, run_id: &str, status: &str) -> Result<(), String>;
+    /// Dismiss every laptop-local mirror associated with `feature_id`.
+    ///
+    /// This does not alter runner-owned records or events. The operation is
+    /// idempotent: an unknown feature id succeeds without changing any rows.
+    fn delete_for_feature(&self, feature_id: &str) -> Result<(), String>;
     fn get(&self, machine_id: &str, run_id: &str) -> Result<Option<RemoteRunMirror>, String>;
     fn list(&self) -> Result<Vec<RemoteRunMirror>, String>;
 }

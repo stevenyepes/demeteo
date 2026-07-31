@@ -148,6 +148,12 @@ pub struct AppContext {
     /// Tauri app populates it.
     pub remote_run_mirror: Arc<dyn RemoteRunMirrorPort>,
 
+    /// Serializes local mirror dismissal with reconciliation's guarded
+    /// status/hydration work. A reconciler may list a row before cleanup,
+    /// but it must reclaim that row under this guard before it can apply any
+    /// runner state; cleanup removes the row while holding the same guard.
+    pub remote_run_mirror_guard: Arc<tokio::sync::Mutex<()>>,
+
     /// Single read model for a run's rendered surface — feature, steps,
     /// per-step artifacts, agent stream, cost (C3,
     /// `docs/EXECUTION_PARITY.md`). UI display commands read through

@@ -317,6 +317,7 @@ pub fn build_core_context(
         runner_runs: runner_runs_repo,
         run_events: run_events_repo,
         remote_run_mirror: remote_run_mirror_repo,
+        remote_run_mirror_guard: Arc::new(tokio::sync::Mutex::new(())),
         run_view,
     }
 }

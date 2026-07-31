@@ -107,6 +107,16 @@ impl RemoteRunMirrorPort for SqliteAdapter {
         Ok(())
     }
 
+    fn delete_for_feature(&self, feature_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        conn.execute(
+            "DELETE FROM remote_run_mirror WHERE feature_id = ?1",
+            params![feature_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn get(&self, machine_id: &str, run_id: &str) -> Result<Option<RemoteRunMirror>, String> {
         let conn = self.conn.lock()?;
         conn.query_row(
