@@ -555,15 +555,16 @@ impl GitOpsHelper {
     }
 }
 
-/// Walk `git status --porcelain` and pull out the unmerged paths.
-/// Shared by the sync flow and the existing `merge_subtask` conflict
-/// path so both produce the same `ConflictFile` shape.
+/// Ask `repo_dir` which files a merge left unresolved.
+///
+/// Shared by the sync flow and the existing `merge_subtask` conflict path so
+/// both produce the same `ConflictFile` shape — the XY-code table itself lives
+/// in [`crate::domain::merge_status`], which the step executor reads too.
 pub(crate) async fn parse_unmerged_files(
     exec: &dyn ExecutionPort,
     machine_id: &str,
     repo_dir: &str,
 ) -> Vec<crate::domain::models::ConflictFile> {
-    use crate::domain::models::ConflictFile;
     let raw = match exec
         .run_command(
             machine_id,
@@ -577,25 +578,7 @@ pub(crate) async fn parse_unmerged_files(
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    raw.lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            if line.len() < 3 {
-                return None;
-            }
-            let xy = &line[..2];
-            let path = line[3..].trim().to_string();
-            let kind = match xy {
-                "UU" | "AA" | "DD" => "both-modified".to_string(),
-                "UA" => "added-by-them".to_string(),
-                "AU" => "added-by-us".to_string(),
-                "UD" => "deleted-by-them".to_string(),
-                "DU" => "deleted-by-us".to_string(),
-                _ => return None,
-            };
-            Some(ConflictFile { path, kind })
-        })
-        .collect()
+    crate::domain::merge_status::parse_unmerged(&raw)
 }
 
 #[cfg(test)]

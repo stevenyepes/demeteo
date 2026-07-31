@@ -49,6 +49,7 @@ pub(crate) mod spend;
 pub(crate) mod step_status;
 pub(crate) mod steps;
 pub(crate) mod sync;
+pub(crate) mod sync_worktree;
 pub(crate) mod updates;
 
 #[cfg(test)]

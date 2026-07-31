@@ -15,8 +15,8 @@
 use std::time::Instant;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
 use crate::domain::models::{StepConfig, StepExecution};
-use crate::paths;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
@@ -200,37 +200,7 @@ impl ExecutionDriver {
         .await
         {
             Ok(_head_sha) => {
-                // Cleanup the sync worktree if one was used.
-                if resolved_cwd != repo_dir {
-                    let _ = self
-                        .exec
-                        .run_command(
-                            machine_str,
-                            &format!(
-                                "git -C {} worktree remove --force {}",
-                                paths::shell_escape_posix(repo_dir),
-                                paths::shell_escape_posix(resolved_cwd)
-                            ),
-                        )
-                        .await;
-                    let _ = self
-                        .exec
-                        .run_command(
-                            machine_str,
-                            &format!("rm -rf {}", paths::shell_escape_posix(resolved_cwd)),
-                        )
-                        .await;
-                    let _ = self
-                        .exec
-                        .run_command(
-                            machine_str,
-                            &format!(
-                                "git -C {} worktree prune",
-                                paths::shell_escape_posix(repo_dir)
-                            ),
-                        )
-                        .await;
-                }
+                discard_sync_worktree(&*self.exec, machine_str, repo_dir, resolved_cwd).await;
 
                 let wall = step_start.elapsed().as_secs();
                 let _ = self.features.step_update(

@@ -23,6 +23,7 @@ pub mod harness_triage;
 pub mod ids;
 pub mod intercept;
 pub mod memory;
+pub(crate) mod merge_status;
 pub mod models;
 pub mod permission;
 pub mod prompt_budget;
