@@ -207,7 +207,7 @@ mod tests;
 // These were previously duplicated across `commands/project.rs`,
 // `commands/bootstrap.rs`, `commands/workflows.rs`, `commands/providers.rs`,
 // `adapters/ssh/client.rs`, `adapters/step_executor/mod.rs`,
-// `adapters/worktree/git_ops.rs`, and `domain/intercept.rs`. Each duplicate
+// `adapters/worktree/git_ops/`, and `domain/intercept.rs`. Each duplicate
 // was a near-copy of the same algorithm; a single change to the escape
 // strategy (e.g. switch to `printf %q`) used to require touching 5 files.
 // The new canonical home is `crate::shared::*`; this module keeps the

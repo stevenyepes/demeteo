@@ -9,9 +9,7 @@
 //! outside the Docker conformance suite could assert that a transport failure
 //! is `Environmental` rather than a verdict.
 //!
-//! Everything here is synchronous and total: it takes what the adapter
-//! observed and returns what should happen. `domain/` has no `async fn`
-//! anywhere in it, which is what keeps that boundary honest.
+//! Synchronous and total, per the [`domain`](crate::domain) rule.
 //!
 //! The adapter keeps the choreography — provisioning, running, storing,
 //! emitting — and owns the mapping from [`outcome::CommandRun`] onto the

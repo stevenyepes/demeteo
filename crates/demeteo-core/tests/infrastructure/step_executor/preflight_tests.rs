@@ -6,38 +6,13 @@ use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::models::WorktreeStrategy;
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 
+#[path = "../../support/preflight_strategy.rs"]
+mod preflight_strategy;
+use preflight_strategy::strategy;
+
 // ── probe_configured_commands ────────────────────────────────────────────────
 
 const T: Duration = Duration::from_secs(5);
-
-/// A `WorktreeStrategy` carrying only what the preflight reads. Spelled out
-/// rather than mutated from a default so each test states its whole input:
-/// which of the three sources a binary comes from is the entire subject of the
-/// HB4 tests below.
-fn strategy(
-    prepare: Option<&str>,
-    test: Option<&str>,
-    harnesses: &[(&str, &str)],
-) -> WorktreeStrategy {
-    WorktreeStrategy {
-        default_branch: "main".to_string(),
-        branch_prefix: "demeteo/features/".to_string(),
-        test_command: test.map(str::to_string),
-        build_command: None,
-        coverage_command: None,
-        conventions_file: None,
-        pr_template: None,
-        harnesses: (!harnesses.is_empty()).then(|| {
-            harnesses
-                .iter()
-                .map(|(name, cmd)| (name.to_string(), cmd.to_string()))
-                .collect()
-        }),
-        validation_gates: None,
-        prepare_command: prepare.map(str::to_string),
-        extra_writable_paths: Vec::new(),
-    }
-}
 
 /// The pre-HB4 shape: only `test_command` configured.
 fn test_only(cmd: &str) -> WorktreeStrategy {

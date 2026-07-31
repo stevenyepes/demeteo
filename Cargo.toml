@@ -11,5 +11,14 @@ members = ["src-tauri", "crates/demeteo-core", "crates/demeteo-runner"]
 [workspace.package]
 version = "1.0.0"
 
+# Doc links are the one part of a comment a machine can check. A `[`Foo`]`
+# that no longer resolves means the item was renamed or moved and the prose
+# around it was not revisited — exactly the rot `scripts/check-doc-refs.sh`
+# catches for file paths. Denied, not warned, so it fails the gate rather
+# than scrolling past in a build log. Surfaces under `cargo doc`, which
+# `scripts/checks.sh` runs; `cargo clippy` does not evaluate rustdoc lints.
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
 [patch.crates-io]
 quick-xml = { path = "src-tauri/vendor/quick-xml" }

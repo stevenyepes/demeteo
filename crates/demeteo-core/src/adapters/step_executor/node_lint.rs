@@ -7,12 +7,12 @@
 //!   sink shape, redirect targets, ports, joins) but takes its "known node
 //!   types" list from the caller — it is a pure domain module and cannot see
 //!   the registry.
-//! - [`NodeHandler::lint`] owns the per-type rules, and only the registry can
+//! - [`NodeHandler::lint`](super::registry::NodeHandler::lint) owns the per-type rules, and only the registry can
 //!   reach the handlers.
 //!
 //! [`lint_definition`] joins them and passes the **registry's** kinds as the
 //! known-types list, which is what retires the hand-maintained
-//! [`CORE_NODE_TYPES`] constant from every boundary caller: a node type added
+//! [`CORE_NODE_TYPES`](crate::domain::workflow_graph::CORE_NODE_TYPES) constant from every boundary caller: a node type added
 //! in Rust (P3.5's `command`) stops linting as `unknown-node-type` the moment
 //! it is registered, with no edit here.
 //!

@@ -27,7 +27,7 @@
 //! holds one `Arc<dyn ...Repository>` per sub-port, and Tauri commands
 //! extract only the sub-port they need.
 //!
-//! Mutation goes through a [`Patch`] value object
+//! Mutation goes through a `Patch` value object
 //! ([`ThreadPatch`], [`FeaturePatch`], [`StepExecutionPatch`]). Each
 //! field of a Patch is a nested `Option<Option<T>>` so callers can
 //! distinguish "leave alone" from "set to NULL" — the previous
@@ -77,7 +77,7 @@ pub struct FeaturePatch {
     /// Pin/clear the feature-wide effort. `Some(None)` clears it back to
     /// "inherit"; the row never stores a resolved default.
     pub effort: Option<Option<crate::domain::models::EffortLevel>>,
-    /// Set/clear the MR/PR URL after [`MrPublisher::publish_mr`].
+    /// Set/clear the MR/PR URL after [`MrPublisher::publish_mr`](crate::ports::mr_publisher::MrPublisher::publish_mr).
     pub mr_url: Option<Option<String>>,
     /// Set the MR/PR state on the feature (draft/open/merged/closed).
     pub mr_state: Option<Option<String>>,

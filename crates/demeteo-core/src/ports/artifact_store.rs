@@ -2,7 +2,7 @@
 //!
 //! The executor and the tool bridge both call this port. The default
 //! implementation is the filesystem adapter under
-//! `src-tauri/src/adapters/artifact_store/fs.rs`; future
+//! `crates/demeteo-core/src/adapters/artifact_store/fs.rs`; future
 //! implementations could be S3, SFTP-remote, or in-memory for tests.
 //!
 //! See `docs/ARCHITECTURE.md` §2 (`ArtifactStore` is in the locked port

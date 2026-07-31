@@ -11,7 +11,8 @@
 //!
 //! ## Why this is safe to compile into the release binary
 //!
-//! Unlike the `#[cfg(test)]` stubs in [`super::test_stubs`], this runtime
+//! Unlike the `#[cfg(test)]` stubs in `super::test_stubs` (not linkable: rustdoc
+//! builds without `--cfg test`, so the module is invisible to it), this runtime
 //! must exist in the **shipped `demeteo-runner` binary** so the CI runner
 //! container can execute a `RunSpec` with `agent_kind: "stub"`. It is
 //! therefore a normal (non-test) module, but it is **only ever registered

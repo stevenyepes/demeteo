@@ -55,3 +55,6 @@ jsonschema = { version = "0.33", default-features = false }
 # locally-spawned interactive shells don't seize the controlling terminal.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[lints]
+workspace = true

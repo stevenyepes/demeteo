@@ -4,7 +4,7 @@
 //! into the same ordered story the Tauri events told*. This suite runs
 //! one deterministic stub feature with the real local wiring — a
 //! [`RunEventRecorder`] decorating a capturing "UI" port, exactly as
-//! `src-tauri/lib.rs` wires the Tauri emitter — and asserts three
+//! `src-tauri/src/lib.rs` wires the Tauri emitter — and asserts three
 //! directions of parity:
 //!
 //! 1. every durable row is one of the live events, in order (no
@@ -243,7 +243,7 @@ async fn local_run_events_replay_the_live_story() {
     ));
     std::fs::create_dir_all(&tmp).expect("create app data dir");
 
-    // Wire exactly like `src-tauri/lib.rs`: recorder decorates the UI
+    // Wire exactly like `src-tauri/src/lib.rs`: recorder decorates the UI
     // port, sink late-bound after the context exists.
     let ui = Arc::new(CapturingNotif::default());
     let recorder = Arc::new(RunEventRecorder::new(ui.clone()));

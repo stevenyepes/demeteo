@@ -12,7 +12,7 @@
 //! per-retry, or live-token visibility.
 //!
 //! This adapter closes that gap without inventing a new transport: it
-//! translates each interesting `DomainEvent` into a [`RunEvent`] append on
+//! translates each interesting `DomainEvent` into a [`RunEvent`](demeteo_core::ports::run_events::RunEvent) append on
 //! the **same** append-only, offset-addressed log the laptop already tails
 //! via the `stream_events` RPC (R9). Secret scrubbing (M7.2) happens at the
 //! `RunEventsPort::append` sink, so every payload written here is scrubbed

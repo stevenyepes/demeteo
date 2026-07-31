@@ -5,7 +5,10 @@
 //! with their assertions unchanged when the policy moved to `domain/`.
 
 use super::*;
-use crate::domain::models::WorktreeStrategy;
+
+#[path = "../../support/preflight_strategy.rs"]
+mod preflight_strategy;
+use preflight_strategy::strategy;
 
 #[test]
 fn a_plain_command_yields_its_binary() {
@@ -120,33 +123,4 @@ fn configured_commands_are_ordered_prepare_test_then_harnesses_by_name() {
         configured_commands(&s),
         vec!["npm ci", "npm test", "npm run e2e", "npm run unit"]
     );
-}
-
-/// A `WorktreeStrategy` carrying only what the preflight reads. Spelled out
-/// rather than mutated from a default so each test states its whole input:
-/// which of the three sources a binary comes from is the entire subject of the
-/// HB4 tests below.
-fn strategy(
-    prepare: Option<&str>,
-    test: Option<&str>,
-    harnesses: &[(&str, &str)],
-) -> WorktreeStrategy {
-    WorktreeStrategy {
-        default_branch: "main".to_string(),
-        branch_prefix: "demeteo/features/".to_string(),
-        test_command: test.map(str::to_string),
-        build_command: None,
-        coverage_command: None,
-        conventions_file: None,
-        pr_template: None,
-        harnesses: (!harnesses.is_empty()).then(|| {
-            harnesses
-                .iter()
-                .map(|(name, cmd)| (name.to_string(), cmd.to_string()))
-                .collect()
-        }),
-        validation_gates: None,
-        prepare_command: prepare.map(str::to_string),
-        extra_writable_paths: Vec::new(),
-    }
 }

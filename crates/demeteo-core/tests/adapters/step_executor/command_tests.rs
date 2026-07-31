@@ -155,10 +155,9 @@ fn the_command_type_reaches_the_palette_without_a_frontend_edit() {
 
 // ── The baseline node (HB2b / P4.2a) ─────────────────────────────────────────
 //
-// One `command` node whose commands are not in the workflow: it runs *this
-// project's* prepare command and validation gates, which a workflow file
-// cannot know. Everything below is about that one exception not leaking into
-// the ordinary command node's contract.
+// The prepare-command exception, from the adapter side. What the exception is
+// and why it exists is documented once on the policy, in
+// `tests/domain/command_step/spec.rs`; these assert the adapter honours it.
 
 #[test]
 fn lint_does_not_demand_a_command_from_a_baseline_node() {

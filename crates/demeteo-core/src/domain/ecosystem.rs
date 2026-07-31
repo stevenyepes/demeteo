@@ -320,7 +320,7 @@ fn site_commands(recipe: &EcosystemRecipe, site: &MarkerSite) -> SiteCommands {
 /// chained: a `cd` that leaks into the next link of a `prepare_command` would
 /// silently run the second install in the first one's directory.
 ///
-/// The separator is `/`, not [`std::path::PathBuf::join`], and that is
+/// The separator is `/`, not [`Path::join`](std::path::Path::join), and that is
 /// deliberate. This is not a host path — it is a fragment of a POSIX shell
 /// command that will be executed on the *target* machine, which for a remote
 /// project is Linux no matter what the desktop is running. Joining it with the

@@ -1,15 +1,7 @@
 //! JSON Schema for the `sequence` node's `config` payload.
 //!
-//! Split out of `mod.rs` because it is a 70-line data literal that shares
-//! nothing with the step's execution logic and changes on a different
-//! cadence — a schema edit should not land in the same diff as a change to
-//! how a checkpoint resumes.
-//!
-//! Kept as `serde_json::json!` rather than an `include_str!`-ed `.json`
-//! file on purpose: the macro is syntax-checked at **compile** time, and a
-//! standalone file would trade that for a runtime parse whose only
-//! failure mode — a malformed schema shipped in a release — is exactly
-//! what the compile-time check already prevents.
+//! A 70-line data literal; see [`steps`](super::super) for why schemas are
+//! their own module and a `json!` macro rather than an `include_str!`-ed file.
 
 /// JSON Schema for the `sequence` node's `config` payload — the
 /// residual [`StepConfig`] fields after migration lifts

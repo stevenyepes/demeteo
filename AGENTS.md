@@ -155,11 +155,35 @@ npm run checks        # === scripts/checks.sh ===
 ```
 
 Covers tsc, `cargo fmt --check`, clippy `--all-targets -D warnings` on the toolchain
-pinned in `rust-toolchain.toml` (so local clippy == CI clippy), the demeteo + core +
-runner test suites, the gate-feedback repro, and commitlint on `origin/master..HEAD`.
+pinned in `rust-toolchain.toml` (so local clippy == CI clippy), `cargo doc` for
+intra-doc links, `scripts/check-doc-refs.sh`, the demeteo + core + runner test suites,
+the gate-feedback repro, and commitlint on `origin/master..HEAD`.
 Fails fast. "`cargo test` passed" is **not** "CI is green" — run the whole script, not
 a subset. The `pre-push` hook runs it automatically (`git push --no-verify` for a
 deliberate WIP).
+
+### Comments are gated too
+
+§3 says doc comments are the part worth keeping, which only holds while they are
+still true. Nothing in a compiler reads a `//`, so two mechanical gates do:
+
+- **`cargo doc`** resolves every `` [`Foo`] `` intra-doc link, denied via
+  `[workspace.lints.rustdoc]`. A renamed item whose prose was not revisited fails
+  the build. Clippy does **not** evaluate rustdoc lints — this gate is only
+  reachable through `cargo doc`.
+- **`scripts/check-doc-refs.sh`** resolves the file paths comments cite, and
+  rejects a paragraph copied into more than one file.
+
+The rot they exist to catch has one dominant cause: a module passes ~400 LOC,
+`foo.rs` becomes `foo/`, and every comment naming `foo.rs` now points at nothing.
+Because §3 makes that split routine, the pointers break routinely. The path gate
+reports a ref only when something of that name exists elsewhere — the "it moved"
+signature — so runtime artifact names in comments stay quiet without an allowlist.
+
+When a rule applies repo-wide, **cite it — do not paste it**. Five copies of one
+paragraph is five things to update and four that won't be. Shared rationale goes
+on the module root (`domain/mod.rs`, `steps/mod.rs`) or in this file, and
+submodules link to it.
 
 **Working inside a Demeteo run, use `npm run checks:code` instead** — the same gates
 without commitlint. Commitlint judges `origin/master..HEAD`, and inside a run that range

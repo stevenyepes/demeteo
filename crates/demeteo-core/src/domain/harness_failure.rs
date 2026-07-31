@@ -5,7 +5,7 @@
 //! error string; the second reads the command and its output for the shapes
 //! that mean "nothing was tested" — a binary the shell could not find, or a
 //! script this worktree does not define. Both were free functions buried in
-//! `driver/verifier.rs`, decidable in a unit test but only reachable through
+//! `driver/verifier/`, decidable in a unit test but only reachable through
 //! an adapter that carries twenty ports they never touch.
 //!
 //! The `crate::ports::execution` import below is for two `&str` constants, not
@@ -391,6 +391,9 @@ pub fn build_missing_task_message(
     )
 }
 
+// These three modules were extracted from
+// `src/adapters/step_executor/driver/verifier/` and moved here with the code
+// (mirrored-tests convention). In each, `super` resolves to this module.
 #[cfg(test)]
 #[path = "../../tests/domain/harness_failure/exec_failure.rs"]
 mod exec_failure_tests;

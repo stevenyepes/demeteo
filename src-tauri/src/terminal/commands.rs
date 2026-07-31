@@ -309,19 +309,11 @@ pub fn detach_terminal_session(
 }
 
 /// Frontend on-screen recognizer (Phase 3, T3.3) reports whether an agent's
-/// approval prompt is currently rendered in a session. `present = true` latches
-/// screen-sourced `awaiting_approval`; `present = false` retracts it. Routed
-/// through the SAME resolver as the hook scanner and the cadence sweep, so the
-/// §2 precedence, dedup, and the OS notification are reused verbatim — a
-/// screen-sourced approval "behaves exactly like the hook-sourced one"
-/// (TERMINAL_ACTIVITY §Phase 3).
+/// approval prompt is currently rendered in a session.
 ///
-/// Agent-gated (defence in depth; the frontend already scans only agent tabs):
-/// a session with no agent present — or an unknown/closed one — is ignored, so
-/// a plain shell can never be pushed into `awaiting_approval`. A retraction for
-/// a session that has no activity record yet is also a no-op: creating a fresh
-/// record just to clear a latch that was never set would resolve to the cadence
-/// default and emit a phantom `working`.
+/// Thin Tauri entry point; the latch/retract semantics, the shared-resolver
+/// routing and the agent gate are documented on
+/// [`report_screen_activity_inner`], which does the work.
 #[tauri::command]
 pub fn report_terminal_screen_activity(
     app: AppHandle,

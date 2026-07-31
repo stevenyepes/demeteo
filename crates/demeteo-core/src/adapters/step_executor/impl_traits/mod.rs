@@ -319,7 +319,7 @@ impl DagStepExecutor {
 
 impl DagStepExecutor {
     /// Resolve the execution context and start the driver loop.
-    /// Used by [`replay_steps_from`] which does not have a pre-resolved context.
+    /// Used by [`replay_steps_from`](super::DagStepExecutor::replay_steps_from) which does not have a pre-resolved context.
     pub async fn start_execution_loop(
         &self,
         feature_id: &str,
@@ -335,7 +335,7 @@ impl DagStepExecutor {
 
     /// Start the execution driver with a pre-resolved context.
     /// Avoids re-resolving the context (DB queries, path probe, etc.)
-    /// when the caller already has one (e.g. [`feature_start`]).
+    /// when the caller already has one (e.g. [`feature_start`](crate::ports::step_executor::StepExecutor::feature_start)).
     pub async fn start_execution_with_ctx(
         &self,
         feature_id: &str,

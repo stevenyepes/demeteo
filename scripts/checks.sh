@@ -50,6 +50,18 @@ step "Rust format check (cargo fmt --all -- --check)"
 step "Rust clippy (--all-targets -D warnings)"
 ( cd src-tauri && cargo clippy --all-targets -- -D warnings )
 
+# Comment rot, in the two forms a machine can see. `cargo doc` resolves every
+# `[`Foo`]` intra-doc link (denied via `[workspace.lints.rustdoc]`), catching a
+# rename the prose was not revisited for; check-doc-refs.sh resolves the file
+# paths comments cite and rejects a paragraph copied into more than one file.
+# Neither is reachable from clippy: it does not evaluate rustdoc lints, and no
+# lint reads a `//` comment at all.
+step "Rust doc links (cargo doc --no-deps)"
+cargo doc --no-deps -p demeteo-core -p demeteo-runner
+
+step "Doc references + duplicate comment blocks"
+scripts/check-doc-refs.sh
+
 step "Rust tests (cargo test)"
 ( cd src-tauri && cargo test )
 

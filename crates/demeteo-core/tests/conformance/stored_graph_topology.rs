@@ -182,7 +182,7 @@ async fn run_diamond(tag: &str, store_v2: bool) -> (AppContext, PathBuf, Feature
             .as_nanos()
     ));
     std::fs::create_dir_all(&tmp).expect("create app data dir");
-    // Wire exactly like `src-tauri/lib.rs`: the recorder decorates the UI
+    // Wire exactly like `src-tauri/src/lib.rs`: the recorder decorates the UI
     // notifier and is late-bound to `ctx.run_events`, which is what makes the
     // durable log the account of the run this test reads back (P1.13).
     let recorder = Arc::new(RunEventRecorder::new(Arc::new(NoopNotif)));

@@ -151,7 +151,7 @@ pub struct PermissionProfile {
 impl PermissionProfile {
     /// The unrestricted profile — everything allowed. Used for the
     /// interactive/probe agent sessions that aren't pipeline steps, and
-    /// as the back-compat default on [`AgentContext`].
+    /// as the back-compat default on [`AgentContext`](crate::ports::agent_runtime::AgentContext).
     pub fn all_allow() -> Self {
         Self {
             read_fs: Access::Allow,

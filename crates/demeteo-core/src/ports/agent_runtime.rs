@@ -409,8 +409,8 @@ pub trait AgentSession: Send + Sync {
 }
 
 /// Cheaply-cloneable handle that tracks how recently the agent's stderr
-/// produced output. The stderr drain thread calls [`beat`] on every
-/// line; the step executor polls [`last_activity_ago_ms`] to decide
+/// produced output. The stderr drain thread calls [`beat`](StderrHeartbeat::beat) on every
+/// line; the step executor polls [`last_activity_ago_ms`](StderrHeartbeat::last_activity_ago_ms) to decide
 /// whether the process is truly stuck.
 #[derive(Clone)]
 pub struct StderrHeartbeat {
@@ -436,7 +436,7 @@ impl StderrHeartbeat {
         self.last_ts.store(Self::now_ms(), Ordering::Relaxed);
     }
 
-    /// Milliseconds since the last call to [`beat`] (or since construction
+    /// Milliseconds since the last call to [`beat`](StderrHeartbeat::beat) (or since construction
     /// if `beat` was never called).
     pub fn last_activity_ago_ms(&self) -> u64 {
         Self::now_ms().saturating_sub(self.last_ts.load(Ordering::Relaxed))
