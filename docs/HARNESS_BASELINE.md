@@ -48,7 +48,8 @@ detection no longer produces confidently wrong commands in the first place.
 
 | What | Where |
 |---|---|
-| Bootstrap tail + phase vocabulary | `crates/demeteo-core/src/adapters/step_executor/impl_traits/mod.rs` (`bootstrap_phase`, `run_bootstrap_tail_inner`) |
+| Bootstrap tail | `crates/demeteo-core/src/adapters/step_executor/impl_traits/bootstrap.rs` (`run_bootstrap_tail_inner`, `run_harness_preflight`) |
+| Phase vocabulary | `crates/demeteo-core/src/adapters/step_executor/impl_traits/mod.rs` (`bootstrap_phase`) |
 | Harness execution primitive | `.../step_executor/driver/verifier.rs` (`run_harness_first`, `harness_shell_options`) |
 | Preflight probe (HB1, built) | `.../step_executor/preflight.rs` |
 | Ecosystem detection | `.../adapters/worktree/git_ops/strategy.rs` (`detect_worktree_strategy`) — the recipes it decides from are `domain/ecosystem.rs` (HB3) |
