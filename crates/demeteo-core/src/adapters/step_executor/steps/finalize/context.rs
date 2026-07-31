@@ -6,6 +6,8 @@
 //! or `git diff` for itself — so Demeteo runs them and hands the results
 //! over. This module is that hand-off.
 
+use super::RepoSite;
+use crate::domain::finalize::commit_log::real_commit_log;
 use crate::domain::models::StepExecution;
 use crate::paths;
 use crate::ports::artifact_store::ArtifactStore;
@@ -28,15 +30,6 @@ const MAX_DIFF_BYTES: usize = 15_000;
 const MAX_ARTIFACT_BYTES: usize = 4_000;
 const MAX_PRIOR_WORK_BYTES: usize = 12_000;
 
-/// Commit subjects Demeteo itself wrote. They describe the machinery, not
-/// the work, and the whole point of the squash is to make them disappear —
-/// so they are also worthless as input for summarising the work.
-fn is_plumbing_commit(subject: &str, feature_id: &str) -> bool {
-    subject.starts_with("chore: merge subtask ")
-        || subject.starts_with("chore: resolve ")
-        || subject.starts_with(&format!("feat({}):", feature_id))
-}
-
 /// The material the agent summarises.
 pub(crate) struct BranchWork {
     /// Real commit subjects+bodies on the branch, plumbing filtered out.
@@ -56,18 +49,34 @@ pub(crate) struct BranchWork {
     pub prior_work: String,
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The two ends of the range finalize summarises.
+pub(crate) struct BranchRange<'a> {
+    pub feature_branch: &'a str,
+    pub default_branch: &'a str,
+}
+
+/// What earlier steps left behind, and where to read it from.
+pub(crate) struct PriorWork<'a> {
+    pub artifacts: &'a dyn ArtifactStore,
+    pub steps: &'a [StepExecution],
+    pub finalize_step_id: &'a str,
+}
+
 pub(crate) async fn gather_branch_work(
     exec: &dyn ExecutionPort,
-    artifacts: &dyn ArtifactStore,
-    steps: &[StepExecution],
-    finalize_step_id: &str,
-    machine_str: &str,
-    repo_dir: &str,
-    feature_branch: &str,
-    default_branch: &str,
+    site: RepoSite<'_>,
+    range: BranchRange<'_>,
+    prior: PriorWork<'_>,
     feature_id: &str,
 ) -> BranchWork {
+    let RepoSite {
+        machine: machine_str,
+        repo_dir,
+    } = site;
+    let BranchRange {
+        feature_branch,
+        default_branch,
+    } = range;
     let safe_dir = paths::shell_escape_posix(repo_dir);
     let git = |args: String| format!("git -C {} {}", safe_dir, args);
     let run = |cmd: String| async move {
@@ -104,17 +113,7 @@ pub(crate) async fn gather_branch_work(
         range
     )))
     .await;
-    let commit_log = raw_log
-        .split('\u{1e}')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .filter(|entry| {
-            let subject = entry.lines().next().unwrap_or("");
-            !is_plumbing_commit(subject, feature_id)
-        })
-        .map(|entry| format!("- {}", entry.replace('\n', "\n  ")))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let commit_log = real_commit_log(&raw_log, feature_id);
 
     let diff_stat = run(git(format!("diff --stat {}", range))).await;
 
@@ -140,7 +139,7 @@ pub(crate) async fn gather_branch_work(
         diff,
         diff_truncated,
         conventions,
-        prior_work: gather_prior_artifacts(artifacts, steps, finalize_step_id),
+        prior_work: gather_prior_artifacts(prior.artifacts, prior.steps, prior.finalize_step_id),
     }
 }
 

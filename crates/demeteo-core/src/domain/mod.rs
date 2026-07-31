@@ -10,6 +10,7 @@ pub mod bootstrap;
 pub(crate) mod command_step;
 pub mod ecosystem;
 pub mod expr;
+pub(crate) mod finalize;
 pub(crate) mod gate;
 pub mod harness_attribution;
 pub mod harness_baseline;

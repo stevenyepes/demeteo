@@ -3,12 +3,13 @@
 use crate::adapters::agent::event_stream::{stream_agent_turn, TurnResult};
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::agent_event::AgentEvent;
+use crate::domain::finalize::authored::{parse_authored, Authored};
 use crate::domain::models::{Feature, StepConfig, StepExecution};
 use crate::paths;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::notification::DomainEvent;
 
-use super::Authored;
+use super::{RepoSite, TurnSpend};
 
 /// The outcome of asking the agent for a summary.
 pub(crate) enum FinalizeTurn {
@@ -22,18 +23,19 @@ pub(crate) enum FinalizeTurn {
 }
 
 impl ExecutionDriver {
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_finalize_turn(
         &self,
         step_exec: &StepExecution,
         step_conf: &StepConfig,
         feature: &Feature,
-        repo_dir: &str,
-        machine_str: &str,
+        site: RepoSite<'_>,
         prompt: &str,
-        accumulated_cost: &mut f64,
-        accumulated_tokens: &mut i64,
+        spend: TurnSpend<'_>,
     ) -> FinalizeTurn {
+        let RepoSite {
+            machine: machine_str,
+            repo_dir,
+        } = site;
         let agent_kind = step_conf
             .agent_kind
             .clone()
@@ -139,8 +141,8 @@ impl ExecutionDriver {
             TurnResult::Interrupted => FinalizeTurn::Cancelled,
             TurnResult::Failed(why) | TurnResult::Environmental(why) => FinalizeTurn::Broken(why),
             TurnResult::Success(outcome) => {
-                *accumulated_cost += outcome.cost_usd;
-                *accumulated_tokens += outcome.tokens;
+                *spend.cost += outcome.cost_usd;
+                *spend.tokens += outcome.tokens;
                 match parse_authored(&outcome.text) {
                     Some(a) => FinalizeTurn::Answered(a),
                     None => FinalizeTurn::Unparseable,
@@ -148,45 +150,4 @@ impl ExecutionDriver {
             }
         }
     }
-}
-
-/// Read the four strings out of the agent's turn.
-///
-/// Keyed on `pr_title` through the shared scanner, so prose, ```json fences
-/// and `<think>` blocks around the object are all tolerated — the same
-/// tolerance the verifier's verdict and the harness triage classifier rely on.
-pub(crate) fn parse_authored(raw_text: &str) -> Option<Authored> {
-    let val = crate::domain::text::find_json_object_with_key(raw_text, "pr_title")?;
-    let get = |key: &str| -> String {
-        val.get(key)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string()
-    };
-
-    let commit_subject = get("commit_subject");
-    let pr_title = get("pr_title");
-    // A summary with no subject and no title is not an answer, however
-    // well-formed the JSON around it was.
-    if commit_subject.is_empty() && pr_title.is_empty() {
-        return None;
-    }
-
-    Some(Authored {
-        // Either field standing in for the other beats failing the step over
-        // a missing key when the agent clearly answered.
-        commit_subject: if commit_subject.is_empty() {
-            pr_title.clone()
-        } else {
-            commit_subject
-        },
-        commit_body: get("commit_body"),
-        pr_title: if pr_title.is_empty() {
-            get("commit_subject")
-        } else {
-            pr_title
-        },
-        pr_body: get("pr_body"),
-    })
 }
