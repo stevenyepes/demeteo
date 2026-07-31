@@ -27,6 +27,7 @@
 //! shared truncation rule.
 
 use crate::domain::text::tail_chars;
+use crate::domain::{artifact::Artifact, artifact::ArtifactSource};
 
 /// What the harness-first pass actually established, before anyone words it.
 ///
@@ -180,6 +181,55 @@ impl HarnessOutcome {
                  use the `environment` verdict rather than `fail`.\n"
                 .to_string(),
         }
+    }
+
+    /// The complete output for every gate that reached a verdict.
+    ///
+    /// [`Self::render_section`] remains bounded because it is an argv value.
+    /// The validator still needs access to the complete evidence when a test's
+    /// result falls in that omitted middle, so the executor persists these as
+    /// per-step artifacts and materializes their references in the worktree.
+    pub fn full_log_artifacts(&self) -> Vec<Artifact> {
+        let runs: Vec<&HarnessRun> = match self {
+            HarnessOutcome::Ran { passed, excluded } => passed
+                .iter()
+                .chain(excluded.iter().map(|excluded| &excluded.run))
+                .collect(),
+            HarnessOutcome::NotConfigured => Vec::new(),
+        };
+
+        runs.into_iter()
+            .map(|run| Artifact {
+                name: format!("harness-{}", run.name),
+                mime: "text/plain".to_string(),
+                content: run.output.clone(),
+                source: ArtifactSource::AgentText,
+            })
+            .collect()
+    }
+
+    /// Explain where the validator can read the complete, untruncated log.
+    ///
+    /// References are intentionally `- \`path\`` bullets: the worktree-context
+    /// binder recognizes that shape and copies host-local artifacts through the
+    /// [`ExecutionPort`](crate::ports::execution::ExecutionPort) before an
+    /// agent reads them.
+    pub fn render_full_log_references(&self, references: &[(String, String)]) -> String {
+        if references.is_empty() {
+            return String::new();
+        }
+        let paths = references
+            .iter()
+            .map(|(name, reference)| format!("- `{reference}` — harness `{name}`"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\n## Complete Harness Output\n\
+             The complete, untruncated output from the already-executed harness is available:\n\
+             {paths}\n\n\
+             Read or search the complete log when the bounded result excerpt does not establish \\
+             a specific test outcome. Do NOT re-run the build or test suite.\n"
+        )
     }
 }
 
