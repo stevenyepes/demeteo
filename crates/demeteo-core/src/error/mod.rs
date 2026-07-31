@@ -1,10 +1,16 @@
 //! Centralized error envelope for the entire backend.
 //!
 //! Every public function in the application, infrastructure, and command
-//! layers returns [`AppError`]. The IPC boundary in [`crate::error::ipc`]
-//! converts it to a [`crate::error::ipc::IpcError`] that omits sensitive
-//! fields (PATs, keyring paths, raw git output) before Tauri serializes
-//! it to the frontend.
+//! layers returns [`AppError`]. Tauri commands stringify it at the IPC
+//! boundary with `.map_err(|e| e.to_string())`.
+//!
+//! **There is no redaction on that path today.** `src/error/ipc.rs` defines
+//! an `IpcError` envelope intended to omit sensitive fields (PATs, keyring
+//! paths, raw git output), but no `mod ipc;` declares it, so neither it nor
+//! its test file is compiled. The only secret scrubbing that actually runs is
+//! [`scrub_secrets`](crate::shared::secret_scrub::scrub_secrets), applied at
+//! the run-event log sinks — not here. Wiring the envelope up, or deleting
+//! it, is an open decision; until then this doc describes what ships.
 //!
 //! Design choices:
 //! - **Typed variants** rather than stringly-typed errors so the frontend
@@ -53,8 +59,8 @@ pub enum AppError {
     Provider { message: String },
 
     /// An external transport (SSH, reqwest, reqwest body) failed. The
-    /// message is redacted — see [`crate::error::ipc`] for the redaction
-    /// policy.
+    /// message is passed through as-is — see the module docs: the redaction
+    /// envelope this once pointed at is not compiled.
     #[error("{message}")]
     Transport { message: String },
 

@@ -9,9 +9,7 @@
 //! is why the ⚠️ hook-bypass warning the PR body carries had never been
 //! asserted anywhere.
 //!
-//! Everything here is synchronous and total: it takes what the adapter
-//! observed and returns what should happen. `domain/` has no `async fn`
-//! anywhere in it, which is what keeps that boundary honest.
+//! Synchronous and total, per the [`domain`](crate::domain) rule.
 //!
 //! The adapter keeps the choreography: the git reads, the agent turn, the
 //! hook validation, the squash and the row write.

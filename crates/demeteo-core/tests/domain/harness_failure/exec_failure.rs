@@ -1,7 +1,3 @@
-// Tests extracted from `src/adapters/step_executor/driver/verifier.rs`, moved
-// with the code to `src/domain/harness_failure.rs` (mirrored-tests convention).
-// `super` resolves to that module.
-
 use super::{classify_exec_failure, HarnessExecFailure};
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 
@@ -16,7 +12,7 @@ fn transport_prefixed_error_is_transport() {
 
 #[test]
 fn timeout_prefixed_error_is_timeout() {
-    // The gap this classifier exists to close. Before it, `verifier.rs` never
+    // The gap this classifier exists to close. Before it, `driver/verifier/` never
     // referenced the timeout prefix at all, so a `timeout:` error fell through
     // to the non-zero-exit branch and became a Verdict — redirecting an agent
     // to "fix" code that never finished being tested.

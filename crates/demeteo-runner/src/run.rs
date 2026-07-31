@@ -645,7 +645,7 @@ async fn await_terminal_and_push_inner(
         //
         // Keyed off the *pending gate row*, not the feature status: an
         // open gate only flips the gate step to `awaiting_gate` (see
-        // `steps/gate.rs`), while the feature it belongs to stays
+        // `steps/gate/`), while the feature it belongs to stays
         // `running`. The one writer of `awaiting_gate` onto a feature is
         // the startup watchdog's restart reconciliation — so gating this
         // call on the feature status meant a live unattended run never

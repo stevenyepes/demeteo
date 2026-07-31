@@ -8,7 +8,7 @@
 //!
 //! It sits beside [`harness_baseline`](crate::domain::harness_baseline) and
 //! [`harness_delta`](crate::domain::harness_delta) rather than under the
-//! verifier, because it belongs to the *harness* — `baseline.rs`, the failing-
+//! verifier, because it belongs to the *harness* — `baseline/`, the failing-
 //! test extractor and the agent step all read it, and only one of them is a
 //! verifier turn.
 //!

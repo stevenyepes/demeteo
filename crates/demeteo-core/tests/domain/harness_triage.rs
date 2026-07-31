@@ -1,4 +1,4 @@
-// Tests extracted from `src/adapters/step_executor/driver/verifier.rs`, moved
+// Tests extracted from `src/adapters/step_executor/driver/verifier/`, moved
 // with the code to `src/domain/harness_triage.rs` (mirrored-tests convention).
 // `super` resolves to that module.
 

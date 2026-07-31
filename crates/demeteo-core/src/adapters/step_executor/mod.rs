@@ -107,7 +107,7 @@ pub struct DagStepExecutor {
     /// accepts the `Read` tool call).
     pub attachments: Arc<dyn AttachmentStore>,
     /// JSON-manifest persistence for the same attachment list. Lives
-    /// on the executor so [`feature_start`] can persist staged
+    /// on the executor so [`feature_start`](crate::ports::step_executor::StepExecutor::feature_start) can persist staged
     /// attachments to the freshly-created feature row BEFORE the
     /// driver is spawned — without this, the agent's first turn would
     /// race against the frontend's post-launch `feature_add_attachment`

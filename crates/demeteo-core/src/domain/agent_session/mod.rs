@@ -9,11 +9,9 @@
 //! never reads — which is why the two budget tests shipped `#[ignore]`d and
 //! `unimplemented!()`.
 //!
-//! Everything here is synchronous and total. `domain/` has no `async fn`
-//! anywhere in it, which is what keeps that boundary honest — policy that
-//! needs to `.await` cannot accidentally end up here. The driver keeps the
-//! choreography: reading the live session's token count, killing it, building
-//! the resume summary, spawning fresh.
+//! Synchronous and total, per the [`domain`](crate::domain) rule. The driver
+//! keeps the choreography: reading the live session's token count, killing it,
+//! building the resume summary, spawning fresh.
 
 pub mod budget;
 pub mod context_window;

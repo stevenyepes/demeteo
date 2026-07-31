@@ -1,4 +1,4 @@
-// Tests extracted from `src/adapters/step_executor/baseline.rs`
+// Tests extracted from `src/adapters/step_executor/baseline/`
 // (mirrored-tests convention). `super` resolves to that module.
 //
 // [`measure_gates`] is a free function over one port precisely so it is

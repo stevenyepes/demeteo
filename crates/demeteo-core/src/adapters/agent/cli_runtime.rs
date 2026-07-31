@@ -34,9 +34,9 @@ pub type EventParser = fn(line: &str) -> Option<AgentEvent>;
 pub type ArgsBuilder =
     fn(ctx: &AgentContext, captured_session_id: Option<&str>, prompt: &str) -> Vec<String>;
 
-/// Translate the session's [`PermissionProfile`] into agent-native
+/// Translate the session's [`PermissionProfile`](crate::domain::permission::PermissionProfile) into agent-native
 /// environment variables (e.g. opencode's `OPENCODE_PERMISSION`). Agents
-/// that enforce via CLI flags instead use [`no_permission_env`] and read
+/// that enforce via CLI flags instead use [`no_permission_env`](crate::ports::agent_runtime::no_permission_env) and read
 /// `ctx.permissions` in their [`ArgsBuilder`].
 pub type PermEnvBuilder = fn(
     p: &crate::domain::permission::PermissionProfile,
@@ -52,7 +52,7 @@ pub type EffortEnvBuilder =
 /// No agent-native effort env (codex, opencode: argv-only; hermes: no
 /// per-invocation effort control at all). The `effort_env` translator for
 /// such runtimes — mirrors
-/// [`no_permission_env`](crate::ports::agent_runtime::no_permission_env).
+/// [`no_permission_env`](crate::ports::agent_runtime::no_permission_env)(crate::ports::agent_runtime::no_permission_env).
 pub fn no_effort_env(_effort: Option<EffortLevel>) -> std::collections::HashMap<String, String> {
     std::collections::HashMap::new()
 }

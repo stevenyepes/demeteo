@@ -1,7 +1,3 @@
-// Tests extracted from `src/adapters/step_executor/driver/verifier.rs`, moved
-// with the code to `src/domain/harness_failure.rs` (mirrored-tests convention).
-// `super` resolves to that module.
-
 use super::{build_missing_task_message, detect_missing_task, MissingTask};
 
 fn detected(cmd: &str, out: &str) -> Option<(String, String)> {

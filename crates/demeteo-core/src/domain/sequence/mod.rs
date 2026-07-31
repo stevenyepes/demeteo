@@ -8,11 +8,9 @@
 //! reaching them from a test meant standing up an `ExecutionDriver` and its
 //! twenty-odd port doubles, and most of them were never reached at all.
 //!
-//! This module is where they go instead. Everything here is synchronous and
-//! total: it takes what the adapter observed and returns what should happen,
-//! and the adapter's job is reduced to observing and obeying. `domain/` has
-//! no `async fn` anywhere in it, which is what keeps that boundary honest —
-//! policy that needs to `.await` cannot accidentally end up here.
+//! This module is where they go instead — synchronous and total, per the
+//! [`domain`](crate::domain) rule, which reduces the adapter's job to
+//! observing and obeying.
 //!
 //! The adapter side keeps the choreography: provisioning, probing, merging,
 //! persisting, emitting.

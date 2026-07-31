@@ -1,7 +1,3 @@
-// Tests extracted from `src/adapters/step_executor/driver/verifier.rs`, moved
-// with the code to `src/domain/harness_failure.rs` (mirrored-tests convention).
-// `super` resolves to that module.
-
 use super::detect_missing_command;
 
 // ── the three shell diagnostics we can actually receive ──────────────────

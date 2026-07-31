@@ -9,8 +9,8 @@
 //! plain data structure the `node_types_list` Tauri command hands to the
 //! frontend verbatim.
 //!
-//! Because every field comes from the [`NodeHandler`] trait — and the
-//! introducing fields ([`NodeHandler::display`]) have **no default** — a
+//! Because every field comes from the [`NodeHandler`](super::registry::NodeHandler) trait — and the
+//! introducing fields ([`NodeHandler::display`](super::registry::NodeHandler::display)) have **no default** — a
 //! new node type cannot be registered without also showing up in the
 //! palette, fully labelled. That is the P3.5 `command`-node acceptance
 //! test ("appears in the builder palette untouched") made structural

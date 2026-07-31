@@ -1,3 +1,16 @@
+//! Policy: what *should* happen, given what an adapter observed.
+//!
+//! Everything here is synchronous and total. It takes an observation and
+//! returns a decision; it performs nothing. `domain/` has **no `async fn`
+//! anywhere in it**, and that is what keeps the boundary honest — a decision
+//! spelled inside an `async fn` that also does I/O is only reachable from a
+//! test that stands up the ports the I/O needs, so in practice it stops being
+//! tested at all. Keeping the decision here makes it reachable from a unit
+//! test with no port doubles, and leaves the adapter holding only the
+//! choreography. See AGENTS.md §3, "Where a decision is allowed to live".
+//!
+//! Submodules should cite this rule rather than restating it.
+
 pub mod action;
 pub mod agent_event;
 pub mod agent_session;

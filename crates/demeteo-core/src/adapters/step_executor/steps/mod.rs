@@ -1,3 +1,14 @@
+//! Node handlers: one module per step kind.
+//!
+//! **Node `config` schemas live in a `schema.rs` beside their handler**, as a
+//! `serde_json::json!` literal rather than an `include_str!`-ed `.json` file.
+//! The macro is syntax-checked at **compile** time; a standalone file would
+//! trade that for a runtime parse whose only failure mode — a malformed schema
+//! shipped in a release — is exactly what the compile-time check prevents.
+//! A schema is a data literal that shares nothing with execution logic and
+//! changes on a different cadence, which is why it is its own file: a schema
+//! edit should not land in the same diff as a change to how a verdict is read.
+
 /// Outcome returned by each step-type handler after execution completes.
 pub(crate) enum StepOutcome {
     /// Step finished successfully; advance to the next step.

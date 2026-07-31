@@ -703,7 +703,7 @@ async fn retry_step(
 /// `GatePresenter::gate_decide` — the same application-level call the
 /// desktop app's `gate_decide` Tauri command uses — so there is exactly
 /// one gate-decision code path regardless of which side of the tunnel
-/// the decision came from. Gated by [`require_owner_of_gate`] so a client
+/// the decision came from. Gated by [`require_owner_of_step`] so a client
 /// can only decide gates on runs it owns (MC-D2).
 async fn decide_gate(
     svc: &Arc<RunnerServices>,
