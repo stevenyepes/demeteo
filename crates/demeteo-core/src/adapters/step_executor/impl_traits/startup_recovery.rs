@@ -154,7 +154,7 @@ impl DagStepExecutor {
 
     /// Resume every feature that [`startup_watchdog`](Self::startup_watchdog)
     /// marked as `awaiting_gate`. Idempotent via
-    /// [`DriverRegistry`](crate::adapters::step_executor::registry::DriverRegistry):
+    /// [`DriverRegistry`](crate::adapters::step_executor::driver_registry::DriverRegistry):
     /// if the runtime already has a driver alive for a feature, it's a no-op.
     ///
     /// Called once from the Tauri setup hook on a background task so
