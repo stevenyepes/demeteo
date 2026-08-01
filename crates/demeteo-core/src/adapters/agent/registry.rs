@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::domain::models::EffortLevel;
+use crate::domain::models::{Availability, EffortLevel};
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 /// Thread-id-keyed registry of live agent sessions. Owns the lazy lifecycle:
@@ -14,7 +14,7 @@ use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, Agen
 pub struct AgentRegistry {
     runtimes: Vec<Arc<dyn AgentRuntime>>,
     sessions: Mutex<HashMap<String, Arc<dyn AgentSession>>>,
-    availability_cache: tokio::sync::Mutex<HashMap<(String, String), bool>>,
+    availability_cache: tokio::sync::Mutex<HashMap<(String, String), Availability>>,
 }
 
 impl AgentRegistry {
@@ -26,14 +26,9 @@ impl AgentRegistry {
         }
     }
 
-    /// Check if the agent kind is available on the given machine.
-    /// The result is cached per `(machine_id, kind)` for the duration of the app session.
-    ///
-    /// When `force` is true the cache is bypassed and the result of the
-    /// fresh probe is written back into the cache. The settings page's
-    /// "Re-check agent availability" button calls with `force = true` so
-    /// that installing a binary mid-session is reflected immediately,
-    /// instead of waiting for an app restart.
+    /// Whether the agent kind is known to be installed on the given machine.
+    /// The lossy read of [`Self::availability`], for callers about to run the
+    /// agent: an unanswered probe counts as "no".
     pub async fn is_available(
         &self,
         kind: &str,
@@ -41,6 +36,29 @@ impl AgentRegistry {
         machine_id: &str,
         force: bool,
     ) -> bool {
+        self.availability(kind, exec, machine_id, force)
+            .await
+            .is_installed()
+    }
+
+    /// Probe whether the agent kind is installed on the given machine.
+    /// A *conclusive* result is cached per `(machine_id, kind)` for the
+    /// duration of the app session; [`Availability::Unknown`] is deliberately
+    /// not cached, so one unreachable moment doesn't pin every agent on that
+    /// machine to "missing" until the app restarts.
+    ///
+    /// When `force` is true the cache is bypassed and the result of the
+    /// fresh probe is written back into the cache. The settings page's
+    /// "Re-check agent availability" button calls with `force = true` so
+    /// that installing a binary mid-session is reflected immediately,
+    /// instead of waiting for an app restart.
+    pub async fn availability(
+        &self,
+        kind: &str,
+        exec: &dyn crate::ports::execution::ExecutionPort,
+        machine_id: &str,
+        force: bool,
+    ) -> Availability {
         let key = (machine_id.to_string(), kind.to_string());
         if !force {
             let cache = self.availability_cache.lock().await;
@@ -52,16 +70,20 @@ impl AgentRegistry {
         let runtime = match self.runtime_for(kind) {
             Some(r) => r,
             None => {
+                // Nothing to probe and nothing that could change: an
+                // unregistered kind is absent by definition.
                 if !force {
                     let mut cache = self.availability_cache.lock().await;
-                    cache.insert(key, false);
+                    cache.insert(key, Availability::Missing);
                 }
-                return false;
+                return Availability::Missing;
             }
         };
-        let avail = runtime.is_available(exec, machine_id).await;
-        let mut cache = self.availability_cache.lock().await;
-        cache.insert(key, avail);
+        let avail = runtime.availability(exec, machine_id).await;
+        if avail.is_conclusive() {
+            let mut cache = self.availability_cache.lock().await;
+            cache.insert(key, avail);
+        }
         avail
     }
 

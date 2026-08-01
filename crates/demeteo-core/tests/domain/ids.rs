@@ -23,3 +23,17 @@ fn newtype_from_string_and_str() {
     assert_eq!(a.as_str(), "x");
     assert_eq!(b.as_str(), "y");
 }
+
+/// Both spellings of "this host". The empty id is the one that gets missed:
+/// it reaches port methods from callers that never had a machine to name, and
+/// a check that only tests `"local"` silently sends it down the remote path.
+#[test]
+fn both_spellings_of_the_local_machine_are_local() {
+    assert!(MachineId::from(LOCAL_MACHINE).is_local());
+    assert!(MachineId::from(String::new()).is_local());
+    assert!(!MachineId::from("m-42").is_local());
+    assert!(
+        !MachineId::from("localhost").is_local(),
+        "the sentinel is exact — a machine may legitimately be named localhost"
+    );
+}

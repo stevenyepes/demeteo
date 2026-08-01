@@ -11,7 +11,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::{AgentEvent, StopReason};
-use crate::domain::models::{EffortLevel, SessionInfo};
+use crate::domain::models::{Availability, EffortLevel, SessionInfo};
 use crate::ports::agent_runtime::{
     AgentContext, AgentRuntime, AgentSession, AgentStartError, StderrHeartbeat,
 };
@@ -123,13 +123,19 @@ impl AgentRuntime for UnifiedCliRuntime {
         self.binary
     }
 
-    async fn is_available(
+    async fn availability(
         &self,
         exec: &dyn crate::ports::execution::ExecutionPort,
         machine_id: &str,
-    ) -> bool {
+    ) -> Availability {
         if machine_id == "local" || machine_id.is_empty() {
-            super::is_binary_on_local_path(self.binary)
+            // A `PATH` scan on this host either finds the binary or does not;
+            // there is no third answer to report.
+            if super::is_binary_on_local_path(self.binary) {
+                Availability::Installed
+            } else {
+                Availability::Missing
+            }
         } else {
             // Probe under an **interactive login** shell so the target user's
             // full environment is sourced — the login profile *and* `~/.bashrc`,
@@ -147,7 +153,7 @@ impl AgentRuntime for UnifiedCliRuntime {
                     crate::ports::execution::ShellOptions::login_interactive(),
                 )
                 .await;
-            res.map(|out| out.trim() == "ok").unwrap_or(false)
+            Availability::from_probe(res, "ok")
         }
     }
 

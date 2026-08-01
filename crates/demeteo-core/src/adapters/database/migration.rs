@@ -15,12 +15,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         .map_err(|e| DbError::Migration(e.to_string()))?;
 
     add_column_if_missing(conn, "machines", "agents", "TEXT")?;
-    conn.execute(
-        "UPDATE machines
-         SET agents = '[{\"kind\":\"opencode\",\"enabled\":true},{\"kind\":\"hermes\",\"enabled\":true},{\"kind\":\"claude-code\",\"enabled\":true}]'
-         WHERE id = 'local' AND (agents IS NULL OR agents = '' OR agents = '[]');",
-        [],
-    )?;
+    // Nothing seeds an agent list for the local host here: it has no `machines`
+    // row to seed (V38), and what its default *should* be is decided from
+    // what is installed, by `AgentConfig::default_for`.
+    //
     // Strip the removed `antigravity` agent from any previously-seeded
     // `agents` JSON so stale rows don't advertise an agent the registry no
     // longer resolves. `get_agent_configs`' parser already drops unsupported

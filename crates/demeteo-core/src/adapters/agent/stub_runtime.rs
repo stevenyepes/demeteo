@@ -142,12 +142,12 @@ impl AgentRuntime for StubRuntime {
         }
     }
 
-    async fn is_available(
+    async fn availability(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,
         _machine_id: &str,
-    ) -> bool {
-        true
+    ) -> crate::domain::models::Availability {
+        crate::domain::models::Availability::Installed
     }
 
     fn install_command(&self) -> &'static str {

@@ -119,8 +119,9 @@ pub async fn start_with_install(
     .map_err(|e| format!("install failed: {}", e))?;
 
     if !runtime
-        .is_available(ctx.exec.as_ref(), thread.machine_id.as_str())
+        .availability(ctx.exec.as_ref(), thread.machine_id.as_str())
         .await
+        .is_installed()
     {
         return Err(format!("INSTALL_BUT_STILL_MISSING:{}", runtime.kind()));
     }

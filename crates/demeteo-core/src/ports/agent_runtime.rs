@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{EffortLevel, SessionInfo};
+use crate::domain::models::{Availability, EffortLevel, SessionInfo};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
@@ -297,14 +297,19 @@ pub trait AgentRuntime: Send + Sync {
         self.kind()
     }
 
-    /// Check if the binary is reachable on the target host (which / command
-    /// -v). The result is cached per `(machine_id, kind)` by the registry for
-    /// the duration of the app session.
-    async fn is_available(
+    /// Check whether the binary is reachable on the target host (which /
+    /// command -v). A conclusive result is cached per `(machine_id, kind)` by
+    /// the registry for the duration of the app session.
+    ///
+    /// Report [`Availability::Unknown`] when the probe itself could not be
+    /// run — the host was unreachable, the transport errored. Answering
+    /// `Missing` there is what turns a dropped SSH connection into a stored
+    /// "user disabled this agent"; see the type's own docs.
+    async fn availability(
         &self,
         exec: &dyn crate::ports::execution::ExecutionPort,
         machine_id: &str,
-    ) -> bool;
+    ) -> Availability;
 
     /// The official install command, shown verbatim in the consent prompt.
     fn install_command(&self) -> &'static str;

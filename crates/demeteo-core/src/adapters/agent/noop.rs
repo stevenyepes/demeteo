@@ -29,12 +29,12 @@ impl AgentRuntime for NoopRuntime {
         }
     }
 
-    async fn is_available(
+    async fn availability(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,
         _machine_id: &str,
-    ) -> bool {
-        false
+    ) -> crate::domain::models::Availability {
+        crate::domain::models::Availability::Missing
     }
 
     fn install_command(&self) -> &'static str {
