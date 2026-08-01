@@ -18,12 +18,12 @@ impl AgentRuntime for NoopRuntime {
             effort_levels: &[],
         }
     }
-    async fn is_available(
+    async fn availability(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,
         _machine_id: &str,
-    ) -> bool {
-        false
+    ) -> Availability {
+        Availability::Missing
     }
     fn install_command(&self) -> &'static str {
         "echo noop"
@@ -229,24 +229,23 @@ async fn kill_removes_session() {
     reg.kill("t1").await;
 }
 
-/// Runtime that lets the test flip the `is_available` answer between
-/// probes. Counts how many times `is_available` was called so the cache
-/// behavior can be asserted from the call count alone.
+/// Runtime that lets the test change the availability answer between probes.
+/// Counts how many times it was probed so the cache behavior can be asserted
+/// from the call count alone.
 struct FlippableRuntime {
-    state: tokio::sync::Mutex<bool>,
+    state: tokio::sync::Mutex<Availability>,
     calls: tokio::sync::Mutex<u32>,
 }
 
 impl FlippableRuntime {
-    fn new(initial: bool) -> Arc<Self> {
+    fn new(initial: Availability) -> Arc<Self> {
         Arc::new(Self {
             state: tokio::sync::Mutex::new(initial),
             calls: tokio::sync::Mutex::new(0),
         })
     }
-    async fn flip(&self) {
-        let mut s = self.state.lock().await;
-        *s = !*s;
+    async fn set(&self, next: Availability) {
+        *self.state.lock().await = next;
     }
     async fn calls(&self) -> u32 {
         *self.calls.lock().await
@@ -267,11 +266,11 @@ impl AgentRuntime for FlippableRuntime {
             effort_levels: &[],
         }
     }
-    async fn is_available(
+    async fn availability(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,
         _machine_id: &str,
-    ) -> bool {
+    ) -> Availability {
         let mut c = self.calls.lock().await;
         *c += 1;
         *self.state.lock().await
@@ -293,90 +292,88 @@ impl AgentRuntime for FlippableRuntime {
     }
 }
 
+/// An `ExecutionPort` the availability tests never read through — the
+/// runtimes under test answer from their own state, so this only has to
+/// exist to satisfy the signature.
+fn noop_exec() -> Arc<dyn crate::ports::execution::ExecutionPort> {
+    struct NoopExec;
+    #[async_trait::async_trait]
+    impl crate::ports::execution::ExecutionPort for NoopExec {
+        async fn test_connection(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        async fn run_command(&self, _: &str, _: &str) -> Result<String, String> {
+            Ok(String::new())
+        }
+        async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
+            Ok(String::new())
+        }
+        async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        async fn write_file_bytes(&self, _: &str, _: &str, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        async fn get_metadata(
+            &self,
+            _: &str,
+            path: &str,
+        ) -> Result<crate::ports::execution::SftpEntry, String> {
+            Ok(crate::ports::execution::SftpEntry {
+                name: path.into(),
+                path: path.into(),
+                is_dir: false,
+                size: 0,
+                modified: 0,
+            })
+        }
+        async fn list_dir(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
+            Ok(vec![])
+        }
+        async fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        async fn resolve_home(&self, _: &str) -> Result<String, String> {
+            Ok("/tmp".into())
+        }
+        async fn resolve_user(&self, _: &str) -> Result<String, String> {
+            Ok("test".into())
+        }
+        async fn control_rpc(
+            &self,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<serde_json::Value, String> {
+            Err("control_rpc not supported by this stub".to_string())
+        }
+        fn spawn_interactive(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[String],
+            _: &str,
+            _: &std::collections::HashMap<String, String>,
+        ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+            Err("noop".into())
+        }
+    }
+    Arc::new(NoopExec)
+}
+
 /// When the user's installation toggles the binary on disk mid-session,
 /// the next click of the "Re-check availability" button must return the
 /// fresh value rather than the cached `false` from the previous probe.
 #[tokio::test]
 async fn is_available_force_bypasses_cache() {
-    let rt = FlippableRuntime::new(false);
+    let rt = FlippableRuntime::new(Availability::Missing);
     let reg = AgentRegistry::new(vec![rt.clone()]);
 
-    // 1. Initial probe: binary missing. Should be cached.
-    let stub: Arc<dyn crate::ports::execution::ExecutionPort> = {
-        struct NoopExec;
-        #[async_trait::async_trait]
-        impl crate::ports::execution::ExecutionPort for NoopExec {
-            async fn test_connection(&self, _: &str) -> Result<(), String> {
-                Ok(())
-            }
-            async fn run_command(&self, _: &str, _: &str) -> Result<String, String> {
-                Ok(String::new())
-            }
-            async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
-                Ok(String::new())
-            }
-            async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
-                Ok(())
-            }
-            async fn write_file_bytes(&self, _: &str, _: &str, _: &[u8]) -> Result<(), String> {
-                Ok(())
-            }
-            async fn get_metadata(
-                &self,
-                _: &str,
-                path: &str,
-            ) -> Result<crate::ports::execution::SftpEntry, String> {
-                Ok(crate::ports::execution::SftpEntry {
-                    name: path.into(),
-                    path: path.into(),
-                    is_dir: false,
-                    size: 0,
-                    modified: 0,
-                })
-            }
-            async fn list_dir(
-                &self,
-                _: &str,
-                _: &str,
-            ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
-                Ok(vec![])
-            }
-            async fn setup_worktree(
-                &self,
-                _: &str,
-                _: &str,
-                _: &str,
-                _: &str,
-            ) -> Result<(), String> {
-                Ok(())
-            }
-            async fn resolve_home(&self, _: &str) -> Result<String, String> {
-                Ok("/tmp".into())
-            }
-            async fn resolve_user(&self, _: &str) -> Result<String, String> {
-                Ok("test".into())
-            }
-            async fn control_rpc(
-                &self,
-                _: &str,
-                _: &str,
-                _: serde_json::Value,
-            ) -> Result<serde_json::Value, String> {
-                Err("control_rpc not supported by this stub".to_string())
-            }
-            fn spawn_interactive(
-                &self,
-                _: &str,
-                _: &str,
-                _: &[String],
-                _: &str,
-                _: &std::collections::HashMap<String, String>,
-            ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
-                Err("noop".into())
-            }
-        }
-        Arc::new(NoopExec)
-    };
+    let stub = noop_exec();
 
     assert!(
         !reg.is_available("flippable", stub.as_ref(), "m1", false)
@@ -396,8 +393,8 @@ async fn is_available_force_bypasses_cache() {
     assert_eq!(rt.calls().await, 1, "non-forced calls must hit the cache");
 
     // 3. The user installs the binary. Flip the underlying runtime's
-    //    answer to `true` and force a re-probe via the refresh button.
-    rt.flip().await;
+    //    answer to `Installed` and force a re-probe via the refresh button.
+    rt.set(Availability::Installed).await;
     assert!(
         reg.is_available("flippable", stub.as_ref(), "m1", true)
             .await
@@ -410,6 +407,41 @@ async fn is_available_force_bypasses_cache() {
             .await
     );
     assert_eq!(rt.calls().await, 2, "fresh value must be cached");
+}
+
+/// The cache remembers answers, not failures. A machine that was briefly
+/// unreachable must be probed again on the next look — caching `Unknown`
+/// would pin every agent on that machine to "missing" until the app
+/// restarts, and Project Settings would persist that as user intent.
+#[tokio::test]
+async fn an_unanswered_probe_is_not_cached_and_is_retried() {
+    let rt = FlippableRuntime::new(Availability::Unknown);
+    let reg = AgentRegistry::new(vec![rt.clone()]);
+    let stub = noop_exec();
+
+    assert_eq!(
+        reg.availability("flippable", stub.as_ref(), "m1", false)
+            .await,
+        Availability::Unknown
+    );
+    assert_eq!(
+        reg.availability("flippable", stub.as_ref(), "m1", false)
+            .await,
+        Availability::Unknown
+    );
+    assert_eq!(
+        rt.calls().await,
+        2,
+        "an inconclusive probe must not be answered from the cache"
+    );
+
+    rt.set(Availability::Installed).await;
+    assert_eq!(
+        reg.availability("flippable", stub.as_ref(), "m1", false)
+            .await,
+        Availability::Installed,
+        "the machine coming back must be visible without a forced refresh"
+    );
 }
 
 #[test]

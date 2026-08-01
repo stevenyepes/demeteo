@@ -195,7 +195,10 @@ impl ThreadRepository for SqliteAdapter {
 
     fn get_agent_configs(&self, machine_id: &MachineId) -> Result<Vec<AgentConfig>, String> {
         let conn = self.conn.lock()?;
-        let raw: Option<String> = if machine_id.0 == "local" {
+        // The local host has no `machines` row to hold this — see the header of
+        // `migrations/V38__local_agent_config.sql`. Collapsing these two
+        // branches back into one statement is the bug V38 was added to fix.
+        let raw: Option<String> = if machine_id.is_local() {
             conn.query_row(
                 "SELECT agents FROM local_agent_config WHERE id = 1",
                 [],
@@ -210,7 +213,9 @@ impl ThreadRepository for SqliteAdapter {
                 params![machine_id.0],
                 |row| row.get(0),
             )
+            .optional()
             .map_err(|e| e.to_string())?
+            .flatten()
         };
         let parsed: Vec<AgentConfig> = raw
             .as_deref()
@@ -223,7 +228,8 @@ impl ThreadRepository for SqliteAdapter {
         let _: Vec<AgentConfig> =
             serde_json::from_str(agents_json).map_err(|e| format!("Invalid agents JSON: {}", e))?;
         let conn = self.conn.lock()?;
-        if machine_id.0 == "local" {
+        // Same fork, same reason as `get_agent_configs`.
+        if machine_id.is_local() {
             conn.execute(
                 "INSERT INTO local_agent_config (id, agents) VALUES (1, ?1)
                  ON CONFLICT(id) DO UPDATE SET agents = excluded.agents",

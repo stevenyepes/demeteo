@@ -582,10 +582,11 @@ fn remote_availability_probe_uses_a_login_shell() {
         .enable_all()
         .build()
         .unwrap();
-    let available = tokio_rt.block_on(runtime.is_available(&rec, "demeteo-remote"));
+    let available = tokio_rt.block_on(runtime.availability(&rec, "demeteo-remote"));
 
-    assert!(
+    assert_eq!(
         available,
+        crate::domain::models::Availability::Installed,
         "probe returning 'ok' should report the agent available"
     );
 

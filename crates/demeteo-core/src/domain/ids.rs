@@ -118,6 +118,21 @@ macro_rules! id_newtype {
 pub const LOCAL_MACHINE: &str = "local";
 
 id_newtype!(MachineId);
+
+impl MachineId {
+    /// Whether this id names the desktop host rather than a `Machine` row.
+    ///
+    /// Both spellings mean it. The empty string reaches port methods from
+    /// callers that never had a machine to name — `machine_resolver` folds it
+    /// into [`LOCAL_MACHINE`] on the way in, but only for the paths that go
+    /// through it — so a check that tests one spelling and not the other is a
+    /// bug waiting for the first caller that skips the resolver.
+    #[inline]
+    pub fn is_local(&self) -> bool {
+        self.0.is_empty() || self.0 == LOCAL_MACHINE
+    }
+}
+
 id_newtype!(ProjectId);
 id_newtype!(ThreadId);
 id_newtype!(FeatureId);

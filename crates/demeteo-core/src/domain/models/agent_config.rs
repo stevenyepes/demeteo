@@ -1,3 +1,6 @@
+// `AgentConfig` is declared in `thread.rs` because that is where the DB row it
+// is parsed out of lives, but the rules for *defaulting* one belong with the
+// agent vocabulary they are expressed in, so they are written here.
 use super::thread::AgentConfig;
 use serde::{Deserialize, Serialize};
 
@@ -70,30 +73,96 @@ impl std::fmt::Display for AgentKind {
     }
 }
 
+/// The answer an availability probe gives for one agent kind on one machine.
+///
+/// [`Unknown`](Self::Unknown) is the whole reason this is not a `bool`. The
+/// probe is a command run on the target host, so "the binary is not there"
+/// and "the host did not answer" arrive through the same channel; collapsing
+/// them loses the only distinction a *default* may be derived from. A remote
+/// machine that is briefly unreachable would otherwise report every agent as
+/// uninstalled, and because Project Settings persists the whole list on any
+/// save, that momentary answer would become the user's stored intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Availability {
+    Installed,
+    Missing,
+    /// The probe could not be completed — a transport error, not an answer.
+    Unknown,
+}
+
+impl Availability {
+    /// Whether the binary is known to be there. `Unknown` answers `false`:
+    /// callers asking this are about to *run* the agent, where the
+    /// conservative reading is the safe one. Seeding a default is the one
+    /// caller that must not use this — see [`AgentConfig::default_for`].
+    pub fn is_installed(self) -> bool {
+        matches!(self, Availability::Installed)
+    }
+
+    /// Whether the probe produced an answer worth remembering. The registry's
+    /// session cache consults this so a single transport failure is retried on
+    /// the next look rather than pinned for the life of the app.
+    pub fn is_conclusive(self) -> bool {
+        !matches!(self, Availability::Unknown)
+    }
+
+    /// Read what an `ExecutionPort` said about a `command -v` probe.
+    ///
+    /// The three fates are already in the port's D3 contract, so no adapter
+    /// has to invent them: a non-zero exit is `command -v` answering "no",
+    /// while [`TRANSPORT_ERROR_PREFIX`] and [`TIMEOUT_ERROR_PREFIX`] mark a
+    /// probe that never produced an answer at all. `ok_marker` is the token
+    /// the probe echoes on success.
+    ///
+    /// [`TRANSPORT_ERROR_PREFIX`]: crate::ports::execution::TRANSPORT_ERROR_PREFIX
+    /// [`TIMEOUT_ERROR_PREFIX`]: crate::ports::execution::TIMEOUT_ERROR_PREFIX
+    pub fn from_probe(result: Result<String, String>, ok_marker: &str) -> Availability {
+        use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
+        match result {
+            Ok(out) if out.trim() == ok_marker => Availability::Installed,
+            Ok(_) => Availability::Missing,
+            Err(e)
+                if e.starts_with(TRANSPORT_ERROR_PREFIX) || e.starts_with(TIMEOUT_ERROR_PREFIX) =>
+            {
+                Availability::Unknown
+            }
+            Err(_) => Availability::Missing,
+        }
+    }
+}
+
 impl AgentConfig {
-    /// Default enablement for a kind not yet in the stored config: enabled
-    /// iff the CLI is actually installed, so an uninstalled agent never
+    /// Default enablement for a kind not yet in the stored config: disabled
+    /// only when the CLI is known to be absent, so an uninstalled agent never
     /// appears pre-checked.
-    pub fn default_for(kind: &str, available: bool) -> AgentConfig {
+    ///
+    /// [`Availability::Unknown`] defaults to *enabled* — the opposite of
+    /// what [`Availability::is_installed`] would give. An unanswered probe is
+    /// not evidence of absence, and the two mistakes are not symmetric: a
+    /// pre-checked agent that turns out to be missing is still filtered out of
+    /// every picker by its `available` flag, whereas a pre-unchecked agent
+    /// that was installed all along becomes stored user intent the moment
+    /// anything in Project Settings is saved.
+    pub fn default_for(kind: &str, availability: Availability) -> AgentConfig {
         AgentConfig {
             kind: kind.to_string(),
-            enabled: available,
+            enabled: availability != Availability::Missing,
         }
     }
 
-    /// Append any `(kind, available)` pair in `known` that isn't already in
+    /// Append any `(kind, availability)` pair in `known` that isn't already in
     /// `existing`, defaulted via [`Self::default_for`]. Entries already
     /// present in `existing` pass through untouched — a saved enable/disable
-    /// is never overridden by availability.
+    /// is never overridden by a probe.
     pub fn seed_missing(
         mut existing: Vec<AgentConfig>,
-        known: &[(&str, bool)],
+        known: &[(&str, Availability)],
     ) -> Vec<AgentConfig> {
-        for (kind, available) in known {
+        for (kind, availability) in known {
             if existing.iter().any(|c| c.kind == *kind) {
                 continue;
             }
-            existing.push(AgentConfig::default_for(kind, *available));
+            existing.push(AgentConfig::default_for(kind, *availability));
         }
         existing
     }

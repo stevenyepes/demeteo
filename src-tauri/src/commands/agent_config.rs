@@ -1,5 +1,5 @@
 use crate::domain::ids::MachineId;
-use crate::domain::models::{AgentConfig, WorkingMemoryEntry};
+use crate::domain::models::{AgentConfig, AgentKind, Availability, WorkingMemoryEntry};
 use crate::error::AppError;
 use crate::state::{AgentCatalogEntry, AgentConfigView, AppContext};
 use tauri::State;
@@ -30,16 +30,16 @@ pub async fn get_agent_configs(
         ctx.registry.runtimes().iter().map(|r| r.kind()).collect();
 
     let force = refresh.unwrap_or(false);
-    let mut known: Vec<(&str, bool)> = Vec::new();
+    let mut known: Vec<(&str, Availability)> = Vec::new();
     for kind in &runtime_kinds {
-        if !demeteo_core::domain::models::AgentKind::is_supported(kind) {
+        if !AgentKind::is_supported(kind) {
             continue;
         }
-        let available = ctx
+        let availability = ctx
             .registry
-            .is_available(kind, &*ctx.exec, &machine_id, force)
+            .availability(kind, &*ctx.exec, &machine_id, force)
             .await;
-        known.push((kind, available));
+        known.push((kind, availability));
     }
 
     // Merge in every registered, *supported* agent the stored config doesn't
@@ -47,36 +47,52 @@ pub async fn get_agent_configs(
     // registry is the source of truth for *which* agents exist. Without this,
     // an adapter added after a machine's config was last saved (e.g. codex on
     // a machine whose row predates it) would never appear in the settings
-    // panel — the config list, not the registry, drove the view. A missing
-    // kind defaults to enabled iff it's actually installed. Internal
-    // runtimes (noop / stub) are filtered out by `is_supported` above.
+    // panel — the config list, not the registry, drove the view. What a
+    // missing kind then defaults to is `AgentConfig::default_for`'s decision,
+    // not this one's. Internal runtimes (noop / stub) are filtered out by
+    // `is_supported` above.
     configured = AgentConfig::seed_missing(configured, &known);
 
-    let mut views: Vec<AgentConfigView> = Vec::new();
-    for cfg in configured {
-        let available = known
-            .iter()
-            .find(|(k, _)| *k == cfg.kind)
-            .map(|(_, available)| *available)
-            .unwrap_or(false);
-        let runtime = ctx.registry.runtime_for(&cfg.kind);
-        let install_command = runtime
-            .as_ref()
-            .map(|r| r.install_command().to_string())
-            .unwrap_or_default();
-        let display_label = runtime
-            .as_ref()
-            .map(|r| r.capabilities().display_label.to_string())
-            .unwrap_or_else(|| cfg.kind.clone());
-        views.push(AgentConfigView {
-            kind: cfg.kind,
-            enabled: cfg.enabled,
-            available,
-            install_command,
-            display_label,
-        });
-    }
-    Ok(views)
+    Ok(agent_config_views(&ctx.registry, configured, &known))
+}
+
+/// The pure half of [`get_agent_configs`] — configs plus probe results in,
+/// rows for the settings table out — so the join between the two lists is
+/// testable without an `AppContext` or a live probe.
+///
+/// A kind in `configured` with no entry in `known` is a stored config for an
+/// agent this build no longer registers. It still gets a row, so a user can
+/// see and clear it, but nothing claims it is available.
+fn agent_config_views(
+    registry: &demeteo_core::adapters::agent::registry::AgentRegistry,
+    configured: Vec<AgentConfig>,
+    known: &[(&str, Availability)],
+) -> Vec<AgentConfigView> {
+    configured
+        .into_iter()
+        .map(|cfg| {
+            let available = known
+                .iter()
+                .find(|(k, _)| *k == cfg.kind)
+                .is_some_and(|(_, availability)| availability.is_installed());
+            let runtime = registry.runtime_for(&cfg.kind);
+            let install_command = runtime
+                .as_ref()
+                .map(|r| r.install_command().to_string())
+                .unwrap_or_default();
+            let display_label = runtime
+                .as_ref()
+                .map(|r| r.capabilities().display_label.to_string())
+                .unwrap_or_else(|| cfg.kind.clone());
+            AgentConfigView {
+                kind: cfg.kind,
+                enabled: cfg.enabled,
+                available,
+                install_command,
+                display_label,
+            }
+        })
+        .collect()
 }
 
 /// The catalog of registered, user-selectable coding agents and the
@@ -95,7 +111,6 @@ pub fn list_agents(ctx: State<'_, AppContext>) -> Result<Vec<AgentCatalogEntry>,
 fn agent_catalog(
     registry: &demeteo_core::adapters::agent::registry::AgentRegistry,
 ) -> Vec<AgentCatalogEntry> {
-    use demeteo_core::domain::models::AgentKind;
     registry
         .runtimes()
         .iter()
