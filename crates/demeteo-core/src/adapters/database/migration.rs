@@ -164,3 +164,7 @@ fn add_column_if_missing(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/infrastructure/database/migration_upgrade.rs"]
+mod tests;

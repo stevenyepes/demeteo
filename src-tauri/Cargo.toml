@@ -25,10 +25,10 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # Phase 2 fires OS notifications, so the nonce must be unguessable). Small,
 # no_std-friendly, and already present transitively in the lock.
 getrandom = "0.3"
-keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"] }
-portable-pty = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+keyring = "4"
+portable-pty = "0.9"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

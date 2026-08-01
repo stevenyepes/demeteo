@@ -8,11 +8,15 @@
 import * as monaco from "monaco-editor";
 import { loader } from "@monaco-editor/react";
 
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
-import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
-import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
-import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+// Worker paths go through the package's `exports` map ("./*" -> "./esm/vs/*.js"),
+// which is why they are not spelled `monaco-editor/esm/vs/...`. monaco 0.56 added
+// that map, and a path that reaches around it resolves only as long as the
+// bundler is lenient about subpath exports — Vite's does not have to be.
+import editorWorker from "monaco-editor/editor/editor.worker?worker";
+import jsonWorker from "monaco-editor/language/json/json.worker?worker";
+import cssWorker from "monaco-editor/language/css/css.worker?worker";
+import htmlWorker from "monaco-editor/language/html/html.worker?worker";
+import tsWorker from "monaco-editor/language/typescript/ts.worker?worker";
 
 self.MonacoEnvironment = {
   getWorker(_workerId, label) {

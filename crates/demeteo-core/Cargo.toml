@@ -8,11 +8,10 @@ edition = "2021"
 
 [features]
 # OS-keyring-backed credential cache for the desktop app. Off in
-# `demeteo-runner` because (a) the runner is intentionally in-memory
-# only per crates/demeteo-runner/src/credentials.rs, and (b) the
-# keyring crate transitively pulls libdbus-sys, whose build script
-# needs pkg-config + libdbus-1-dev — neither available when
-# cross-compiling for x86_64-unknown-linux-musl.
+# `demeteo-runner`: the runner is intentionally in-memory only per
+# crates/demeteo-runner/src/credentials.rs. There is also no keyring
+# daemon to talk to on a headless remote, so linking one in would only
+# buy a store that always fails to open.
 default = ["keyring"]
 keyring = ["dep:keyring"]
 # Build openssl from source via openssl-sys's vendored feature instead
@@ -34,22 +33,22 @@ ssh-conformance = []
 
 [dependencies]
 async-trait = "0.1"
-keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"], optional = true }
+keyring = { version = "4", optional = true }
 parking_lot = "0.12"
-refinery = { version = "0.8", features = ["rusqlite"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+refinery = { version = "0.9", features = ["rusqlite"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 socket2 = "0.6"
 ssh2 = "0.9"
-thiserror = "1"
+thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tracing = "0.1"
 schemars = "1"
-jsonschema = { version = "0.33", default-features = false }
+jsonschema = { version = "0.49", default-features = false }
 
 # Unix-only: `setsid(2)` in `shared::proc::detach_from_controlling_tty`, so
 # locally-spawned interactive shells don't seize the controlling terminal.

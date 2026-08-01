@@ -78,7 +78,7 @@ impl ProjectMemoryPort for SqliteAdapter {
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let iter = stmt
-            .query_map(params![project_id, limit], row_to_entry)
+            .query_map(params![project_id, limit as i64], row_to_entry)
             .map_err(|e| e.to_string())?;
 
         let mut list = Vec::new();
