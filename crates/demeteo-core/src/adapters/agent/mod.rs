@@ -7,6 +7,7 @@ pub mod hermes;
 pub mod install;
 pub mod noop;
 pub mod opencode;
+pub mod pi;
 pub mod registry;
 pub mod stub_runtime;
 

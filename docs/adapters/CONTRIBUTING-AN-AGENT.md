@@ -32,7 +32,7 @@ runtime:
 | `build_args` | `fn(&AgentContext, Option<&str>, &str) -> Vec<String>` | Build the argv for one turn |
 | `perm_env` | `fn(&PermissionProfile) -> HashMap<String,String>` | Translate the permission policy to native env |
 | `effort_env` | `fn(Option<EffortLevel>) -> HashMap<String,String>` | Translate the resolved effort to native env |
-| `AgentCapabilities` | struct | Declared `display_label`, `lists_models`, `default_model`, `effort_levels` |
+| `AgentCapabilities` | struct | Declared `display_label`, `model_listing`, `default_model`, `effort_levels` |
 
 Look at `adapters/agent/claude_code/mod.rs` (a mature CLI with structured
 stream output) as the closest template, or `opencode`/`hermes` for the
@@ -150,7 +150,10 @@ pub fn runtime() -> UnifiedCliRuntime {
         perm_env: crate::ports::agent_runtime::opencode_permission_env, // or no_permission_env
         effort_env: crate::adapters::agent::cli_runtime::no_effort_env,  // or your own
         display_label: "Your Name",         // shown in every picker
-        lists_models: true,                 // does `<binary> models` list models?
+        // How (or whether) the CLI enumerates its models. `None` falls back to
+        // a static list. Declaring the wrong command is not a no-op: a CLI with
+        // no such subcommand reads the word as a *prompt* and bills a turn.
+        model_listing: Some(ModelListing::MODELS_SUBCOMMAND), // `<binary> models`
         default_model: None,                // Some("...") to seed cost fallback
         effort_levels: EffortLevel::supported_for(AgentKind::YourName), // may be &[]
     }
@@ -158,7 +161,7 @@ pub fn runtime() -> UnifiedCliRuntime {
 ```
 
 `AgentCapabilities` is the whole reason no downstream site special-cases your
-kind: `display_label` feeds the UI, `lists_models` drives dynamic model
+kind: `display_label` feeds the UI, `model_listing` drives dynamic model
 discovery in `application/agent_probe.rs`, `default_model` seeds the
 `UsageAccumulator` cost fallback, and `effort_levels` populates every effort
 picker in the frontend.

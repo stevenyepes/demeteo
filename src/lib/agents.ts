@@ -18,6 +18,7 @@ export const AGENTS: Record<string, AgentMeta> = {
   opencode: { kind: 'opencode', binary: 'opencode', label: 'OpenCode' },
   hermes: { kind: 'hermes', binary: 'hermes', label: 'Hermes' },
   codex: { kind: 'codex', binary: 'codex', label: 'Codex' },
+  pi: { kind: 'pi', binary: 'pi', label: 'Pi' },
 };
 
 /** The agents surfaced when a machine reports no explicit agent config. */

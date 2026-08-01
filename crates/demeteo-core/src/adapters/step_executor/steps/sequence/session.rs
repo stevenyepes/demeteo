@@ -46,7 +46,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
-            bare_mode: target.agent_kind == "claude-code",
+            bare_mode: true,
             tool_allowlist: None,
             max_turns: None,
             // A sequence task is a primary coding turn: full base budget.

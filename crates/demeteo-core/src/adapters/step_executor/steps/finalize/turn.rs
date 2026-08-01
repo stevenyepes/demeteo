@@ -74,7 +74,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions,
-            bare_mode: agent_kind == "claude-code",
+            bare_mode: true,
             // The diff and commit log are inlined in the prompt; read tools
             // stay available for the truncated-diff case, but the denied
             // tools (Bash/Edit/Write/Web) lose their *definitions* too —

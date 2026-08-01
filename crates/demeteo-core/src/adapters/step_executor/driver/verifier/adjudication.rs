@@ -443,7 +443,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
-            bare_mode: agent_kind == "claude-code",
+            bare_mode: true,
             // The classifier's entire input is inlined in the prompt (the
             // harness output tail) and its entire output is one JSON
             // object — no tool definitions in context, no agentic loop.

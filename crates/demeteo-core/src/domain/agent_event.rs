@@ -48,6 +48,13 @@ pub enum AgentEvent {
     /// numeric fields as monotonically cumulative per turn.
     Usage(Usage),
 
+    /// Token / cost telemetry for **one model request**, not a running
+    /// total. The sibling of [`Usage`](Self::Usage), and the difference is
+    /// the whole reason it exists: a snapshot is *maxed*, an increment is
+    /// *summed* (see [`crate::domain::usage`]). Emitted by agents whose wire
+    /// format resets the counters every request — pi, on each `turn_end`.
+    UsageDelta(Usage),
+
     /// Soft error from the agent.
     ///
     /// `usage` carries the partial-failure token/cost snapshot when the
