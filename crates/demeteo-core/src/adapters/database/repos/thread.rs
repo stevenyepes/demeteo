@@ -237,11 +237,23 @@ impl ThreadRepository for SqliteAdapter {
             )
             .map_err(|e| e.to_string())?;
         } else {
-            conn.execute(
-                "UPDATE machines SET agents = ?2 WHERE id = ?1",
-                params![machine_id.0, agents_json],
-            )
-            .map_err(|e| e.to_string())?;
+            let rows = conn
+                .execute(
+                    "UPDATE machines SET agents = ?2 WHERE id = ?1",
+                    params![machine_id.0, agents_json],
+                )
+                .map_err(|e| e.to_string())?;
+            // An UPDATE that matched nothing is a successful statement and a
+            // lost save. That silence is the whole of the bug V38 exists for,
+            // and it survives here for any id with no row — a project still
+            // pointing at a machine that has since been deleted. Say so
+            // instead of reporting success.
+            if rows == 0 {
+                return Err(format!(
+                    "No machine '{}' to save agent settings to",
+                    machine_id.0
+                ));
+            }
         }
         Ok(())
     }
