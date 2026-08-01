@@ -125,8 +125,27 @@ fn a_remote_machine_round_trips_through_its_own_machines_row() {
     );
 }
 
-/// A machine with no stored list yet is an empty list, not an error — the
-/// caller cannot tell a first run from a failed read otherwise.
+/// The remote half of the silent no-op. A project whose machine row has since
+/// been deleted still resolves to that id, and the `UPDATE` then matches
+/// nothing — a statement that succeeds while saving nothing, which is exactly
+/// what made the local toggle look broken. The write must say so.
+#[test]
+fn saving_to_a_machine_that_has_no_row_is_an_error_not_a_silent_no_op() {
+    let db = db();
+    let err = ThreadRepository::set_agent_configs(
+        &db,
+        &MachineId::from("m-deleted"),
+        &agents_json(&[("codex", false)]),
+    )
+    .expect_err("a save that stored nothing must not report success");
+    assert!(
+        err.contains("m-deleted"),
+        "the message must name the machine that could not be written: {err}"
+    );
+}
+
+/// Reading is the other half: a save that failed loudly must not be followed
+/// by a read that invents an answer. Nothing stored is an empty list.
 #[test]
 fn a_machine_with_no_stored_config_reads_as_empty() {
     let db = db();
