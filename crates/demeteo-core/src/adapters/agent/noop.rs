@@ -24,17 +24,18 @@ impl AgentRuntime for NoopRuntime {
         crate::ports::agent_runtime::AgentCapabilities {
             display_label: "Noop",
             lists_models: false,
+            model_listing: None,
             default_model: None,
             effort_levels: &[],
         }
     }
 
-    async fn is_available(
+    async fn availability(
         &self,
         _exec: &dyn crate::ports::execution::ExecutionPort,
         _machine_id: &str,
-    ) -> bool {
-        false
+    ) -> crate::domain::models::Availability {
+        crate::domain::models::Availability::Missing
     }
 
     fn install_command(&self) -> &'static str {

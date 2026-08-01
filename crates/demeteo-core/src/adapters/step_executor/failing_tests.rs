@@ -217,7 +217,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
-            bare_mode: agent_kind == "claude-code",
+            bare_mode: true,
             // The entire input is inlined in the prompt and the entire output is
             // one JSON array — no tool definitions in context, no agentic loop.
             // It also means the extractor *cannot* run a command, which is what
@@ -258,7 +258,7 @@ impl ExecutionDriver {
                     match ev {
                         Some(AgentEvent::Text { delta }) => text.push_str(&delta),
                         Some(AgentEvent::TurnComplete { .. }) | None => break parse_test_ids_text(&text),
-                        Some(AgentEvent::Error { .. }) => break Vec::new(),
+                        Some(ref e @ AgentEvent::Error { .. }) if e.ends_turn() => break Vec::new(),
                         Some(_) => {}
                     }
                 }

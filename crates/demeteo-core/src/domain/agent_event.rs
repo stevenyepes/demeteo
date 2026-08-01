@@ -48,6 +48,13 @@ pub enum AgentEvent {
     /// numeric fields as monotonically cumulative per turn.
     Usage(Usage),
 
+    /// Token / cost telemetry for **one model request**, not a running
+    /// total. The sibling of [`Usage`](Self::Usage), and the difference is
+    /// the whole reason it exists: a snapshot is *maxed*, an increment is
+    /// *summed* (see [`crate::domain::usage`]). Emitted by agents whose wire
+    /// format resets the counters every request — pi, on each `turn_end`.
+    UsageDelta(Usage),
+
     /// Soft error from the agent.
     ///
     /// `usage` carries the partial-failure token/cost snapshot when the
@@ -82,6 +89,39 @@ pub enum AgentEvent {
 
     /// Agent updated a config option (model, mode, reasoning level, etc.)
     ConfigChanged { config_id: String, value: String },
+}
+
+impl AgentEvent {
+    /// Does this event end the turn's event stream?
+    ///
+    /// Every stream consumer asks here rather than matching the variant
+    /// itself — [`drain_lines`](crate::adapters::agent::cli_runtime), the
+    /// shared turn loop, the verifier, the triage and failing-test readers.
+    /// Spread across those call sites the question reads as
+    /// `matches!(evt, TurnComplete | Error { .. })` and `recoverable` is
+    /// never consulted, which is not a hypothetical: codex has no warning
+    /// channel and routes its runtime warnings onto the same non-fatal error
+    /// item as a real per-item failure, so `Error` alone does not mean the
+    /// agent stopped.
+    ///
+    /// A recoverable error costs fidelity, never correctness. The events it
+    /// stands for are gone, so the turn's tool-call and artifact ledger is
+    /// incomplete from here on; consumers that verify against the filesystem
+    /// (the sync resolver stages and re-checks git's own index) are
+    /// unaffected, and consumers that trust the ledger must not assume it is
+    /// complete.
+    ///
+    /// Continuing has a bounded cost worth knowing about: if the lost events
+    /// included a `tool_result`, the turn loop's `pending_tool_calls` never
+    /// empties and the silence timeouts stay suppressed for the rest of the
+    /// turn, leaving the wall cap as the only bound.
+    pub fn ends_turn(&self) -> bool {
+        match self {
+            AgentEvent::TurnComplete { .. } => true,
+            AgentEvent::Error { recoverable, .. } => !recoverable,
+            _ => false,
+        }
+    }
 }
 
 /// Token / cost snapshot.

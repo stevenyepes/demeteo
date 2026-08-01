@@ -443,7 +443,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
-            bare_mode: agent_kind == "claude-code",
+            bare_mode: true,
             // The classifier's entire input is inlined in the prompt (the
             // harness output tail) and its entire output is one JSON
             // object — no tool definitions in context, no agentic loop.
@@ -484,7 +484,9 @@ impl ExecutionDriver {
                     match ev {
                         Some(AgentEvent::Text { delta }) => text.push_str(&delta),
                         Some(AgentEvent::TurnComplete { .. }) | None => break parse_triage_text(&text),
-                        Some(AgentEvent::Error { .. }) => break TriageVerdict::Regression,
+                        Some(ref e @ AgentEvent::Error { .. }) if e.ends_turn() => {
+                            break TriageVerdict::Regression
+                        }
                         Some(_) => {}
                     }
                 }

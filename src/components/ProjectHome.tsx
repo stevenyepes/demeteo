@@ -16,6 +16,7 @@ import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '
 import { buildWorkflowById, classifyWorkflowBadge } from '../lib/workflowBadge';
 import {
     extractClipboardImageFiles,
+    recoverClipboardImageFile,
     stageBrowserFilesForLaunch,
 } from '../lib/attachments';
 
@@ -66,6 +67,7 @@ const ProjectHome = () => {
     // Feature modal as a seed on launch; see AttachmentDropzone.tsx for
     // the launch-stage contract.
     const [attachments, setAttachments] = useState<LaunchStageEntry[]>([]);
+    const [attachmentError, setAttachmentError] = useState<string | null>(null);
 
     // The inline composer is a lightweight seed for the one launch
     // surface (Alternative A): it captures a title + attachments and
@@ -80,11 +82,27 @@ const ProjectHome = () => {
     }, [attachments]);
 
     const handleComposerPaste = useCallback(
-        (e: React.ClipboardEvent<HTMLDivElement>) => {
+        async (e: React.ClipboardEvent<HTMLDivElement>) => {
             const extraction = extractClipboardImageFiles(e.clipboardData);
-            if (extraction.kind !== 'files') return;
+            if (extraction.kind === 'none') {
+                if (e.clipboardData.items.length !== 0) return;
+                const recovery = await recoverClipboardImageFile();
+                if (recovery.kind !== 'recovered') {
+                    setAttachmentError('This webview could not read image bytes from the clipboard. Save it and attach it, or try another clipboard source.');
+                    return;
+                }
+                e.preventDefault();
+                await stageClipboardFiles([recovery.file]);
+                setAttachmentError(null);
+                return;
+            }
+            if (extraction.kind === 'unavailable') {
+                setAttachmentError('The clipboard offered an image, but this webview could not access its file. Save it and attach it, or try another clipboard source.');
+                return;
+            }
             e.preventDefault();
-            void stageClipboardFiles(extraction.files);
+            await stageClipboardFiles(extraction.files);
+            setAttachmentError(null);
         },
         [stageClipboardFiles],
     );
@@ -553,6 +571,11 @@ const ProjectHome = () => {
                                             maxChips={6}
                                         />
                                     </div>
+                                    {attachmentError && (
+                                        <p role="alert" className="px-2 text-[11px] font-mono text-ruby-200">
+                                            {attachmentError}
+                                        </p>
+                                    )}
                                     <div className="mt-2 flex items-center justify-between gap-3 pl-2">
                                         <span className="text-[11px] text-slate-500 font-mono">
                                             Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400">Enter</kbd> to configure &amp; launch · paste an image to attach

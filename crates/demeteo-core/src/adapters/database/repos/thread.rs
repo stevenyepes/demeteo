@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::domain::ids::{MachineId, ThreadId};
 use crate::domain::models::{AgentConfig, Message, ThreadSession, WorkingMemoryEntry};
@@ -195,13 +195,28 @@ impl ThreadRepository for SqliteAdapter {
 
     fn get_agent_configs(&self, machine_id: &MachineId) -> Result<Vec<AgentConfig>, String> {
         let conn = self.conn.lock()?;
-        let raw: Option<String> = conn
-            .query_row(
+        // The local host has no `machines` row to hold this — see the header of
+        // `migrations/V38__local_agent_config.sql`. Collapsing these two
+        // branches back into one statement is the bug V38 was added to fix.
+        let raw: Option<String> = if machine_id.is_local() {
+            conn.query_row(
+                "SELECT agents FROM local_agent_config WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten()
+        } else {
+            conn.query_row(
                 "SELECT agents FROM machines WHERE id = ?1",
                 params![machine_id.0],
                 |row| row.get(0),
             )
-            .map_err(|e| e.to_string())?;
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten()
+        };
         let parsed: Vec<AgentConfig> = raw
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
@@ -213,11 +228,33 @@ impl ThreadRepository for SqliteAdapter {
         let _: Vec<AgentConfig> =
             serde_json::from_str(agents_json).map_err(|e| format!("Invalid agents JSON: {}", e))?;
         let conn = self.conn.lock()?;
-        conn.execute(
-            "UPDATE machines SET agents = ?2 WHERE id = ?1",
-            params![machine_id.0, agents_json],
-        )
-        .map_err(|e| e.to_string())?;
+        // Same fork, same reason as `get_agent_configs`.
+        if machine_id.is_local() {
+            conn.execute(
+                "INSERT INTO local_agent_config (id, agents) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET agents = excluded.agents",
+                params![agents_json],
+            )
+            .map_err(|e| e.to_string())?;
+        } else {
+            let rows = conn
+                .execute(
+                    "UPDATE machines SET agents = ?2 WHERE id = ?1",
+                    params![machine_id.0, agents_json],
+                )
+                .map_err(|e| e.to_string())?;
+            // An UPDATE that matched nothing is a successful statement and a
+            // lost save. That silence is the whole of the bug V38 exists for,
+            // and it survives here for any id with no row — a project still
+            // pointing at a machine that has since been deleted. Say so
+            // instead of reporting success.
+            if rows == 0 {
+                return Err(format!(
+                    "No machine '{}' to save agent settings to",
+                    machine_id.0
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -285,3 +322,7 @@ impl ThreadRepository for SqliteAdapter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/database/repos/thread.rs"]
+mod tests;

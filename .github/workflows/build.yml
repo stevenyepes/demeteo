@@ -142,11 +142,16 @@ jobs:
       # demeteo-runner ships as a static musl binary so it runs on any
       # remote Linux box regardless of glibc version — built once, on
       # the Linux leg, independent of the per-platform app target above.
+      # cmake is named explicitly because aws-lc-sys builds its C sources with
+      # it, and reqwest's `rustls` feature pulls aws-lc-rs. The GitHub runner
+      # image happens to preinstall cmake, so omitting it works right up until
+      # the image drops it — and the failure would land on a release tag, not
+      # on a PR, since this job only runs on master and tags.
       - name: Install musl target for demeteo-runner
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           rustup target add x86_64-unknown-linux-musl
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools cmake
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

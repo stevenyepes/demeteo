@@ -54,6 +54,43 @@ fn mode_changed_serializes_with_snake_case_kind() {
 }
 
 #[test]
+fn a_recoverable_error_does_not_end_the_turn() {
+    let e = AgentEvent::Error {
+        code: "item_error".into(),
+        message: "in-process app-server event stream lagged; dropped 13 events".into(),
+        recoverable: true,
+        usage: None,
+    };
+    assert!(!e.ends_turn());
+}
+
+#[test]
+fn a_non_recoverable_error_ends_the_turn() {
+    let e = AgentEvent::Error {
+        code: "cli_error".into(),
+        message: "context window exceeded".into(),
+        recoverable: false,
+        usage: None,
+    };
+    assert!(e.ends_turn());
+}
+
+#[test]
+fn only_errors_and_turn_complete_end_the_turn() {
+    assert!(AgentEvent::TurnComplete {
+        stop_reason: StopReason::EndOfTurn,
+        usage: None,
+    }
+    .ends_turn());
+    assert!(!AgentEvent::Text { delta: "hi".into() }.ends_turn());
+    assert!(!AgentEvent::Usage(Usage::default()).ends_turn());
+    assert!(!AgentEvent::ModeChanged {
+        mode_id: "code".into(),
+    }
+    .ends_turn());
+}
+
+#[test]
 fn config_changed_serializes_correctly() {
     let e = AgentEvent::ConfigChanged {
         config_id: "model".into(),

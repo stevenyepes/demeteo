@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   addAttachment,
   extractClipboardImageFiles,
+  recoverClipboardImageFile,
   stageBrowserFilesForLaunch,
   stageAttachmentMetadata,
   type AttachedFile,
@@ -218,7 +219,21 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent<HTMLDivElement>) => {
       const extraction = extractClipboardImageFiles(e.clipboardData);
-      if (extraction.kind === "none") return;
+      if (extraction.kind === "none") {
+        // WebKitGTK can send an empty item list for an image paste. Do not
+        // probe ordinary text/unsupported pastes, which still expose items.
+        if (e.clipboardData.items.length !== 0) return;
+        const recovery = await recoverClipboardImageFile();
+        if (recovery.kind !== "recovered") {
+          onError?.(
+            "This webview could not read image bytes from the clipboard. Save it and attach it, or try another clipboard source.",
+          );
+          return;
+        }
+        e.preventDefault();
+        await ingestFiles([recovery.file]);
+        return;
+      }
       if (extraction.kind === "unavailable") {
         onError?.(
           "The clipboard offered an image, but this webview could not access its file. Save it and attach it, or try another clipboard source.",

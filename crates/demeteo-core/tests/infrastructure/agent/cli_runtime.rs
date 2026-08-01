@@ -151,6 +151,71 @@ fn drain_lines_stops_at_terminal_event_even_if_more_data_pending() {
     assert!(matches!(&events[1], AgentEvent::TurnComplete { .. }));
 }
 
+/// Like [`mock_parse_event`], but `warning` lines produce a **recoverable**
+/// error — codex's shape, where a runtime warning has no channel of its own
+/// and rides the same non-fatal error item as a real per-item failure.
+fn mock_parse_event_with_warnings(line: &str) -> Option<AgentEvent> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    if v.get("type").and_then(|t| t.as_str()) != Some("warning") {
+        return mock_parse_event(line);
+    }
+    Some(AgentEvent::Error {
+        code: "item_error".to_string(),
+        message: v
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("warning")
+            .to_string(),
+        recoverable: true,
+        usage: None,
+    })
+}
+
+#[test]
+fn drain_lines_keeps_reading_past_a_recoverable_error() {
+    // A codex turn that hit its own backpressure mid-flight. The warning is
+    // surfaced, but the turn is still running: truncating here dropped the
+    // real result and reported "Resolver failed. in-process app-server event
+    // stream lagged; dropped 13 events" while the agent was still working.
+    let full = br#"{"type":"text","delta":"before"}
+{"type":"warning","message":"in-process app-server event stream lagged; dropped 13 events"}
+{"type":"text","delta":"after"}
+{"type":"end_turn"}
+"#;
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
+    std::thread::spawn(move || {
+        drain_lines(
+            Cursor::new(full.to_vec()),
+            mock_parse_event_with_warnings,
+            || Some(0),
+            tx,
+            None,
+            None,
+        );
+    });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let events = rt.block_on(async {
+        let mut events = Vec::new();
+        while let Some(e) = rx.recv().await {
+            events.push(e);
+        }
+        events
+    });
+
+    assert_eq!(events.len(), 4, "got: {:?}", events);
+    assert!(matches!(&events[0], AgentEvent::Text { delta } if delta == "before"));
+    assert!(matches!(&events[1], AgentEvent::Error { recoverable, .. } if *recoverable));
+    assert!(
+        matches!(&events[2], AgentEvent::Text { delta } if delta == "after"),
+        "everything after the warning was truncated: {:?}",
+        events
+    );
+    assert!(matches!(&events[3], AgentEvent::TurnComplete { .. }));
+}
+
 /// A reader that yields some data, then fails with a read error — the shape
 /// of the remote SSH stream when the transport drops mid-turn.
 struct FailingReader {
@@ -506,7 +571,7 @@ fn remote_availability_probe_uses_a_login_shell() {
         perm_env: probe_perm_env,
         effort_env: no_effort_env,
         display_label: "OpenCode",
-        lists_models: true,
+        model_listing: Some(crate::ports::agent_runtime::ModelListing::MODELS_SUBCOMMAND),
         default_model: None,
         static_env: &[],
         effort_levels: &[],
@@ -517,10 +582,11 @@ fn remote_availability_probe_uses_a_login_shell() {
         .enable_all()
         .build()
         .unwrap();
-    let available = tokio_rt.block_on(runtime.is_available(&rec, "demeteo-remote"));
+    let available = tokio_rt.block_on(runtime.availability(&rec, "demeteo-remote"));
 
-    assert!(
+    assert_eq!(
         available,
+        crate::domain::models::Availability::Installed,
         "probe returning 'ok' should report the agent available"
     );
 
@@ -601,6 +667,7 @@ fn mock_parse_usage_event(line: &str) -> Option<AgentEvent> {
     };
     match v.get("type").and_then(|t| t.as_str()) {
         Some("usage") => Some(AgentEvent::Usage(usage)),
+        Some("usage_delta") => Some(AgentEvent::UsageDelta(usage)),
         Some("end_turn") => Some(AgentEvent::TurnComplete {
             stop_reason: StopReason::EndOfTurn,
             usage: Some(usage),
@@ -643,6 +710,94 @@ fn drain_lines_counts_cache_tokens_in_cumulative_footprint() {
         100 + 50 + 80_000 + 2_000,
         "footprint must be input + output + cache_read + cache_creation, monotonic-max"
     );
+}
+
+#[test]
+fn drain_lines_takes_the_largest_usage_delta_not_their_sum() {
+    let cumulative = Arc::new(AtomicU64::new(0));
+    let input = concat!(
+        r#"{"type":"usage_delta","input":1000,"output":50}"#,
+        "\n",
+        r#"{"type":"usage_delta","input":400,"output":20}"#,
+        "\n",
+        r#"{"type":"usage_delta","input":700,"output":30}"#,
+        "\n",
+    );
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(8);
+    let cum = cumulative.clone();
+    let handle = std::thread::spawn(move || {
+        drain_lines(
+            Cursor::new(input),
+            mock_parse_usage_event,
+            || Some(0),
+            tx,
+            None,
+            Some(cum),
+        );
+    });
+    while rx.blocking_recv().is_some() {}
+    handle.join().unwrap();
+    assert_eq!(cumulative.load(Ordering::Relaxed), 1050);
+}
+
+fn captured_session_id(input: &'static str) -> Option<String> {
+    let capture = Arc::new(Mutex::new(None));
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(8);
+    let cap = capture.clone();
+    let handle = std::thread::spawn(move || {
+        drain_lines(
+            Cursor::new(input),
+            mock_parse_event,
+            || Some(0),
+            tx,
+            Some(cap),
+            None,
+        );
+    });
+    while rx.blocking_recv().is_some() {}
+    handle.join().unwrap();
+    let guard = capture.lock().unwrap();
+    guard.clone()
+}
+
+#[test]
+fn a_bare_id_is_captured_only_from_a_session_typed_line() {
+    // pi's header names the session id `id`. Everything else on the stream
+    // names *its own* id the same way, and the capture takes the first
+    // match — so the tool line has to lose to the header that follows it.
+    let sid = captured_session_id(concat!(
+        r#"{"type":"tool_execution_start","id":"tool-abc","toolName":"read"}"#,
+        "\n",
+        r#"{"type":"session","version":3,"id":"019fbb89-real"}"#,
+        "\n",
+        r#"{"type":"end_turn"}"#,
+        "\n",
+    ));
+    assert_eq!(sid.as_deref(), Some("019fbb89-real"));
+}
+
+#[test]
+fn a_bare_id_on_a_non_session_line_is_never_captured() {
+    let sid = captured_session_id(concat!(
+        r#"{"type":"message_start","id":"msg-1"}"#,
+        "\n",
+        r#"{"type":"tool_execution_end","id":"tool-abc","isError":false}"#,
+        "\n",
+        r#"{"type":"end_turn"}"#,
+        "\n",
+    ));
+    assert_eq!(sid, None);
+}
+
+#[test]
+fn the_documented_session_keys_still_win_over_a_bare_id() {
+    let sid = captured_session_id(concat!(
+        r#"{"type":"init","sessionID":"ses_opencode","id":"not-this-one"}"#,
+        "\n",
+        r#"{"type":"end_turn"}"#,
+        "\n",
+    ));
+    assert_eq!(sid.as_deref(), Some("ses_opencode"));
 }
 
 #[test]

@@ -234,6 +234,46 @@ describe('ProjectHome inline composer paste', () => {
     );
   });
 
+  it('recovers a WebKitGTK empty-item image paste through the async clipboard', async () => {
+    const clipboardRead = vi.fn().mockResolvedValue([{
+      types: ['image/png'],
+      getType: vi.fn().mockResolvedValue(new Blob(['png bytes'], { type: 'image/png' })),
+    }]);
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { read: clipboardRead } });
+    try {
+      renderHome();
+      const composer = await screen.findByTestId('project-home-composer');
+
+      paste(composer, []);
+
+      await waitFor(() => expect(clipboardRead).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText(/pasted-image\.png/)).toBeInTheDocument();
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
+  it('shows a soft error when a WebKitGTK empty-item image paste is denied', async () => {
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { read: vi.fn().mockRejectedValue(new DOMException('denied', 'NotAllowedError')) },
+    });
+    try {
+      renderHome();
+      const composer = await screen.findByTestId('project-home-composer');
+
+      paste(composer, []);
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/could not read image bytes/i);
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
   it('stages every supported image from a multi-image paste in clipboard order', async () => {
     renderHome();
     const composer = await screen.findByTestId('project-home-composer');

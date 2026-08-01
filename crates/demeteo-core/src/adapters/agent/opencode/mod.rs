@@ -473,8 +473,7 @@ impl OpencodeCliRuntime {
                 // Effort rides on argv (`--variant`), not env.
                 effort_env: super::cli_runtime::no_effort_env,
                 display_label: "OpenCode",
-                // `opencode models` lists selectable models.
-                lists_models: true,
+                model_listing: Some(crate::ports::agent_runtime::ModelListing::MODELS_SUBCOMMAND),
                 default_model: None,
                 effort_levels: EffortLevel::supported_for(AgentKind::Opencode),
                 static_env: &[],
@@ -499,12 +498,12 @@ impl AgentRuntime for OpencodeCliRuntime {
         self.inner.capabilities()
     }
 
-    async fn is_available(
+    async fn availability(
         &self,
         exec: &dyn crate::ports::execution::ExecutionPort,
         machine_id: &str,
-    ) -> bool {
-        self.inner.is_available(exec, machine_id).await
+    ) -> crate::domain::models::Availability {
+        self.inner.availability(exec, machine_id).await
     }
 
     fn install_command(&self) -> &'static str {

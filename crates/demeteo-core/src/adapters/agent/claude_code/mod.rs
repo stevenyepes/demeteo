@@ -540,9 +540,9 @@ pub fn runtime() -> UnifiedCliRuntime {
         // `claude_effort_env`).
         effort_env: claude_effort_env,
         display_label: "Claude Code",
-        // The `claude` CLI has no `models` subcommand — model aliases come
+        // The `claude` CLI has no model-listing command — model aliases come
         // from the static fallback list in `application::agent_probe`.
-        lists_models: false,
+        model_listing: None,
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::ClaudeCode),
         // Headless hygiene: no self-update check on spawn (latency, and a

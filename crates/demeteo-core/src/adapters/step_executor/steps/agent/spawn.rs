@@ -91,7 +91,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions,
-            bare_mode: agent_kind == "claude-code",
+            bare_mode: true,
             tool_allowlist: None,
             max_turns: None,
             // Primary coding turn: the full resolved base budget.
@@ -182,7 +182,7 @@ impl ExecutionDriver {
                 agent_exec: self.agent_exec.clone(),
                 exec: self.exec.clone(),
                 permissions,
-                bare_mode: agent_kind == "claude-code",
+                bare_mode: true,
                 tool_allowlist: None,
                 max_turns: None,
                 // Primary coding turn: the full resolved base budget.

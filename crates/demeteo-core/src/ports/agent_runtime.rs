@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{EffortLevel, SessionInfo};
+use crate::domain::models::{Availability, EffortLevel, SessionInfo};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
@@ -55,13 +55,17 @@ pub struct AgentContext {
     /// `--disallowedTools`). Defaults to `all_allow` for interactive /
     /// probe sessions that aren't capability-scoped pipeline steps.
     pub permissions: PermissionProfile,
-    /// Opt the claude-code session into `--bare` and
-    /// `--exclude-dynamic-system-prompt-sections` so the vendor
-    /// system prompt is byte-identical across worktrees (better prompt
-    /// cache reuse). Default `false`; the orchestrator passes `true`
-    /// for capability-scoped pipeline steps and leaves it off for the
-    /// interactive AgentTerminalDrawer so CLAUDE.md / hooks /
-    /// skills still auto-load.
+    /// Strip the machine-local personalization an agent would otherwise
+    /// load — hooks, skills, extensions, themes, dynamic system-prompt
+    /// sections — so the static prefix is byte-identical across worktrees
+    /// and machines, which is what makes the provider prompt cache hit.
+    ///
+    /// A property of the *step*, not of the agent: `true` for every
+    /// capability-scoped pipeline step, `false` for the interactive
+    /// AgentTerminalDrawer and the model probe. An adapter whose CLI has no
+    /// such switch ignores it. Never derive it from the agent kind — an
+    /// adapter that grows those flags later is then silently left out of
+    /// them, with nothing failing to say so.
     pub bare_mode: bool,
     /// Restrict which built-in tools are even *defined* for the session
     /// (claude-code: `--tools a,b`; `Some(vec![])` → `--tools ""`, no
@@ -72,6 +76,12 @@ pub struct AgentContext {
     /// for single-purpose role turns (triage, finalize) whose entire job
     /// is to emit one structured answer. `None` = the agent's full set.
     /// Adapters without an equivalent flag ignore it.
+    ///
+    /// The names are **claude-code's** tool vocabulary (`Read`, `Grep`,
+    /// `Glob`, …). An adapter whose CLI spells its tools differently must
+    /// translate rather than forward: pi's are lowercase and it has no
+    /// `glob`, so a verbatim `-t Read,Grep,Glob` selects nothing at all and
+    /// the turn silently runs with no tools.
     pub tool_allowlist: Option<Vec<String>>,
     /// Hard ceiling on agentic turns for this session's process
     /// (claude-code: `--max-turns N`). Purely an anti-runaway guard:
@@ -239,6 +249,42 @@ pub enum AgentStartError {
     SpawnFailed(String),
 }
 
+/// Turn the stdout of a runtime's model-listing command into model
+/// identifiers, in the form they will be handed back to `--model`.
+pub type ModelListParser = fn(output: &str) -> Vec<String>;
+
+/// How to enumerate one runtime's selectable models.
+///
+/// Per-runtime rather than a shared `<binary> models` convention because
+/// getting it wrong is not a no-op: a CLI with no such subcommand parses
+/// `models` as a **prompt**, spends a turn answering it, and hands prose to
+/// the parser. Two agents happen to share the subcommand; that is a
+/// coincidence, not a contract.
+#[derive(Debug, Clone, Copy)]
+pub struct ModelListing {
+    /// Appended to the runtime's binary, verbatim, as the shell command.
+    pub args: &'static str,
+    pub parse: ModelListParser,
+}
+
+impl ModelListing {
+    /// `<binary> models`, one identifier per line — opencode and hermes.
+    pub const MODELS_SUBCOMMAND: Self = Self {
+        args: "models",
+        parse: models_one_per_line,
+    };
+}
+
+/// Every non-blank line is one model identifier.
+pub fn models_one_per_line(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The capabilities Demeteo asks of a coding agent, declared once per runtime
 /// instead of being inferred from `match kind { ... }` string lists scattered
 /// across the executor, the model probe, and the UI.
@@ -252,11 +298,17 @@ pub struct AgentCapabilities {
     /// Replaces the ad-hoc `kind.replace('-', ' ')` / display-name maps in
     /// the frontend.
     pub display_label: &'static str,
-    /// Whether the CLI exposes a `<binary> models` subcommand that lists
-    /// selectable models. Drives dynamic model discovery in
-    /// `application::agent_probe`; agents without it fall back to a static
-    /// list.
+    /// Whether the CLI can enumerate its models at all. Mirrors
+    /// [`model_listing`](Self::model_listing)`.is_some()` as a plain bool
+    /// for the UI, which has no use for the command itself.
     pub lists_models: bool,
+    /// The command and parser `application::agent_probe` uses for dynamic
+    /// model discovery. `None` → the agent falls back to a static list.
+    ///
+    /// Skipped by serde in both directions: a fn pointer has no wire form,
+    /// and this is a backend contract the UI never reads.
+    #[serde(skip)]
+    pub model_listing: Option<ModelListing>,
     /// The model this runtime uses when no explicit override is configured,
     /// used to seed `UsageAccumulator` for pricing-table cost fallback.
     /// `None` when the default isn't statically knowable.
@@ -297,14 +349,19 @@ pub trait AgentRuntime: Send + Sync {
         self.kind()
     }
 
-    /// Check if the binary is reachable on the target host (which / command
-    /// -v). The result is cached per `(machine_id, kind)` by the registry for
-    /// the duration of the app session.
-    async fn is_available(
+    /// Check whether the binary is reachable on the target host (which /
+    /// command -v). A conclusive result is cached per `(machine_id, kind)` by
+    /// the registry for the duration of the app session.
+    ///
+    /// Report [`Availability::Unknown`] when the probe itself could not be
+    /// run — the host was unreachable, the transport errored. Answering
+    /// `Missing` there is what turns a dropped SSH connection into a stored
+    /// "user disabled this agent"; see the type's own docs.
+    async fn availability(
         &self,
         exec: &dyn crate::ports::execution::ExecutionPort,
         machine_id: &str,
-    ) -> bool;
+    ) -> Availability;
 
     /// The official install command, shown verbatim in the consent prompt.
     fn install_command(&self) -> &'static str;

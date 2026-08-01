@@ -103,8 +103,20 @@ fn parse_codex_item(item: &serde_json::Value, started: bool) -> Option<AgentEven
         //      `model_context_window` / `model_catalog_json` in their codex
         //      config — see `is_metadata_fallback_notice`.
         //
-        //   2. A genuine per-item error — surfaced as a recoverable `Error` so
+        //   2. A runtime *warning*. Codex has no warning event: `exec` routes
+        //      `event_processor.process_warning` onto this same non-fatal
+        //      error item, so its own backpressure notice
+        //      ("in-process app-server event stream lagged; dropped N events")
+        //      arrives here indistinguishable from a failure. The turn is
+        //      still running when it lands.
+        //
+        //   3. A genuine per-item error — surfaced as a recoverable `Error` so
         //      the StepExecutor keeps running rather than aborting the turn.
+        //
+        // A codex turn ends on the top-level `turn.failed` / `thread.error` /
+        // `error` envelopes above; nothing on this per-item channel ends it.
+        // `recoverable: true` is what carries that distinction to the stream
+        // consumers — see `AgentEvent::ends_turn`.
         "error" => {
             let message = item
                 .get("message")
@@ -351,9 +363,9 @@ pub fn runtime() -> UnifiedCliRuntime {
         // Effort rides on argv (`-c model_reasoning_effort=…`), not env.
         effort_env: crate::adapters::agent::cli_runtime::no_effort_env,
         display_label: "Codex",
-        // `codex` has no `models` list subcommand; aliases come from the static
+        // `codex` has no model-listing command; aliases come from the static
         // fallback in `application::agent_probe`.
-        lists_models: false,
+        model_listing: None,
         // Codex's default model is user-configurable in ~/.codex/config.toml;
         // don't seed a cost fallback that could misprice an overridden model.
         default_model: None,

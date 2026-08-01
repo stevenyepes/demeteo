@@ -409,7 +409,7 @@ impl ExecutionDriver {
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
-            bare_mode: verifier_agent_kind == "claude-code",
+            bare_mode: true,
             // The verifier reads artifacts/files on demand, so it keeps its
             // full toolset — but interpreting an already-run harness into
             // one verdict object should never take dozens of round trips.
@@ -493,7 +493,7 @@ impl ExecutionDriver {
                             text_buffer.push_str(delta);
                         }
                         AgentEvent::TurnComplete { .. } => break,
-                        AgentEvent::Error { message, .. } => {
+                        AgentEvent::Error { message, .. } if event.ends_turn() => {
                             run_failed = Some(format!("Verifier agent error: {}", message));
                             break;
                         }
