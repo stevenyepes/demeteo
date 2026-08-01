@@ -20,6 +20,7 @@ Agents are invoked as one-shot CLI processes — no server, no handshake. They m
 | [claude-code](https://claude.ai/code) | `claude --print --verbose --output-format stream-json` |
 | [hermes](https://github.com/NousResearch/hermes-agent) | `hermes run --format json` |
 | [codex](https://github.com/openai/codex) | `codex exec --json` |
+| [pi](https://github.com/earendil-works/pi-mono) | `pi --mode json` |
 
 Want to add another agent? Every agent declares the same [capability contract](AGENT_INTEGRATION.md); see [`docs/adapters/CONTRIBUTING-AN-AGENT.md`](docs/adapters/CONTRIBUTING-AN-AGENT.md) for the step-by-step.
 

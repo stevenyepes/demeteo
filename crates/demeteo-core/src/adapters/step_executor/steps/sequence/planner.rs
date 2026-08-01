@@ -148,7 +148,7 @@ impl ExecutionDriver {
                 false, // no network
                 true,  // allow shell for codebase exploration
             ),
-            bare_mode: target.agent_kind == "claude-code",
+            bare_mode: true,
             // Full toolset — the planner explores the codebase before
             // decomposing. The cap is anti-runaway only: decomposition
             // should never take 50 round trips.

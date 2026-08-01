@@ -85,6 +85,8 @@ impl EffortLevel {
     ///   doesn't offer.
     /// - `Hermes`: empty — effort lives only in `~/.hermes/config.yaml`, and
     ///   there is no per-invocation control to drive. Honest degradation.
+    /// - `Pi`: `--thinking` takes `off|minimal|low|medium|high|xhigh|max`, a
+    ///   superset of this ladder, so every level goes through unclamped.
     pub fn supported_for(kind: AgentKind) -> &'static [EffortLevel] {
         const ALL: &[EffortLevel] = &[
             EffortLevel::Low,
@@ -104,6 +106,7 @@ impl EffortLevel {
             AgentKind::Codex => NO_MAX,
             AgentKind::Opencode => ALL,
             AgentKind::Hermes => &[],
+            AgentKind::Pi => ALL,
         }
     }
 

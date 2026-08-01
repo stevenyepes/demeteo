@@ -327,7 +327,8 @@ pub enum AgentStartError {
 /// agent means filling this in — no downstream site special-cases the kind.
 pub struct AgentCapabilities {
     pub display_label: &'static str,       // human-facing name for the UI
-    pub lists_models: bool,                // exposes a `<binary> models` subcommand
+    pub lists_models: bool,                // mirrors model_listing.is_some() for the UI
+    pub model_listing: Option<ModelListing>, // the command + parser that enumerates models
     pub default_model: Option<&'static str>, // seeds cost fallback; None if dynamic
 }
 

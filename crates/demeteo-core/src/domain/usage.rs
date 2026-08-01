@@ -6,20 +6,20 @@
 //!
 //! ## Why a shared accumulator
 //!
-//! Each agent emits usage differently:
+//! There are **two** wire shapes, and they need opposite arithmetic:
 //!
-//! | Agent        | Shape on the wire                                     |
-//! |--------------|-------------------------------------------------------|
-//! | Claude Code  | One terminal `result` event with `usage` + `cost_usd` |
-//! | opencode     | Multiple `usage_update` + `step_finish` events         |
-//! | hermes       | Multiple `usage_update` events                         |
+//! | Shape                            | Event                                     | Rule           | Agents                          |
+//! |----------------------------------|-------------------------------------------|----------------|---------------------------------|
+//! | Cumulative snapshot for the turn | [`AgentEvent::Usage`] / `TurnComplete`    | monotonic max  | Claude Code, opencode, hermes   |
+//! | Increment for one model request  | [`AgentEvent::UsageDelta`]                | sum            | pi                              |
 //!
-//! Naively overwriting `latest_tokens` on each event loses or duplicates
-//! data; naive summing overcounts. This module applies one rule:
-//! **monotonic max**. The wire protocols are documented as cumulative per
-//! turn (verified against Anthropic SDK `cost-tracking.md` and opencode's
-//! `step_finish.tokens.total` convention). Any value strictly less than the
-//! running maximum is ignored.
+//! Maxing a snapshot stream is right because the counters only grow
+//! (verified against Anthropic SDK `cost-tracking.md` and opencode's
+//! `step_finish.tokens.total` convention), so a value below the running
+//! maximum is a duplicate or a reorder and is ignored. Maxing an *increment*
+//! stream is a silent undercount that scales with turn count — a 30-turn run
+//! reports roughly one turn's tokens — which is why the shape is carried by
+//! the event variant rather than assumed here.
 //!
 //! ## Cost fallback
 //!
@@ -57,12 +57,13 @@ impl UsageAccumulator {
         }
     }
 
-    /// Apply one event. Monotonic max on every numeric field; cost is
-    /// last-write-wins (the agent's `cost_usd` is the more authoritative
-    /// figure than a derived estimate).
+    /// Apply one event, using the arithmetic the event's shape demands
+    /// (module docs). Snapshots max every numeric field and take the
+    /// last `cost_usd` — the agent's own figure is more authoritative than
+    /// a derived estimate. Increments add.
     ///
     /// After a `TurnComplete { usage: Some(_), .. }` is ingested, the
-    /// accumulator ignores further `Usage` events for this turn — the
+    /// accumulator ignores further usage events for this turn — the
     /// terminal snapshot is authoritative and any post-terminus events
     /// would be a parser bug. Set `finished = true` defensively.
     pub fn ingest_event(&mut self, event: &AgentEvent) {
@@ -72,6 +73,12 @@ impl UsageAccumulator {
                     return;
                 }
                 self.apply_usage(u);
+            }
+            AgentEvent::UsageDelta(u) => {
+                if self.finished {
+                    return;
+                }
+                self.add_usage(u);
             }
             AgentEvent::TurnComplete { usage, .. } => {
                 if let Some(u) = usage {
@@ -98,6 +105,20 @@ impl UsageAccumulator {
             .max(u.cache_creation_input_tokens);
         if let Some(c) = u.cost_usd {
             self.running_cost = Some(c);
+        }
+    }
+
+    fn add_usage(&mut self, u: &Usage) {
+        self.running_input_tokens = self.running_input_tokens.saturating_add(u.input_tokens);
+        self.running_output_tokens = self.running_output_tokens.saturating_add(u.output_tokens);
+        self.running_cache_read = self
+            .running_cache_read
+            .saturating_add(u.cache_read_input_tokens);
+        self.running_cache_creation = self
+            .running_cache_creation
+            .saturating_add(u.cache_creation_input_tokens);
+        if let Some(c) = u.cost_usd {
+            self.running_cost = Some(self.running_cost.unwrap_or(0.0) + c);
         }
     }
 
