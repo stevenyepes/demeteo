@@ -1,3 +1,4 @@
+use super::thread::AgentConfig;
 use serde::{Deserialize, Serialize};
 
 /// Canonical identifier for a supported coding agent.
@@ -65,6 +66,35 @@ impl std::fmt::Display for AgentKind {
     }
 }
 
+impl AgentConfig {
+    /// Default enablement for a kind not yet in the stored config: enabled
+    /// iff the CLI is actually installed, so an uninstalled agent never
+    /// appears pre-checked.
+    pub fn default_for(kind: &str, available: bool) -> AgentConfig {
+        AgentConfig {
+            kind: kind.to_string(),
+            enabled: available,
+        }
+    }
+
+    /// Append any `(kind, available)` pair in `known` that isn't already in
+    /// `existing`, defaulted via [`Self::default_for`]. Entries already
+    /// present in `existing` pass through untouched — a saved enable/disable
+    /// is never overridden by availability.
+    pub fn seed_missing(
+        mut existing: Vec<AgentConfig>,
+        known: &[(&str, bool)],
+    ) -> Vec<AgentConfig> {
+        for (kind, available) in known {
+            if existing.iter().any(|c| c.kind == *kind) {
+                continue;
+            }
+            existing.push(AgentConfig::default_for(kind, *available));
+        }
+        existing
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WorktreeInfo {
     pub path: String,
@@ -81,3 +111,7 @@ pub struct RepoHealthStatus {
     pub has_uncommitted: bool,
     pub has_unpushed: bool,
 }
+
+#[cfg(test)]
+#[path = "../../../tests/domain/models/agent_config.rs"]
+mod tests;

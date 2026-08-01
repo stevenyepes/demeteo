@@ -25,62 +25,40 @@ pub async fn get_agent_configs(
         .threads
         .get_agent_configs(&resolved_id)
         .unwrap_or_else(|_| Vec::new());
-    if configured.is_empty() {
-        configured = vec![
-            AgentConfig {
-                kind: "opencode".to_string(),
-                enabled: true,
-            },
-            AgentConfig {
-                kind: "hermes".to_string(),
-                enabled: true,
-            },
-            AgentConfig {
-                kind: "claude-code".to_string(),
-                enabled: true,
-            },
-            AgentConfig {
-                kind: "codex".to_string(),
-                enabled: true,
-            },
-        ];
-    }
 
     let runtime_kinds: Vec<&'static str> =
         ctx.registry.runtimes().iter().map(|r| r.kind()).collect();
+
+    let force = refresh.unwrap_or(false);
+    let mut known: Vec<(&str, bool)> = Vec::new();
+    for kind in &runtime_kinds {
+        if !demeteo_core::domain::models::AgentKind::is_supported(kind) {
+            continue;
+        }
+        let available = ctx
+            .registry
+            .is_available(kind, &*ctx.exec, &machine_id, force)
+            .await;
+        known.push((kind, available));
+    }
 
     // Merge in every registered, *supported* agent the stored config doesn't
     // know about yet. The DB persists only the enable/disable delta; the
     // registry is the source of truth for *which* agents exist. Without this,
     // an adapter added after a machine's config was last saved (e.g. codex on
     // a machine whose row predates it) would never appear in the settings
-    // panel — the config list, not the registry, drove the view. New agents
-    // default to enabled, matching the fresh-machine seed above. Internal
-    // runtimes (noop / stub) are filtered out by `is_supported`.
-    for kind in &runtime_kinds {
-        if !demeteo_core::domain::models::AgentKind::is_supported(kind) {
-            continue;
-        }
-        if configured.iter().any(|c| c.kind == *kind) {
-            continue;
-        }
-        configured.push(AgentConfig {
-            kind: kind.to_string(),
-            enabled: true,
-        });
-    }
+    // panel — the config list, not the registry, drove the view. A missing
+    // kind defaults to enabled iff it's actually installed. Internal
+    // runtimes (noop / stub) are filtered out by `is_supported` above.
+    configured = AgentConfig::seed_missing(configured, &known);
 
     let mut views: Vec<AgentConfigView> = Vec::new();
-    let force = refresh.unwrap_or(false);
     for cfg in configured {
-        let available = match runtime_kinds.iter().find(|k| **k == cfg.kind) {
-            Some(k) => {
-                ctx.registry
-                    .is_available(k, &*ctx.exec, &machine_id, force)
-                    .await
-            }
-            None => false,
-        };
+        let available = known
+            .iter()
+            .find(|(k, _)| *k == cfg.kind)
+            .map(|(_, available)| *available)
+            .unwrap_or(false);
         let runtime = ctx.registry.runtime_for(&cfg.kind);
         let install_command = runtime
             .as_ref()
