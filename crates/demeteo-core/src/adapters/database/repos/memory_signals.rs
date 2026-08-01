@@ -61,7 +61,7 @@ impl MemorySignalsPort for SqliteAdapter {
             )
             .map_err(|e| e.to_string())?;
         let iter = stmt
-            .query_map(params![limit, max_attempts], row_to_signal)
+            .query_map(params![limit as i64, max_attempts], row_to_signal)
             .map_err(|e| e.to_string())?;
         let mut list = Vec::new();
         for r in iter {

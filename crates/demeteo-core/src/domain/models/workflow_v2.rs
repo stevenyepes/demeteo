@@ -261,7 +261,7 @@ pub fn validate_workflow_v2(value: &serde_json::Value) -> Result<(), String> {
     let errors: Vec<String> = VALIDATOR
         .iter_errors(value)
         .map(|e| {
-            let at = e.instance_path.to_string();
+            let at = e.instance_path().to_string();
             let at = if at.is_empty() { "/".to_string() } else { at };
             format!("at {at}: {e}")
         })
