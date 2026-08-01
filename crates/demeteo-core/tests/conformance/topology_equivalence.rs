@@ -226,9 +226,19 @@ const REPO_PATH: &str = "demeteo/topology";
 const PROVIDER_ID: &str = "topo-provider";
 
 /// A unique app-data dir for one engine instance.
+///
+/// The counter is what makes it unique; the timestamp only makes it readable.
+/// `SystemTime::now()` resolves to the microsecond on macOS, so two tests
+/// entering here in the same microsecond used to get the *same* path — and
+/// since each leg deletes its dir when it finishes, whichever ended first took
+/// the other's database and artifacts with it. Linux resolves to the true
+/// nanosecond, so this only ever reproduced off-CI, where the parity gates are
+/// run by hand.
 fn fresh_app_data_dir(tag: &str) -> std::path::PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "demeteo-topology-{tag}-{}",
+        "demeteo-topology-{tag}-{}-{seq}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
