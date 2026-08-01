@@ -30,17 +30,15 @@ pub async fn get_agent_configs(
         ctx.registry.runtimes().iter().map(|r| r.kind()).collect();
 
     let force = refresh.unwrap_or(false);
-    let mut known: Vec<(&str, Availability)> = Vec::new();
-    for kind in &runtime_kinds {
-        if !AgentKind::is_supported(kind) {
-            continue;
-        }
-        let availability = ctx
-            .registry
-            .availability(kind, &*ctx.exec, &machine_id, force)
-            .await;
-        known.push((kind, availability));
-    }
+    let supported: Vec<&'static str> = runtime_kinds
+        .iter()
+        .copied()
+        .filter(|k| AgentKind::is_supported(k))
+        .collect();
+    let known = ctx
+        .registry
+        .availability_of(&supported, &*ctx.exec, &machine_id, force)
+        .await;
 
     // Merge in every registered, *supported* agent the stored config doesn't
     // know about yet. The DB persists only the enable/disable delta; the
