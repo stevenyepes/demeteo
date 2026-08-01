@@ -137,6 +137,7 @@ impl AgentRuntime for StubRuntime {
         crate::ports::agent_runtime::AgentCapabilities {
             display_label: "Stub Agent",
             lists_models: false,
+            model_listing: None,
             default_model: None,
             effort_levels: &[],
         }

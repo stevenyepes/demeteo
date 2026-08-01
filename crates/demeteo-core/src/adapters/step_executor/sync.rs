@@ -142,7 +142,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         agent_exec: agent_exec.clone(),
         exec: exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),
-        bare_mode: agent_kind == "claude-code",
+        bare_mode: true,
         tool_allowlist: None,
         max_turns: None,
         // Standalone resolver path (no driver budget in scope); uncapped like

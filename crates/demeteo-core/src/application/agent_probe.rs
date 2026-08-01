@@ -1,5 +1,5 @@
 use crate::domain::models::ConfigOptionValue;
-use crate::ports::agent_runtime::AgentContext;
+use crate::ports::agent_runtime::{AgentContext, ModelListing};
 use crate::state::AppContext;
 
 pub async fn discover_models(
@@ -22,14 +22,14 @@ pub async fn discover_models(
         return Ok(models);
     }
 
-    // 2. CLI model probing for agents that declare a `models` subcommand.
-    let lists_models = ctx
+    // 2. CLI model probing for agents that declare a listing command.
+    let listing = ctx
         .registry
         .runtime_for(&agent_kind)
-        .map(|r| r.capabilities().lists_models)
-        .unwrap_or(false);
-    if lists_models {
-        if let Ok(models) = probe_models_via_cli(ctx.exec.as_ref(), &machine_id, &agent_kind).await
+        .and_then(|r| r.capabilities().model_listing.map(|l| (r.binary(), l)));
+    if let Some((binary, listing)) = listing {
+        if let Ok(models) =
+            probe_models_via_cli(ctx.exec.as_ref(), &machine_id, &agent_kind, binary, listing).await
         {
             return Ok(models);
         }
@@ -99,19 +99,15 @@ async fn probe_models_via_acp(
     Err("No model config option in ACP session info".into())
 }
 
+/// Run one runtime's declared [`ModelListing`] and parse its stdout. Agents
+/// declaring none fall back to [`fallback_models`].
 async fn probe_models_via_cli(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
     agent_kind: &str,
+    binary: &str,
+    listing: ModelListing,
 ) -> Result<Vec<ConfigOptionValue>, String> {
-    // NOTE: do NOT add a "claude-code" arm here. The `claude` CLI has no
-    // `models` subcommand — `claude models` would be parsed as a *prompt*
-    // ("models") and start a session instead of listing anything. claude-code
-    // models come from the alias fallback in `fallback_models` instead, and
-    // `discover_models` deliberately excludes claude-code from this CLI path.
-    // Every kind reaching this CLI-listing path has a binary name equal to
-    // its kind (opencode, hermes); claude-code is excluded above.
-    let binary = agent_kind;
     // Interactive login shell so a tool-manager-provided binary (mise/asdf/
     // nvm) is on PATH — matching the availability probe and agent spawn.
     // A plain `run_command` runs non-login and can't find e.g. a
@@ -121,19 +117,17 @@ async fn probe_models_via_cli(
     let output = exec
         .run_command_with(
             machine_id,
-            &format!("{} models", binary),
+            &format!("{} {}", binary, listing.args),
             crate::ports::execution::ShellOptions::login_interactive(),
         )
         .await?;
-    let models: Vec<ConfigOptionValue> = output
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
+    let models: Vec<ConfigOptionValue> = (listing.parse)(&output)
+        .into_iter()
         .map(|model| {
-            let supports_images = model_supports_images_by_name(agent_kind, model);
+            let supports_images = model_supports_images_by_name(agent_kind, &model);
             ConfigOptionValue {
-                value: model.to_string(),
-                name: model.to_string(),
+                name: model.clone(),
+                value: model,
                 description: None,
                 supports_images,
             }

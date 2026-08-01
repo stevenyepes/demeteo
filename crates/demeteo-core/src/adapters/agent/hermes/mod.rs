@@ -190,8 +190,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         // greyed out in the UI.
         effort_env: crate::adapters::agent::cli_runtime::no_effort_env,
         display_label: "Hermes",
-        // `hermes models` lists selectable models.
-        lists_models: true,
+        model_listing: Some(crate::ports::agent_runtime::ModelListing::MODELS_SUBCOMMAND),
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Hermes),
         static_env: &[],

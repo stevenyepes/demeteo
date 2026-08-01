@@ -13,6 +13,7 @@ impl AgentRuntime for NoopRuntime {
         crate::ports::agent_runtime::AgentCapabilities {
             display_label: "Noop",
             lists_models: false,
+            model_listing: None,
             default_model: None,
             effort_levels: &[],
         }
@@ -260,6 +261,7 @@ impl AgentRuntime for FlippableRuntime {
         crate::ports::agent_runtime::AgentCapabilities {
             display_label: "Flippable",
             lists_models: false,
+            model_listing: None,
             default_model: None,
             effort_levels: &[],
         }

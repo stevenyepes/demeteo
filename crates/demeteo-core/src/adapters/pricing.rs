@@ -29,6 +29,7 @@ struct PricingRow {
 
 const CONTEXT_1M: Option<u64> = Some(1_000_000);
 const CONTEXT_400K: Option<u64> = Some(400_000);
+const CONTEXT_272K: Option<u64> = Some(272_000);
 const CONTEXT_200K: Option<u64> = Some(200_000);
 const CONTEXT_128K: Option<u64> = Some(128_000);
 const CONTEXT_100K: Option<u64> = Some(100_000);
@@ -201,6 +202,37 @@ fn default_prices() -> HashMap<String, PricingRow> {
         },
     );
 
+    // pi routes through `provider/model` ids, so `openai-codex/gpt-5.6-luna`
+    // never reaches the bare `gpt-5` prefix row and the context-window
+    // watchdog would silently run with no budget. These two rows are keyed on
+    // the provider-qualified form pi actually emits, and they differ from the
+    // bare `gpt-5` row: `pi --list-models` reports 272K for this line, not the
+    // 400K the direct-API models expose. `gpt-5.3-codex-spark` is the one
+    // member at 128K, so it needs an exact row of its own — every other
+    // `openai-codex/gpt-5*` resolves through the prefix row. Cost mirrors the
+    // bare `gpt-5` row; pi reports `cost` on the wire, so this is a fallback
+    // that is rarely consulted.
+    m.insert(
+        "openai-codex/gpt-5".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 1.25,
+                output_per_million: 10.00,
+            },
+            context_window: CONTEXT_272K,
+        },
+    );
+    m.insert(
+        "openai-codex/gpt-5.3-codex-spark".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 1.25,
+                output_per_million: 10.00,
+            },
+            context_window: CONTEXT_128K,
+        },
+    );
+
     // Google Gemini.
     m.insert(
         "gemini-2.5-pro".to_string(),
@@ -268,38 +300,52 @@ impl Default for HardcodedPricingTable {
     }
 }
 
-impl PricingTable for HardcodedPricingTable {
-    fn price_for(&self, model: &str) -> Option<ModelPrice> {
+impl HardcodedPricingTable {
+    /// Resolve the row backing `model`, accepting both a bare id
+    /// (`gpt-5.6-luna`) and the `provider/model` form — which pi returns from
+    /// `--list-models`, and which `agent_probe`'s opencode/hermes fallback
+    /// list has always shipped.
+    ///
+    /// The qualified key is tried whole *before* it is stripped, so a row
+    /// keyed on `openai-codex/gpt-5` keeps precedence over the bare `gpt-5`
+    /// it would otherwise strip down to. Those two disagree — 272K against
+    /// 400K — and the qualified one is what the agent actually reports.
+    fn row_for(&self, model: &str) -> Option<&PricingRow> {
         let key = model.trim().to_lowercase();
         if key.is_empty() {
             return None;
         }
-        if let Some(row) = self.by_name.get(&key) {
-            return Some(row.price);
+        self.row_for_key(&key).or_else(|| {
+            key.split_once('/')
+                .and_then(|(_provider, bare)| self.row_for_key(bare))
+        })
+    }
+
+    /// Exact hit, else the **longest** row name `key` starts with.
+    ///
+    /// Longest rather than first: `gpt-5-mini-2025-08-07` prefix-matches both
+    /// `gpt-5` and `gpt-5-mini`, and `HashMap` iteration order is arbitrary,
+    /// so returning the first match billed that model at whichever row the
+    /// hasher happened to yield — five times over when `gpt-5` won.
+    fn row_for_key(&self, key: &str) -> Option<&PricingRow> {
+        if let Some(row) = self.by_name.get(key) {
+            return Some(row);
         }
-        // Prefix fallback so `claude-3-5-sonnet-20241022` still resolves.
-        for (_name, row) in &self.by_name {
-            if key.starts_with(_name) {
-                return Some(row.price);
-            }
-        }
-        None
+        self.by_name
+            .iter()
+            .filter(|(name, _)| key.starts_with(name.as_str()))
+            .max_by_key(|(name, _)| name.len())
+            .map(|(_name, row)| row)
+    }
+}
+
+impl PricingTable for HardcodedPricingTable {
+    fn price_for(&self, model: &str) -> Option<ModelPrice> {
+        self.row_for(model).map(|row| row.price)
     }
 
     fn context_window(&self, model: &str) -> Option<u64> {
-        let key = model.trim().to_lowercase();
-        if key.is_empty() {
-            return None;
-        }
-        if let Some(row) = self.by_name.get(&key) {
-            return row.context_window;
-        }
-        for (_name, row) in &self.by_name {
-            if key.starts_with(_name) {
-                return row.context_window;
-            }
-        }
-        None
+        self.row_for(model).and_then(|row| row.context_window)
     }
 
     fn known_models(&self) -> Vec<String> {

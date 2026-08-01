@@ -9,6 +9,7 @@ fn agent_kind_maps_known_binaries() {
     assert_eq!(agent_kind_for_binary("opencode"), Some("opencode"));
     assert_eq!(agent_kind_for_binary("codex"), Some("codex"));
     assert_eq!(agent_kind_for_binary("hermes"), Some("hermes"));
+    assert_eq!(agent_kind_for_binary("pi"), Some("pi"));
     assert_eq!(agent_kind_for_binary("bash"), None);
     assert_eq!(agent_kind_for_binary("node"), None);
 }
@@ -20,6 +21,7 @@ fn detect_agent_matches_native_launcher() {
         detect_agent_in_command("/opt/homebrew/bin/opencode --resume"),
         Some("opencode")
     );
+    assert_eq!(detect_agent_in_command("pi --mode json"), Some("pi"));
 }
 
 #[test]
@@ -38,7 +40,20 @@ fn detect_agent_matches_script_token() {
 fn detect_agent_ignores_non_agents() {
     assert_eq!(detect_agent_in_command("-zsh"), None);
     assert_eq!(detect_agent_in_command("vim notes/claude.txt"), None);
+    assert_eq!(detect_agent_in_command("git -C /src/pi-mono status"), None);
     assert_eq!(detect_agent_in_command(""), None);
+}
+
+/// `pi` is a word before it is a binary, and the scan reads every token, not
+/// just argv[0] — so it is only an agent where a binary can stand.
+#[test]
+fn detect_agent_ignores_a_bare_pi_argument() {
+    assert_eq!(detect_agent_in_command("cargo run -p pi"), None);
+    assert_eq!(detect_agent_in_command("git add pi"), None);
+    assert_eq!(
+        detect_agent_in_command("node /Users/x/.bin/pi --mode json"),
+        Some("pi")
+    );
 }
 
 #[test]

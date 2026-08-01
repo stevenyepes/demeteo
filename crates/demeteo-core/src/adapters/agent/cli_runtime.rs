@@ -86,8 +86,9 @@ pub struct UnifiedCliRuntime {
     pub effort_env: EffortEnvBuilder,
     /// Human-facing name for pickers/settings (e.g. "Claude Code").
     pub display_label: &'static str,
-    /// Whether `<binary> models` lists selectable models.
-    pub lists_models: bool,
+    /// How this agent enumerates its models, if it can. `None` → the model
+    /// picker falls back to a static list.
+    pub model_listing: Option<crate::ports::agent_runtime::ModelListing>,
     /// Default model when no override is configured; `None` if not statically
     /// knowable.
     pub default_model: Option<&'static str>,
@@ -113,7 +114,8 @@ impl AgentRuntime for UnifiedCliRuntime {
     fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
         crate::ports::agent_runtime::AgentCapabilities {
             display_label: self.display_label,
-            lists_models: self.lists_models,
+            lists_models: self.model_listing.is_some(),
+            model_listing: self.model_listing,
             default_model: self.default_model,
             effort_levels: self.effort_levels,
         }
@@ -225,8 +227,8 @@ pub struct UnifiedCliSession {
     stderr_hb: StderrHeartbeat,
     /// Monotonic high-water mark of the session's request footprint
     /// (input + cache_read + cache_creation + output tokens). Updated
-    /// as `Usage` / `TurnComplete { usage }` events are parsed by
-    /// `drain_lines`. Read by the driver's context-window watchdog
+    /// as `Usage` / `UsageDelta` / `TurnComplete { usage }` events are
+    /// parsed by `drain_lines`. Read by the driver's context-window watchdog
     /// via [`AgentSession::cumulative_tokens`] — cache reads count,
     /// because they occupy context even though they bill at ~10%.
     /// Zero for a fresh session before the first event arrives.
@@ -555,6 +557,30 @@ impl Read for HandleReader {
     }
 }
 
+/// Probe one parsed stdout line for the agent's session identifier.
+///
+/// The descriptor carries no key name, so the union of every adapter's
+/// spelling is tried against every line. The bare `id` arm is type-guarded:
+/// pi names it plainly `id` on its `{"type":"session",…}` header, while
+/// messages, tool calls and responses all carry an `id` too — unguarded, that
+/// arm would latch onto whichever line arrived first.
+pub(crate) fn session_id_from_line(v: &serde_json::Value) -> Option<&str> {
+    v.get("sessionID")
+        .or_else(|| v.get("session_id"))
+        .or_else(|| v.get("conversationID"))
+        .or_else(|| v.get("conversation_id"))
+        // Codex emits `thread_id` on its first `thread.started` line
+        // (`codex exec --json`).
+        .or_else(|| v.get("thread_id"))
+        .or_else(|| v.get("data").and_then(|d| d.get("conversation_id")))
+        .or_else(|| v.get("data").and_then(|d| d.get("session_id")))
+        .or_else(|| match v.get("type").and_then(|t| t.as_str()) {
+            Some("session") => v.get("id"),
+            _ => None,
+        })
+        .and_then(|s| s.as_str())
+}
+
 fn drain_lines<R, F>(
     reader: R,
     parse_event: EventParser,
@@ -602,20 +628,7 @@ fn drain_lines<R, F>(
                         if guard.is_none() {
                             drop(guard);
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                                let found_sid = v
-                                    .get("sessionID")
-                                    .or_else(|| v.get("session_id"))
-                                    .or_else(|| v.get("conversationID"))
-                                    .or_else(|| v.get("conversation_id"))
-                                    // Codex emits `thread_id` on its first
-                                    // `thread.started` line (`codex exec --json`).
-                                    .or_else(|| v.get("thread_id"))
-                                    .or_else(|| {
-                                        v.get("data").and_then(|d| d.get("conversation_id"))
-                                    })
-                                    .or_else(|| v.get("data").and_then(|d| d.get("session_id")))
-                                    .and_then(|s| s.as_str());
-                                if let Some(sid) = found_sid {
+                                if let Some(sid) = session_id_from_line(&v) {
                                     if let Ok(mut g) = capture.lock() {
                                         *g = Some(sid.to_string());
                                     }
@@ -635,6 +648,12 @@ fn drain_lines<R, F>(
                     // request footprint is therefore
                     // input + cache_read + cache_creation + output; summing
                     // only input+output made the watchdog fire late or never.
+                    //
+                    // `UsageDelta` is a peer of `Usage` here and is *not*
+                    // summed, though the accumulator sums it: this asks
+                    // whether one request still fits the context window, so
+                    // the largest single footprint answers it and the billed
+                    // total does not.
                     if let Some(ref cumulative) = cumulative_tokens {
                         let footprint = |u: &crate::domain::agent_event::Usage| {
                             u.input_tokens
@@ -643,7 +662,7 @@ fn drain_lines<R, F>(
                                 + u.output_tokens
                         };
                         let delta = match &evt {
-                            AgentEvent::Usage(u) => footprint(u),
+                            AgentEvent::Usage(u) | AgentEvent::UsageDelta(u) => footprint(u),
                             AgentEvent::TurnComplete { usage: Some(u), .. } => footprint(u),
                             _ => 0,
                         };

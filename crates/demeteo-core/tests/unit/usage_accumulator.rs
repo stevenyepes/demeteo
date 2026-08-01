@@ -67,6 +67,22 @@ fn usage(
     })
 }
 
+fn delta(
+    input: u64,
+    output: u64,
+    cost: Option<f64>,
+    cache_read: u64,
+    cache_create: u64,
+) -> AgentEvent {
+    AgentEvent::UsageDelta(Usage {
+        input_tokens: input,
+        output_tokens: output,
+        cost_usd: cost,
+        cache_read_input_tokens: cache_read,
+        cache_creation_input_tokens: cache_create,
+    })
+}
+
 fn terminal(stop_reason: StopReason, u: Option<Usage>) -> AgentEvent {
     AgentEvent::TurnComplete {
         stop_reason,
@@ -109,6 +125,49 @@ fn monotonic_max_on_cache_tokens() {
     acc.ingest_event(&usage(0, 0, None, 1200, 800));
     assert_eq!(acc.cache_read_input_tokens(), 1500);
     assert_eq!(acc.cache_creation_input_tokens(), 800);
+}
+
+#[test]
+fn usage_deltas_are_summed_not_maxed() {
+    // pi's measured two-turn run: output 18 then 5, cost 0.001166 then
+    // 0.001137. Under the snapshot rule this reports 18 tokens / $0.001137;
+    // the truth is 23 and $0.002303, and the gap grows with turn count.
+    let mut acc = UsageAccumulator::new(None);
+    acc.ingest_event(&delta(1058, 18, Some(0.001166), 0, 0));
+    acc.ingest_event(&delta(1092, 5, Some(0.001137), 0, 0));
+    assert_eq!(acc.input_tokens(), 2150);
+    assert_eq!(acc.tokens(), 2173);
+    assert!((acc.cost_usd() - 0.002303).abs() < 1e-9);
+}
+
+#[test]
+fn usage_deltas_sum_cache_tokens_too() {
+    let mut acc = UsageAccumulator::new(None);
+    acc.ingest_event(&delta(0, 0, None, 1000, 500));
+    acc.ingest_event(&delta(0, 0, None, 1500, 200));
+    assert_eq!(acc.cache_read_input_tokens(), 2500);
+    assert_eq!(acc.cache_creation_input_tokens(), 700);
+}
+
+#[test]
+fn post_terminal_usage_deltas_are_ignored() {
+    let mut acc = UsageAccumulator::new(None);
+    acc.ingest_event(&delta(100, 50, Some(0.01), 0, 0));
+    acc.ingest_event(&terminal(StopReason::EndOfTurn, None));
+    acc.ingest_event(&delta(999_999, 999_999, Some(99.99), 0, 0));
+    assert_eq!(acc.tokens(), 150);
+    assert!((acc.cost_usd() - 0.01).abs() < 1e-9);
+}
+
+#[test]
+fn usage_snapshots_are_unaffected_by_the_delta_rule() {
+    // Guards the sibling: `Usage` must still max, or every snapshot agent
+    // (claude-code, opencode, hermes) starts double-counting.
+    let mut acc = UsageAccumulator::new(None);
+    acc.ingest_event(&usage(1058, 18, Some(0.001166), 0, 0));
+    acc.ingest_event(&usage(1092, 5, Some(0.001137), 0, 0));
+    assert_eq!(acc.tokens(), 1110);
+    assert!((acc.cost_usd() - 0.001137).abs() < 1e-9);
 }
 
 #[test]

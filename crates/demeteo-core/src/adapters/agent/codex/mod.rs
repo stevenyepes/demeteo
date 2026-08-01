@@ -363,9 +363,9 @@ pub fn runtime() -> UnifiedCliRuntime {
         // Effort rides on argv (`-c model_reasoning_effort=…`), not env.
         effort_env: crate::adapters::agent::cli_runtime::no_effort_env,
         display_label: "Codex",
-        // `codex` has no `models` list subcommand; aliases come from the static
+        // `codex` has no model-listing command; aliases come from the static
         // fallback in `application::agent_probe`.
-        lists_models: false,
+        model_listing: None,
         // Codex's default model is user-configurable in ~/.codex/config.toml;
         // don't seed a cost fallback that could misprice an overridden model.
         default_model: None,

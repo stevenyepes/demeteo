@@ -37,6 +37,7 @@ pub(crate) fn agent_kind_for_binary(binary: &str) -> Option<&'static str> {
         "opencode" => Some("opencode"),
         "hermes" => Some("hermes"),
         "codex" => Some("codex"),
+        "pi" => Some("pi"),
         _ => None,
     }
 }
@@ -50,11 +51,19 @@ pub(crate) fn agent_kind_for_binary(binary: &str) -> Option<&'static str> {
 /// `claude.exe` / `codex.exe`, so `.cmd`/`.exe`/`.bat` are stripped too (all
 /// suffixes case-insensitively) — keeping `agent_kind_for_binary` and the
 /// frontend `AGENTS` table keyed on the bare names.
+///
+/// `pi` is the exception: two letters and an ordinary word, so a bare `pi`
+/// token anywhere in a command line (`cargo run -p pi`, `git add pi`) would
+/// badge the tab as running an agent. It is accepted only where a binary can
+/// actually appear — argv[0], or a token carrying a path separator, which is
+/// how a node-script install (`node …/pi`) shows up.
 pub(crate) fn detect_agent_in_command(command: &str) -> Option<&'static str> {
     /// Basename suffixes stripped before matching, longest first so `.mjs`
     /// wins over a hypothetical shorter overlap.
     const SUFFIXES: [&str; 5] = [".mjs", ".js", ".cmd", ".exe", ".bat"];
-    for token in command.split_whitespace() {
+    const BARE_TOKEN_TOO_AMBIGUOUS: [&str; 1] = ["pi"];
+    for (idx, token) in command.split_whitespace().enumerate() {
+        let is_path = token.contains('/') || token.contains('\\');
         // Split on both separators — Windows command lines use backslashes.
         let base = token.rsplit(['/', '\\']).next().unwrap_or(token);
         let lower = base.to_ascii_lowercase();
@@ -66,6 +75,9 @@ pub(crate) fn detect_agent_in_command(command: &str) -> Option<&'static str> {
                     .map(|_| &base[..base.len() - suf.len()])
             })
             .unwrap_or(base);
+        if BARE_TOKEN_TOO_AMBIGUOUS.contains(&base) && idx > 0 && !is_path {
+            continue;
+        }
         if let Some(kind) = agent_kind_for_binary(base) {
             return Some(kind);
         }

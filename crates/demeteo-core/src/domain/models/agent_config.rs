@@ -22,15 +22,17 @@ pub enum AgentKind {
     Hermes,
     ClaudeCode,
     Codex,
+    Pi,
 }
 
 impl AgentKind {
     /// Every supported kind, in canonical display order.
-    pub const ALL: [AgentKind; 4] = [
+    pub const ALL: [AgentKind; 5] = [
         AgentKind::Opencode,
         AgentKind::Hermes,
         AgentKind::ClaudeCode,
         AgentKind::Codex,
+        AgentKind::Pi,
     ];
 
     /// The stable kebab identifier used on the wire, in the DB, and as the
@@ -41,6 +43,7 @@ impl AgentKind {
             AgentKind::Hermes => "hermes",
             AgentKind::ClaudeCode => "claude-code",
             AgentKind::Codex => "codex",
+            AgentKind::Pi => "pi",
         }
     }
 
@@ -53,6 +56,7 @@ impl AgentKind {
             "hermes" => Some(AgentKind::Hermes),
             "claude-code" => Some(AgentKind::ClaudeCode),
             "codex" => Some(AgentKind::Codex),
+            "pi" => Some(AgentKind::Pi),
             _ => None,
         }
     }

@@ -119,3 +119,51 @@ fn context_window_case_insensitive() {
     let t = HardcodedPricingTable::new();
     assert_eq!(t.context_window("Claude-Sonnet-4"), Some(200_000));
 }
+
+#[test]
+fn provider_qualified_ids_resolve_through_the_bare_row() {
+    let t = HardcodedPricingTable::new();
+    // pi hands back `provider/model` from `--list-models`, and
+    // `agent_probe`'s opencode/hermes fallback list already shipped
+    // ids in this shape. Neither reaches a bare row by prefix — the
+    // key starts with the provider, not the model.
+    assert_eq!(t.context_window("anthropic/claude-sonnet-4"), Some(200_000));
+    assert_eq!(
+        t.price_for("anthropic/claude-3-5-sonnet-20241022")
+            .unwrap()
+            .input_per_million,
+        3.00
+    );
+    assert_eq!(
+        t.context_window("google/gemini-2.5-pro"),
+        t.context_window("gemini-2.5-pro")
+    );
+}
+
+#[test]
+fn a_qualified_row_outranks_the_bare_row_it_would_strip_to() {
+    let t = HardcodedPricingTable::new();
+    // `openai-codex/gpt-5` and `gpt-5` disagree on the window (pi reports
+    // 272K for the codex line, the direct API exposes 400K). Stripping
+    // must not be reached while the qualified form still matches.
+    assert_eq!(t.context_window("openai-codex/gpt-5.6-luna"), Some(272_000));
+    assert_eq!(
+        t.context_window("openai-codex/gpt-5.3-codex-spark"),
+        Some(128_000)
+    );
+    assert_eq!(t.context_window("gpt-5.6-luna"), Some(400_000));
+}
+
+#[test]
+fn the_longest_matching_prefix_wins() {
+    let t = HardcodedPricingTable::new();
+    // `gpt-5-mini-2025-08-07` prefix-matches both `gpt-5` and `gpt-5-mini`.
+    // HashMap iteration order is arbitrary, so picking the first match
+    // resolved this to whichever the hasher happened to yield.
+    assert_eq!(
+        t.price_for("gpt-5-mini-2025-08-07")
+            .unwrap()
+            .input_per_million,
+        t.price_for("gpt-5-mini").unwrap().input_per_million
+    );
+}
