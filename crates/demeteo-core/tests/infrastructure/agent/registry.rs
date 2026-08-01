@@ -322,6 +322,7 @@ impl AgentRuntime for FixedRuntime {
         crate::ports::agent_runtime::AgentCapabilities {
             display_label: "Fixed",
             lists_models: false,
+            model_listing: None,
             default_model: None,
             effort_levels: &[],
         }
