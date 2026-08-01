@@ -87,6 +87,41 @@ impl AgentRegistry {
         avail
     }
 
+    /// Probe `kinds` on one machine, in order, and pair each with its answer.
+    ///
+    /// Stops probing the moment a kind comes back [`Availability::Unknown`]
+    /// and reports the rest as `Unknown` too. That result says the *machine*
+    /// did not answer, which is not a fact about the kind — asking the next
+    /// one buys the same answer at the same price. The price is why this
+    /// exists: an unreachable host costs a 5s TCP timeout times three retry
+    /// attempts, and since an inconclusive answer is deliberately not cached,
+    /// a caller looping over every kind pays that per kind, every time it
+    /// looks. One machine, one bill.
+    ///
+    /// Every entry is still returned in the order given, so a caller can zip
+    /// it against its own list.
+    pub async fn availability_of<'k>(
+        &self,
+        kinds: &[&'k str],
+        exec: &dyn crate::ports::execution::ExecutionPort,
+        machine_id: &str,
+        force: bool,
+    ) -> Vec<(&'k str, Availability)> {
+        let mut out = Vec::with_capacity(kinds.len());
+        let mut unreachable = false;
+        for kind in kinds {
+            let avail = if unreachable {
+                Availability::Unknown
+            } else {
+                let probed = self.availability(kind, exec, machine_id, force).await;
+                unreachable = !probed.is_conclusive();
+                probed
+            };
+            out.push((*kind, avail));
+        }
+        out
+    }
+
     /// Resolve which runtime owns a given `kind`. The lookup is exact; v1
     /// has two runtimes (`opencode`, `hermes`) and the picker hands the
     /// selected `kind` straight through.

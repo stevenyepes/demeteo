@@ -290,6 +290,65 @@ impl AgentRuntime for FlippableRuntime {
     }
 }
 
+/// A runtime with a fixed kind and answer that counts its probes, so a test
+/// can tell "answered X" apart from "was never asked".
+struct FixedRuntime {
+    kind: &'static str,
+    answer: Availability,
+    calls: tokio::sync::Mutex<u32>,
+}
+
+impl FixedRuntime {
+    fn new(kind: &'static str, answer: Availability) -> Arc<Self> {
+        Arc::new(Self {
+            kind,
+            answer,
+            calls: tokio::sync::Mutex::new(0),
+        })
+    }
+    async fn calls(&self) -> u32 {
+        *self.calls.lock().await
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentRuntime for FixedRuntime {
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+    fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
+        crate::ports::agent_runtime::AgentCapabilities {
+            display_label: "Fixed",
+            lists_models: false,
+            default_model: None,
+            effort_levels: &[],
+        }
+    }
+    async fn availability(
+        &self,
+        _exec: &dyn crate::ports::execution::ExecutionPort,
+        _machine_id: &str,
+    ) -> Availability {
+        *self.calls.lock().await += 1;
+        self.answer
+    }
+    fn install_command(&self) -> &'static str {
+        "echo fixed"
+    }
+    fn start(
+        &self,
+        _ctx: AgentContext,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Arc<dyn AgentSession>, AgentStartError>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async { Err(AgentStartError::SpawnFailed("fixed".into())) })
+    }
+}
+
 /// An `ExecutionPort` the availability tests never read through — the
 /// runtimes under test answer from their own state, so this only has to
 /// exist to satisfy the signature.
@@ -440,6 +499,60 @@ async fn an_unanswered_probe_is_not_cached_and_is_retried() {
         Availability::Installed,
         "the machine coming back must be visible without a forced refresh"
     );
+}
+
+/// One unreachable machine, one bill. The settings page probes every kind on
+/// one machine, and an inconclusive answer is not cached — so without this,
+/// opening settings against a dead host pays the SSH connect timeout and its
+/// retries once *per agent kind*, on every open.
+#[tokio::test]
+async fn one_unreachable_answer_stops_the_probe_for_the_rest_of_the_machine() {
+    let first = FixedRuntime::new("first", Availability::Unknown);
+    let second = FixedRuntime::new("second", Availability::Installed);
+    let reg = AgentRegistry::new(vec![first.clone(), second.clone()]);
+    let stub = noop_exec();
+
+    let got = reg
+        .availability_of(&["first", "second"], stub.as_ref(), "m1", false)
+        .await;
+
+    assert_eq!(
+        got,
+        vec![
+            ("first", Availability::Unknown),
+            ("second", Availability::Unknown)
+        ],
+        "a machine that did not answer did not answer for any kind"
+    );
+    assert_eq!(first.calls().await, 1);
+    assert_eq!(
+        second.calls().await,
+        0,
+        "the second kind must not be probed once the machine is known unreachable"
+    );
+}
+
+/// The short-circuit is for an unreachable *machine*, not for a missing
+/// agent: one kind being absent says nothing about the next.
+#[tokio::test]
+async fn a_missing_agent_does_not_stop_the_probe_for_the_others() {
+    let first = FixedRuntime::new("first", Availability::Missing);
+    let second = FixedRuntime::new("second", Availability::Installed);
+    let reg = AgentRegistry::new(vec![first.clone(), second.clone()]);
+    let stub = noop_exec();
+
+    let got = reg
+        .availability_of(&["first", "second"], stub.as_ref(), "m1", false)
+        .await;
+
+    assert_eq!(
+        got,
+        vec![
+            ("first", Availability::Missing),
+            ("second", Availability::Installed)
+        ]
+    );
+    assert_eq!(second.calls().await, 1);
 }
 
 #[test]
