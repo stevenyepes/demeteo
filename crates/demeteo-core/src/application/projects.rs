@@ -3,7 +3,6 @@ use crate::domain::models::{Project, RepoHealthStatus, Repository, WorktreeInfo}
 use crate::paths;
 use crate::state::AppContext;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RepositoryConfig {
@@ -94,39 +93,23 @@ pub async fn resolve_target_dir(
 /// boundary. Resolving the machine and checkout path here prevents a terminal
 /// caller from directing Git operations to another project or host.
 ///
-/// Only terminal-owned worktrees are returned. Git also reports the
-/// `{repo}_wt_{subtask}` checkouts a running pipeline step owns, and those are
-/// torn down with `worktree remove --force` plus `rm -rf` when the feature
-/// finishes — offering one as a place to open a shell or an agent hands the
-/// user a directory that will be deleted underneath them.
+/// Only terminal-owned worktrees are returned; which those are is decided by
+/// [`crate::domain::terminal_worktree`], not here. The listing must exclude the
+/// checkouts a running pipeline step owns — those are torn down with
+/// `worktree remove --force` under whoever opened a shell in one.
 pub async fn list_terminal_worktrees(
     ctx: &AppContext,
     project_id: String,
     repository_id: String,
 ) -> Result<Vec<WorktreeInfo>, String> {
     let resolved = resolve_terminal_repository(ctx, &project_id, &repository_id).await?;
-    let worktrees = ctx
-        .worktree_ops
-        .list_worktrees(resolved.machine_id.as_deref(), &resolved.repo_dir)
-        .await?;
-    Ok(worktrees
-        .into_iter()
-        .filter(|worktree| is_terminal_worktree(&worktree.path))
-        .collect())
-}
-
-/// Recognise the terminal area by the presence of its path *component*, never
-/// by a prefix comparison against the computed area.
-///
-/// `git worktree list` replays the path git resolved when the worktree was
-/// added, and the create command resolves it physically (`pwd -P`), while the
-/// area derived from [`paths::project_root`] is logical. On macOS those differ
-/// (`/var` → `/private/var`), so a `starts_with` compare silently matches
-/// nothing and the listing comes back empty.
-fn is_terminal_worktree(worktree_path: &str) -> bool {
-    Path::new(worktree_path)
-        .components()
-        .any(|component| component.as_os_str() == paths::TERMINAL_WORKTREES_SUBDIR)
+    ctx.worktree_ops
+        .list_terminal_worktrees(
+            resolved.machine_id.as_deref(),
+            &resolved.repo_dir,
+            &resolved.project_root,
+        )
+        .await
 }
 
 /// Create a linked terminal worktree for one repository of a project.

@@ -330,6 +330,103 @@ pub async fn terminal_worktree_contract(
         &format!("rm -rf {}", shell_escape_posix(&base)),
     )
     .await;
+
+    terminal_listing_through_a_symlinked_root(&port, machine_id, &anchor, nanos).await;
+}
+
+/// The listing must be anchored on what Git resolved, not on the paths
+/// configuration handed in.
+///
+/// Everything above builds under a `pwd -P` anchor, so logical and physical
+/// agree and an implementation that anchored on `project_root` would pass. Here
+/// the project is built under a real directory and driven entirely through a
+/// symlink to it, which is the shape a listing filter gets wrong: Git replays
+/// the resolved path, and a comparison against the configured one matches
+/// nothing.
+async fn terminal_listing_through_a_symlinked_root(
+    port: &Arc<dyn ExecutionPort>,
+    machine_id: &str,
+    anchor: &str,
+    nanos: u128,
+) {
+    let physical = format!("{anchor}/demeteo-terminal-worktree-linked-{nanos}");
+    let logical = format!("{physical}-link");
+    sh(
+        port,
+        machine_id,
+        &format!(
+            "set -eu; rm -rf {p} {l}; mkdir -p {p}; ln -s {p} {l}",
+            p = shell_escape_posix(&physical),
+            l = shell_escape_posix(&logical),
+        ),
+    )
+    .await;
+
+    // Prove the premise on this transport before asserting anything with it: a
+    // target where the link did not take would pass every clause below for the
+    // wrong reason.
+    let resolved = sh(
+        port,
+        machine_id,
+        &format!("cd {} && pwd -P", shell_escape_posix(&logical)),
+    )
+    .await
+    .trim()
+    .to_string();
+    assert_eq!(
+        resolved, physical,
+        "the symlinked root must resolve elsewhere, or this clause proves nothing"
+    );
+
+    let (physical_root, _) = make_project_repo(port, machine_id, &physical).await;
+    let logical_root = format!("{logical}/project");
+    let logical_repo = format!("{logical_root}/{REPOS_SUBDIR}/{REPO_NAME}");
+
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    let ops: Arc<dyn WorktreeOpsPort> = Arc::new(GitOpsHelper::new(db, port.clone()));
+
+    let created = ops
+        .create_terminal_worktree(
+            Some(machine_id),
+            &logical_repo,
+            &logical_root,
+            "terminal/linked",
+            "session-linked",
+        )
+        .await
+        .expect("creates a terminal worktree through the symlinked root");
+
+    assert_eq!(
+        created.path,
+        format!("{physical_root}/{TERMINAL_WORKTREES_SUBDIR}/{REPO_NAME}/session-linked"),
+        "Git records the resolved path, which is what the listing has to match",
+    );
+
+    let listed = ops
+        .list_terminal_worktrees(Some(machine_id), &logical_repo, &logical_root)
+        .await
+        .expect("lists terminal locations through the symlinked root");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|w| (w.path.as_str(), w.branch.as_deref()))
+            .collect::<Vec<_>>(),
+        [(created.path.as_str(), Some("terminal/linked"))],
+        "the worktree just created must be the one listed back",
+    );
+
+    sh(
+        port,
+        machine_id,
+        &format!(
+            "rm -rf {} {}",
+            shell_escape_posix(&physical),
+            shell_escape_posix(&logical)
+        ),
+    )
+    .await;
 }
 
 #[tokio::test]

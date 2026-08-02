@@ -295,6 +295,14 @@ impl WorktreeOpsPort for RecordingWorktrees {
     ) -> Result<crate::domain::models::WorktreeInfo, String> {
         panic!("unexpected WorktreeOpsPort call")
     }
+    async fn list_terminal_worktrees(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<crate::domain::models::WorktreeInfo>, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
     async fn cleanup_legacy_terminal_worktrees(
         &self,
         _: Option<&str>,

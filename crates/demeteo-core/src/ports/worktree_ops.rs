@@ -91,6 +91,24 @@ pub trait WorktreeOpsPort: Send + Sync {
         worktree_name: &str,
     ) -> Result<WorktreeInfo, String>;
 
+    /// The linked worktrees of `repo_dir` that belong to the terminal area
+    /// below `project_root`, and nothing else.
+    ///
+    /// Separate from [`list_worktrees`](Self::list_worktrees) rather than a
+    /// filter over it, because the classification needs the primary checkout's
+    /// path and that method deliberately withholds it — three of its callers
+    /// `worktree remove --force` whatever survives their own filter, so the
+    /// main checkout must not be in what they filter.
+    ///
+    /// An error, not an empty list, when the area cannot be derived: an empty
+    /// list is what a healthy repository with no terminal worktrees returns.
+    async fn list_terminal_worktrees(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+    ) -> Result<Vec<WorktreeInfo>, String>;
+
     /// Retire terminal worktrees left at the location this feature used before
     /// the area moved out of `repos/`, returning how many were unregistered.
     ///

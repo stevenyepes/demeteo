@@ -35,88 +35,10 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let output = self
             .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} worktree list --porcelain",
-                    paths::shell_escape_posix(repo_dir)
-                ),
-            )
+            .run_command(machine_str, &worktree_list_cmd(repo_dir))
             .await?;
 
-        let mut worktrees = Vec::new();
-        let mut current_path: Option<String> = None;
-        let mut current_branch: Option<String> = None;
-        let mut is_locked = false;
-        // block_index tracks which worktree entry we are accumulating.
-        // Index 0 is always the primary worktree (the main checkout); we skip it.
-        let mut block_index: i32 = -1;
-
-        let flush = |path: String,
-                     branch: Option<String>,
-                     locked: bool,
-                     idx: i32,
-                     out: &mut Vec<WorktreeInfo>| {
-            if idx > 0 {
-                out.push(WorktreeInfo {
-                    path,
-                    branch,
-                    is_locked: locked,
-                });
-            }
-        };
-
-        for line in output.lines() {
-            if line.starts_with("worktree ") {
-                // Flush the previously accumulated block (if any)
-                if let Some(path) = current_path.take() {
-                    flush(
-                        path,
-                        current_branch.take(),
-                        is_locked,
-                        block_index,
-                        &mut worktrees,
-                    );
-                }
-                block_index += 1;
-                current_path = Some(line.trim_start_matches("worktree ").to_string());
-                current_branch = None;
-                is_locked = false;
-            } else if line.starts_with("branch ") {
-                // Strip "branch refs/heads/" prefix; fall back to raw remainder
-                current_branch = Some(
-                    line.trim_start_matches("branch refs/heads/")
-                        .trim_start_matches("branch ")
-                        .to_string(),
-                );
-            } else if line.starts_with("locked") {
-                is_locked = true;
-            } else if line.is_empty() {
-                // Blank line = end of a porcelain block; flush it
-                if let Some(path) = current_path.take() {
-                    flush(
-                        path,
-                        current_branch.take(),
-                        is_locked,
-                        block_index,
-                        &mut worktrees,
-                    );
-                    is_locked = false;
-                }
-            }
-        }
-        // Flush the final block if it wasn't terminated by a blank line
-        if let Some(path) = current_path.take() {
-            flush(
-                path,
-                current_branch.take(),
-                is_locked,
-                block_index,
-                &mut worktrees,
-            );
-        }
-
-        Ok(worktrees)
+        Ok(crate::domain::worktree_listing::parse(&output).linked)
     }
 
     /// Create a linked worktree for an interactive terminal session.
@@ -159,6 +81,43 @@ impl GitOpsHelper {
             path: created_terminal_worktree_path(&output, &destination),
             branch: Some(branch.to_string()),
             is_locked: false,
+        })
+    }
+
+    /// The linked worktrees a terminal session may be opened in.
+    ///
+    /// One listing serves both halves: the primary checkout Git names first is
+    /// the physical anchor
+    /// [`domain::terminal_worktree::selectable`](crate::domain::terminal_worktree::selectable)
+    /// needs, and the rest are the candidates. It never leaves this function.
+    pub async fn list_terminal_worktrees(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+    ) -> Result<Vec<WorktreeInfo>, String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let output = self
+            .exec
+            .run_command(machine_str, &worktree_list_cmd(repo_dir))
+            .await?;
+        let listing = crate::domain::worktree_listing::parse(&output);
+        let primary = listing.primary.ok_or_else(|| {
+            format!("list_terminal_worktrees: git reported no primary worktree for {repo_dir}")
+        })?;
+
+        crate::domain::terminal_worktree::selectable(
+            project_root,
+            repo_dir,
+            &primary.path,
+            listing.linked,
+        )
+        .ok_or_else(|| {
+            format!(
+                "list_terminal_worktrees: no terminal area for repository {repo_dir} below \
+                 project root {project_root} (git reports the checkout at {})",
+                primary.path
+            )
         })
     }
 
@@ -746,7 +705,7 @@ impl GitOpsHelper {
         // mirrors `cleanup_subtask_worktree`'s worktree→branch ordering.
 
         // 1. Remove worktree directories for subtasks of this feature.
-        let prefix = format!("{}_subtask_", branch);
+        let prefix = format!("{branch}{}", crate::domain::ids::SUBTASK_BRANCH_INFIX);
         if let Ok(worktrees) = self.list_worktrees(machine_id, repo_dir).await {
             for wt in &worktrees {
                 let is_match = wt.branch.as_deref().is_some_and(|b| b.starts_with(&prefix));
@@ -799,9 +758,10 @@ impl GitOpsHelper {
         //    that leading whitespace, so `git branch -D "  <name>"` would
         //    never match a real ref.
         let subtask_cmd = format!(
-            "git -C {} branch --list '{}_subtask_*' --format='%(refname:short)' | while IFS= read -r b; do git -C {} branch -D \"$b\" 2>/dev/null; done",
+            "git -C {} branch --list '{}{}*' --format='%(refname:short)' | while IFS= read -r b; do git -C {} branch -D \"$b\" 2>/dev/null; done",
             safe_dir,
             safe_branch,
+            crate::domain::ids::SUBTASK_BRANCH_INFIX,
             safe_dir
         );
         let _ = self.exec.run_command(machine_str, &subtask_cmd).await;
@@ -907,6 +867,16 @@ impl GitOpsHelper {
 /// silently misses its target, so it is written once.
 fn worktree_dir(repo_dir: &str, worktree_id: &str) -> String {
     format!("{}_wt_{}", repo_dir, worktree_id)
+}
+
+/// The one reading every worktree listing in this crate is built from. Shared
+/// so the terminal listing and merge-back cannot end up asking git a
+/// differently-shaped question than [`GitOpsHelper::list_worktrees`] does.
+pub(super) fn worktree_list_cmd(repo_dir: &str) -> String {
+    format!(
+        "git -C {} worktree list --porcelain",
+        paths::shell_escape_posix(repo_dir)
+    )
 }
 
 /// Resolve a terminal worktree beneath a directory controlled by Demeteo, not
@@ -1097,9 +1067,16 @@ fn created_terminal_worktree_path(output: &str, derived: &str) -> String {
 /// Validate the user branch before it is handed to Git. This is the
 /// `check-ref-format --branch` safety subset: it rejects ambiguous refs and
 /// command-like names while allowing ordinary slash-separated branch names.
+///
+/// It also refuses the pipeline's own subtask infix, which Git would happily
+/// accept. `domain::terminal_worktree` withholds any branch carrying it, so
+/// accepting one here would hand back a worktree that then never appears in the
+/// listing again — created, on disk, and invisible, with nothing said. A refusal
+/// at creation is the same rule, stated where the user can act on it.
 fn validate_terminal_branch(branch: &str) -> Result<(), String> {
     let invalid = branch.is_empty()
         || branch == "@"
+        || branch.contains(crate::domain::ids::SUBTASK_BRANCH_INFIX)
         || branch.starts_with('-')
         || branch.starts_with('/')
         || branch.ends_with('/')

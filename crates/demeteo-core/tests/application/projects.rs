@@ -17,9 +17,10 @@ static CONTEXT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, PartialEq)]
 enum WorktreeCall {
-    List {
+    ListTerminal {
         machine: Option<String>,
         repo_dir: String,
+        project_root: String,
     },
     Create {
         machine: Option<String>,
@@ -69,34 +70,31 @@ impl WorktreeOpsPort for RecordingWorktrees {
     async fn get_head_branch(&self, _: Option<&str>, _: &str) -> Option<String> {
         panic!("unexpected WorktreeOpsPort call")
     }
-    async fn list_worktrees(
+    async fn list_worktrees(&self, _: Option<&str>, _: &str) -> Result<Vec<WorktreeInfo>, String> {
+        // The terminal listing must not reach for the unfiltered one: its
+        // result carries the primary checkout's siblings, including the
+        // worktrees a running step owns.
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn list_terminal_worktrees(
         &self,
         machine: Option<&str>,
         repo_dir: &str,
+        project_root: &str,
     ) -> Result<Vec<WorktreeInfo>, String> {
-        self.record(WorktreeCall::List {
+        self.record(WorktreeCall::ListTerminal {
             machine: machine.map(str::to_string),
             repo_dir: repo_dir.to_string(),
+            project_root: project_root.to_string(),
         })?;
-        Ok(vec![
-            WorktreeInfo {
-                path: format!("{repo_dir}_wt_f-1-step-s-implement"),
-                branch: Some("feature/one_subtask_s-implement".to_string()),
-                is_locked: false,
-            },
-            // Deliberately shares no prefix with the workspace this context
-            // resolves: git reports the path it resolved physically at add
-            // time, so a filter comparing against the logical area would keep
-            // nothing here.
-            WorktreeInfo {
-                path: format!(
-                    "/physical/projects/p/{}/repo/existing",
-                    crate::paths::TERMINAL_WORKTREES_SUBDIR
-                ),
-                branch: Some("terminal/existing".to_string()),
-                is_locked: false,
-            },
-        ])
+        Ok(vec![WorktreeInfo {
+            path: format!(
+                "/physical/projects/p/{}/repo/existing",
+                crate::paths::TERMINAL_WORKTREES_SUBDIR
+            ),
+            branch: Some("terminal/existing".to_string()),
+            is_locked: false,
+        }])
     }
     async fn create_terminal_worktree(
         &self,
@@ -272,14 +270,16 @@ async fn list_resolves_a_local_project_repository_before_calling_the_port() {
     let (ctx, worktree_port, calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let repo_dir = ctx
+    let project_root = ctx
         .workspace_dir
-        .join("projects/p-local/repos/local-repo")
+        .join("projects/p-local")
         .to_string_lossy()
         .to_string();
-    worktree_port.expect(WorktreeCall::List {
+    let repo_dir = format!("{project_root}/repos/local-repo");
+    worktree_port.expect(WorktreeCall::ListTerminal {
         machine: None,
         repo_dir: repo_dir.clone(),
+        project_root: project_root.clone(),
     });
 
     let worktrees = list_terminal_worktrees(&ctx, "p-local".to_string(), "r-local".to_string())
@@ -289,10 +289,12 @@ async fn list_resolves_a_local_project_repository_before_calling_the_port() {
     assert_eq!(worktrees[0].branch.as_deref(), Some("terminal/existing"));
     assert_eq!(
         *calls.lock().unwrap(),
-        [WorktreeCall::List {
+        [WorktreeCall::ListTerminal {
             machine: None,
-            repo_dir
-        }]
+            repo_dir,
+            project_root
+        }],
+        "the port needs the project root to anchor the area it classifies against"
     );
 }
 
@@ -337,36 +339,40 @@ async fn create_resolves_a_remote_project_machine_and_repository_before_calling_
     );
 }
 
-/// A `{repo}_wt_{subtask}` checkout belongs to a running pipeline step, which
-/// force-removes it when the feature ends. Offering it as a session location
-/// hands the user a directory that disappears mid-edit, so the listing must
-/// drop it and keep only the terminal area.
+/// Which worktrees are terminal-owned is decided by
+/// `domain::terminal_worktree`, reached through the port. This layer resolves
+/// identity and forwards; a second filter here would be a rule with two homes
+/// and no way to notice when they disagree.
 #[tokio::test]
-async fn subtask_worktrees_are_not_offered_as_terminal_locations() {
+async fn the_listing_is_the_ports_answer_and_is_not_filtered_again() {
     let (ctx, worktree_port, _calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let repo_dir = ctx
+    let project_root = ctx
         .workspace_dir
-        .join("projects/p-local/repos/local-repo")
+        .join("projects/p-local")
         .to_string_lossy()
         .to_string();
-    worktree_port.expect(WorktreeCall::List {
+    worktree_port.expect(WorktreeCall::ListTerminal {
         machine: None,
-        repo_dir,
+        repo_dir: format!("{project_root}/repos/local-repo"),
+        project_root,
     });
 
     let worktrees = list_terminal_worktrees(&ctx, "p-local".to_string(), "r-local".to_string())
         .await
         .unwrap();
 
+    // The double answers with a path that shares no prefix with this context's
+    // workspace, as git would after resolving symlinks. Anything comparing it
+    // against a locally-derived area would drop it.
     assert_eq!(
         worktrees
             .iter()
             .map(|worktree| worktree.branch.as_deref())
             .collect::<Vec<_>>(),
         [Some("terminal/existing")],
-        "only the terminal-owned worktree may be offered: {worktrees:?}"
+        "the port's answer must reach the caller intact: {worktrees:?}"
     );
 }
 

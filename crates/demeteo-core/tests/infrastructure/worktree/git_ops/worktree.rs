@@ -654,6 +654,10 @@ async fn terminal_worktree_rejects_unsafe_branch_and_location_inputs() {
 
     for (branch, name) in [
         ("bad..branch", "session"),
+        // Git would accept this. The terminal listing withholds any branch
+        // carrying the pipeline's infix, so accepting it here would hand back a
+        // worktree that never appears again.
+        ("terminal/notes_subtask_1", "session"),
         ("terminal/session", ""),
         ("terminal/session", "/outside"),
         ("terminal/session", "C:\\outside"),
@@ -671,6 +675,160 @@ async fn terminal_worktree_rejects_unsafe_branch_and_location_inputs() {
         "invalid input must not create a worktree"
     );
     let _ = std::fs::remove_dir_all(&project_root);
+}
+
+/// Builds `<base>/project/repos/app` as a one-commit repository, so a test can
+/// choose the path the project root sits on rather than take the temp-dir one
+/// [`make_project_repo`] picks.
+async fn make_project_repo_at(base: &std::path::Path) -> (String, String, GitOpsHelper) {
+    let project_root = base.join("project");
+    let repo_dir = project_root.join(crate::paths::REPOS_SUBDIR).join("app");
+    std::fs::create_dir_all(&repo_dir).expect("creates the project layout");
+    let repo = repo_dir.to_string_lossy().to_string();
+
+    let exec = fresh_exec();
+    for command in [
+        format!("git -C \"{repo}\" init -q -b main"),
+        format!("git -C \"{repo}\" config user.email ci@demeteo.test"),
+        format!("git -C \"{repo}\" config user.name CI"),
+        format!("git -C \"{repo}\" commit -q --allow-empty -m init"),
+    ] {
+        exec.run_command("local", &command)
+            .await
+            .unwrap_or_else(|e| panic!("setup failed: {command}: {e}"));
+    }
+
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    (
+        project_root.to_string_lossy().to_string(),
+        repo,
+        GitOpsHelper::new(db, Arc::new(LocalSubprocessAdapter::new())),
+    )
+}
+
+fn scratch(suffix: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "demeteo_test_{suffix}_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_millis()
+    ))
+}
+
+#[tokio::test]
+async fn a_workspace_under_a_terminal_worktrees_directory_still_withholds_a_running_steps_checkout()
+{
+    // The reported bug end to end: every path below carries a
+    // `terminal-worktrees` component, which is all the rule this replaced
+    // looked for.
+    let base =
+        scratch("terminal_listing_named_ancestor").join(crate::paths::TERMINAL_WORKTREES_SUBDIR);
+    let (project_root, repo, helper) = make_project_repo_at(&base).await;
+
+    fresh_exec()
+        .run_command("local", &format!("git -C \"{repo}\" branch feature/one"))
+        .await
+        .expect("creates the feature branch a subtask is cut from");
+    helper
+        .provision_subtask_worktree(None, &repo, "feature/one", "s-1")
+        .await
+        .expect("provisions a pipeline-owned worktree");
+    // A linked worktree outside the area carrying an ordinary branch. The
+    // subtask one above would be refused by the branch guard alone, so without
+    // this entry the assertion below would hold with the anchor removed.
+    fresh_exec()
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{repo}\" worktree add -q -b plain/elsewhere \"{}\"",
+                base.join("outside-the-area").to_string_lossy()
+            ),
+        )
+        .await
+        .expect("adds an out-of-area worktree");
+    let mine = helper
+        .create_terminal_worktree(None, &repo, &project_root, "terminal/mine", "mine")
+        .await
+        .expect("creates a terminal worktree");
+
+    let listed = helper
+        .list_terminal_worktrees(None, &repo, &project_root)
+        .await
+        .expect("lists terminal locations");
+
+    assert_eq!(
+        listed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
+        [mine.path.as_str()],
+        "a checkout a running step owns is force-removed under whoever opened a shell in it"
+    );
+    assert_eq!(
+        helper.list_worktrees(None, &repo).await.unwrap().len(),
+        3,
+        "all three worktrees exist; only one of them is a terminal location"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_terminal_worktree_is_listed_when_the_project_root_is_reached_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let base = scratch("terminal_listing_symlink");
+    let physical = base.join("real");
+    let logical = base.join("link");
+    std::fs::create_dir_all(&physical).expect("creates the physical base");
+    symlink(&physical, &logical).expect("creates the logical base");
+
+    let (_, _, helper) = make_project_repo_at(&physical).await;
+    // Drive the port entirely through the logical spelling, as configuration
+    // would: git resolves it away, so nothing derived from these strings can be
+    // compared against what git reports back.
+    let logical_root = logical.join("project").to_string_lossy().to_string();
+    let logical_repo = format!("{logical_root}/{}/app", crate::paths::REPOS_SUBDIR);
+
+    let created = helper
+        .create_terminal_worktree(None, &logical_repo, &logical_root, "terminal/linked", "one")
+        .await
+        .expect("creates through the symlinked root");
+
+    let listed = helper
+        .list_terminal_worktrees(None, &logical_repo, &logical_root)
+        .await
+        .expect("lists through the symlinked root");
+
+    assert_eq!(
+        listed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
+        [created.path.as_str()],
+        "the area must be anchored on what git resolved, not on the configured root"
+    );
+    // The premise: git resolved the link away, so nothing built from the
+    // logical strings above can be compared against what it reports back.
+    assert!(
+        created.path.contains("/real/") && !created.path.contains("/link/"),
+        "git must report the physical path, or this test proves nothing: {}",
+        created.path
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn a_repository_outside_its_project_root_is_an_error_not_an_empty_listing() {
+    let base = scratch("terminal_listing_unanchored");
+    let (_, repo, helper) = make_project_repo_at(&base).await;
+
+    let error = helper
+        .list_terminal_worktrees(None, &repo, "/somewhere/else")
+        .await
+        .expect_err("an underivable area must not read as a healthy empty listing");
+
+    assert!(error.contains("no terminal area"), "{error}");
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[tokio::test]

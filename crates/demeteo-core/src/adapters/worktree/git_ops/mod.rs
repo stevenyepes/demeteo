@@ -38,7 +38,10 @@ impl GitOpsHelper {
 /// have to agree on this name — a mismatch in any one of them silently
 /// targets a branch that does not exist.
 pub fn subtask_branch_name(feature_branch: &str, subtask_id: &str) -> String {
-    format!("{}_subtask_{}", feature_branch, subtask_id)
+    format!(
+        "{feature_branch}{}{subtask_id}",
+        crate::domain::ids::SUBTASK_BRANCH_INFIX
+    )
 }
 
 pub(crate) mod clone;
@@ -85,6 +88,16 @@ impl WorktreeOpsPort for GitOpsHelper {
         worktree_name: &str,
     ) -> Result<WorktreeInfo, String> {
         self.create_terminal_worktree(machine_id, repo_dir, project_root, branch, worktree_name)
+            .await
+    }
+
+    async fn list_terminal_worktrees(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+    ) -> Result<Vec<WorktreeInfo>, String> {
+        self.list_terminal_worktrees(machine_id, repo_dir, project_root)
             .await
     }
 
