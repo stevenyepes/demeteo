@@ -3,6 +3,7 @@ use crate::domain::models::{Project, RepoHealthStatus, Repository, WorktreeInfo}
 use crate::paths;
 use crate::state::AppContext;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RepositoryConfig {
@@ -92,15 +93,40 @@ pub async fn resolve_target_dir(
 /// The project and repository IDs are the only authority accepted at this
 /// boundary. Resolving the machine and checkout path here prevents a terminal
 /// caller from directing Git operations to another project or host.
+///
+/// Only terminal-owned worktrees are returned. Git also reports the
+/// `{repo}_wt_{subtask}` checkouts a running pipeline step owns, and those are
+/// torn down with `worktree remove --force` plus `rm -rf` when the feature
+/// finishes — offering one as a place to open a shell or an agent hands the
+/// user a directory that will be deleted underneath them.
 pub async fn list_terminal_worktrees(
     ctx: &AppContext,
     project_id: String,
     repository_id: String,
 ) -> Result<Vec<WorktreeInfo>, String> {
     let resolved = resolve_terminal_repository(ctx, &project_id, &repository_id).await?;
-    ctx.worktree_ops
+    let worktrees = ctx
+        .worktree_ops
         .list_worktrees(resolved.machine_id.as_deref(), &resolved.repo_dir)
-        .await
+        .await?;
+    Ok(worktrees
+        .into_iter()
+        .filter(|worktree| is_terminal_worktree(&worktree.path))
+        .collect())
+}
+
+/// Recognise the terminal area by the presence of its path *component*, never
+/// by a prefix comparison against the computed area.
+///
+/// `git worktree list` replays the path git resolved when the worktree was
+/// added, and the create command resolves it physically (`pwd -P`), while the
+/// area derived from [`paths::project_root`] is logical. On macOS those differ
+/// (`/var` → `/private/var`), so a `starts_with` compare silently matches
+/// nothing and the listing comes back empty.
+fn is_terminal_worktree(worktree_path: &str) -> bool {
+    Path::new(worktree_path)
+        .components()
+        .any(|component| component.as_os_str() == paths::TERMINAL_WORKTREES_SUBDIR)
 }
 
 /// Create a linked terminal worktree for one repository of a project.
@@ -120,6 +146,7 @@ pub async fn create_terminal_worktree(
         .create_terminal_worktree(
             resolved.machine_id.as_deref(),
             &resolved.repo_dir,
+            &resolved.project_root,
             &branch,
             &worktree_name,
         )
@@ -129,6 +156,7 @@ pub async fn create_terminal_worktree(
 struct ResolvedTerminalRepository {
     machine_id: Option<String>,
     repo_dir: String,
+    project_root: String,
 }
 
 /// Resolve trusted terminal-worktree I/O inputs before calling the Git port.
@@ -169,10 +197,24 @@ async fn resolve_terminal_repository(
         )
     };
     let repo_dir = resolve_target_dir(ctx, &project, project_id, &repository.repo_path).await?;
+    // One call for both transports: the remote branch resolves `$HOME` over the
+    // wire and ignores `workspace_dir`, so passing it is what keeps the local
+    // and remote layouts structurally identical rather than coincidentally so.
+    let project_root = paths::project_root(
+        &ctx.exec,
+        &project.compute_type,
+        project.remote_host.as_deref(),
+        project_id,
+        Some(&ctx.workspace_dir),
+    )
+    .await?
+    .to_string_lossy()
+    .to_string();
 
     Ok(ResolvedTerminalRepository {
         machine_id,
         repo_dir,
+        project_root,
     })
 }
 

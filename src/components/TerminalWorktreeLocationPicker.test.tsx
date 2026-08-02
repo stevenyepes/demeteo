@@ -1,6 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ComponentProps } from 'react';
+import { StrictMode, type ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTerminalWorktree, listTerminalWorktrees } from '../lib/terminal';
@@ -78,7 +78,7 @@ describe('TerminalWorktreeLocationPicker', () => {
   });
 
   it('formats failures and clears stale selection/error when its repository changes', async () => {
-    vi.mocked(listTerminalWorktrees).mockResolvedValueOnce([{ path: '/repos/demo-old', branch: 'old', isLocked: false }]);
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([{ path: '/repos/demo-old', branch: 'old', isLocked: false }]);
     const { rerender } = mount();
     await userEvent.click(screen.getByTestId('terminal-location-trigger'));
     await userEvent.click(await screen.findByTestId('terminal-location-worktree-/repos/demo-old'));
@@ -109,6 +109,71 @@ describe('TerminalWorktreeLocationPicker', () => {
     await userEvent.click(screen.getByTestId('terminal-location-create'));
     expect(await screen.findByTestId('terminal-location-error')).toHaveTextContent('branch is invalid');
     expect(screen.getByTestId('terminal-location-create')).not.toBeDisabled();
+  });
+
+  it('offers the unscoped machine home only when the caller allows it', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    const { unmount } = mount();
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    expect(screen.getByTestId('terminal-location-main')).toBeInTheDocument();
+    expect(screen.queryByTestId('terminal-location-home')).not.toBeInTheDocument();
+    unmount();
+
+    mount({ allowHome: true });
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(screen.getByTestId('terminal-location-home'));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'home', workDir: null, workBranch: null });
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Machine home');
+  });
+
+  it('lists once per menu open even when StrictMode double-invokes state updaters', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    render(
+      <StrictMode>
+        <TerminalWorktreeLocationPicker projectId="project-a" repositoryId="repository-a" onChange={onChange} />
+      </StrictMode>,
+    );
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    expect(listTerminalWorktrees).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches on every open so a worktree removed while closed stops being offered', async () => {
+    vi.mocked(listTerminalWorktrees)
+      .mockResolvedValueOnce([{ path: '/repos/demo-gone', branch: 'gone', isLocked: false }])
+      .mockResolvedValueOnce([]);
+    mount();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    expect(await screen.findByTestId('terminal-location-worktree-/repos/demo-gone')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+
+    expect(listTerminalWorktrees).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText('No linked worktrees')).toBeInTheDocument();
+    expect(screen.queryByTestId('terminal-location-worktree-/repos/demo-gone')).not.toBeInTheDocument();
+  });
+
+  it('keeps typed create input when the caller passes a fresh onChange identity', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    const { rerender } = render(
+      <TerminalWorktreeLocationPicker projectId="project-a" repositoryId="repository-a" onChange={(location) => onChange(location)} />,
+    );
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await screen.findByText('No linked worktrees');
+    await userEvent.type(screen.getByLabelText('Branch name'), 'feature/keep');
+    await userEvent.type(screen.getByLabelText('Worktree name'), 'keep');
+
+    await act(async () => {
+      rerender(
+        <TerminalWorktreeLocationPicker projectId="project-a" repositoryId="repository-a" onChange={(location) => onChange(location)} />,
+      );
+    });
+
+    expect(screen.getByLabelText('Branch name')).toHaveValue('feature/keep');
+    expect(screen.getByLabelText('Worktree name')).toHaveValue('keep');
+    expect(screen.getByTestId('terminal-location-menu')).toBeInTheDocument();
   });
 
   it('discards a rejected create from a previously selected repository', async () => {

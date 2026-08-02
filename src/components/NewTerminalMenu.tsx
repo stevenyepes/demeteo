@@ -121,11 +121,22 @@ export function NewTerminalMenu({
   );
   /** The one machine the current project's repositories live on. */
   const projectMachineId = currentProject ? currentProject.remote_host || 'local' : null;
-  const projectRepository = currentProjectId
-    ? projectState.reposByProject[currentProjectId]?.[0] ?? null
-    : null;
+  const projectRepositories = useMemo(
+    () => (currentProjectId ? projectState.reposByProject[currentProjectId] ?? [] : []),
+    [projectState.reposByProject, currentProjectId],
+  );
 
   const [openMenu, setOpenMenu] = useState(false);
+  const [selectedRepositoryId, setSelectedRepositoryId] = useState<string | null>(null);
+  // Falling back to the first entry rather than storing it keeps the selection
+  // valid when the project changes or its repository list is refetched.
+  const projectRepository = useMemo(
+    () =>
+      projectRepositories.find((repo) => repo.id === selectedRepositoryId) ??
+      projectRepositories[0] ??
+      null,
+    [projectRepositories, selectedRepositoryId],
+  );
   const [machines, setMachines] = useState<Machine[]>([]);
   const [localAgents, setLocalAgents] = useState<AgentMeta[]>(
     defaultAgentKinds().map((k) => AGENTS[k]),
@@ -308,7 +319,13 @@ export function NewTerminalMenu({
       setOpenMenu(false);
       setError(null);
       try {
-        if (showLocationSwitch && location && projectRepository && currentProjectId) {
+        if (
+          showLocationSwitch &&
+          location &&
+          location.kind !== 'home' &&
+          projectRepository &&
+          currentProjectId
+        ) {
           await open({
             machineId: target.machineId,
             machineLabel: target.machineLabel,
@@ -351,8 +368,9 @@ export function NewTerminalMenu({
   );
 
   // Primary split-button action: preserve one-click machine-root launches,
-  // except when local is the active project's machine. That checkout needs a
-  // deliberate main/worktree choice, so reveal the shared chooser instead.
+  // except when local is the active project's machine. There the machine root
+  // and the checkout are both plausible, so reveal the shared chooser instead
+  // of guessing one.
   const launchLocalShell = useCallback(() => {
     if (primaryRequiresLocationSelection) {
       setOpenMenu(true);
@@ -553,11 +571,28 @@ export function NewTerminalMenu({
                       worktree state. */}
                   {showLocationSwitch && (
                     <div className="mx-1 mb-1.5" data-testid="new-terminal-location">
+                      {projectRepositories.length > 1 && (
+                        <select
+                          value={projectRepository?.id ?? ''}
+                          onChange={(e) => setSelectedRepositoryId(e.target.value)}
+                          disabled={launching}
+                          aria-label="Repository"
+                          className="mb-1.5 w-full rounded-md border border-white/10 bg-[#0c0d12] px-2 py-1.5 text-[11px] font-mono text-slate-300 outline-none focus:border-violet-400 disabled:opacity-40"
+                          data-testid="new-terminal-repo-select"
+                        >
+                          {projectRepositories.map((repo) => (
+                            <option key={repo.id} value={repo.id}>
+                              {repo.repo_path}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                       <TerminalWorktreeLocationPicker
                         projectId={currentProjectId ?? ''}
                         repositoryId={projectRepository?.id ?? ''}
                         onChange={setLocation}
                         requireSelection
+                        allowHome
                         onBusyChange={setLocationBusy}
                         disabled={launching}
                       />

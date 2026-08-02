@@ -57,16 +57,11 @@ function mount(repoPath = '/repo/one') {
   return render(tree(repoPath));
 }
 
-async function chooseMainLocation() {
-  await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-  await userEvent.click(screen.getByTestId('terminal-location-main'));
-}
-
 describe('StartSessionButton', () => {
-  it('requires an explicit main-branch choice, then opens a plain shell with primary-checkout semantics', async () => {
+  it('is live without opening the picker and opens a plain shell with primary-checkout semantics', async () => {
     mount();
-    expect(screen.getByTestId('start-session-primary')).toBeDisabled();
-    await chooseMainLocation();
+    expect(screen.getByTestId('start-session-primary')).not.toBeDisabled();
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main branch');
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
       for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -89,7 +84,6 @@ describe('StartSessionButton', () => {
 
   it('caret dropdown lists the AGENTS registry and launches with kind/binary as agentKind/launchCommand', async () => {
     mount();
-    await chooseMainLocation();
     await userEvent.click(screen.getByTestId('start-session-caret'));
     expect(screen.getByTestId('start-session-dropdown')).toBeInTheDocument();
     expect(screen.getByTestId('start-session-agent-claude-code')).toHaveTextContent('Claude');
@@ -125,7 +119,6 @@ describe('StartSessionButton', () => {
       return Promise.resolve(undefined);
     });
     mount();
-    await chooseMainLocation();
 
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
@@ -157,7 +150,6 @@ describe('StartSessionButton', () => {
       return Promise.resolve(undefined);
     });
     mount();
-    await chooseMainLocation();
 
     const primary = screen.getByTestId('start-session-primary');
     await act(async () => {
@@ -177,7 +169,6 @@ describe('StartSessionButton', () => {
 
   it('stacks a new session per click (forceNew) rather than refocusing one tab', async () => {
     mount();
-    await chooseMainLocation();
 
     for (let click = 0; click < 3; click++) {
       await act(async () => {
@@ -242,7 +233,6 @@ describe('StartSessionButton', () => {
       return Promise.resolve(undefined);
     });
     mount();
-    await chooseMainLocation();
 
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
@@ -281,7 +271,6 @@ describe('StartSessionButton', () => {
       return Promise.resolve(undefined);
     });
     const { rerender } = mount('/repo/one');
-    await chooseMainLocation();
 
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
@@ -341,8 +330,17 @@ describe('StartSessionButton', () => {
     await userEvent.type(screen.getByLabelText('Worktree name'), 'new');
     await userEvent.click(screen.getByTestId('terminal-location-create'));
     expect(await screen.findByTestId('terminal-location-error')).toHaveTextContent('branch already exists');
-    expect(screen.getByTestId('start-session-primary')).toBeDisabled();
+    // The failed create must not become a selection: the button still points
+    // at the main-branch default it started on.
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main branch');
     expect(commandArgs('start_terminal_session')).toHaveLength(0);
+  });
+
+  it('does not offer the unscoped machine home for a repository-scoped session', async () => {
+    mount();
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    expect(await screen.findByTestId('terminal-location-main')).toBeInTheDocument();
+    expect(screen.queryByTestId('terminal-location-home')).not.toBeInTheDocument();
   });
 
   it('launches a newly-created backend target unchanged', async () => {

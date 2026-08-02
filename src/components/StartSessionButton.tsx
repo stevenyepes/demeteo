@@ -122,9 +122,11 @@ export function StartSessionButton({
 
   // A stale failure must not follow the user to another project or repo: the
   // message names a target that is no longer the one this button would open.
+  // The selection is deliberately left alone — the picker re-emits its
+  // main-branch default when retargeted, and a child effect commits before
+  // this one, so clearing it here would strand the button disabled.
   useEffect(() => {
     setError(null);
-    setLocation(null);
   }, [projectId, repositoryId, repoPath, machineId]);
 
   // Disabled while a launch is in flight, and until the workspace has
@@ -136,7 +138,6 @@ export function StartSessionButton({
       <TerminalWorktreeLocationPicker
         projectId={projectId}
         repositoryId={repositoryId}
-        requireSelection
         disabled={launching}
         onBusyChange={setLocationBusy}
         onChange={setLocation}
@@ -148,7 +149,7 @@ export function StartSessionButton({
           onClick={() => void launch()}
           disabled={disabled}
           className="flex items-center gap-1.5 pl-3 pr-3 py-1.5 rounded-l-md text-xs font-mono whitespace-nowrap border border-white/10 border-r-0 bg-violet-600 hover:bg-violet-500 text-white shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all disabled:opacity-40"
-          title={repoPath ? 'Choose a location, then start a shell session' : 'No repository resolved for this workspace yet'}
+          title={repoPath ? 'Start a shell session on the main branch, or pick another location' : 'No repository resolved for this workspace yet'}
           data-testid="start-session-primary"
         >
           <TerminalSquare className="w-3.5 h-3.5 shrink-0" />

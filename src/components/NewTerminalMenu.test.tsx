@@ -27,6 +27,9 @@ async function openProjectLocations() {
 }
 
 beforeEach(() => {
+  // The Recent strip is localStorage-backed, so a launch in one test would
+  // otherwise be visible to the next.
+  localStorage.clear();
   open.mockReset();
   open.mockResolvedValue(undefined);
   vi.mocked(invoke).mockReset();
@@ -96,6 +99,63 @@ describe('NewTerminalMenu terminal worktree locations', () => {
       workDir: undefined,
       workBranch: null,
       forceNew: true,
+    }));
+  });
+
+  it('opens the machine root unscoped for the machine-home location and records it', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    mount();
+
+    await openProjectLocations();
+    await userEvent.click(screen.getByTestId('terminal-location-home'));
+    await userEvent.click(screen.getByText('New shell'));
+
+    expect(open).toHaveBeenCalledTimes(1);
+    const opened = open.mock.calls[0][0];
+    expect(opened).toMatchObject({ machineId: 'local', forceNew: true, agentKind: null });
+    expect(opened).not.toHaveProperty('projectId');
+    expect(opened).not.toHaveProperty('repoPath');
+    expect(opened).not.toHaveProperty('workDir');
+
+    await userEvent.click(screen.getByTestId('new-terminal-caret'));
+    expect(screen.getByTitle('Open shell on local')).toBeInTheDocument();
+  });
+
+  it('scopes discovery and launch to the chosen repository on a multi-repo project', async () => {
+    useProject.mockReturnValue({
+      state: {
+        currentProjectId: 'project-1',
+        projects: [{ id: 'project-1', name: 'Demo', status: 'idle', repos: 2, nodes: 0, spend: 0, tokens: 0 }],
+        reposByProject: {
+          'project-1': [
+            { id: 'repository-1', repo_path: '/repos/demo', provider_id: 'provider-1' },
+            { id: 'repository-2', repo_path: '/repos/other', provider_id: 'provider-1' },
+          ],
+        },
+      },
+    });
+    vi.mocked(listTerminalWorktrees).mockImplementation(async (_projectId, repositoryId) =>
+      repositoryId === 'repository-2'
+        ? [{ path: '/repos/other-ticket', branch: 'other/ticket', isLocked: false }]
+        : [],
+    );
+    mount();
+
+    await openProjectLocations();
+    expect(listTerminalWorktrees).toHaveBeenCalledWith('project-1', 'repository-1');
+    await screen.findByText('No linked worktrees');
+
+    await userEvent.selectOptions(screen.getByTestId('new-terminal-repo-select'), 'repository-2');
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(await screen.findByTestId('terminal-location-worktree-/repos/other-ticket'));
+    await userEvent.click(screen.getByText('New shell'));
+
+    expect(listTerminalWorktrees).toHaveBeenCalledWith('project-1', 'repository-2');
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      repoPath: '/repos/other',
+      workDir: '/repos/other-ticket',
+      workBranch: 'other/ticket',
     }));
   });
 

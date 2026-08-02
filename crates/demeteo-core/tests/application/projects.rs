@@ -24,6 +24,7 @@ enum WorktreeCall {
     Create {
         machine: Option<String>,
         repo_dir: String,
+        project_root: String,
         branch: String,
         name: String,
     },
@@ -77,22 +78,38 @@ impl WorktreeOpsPort for RecordingWorktrees {
             machine: machine.map(str::to_string),
             repo_dir: repo_dir.to_string(),
         })?;
-        Ok(vec![WorktreeInfo {
-            path: format!("{repo_dir}-terminal"),
-            branch: Some("terminal/existing".to_string()),
-            is_locked: false,
-        }])
+        Ok(vec![
+            WorktreeInfo {
+                path: format!("{repo_dir}_wt_f-1-step-s-implement"),
+                branch: Some("feature/one_subtask_s-implement".to_string()),
+                is_locked: false,
+            },
+            // Deliberately shares no prefix with the workspace this context
+            // resolves: git reports the path it resolved physically at add
+            // time, so a filter comparing against the logical area would keep
+            // nothing here.
+            WorktreeInfo {
+                path: format!(
+                    "/physical/projects/p/{}/repo/existing",
+                    crate::paths::TERMINAL_WORKTREES_SUBDIR
+                ),
+                branch: Some("terminal/existing".to_string()),
+                is_locked: false,
+            },
+        ])
     }
     async fn create_terminal_worktree(
         &self,
         machine: Option<&str>,
         repo_dir: &str,
+        project_root: &str,
         branch: &str,
         name: &str,
     ) -> Result<WorktreeInfo, String> {
         self.record(WorktreeCall::Create {
             machine: machine.map(str::to_string),
             repo_dir: repo_dir.to_string(),
+            project_root: project_root.to_string(),
             branch: branch.to_string(),
             name: name.to_string(),
         })?;
@@ -101,6 +118,13 @@ impl WorktreeOpsPort for RecordingWorktrees {
             branch: Some(branch.to_string()),
             is_locked: false,
         })
+    }
+    async fn cleanup_legacy_terminal_worktrees(
+        &self,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<usize, String> {
+        panic!("unexpected WorktreeOpsPort call")
     }
     async fn detect_worktree_strategy(
         &self,
@@ -277,13 +301,15 @@ async fn create_resolves_a_remote_project_machine_and_repository_before_calling_
     let (ctx, worktree_port, calls) = context();
     add_project(&ctx, "p-remote", "remote", Some("machine-remote"));
     add_repo(&ctx, "r-remote", "p-remote", "org/remote-repo");
-    let repo_dir = format!(
-        "{}/.demeteo/projects/p-remote/repos/remote-repo",
+    let project_root = format!(
+        "{}/.demeteo/projects/p-remote",
         std::env::var("HOME").unwrap()
     );
+    let repo_dir = format!("{project_root}/repos/remote-repo");
     worktree_port.expect(WorktreeCall::Create {
         machine: Some("machine-remote".to_string()),
         repo_dir: repo_dir.clone(),
+        project_root: project_root.clone(),
         branch: "terminal/new".to_string(),
         name: "new".to_string(),
     });
@@ -304,9 +330,43 @@ async fn create_resolves_a_remote_project_machine_and_repository_before_calling_
         [WorktreeCall::Create {
             machine: Some("machine-remote".to_string()),
             repo_dir,
+            project_root,
             branch: "terminal/new".to_string(),
             name: "new".to_string()
         }]
+    );
+}
+
+/// A `{repo}_wt_{subtask}` checkout belongs to a running pipeline step, which
+/// force-removes it when the feature ends. Offering it as a session location
+/// hands the user a directory that disappears mid-edit, so the listing must
+/// drop it and keep only the terminal area.
+#[tokio::test]
+async fn subtask_worktrees_are_not_offered_as_terminal_locations() {
+    let (ctx, worktree_port, _calls) = context();
+    add_project(&ctx, "p-local", "local", None);
+    add_repo(&ctx, "r-local", "p-local", "org/local-repo");
+    let repo_dir = ctx
+        .workspace_dir
+        .join("projects/p-local/repos/local-repo")
+        .to_string_lossy()
+        .to_string();
+    worktree_port.expect(WorktreeCall::List {
+        machine: None,
+        repo_dir,
+    });
+
+    let worktrees = list_terminal_worktrees(&ctx, "p-local".to_string(), "r-local".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        worktrees
+            .iter()
+            .map(|worktree| worktree.branch.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("terminal/existing")],
+        "only the terminal-owned worktree may be offered: {worktrees:?}"
     );
 }
 

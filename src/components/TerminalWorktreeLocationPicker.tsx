@@ -6,9 +6,12 @@ import { createTerminalWorktree, listTerminalWorktrees } from '../lib/terminal';
 import { formatError } from '../lib/errors';
 
 /** A terminal target selected by a user. Worktree paths always come from the
- * backend; `main` deliberately leaves directory resolution to the launcher. */
+ * backend; `main` deliberately leaves directory resolution to the launcher,
+ * and `home` carries no repository scope at all — a launcher receiving it must
+ * open at the machine's own root rather than anywhere inside the project. */
 export type TerminalWorktreeLocation =
   | { kind: 'main'; workDir: null; workBranch: null }
+  | { kind: 'home'; workDir: null; workBranch: null }
   | { kind: 'worktree'; workDir: string; workBranch: string | null };
 
 export interface TerminalWorktreeLocationPickerProps {
@@ -18,6 +21,10 @@ export interface TerminalWorktreeLocationPickerProps {
   onChange: (location: TerminalWorktreeLocation) => void;
   /** Require a deliberate menu choice instead of treating main as selected. */
   requireSelection?: boolean;
+  /** Offer the unscoped machine root. Only a launcher that can open outside
+   *  the repository may set this; a repo-scoped one would emit a target it
+   *  cannot honour. */
+  allowHome?: boolean;
   /** Reports list/create activity so a containing launcher can stay disabled. */
   onBusyChange?: (busy: boolean) => void;
   disabled?: boolean;
@@ -26,6 +33,12 @@ export interface TerminalWorktreeLocationPickerProps {
 
 const MAIN_LOCATION: TerminalWorktreeLocation = {
   kind: 'main',
+  workDir: null,
+  workBranch: null,
+};
+
+const HOME_LOCATION: TerminalWorktreeLocation = {
+  kind: 'home',
   workDir: null,
   workBranch: null,
 };
@@ -47,6 +60,7 @@ export function TerminalWorktreeLocationPicker({
   repositoryId,
   onChange,
   requireSelection = false,
+  allowHome = false,
   onBusyChange,
   disabled = false,
   className = '',
@@ -72,6 +86,14 @@ export function TerminalWorktreeLocationPicker({
   currentTargetKey.current = targetKey;
   const busy = disabled || listing || creating;
 
+  // The reset below wipes typed input, so it must key on the target alone. A
+  // caller passing an inline `onChange` would otherwise clear a half-typed
+  // branch name on every parent re-render.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const requireSelectionRef = useRef(requireSelection);
+  requireSelectionRef.current = requireSelection;
+
   useEffect(() => {
     onBusyChange?.(listing || creating);
   }, [listing, creating, onBusyChange]);
@@ -87,15 +109,16 @@ export function TerminalWorktreeLocationPicker({
   }, [targetKey]);
 
   useEffect(() => {
+    const next = requireSelectionRef.current ? null : MAIN_LOCATION;
     setMenuOpen(false);
     setWorktrees([]);
     setLoadedFor(null);
-    setSelected(requireSelection ? null : MAIN_LOCATION);
+    setSelected(next);
     setBranch('');
     setWorktreeName('');
     setError(null);
-    if (!requireSelection) onChange(MAIN_LOCATION);
-  }, [targetKey, requireSelection, onChange]);
+    if (next) onChangeRef.current(next);
+  }, [targetKey]);
 
   const load = useCallback(async () => {
     if (!projectId || !repositoryId || listing || creating) return;
@@ -126,14 +149,20 @@ export function TerminalWorktreeLocationPicker({
     [onChange],
   );
 
+  // The list request must stay outside the state updater: StrictMode invokes
+  // an updater twice, so a request inside one issues two
+  // `list_terminal_worktrees` per open.
+  //
+  // Every open refetches. Worktrees appear and disappear while this menu is
+  // closed — a pipeline finishing, another window, a `git worktree` in a
+  // terminal — so a list cached from the first open goes stale in place, and
+  // choosing a vanished one opens a session on a path that no longer exists.
   const toggleMenu = useCallback(() => {
     if (busy) return;
-    setMenuOpen((wasOpen) => {
-      const willOpen = !wasOpen;
-      if (willOpen && loadedFor !== targetKey) void load();
-      return willOpen;
-    });
-  }, [busy, loadedFor, targetKey, load]);
+    const willOpen = !menuOpen;
+    setMenuOpen(willOpen);
+    if (willOpen) void load();
+  }, [busy, menuOpen, load]);
 
   const create = useCallback(async () => {
     // State does not update synchronously, so retain an imperative latch for
@@ -176,6 +205,8 @@ export function TerminalWorktreeLocationPicker({
       ? 'Choose a location'
       : selected.kind === 'main'
       ? 'Main branch'
+      : selected.kind === 'home'
+      ? 'Machine home'
       : selected.workBranch ?? selected.workDir;
 
   return (
@@ -208,6 +239,21 @@ export function TerminalWorktreeLocationPicker({
             <span className="flex-1">Main branch</span>
             {selected?.kind === 'main' && <Check className="w-3 h-3 text-cyan-400" />}
           </button>
+
+          {allowHome && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => choose(HOME_LOCATION)}
+              disabled={busy}
+              className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] font-mono text-slate-300 hover:bg-white/5 disabled:opacity-40"
+              data-testid="terminal-location-home"
+            >
+              <House className="w-3 h-3 text-slate-400" />
+              <span className="flex-1">Machine home</span>
+              {selected?.kind === 'home' && <Check className="w-3 h-3 text-cyan-400" />}
+            </button>
+          )}
 
           <div className="my-1 border-t border-white/[0.06]" />
           <div className="px-2 pb-1 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-600">Linked worktrees</div>

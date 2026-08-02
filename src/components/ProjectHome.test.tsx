@@ -117,11 +117,6 @@ function commandsOf(name: string): Array<Record<string, unknown> | undefined> {
     .map(([, a]) => a as Record<string, unknown> | undefined);
 }
 
-async function chooseMainTerminalLocation() {
-  await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-  await userEvent.click(screen.getByTestId('terminal-location-main'));
-}
-
 function mount(project: Project) {
   render(
     <NavigationProvider>
@@ -413,7 +408,6 @@ describe('ProjectHome — persistent Start Session affordance', () => {
     expect(commandsOf('start_terminal_session')).toHaveLength(1);
 
     // The hero button is independent: each click stacks another session.
-    await chooseMainTerminalLocation();
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
     });
@@ -452,7 +446,6 @@ describe('ProjectHome — persistent Start Session affordance', () => {
     mount(baseProject({ id: 'proj-local', compute_type: 'local' }));
 
     await waitFor(() => expect(screen.getByTestId('start-session-button')).toBeInTheDocument());
-    await chooseMainTerminalLocation();
 
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
@@ -475,7 +468,6 @@ describe('ProjectHome — persistent Start Session affordance', () => {
     mount(baseProject({ id: 'proj-remote', compute_type: 'remote', remote_host: 'gpu-box' }));
 
     await waitFor(() => expect(screen.getByTestId('start-session-button')).toBeInTheDocument());
-    await chooseMainTerminalLocation();
 
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
@@ -506,7 +498,6 @@ describe('ProjectHome — persistent Start Session affordance', () => {
       await userEvent.selectOptions(select, 'proj-multi-repo-1');
     });
     expect(select.value).toBe('proj-multi-repo-1');
-    await chooseMainTerminalLocation();
 
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));

@@ -319,6 +319,13 @@ mod ssh_target {
     }
 }
 
+/// `WorktreeOpsPort::create_terminal_worktree` against both transports. Nested
+/// here rather than hung off `ports::worktree_ops` so it reaches `ssh_target`
+/// — the loopback container's env contract is spelled once, as that module's
+/// own doc requires.
+#[path = "terminal_worktree.rs"]
+mod terminal_worktree;
+
 #[cfg(feature = "ssh-conformance")]
 #[tokio::test]
 async fn ssh_client_adapter_satisfies_the_contract() {

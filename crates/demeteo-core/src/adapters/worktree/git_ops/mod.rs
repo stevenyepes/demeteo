@@ -80,10 +80,20 @@ impl WorktreeOpsPort for GitOpsHelper {
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
+        project_root: &str,
         branch: &str,
         worktree_name: &str,
     ) -> Result<WorktreeInfo, String> {
-        self.create_terminal_worktree(machine_id, repo_dir, branch, worktree_name)
+        self.create_terminal_worktree(machine_id, repo_dir, project_root, branch, worktree_name)
+            .await
+    }
+
+    async fn cleanup_legacy_terminal_worktrees(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<usize, String> {
+        self.cleanup_legacy_terminal_worktrees(machine_id, repo_dir)
             .await
     }
 
