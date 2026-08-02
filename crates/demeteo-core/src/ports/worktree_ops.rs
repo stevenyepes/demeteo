@@ -71,6 +71,58 @@ pub trait WorktreeOpsPort: Send + Sync {
         repo_dir: &str,
     ) -> Result<Vec<WorktreeInfo>, String>;
 
+    /// Create a user-requested linked worktree without altering or reclaiming
+    /// any existing worktree state.
+    ///
+    /// This creates a **new** branch from the current primary-checkout HEAD.
+    /// Supplying a branch that already exists is an error; implementations
+    /// must not reuse, reset, or check out that branch in a new worktree.
+    ///
+    /// `project_root` is the Demeteo-owned root of the project and must
+    /// already exist on the target host; implementations derive the worktree
+    /// destination *below* it. `branch` and `worktree_name` stay untrusted —
+    /// the caller never gets to choose an absolute destination.
+    async fn create_terminal_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+        branch: &str,
+        worktree_name: &str,
+    ) -> Result<WorktreeInfo, String>;
+
+    /// The linked worktrees of `repo_dir` that belong to the terminal area
+    /// below `project_root`, and nothing else.
+    ///
+    /// Separate from [`list_worktrees`](Self::list_worktrees) rather than a
+    /// filter over it, because the classification needs the primary checkout's
+    /// path and that method deliberately withholds it — three of its callers
+    /// `worktree remove --force` whatever survives their own filter, so the
+    /// main checkout must not be in what they filter.
+    ///
+    /// An error, not an empty list, when the area cannot be derived: an empty
+    /// list is what a healthy repository with no terminal worktrees returns.
+    async fn list_terminal_worktrees(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+    ) -> Result<Vec<WorktreeInfo>, String>;
+
+    /// Retire terminal worktrees left at the location this feature used before
+    /// the area moved out of `repos/`, returning how many were unregistered.
+    ///
+    /// Unregistering is the point: those directories sit where
+    /// `application::bootstrap` reclaims the tree, so a plain delete leaves
+    /// `.git/worktrees` entries behind and a later add of the same name fails
+    /// against a worktree Git still believes in. Implementations must leave the
+    /// current-location worktrees alone.
+    async fn cleanup_legacy_terminal_worktrees(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<usize, String>;
+
     /// Detect the worktree strategy and return it.
     async fn detect_worktree_strategy(
         &self,

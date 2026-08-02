@@ -117,6 +117,15 @@ macro_rules! id_newtype {
 /// execution target. Do not use it for the former.
 pub const LOCAL_MACHINE: &str = "local";
 
+/// What sits between a feature branch and a subtask id in the branch a
+/// pipeline checks its subtask worktrees out on.
+///
+/// Provisioning builds the name, merge-back and cleanup match on it, and the
+/// terminal-location filter refuses anything carrying it — so a private
+/// spelling in any one of them silently targets, or spares, a branch the
+/// others do not.
+pub const SUBTASK_BRANCH_INFIX: &str = "_subtask_";
+
 id_newtype!(MachineId);
 
 impl MachineId {

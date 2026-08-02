@@ -10,10 +10,16 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SessionInfo } from "../types";
+import type {
+  CreateTerminalWorktreeRequest,
+  SessionInfo,
+  TerminalWorktree,
+} from "../types";
 import {
   attachTerminalSession,
+  createTerminalWorktree,
   detachTerminalSession,
+  listTerminalWorktrees,
   listTerminalSessions,
   renameTerminalSession,
 } from "./terminal";
@@ -111,6 +117,51 @@ describe("listTerminalSessions", () => {
     const result = await listTerminalSessions();
 
     expect(result).toEqual(payload);
+  });
+});
+
+describe("listTerminalWorktrees", () => {
+  it("lists a project repository's worktrees and maps the wire lock field", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([
+      { path: "/repos/app", branch: "main", is_locked: false },
+      { path: "/repos/app/feature", branch: null, is_locked: true },
+    ]);
+
+    const result = await listTerminalWorktrees("project_1", "repository_1");
+
+    expect(invoke).toHaveBeenCalledWith("list_terminal_worktrees", {
+      projectId: "project_1",
+      repositoryId: "repository_1",
+    });
+    expect(result).toEqual([
+      { path: "/repos/app", branch: "main", isLocked: false },
+      { path: "/repos/app/feature", branch: null, isLocked: true },
+    ] satisfies TerminalWorktree[]);
+  });
+});
+
+describe("createTerminalWorktree", () => {
+  it("forwards only the create request fields and maps the result", async () => {
+    const request = {
+      projectId: "project_1",
+      repositoryId: "repository_1",
+      branch: "feature/terminal",
+      worktreeName: "terminal-feature",
+    } satisfies CreateTerminalWorktreeRequest;
+    vi.mocked(invoke).mockResolvedValueOnce({
+      path: "/repos/app/.worktrees/terminal-feature",
+      branch: "feature/terminal",
+      is_locked: false,
+    });
+
+    const result = await createTerminalWorktree(request);
+
+    expect(invoke).toHaveBeenCalledWith("create_terminal_worktree", request);
+    expect(result).toEqual({
+      path: "/repos/app/.worktrees/terminal-feature",
+      branch: "feature/terminal",
+      isLocked: false,
+    } satisfies TerminalWorktree);
   });
 });
 

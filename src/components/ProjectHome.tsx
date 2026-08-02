@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
-import { Feature } from '../types';
+import { Feature, Repository } from '../types';
 import { formatTokens } from '../lib/utils';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
@@ -43,7 +43,7 @@ const ProjectHome = () => {
     const [features, setFeatures] = useState<Feature[]>([]);
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
-    const [activeRepoPath, setActiveRepoPath] = useState<string>('');
+    const [activeRepositoryId, setActiveRepositoryId] = useState<string>('');
     // Feature ids that have a remote-run mirror → they execute detached under
     // the runner rather than on this machine. Drives the per-card transport
     // badge. Empty when nothing detached is (or was) tracked in this project.
@@ -58,7 +58,8 @@ const ProjectHome = () => {
     });
 
     // Repositories drive the terminal tab / coding-session target.
-    const [repositories, setRepositories] = useState<{ path: string; name: string }[]>([]);
+    const [repositories, setRepositories] = useState<Repository[]>([]);
+    const [repositoriesProjectId, setRepositoriesProjectId] = useState<string | null>(null);
     // Workflow id → display meta, used to label the Active Pipelines list.
     const [workflowById, setWorkflowById] = useState<Map<string, { name: string; is_starter: boolean }>>(new Map());
 
@@ -187,7 +188,13 @@ const ProjectHome = () => {
         // during the fetch — or after a failed/empty fetch — open a session in
         // the project the user just left. An empty path disables the button.
         setRepositories([]);
-        setActiveRepoPath('');
+        setRepositoriesProjectId(null);
+        setActiveRepositoryId('');
+
+        // An earlier project's request may settle after this effect has been
+        // replaced. Its repositories must not become the selected launch
+        // target for the newly active project.
+        let cancelled = false;
 
         const fetchWorkspaceData = async () => {
             setIsLoadingFeatures(true);
@@ -198,6 +205,8 @@ const ProjectHome = () => {
                 listWorkflows(),
                 listMirroredRuns(),
             ]);
+
+            if (cancelled) return;
 
             // Detached runs: any active feature that has a remote-run mirror.
             if (mirrorsRes.status === 'fulfilled' && Array.isArray(mirrorsRes.value)) {
@@ -248,13 +257,10 @@ const ProjectHome = () => {
 
             // Handle repositories
             if (reposRes.status === 'fulfilled' && reposRes.value) {
-                const mapped = reposRes.value.map(r => ({
-                    path: r.repo_path,
-                    name: r.repo_path.split('/').pop() || r.repo_path
-                }));
-                setRepositories(mapped);
-                if (mapped.length > 0) {
-                    setActiveRepoPath(mapped[0].path);
+                setRepositories(reposRes.value);
+                setRepositoriesProjectId(activeProject.id);
+                if (reposRes.value.length > 0) {
+                    setActiveRepositoryId(reposRes.value[0].id);
                 }
             } else if (reposRes.status === 'rejected') {
                 console.error("Failed to fetch repositories:", reposRes.reason);
@@ -270,7 +276,18 @@ const ProjectHome = () => {
             }
         };
         fetchWorkspaceData();
+        return () => {
+            cancelled = true;
+        };
     }, [activeProject.id]);
+
+    // The active ID is meaningful only within the project that supplied this
+    // repository list. The explicit ownership check closes the render between
+    // a project change and its reset effect, when React still holds old state.
+    const activeRepository = repositoriesProjectId === activeProject.id
+        ? repositories.find((repo) => repo.id === activeRepositoryId) ?? null
+        : null;
+    const activeRepoPath = activeRepository?.repo_path ?? '';
 
     const isCurrentlyFailed = activeProject.status === 'error';
     const isCurrentlyBootstrapping = activeProject.status === 'bootstrapping';
@@ -467,13 +484,13 @@ const ProjectHome = () => {
                         <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-white/5 border border-white/5 rounded-lg p-2.5">
                             <span>Repository:</span>
                             <select
-                                value={activeRepoPath}
-                                onChange={(e) => setActiveRepoPath(e.target.value)}
+                                value={activeRepositoryId}
+                                onChange={(e) => setActiveRepositoryId(e.target.value)}
                                 className="bg-[#08090c] border border-white/10 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
                             >
                                 {repositories.map((repo) => (
-                                    <option key={repo.path} value={repo.path}>
-                                        {repo.path}
+                                    <option key={repo.id} value={repo.id}>
+                                        {repo.repo_path}
                                     </option>
                                 ))}
                             </select>
@@ -481,6 +498,7 @@ const ProjectHome = () => {
                     )}
                     <StartSessionButton
                         projectId={activeProject.id}
+                        repositoryId={activeRepository?.id ?? ''}
                         repoPath={activeRepoPath}
                         machineId={machineId}
                         machineLabel={machineId}

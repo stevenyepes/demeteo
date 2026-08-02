@@ -68,6 +68,18 @@ async fn do_bootstrap_inner(
         .join(paths::REPOS_SUBDIR)
     };
 
+    // Terminal worktrees once lived under `repos/`, where the reclaim below
+    // deletes them. Unregister those first: the reclaim removes directories
+    // without telling Git, leaving `.git/worktrees` entries that make a later
+    // add of the same name fail against a worktree Git still believes in.
+    for repo in &repos {
+        let repo_dir = repos_parent_dir.join(get_repo_name(&repo.repo_path));
+        let _ = ctx
+            .worktree_ops
+            .cleanup_legacy_terminal_worktrees(machine_id, &repo_dir.to_string_lossy())
+            .await;
+    }
+
     // Clean up any directories in the workspace repos/ folder that are no longer configured
     let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
     if project.compute_type.to_lowercase() == "local" {

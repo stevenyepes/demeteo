@@ -1,7 +1,7 @@
 use super::GitOpsHelper;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 impl GitOpsHelper {
     /// Get the current HEAD branch for a repo directory
@@ -35,88 +35,153 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let output = self
             .exec
+            .run_command(machine_str, &worktree_list_cmd(repo_dir))
+            .await?;
+
+        Ok(crate::domain::worktree_listing::parse(&output).linked)
+    }
+
+    /// Create a linked worktree for an interactive terminal session.
+    ///
+    /// Unlike subtask provisioning, this path never removes an existing
+    /// worktree, resets a branch, or falls back to an existing branch. `git
+    /// worktree add -b` creates the requested branch from the current
+    /// primary-checkout HEAD; an existing requested branch is rejected rather
+    /// than reused. The caller owns both names, so a collision is an error the
+    /// user must resolve rather than stale pipeline state to reclaim.
+    pub async fn create_terminal_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+        branch: &str,
+        worktree_name: &str,
+    ) -> Result<WorktreeInfo, String> {
+        validate_terminal_branch(branch)?;
+        let destination = terminal_worktree_dir(repo_dir, project_root, worktree_name)?;
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let command =
+            terminal_worktree_create_cmd(repo_dir, project_root, branch, &destination, "")?;
+        let output = self
+            .exec
+            .run_command(machine_str, &command)
+            .await
+            .map_err(|e| {
+                format!(
+                    "create_terminal_worktree: git worktree add for branch '{branch}' failed: {e}"
+                )
+            })?;
+
+        // The path the command resolved, not the one derived from
+        // configuration. Git records the physical destination and replays it
+        // from `worktree list`, so returning the logical form would hand the
+        // caller a path that never equals the one it lists back — on macOS
+        // `/var` and `/private/var` name the same directory and compare unequal.
+        Ok(WorktreeInfo {
+            path: created_terminal_worktree_path(&output, &destination),
+            branch: Some(branch.to_string()),
+            is_locked: false,
+        })
+    }
+
+    /// The linked worktrees a terminal session may be opened in.
+    ///
+    /// One listing serves both halves: the primary checkout Git names first is
+    /// the physical anchor
+    /// [`domain::terminal_worktree::selectable`](crate::domain::terminal_worktree::selectable)
+    /// needs, and the rest are the candidates. It never leaves this function.
+    pub async fn list_terminal_worktrees(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+    ) -> Result<Vec<WorktreeInfo>, String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let output = self
+            .exec
+            .run_command(machine_str, &worktree_list_cmd(repo_dir))
+            .await?;
+        let listing = crate::domain::worktree_listing::parse(&output);
+        let primary = listing.primary.ok_or_else(|| {
+            format!("list_terminal_worktrees: git reported no primary worktree for {repo_dir}")
+        })?;
+
+        crate::domain::terminal_worktree::selectable(
+            project_root,
+            repo_dir,
+            &primary.path,
+            listing.linked,
+        )
+        .ok_or_else(|| {
+            format!(
+                "list_terminal_worktrees: no terminal area for repository {repo_dir} below \
+                 project root {project_root} (git reports the checkout at {})",
+                primary.path
+            )
+        })
+    }
+
+    /// Retire terminal worktrees still registered at the pre-relocation
+    /// location, returning how many were unregistered.
+    ///
+    /// See [`terminal_worktree_area`] for why that location was abandoned. The
+    /// order matters and mirrors [`GitOpsHelper::cleanup_subtask_worktree`]:
+    /// `worktree remove` first so Git forgets the entry, then `prune` for any
+    /// whose directory a previous reclaim already deleted, and only then the
+    /// area itself.
+    pub async fn cleanup_legacy_terminal_worktrees(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<usize, String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let Some(area) = legacy_terminal_worktree_area(repo_dir) else {
+            return Ok(0);
+        };
+        let marker = area
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let safe_dir = paths::shell_escape_posix(repo_dir);
+
+        let stale: Vec<String> = self
+            .list_worktrees(machine_id, repo_dir)
+            .await?
+            .into_iter()
+            .filter(|worktree| has_path_component(&worktree.path, &marker))
+            .map(|worktree| worktree.path)
+            .collect();
+
+        for path in &stale {
+            let _ = self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "git -C {} worktree remove --force {}",
+                        safe_dir,
+                        paths::shell_escape_posix(path)
+                    ),
+                )
+                .await;
+        }
+
+        let _ = self
+            .exec
+            .run_command(machine_str, &format!("git -C {safe_dir} worktree prune"))
+            .await;
+        let _ = self
+            .exec
             .run_command(
                 machine_str,
                 &format!(
-                    "git -C {} worktree list --porcelain",
-                    paths::shell_escape_posix(repo_dir)
+                    "rm -rf {}",
+                    paths::shell_escape_posix(&area.to_string_lossy())
                 ),
             )
-            .await?;
+            .await;
 
-        let mut worktrees = Vec::new();
-        let mut current_path: Option<String> = None;
-        let mut current_branch: Option<String> = None;
-        let mut is_locked = false;
-        // block_index tracks which worktree entry we are accumulating.
-        // Index 0 is always the primary worktree (the main checkout); we skip it.
-        let mut block_index: i32 = -1;
-
-        let flush = |path: String,
-                     branch: Option<String>,
-                     locked: bool,
-                     idx: i32,
-                     out: &mut Vec<WorktreeInfo>| {
-            if idx > 0 {
-                out.push(WorktreeInfo {
-                    path,
-                    branch,
-                    is_locked: locked,
-                });
-            }
-        };
-
-        for line in output.lines() {
-            if line.starts_with("worktree ") {
-                // Flush the previously accumulated block (if any)
-                if let Some(path) = current_path.take() {
-                    flush(
-                        path,
-                        current_branch.take(),
-                        is_locked,
-                        block_index,
-                        &mut worktrees,
-                    );
-                }
-                block_index += 1;
-                current_path = Some(line.trim_start_matches("worktree ").to_string());
-                current_branch = None;
-                is_locked = false;
-            } else if line.starts_with("branch ") {
-                // Strip "branch refs/heads/" prefix; fall back to raw remainder
-                current_branch = Some(
-                    line.trim_start_matches("branch refs/heads/")
-                        .trim_start_matches("branch ")
-                        .to_string(),
-                );
-            } else if line.starts_with("locked") {
-                is_locked = true;
-            } else if line.is_empty() {
-                // Blank line = end of a porcelain block; flush it
-                if let Some(path) = current_path.take() {
-                    flush(
-                        path,
-                        current_branch.take(),
-                        is_locked,
-                        block_index,
-                        &mut worktrees,
-                    );
-                    is_locked = false;
-                }
-            }
-        }
-        // Flush the final block if it wasn't terminated by a blank line
-        if let Some(path) = current_path.take() {
-            flush(
-                path,
-                current_branch.take(),
-                is_locked,
-                block_index,
-                &mut worktrees,
-            );
-        }
-
-        Ok(worktrees)
+        Ok(stale.len())
     }
 
     /// Create a feature branch off the default branch in the main repo.
@@ -640,7 +705,7 @@ impl GitOpsHelper {
         // mirrors `cleanup_subtask_worktree`'s worktree→branch ordering.
 
         // 1. Remove worktree directories for subtasks of this feature.
-        let prefix = format!("{}_subtask_", branch);
+        let prefix = format!("{branch}{}", crate::domain::ids::SUBTASK_BRANCH_INFIX);
         if let Ok(worktrees) = self.list_worktrees(machine_id, repo_dir).await {
             for wt in &worktrees {
                 let is_match = wt.branch.as_deref().is_some_and(|b| b.starts_with(&prefix));
@@ -693,9 +758,10 @@ impl GitOpsHelper {
         //    that leading whitespace, so `git branch -D "  <name>"` would
         //    never match a real ref.
         let subtask_cmd = format!(
-            "git -C {} branch --list '{}_subtask_*' --format='%(refname:short)' | while IFS= read -r b; do git -C {} branch -D \"$b\" 2>/dev/null; done",
+            "git -C {} branch --list '{}{}*' --format='%(refname:short)' | while IFS= read -r b; do git -C {} branch -D \"$b\" 2>/dev/null; done",
             safe_dir,
             safe_branch,
+            crate::domain::ids::SUBTASK_BRANCH_INFIX,
             safe_dir
         );
         let _ = self.exec.run_command(machine_str, &subtask_cmd).await;
@@ -801,6 +867,237 @@ impl GitOpsHelper {
 /// silently misses its target, so it is written once.
 fn worktree_dir(repo_dir: &str, worktree_id: &str) -> String {
     format!("{}_wt_{}", repo_dir, worktree_id)
+}
+
+/// The one reading every worktree listing in this crate is built from. Shared
+/// so the terminal listing and merge-back cannot end up asking git a
+/// differently-shaped question than [`GitOpsHelper::list_worktrees`] does.
+pub(super) fn worktree_list_cmd(repo_dir: &str) -> String {
+    format!(
+        "git -C {} worktree list --porcelain",
+        paths::shell_escape_posix(repo_dir)
+    )
+}
+
+/// Resolve a terminal worktree beneath a directory controlled by Demeteo, not
+/// by the interactive caller. A relative name may contain normal path
+/// components, but it may never select the repository root, an absolute path,
+/// or an ancestor of that directory.
+fn terminal_worktree_dir(
+    repo_dir: &str,
+    project_root: &str,
+    worktree_name: &str,
+) -> Result<String, String> {
+    let name = Path::new(worktree_name);
+    if worktree_name.trim().is_empty()
+        || name.is_absolute()
+        // A remote repository may use POSIX paths while the desktop host is
+        // Windows (or vice versa), so reject the other platform's absolute
+        // path forms instead of trusting this host's `Path` parser alone.
+        || worktree_name.contains('\\')
+        || worktree_name.contains(':')
+        || name.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
+                    | Component::CurDir
+            )
+        })
+    {
+        return Err("create_terminal_worktree: worktree name must be a non-empty relative path without traversal".to_string());
+    }
+
+    let worktree_area = terminal_worktree_area(repo_dir, project_root)?;
+    let destination: PathBuf = worktree_area.join(name);
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+/// `<project_root>/terminal-worktrees/<repo_name>` — a sibling of the project's
+/// `repos/`, never a child of it.
+///
+/// These worktrees hold the user's uncommitted interactive work, and
+/// `application::bootstrap` prunes `repos/` down to the configured repository
+/// names on every re-bootstrap. Inside `repos/` the area is destroyed, and
+/// destroyed *asymmetrically*: the local prune walks `read_dir`, which yields
+/// dot-entries, while the remote prune globs `"$dir"/*`, which does not match a
+/// leading dot — so a hidden sibling of the checkout survived remotely and
+/// vanished locally. Keeping the area out of `repos/` is what makes the two
+/// transports agree.
+fn terminal_worktree_area(repo_dir: &str, project_root: &str) -> Result<PathBuf, String> {
+    let repo_name = Path::new(repo_dir).file_name().ok_or_else(|| {
+        "create_terminal_worktree: repository path has no directory name".to_string()
+    })?;
+    Ok(Path::new(project_root)
+        .join(paths::TERMINAL_WORKTREES_SUBDIR)
+        .join(repo_name))
+}
+
+/// `<repos>/.<repo_name>.demeteo-terminal-worktrees` — where terminal
+/// worktrees lived before [`terminal_worktree_area`] moved them out of
+/// `repos/`. Retained only so
+/// [`GitOpsHelper::cleanup_legacy_terminal_worktrees`] can find and retire
+/// them; nothing creates this path any more.
+fn legacy_terminal_worktree_area(repo_dir: &str) -> Option<PathBuf> {
+    let repo = Path::new(repo_dir);
+    let parent = repo.parent()?;
+    let repo_name = repo.file_name()?;
+    Some(parent.join(format!(
+        ".{}.demeteo-terminal-worktrees",
+        repo_name.to_string_lossy()
+    )))
+}
+
+/// Match a directory name anywhere in `path`, rather than comparing a prefix
+/// against a computed root: Git replays the path it resolved when the worktree
+/// was added, which is physical, while a path built from configuration is
+/// logical, and on macOS those differ (`/var` → `/private/var`).
+fn has_path_component(path: &str, name: &str) -> bool {
+    Path::new(path)
+        .components()
+        .any(|component| component.as_os_str() == name)
+}
+
+/// Build the one target-machine transaction used to prepare a terminal
+/// worktree destination and add it to Git.
+///
+/// The worktree area and every requested parent are created one component at
+/// a time. `mkdir -p` is deliberately not used: it silently follows a
+/// symlink. Starting at the project root — the one directory here that Demeteo
+/// owns and that already exists — this flow checks and then enters every
+/// component relative to its current working directory, including
+/// `terminal-worktrees` and the per-repository directory below it. It also
+/// compares the physical directory after every `cd` with the expected child.
+/// Once the final parent is entered, Git receives only the destination
+/// basename, so a later rename-and-symlink substitution cannot redirect it by
+/// causing another pathname resolution of that parent.
+///
+/// `interlude` is shell run after the destination parent has been entered and
+/// before Git is invoked. Production passes `""`; only a test that has to act
+/// inside that check-to-use window passes anything else, so the string this
+/// builds is otherwise the same one production emits.
+fn terminal_worktree_create_cmd(
+    repo_dir: &str,
+    project_root: &str,
+    branch: &str,
+    destination: &str,
+    interlude: &str,
+) -> Result<String, String> {
+    let destination_path = Path::new(destination);
+    let area = terminal_worktree_area(repo_dir, project_root)?;
+    let parent = destination_path.parent().ok_or_else(|| {
+        "create_terminal_worktree: destination has no parent directory".to_string()
+    })?;
+    let trusted_root = Path::new(project_root);
+    let area_root = trusted_root.join(paths::TERMINAL_WORKTREES_SUBDIR);
+
+    let mut directories: Vec<&Path> = parent
+        .ancestors()
+        .take_while(|candidate| *candidate != trusted_root)
+        .collect();
+    directories.reverse();
+    if directories.first().copied() != Some(area_root.as_path())
+        || !destination_path.starts_with(&area)
+        || destination_path == area
+    {
+        return Err("create_terminal_worktree: destination escaped controlled area".to_string());
+    }
+
+    let trusted_parent = paths::shell_escape_posix(project_root);
+    let prepare = directories
+        .iter()
+        .map(|directory| {
+            let component = directory.file_name().ok_or_else(|| {
+                "create_terminal_worktree: controlled parent has no directory name".to_string()
+            })?;
+            let component = paths::shell_escape_posix(&component.to_string_lossy());
+            Ok(format!(
+                "if [ -L ./{component} ]; then echo 'terminal worktree parent is a symlink' >&2; exit 1; fi; \\
+                 if [ -e ./{component} ]; then [ -d ./{component} ] || {{ echo 'terminal worktree parent is not a directory' >&2; exit 1; }}; \\
+                 else mkdir ./{component}; fi; \\
+                 [ ! -L ./{component} ] && [ -d ./{component} ] || {{ echo 'terminal worktree parent changed during creation' >&2; exit 1; }}; \\
+                 expected_child=\"${{expected_parent}}\"/{component}; cd ./{component}; actual_parent=$(pwd -P); \\
+                 [ \"$actual_parent\" = \"$expected_child\" ] || {{ echo 'terminal worktree parent changed during creation' >&2; exit 1; }}; \\
+                 expected_parent=$actual_parent"
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?
+        .join("; ");
+    let destination_name = destination_path
+        .file_name()
+        .ok_or_else(|| "create_terminal_worktree: destination has no directory name".to_string())?;
+    let destination_name = paths::shell_escape_posix(&destination_name.to_string_lossy());
+    let work_tree = paths::shell_escape_posix(repo_dir);
+    let branch = paths::shell_escape_posix(branch);
+
+    // `rev-parse` rather than a literal `<repo_dir>/.git`. Not because the
+    // literal is known to break — Git resolves a `.git` *file* handed to
+    // `--git-dir`, so submodule and linked-worktree checkouts work either way —
+    // but because it is the only place in this module that asserts where a
+    // repository keeps its git directory. Every other call here uses `git -C`
+    // and gets discovery for free; this one cannot, because the shell has to
+    // stay in the destination parent it just checked.
+    Ok(format!(
+        "set -eu; git_dir=$(git -C {work_tree} rev-parse --absolute-git-dir); \\
+         cd {trusted_parent}; expected_parent=$(pwd -P); {prepare}; \\
+         {interlude}if [ -e ./{destination_name} ] || [ -L ./{destination_name} ]; then echo 'terminal worktree destination already exists' >&2; exit 1; fi; \\
+         git --git-dir=\"$git_dir\" --work-tree={work_tree} worktree add -b {branch} ./{destination_name}; \\
+         printf '%s\\n' \"${{expected_parent}}\"/{destination_name}",
+    ))
+}
+
+/// The physical destination the command reports on its last line.
+///
+/// Taking the *last* line rather than the whole output: `git worktree add`
+/// writes its progress to stderr, but that is a convention rather than a
+/// guarantee, and a transport is free to interleave. Falling back to the
+/// derived path keeps a silent stdout from failing the whole create.
+fn created_terminal_worktree_path(output: &str, derived: &str) -> String {
+    output
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .filter(|line| line.starts_with('/'))
+        .map(str::to_string)
+        .unwrap_or_else(|| derived.to_string())
+}
+
+/// Validate the user branch before it is handed to Git. This is the
+/// `check-ref-format --branch` safety subset: it rejects ambiguous refs and
+/// command-like names while allowing ordinary slash-separated branch names.
+///
+/// It also refuses the pipeline's own subtask infix, which Git would happily
+/// accept. `domain::terminal_worktree` withholds any branch carrying it, so
+/// accepting one here would hand back a worktree that then never appears in the
+/// listing again — created, on disk, and invisible, with nothing said. A refusal
+/// at creation is the same rule, stated where the user can act on it.
+fn validate_terminal_branch(branch: &str) -> Result<(), String> {
+    let invalid = branch.is_empty()
+        || branch == "@"
+        || branch.contains(crate::domain::ids::SUBTASK_BRANCH_INFIX)
+        || branch.starts_with('-')
+        || branch.starts_with('/')
+        || branch.ends_with('/')
+        || branch.ends_with('.')
+        || branch.contains("..")
+        || branch.contains("@{")
+        || branch.contains("//")
+        || branch.chars().any(|character| {
+            character.is_ascii_control()
+                || character.is_whitespace()
+                || matches!(character, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+        })
+        || branch
+            .split('/')
+            .any(|component| component.starts_with('.') || component.ends_with(".lock"));
+    if invalid {
+        return Err(format!(
+            "create_terminal_worktree: branch '{branch}' is not a safe Git branch name"
+        ));
+    }
+    Ok(())
 }
 
 /// Build the shell command that symlinks each entry in

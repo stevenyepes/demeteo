@@ -1,6 +1,6 @@
 use crate::application::projects::{ProjectConfig, RepoDirtyStatus};
 use crate::domain::ids::ProjectId;
-use crate::domain::models::{EffortLevel, Project, RepoHealthStatus, Repository};
+use crate::domain::models::{EffortLevel, Project, RepoHealthStatus, Repository, WorktreeInfo};
 use crate::error::AppError;
 use crate::paths;
 use crate::state::AppContext;
@@ -144,6 +144,45 @@ pub async fn resolve_repo_dir(
     crate::application::projects::resolve_target_dir(&ctx, &project, &project_id, &repo_path)
         .await
         .map_err(AppError::from)
+}
+
+/// List the linked worktrees for a repository owned by a project.
+///
+/// The application policy resolves the trusted machine and checkout directory
+/// from these IDs before it delegates any Git operation to the worktree port.
+#[tauri::command]
+pub async fn list_terminal_worktrees(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    repository_id: String,
+) -> Result<Vec<WorktreeInfo>, AppError> {
+    crate::application::projects::list_terminal_worktrees(&ctx, project_id, repository_id)
+        .await
+        .map_err(AppError::from)
+}
+
+/// Create a linked worktree for a repository owned by a project.
+///
+/// Callers supply only the project/repository identities and user-facing
+/// branch/name inputs. The application policy derives the machine and
+/// destination; validation and Git I/O remain behind `WorktreeOpsPort`.
+#[tauri::command]
+pub async fn create_terminal_worktree(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    repository_id: String,
+    branch: String,
+    worktree_name: String,
+) -> Result<WorktreeInfo, AppError> {
+    crate::application::projects::create_terminal_worktree(
+        &ctx,
+        project_id,
+        repository_id,
+        branch,
+        worktree_name,
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 #[tauri::command]

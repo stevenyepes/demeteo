@@ -6,9 +6,15 @@ import { useNavigation } from '../context';
 import { AGENTS, type AgentMeta } from '../lib/agents';
 import { recordRecent } from '../lib/terminalRecents';
 import { formatError } from '../lib/errors';
+import {
+  TerminalWorktreeLocationPicker,
+  type TerminalWorktreeLocation,
+} from './TerminalWorktreeLocationPicker';
 
 export interface StartSessionButtonProps {
   projectId: string;
+  /** Persistent repository identity used by the terminal location chooser. */
+  repositoryId: string;
   repoPath: string;
   machineId: string;
   machineLabel: string;
@@ -32,6 +38,7 @@ export interface StartSessionButtonProps {
  */
 export function StartSessionButton({
   projectId,
+  repositoryId,
   repoPath,
   machineId,
   machineLabel,
@@ -42,6 +49,8 @@ export function StartSessionButton({
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [location, setLocation] = useState<TerminalWorktreeLocation | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -82,7 +91,7 @@ export function StartSessionButton({
       // no repositories) — same guard `TerminalTabOpener` uses, so a click in
       // that window can't open a session at the process's default directory
       // instead of the repo.
-      if (!repoPath) return;
+      if (!repoPath || !location || locationBusy) return;
       launchingRef.current = true;
       setLaunching(true);
       setMenuOpen(false);
@@ -93,6 +102,8 @@ export function StartSessionButton({
           machineLabel,
           projectId,
           repoPath,
+          workDir: location.workDir ?? undefined,
+          workBranch: location.workBranch,
           forceNew: true,
           agentKind: agent?.kind ?? null,
           launchCommand: agent?.binary,
@@ -106,28 +117,39 @@ export function StartSessionButton({
         setLaunching(false);
       }
     },
-    [open, machineId, machineLabel, projectId, repoPath, navigate],
+    [open, machineId, machineLabel, projectId, repoPath, location, locationBusy, navigate],
   );
 
   // A stale failure must not follow the user to another project or repo: the
   // message names a target that is no longer the one this button would open.
+  // The selection is deliberately left alone — the picker re-emits its
+  // main-branch default when retargeted, and a child effect commits before
+  // this one, so clearing it here would strand the button disabled.
   useEffect(() => {
     setError(null);
-  }, [projectId, repoPath, machineId]);
+  }, [projectId, repositoryId, repoPath, machineId]);
 
   // Disabled while a launch is in flight, and until the workspace has
   // resolved a repo path to scope the session to.
-  const disabled = launching || !repoPath;
+  const disabled = launching || locationBusy || !repoPath || !location;
 
   return (
     <div ref={containerRef} className={`relative ${className}`} data-testid="start-session-button">
+      <TerminalWorktreeLocationPicker
+        projectId={projectId}
+        repositoryId={repositoryId}
+        disabled={launching}
+        onBusyChange={setLocationBusy}
+        onChange={setLocation}
+        className="mb-1.5 w-52"
+      />
       <div className="inline-flex shrink-0 rounded-md shadow-sm">
         <button
           type="button"
           onClick={() => void launch()}
           disabled={disabled}
           className="flex items-center gap-1.5 pl-3 pr-3 py-1.5 rounded-l-md text-xs font-mono whitespace-nowrap border border-white/10 border-r-0 bg-violet-600 hover:bg-violet-500 text-white shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all disabled:opacity-40"
-          title={repoPath ? 'Start a shell session in this repo' : 'No repository resolved for this workspace yet'}
+          title={repoPath ? 'Start a shell session on the main branch, or pick another location' : 'No repository resolved for this workspace yet'}
           data-testid="start-session-primary"
         >
           <TerminalSquare className="w-3.5 h-3.5 shrink-0" />

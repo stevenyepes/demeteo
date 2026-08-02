@@ -20,31 +20,17 @@ impl GitOpsHelper {
         let safe_sb = paths::shell_escape_posix(&subtask_branch);
 
         // Find if the feature branch is checked out in any worktree (including the main repo).
-        let mut checked_out_path = None;
-        if let Ok(worktree_list) = self
+        let checked_out_path = match self
             .exec
-            .run_command(
-                machine_str,
-                &format!("git -C {} worktree list --porcelain", safe_wt),
-            )
+            .run_command(machine_str, &super::worktree::worktree_list_cmd(wt_path))
             .await
         {
-            let mut current_path = None;
-            for line in worktree_list.lines() {
-                if line.starts_with("worktree ") {
-                    current_path = Some(line.trim_start_matches("worktree ").trim().to_string());
-                } else if line.starts_with("branch ") {
-                    let branch_name = line
-                        .trim_start_matches("branch refs/heads/")
-                        .trim_start_matches("branch ")
-                        .trim();
-                    if branch_name == feature_branch {
-                        checked_out_path = current_path.clone();
-                        break;
-                    }
-                }
-            }
-        }
+            Ok(worktree_list) => crate::domain::worktree_listing::parse(&worktree_list)
+                .all()
+                .find(|worktree| worktree.branch.as_deref() == Some(feature_branch))
+                .map(|worktree| worktree.path.clone()),
+            Err(_) => None,
+        };
 
         // Conventional-commit form: a target repo that lints the whole PR
         // range in CI rejects a bare "Merge subtask sub-2" even though the

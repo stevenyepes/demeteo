@@ -117,7 +117,7 @@ export function GeneralTab() {
                   <div className="flex items-center gap-2 text-sm text-slate-400 py-2"><RotateCw className="w-4 h-4 animate-spin text-cyan-400" />Scanning repositories...</div>
                 ) : s.healthData && s.healthData.length > 0 ? s.healthData.map(repo => {
                   const repoName = repo.repo_path.split('/').pop() ?? repo.repo_path;
-                  const activeWorktrees = repo.worktrees.slice(1);
+                  const activeWorktrees = repo.worktrees;
                   const isDirty = repo.has_uncommitted || repo.has_unpushed;
                   return (
                     <div key={repo.repo_path} className={`rounded-lg border p-3.5 transition-all ${repo.is_cloned ? (isDirty ? 'border-amber-500/20 bg-amber-500/5' : 'border-white/5 bg-black/20') : 'border-ruby-500/20 bg-ruby-500/5'}`}>

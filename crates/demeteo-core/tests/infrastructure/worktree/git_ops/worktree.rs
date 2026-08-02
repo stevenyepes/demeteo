@@ -8,8 +8,118 @@ use crate::adapters::local::execution::LocalSubprocessAdapter;
 use crate::paths::feature_cache_dir;
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
+use crate::ports::worktree_ops::WorktreeOpsPort;
 use rusqlite::Connection;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// Strict execution double for the terminal-worktree transport boundary. It
+/// accepts the one compound prepare-and-add command and records which machine
+/// received it; every unrelated operation is an error.
+struct RecordingTerminalExec {
+    calls: Mutex<Vec<(String, String)>>,
+}
+
+impl RecordingTerminalExec {
+    fn calls(&self) -> Vec<(String, String)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ExecutionPort for RecordingTerminalExec {
+    async fn test_connection(&self, _: &str) -> Result<(), String> {
+        Err("unexpected test_connection".to_string())
+    }
+
+    async fn run_command(&self, machine_id: &str, command: &str) -> Result<String, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((machine_id.to_string(), command.to_string()));
+        if command.contains("worktree add") {
+            Ok(String::new())
+        } else {
+            Err(format!("unexpected command: {command}"))
+        }
+    }
+
+    async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
+        Err("unexpected read_file".to_string())
+    }
+    async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Err("unexpected write_file".to_string())
+    }
+    async fn write_file_bytes(&self, _: &str, _: &str, _: &[u8]) -> Result<(), String> {
+        Err("unexpected write_file_bytes".to_string())
+    }
+    async fn get_metadata(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<crate::ports::execution::SftpEntry, String> {
+        Err("unexpected get_metadata".to_string())
+    }
+    async fn list_dir(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
+        Err("unexpected list_dir".to_string())
+    }
+    async fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Err("unexpected setup_worktree".to_string())
+    }
+    async fn resolve_home(&self, _: &str) -> Result<String, String> {
+        Err("unexpected resolve_home".to_string())
+    }
+    async fn resolve_user(&self, _: &str) -> Result<String, String> {
+        Err("unexpected resolve_user".to_string())
+    }
+    async fn control_rpc(
+        &self,
+        _: &str,
+        _: &str,
+        _: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("unexpected control_rpc".to_string())
+    }
+    fn spawn_interactive(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[String],
+        _: &str,
+        _: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+        Err("unexpected spawn_interactive".to_string())
+    }
+}
+
+/// A repository sitting where a bootstrapped project puts it —
+/// `<project_root>/repos/<name>` — so the terminal area these tests exercise is
+/// derived from a real project root rather than an invented one.
+async fn make_project_repo(suffix: &str) -> (std::path::PathBuf, String, GitOpsHelper) {
+    let (checkout, helper) = make_repo(suffix).await;
+    let project_root = checkout.with_extension("project");
+    let repos = project_root.join(crate::paths::REPOS_SUBDIR);
+    std::fs::create_dir_all(&repos).expect("creates the project repos directory");
+    let repo_dir = repos.join(checkout.file_name().expect("temporary repo has a name"));
+    std::fs::rename(&checkout, &repo_dir).expect("moves the checkout into the project layout");
+    (project_root, repo_dir.to_string_lossy().to_string(), helper)
+}
+
+/// The area for `repo_dir` under `project_root`, spelled out here rather than
+/// reusing the production helper so a wrong relocation cannot pass by agreeing
+/// with itself.
+fn expected_area(project_root: &std::path::Path, repo_dir: &str) -> std::path::PathBuf {
+    project_root
+        .join(crate::paths::TERMINAL_WORKTREES_SUBDIR)
+        .join(
+            std::path::Path::new(repo_dir)
+                .file_name()
+                .expect("repository has a name"),
+        )
+}
 
 #[test]
 fn command_iterates_every_known_cache_dir() {
@@ -181,6 +291,681 @@ async fn test_list_worktrees_with_one_extra_worktree() {
         .await;
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&wt_dir);
+}
+
+#[tokio::test]
+async fn terminal_worktree_creation_returns_linked_worktree_metadata() {
+    let (project_root, repo, helper) = make_project_repo("terminal_worktree_create").await;
+
+    let created = WorktreeOpsPort::create_terminal_worktree(
+        &helper,
+        None,
+        &repo,
+        &project_root.to_string_lossy(),
+        "terminal/session",
+        "session-one",
+    )
+    .await
+    .expect("creates a terminal worktree");
+
+    assert_eq!(created.branch.as_deref(), Some("terminal/session"));
+    assert!(!created.is_locked);
+    assert_eq!(
+        std::path::Path::new(&created.path).canonicalize().unwrap(),
+        expected_area(&project_root, &repo)
+            .join("session-one")
+            .canonicalize()
+            .unwrap()
+    );
+    assert!(std::path::Path::new(&created.path).exists());
+    // What `create` returns must be what `list` replays, or nothing can match
+    // a freshly created worktree against the listing it appears in.
+    assert_eq!(
+        helper
+            .list_worktrees(None, &repo)
+            .await
+            .unwrap()
+            .iter()
+            .map(|worktree| worktree.path.as_str())
+            .collect::<Vec<_>>(),
+        [created.path.as_str()]
+    );
+    // The bootstrap prune sweeps `repos/` by configured repository name, so a
+    // terminal worktree anywhere below it is deleted on the next re-bootstrap.
+    assert!(
+        !std::path::Path::new(&created.path)
+            .starts_with(project_root.join(crate::paths::REPOS_SUBDIR)),
+        "the terminal area must not live under the pruned repos/ directory: {}",
+        created.path
+    );
+
+    let exec = fresh_exec();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{repo}\" worktree remove --force \"{}\"",
+                created.path
+            ),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn terminal_worktree_rejects_a_symlinked_area_or_nested_parent() {
+    use std::os::unix::fs::symlink;
+
+    let (project_root, repo, helper) = make_project_repo("terminal_worktree_symlink").await;
+    let root = project_root.to_string_lossy().to_string();
+    let area_root = project_root.join(crate::paths::TERMINAL_WORKTREES_SUBDIR);
+    let area = expected_area(&project_root, &repo);
+    let outside = project_root.join("demeteo_terminal_worktree_outside");
+    std::fs::create_dir(&outside).expect("creates outside directory");
+
+    symlink(&outside, &area_root).expect("creates area-root escape link");
+    let area_root_error = helper
+        .create_terminal_worktree(None, &repo, &root, "terminal/area-link", "session")
+        .await
+        .expect_err("a symlinked worktree area root must be rejected");
+    assert!(area_root_error.contains("symlink"), "{area_root_error}");
+    std::fs::remove_file(&area_root).expect("removes area-root link");
+
+    std::fs::create_dir_all(&area).expect("creates controlled area");
+    symlink(&outside, area.join("nested")).expect("creates nested escape link");
+    let nested_error = helper
+        .create_terminal_worktree(None, &repo, &root, "terminal/nested-link", "nested/session")
+        .await
+        .expect_err("a symlinked nested parent must be rejected");
+    assert!(nested_error.contains("symlink"), "{nested_error}");
+    assert!(
+        !outside.join("session").exists(),
+        "Git must not follow either escape link"
+    );
+
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn terminal_worktree_keeps_the_checked_parent_when_its_path_is_replaced() {
+    use std::os::unix::fs::symlink;
+    use std::process::Stdio;
+    use tokio::process::Command;
+    use tokio::time::{sleep, Duration};
+
+    let (project_root, repo, _helper) = make_project_repo("terminal_worktree_replacement").await;
+    let root = project_root.to_string_lossy().to_string();
+    let area = expected_area(&project_root, &repo);
+    let nested = area.join("nested");
+    let outside = project_root.join("demeteo_terminal_worktree_replacement_outside");
+    let retained = area.join("nested-retained");
+    let ready = project_root.join("demeteo_terminal_worktree_replacement_ready");
+    let release = project_root.join("demeteo_terminal_worktree_replacement_release");
+    std::fs::create_dir_all(&nested).expect("creates initially valid parent");
+    std::fs::create_dir(&outside).expect("creates outside directory");
+
+    let destination = super::terminal_worktree_dir(&repo, &root, "nested/session")
+        .expect("derives controlled destination");
+    // The pause is injected rather than compiled in, so the command under test
+    // differs from the production one only by this string. It parks after the
+    // destination parent has been validated and entered, which is the only
+    // moment at which the substitution below can prove anything.
+    let command = super::terminal_worktree_create_cmd(
+        &repo,
+        &root,
+        "terminal/replaced",
+        &destination,
+        ": > \"$DEMETEO_TERMINAL_WORKTREE_TEST_READY\"; \
+         while [ ! -e \"$DEMETEO_TERMINAL_WORKTREE_TEST_RELEASE\" ]; do sleep 0.01; done; ",
+    )
+    .expect("builds target command");
+    let child = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .env("DEMETEO_TERMINAL_WORKTREE_TEST_READY", &ready)
+        .env("DEMETEO_TERMINAL_WORKTREE_TEST_RELEASE", &release)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("starts target-machine command");
+
+    // The command creates this file only after it has validated and entered
+    // the final destination parent, but immediately before invoking Git.
+    // That makes this replacement deterministic rather than relying on a
+    // pre-command swap that cannot exercise the check-to-use interval.
+    for _ in 0..100 {
+        if ready.exists() {
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        ready.exists(),
+        "target command reached its synchronization point"
+    );
+    std::fs::rename(&nested, &retained).expect("moves checked parent aside");
+    symlink(&outside, &nested).expect("replaces checked parent with link");
+    std::fs::File::create(&release).expect("releases target command to Git");
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("waits for target command");
+    assert!(
+        output.status.success(),
+        "git must use the retained directory: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !outside.join("session").exists(),
+        "the replacement must not redirect git worktree add outside the controlled area"
+    );
+    assert!(
+        retained.join("session").exists(),
+        "git must create beneath the directory retained before its pathname changed"
+    );
+
+    let exec = fresh_exec();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{repo}\" worktree remove --force \"{}\"",
+                retained.join("session").to_string_lossy()
+            ),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+#[tokio::test]
+async fn terminal_worktree_creation_escapes_arguments_on_the_selected_machine() {
+    let exec = Arc::new(RecordingTerminalExec {
+        calls: Mutex::new(Vec::new()),
+    });
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    let helper = GitOpsHelper::new(db, exec.clone());
+
+    let created = helper
+        .create_terminal_worktree(
+            Some("remote-machine"),
+            "/srv/project/repos/O'Reilly repo",
+            "/srv/project",
+            "terminal/remote's-session",
+            "nested/session's",
+        )
+        .await
+        .expect("recording remote command succeeds");
+    assert_eq!(
+        created.path,
+        "/srv/project/terminal-worktrees/O'Reilly repo/nested/session's"
+    );
+
+    let calls = exec.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "inspection and add must be one target command"
+    );
+    assert_eq!(calls[0].0, "remote-machine");
+    assert!(
+        calls[0].1.contains("[ -L "),
+        "the target command must reject symlinked components: {}",
+        calls[0].1
+    );
+    assert!(
+        calls[0].1.contains("mkdir "),
+        "the target command must establish the controlled parents: {}",
+        calls[0].1
+    );
+    assert!(
+        calls[0]
+            .1
+            .contains("cd /srv/project; expected_parent=$(pwd -P)"),
+        "the command must anchor at the project root before descending: {}",
+        calls[0].1
+    );
+    assert!(
+        calls[0].1.contains("mkdir ./terminal-worktrees")
+            && calls[0].1.contains("mkdir ./'O'\\''Reilly repo'"),
+        "both levels of the relocated area must be fenced per component: {}",
+        calls[0].1
+    );
+    assert!(
+        calls[0].1.contains(
+            "git --git-dir=\"$git_dir\" --work-tree='/srv/project/repos/O'\\''Reilly repo' worktree add -b 'terminal/remote'\\''s-session' ./'session'\\''s'"
+        ),
+        "the repository, branch, and retained-relative destination name must be POSIX-escaped: {}",
+        calls[0].1
+    );
+    assert!(
+        calls[0].1.contains(
+            "git_dir=$(git -C '/srv/project/repos/O'\\''Reilly repo' rev-parse --absolute-git-dir)"
+        ),
+        "the git directory must be discovered, not assumed to be <repo>/.git: {}",
+        calls[0].1
+    );
+}
+
+#[tokio::test]
+async fn terminal_worktree_branch_starts_at_the_current_primary_checkout_head() {
+    let (project_root, repo, helper) = make_project_repo("terminal_worktree_start_point").await;
+    let exec = fresh_exec();
+
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" checkout -b source/branch"),
+    )
+    .await
+    .expect("creates source branch");
+    exec.write_file("local", &format!("{repo}/source.txt"), "source commit")
+        .await
+        .expect("writes source commit");
+    exec.run_command("local", &format!("git -C \"{repo}\" add source.txt"))
+        .await
+        .expect("stages source commit");
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" commit -m source-commit"),
+    )
+    .await
+    .expect("commits source branch");
+    let primary_head = rev_parse(&exec, &repo, "HEAD").await;
+
+    let created = helper
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &project_root.to_string_lossy(),
+            "terminal/from-primary-head",
+            "session",
+        )
+        .await
+        .expect("creates linked worktree from the primary checkout head");
+
+    assert_eq!(
+        rev_parse(&exec, &repo, "refs/heads/terminal/from-primary-head").await,
+        primary_head,
+        "-b must create the terminal branch at the current primary-checkout HEAD"
+    );
+    assert_eq!(
+        helper.get_head_branch(None, &repo).await.as_deref(),
+        Some("source/branch"),
+        "terminal creation must not move the primary checkout"
+    );
+
+    let _ = exec
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{repo}\" worktree remove --force \"{}\"",
+                created.path
+            ),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+#[tokio::test]
+async fn terminal_worktree_rejects_an_existing_branch_without_reusing_it() {
+    let (project_root, repo, helper) = make_project_repo("terminal_worktree_existing_branch").await;
+    let exec = fresh_exec();
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" branch terminal/already-exists"),
+    )
+    .await
+    .expect("creates pre-existing branch");
+    let existing_branch_head = rev_parse(&exec, &repo, "refs/heads/terminal/already-exists").await;
+    let destination = expected_area(&project_root, &repo).join("new-session");
+
+    let error = helper
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &project_root.to_string_lossy(),
+            "terminal/already-exists",
+            "new-session",
+        )
+        .await
+        .expect_err("an existing branch must not be reused");
+
+    assert!(error.contains("git worktree add"), "{error}");
+    assert_eq!(
+        rev_parse(&exec, &repo, "refs/heads/terminal/already-exists").await,
+        existing_branch_head,
+        "creation must not reset or otherwise change the existing branch"
+    );
+    assert!(
+        !destination.exists(),
+        "a failed existing-branch create must not leave a destination to reuse"
+    );
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+#[tokio::test]
+async fn terminal_worktree_rejects_unsafe_branch_and_location_inputs() {
+    let (project_root, repo, helper) = make_project_repo("terminal_worktree_invalid").await;
+    let root = project_root.to_string_lossy().to_string();
+
+    for (branch, name) in [
+        ("bad..branch", "session"),
+        // Git would accept this. The terminal listing withholds any branch
+        // carrying the pipeline's infix, so accepting it here would hand back a
+        // worktree that never appears again.
+        ("terminal/notes_subtask_1", "session"),
+        ("terminal/session", ""),
+        ("terminal/session", "/outside"),
+        ("terminal/session", "C:\\outside"),
+        ("terminal/session", "../outside"),
+        ("terminal/session", "nested/../outside"),
+    ] {
+        let error = helper
+            .create_terminal_worktree(None, &repo, &root, branch, name)
+            .await
+            .expect_err("unsafe terminal worktree input must be rejected");
+        assert!(error.contains("create_terminal_worktree"), "{error}");
+    }
+    assert!(
+        helper.list_worktrees(None, &repo).await.unwrap().is_empty(),
+        "invalid input must not create a worktree"
+    );
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+/// Builds `<base>/project/repos/app` as a one-commit repository, so a test can
+/// choose the path the project root sits on rather than take the temp-dir one
+/// [`make_project_repo`] picks.
+async fn make_project_repo_at(base: &std::path::Path) -> (String, String, GitOpsHelper) {
+    let project_root = base.join("project");
+    let repo_dir = project_root.join(crate::paths::REPOS_SUBDIR).join("app");
+    std::fs::create_dir_all(&repo_dir).expect("creates the project layout");
+    let repo = repo_dir.to_string_lossy().to_string();
+
+    let exec = fresh_exec();
+    for command in [
+        format!("git -C \"{repo}\" init -q -b main"),
+        format!("git -C \"{repo}\" config user.email ci@demeteo.test"),
+        format!("git -C \"{repo}\" config user.name CI"),
+        format!("git -C \"{repo}\" commit -q --allow-empty -m init"),
+    ] {
+        exec.run_command("local", &command)
+            .await
+            .unwrap_or_else(|e| panic!("setup failed: {command}: {e}"));
+    }
+
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    (
+        project_root.to_string_lossy().to_string(),
+        repo,
+        GitOpsHelper::new(db, Arc::new(LocalSubprocessAdapter::new())),
+    )
+}
+
+fn scratch(suffix: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "demeteo_test_{suffix}_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_millis()
+    ))
+}
+
+#[tokio::test]
+async fn a_workspace_under_a_terminal_worktrees_directory_still_withholds_a_running_steps_checkout()
+{
+    // The reported bug end to end: every path below carries a
+    // `terminal-worktrees` component, which is all the rule this replaced
+    // looked for.
+    let base =
+        scratch("terminal_listing_named_ancestor").join(crate::paths::TERMINAL_WORKTREES_SUBDIR);
+    let (project_root, repo, helper) = make_project_repo_at(&base).await;
+
+    fresh_exec()
+        .run_command("local", &format!("git -C \"{repo}\" branch feature/one"))
+        .await
+        .expect("creates the feature branch a subtask is cut from");
+    helper
+        .provision_subtask_worktree(None, &repo, "feature/one", "s-1")
+        .await
+        .expect("provisions a pipeline-owned worktree");
+    // A linked worktree outside the area carrying an ordinary branch. The
+    // subtask one above would be refused by the branch guard alone, so without
+    // this entry the assertion below would hold with the anchor removed.
+    fresh_exec()
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{repo}\" worktree add -q -b plain/elsewhere \"{}\"",
+                base.join("outside-the-area").to_string_lossy()
+            ),
+        )
+        .await
+        .expect("adds an out-of-area worktree");
+    let mine = helper
+        .create_terminal_worktree(None, &repo, &project_root, "terminal/mine", "mine")
+        .await
+        .expect("creates a terminal worktree");
+
+    let listed = helper
+        .list_terminal_worktrees(None, &repo, &project_root)
+        .await
+        .expect("lists terminal locations");
+
+    assert_eq!(
+        listed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
+        [mine.path.as_str()],
+        "a checkout a running step owns is force-removed under whoever opened a shell in it"
+    );
+    assert_eq!(
+        helper.list_worktrees(None, &repo).await.unwrap().len(),
+        3,
+        "all three worktrees exist; only one of them is a terminal location"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_terminal_worktree_is_listed_when_the_project_root_is_reached_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let base = scratch("terminal_listing_symlink");
+    let physical = base.join("real");
+    let logical = base.join("link");
+    std::fs::create_dir_all(&physical).expect("creates the physical base");
+    symlink(&physical, &logical).expect("creates the logical base");
+
+    let (_, _, helper) = make_project_repo_at(&physical).await;
+    // Drive the port entirely through the logical spelling, as configuration
+    // would: git resolves it away, so nothing derived from these strings can be
+    // compared against what git reports back.
+    let logical_root = logical.join("project").to_string_lossy().to_string();
+    let logical_repo = format!("{logical_root}/{}/app", crate::paths::REPOS_SUBDIR);
+
+    let created = helper
+        .create_terminal_worktree(None, &logical_repo, &logical_root, "terminal/linked", "one")
+        .await
+        .expect("creates through the symlinked root");
+
+    let listed = helper
+        .list_terminal_worktrees(None, &logical_repo, &logical_root)
+        .await
+        .expect("lists through the symlinked root");
+
+    assert_eq!(
+        listed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
+        [created.path.as_str()],
+        "the area must be anchored on what git resolved, not on the configured root"
+    );
+    // The premise: git resolved the link away, so nothing built from the
+    // logical strings above can be compared against what it reports back.
+    assert!(
+        created.path.contains("/real/") && !created.path.contains("/link/"),
+        "git must report the physical path, or this test proves nothing: {}",
+        created.path
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn a_repository_outside_its_project_root_is_an_error_not_an_empty_listing() {
+    let base = scratch("terminal_listing_unanchored");
+    let (_, repo, helper) = make_project_repo_at(&base).await;
+
+    let error = helper
+        .list_terminal_worktrees(None, &repo, "/somewhere/else")
+        .await
+        .expect_err("an underivable area must not read as a healthy empty listing");
+
+    assert!(error.contains("no terminal area"), "{error}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn legacy_terminal_worktrees_are_unregistered_and_current_ones_left_alone() {
+    let (project_root, repo, helper) = make_project_repo("terminal_worktree_legacy").await;
+    let root = project_root.to_string_lossy().to_string();
+    let exec = fresh_exec();
+    let kept = helper
+        .create_terminal_worktree(None, &repo, &root, "terminal/kept", "kept")
+        .await
+        .expect("creates a current-location worktree");
+
+    // The old location, built the way the abandoned code built it: a hidden
+    // sibling of the checkout inside `repos/`.
+    let legacy_area = std::path::Path::new(&repo)
+        .parent()
+        .expect("the checkout has a parent")
+        .join(format!(
+            ".{}.demeteo-terminal-worktrees",
+            std::path::Path::new(&repo)
+                .file_name()
+                .expect("the checkout has a name")
+                .to_string_lossy()
+        ));
+    let legacy = legacy_area.join("stale");
+    std::fs::create_dir_all(&legacy_area).expect("creates the legacy area");
+    exec.run_command(
+        "local",
+        &format!(
+            "git -C \"{repo}\" worktree add -b terminal/stale \"{}\"",
+            legacy.to_string_lossy()
+        ),
+    )
+    .await
+    .expect("registers a worktree at the legacy location");
+
+    let removed = helper
+        .cleanup_legacy_terminal_worktrees(None, &repo)
+        .await
+        .expect("cleans the legacy location");
+
+    assert_eq!(removed, 1, "the one legacy worktree must be reported");
+    assert!(
+        !legacy_area.exists(),
+        "the legacy area itself must be gone, not just its registration"
+    );
+    let surviving = helper.list_worktrees(None, &repo).await.unwrap();
+    assert_eq!(
+        surviving
+            .iter()
+            .map(|worktree| worktree.path.as_str())
+            .collect::<Vec<_>>(),
+        [kept.path.as_str()],
+        "Git must forget the legacy worktree and keep the current-location one"
+    );
+
+    let _ = exec
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{repo}\" worktree remove --force \"{}\"",
+                kept.path
+            ),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+#[tokio::test]
+async fn terminal_worktree_collision_is_reported_without_reusing_the_worktree() {
+    let (project_root, repo, helper) = make_project_repo("terminal_worktree_collision").await;
+    let root = project_root.to_string_lossy().to_string();
+    let created = helper
+        .create_terminal_worktree(None, &repo, &root, "terminal/first", "shared")
+        .await
+        .expect("creates initial worktree");
+
+    let error = helper
+        .create_terminal_worktree(None, &repo, &root, "terminal/second", "shared")
+        .await
+        .expect_err("an occupied destination must not be reused");
+    assert!(error.contains("destination already exists"), "{error}");
+    assert_eq!(
+        helper.list_worktrees(None, &repo).await.unwrap().len(),
+        1,
+        "collision handling must neither remove nor create worktrees"
+    );
+
+    let exec = fresh_exec();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{repo}\" worktree remove --force \"{}\"",
+                created.path
+            ),
+        )
+        .await;
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+#[tokio::test]
+async fn terminal_worktree_propagates_git_failures_without_cleanup() {
+    let temp = std::env::temp_dir().join(format!(
+        "demeteo_terminal_worktree_failure_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_millis()
+    ));
+    let non_repo = temp
+        .join(crate::paths::REPOS_SUBDIR)
+        .join("not-a-repository");
+    std::fs::create_dir_all(&non_repo).expect("creates non-repository directory");
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    let helper = GitOpsHelper::new(db, Arc::new(LocalSubprocessAdapter::new()));
+
+    let error = helper
+        .create_terminal_worktree(
+            None,
+            &non_repo.to_string_lossy(),
+            &temp.to_string_lossy(),
+            "terminal/failure",
+            "session",
+        )
+        .await
+        .expect_err("git failures must be surfaced");
+    assert!(error.contains("git worktree add"), "{error}");
+    assert!(
+        !expected_area(&temp, &non_repo.to_string_lossy())
+            .join("session")
+            .exists(),
+        "a failed add must not leave a reused or cleaned-up destination"
+    );
+    let _ = std::fs::remove_dir_all(&temp);
 }
 
 #[tokio::test]

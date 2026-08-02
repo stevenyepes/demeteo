@@ -445,6 +445,8 @@ pub fn run() {
             commands::project::get_workspace_health,
             commands::project::get_project_by_id,
             commands::project::resolve_repo_dir,
+            commands::project::list_terminal_worktrees,
+            commands::project::create_terminal_worktree,
             commands::project::project_memory_list,
             commands::project::project_memory_upsert,
             commands::project::project_memory_delete,

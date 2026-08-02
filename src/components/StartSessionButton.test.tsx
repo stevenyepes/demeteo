@@ -15,6 +15,7 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation((cmd: string, _args?: InvokeArgs) => {
     if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+    if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
     if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
     if (cmd === 'start_terminal_session') {
       return Promise.resolve({ session_id: `sess_${++nextSessionId}`, launch_command: null });
@@ -42,6 +43,7 @@ function tree(repoPath: string): ReactElement {
         <NavProbe />
         <StartSessionButton
           projectId="proj-1"
+          repositoryId="repository-1"
           repoPath={repoPath}
           machineId="local"
           machineLabel="local"
@@ -56,8 +58,10 @@ function mount(repoPath = '/repo/one') {
 }
 
 describe('StartSessionButton', () => {
-  it('primary click opens a plain shell (no agentKind) and navigates to terminals', async () => {
+  it('is live without opening the picker and opens a plain shell with primary-checkout semantics', async () => {
     mount();
+    expect(screen.getByTestId('start-session-primary')).not.toBeDisabled();
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main branch');
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
       for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -105,6 +109,7 @@ describe('StartSessionButton', () => {
     let resolveStart: (() => void) | null = null;
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
       if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
       if (cmd === 'start_terminal_session') {
         return new Promise((resolve) => {
@@ -135,6 +140,7 @@ describe('StartSessionButton', () => {
     let resolveStart: (() => void) | null = null;
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
       if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
       if (cmd === 'start_terminal_session') {
         return new Promise((resolve) => {
@@ -192,6 +198,29 @@ describe('StartSessionButton', () => {
 
     expect(commandArgs('start_terminal_session')).toHaveLength(0);
     expect(commandArgs('resolve_repo_dir')).toHaveLength(0);
+  });
+
+  it('disables shell and agent actions while location discovery is pending and displays a list failure', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'list_terminal_worktrees') return new Promise(() => {});
+      return Promise.resolve(undefined);
+    });
+    mount();
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    expect(screen.getByTestId('terminal-location-loading')).toBeInTheDocument();
+    expect(screen.getByTestId('start-session-primary')).toBeDisabled();
+    expect(screen.getByTestId('start-session-caret')).toBeDisabled();
+
+    // A separate mount gives the rejected request a chance to settle visibly.
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'list_terminal_worktrees') return Promise.reject({ kind: 'io_error', message: 'cannot list locations' });
+      return Promise.resolve(undefined);
+    });
+    mount();
+    await userEvent.click(screen.getAllByTestId('terminal-location-trigger')[1]);
+    expect(await screen.findByTestId('terminal-location-error')).toHaveTextContent('cannot list locations');
   });
 
   it('renders a visible inline error when open() rejects, and clears it on the next successful click', async () => {
@@ -255,5 +284,84 @@ describe('StartSessionButton', () => {
       rerender(tree('/repo/two'));
     });
     expect(screen.queryByTestId('start-session-error')).not.toBeInTheDocument();
+  });
+
+  it('forwards an existing worktree unchanged for shell and agent launches', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'list_terminal_worktrees') {
+        return Promise.resolve([{ path: '/worktrees/ticket-42', branch: 'feature/ticket-42', is_locked: false }]);
+      }
+      if (cmd === 'start_terminal_session') return Promise.resolve({ session_id: `sess_${++nextSessionId}`, launch_command: null });
+      return Promise.resolve(undefined);
+    });
+    mount();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(await screen.findByTestId('terminal-location-worktree-/worktrees/ticket-42'));
+    await act(async () => {
+      await userEvent.click(screen.getByTestId('start-session-primary'));
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    await userEvent.click(screen.getByTestId('start-session-caret'));
+    await act(async () => {
+      await userEvent.click(screen.getByTestId('start-session-agent-opencode'));
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+
+    const started = commandArgs('start_terminal_session');
+    expect(started).toHaveLength(2);
+    expect(started[0]).toMatchObject({ workDir: '/worktrees/ticket-42', workBranch: 'feature/ticket-42', agentKind: null });
+    expect(started[1]).toMatchObject({ workDir: '/worktrees/ticket-42', workBranch: 'feature/ticket-42', agentKind: 'opencode', launchCommand: 'opencode' });
+    expect(commandArgs('resolve_repo_dir')).toHaveLength(0);
+  });
+
+  it('selects a created worktree and shows create failures without launching', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
+      if (cmd === 'create_terminal_worktree') return Promise.reject({ kind: 'validation', message: 'branch already exists' });
+      return Promise.resolve(undefined);
+    });
+    mount();
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await screen.findByText('No linked worktrees');
+    await userEvent.type(screen.getByLabelText('Branch name'), 'feature/new');
+    await userEvent.type(screen.getByLabelText('Worktree name'), 'new');
+    await userEvent.click(screen.getByTestId('terminal-location-create'));
+    expect(await screen.findByTestId('terminal-location-error')).toHaveTextContent('branch already exists');
+    // The failed create must not become a selection: the button still points
+    // at the main-branch default it started on.
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main branch');
+    expect(commandArgs('start_terminal_session')).toHaveLength(0);
+  });
+
+  it('does not offer the unscoped machine home for a repository-scoped session', async () => {
+    mount();
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    expect(await screen.findByTestId('terminal-location-main')).toBeInTheDocument();
+    expect(screen.queryByTestId('terminal-location-home')).not.toBeInTheDocument();
+  });
+
+  it('launches a newly-created backend target unchanged', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
+      if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
+      if (cmd === 'create_terminal_worktree') return Promise.resolve({ path: '/worktrees/new', branch: 'feature/new', is_locked: false });
+      if (cmd === 'start_terminal_session') return Promise.resolve({ session_id: 'sess_new', launch_command: null });
+      return Promise.resolve(undefined);
+    });
+    mount();
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await screen.findByText('No linked worktrees');
+    await userEvent.type(screen.getByLabelText('Branch name'), 'feature/new');
+    await userEvent.type(screen.getByLabelText('Worktree name'), 'new');
+    await userEvent.click(screen.getByTestId('terminal-location-create'));
+    await act(async () => {
+      await userEvent.click(screen.getByTestId('start-session-primary'));
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(commandArgs('start_terminal_session')[0]).toMatchObject({ workDir: '/worktrees/new', workBranch: 'feature/new' });
+    expect(commandArgs('resolve_repo_dir')).toHaveLength(0);
   });
 });

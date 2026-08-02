@@ -75,18 +75,28 @@ function baseProject(overrides: Partial<Project> = {}): Project {
  * back a path derived from the requested `repoPath` so a test can assert
  * which repo a click actually resolved against.
  */
-function mockBackend(repoPaths: string[]) {
+function mockBackend(repoPaths: string[] | Record<string, string[]>) {
   vi.mocked(invoke).mockImplementation((cmd: string, args?: InvokeArgs) => {
     switch (cmd) {
       case 'fetch_active_features':
         return Promise.resolve([]);
       case 'get_repositories_for_project':
-        return Promise.resolve(repoPaths.map((p) => ({ repo_path: p })));
+        {
+          const { projectId } = (args ?? {}) as { projectId?: string };
+          const paths = Array.isArray(repoPaths) ? repoPaths : repoPaths[projectId ?? ''] ?? [];
+          return Promise.resolve(paths.map((repo_path, index) => ({
+            id: `${projectId ?? 'project'}-repo-${index}`,
+            repo_path,
+            provider_id: 'provider-1',
+          })));
+        }
       case 'workflow_list':
         return Promise.resolve([]);
       case 'remote_list_mirrored_runs':
         return Promise.resolve([]);
       case 'list_terminal_sessions':
+        return Promise.resolve([]);
+      case 'list_terminal_worktrees':
         return Promise.resolve([]);
       case 'resolve_repo_dir': {
         const { repoPath } = (args ?? {}) as { repoPath?: string };
@@ -117,6 +127,42 @@ function mount(project: Project) {
               <ProjectHome />
               <StartFeatureSeedProbe />
             </ProjectSeed>
+          </TerminalPanelProvider>
+        </UIStateProvider>
+      </ProjectProvider>
+    </NavigationProvider>,
+  );
+}
+
+function ProjectSwitchSeed({ projects, children }: { projects: Project[]; children: ReactNode }): ReactElement | null {
+  const { dispatch } = useProject();
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    dispatch({ type: 'LOAD_PROJECTS', projects, reposByProject: {} });
+    dispatch({ type: 'SET_CURRENT', id: projects[0].id });
+    setSeeded(true);
+    // This fixture is deliberately mounted once per test.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  if (!seeded) return null;
+  return <>{children}</>;
+}
+
+function ProjectSwitcher({ projectId }: { projectId: string }): ReactElement {
+  const { dispatch } = useProject();
+  return <button type="button" onClick={() => dispatch({ type: 'SET_CURRENT', id: projectId })}>Switch project</button>;
+}
+
+function mountSwitchable(projects: Project[]) {
+  render(
+    <NavigationProvider>
+      <ProjectProvider>
+        <UIStateProvider>
+          <TerminalPanelProvider>
+            <ProjectSwitchSeed projects={projects}>
+              <ProjectSwitcher projectId={projects[1].id} />
+              <ProjectHome />
+            </ProjectSwitchSeed>
           </TerminalPanelProvider>
         </UIStateProvider>
       </ProjectProvider>
@@ -446,12 +492,12 @@ describe('ProjectHome — persistent Start Session affordance', () => {
     await waitFor(() => expect(screen.getByTestId('start-session-button')).toBeInTheDocument());
     // Defaults to the first repo returned by the backend.
     const select = screen.getByText('Repository:').closest('div')!.querySelector('select')!;
-    expect(select.value).toBe('/repo/one');
+    expect(select.value).toBe('proj-multi-repo-0');
 
     await act(async () => {
-      await userEvent.selectOptions(select, '/repo/two');
+      await userEvent.selectOptions(select, 'proj-multi-repo-1');
     });
-    expect(select.value).toBe('/repo/two');
+    expect(select.value).toBe('proj-multi-repo-1');
 
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
@@ -467,6 +513,28 @@ describe('ProjectHome — persistent Start Session affordance', () => {
       machineId: 'local',
       workDir: '/resolved/repo/two',
     });
+  });
+
+  it('clears the prior project repository before a newly selected project can launch', async () => {
+    mockBackend({
+      'proj-a': ['/repo/project-a'],
+      'proj-b': [],
+    });
+    mountSwitchable([
+      baseProject({ id: 'proj-a', compute_type: 'local' }),
+      baseProject({ id: 'proj-b', compute_type: 'local' }),
+    ]);
+
+    await waitFor(() => expect(screen.getByTestId('terminal-location-trigger')).not.toBeDisabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Switch project' }));
+
+    await waitFor(() => expect(screen.getByTestId('start-session-primary')).toBeDisabled());
+    await act(async () => {
+      screen.getByTestId('start-session-primary').click();
+    });
+
+    expect(commandsOf('resolve_repo_dir')).toHaveLength(0);
+    expect(commandsOf('start_terminal_session')).toHaveLength(0);
   });
 });
 

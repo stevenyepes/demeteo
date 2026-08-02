@@ -51,6 +51,16 @@ pub const PROJECTS_SUBDIR: &str = "projects";
 /// working trees live.
 pub const REPOS_SUBDIR: &str = "repos";
 
+/// The subdirectory under each project holding the linked worktrees an
+/// interactive terminal session owns, one directory per repository.
+///
+/// A sibling of [`REPOS_SUBDIR`] rather than a child of it, for the reason
+/// recorded on `terminal_worktree_area` in
+/// `crates/demeteo-core/src/adapters/worktree/git_ops/worktree.rs`. Spelled
+/// here so the adapter that creates them and the application filter that
+/// recognises them cannot drift apart.
+pub const TERMINAL_WORKTREES_SUBDIR: &str = "terminal-worktrees";
+
 /// Resolve the Demeteo project root for `project_id` on the target host.
 ///
 /// For local projects this is `<home>/.demeteo/projects/<project_id>`.
