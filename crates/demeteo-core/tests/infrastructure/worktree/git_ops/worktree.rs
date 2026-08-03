@@ -8,7 +8,7 @@ use crate::adapters::local::execution::LocalSubprocessAdapter;
 use crate::paths::feature_cache_dir;
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
-use crate::ports::worktree_ops::WorktreeOpsPort;
+use crate::ports::worktree_ops::{TerminalWorktreeRequest, WorktreeOpsPort};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
@@ -92,6 +92,18 @@ impl ExecutionPort for RecordingTerminalExec {
         _: &std::collections::HashMap<String, String>,
     ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
         Err("unexpected spawn_interactive".to_string())
+    }
+}
+
+/// A creation request that names no base, so the start point stays the primary
+/// checkout's HEAD. Tests about *where a branch is cut* set `base_branch`
+/// themselves; every other test is about the destination and should not have to
+/// stand up a remote to reach it.
+fn terminal_request(branch: &str, worktree_name: &str) -> TerminalWorktreeRequest {
+    TerminalWorktreeRequest {
+        branch: branch.to_string(),
+        base_branch: None,
+        worktree_name: worktree_name.to_string(),
     }
 }
 
@@ -302,22 +314,23 @@ async fn terminal_worktree_creation_returns_linked_worktree_metadata() {
         None,
         &repo,
         &project_root.to_string_lossy(),
-        "terminal/session",
-        "session-one",
+        &terminal_request("terminal/session", "session-one"),
     )
     .await
     .expect("creates a terminal worktree");
 
-    assert_eq!(created.branch.as_deref(), Some("terminal/session"));
-    assert!(!created.is_locked);
+    assert_eq!(created.worktree.branch.as_deref(), Some("terminal/session"));
+    assert!(!created.worktree.is_locked);
     assert_eq!(
-        std::path::Path::new(&created.path).canonicalize().unwrap(),
+        std::path::Path::new(&created.worktree.path)
+            .canonicalize()
+            .unwrap(),
         expected_area(&project_root, &repo)
             .join("session-one")
             .canonicalize()
             .unwrap()
     );
-    assert!(std::path::Path::new(&created.path).exists());
+    assert!(std::path::Path::new(&created.worktree.path).exists());
     // What `create` returns must be what `list` replays, or nothing can match
     // a freshly created worktree against the listing it appears in.
     assert_eq!(
@@ -328,15 +341,15 @@ async fn terminal_worktree_creation_returns_linked_worktree_metadata() {
             .iter()
             .map(|worktree| worktree.path.as_str())
             .collect::<Vec<_>>(),
-        [created.path.as_str()]
+        [created.worktree.path.as_str()]
     );
     // The bootstrap prune sweeps `repos/` by configured repository name, so a
     // terminal worktree anywhere below it is deleted on the next re-bootstrap.
     assert!(
-        !std::path::Path::new(&created.path)
+        !std::path::Path::new(&created.worktree.path)
             .starts_with(project_root.join(crate::paths::REPOS_SUBDIR)),
         "the terminal area must not live under the pruned repos/ directory: {}",
-        created.path
+        created.worktree.path
     );
 
     let exec = fresh_exec();
@@ -345,7 +358,7 @@ async fn terminal_worktree_creation_returns_linked_worktree_metadata() {
             "local",
             &format!(
                 "git -C \"{repo}\" worktree remove --force \"{}\"",
-                created.path
+                created.worktree.path
             ),
         )
         .await;
@@ -366,7 +379,12 @@ async fn terminal_worktree_rejects_a_symlinked_area_or_nested_parent() {
 
     symlink(&outside, &area_root).expect("creates area-root escape link");
     let area_root_error = helper
-        .create_terminal_worktree(None, &repo, &root, "terminal/area-link", "session")
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &root,
+            &terminal_request("terminal/area-link", "session"),
+        )
         .await
         .expect_err("a symlinked worktree area root must be rejected");
     assert!(area_root_error.contains("symlink"), "{area_root_error}");
@@ -375,7 +393,12 @@ async fn terminal_worktree_rejects_a_symlinked_area_or_nested_parent() {
     std::fs::create_dir_all(&area).expect("creates controlled area");
     symlink(&outside, area.join("nested")).expect("creates nested escape link");
     let nested_error = helper
-        .create_terminal_worktree(None, &repo, &root, "terminal/nested-link", "nested/session")
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &root,
+            &terminal_request("terminal/nested-link", "nested/session"),
+        )
         .await
         .expect_err("a symlinked nested parent must be rejected");
     assert!(nested_error.contains("symlink"), "{nested_error}");
@@ -417,6 +440,7 @@ async fn terminal_worktree_keeps_the_checked_parent_when_its_path_is_replaced() 
         &root,
         "terminal/replaced",
         &destination,
+        None,
         ": > \"$DEMETEO_TERMINAL_WORKTREE_TEST_READY\"; \
          while [ ! -e \"$DEMETEO_TERMINAL_WORKTREE_TEST_RELEASE\" ]; do sleep 0.01; done; ",
     )
@@ -495,13 +519,12 @@ async fn terminal_worktree_creation_escapes_arguments_on_the_selected_machine() 
             Some("remote-machine"),
             "/srv/project/repos/O'Reilly repo",
             "/srv/project",
-            "terminal/remote's-session",
-            "nested/session's",
+            &terminal_request("terminal/remote's-session", "nested/session's"),
         )
         .await
         .expect("recording remote command succeeds");
     assert_eq!(
-        created.path,
+        created.worktree.path,
         "/srv/project/terminal-worktrees/O'Reilly repo/nested/session's"
     );
 
@@ -581,8 +604,7 @@ async fn terminal_worktree_branch_starts_at_the_current_primary_checkout_head() 
             None,
             &repo,
             &project_root.to_string_lossy(),
-            "terminal/from-primary-head",
-            "session",
+            &terminal_request("terminal/from-primary-head", "session"),
         )
         .await
         .expect("creates linked worktree from the primary checkout head");
@@ -603,7 +625,7 @@ async fn terminal_worktree_branch_starts_at_the_current_primary_checkout_head() 
             "local",
             &format!(
                 "git -C \"{repo}\" worktree remove --force \"{}\"",
-                created.path
+                created.worktree.path
             ),
         )
         .await;
@@ -628,8 +650,7 @@ async fn terminal_worktree_rejects_an_existing_branch_without_reusing_it() {
             None,
             &repo,
             &project_root.to_string_lossy(),
-            "terminal/already-exists",
-            "new-session",
+            &terminal_request("terminal/already-exists", "new-session"),
         )
         .await
         .expect_err("an existing branch must not be reused");
@@ -665,7 +686,7 @@ async fn terminal_worktree_rejects_unsafe_branch_and_location_inputs() {
         ("terminal/session", "nested/../outside"),
     ] {
         let error = helper
-            .create_terminal_worktree(None, &repo, &root, branch, name)
+            .create_terminal_worktree(None, &repo, &root, &terminal_request(branch, name))
             .await
             .expect_err("unsafe terminal worktree input must be rejected");
         assert!(error.contains("create_terminal_worktree"), "{error}");
@@ -750,7 +771,12 @@ async fn a_workspace_under_a_terminal_worktrees_directory_still_withholds_a_runn
         .await
         .expect("adds an out-of-area worktree");
     let mine = helper
-        .create_terminal_worktree(None, &repo, &project_root, "terminal/mine", "mine")
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &project_root,
+            &terminal_request("terminal/mine", "mine"),
+        )
         .await
         .expect("creates a terminal worktree");
 
@@ -761,7 +787,7 @@ async fn a_workspace_under_a_terminal_worktrees_directory_still_withholds_a_runn
 
     assert_eq!(
         listed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
-        [mine.path.as_str()],
+        [mine.worktree.path.as_str()],
         "a checkout a running step owns is force-removed under whoever opened a shell in it"
     );
     assert_eq!(
@@ -792,7 +818,12 @@ async fn a_terminal_worktree_is_listed_when_the_project_root_is_reached_through_
     let logical_repo = format!("{logical_root}/{}/app", crate::paths::REPOS_SUBDIR);
 
     let created = helper
-        .create_terminal_worktree(None, &logical_repo, &logical_root, "terminal/linked", "one")
+        .create_terminal_worktree(
+            None,
+            &logical_repo,
+            &logical_root,
+            &terminal_request("terminal/linked", "one"),
+        )
         .await
         .expect("creates through the symlinked root");
 
@@ -803,15 +834,15 @@ async fn a_terminal_worktree_is_listed_when_the_project_root_is_reached_through_
 
     assert_eq!(
         listed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
-        [created.path.as_str()],
+        [created.worktree.path.as_str()],
         "the area must be anchored on what git resolved, not on the configured root"
     );
     // The premise: git resolved the link away, so nothing built from the
     // logical strings above can be compared against what it reports back.
     assert!(
-        created.path.contains("/real/") && !created.path.contains("/link/"),
+        created.worktree.path.contains("/real/") && !created.worktree.path.contains("/link/"),
         "git must report the physical path, or this test proves nothing: {}",
-        created.path
+        created.worktree.path
     );
 
     let _ = std::fs::remove_dir_all(&base);
@@ -837,7 +868,12 @@ async fn legacy_terminal_worktrees_are_unregistered_and_current_ones_left_alone(
     let root = project_root.to_string_lossy().to_string();
     let exec = fresh_exec();
     let kept = helper
-        .create_terminal_worktree(None, &repo, &root, "terminal/kept", "kept")
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &root,
+            &terminal_request("terminal/kept", "kept"),
+        )
         .await
         .expect("creates a current-location worktree");
 
@@ -881,7 +917,7 @@ async fn legacy_terminal_worktrees_are_unregistered_and_current_ones_left_alone(
             .iter()
             .map(|worktree| worktree.path.as_str())
             .collect::<Vec<_>>(),
-        [kept.path.as_str()],
+        [kept.worktree.path.as_str()],
         "Git must forget the legacy worktree and keep the current-location one"
     );
 
@@ -890,7 +926,7 @@ async fn legacy_terminal_worktrees_are_unregistered_and_current_ones_left_alone(
             "local",
             &format!(
                 "git -C \"{repo}\" worktree remove --force \"{}\"",
-                kept.path
+                kept.worktree.path
             ),
         )
         .await;
@@ -902,12 +938,22 @@ async fn terminal_worktree_collision_is_reported_without_reusing_the_worktree() 
     let (project_root, repo, helper) = make_project_repo("terminal_worktree_collision").await;
     let root = project_root.to_string_lossy().to_string();
     let created = helper
-        .create_terminal_worktree(None, &repo, &root, "terminal/first", "shared")
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &root,
+            &terminal_request("terminal/first", "shared"),
+        )
         .await
         .expect("creates initial worktree");
 
     let error = helper
-        .create_terminal_worktree(None, &repo, &root, "terminal/second", "shared")
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &root,
+            &terminal_request("terminal/second", "shared"),
+        )
         .await
         .expect_err("an occupied destination must not be reused");
     assert!(error.contains("destination already exists"), "{error}");
@@ -923,10 +969,89 @@ async fn terminal_worktree_collision_is_reported_without_reusing_the_worktree() 
             "local",
             &format!(
                 "git -C \"{repo}\" worktree remove --force \"{}\"",
-                created.path
+                created.worktree.path
             ),
         )
         .await;
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+/// A project whose clone is absent — never bootstrapped, or a workspace wiped
+/// under it — reaches every terminal operation as a bare `git` complaint about
+/// a directory. The picker shows that string and nothing else, so the port has
+/// to name the missing clone and the way back.
+///
+/// Asserted through [`WorktreeOpsPort`] rather than the inherent methods: that
+/// is the surface the application calls, and it is where the restatement lives.
+#[tokio::test]
+async fn a_missing_clone_is_named_as_such_by_every_terminal_operation() {
+    let project_root = std::env::temp_dir().join(format!(
+        "demeteo_terminal_missing_clone_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_millis()
+    ));
+    let repo = project_root
+        .join(crate::paths::REPOS_SUBDIR)
+        .join("never-cloned")
+        .to_string_lossy()
+        .to_string();
+    let root = project_root.to_string_lossy().to_string();
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    let port: Arc<dyn WorktreeOpsPort> = Arc::new(GitOpsHelper::new(
+        db,
+        Arc::new(LocalSubprocessAdapter::new()),
+    ));
+
+    // A chosen base is the case Git explains worst: the start-point probe fails
+    // against the missing directory and reports the base as the thing at fault.
+    let create = port
+        .create_terminal_worktree(
+            None,
+            &repo,
+            &root,
+            &TerminalWorktreeRequest {
+                branch: "terminal/session".to_string(),
+                base_branch: Some("main".to_string()),
+                worktree_name: "session".to_string(),
+            },
+        )
+        .await
+        .expect_err("a missing clone cannot produce a worktree");
+    let list = port
+        .list_terminal_worktrees(None, &repo, &root)
+        .await
+        .expect_err("a missing clone has no listing");
+    let branches = port
+        .list_terminal_branches(None, &repo)
+        .await
+        .expect_err("a missing clone has no branches");
+    let remove = port
+        .remove_terminal_worktree(None, &repo, &root, &format!("{repo}-session"), false)
+        .await
+        .expect_err("a missing clone owns no worktree to remove");
+
+    for error in [&create, &list, &branches, &remove] {
+        assert!(
+            error.contains(&repo) && error.contains("has not been cloned"),
+            "the failure must name the missing clone: {error}"
+        );
+        assert!(
+            error.contains("Re-run Bootstrap"),
+            "the failure must name the way back: {error}"
+        );
+    }
+    // The original wording is retained, but behind the restatement rather than
+    // as the whole message: a base branch that "exists neither on origin nor
+    // locally" is what a reader acts on first if it leads.
+    assert!(
+        create.starts_with(&repo),
+        "the base branch must not lead the report of an absent repository: {create}"
+    );
+
     let _ = std::fs::remove_dir_all(&project_root);
 }
 
@@ -953,8 +1078,7 @@ async fn terminal_worktree_propagates_git_failures_without_cleanup() {
             None,
             &non_repo.to_string_lossy(),
             &temp.to_string_lossy(),
-            "terminal/failure",
-            "session",
+            &terminal_request("terminal/failure", "session"),
         )
         .await
         .expect_err("git failures must be surfaced");

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { invoke } from '@tauri-apps/api/core';
-import { createTerminalWorktree, listTerminalWorktrees } from '../lib/terminal';
+import { createTerminalWorktree, listTerminalBranches, listTerminalWorktrees } from '../lib/terminal';
 import { NewTerminalMenu } from './NewTerminalMenu';
 
 const open = vi.fn();
@@ -14,7 +14,9 @@ vi.mock('../hooks/useTerminalPanel', () => ({ useTerminalPanel: () => ({ open })
 vi.mock('../context/ProjectContext', () => ({ useProject: () => useProject() }));
 vi.mock('../lib/terminal', () => ({
   createTerminalWorktree: vi.fn(),
+  listTerminalBranches: vi.fn(),
   listTerminalWorktrees: vi.fn(),
+  removeTerminalWorktree: vi.fn(),
 }));
 
 function mount() {
@@ -39,6 +41,11 @@ beforeEach(() => {
   });
   vi.mocked(listTerminalWorktrees).mockReset();
   vi.mocked(createTerminalWorktree).mockReset();
+  vi.mocked(listTerminalBranches).mockReset();
+  vi.mocked(listTerminalBranches).mockResolvedValue({
+    defaultBranch: 'main',
+    branches: [{ name: 'main', hasLocal: true, hasRemote: true }],
+  });
   useProject.mockReturnValue({
     state: {
       currentProjectId: 'project-1',
@@ -143,7 +150,7 @@ describe('NewTerminalMenu terminal worktree locations', () => {
 
     await openProjectLocations();
     expect(listTerminalWorktrees).toHaveBeenCalledWith('project-1', 'repository-1');
-    await screen.findByText('No linked worktrees');
+    await screen.findByTestId('terminal-location-new');
 
     await userEvent.selectOptions(screen.getByTestId('new-terminal-repo-select'), 'repository-2');
     await userEvent.click(screen.getByTestId('terminal-location-trigger'));
@@ -183,14 +190,14 @@ describe('NewTerminalMenu terminal worktree locations', () => {
   it('opens a created worktree with an agent using the returned target', async () => {
     vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
     vi.mocked(createTerminalWorktree).mockResolvedValue({
-      path: '/repos/demo-new', branch: 'feature/new', isLocked: false,
+      worktree: { path: '/repos/demo-new', branch: 'feature/new', isLocked: false },
+      baseRef: 'origin/main',
     });
     mount();
 
     await openProjectLocations();
-    await screen.findByText('No linked worktrees');
+    await userEvent.click(await screen.findByTestId('terminal-location-new'));
     await userEvent.type(screen.getByLabelText('Branch name'), 'feature/new');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'demo-new');
     await userEvent.click(screen.getByTestId('terminal-location-create'));
     await userEvent.click(screen.getByText('OpenCode'));
 

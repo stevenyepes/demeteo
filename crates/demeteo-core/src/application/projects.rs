@@ -1,6 +1,8 @@
+use crate::domain::branch_listing::BranchOption;
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
 use crate::domain::models::{Project, RepoHealthStatus, Repository, WorktreeInfo};
 use crate::paths;
+use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
 use crate::state::AppContext;
 use serde::{Deserialize, Serialize};
 
@@ -112,26 +114,79 @@ pub async fn list_terminal_worktrees(
         .await
 }
 
+/// The base branches a terminal worktree may be cut from, and which one this
+/// project treats as its default.
+///
+/// The default travels with the list because it is the only part a picker
+/// cannot derive: `refs/heads` says nothing about which branch this project
+/// integrates into, and preselecting the wrong one is how a session quietly
+/// starts from somewhere other than where work lands.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TerminalBranchOptions {
+    pub default_branch: String,
+    pub branches: Vec<BranchOption>,
+}
+
+/// List the base-branch candidates for one repository of a project.
+pub async fn list_terminal_branches(
+    ctx: &AppContext,
+    project_id: String,
+    repository_id: String,
+) -> Result<TerminalBranchOptions, String> {
+    let resolved = resolve_terminal_repository(ctx, &project_id, &repository_id).await?;
+    let branches = ctx
+        .worktree_ops
+        .list_terminal_branches(resolved.machine_id.as_deref(), &resolved.repo_dir)
+        .await?;
+
+    Ok(TerminalBranchOptions {
+        default_branch: resolved.default_branch,
+        branches,
+    })
+}
+
 /// Create a linked terminal worktree for one repository of a project.
 ///
-/// `branch` and `worktree_name` remain untrusted user input; the worktree
-/// adapter validates them before deriving the final destination below the
-/// resolved repository area.
+/// Every field of `request` remains untrusted user input; the worktree adapter
+/// validates them before deriving the final destination below the resolved
+/// repository area.
 pub async fn create_terminal_worktree(
     ctx: &AppContext,
     project_id: String,
     repository_id: String,
-    branch: String,
-    worktree_name: String,
-) -> Result<WorktreeInfo, String> {
+    request: TerminalWorktreeRequest,
+) -> Result<TerminalWorktreeCreated, String> {
     let resolved = resolve_terminal_repository(ctx, &project_id, &repository_id).await?;
     ctx.worktree_ops
         .create_terminal_worktree(
             resolved.machine_id.as_deref(),
             &resolved.repo_dir,
             &resolved.project_root,
-            &branch,
-            &worktree_name,
+            &request,
+        )
+        .await
+}
+
+/// Remove one terminal worktree of a project's repository.
+///
+/// The path is resolved against this project's own repository before the port
+/// sees it, exactly as the listing and creation paths are — a caller holding a
+/// path from elsewhere must not be able to aim a removal through this project.
+pub async fn remove_terminal_worktree(
+    ctx: &AppContext,
+    project_id: String,
+    repository_id: String,
+    worktree_path: String,
+    force: bool,
+) -> Result<(), String> {
+    let resolved = resolve_terminal_repository(ctx, &project_id, &repository_id).await?;
+    ctx.worktree_ops
+        .remove_terminal_worktree(
+            resolved.machine_id.as_deref(),
+            &resolved.repo_dir,
+            &resolved.project_root,
+            &worktree_path,
+            force,
         )
         .await
 }
@@ -140,6 +195,7 @@ struct ResolvedTerminalRepository {
     machine_id: Option<String>,
     repo_dir: String,
     project_root: String,
+    default_branch: String,
 }
 
 /// Resolve trusted terminal-worktree I/O inputs before calling the Git port.
@@ -194,10 +250,22 @@ async fn resolve_terminal_repository(
     .to_string_lossy()
     .to_string();
 
+    // The same settings a pipeline reads for its own base, falling back to the
+    // shipped defaults exactly as `application::worktree` does — a terminal
+    // session and a feature must not disagree about what this project
+    // integrates into.
+    let default_branch = ctx
+        .projects
+        .get_settings(&project_id_typed)?
+        .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings)
+        .worktree_strategy
+        .default_branch;
+
     Ok(ResolvedTerminalRepository {
         machine_id,
         repo_dir,
         project_root,
+        default_branch,
     })
 }
 

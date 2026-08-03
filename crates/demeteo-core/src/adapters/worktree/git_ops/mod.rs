@@ -1,8 +1,10 @@
+use crate::domain::branch_listing::BranchOption;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::{
-    CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, WorktreeOpsPort,
+    CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, TerminalWorktreeCreated,
+    TerminalWorktreeRequest, WorktreeOpsPort,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -79,16 +81,59 @@ impl WorktreeOpsPort for GitOpsHelper {
         self.list_worktrees(machine_id, repo_dir).await
     }
 
+    // The four terminal operations answer an interactive picker, which shows
+    // whatever string comes back and offers no second attempt at explaining it.
+    // Their one shared precondition — the project's clone exists — is the one
+    // Git states least usefully, so it is restated here rather than in each
+    // operation, where the start-point probe would still get there first.
     async fn create_terminal_worktree(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         project_root: &str,
-        branch: &str,
-        worktree_name: &str,
-    ) -> Result<WorktreeInfo, String> {
-        self.create_terminal_worktree(machine_id, repo_dir, project_root, branch, worktree_name)
+        request: &TerminalWorktreeRequest,
+    ) -> Result<TerminalWorktreeCreated, String> {
+        match self
+            .create_terminal_worktree(machine_id, repo_dir, project_root, request)
             .await
+        {
+            Ok(created) => Ok(created),
+            Err(error) => Err(self
+                .explain_missing_checkout(machine_id, repo_dir, error)
+                .await),
+        }
+    }
+
+    async fn remove_terminal_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+        worktree_path: &str,
+        force: bool,
+    ) -> Result<(), String> {
+        match self
+            .remove_terminal_worktree(machine_id, repo_dir, project_root, worktree_path, force)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self
+                .explain_missing_checkout(machine_id, repo_dir, error)
+                .await),
+        }
+    }
+
+    async fn list_terminal_branches(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<Vec<BranchOption>, String> {
+        match self.list_terminal_branches(machine_id, repo_dir).await {
+            Ok(branches) => Ok(branches),
+            Err(error) => Err(self
+                .explain_missing_checkout(machine_id, repo_dir, error)
+                .await),
+        }
     }
 
     async fn list_terminal_worktrees(
@@ -97,8 +142,15 @@ impl WorktreeOpsPort for GitOpsHelper {
         repo_dir: &str,
         project_root: &str,
     ) -> Result<Vec<WorktreeInfo>, String> {
-        self.list_terminal_worktrees(machine_id, repo_dir, project_root)
+        match self
+            .list_terminal_worktrees(machine_id, repo_dir, project_root)
             .await
+        {
+            Ok(worktrees) => Ok(worktrees),
+            Err(error) => Err(self
+                .explain_missing_checkout(machine_id, repo_dir, error)
+                .await),
+        }
     }
 
     async fn cleanup_legacy_terminal_worktrees(

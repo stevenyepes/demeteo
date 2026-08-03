@@ -20,6 +20,7 @@ pub(crate) mod artifact_capture;
 pub mod artifact_contract;
 pub mod attachment;
 pub mod bootstrap;
+pub mod branch_listing;
 pub(crate) mod command_step;
 pub mod ecosystem;
 pub mod expr;

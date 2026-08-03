@@ -134,22 +134,34 @@ export function StartSessionButton({
   const disabled = launching || locationBusy || !repoPath || !location;
 
   return (
-    <div ref={containerRef} className={`relative ${className}`} data-testid="start-session-button">
-      <TerminalWorktreeLocationPicker
-        projectId={projectId}
-        repositoryId={repositoryId}
-        disabled={launching}
-        onBusyChange={setLocationBusy}
-        onChange={setLocation}
-        className="mb-1.5 w-52"
-      />
-      <div className="inline-flex shrink-0 rounded-md shadow-sm">
+    <div
+      ref={containerRef}
+      className={`relative flex items-end gap-3 ${className}`}
+      data-testid="start-session-button"
+    >
+      {/* Where, then what. The location is a labelled field and the launch is
+          the only filled control, so the pair reads as one decision followed by
+          one action rather than as two competing buttons. */}
+      <div className="min-w-0">
+        <span className="block pb-1 pl-0.5 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-500">
+          Session location
+        </span>
+        <TerminalWorktreeLocationPicker
+          projectId={projectId}
+          repositoryId={repositoryId}
+          disabled={launching}
+          onBusyChange={setLocationBusy}
+          onChange={setLocation}
+          className="w-60"
+        />
+      </div>
+      <div className="inline-flex shrink-0 rounded-lg shadow-sm">
         <button
           type="button"
           onClick={() => void launch()}
           disabled={disabled}
-          className="flex items-center gap-1.5 pl-3 pr-3 py-1.5 rounded-l-md text-xs font-mono whitespace-nowrap border border-white/10 border-r-0 bg-violet-600 hover:bg-violet-500 text-white shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all disabled:opacity-40"
-          title={repoPath ? 'Start a shell session on the main branch, or pick another location' : 'No repository resolved for this workspace yet'}
+          className="flex items-center gap-1.5 pl-3.5 pr-3.5 py-2 rounded-l-lg text-xs font-mono whitespace-nowrap border border-white/10 border-r-0 bg-violet-600 hover:bg-violet-500 text-white shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all disabled:opacity-40"
+          title={repoPath ? 'Start a shell session at the selected location' : 'No repository resolved for this workspace yet'}
           data-testid="start-session-primary"
         >
           <TerminalSquare className="w-3.5 h-3.5 shrink-0" />
@@ -159,7 +171,7 @@ export function StartSessionButton({
           type="button"
           onClick={() => setMenuOpen((v) => !v)}
           disabled={disabled}
-          className="flex items-center px-1.5 py-1.5 rounded-r-md text-xs font-mono border border-white/10 bg-violet-600 hover:bg-violet-500 text-white transition-all disabled:opacity-40"
+          className="flex items-center px-2 py-2 rounded-r-lg text-xs font-mono border border-white/10 border-l-white/25 bg-violet-600 hover:bg-violet-500 text-white transition-all disabled:opacity-40"
           title="Choose an agent to launch"
           aria-haspopup="menu"
           aria-expanded={menuOpen}
@@ -172,7 +184,7 @@ export function StartSessionButton({
       {menuOpen && (
         <div
           role="menu"
-          className="absolute left-0 mt-1 z-30 w-52 rounded-lg border border-white/10 bg-[#0c0d12] shadow-2xl overflow-hidden p-1"
+          className="absolute right-0 top-full mt-1.5 z-30 w-52 rounded-lg border border-white/10 bg-[#0c0d12] shadow-2xl overflow-hidden p-1"
           data-testid="start-session-dropdown"
         >
           {Object.values(AGENTS).map((agent) => (

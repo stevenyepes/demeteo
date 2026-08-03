@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
-import { Check, ChevronDown, GitBranch, House, Plus } from 'lucide-react';
+import { Check, ChevronDown, FolderGit2, GitBranch, House, Plus, RotateCw } from 'lucide-react';
 
-import type { TerminalWorktree } from '../types';
-import { createTerminalWorktree, listTerminalWorktrees } from '../lib/terminal';
+import type { TerminalBranchOption, TerminalWorktree } from '../types';
+import {
+  createTerminalWorktree,
+  listTerminalBranches,
+  listTerminalWorktrees,
+  removeTerminalWorktree,
+} from '../lib/terminal';
 import { formatError } from '../lib/errors';
+import { CreateWorktreeForm, type WorktreeDraft } from './worktree/CreateWorktreeForm';
+import { WorktreeRow } from './worktree/WorktreeRow';
 
 /** A terminal target selected by a user. Worktree paths always come from the
  * backend; `main` deliberately leaves directory resolution to the launcher,
@@ -52,8 +59,14 @@ function worktreeLocation(worktree: TerminalWorktree): TerminalWorktreeLocation 
 }
 
 /**
- * Shared location controller for terminal launchers. It owns only selection
- * and typed worktree discovery/creation; callers own terminal opening.
+ * Shared location controller for terminal launchers. It owns only selection,
+ * typed worktree discovery, creation, and retirement; callers own terminal
+ * opening.
+ *
+ * Presented as a *field* rather than a button, because it is not an action —
+ * it is the "where" half of a launch whose "what" half is the caller's own
+ * button. Two adjacent buttons of equal weight read as two ways to start a
+ * session, and the pair was mistaken for exactly that.
  */
 export function TerminalWorktreeLocationPicker({
   projectId,
@@ -71,11 +84,14 @@ export function TerminalWorktreeLocationPicker({
   const [selected, setSelected] = useState<TerminalWorktreeLocation | null>(
     requireSelection ? null : MAIN_LOCATION,
   );
-  const [branch, setBranch] = useState('');
-  const [worktreeName, setWorktreeName] = useState('');
+  const [creatingOpen, setCreatingOpen] = useState(false);
+  const [branches, setBranches] = useState<TerminalBranchOption[]>([]);
+  const [defaultBranch, setDefaultBranch] = useState('main');
+  const [loadingBranches, setLoadingBranches] = useState(false);
   const [listing, setListing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const createInFlight = useRef(false);
   // A request identity prevents a previous target's completion from clearing
   // the busy state of a newer create after the picker is retargeted.
@@ -86,13 +102,15 @@ export function TerminalWorktreeLocationPicker({
   currentTargetKey.current = targetKey;
   const busy = disabled || listing || creating;
 
-  // The reset below wipes typed input, so it must key on the target alone. A
-  // caller passing an inline `onChange` would otherwise clear a half-typed
+  // The reset below wipes the create form, so it must key on the target alone.
+  // A caller passing an inline `onChange` would otherwise clear a half-typed
   // branch name on every parent re-render.
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const requireSelectionRef = useRef(requireSelection);
   requireSelectionRef.current = requireSelection;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   useEffect(() => {
     onBusyChange?.(listing || creating);
@@ -114,9 +132,10 @@ export function TerminalWorktreeLocationPicker({
     setWorktrees([]);
     setLoadedFor(null);
     setSelected(next);
-    setBranch('');
-    setWorktreeName('');
+    setCreatingOpen(false);
+    setBranches([]);
     setError(null);
+    setNotice(null);
     if (next) onChangeRef.current(next);
   }, [targetKey]);
 
@@ -138,6 +157,27 @@ export function TerminalWorktreeLocationPicker({
       if (requestedTarget === currentTargetKey.current) setListing(false);
     }
   }, [projectId, repositoryId, listing, creating, targetKey]);
+
+  // Only when the create form opens. Reading refs is cheap but not free on a
+  // remote host, and every other use of this menu is a selection.
+  const loadBranches = useCallback(async () => {
+    if (!projectId || !repositoryId) return;
+    setLoadingBranches(true);
+    const requestedTarget = `${projectId}:${repositoryId}`;
+    try {
+      const options = await listTerminalBranches(projectId, repositoryId);
+      if (requestedTarget === currentTargetKey.current) {
+        setBranches(options.branches);
+        setDefaultBranch(options.defaultBranch);
+      }
+    } catch (err) {
+      // A base can still be typed-through from the default; failing to list
+      // refs must not block creation, so this is reported and not fatal.
+      if (requestedTarget === currentTargetKey.current) setError(formatError(err));
+    } finally {
+      if (requestedTarget === currentTargetKey.current) setLoadingBranches(false);
+    }
+  }, [projectId, repositoryId, targetKey]);
 
   const choose = useCallback(
     (location: TerminalWorktreeLocation) => {
@@ -161,53 +201,97 @@ export function TerminalWorktreeLocationPicker({
     if (busy) return;
     const willOpen = !menuOpen;
     setMenuOpen(willOpen);
+    setNotice(null);
     if (willOpen) void load();
   }, [busy, menuOpen, load]);
 
-  const create = useCallback(async () => {
-    // State does not update synchronously, so retain an imperative latch for
-    // rapid double clicks that happen before the disabled attribute commits.
-    if (createInFlight.current || !branch.trim() || !worktreeName.trim() || busy) return;
-    const requestedTarget = targetKey;
-    const request = Symbol(requestedTarget);
-    createInFlight.current = true;
-    activeCreateRequest.current = request;
-    setCreating(true);
+  const openCreate = useCallback(() => {
+    setCreatingOpen(true);
     setError(null);
-    try {
-      const created = await createTerminalWorktree({
-        projectId,
-        repositoryId,
-        branch: branch.trim(),
-        worktreeName: worktreeName.trim(),
-      });
-      if (requestedTarget !== currentTargetKey.current || activeCreateRequest.current !== request) return;
-      setWorktrees((previous) => [...previous.filter((item) => item.path !== created.path), created]);
-      setLoadedFor(requestedTarget);
-      setBranch('');
-      setWorktreeName('');
-      choose(worktreeLocation(created));
-    } catch (err) {
-      if (requestedTarget === currentTargetKey.current && activeCreateRequest.current === request) {
-        setError(formatError(err));
+    setNotice(null);
+    void loadBranches();
+  }, [loadBranches]);
+
+  const create = useCallback(
+    async (draft: WorktreeDraft) => {
+      // State does not update synchronously, so retain an imperative latch for
+      // rapid double clicks that happen before the disabled attribute commits.
+      if (createInFlight.current || busy) return;
+      const requestedTarget = targetKey;
+      const request = Symbol(requestedTarget);
+      createInFlight.current = true;
+      activeCreateRequest.current = request;
+      setCreating(true);
+      setError(null);
+      try {
+        const created = await createTerminalWorktree({
+          projectId,
+          repositoryId,
+          branch: draft.branch,
+          baseBranch: draft.baseBranch,
+          worktreeName: draft.worktreeName,
+        });
+        if (requestedTarget !== currentTargetKey.current || activeCreateRequest.current !== request)
+          return;
+        setWorktrees((previous) => [
+          ...previous.filter((item) => item.path !== created.worktree.path),
+          created.worktree,
+        ]);
+        setLoadedFor(requestedTarget);
+        setCreatingOpen(false);
+        // What it was actually cut from, not what was requested: the backend
+        // falls back to a local ref when origin is unreachable, and that is
+        // precisely when a caller assuming otherwise would be wrong.
+        setNotice(`${draft.branch} · from ${created.baseRef}`);
+        setSelected(worktreeLocation(created.worktree));
+        onChange(worktreeLocation(created.worktree));
+      } catch (err) {
+        if (
+          requestedTarget === currentTargetKey.current &&
+          activeCreateRequest.current === request
+        ) {
+          setError(formatError(err));
+        }
+      } finally {
+        if (
+          requestedTarget === currentTargetKey.current &&
+          activeCreateRequest.current === request
+        ) {
+          activeCreateRequest.current = null;
+          createInFlight.current = false;
+          setCreating(false);
+        }
       }
-    } finally {
-      if (requestedTarget === currentTargetKey.current && activeCreateRequest.current === request) {
-        activeCreateRequest.current = null;
-        createInFlight.current = false;
-        setCreating(false);
+    },
+    [busy, projectId, repositoryId, targetKey, onChange],
+  );
+
+  const remove = useCallback(
+    async (worktree: TerminalWorktree, force: boolean) => {
+      await removeTerminalWorktree(projectId, repositoryId, worktree.path, force);
+      if (targetKey !== currentTargetKey.current) return;
+      setWorktrees((previous) => previous.filter((item) => item.path !== worktree.path));
+      setNotice(null);
+      // A session cannot be launched into a directory that no longer exists,
+      // so a selection pointing at it has to go back to the main checkout.
+      // Decided outside the state updater, which StrictMode invokes twice.
+      if (selectedRef.current?.kind === 'worktree' && selectedRef.current.workDir === worktree.path) {
+        const next = requireSelectionRef.current ? null : MAIN_LOCATION;
+        setSelected(next);
+        onChangeRef.current(next ?? MAIN_LOCATION);
       }
-    }
-  }, [branch, worktreeName, busy, projectId, repositoryId, targetKey, choose]);
+    },
+    [projectId, repositoryId, targetKey],
+  );
 
   const selectedLabel =
     selected === null
       ? 'Choose a location'
       : selected.kind === 'main'
-      ? 'Main branch'
-      : selected.kind === 'home'
-      ? 'Machine home'
-      : selected.workBranch ?? selected.workDir;
+        ? 'Main checkout'
+        : selected.kind === 'home'
+          ? 'Machine home'
+          : (selected.workBranch ?? selected.workDir);
 
   return (
     <div className={`relative ${className}`} data-testid="terminal-worktree-location-picker">
@@ -217,16 +301,30 @@ export function TerminalWorktreeLocationPicker({
         disabled={busy || !projectId || !repositoryId}
         aria-expanded={menuOpen}
         aria-haspopup="menu"
-        className="w-full flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1.5 text-left text-[11px] font-mono text-slate-300 hover:bg-white/[0.06] transition disabled:opacity-40"
+        className={`w-full flex items-center gap-2 rounded-lg border bg-black/20 px-2.5 py-2 text-left text-[11.5px] font-mono transition disabled:opacity-40 ${
+          menuOpen
+            ? 'border-violet-400/50 text-slate-100'
+            : 'border-white/10 text-slate-300 hover:border-white/20 hover:bg-black/30'
+        }`}
         data-testid="terminal-location-trigger"
       >
-        {selected?.kind === 'worktree' ? <GitBranch className="w-3 h-3 text-violet-400" /> : <House className="w-3 h-3 text-slate-400" />}
+        {selected?.kind === 'worktree' ? (
+          <GitBranch className="w-3.5 h-3.5 shrink-0 text-violet-400" />
+        ) : (
+          <House className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+        )}
         <span className="flex-1 truncate">{selectedLabel}</span>
-        <ChevronDown className={`w-3 h-3 text-slate-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown
+          className={`w-3.5 h-3.5 shrink-0 text-slate-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`}
+        />
       </button>
 
       {menuOpen && (
-        <div role="menu" className="absolute left-0 mt-1 z-30 w-72 rounded-lg border border-white/10 bg-[#0c0d12] p-1.5 shadow-2xl" data-testid="terminal-location-menu">
+        <div
+          role="menu"
+          className="absolute left-0 mt-1.5 z-30 w-[320px] rounded-xl border border-white/10 bg-[#0c0d12]/95 backdrop-blur-xl p-1.5 shadow-2xl"
+          data-testid="terminal-location-menu"
+        >
           <button
             type="button"
             role="menuitem"
@@ -235,8 +333,8 @@ export function TerminalWorktreeLocationPicker({
             className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] font-mono text-slate-300 hover:bg-white/5 disabled:opacity-40"
             data-testid="terminal-location-main"
           >
-            <House className="w-3 h-3 text-slate-400" />
-            <span className="flex-1">Main branch</span>
+            <FolderGit2 className="w-3 h-3 text-slate-400" />
+            <span className="flex-1">Main checkout</span>
             {selected?.kind === 'main' && <Check className="w-3 h-3 text-cyan-400" />}
           </button>
 
@@ -256,32 +354,94 @@ export function TerminalWorktreeLocationPicker({
           )}
 
           <div className="my-1 border-t border-white/[0.06]" />
-          <div className="px-2 pb-1 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-600">Linked worktrees</div>
-          {listing && <div className="px-2 py-1.5 text-[11px] font-mono text-slate-500" data-testid="terminal-location-loading">Loading locations…</div>}
-          {!listing && worktrees.map((worktree) => {
-            const location = worktreeLocation(worktree);
-            const active = selected?.kind === 'worktree' && selected.workDir === worktree.path;
-            return (
-              <button key={worktree.path} type="button" role="menuitem" onClick={() => choose(location)} disabled={busy} className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] font-mono text-slate-300 hover:bg-violet-500/15 disabled:opacity-40" data-testid={`terminal-location-worktree-${worktree.path}`}>
-                <GitBranch className="w-3 h-3 text-violet-400 shrink-0" />
-                <span className="flex-1 truncate">{worktree.branch ?? worktree.path}</span>
-                {worktree.isLocked && <span className="text-[9px] text-amber-300">locked</span>}
-                {active && <Check className="w-3 h-3 text-cyan-400 shrink-0" />}
-              </button>
-            );
-          })}
-          {!listing && loadedFor === targetKey && worktrees.length === 0 && <div className="px-2 py-1.5 text-[11px] font-mono text-slate-600">No linked worktrees</div>}
+          <div className="flex items-center gap-2 px-2 pb-1">
+            <span className="text-[9px] font-mono uppercase tracking-[0.16em] text-slate-600">
+              Worktrees
+            </span>
+            <span className="flex-1" />
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={busy}
+              className="p-0.5 rounded text-slate-600 hover:text-slate-300 hover:bg-white/5 transition disabled:opacity-40"
+              title="Refresh"
+              aria-label="Refresh worktrees"
+              data-testid="terminal-location-refresh"
+            >
+              <RotateCw className={`w-3 h-3 ${listing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {listing && (
+            <div
+              className="px-2 py-1.5 text-[11px] font-mono text-slate-500"
+              data-testid="terminal-location-loading"
+            >
+              Loading locations…
+            </div>
+          )}
+          {!listing &&
+            worktrees.map((worktree) => (
+              <WorktreeRow
+                key={worktree.path}
+                worktree={worktree}
+                active={selected?.kind === 'worktree' && selected.workDir === worktree.path}
+                disabled={busy}
+                onSelect={() => choose(worktreeLocation(worktree))}
+                onRemove={(force) => remove(worktree, force)}
+              />
+            ))}
+          {!listing && loadedFor === targetKey && worktrees.length === 0 && !creatingOpen && (
+            <div className="px-2 py-1.5 text-[11px] font-mono text-slate-600">
+              None yet — a worktree gives a session its own branch and folder.
+            </div>
+          )}
 
           <div className="my-1.5 border-t border-white/[0.06]" />
-          <div className="px-2 pb-1 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-600">Create linked worktree</div>
-          <div className="grid grid-cols-2 gap-1 px-1">
-            <input value={branch} onChange={(event) => { setBranch(event.target.value); setError(null); }} disabled={busy} placeholder="Branch" aria-label="Branch name" className="min-w-0 rounded border border-white/10 bg-black/20 px-2 py-1.5 text-[11px] font-mono text-slate-200 outline-none focus:border-violet-400 disabled:opacity-40" />
-            <input value={worktreeName} onChange={(event) => { setWorktreeName(event.target.value); setError(null); }} disabled={busy} placeholder="Folder name" aria-label="Worktree name" className="min-w-0 rounded border border-white/10 bg-black/20 px-2 py-1.5 text-[11px] font-mono text-slate-200 outline-none focus:border-violet-400 disabled:opacity-40" />
-          </div>
-          <button type="button" onClick={() => void create()} disabled={busy || !branch.trim() || !worktreeName.trim()} className="mt-1.5 w-full flex items-center justify-center gap-1.5 rounded-md bg-violet-600 px-2 py-1.5 text-[11px] font-mono text-white hover:bg-violet-500 disabled:opacity-40" data-testid="terminal-location-create">
-            <Plus className="w-3 h-3" /> {creating ? 'Creating…' : 'Create worktree'}
-          </button>
-          {error && <div className="mt-1.5 rounded border border-ruby-500/30 bg-ruby-500/10 px-2 py-1.5 text-[11px] font-mono text-ruby-300" data-testid="terminal-location-error">{error}</div>}
+          {creatingOpen ? (
+            <CreateWorktreeForm
+              branches={branches}
+              defaultBranch={defaultBranch}
+              loadingBranches={loadingBranches}
+              busy={creating}
+              error={error}
+              onSubmit={(draft) => void create(draft)}
+              onCancel={() => {
+                setCreatingOpen(false);
+                setError(null);
+              }}
+            />
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={openCreate}
+                disabled={busy}
+                className="w-full flex items-center gap-2 rounded-md border border-dashed border-white/15 px-2 py-1.5 text-left text-[11px] font-mono text-slate-400 hover:border-violet-400/40 hover:text-violet-200 hover:bg-violet-500/[0.08] transition disabled:opacity-40"
+                data-testid="terminal-location-new"
+              >
+                <Plus className="w-3 h-3" />
+                <span>New worktree</span>
+              </button>
+              {notice && (
+                <div
+                  className="mt-1.5 flex items-center gap-1.5 rounded border border-emerald-500/25 bg-emerald-500/[0.08] px-2 py-1.5 text-[10.5px] font-mono text-emerald-300"
+                  data-testid="terminal-location-notice"
+                >
+                  <Check className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{notice}</span>
+                </div>
+              )}
+              {error && (
+                <div
+                  className="mt-1.5 rounded border border-ruby-500/30 bg-ruby-500/10 px-2 py-1.5 text-[11px] font-mono text-ruby-300"
+                  data-testid="terminal-location-error"
+                >
+                  {error}
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

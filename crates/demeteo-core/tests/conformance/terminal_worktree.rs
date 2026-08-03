@@ -22,7 +22,7 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::paths::{shell_escape_posix, REPOS_SUBDIR, TERMINAL_WORKTREES_SUBDIR};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
-use crate::ports::worktree_ops::WorktreeOpsPort;
+use crate::ports::worktree_ops::{TerminalWorktreeRequest, WorktreeOpsPort};
 use rusqlite::Connection;
 use std::sync::Arc;
 
@@ -30,6 +30,16 @@ use std::sync::Arc;
 /// exercised through a transport that adds its own quoting layer rather than
 /// only through a double that records the string.
 const REPO_NAME: &str = "sample repo";
+
+/// A request naming no base, so the start point stays the primary checkout's
+/// HEAD. The base-branch leg builds its own.
+fn terminal_request(branch: &str, worktree_name: &str) -> TerminalWorktreeRequest {
+    TerminalWorktreeRequest {
+        branch: branch.to_string(),
+        base_branch: None,
+        worktree_name: worktree_name.to_string(),
+    }
+}
 
 async fn sh(port: &Arc<dyn ExecutionPort>, machine_id: &str, command: &str) -> String {
     port.run_command(machine_id, command)
@@ -158,23 +168,23 @@ pub async fn terminal_worktree_contract(
             Some(machine_id),
             &repo,
             &project_root,
-            "terminal/session",
-            "session-one",
+            &terminal_request("terminal/session", "session-one"),
         )
         .await
         .expect("create_terminal_worktree must succeed against a real repository");
 
     assert_eq!(
-        created.path,
+        created.worktree.path,
         format!("{area}/session-one"),
         "the destination must be <project_root>/{TERMINAL_WORKTREES_SUBDIR}/<repo_name>/<name>",
     );
     assert!(
         !created
+            .worktree
             .path
             .starts_with(&format!("{project_root}/{REPOS_SUBDIR}/")),
         "the area must not live under the pruned repos/ directory: {}",
-        created.path,
+        created.worktree.path,
     );
     assert_eq!(
         entries(&port, machine_id, &project_root).await,
@@ -195,7 +205,12 @@ pub async fn terminal_worktree_contract(
         "creation must leave nothing beside the primary checkout",
     );
     assert!(
-        exists(&port, machine_id, &format!("{}/README.md", created.path)).await,
+        exists(
+            &port,
+            machine_id,
+            &format!("{}/README.md", created.worktree.path)
+        )
+        .await,
         "the destination must be a real checkout, not an empty directory",
     );
 
@@ -209,10 +224,10 @@ pub async fn terminal_worktree_contract(
         1,
         "exactly one linked worktree must exist; got {listed:?}",
     );
-    assert_eq!(listed[0].path, created.path);
-    assert_eq!(listed[0].branch, created.branch);
-    assert_eq!(created.branch.as_deref(), Some("terminal/session"));
-    assert!(!created.is_locked);
+    assert_eq!(listed[0].path, created.worktree.path);
+    assert_eq!(listed[0].branch, created.worktree.branch);
+    assert_eq!(created.worktree.branch.as_deref(), Some("terminal/session"));
+    assert!(!created.worktree.is_locked);
 
     // --- the branch is cut at the primary HEAD, which does not move --------
     assert_eq!(
@@ -260,8 +275,7 @@ pub async fn terminal_worktree_contract(
             Some(machine_id),
             &repo,
             &project_root,
-            "terminal/already-exists",
-            "second-session",
+            &terminal_request("terminal/already-exists", "second-session"),
         )
         .await
         .expect_err("an existing branch must not be reused");
@@ -289,8 +303,7 @@ pub async fn terminal_worktree_contract(
             Some(machine_id),
             &repo,
             &project_root,
-            "terminal/collision",
-            "session-one",
+            &terminal_request("terminal/collision", "session-one"),
         )
         .await
         .expect_err("an occupied destination must not be reused");
@@ -320,7 +333,12 @@ pub async fn terminal_worktree_contract(
         "collision handling must neither remove, move, nor re-branch the worktree already there",
     );
     assert!(
-        exists(&port, machine_id, &format!("{}/README.md", created.path)).await,
+        exists(
+            &port,
+            machine_id,
+            &format!("{}/README.md", created.worktree.path)
+        )
+        .await,
         "the occupying worktree's contents must survive the refused request",
     );
 
@@ -332,6 +350,265 @@ pub async fn terminal_worktree_contract(
     .await;
 
     terminal_listing_through_a_symlinked_root(&port, machine_id, &anchor, nanos).await;
+    terminal_branch_is_cut_from_origin(&port, machine_id, &anchor, nanos).await;
+    terminal_worktree_removal(&port, machine_id, &anchor, nanos).await;
+}
+
+/// A requested base is fetched before it is used, so the session starts on
+/// upstream's tip rather than on whatever this checkout last saw.
+///
+/// The shape being caught: `origin/main` moves, nobody pulls, and a worktree
+/// "from main" is cut at a local ref that is days old. Nothing about that looks
+/// wrong afterwards — the branch exists, the files are there, and the missing
+/// commits only surface as a conflict at merge time. So origin is advanced here
+/// behind the checkout's back, and the new branch has to land on the commit the
+/// checkout has never seen.
+async fn terminal_branch_is_cut_from_origin(
+    port: &Arc<dyn ExecutionPort>,
+    machine_id: &str,
+    anchor: &str,
+    nanos: u128,
+) {
+    let base = format!("{anchor}/demeteo-terminal-worktree-origin-{nanos}");
+    let (project_root, repo) = make_project_repo(port, machine_id, &base).await;
+    let origin = format!("{base}/origin.git");
+    let publisher = format!("{base}/publisher");
+    let stale = rev(port, machine_id, &repo, "HEAD")
+        .await
+        .expect("the seeded repository has a HEAD");
+
+    sh(
+        port,
+        machine_id,
+        &format!(
+            // `-b main` on the bare repository, not just on the checkout: a
+            // bare repo's HEAD comes from the *target host's* `init.defaultBranch`,
+            // and a clone of one whose HEAD names a branch that was never pushed
+            // lands on an unborn branch of the wrong name. That is `master` on
+            // the conformance container and `main` on most developer machines,
+            // so leaving it to the host makes this setup pass locally and fail
+            // over SSH for a reason that has nothing to do with the port.
+            "set -eu; git init -q --bare -b main {origin}; \
+             git -C {repo} remote add origin {origin}; \
+             git -C {repo} push -q origin main; \
+             git clone -q {origin} {publisher}; \
+             git -C {publisher} config user.email ci@demeteo.test; \
+             git -C {publisher} config user.name CI; \
+             git -C {publisher} commit -q --allow-empty -m upstream-moved; \
+             git -C {publisher} push -q origin HEAD:refs/heads/main",
+            origin = shell_escape_posix(&origin),
+            repo = shell_escape_posix(&repo),
+            publisher = shell_escape_posix(&publisher),
+        ),
+    )
+    .await;
+    let upstream = sh(
+        port,
+        machine_id,
+        &format!(
+            "git -C {} rev-parse --verify HEAD",
+            shell_escape_posix(&publisher)
+        ),
+    )
+    .await
+    .trim()
+    .to_string();
+    assert_ne!(
+        upstream, stale,
+        "origin must be ahead of the checkout, or this proves nothing"
+    );
+    assert_eq!(
+        rev(port, machine_id, &repo, "refs/remotes/origin/main")
+            .await
+            .expect("the checkout tracked origin/main at push time"),
+        stale,
+        "the checkout's view of origin must still be the stale one before the create",
+    );
+
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    let ops: Arc<dyn WorktreeOpsPort> = Arc::new(GitOpsHelper::new(db, port.clone()));
+
+    let created = ops
+        .create_terminal_worktree(
+            Some(machine_id),
+            &repo,
+            &project_root,
+            &TerminalWorktreeRequest {
+                branch: "terminal/fresh".to_string(),
+                base_branch: Some("main".to_string()),
+                worktree_name: "fresh".to_string(),
+            },
+        )
+        .await
+        .expect("creates a terminal worktree from a named base");
+
+    assert_eq!(
+        created.base_ref, "origin/main",
+        "the caller is told which ref was used, because the fallback is silent otherwise",
+    );
+    assert_eq!(
+        rev(port, machine_id, &repo, "refs/heads/terminal/fresh")
+            .await
+            .expect("the terminal branch exists"),
+        upstream,
+        "the branch must start at the fetched origin tip, not at the stale local ref",
+    );
+    assert_eq!(
+        rev(port, machine_id, &repo, "refs/heads/main")
+            .await
+            .expect("the local default branch still resolves"),
+        stale,
+        "refreshing a base must not move the branch the user has checked out",
+    );
+
+    // A base nobody has is refused rather than quietly resolved to HEAD, which
+    // is the one outcome that would put a session somewhere it did not ask for.
+    let missing = ops
+        .create_terminal_worktree(
+            Some(machine_id),
+            &repo,
+            &project_root,
+            &TerminalWorktreeRequest {
+                branch: "terminal/nowhere".to_string(),
+                base_branch: Some("no-such-base".to_string()),
+                worktree_name: "nowhere".to_string(),
+            },
+        )
+        .await
+        .expect_err("an unknown base must not fall through to HEAD");
+    assert!(missing.contains("no-such-base"), "{missing}");
+    assert!(
+        rev(port, machine_id, &repo, "refs/heads/terminal/nowhere")
+            .await
+            .is_err(),
+        "a refused base must not create the branch it was asked for",
+    );
+
+    sh(
+        port,
+        machine_id,
+        &format!("rm -rf {}", shell_escape_posix(&base)),
+    )
+    .await;
+}
+
+/// Removal takes the worktree it was given and nothing else.
+///
+/// `git worktree remove --force` deletes a directory outright, so the only
+/// thing between this and a user's uncommitted work — or a running step's
+/// checkout, or the primary one — is the area check. It is asserted here rather
+/// than only against a double, because a path that classifies one way locally
+/// and another over SSH is exactly the divergence this file exists for.
+async fn terminal_worktree_removal(
+    port: &Arc<dyn ExecutionPort>,
+    machine_id: &str,
+    anchor: &str,
+    nanos: u128,
+) {
+    let base = format!("{anchor}/demeteo-terminal-worktree-removal-{nanos}");
+    let (project_root, repo) = make_project_repo(port, machine_id, &base).await;
+
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    let ops: Arc<dyn WorktreeOpsPort> = Arc::new(GitOpsHelper::new(db, port.clone()));
+
+    let retired = ops
+        .create_terminal_worktree(
+            Some(machine_id),
+            &repo,
+            &project_root,
+            &terminal_request("terminal/retired", "retired"),
+        )
+        .await
+        .expect("creates the worktree to retire")
+        .worktree;
+    let kept = ops
+        .create_terminal_worktree(
+            Some(machine_id),
+            &repo,
+            &project_root,
+            &terminal_request("terminal/kept", "kept"),
+        )
+        .await
+        .expect("creates the worktree to keep")
+        .worktree;
+
+    // --- the primary checkout is not removable through this path ------------
+    let refused = ops
+        .remove_terminal_worktree(Some(machine_id), &repo, &project_root, &repo, false)
+        .await
+        .expect_err("the primary checkout must never be removable as a terminal worktree");
+    assert!(refused.contains("not a terminal worktree"), "{refused}");
+    assert!(
+        exists(port, machine_id, &format!("{repo}/README.md")).await,
+        "a refused removal must not touch the checkout it was aimed at",
+    );
+
+    // --- a clean worktree goes, and takes nothing with it -------------------
+    ops.remove_terminal_worktree(Some(machine_id), &repo, &project_root, &retired.path, false)
+        .await
+        .expect("removes a clean terminal worktree");
+    assert!(
+        !exists(port, machine_id, &retired.path).await,
+        "removal must delete the directory, not just unregister it",
+    );
+    assert_eq!(
+        ops.list_terminal_worktrees(Some(machine_id), &repo, &project_root)
+            .await
+            .expect("lists the surviving terminal worktrees")
+            .iter()
+            .map(|worktree| worktree.path.as_str())
+            .collect::<Vec<_>>(),
+        [kept.path.as_str()],
+        "removal must leave every other worktree registered",
+    );
+    assert!(
+        rev(port, machine_id, &repo, "refs/heads/terminal/retired")
+            .await
+            .is_ok(),
+        "the branch outlives its worktree: the directory is recreatable, the commits are not",
+    );
+    // The administrative entry has to go with it, or re-creating the same name
+    // fails against a worktree Git still believes in.
+    ops.create_terminal_worktree(
+        Some(machine_id),
+        &repo,
+        &project_root,
+        &terminal_request("terminal/retired-again", "retired"),
+    )
+    .await
+    .expect("the removed name must be reusable");
+
+    // --- work in progress is not discarded without being asked -------------
+    port.write_file(machine_id, &format!("{}/scratch.txt", kept.path), "wip\n")
+        .await
+        .expect("leaves an untracked file in the worktree");
+    let dirty = ops
+        .remove_terminal_worktree(Some(machine_id), &repo, &project_root, &kept.path, false)
+        .await
+        .expect_err("git must refuse to discard untracked files");
+    assert!(dirty.contains("git worktree remove failed"), "{dirty}");
+    assert!(
+        exists(port, machine_id, &format!("{}/scratch.txt", kept.path)).await,
+        "a refused removal must leave the work it refused to discard",
+    );
+    ops.remove_terminal_worktree(Some(machine_id), &repo, &project_root, &kept.path, true)
+        .await
+        .expect("force is the user's answer to that refusal");
+    assert!(
+        !exists(port, machine_id, &kept.path).await,
+        "a forced removal must actually remove",
+    );
+
+    sh(
+        port,
+        machine_id,
+        &format!("rm -rf {}", shell_escape_posix(&base)),
+    )
+    .await;
 }
 
 /// The listing must be anchored on what Git resolved, not on the paths
@@ -392,14 +669,13 @@ async fn terminal_listing_through_a_symlinked_root(
             Some(machine_id),
             &logical_repo,
             &logical_root,
-            "terminal/linked",
-            "session-linked",
+            &terminal_request("terminal/linked", "session-linked"),
         )
         .await
         .expect("creates a terminal worktree through the symlinked root");
 
     assert_eq!(
-        created.path,
+        created.worktree.path,
         format!("{physical_root}/{TERMINAL_WORKTREES_SUBDIR}/{REPO_NAME}/session-linked"),
         "Git records the resolved path, which is what the listing has to match",
     );
@@ -413,7 +689,7 @@ async fn terminal_listing_through_a_symlinked_root(
             .iter()
             .map(|w| (w.path.as_str(), w.branch.as_deref()))
             .collect::<Vec<_>>(),
-        [(created.path.as_str(), Some("terminal/linked"))],
+        [(created.worktree.path.as_str(), Some("terminal/linked"))],
         "the worktree just created must be the one listed back",
     );
 

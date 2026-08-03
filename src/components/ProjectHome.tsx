@@ -479,14 +479,18 @@ const ProjectHome = () => {
                     active. This is the only terminal entry point local projects
                     ever see; TerminalTabOpener below stays remote/'terminal'-tab
                     only and keeps its own auto-open behavior untouched. */}
-                <div className="flex items-center gap-3 shrink-0">
+                <div className="flex items-end gap-3 shrink-0">
                     {repositories.length > 1 && (
-                        <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-white/5 border border-white/5 rounded-lg p-2.5">
-                            <span>Repository:</span>
+                        <div className="min-w-0">
+                            <span className="block pb-1 pl-0.5 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-500">
+                                Repository
+                            </span>
                             <select
                                 value={activeRepositoryId}
                                 onChange={(e) => setActiveRepositoryId(e.target.value)}
-                                className="bg-[#08090c] border border-white/10 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                className="w-52 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2 text-[11.5px] font-mono text-slate-300 outline-none hover:border-white/20 focus:border-cyan-500/50"
+                                aria-label="Repository"
+                                data-testid="project-home-repo-select"
                             >
                                 {repositories.map((repo) => (
                                     <option key={repo.id} value={repo.id}>

@@ -570,7 +570,10 @@ export function NewTerminalMenu({
                       location selection instead of maintaining feature-only
                       worktree state. */}
                   {showLocationSwitch && (
-                    <div className="mx-1 mb-1.5" data-testid="new-terminal-location">
+                    <div className="mx-1 mb-2" data-testid="new-terminal-location">
+                      <span className="block px-0.5 pb-1 text-[9px] font-mono uppercase tracking-[0.16em] text-slate-600">
+                        Session location
+                      </span>
                       {projectRepositories.length > 1 && (
                         <select
                           value={projectRepository?.id ?? ''}

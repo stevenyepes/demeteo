@@ -61,7 +61,7 @@ describe('StartSessionButton', () => {
   it('is live without opening the picker and opens a plain shell with primary-checkout semantics', async () => {
     mount();
     expect(screen.getByTestId('start-session-primary')).not.toBeDisabled();
-    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main branch');
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main checkout');
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
       for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -320,19 +320,19 @@ describe('StartSessionButton', () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
       if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
+      if (cmd === 'list_terminal_branches') return Promise.resolve({ default_branch: 'main', branches: [{ name: 'main', has_local: true, has_remote: true }] });
       if (cmd === 'create_terminal_worktree') return Promise.reject({ kind: 'validation', message: 'branch already exists' });
       return Promise.resolve(undefined);
     });
     mount();
     await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-    await screen.findByText('No linked worktrees');
+    await userEvent.click(await screen.findByTestId('terminal-location-new'));
     await userEvent.type(screen.getByLabelText('Branch name'), 'feature/new');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'new');
     await userEvent.click(screen.getByTestId('terminal-location-create'));
     expect(await screen.findByTestId('terminal-location-error')).toHaveTextContent('branch already exists');
     // The failed create must not become a selection: the button still points
-    // at the main-branch default it started on.
-    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main branch');
+    // at the main-checkout default it started on.
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main checkout');
     expect(commandArgs('start_terminal_session')).toHaveLength(0);
   });
 
@@ -347,15 +347,15 @@ describe('StartSessionButton', () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
       if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
-      if (cmd === 'create_terminal_worktree') return Promise.resolve({ path: '/worktrees/new', branch: 'feature/new', is_locked: false });
+      if (cmd === 'list_terminal_branches') return Promise.resolve({ default_branch: 'main', branches: [{ name: 'main', has_local: true, has_remote: true }] });
+      if (cmd === 'create_terminal_worktree') return Promise.resolve({ worktree: { path: '/worktrees/new', branch: 'feature/new', is_locked: false }, base_ref: 'origin/main' });
       if (cmd === 'start_terminal_session') return Promise.resolve({ session_id: 'sess_new', launch_command: null });
       return Promise.resolve(undefined);
     });
     mount();
     await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-    await screen.findByText('No linked worktrees');
+    await userEvent.click(await screen.findByTestId('terminal-location-new'));
     await userEvent.type(screen.getByLabelText('Branch name'), 'feature/new');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'new');
     await userEvent.click(screen.getByTestId('terminal-location-create'));
     await act(async () => {
       await userEvent.click(screen.getByTestId('start-session-primary'));
